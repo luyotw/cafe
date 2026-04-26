@@ -131,7 +131,6 @@ def test_sync_pr_skips_todo_comment_when_items_unchecked(tmp_path: Path) -> None
     if log_file.exists():
         assert "comment:" not in log_file.read_text(encoding="utf-8")
 
-
 def test_builtin_playbooks_publish_pr_through_sync_hook() -> None:
     project_root = Path(__file__).resolve().parents[2]
     for rel_path in [
@@ -141,8 +140,6 @@ def test_builtin_playbooks_publish_pr_through_sync_hook() -> None:
     ]:
         content = (project_root / rel_path).read_text(encoding="utf-8")
         assert "publish_output: [GitHubPRCreator, LocalPRReviewer, PRLinkOpener]" in content
-
-
 def test_sync_pr_rejects_uncommitted_changes(tmp_path: Path) -> None:
     project_root = Path(__file__).resolve().parents[2]
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"

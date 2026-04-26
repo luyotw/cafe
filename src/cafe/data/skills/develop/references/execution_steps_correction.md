@@ -10,10 +10,10 @@
 [ ] Confirm: Commit messages strictly match existing format, language, and structure
 [ ] Confirm: All issues are fixed
 [ ] Confirm: All tests pass and are not fragile
-[ ] Return status code
+[ ] Update blackboard and next-step baton to hand off to the next workflow target
 
-## Status Codes
+## Handoff Targets
 
-- CAFE_CONFIRMED: All issues fixed, ready for review
-- CAFE_NO_CHANGES_NEEDED: You believe reviewer's feedback is incorrect/unnecessary. Write your reasoning to {output_file} then return this code.
+- `review`: All issues fixed or you have written a technical dispute to {output_file}
+- `user`: The dispute needs user arbitration
 {xml_questions_instruction}

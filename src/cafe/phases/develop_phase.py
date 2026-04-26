@@ -12,7 +12,7 @@ from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
-from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
+from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 from cafe.ui.chat import launch_chat_session
 from cafe.ui.display import Display
@@ -689,20 +689,7 @@ class DevelopPhase(Phase):
         Returns:
             Prompt string
         """
-        status_code_prompt = generate_status_code_prompt(
-            valid_codes=[
-                PhaseStatusCode.CONFIRMED,
-                PhaseStatusCode.NEED_PERMISSION,
-                PhaseStatusCode.NEED_CLARIFICATION,
-                PhaseStatusCode.NO_CHANGES_NEEDED,
-            ],
-            descriptions={
-                PhaseStatusCode.CONFIRMED: "Development work completed",
-                PhaseStatusCode.NEED_PERMISSION: "Need to request tool usage permissions",
-                PhaseStatusCode.NEED_CLARIFICATION: "Need user to clarify next steps",
-                PhaseStatusCode.NO_CHANGES_NEEDED: "You believe reviewer's feedback is incorrect/unnecessary and have valid technical reasons to disagree",
-            },
-        )
+        status_code_prompt = ""
 
         # Load PR feedback (either from GitHub comments or local pr_XXX.md files)
         config_file = self.issue_dir / "issue.yaml"
@@ -1076,7 +1063,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 
             # Handle NEED_PERMISSION, NEED_CLARIFICATION, NO_CHANGES_NEEDED specially - return and wait for next invocation
             if response:
-                response_status = StatusCodeParser.extract(
+                response_status = self._extract_status_code_from_response(
                     response,
                     valid_codes=[
                         PhaseStatusCode.CONFIRMED,
@@ -1146,7 +1133,7 @@ Do NOT return any other status code until you have written your reasoning."""
                             )
 
                             # Extract status code from continuation response
-                            continuation_status = StatusCodeParser.extract(
+                            continuation_status = self._extract_status_code_from_response(
                                 continuation_response,
                                 valid_codes=[PhaseStatusCode.NO_CHANGES_NEEDED],
                             )

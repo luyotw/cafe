@@ -440,7 +440,7 @@ class TestSpecChecklistXmlInstructions:
         assert "questions.xml" in content
         assert "<questions>" in content
         assert "<question" in content
-        assert "CAFE_NEED_CLARIFICATION" in content
+        assert "If user clarification is needed" in content
 
     def test_iteration_n_contains_xml_instructions(self, tmp_path):
         """測試 iteration N checklist 包含 XML 問題檔指示"""

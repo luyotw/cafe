@@ -12,5 +12,5 @@
 [ ] Confirm: All tests pass and are not fragile
 [ ] Confirm: All commits are made
 [ ] Confirm: No pending work remains
-[ ] Return status code
+[ ] Update blackboard and next-step baton to hand off to the next workflow target
 {xml_questions_instruction}

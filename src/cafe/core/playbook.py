@@ -61,7 +61,7 @@ class StepConfig(BaseModel):
     input_artifacts: List[str] = Field(default_factory=list)
     output_artifact: Optional[str] = None
     allowed_tools: List[str] = Field(default_factory=list)
-    valid_status_codes: List[str]
+    valid_status_codes: List[str] = Field(default_factory=list)
     max_iterations: Optional[Union[int, str]] = None
     allowed_goto: List[str] = Field(default_factory=list)
     hooks: StepHooks = Field(default_factory=StepHooks)
@@ -90,13 +90,6 @@ class StepConfig(BaseModel):
         if "default" not in normalized and not any(key.isdigit() for key in normalized):
             raise ValueError("skill mapping must include 'default' or numbered iteration keys")
         return normalized
-
-    @field_validator("valid_status_codes")
-    @classmethod
-    def _validate_status_codes(cls, value: List[str]) -> List[str]:
-        if not value:
-            raise ValueError("valid_status_codes must not be empty")
-        return value
 
 
 class PlaybookDefinition(BaseModel):

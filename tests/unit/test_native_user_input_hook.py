@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from cafe.core.hooks.native import (
     GitHubPRCreator,
     LocalPRReviewer,
@@ -279,7 +281,6 @@ def test_execute_step_skips_checklist_validation_when_confirmed_without_agent_ru
         )
     )
     executor._resolve_skill_name = MagicMock(return_value="spec_revise")
-    executor._resolve_valid_status_codes = MagicMock(return_value=[PhaseStatusCode.CONFIRMED])
     executor._resolve_agent_name = MagicMock(return_value="Roger")
     executor._build_context = MagicMock(return_value={})
     executor._generate_checklist = MagicMock()
@@ -435,9 +436,26 @@ def test_github_pr_creator_publish_output_runs_sync_pr_script(tmp_path: Path) ->
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     phase_dir = issue_dir / "pr"
     output_file = phase_dir / "iteration_001" / "output.md"
+    publish_request_file = phase_dir / "iteration_001" / "publish_request.json"
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_text("# Test PR\n\nBody\n", encoding="utf-8")
-    (issue_dir / "issue.yaml").write_text("base_branch: develop\n", encoding="utf-8")
+    publish_request_file.write_text(
+        json.dumps(
+            {
+                "capability": "publish_pr",
+                "script": "src/cafe/data/skills/pr/scripts/sync_pr.sh",
+                "args": {
+                    "output": ".cafe/issues/demo/pr/iteration_001/output.md",
+                    "base": "develop",
+                },
+                "permissions": {
+                    "network": ["github.com", "api.github.com"],
+                    "writes": [".git", ".cafe/issues/demo"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
 
     phase = _FakePhase(phase_dir=phase_dir, iteration=1)
     phase.git_ops = MagicMock()
@@ -458,6 +476,7 @@ def test_github_pr_creator_publish_output_runs_sync_pr_script(tmp_path: Path) ->
             phase=phase,
             step_name="pr",
             output_file=output_file,
+            publish_request_file=publish_request_file,
             status_code=PhaseStatusCode.CONFIRMED,
         )
 
@@ -477,12 +496,89 @@ def test_github_pr_creator_publish_output_runs_sync_pr_script(tmp_path: Path) ->
     ]
 
 
+def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_without_status_code(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "pr"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    publish_request_file = phase_dir / "iteration_001" / "publish_request.json"
+    next_step_file = issue_dir / "next_step.txt"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Test PR\n\nBody\n", encoding="utf-8")
+    publish_request_file.write_text(
+        json.dumps(
+            {
+                "capability": "publish_pr",
+                "script": "src/cafe/data/skills/pr/scripts/sync_pr.sh",
+                "args": {
+                    "output": ".cafe/issues/demo/pr/iteration_001/output.md",
+                    "base": "develop",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    next_step_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": "pr",
+                "to_owner": "done",
+                "to_step": "done",
+                "intent": "workflow_complete",
+                "status_code": "BATON_WORKFLOW_COMPLETE",
+                "created_at": "2026-04-26T22:49:02.559908+08:00",
+                "source": "agent.test",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+
+    completed = MagicMock()
+    completed.returncode = 0
+    completed.stdout = (
+        '{"action":"created","pr_number":"42",'
+        '"pr_url":"https://github.com/test/repo/pull/42"}\n'
+    )
+    completed.stderr = ""
+
+    hook = GitHubPRCreator()
+    with patch("cafe.core.hooks.native.subprocess.run", return_value=completed) as mock_run:
+        result = hook.run(
+            stage="publish_output",
+            phase=phase,
+            step_name="pr",
+            output_file=output_file,
+            publish_request_file=publish_request_file,
+            context={"next_step_path": str(next_step_file)},
+            status_code=None,
+        )
+
+    mock_run.assert_called_once()
+    assert result.events == [
+        {
+            "type": "pr_synced",
+            "url": "https://github.com/test/repo/pull/42",
+            "pr_number": "42",
+            "action": "created",
+            "source": "skill_script",
+        }
+    ]
+
+
 def test_github_pr_creator_publish_output_skips_local_pr_mode(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     phase_dir = issue_dir / "pr"
     output_file = phase_dir / "iteration_001" / "output.md"
+    publish_request_file = phase_dir / "iteration_001" / "publish_request.json"
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_text("# Test PR\n\nBody\n", encoding="utf-8")
+    publish_request_file.write_text("{}", encoding="utf-8")
     (issue_dir / "issue.yaml").write_text("pr:\n  auto_create: false\n", encoding="utf-8")
 
     phase = _FakePhase(phase_dir=phase_dir, iteration=1)
@@ -495,11 +591,52 @@ def test_github_pr_creator_publish_output_skips_local_pr_mode(tmp_path: Path) ->
             phase=phase,
             step_name="pr",
             output_file=output_file,
+            publish_request_file=publish_request_file,
             status_code=PhaseStatusCode.CONFIRMED,
         )
 
     mock_run.assert_not_called()
     assert result.events == []
+
+
+def test_github_pr_creator_publish_output_rejects_untrusted_contract_script(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "pr"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    publish_request_file = phase_dir / "iteration_001" / "publish_request.json"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Test PR\n\nBody\n", encoding="utf-8")
+    publish_request_file.write_text(
+        json.dumps(
+            {
+                "capability": "publish_pr",
+                "script": "scripts/not-trusted.sh",
+                "args": {
+                    "output": ".cafe/issues/demo/pr/iteration_001/output.md",
+                    "base": "develop",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+
+    hook = GitHubPRCreator()
+    with patch("cafe.core.hooks.native.subprocess.run") as mock_run:
+        with pytest.raises(RuntimeError, match="untrusted script"):
+            hook.run(
+                stage="publish_output",
+                phase=phase,
+                step_name="pr",
+                output_file=output_file,
+                publish_request_file=publish_request_file,
+                status_code=PhaseStatusCode.CONFIRMED,
+            )
+
+    mock_run.assert_not_called()
 
 
 def test_pr_comment_poster_posts_todo_comment_only_when_confirmed_and_complete(tmp_path: Path) -> None:

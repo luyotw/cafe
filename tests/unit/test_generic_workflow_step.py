@@ -1,6 +1,7 @@
 """Tests for direct workflow step execution."""
 
 from collections.abc import Iterator
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -81,7 +82,7 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
     skill_root = tmp_path / "builtin" / "skills"
     for name, body in {
         "spec_first": "## Role\nRead your agent file: {agent_file}\n\n## Context\n{blackboard_digest}\n",
-        "plan": "Write plan to: {output_file}\n\n{status_code_instruction}\n",
+        "plan": "Write plan to: {output_file}\n",
         "develop": "Implement the current request.\n",
         "workflow-common": "Read blackboard first.\n",
         "github_sync": "Shared GitHub sync helper.\n",
@@ -149,10 +150,10 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert (iteration_dir / "checklist.md").exists()
     assert (iteration_dir / "output.md").exists()
     assert (iteration_dir / "artifact.json").exists()
-    assert (issue_dir / "spec" / "status.json").exists()
+    assert not (issue_dir / "spec" / "status.json").exists()
 
 
-def test_generic_workflow_step_does_not_retry_when_agent_returns_any_cafe_token(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_does_not_retry_for_legacy_status_tokens(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-status-retry"
     playbook = {
@@ -183,10 +184,7 @@ def test_generic_workflow_step_does_not_retry_when_agent_returns_any_cafe_token(
 
     result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
-    # Agent returned CAFE_SPEC_READY (unrecognized but a CAFE_* token) — no retry should occur
     assert len(agent_manager.prompts) == 1
-    assert not any("If completed respond with status code" in prompt for prompt in agent_manager.prompts)
-    # status_code is None; the playbook runner will handle it via default/alias
     assert result.status_code is None
 
 
@@ -217,8 +215,8 @@ def test_generic_workflow_step_executor_uses_iteration_specific_skill_mapping(tm
     }
 
     class RecordingPhase(GenericPhase):
-        def __init__(self, loader):
-            super().__init__(loader)
+        def __init__(self, loader, bridge):
+            super().__init__(loader, skill_bridge=bridge)
             self.skill_names: list[str] = []
 
         def execute(self, **kwargs):
@@ -226,7 +224,8 @@ def test_generic_workflow_step_executor_uses_iteration_specific_skill_mapping(tm
             return super().execute(**kwargs)
 
     state = BlackboardStore(issue_dir).load_or_create("spec")
-    generic_phase = RecordingPhase(_build_loader(tmp_path).skill_loader)
+    phase_for_loader = _build_loader(tmp_path)
+    generic_phase = RecordingPhase(phase_for_loader.skill_loader, phase_for_loader.skill_bridge)
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-2",
@@ -335,6 +334,157 @@ def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(tmp_pat
     assert any("還要再實作 cafe skill rm" in prompt for prompt in agent_manager.prompts)
 
 
+def test_generic_workflow_step_prompt_keeps_skill_invocations_only(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-skill-body"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "pr": {
+                "skill": "pr",
+                "role": "developer",
+                "output_artifact": "pr",
+                "allowed_tools": ["Read"],
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("pr")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-pr-skill-body",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("pr", playbook["steps"]["pr"], state)
+
+    prompt = agent_manager.prompts[-1]
+    assert "Shared skills:" in prompt
+    assert "Phase skill: " in prompt
+    assert "Shared skill instructions:" not in prompt
+    assert "Phase skill instructions:" not in prompt
+    assert "Read blackboard first." not in prompt
+    assert "Write PR content to:" not in prompt
+
+
+def test_generic_workflow_step_pr_prompt_overrides_external_state_guardrail(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-guardrail"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "pr": {
+                "skill": "pr",
+                "role": "developer",
+                "output_artifact": "pr",
+                "allowed_tools": ["Read"],
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("pr")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+    store.set_handoff_summary(state, "原本的 pr script 有問題，我把 pr 砍掉了麻煩重發一次")
+    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-pr-guardrail",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("pr", playbook["steps"]["pr"], state)
+
+    prompt = agent_manager.prompts[-1]
+    assert "Do not wait for, verify, or require a remote GitHub branch/PR" in prompt
+    assert "Remote PR publish happens later in the host-side publish_output hook." in prompt
+    assert "Before updating the workflow baton, verify whether the requested state change has actually happened in files or external state relevant to this phase." not in prompt
+
+
+def test_generic_workflow_step_writes_pr_publish_request_contract(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-contract"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "pr": {
+                "skill": "pr",
+                "role": "developer",
+                "output_artifact": "pr",
+                "allowed_tools": ["Read"],
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("pr")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    issue_yaml = issue_dir / "issue.yaml"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    issue_yaml.write_text("base_branch: v02\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-pr-contract",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("pr", playbook["steps"]["pr"], state)
+
+    publish_request = json.loads(
+        (issue_dir / "pr" / "iteration_001" / "publish_request.json").read_text(encoding="utf-8")
+    )
+    assert publish_request["capability"] == "publish_pr"
+    assert publish_request["script"] == "src/cafe/data/skills/pr/scripts/sync_pr.sh"
+    assert publish_request["args"] == {
+        "output": ".cafe/issues/issue-pr-contract/pr/iteration_001/output.md",
+        "base": "v02",
+    }
+    assert publish_request["permissions"]["network"] == ["github.com", "api.github.com"]
+    assert publish_request["permissions"]["writes"] == [".git", ".cafe/issues/issue-pr-contract"]
+
+
 def test_generic_workflow_step_collects_clarification_before_next_agent_run(
     tmp_path: Path,
     monkeypatch,
@@ -405,13 +555,9 @@ def test_generic_workflow_step_collects_clarification_before_next_agent_run(
         second_result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
     assert second_result.response == "CAFE_CONFIRMED"
-    assert any(
+    assert not any(
         "Current user input for this iteration:" in prompt and "A1: CLI only" in prompt
         for prompt in agent_manager.prompts
-    )
-    user_input_file = issue_dir / "spec" / "iteration_002" / "user_input.md"
-    assert user_input_file.read_text(encoding="utf-8") == (
-        "Q1: Which flow should we support first?\nA1: CLI only"
     )
 
 
@@ -458,10 +604,10 @@ def test_generic_workflow_step_auto_continues_pause_statuses_in_interactive_mode
     result = executor.execute_step("plan", playbook["steps"]["plan"], state)
 
     assert result.response == "CAFE_READY_FOR_REVIEW"
-    assert result.auto_continue is True
+    assert result.auto_continue is False
 
 
-def test_generic_workflow_step_recovers_missing_status_code_with_continue_prompt(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_keeps_missing_status_without_continue_prompt(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-no-status"
     playbook = {
@@ -493,9 +639,10 @@ def test_generic_workflow_step_recovers_missing_status_code_with_continue_prompt
     result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
     assert "done without status" in result.response
-    assert result.status_code == "CAFE_CONFIRMED"
+    assert result.status_code is None
+    assert len(executor.agent_manager.prompts) == 1
     context_data = (issue_dir / "spec" / "iteration_001" / "context.json").read_text(encoding="utf-8")
-    assert '"status_code": "CAFE_CONFIRMED"' in context_data
+    assert '"status_code": null' in context_data
 
 
 def test_generic_workflow_step_does_not_recover_from_unchanged_output(tmp_path: Path, monkeypatch) -> None:

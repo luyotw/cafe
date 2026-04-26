@@ -231,11 +231,9 @@ class TestPlanPhaseWithStatusCodes:
              patch('builtins.input', return_value='c'):
             result = phase.execute()
 
-        # After behavior change: _analyze_missing_status_code returns NEED_CLARIFICATION, which now completes immediately
-        # The extracted status code from _analyze_missing_status_code is NEED_CLARIFICATION
-        assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"  # Status code from second call
-        assert agent_manager.execute.call_count == 2  # First call + _analyze_missing_status_code
+        assert result.status == PhaseStatus.FAILED
+        assert "valid status code" in result.message
+        assert agent_manager.execute.call_count == 1
 
     def test_case_insensitive_status_code(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試狀態碼不區分大小寫"""

@@ -7,7 +7,7 @@
 [ ] Prioritize user feedback from PR comments over spec requirements if there are conflicts
 
 ## Git Status and Security Check
-[ ] Check if there are new commits (use `git log {base_branch}..HEAD`). If no commits exist, development is incomplete - return CAFE_NEEDS_CHANGES
+[ ] Check if there are new commits (use `git log {base_branch}..HEAD`). If no commits exist, development is incomplete - hand off to `develop`
 [ ] Check for uncommitted changes (if any, development is incomplete)
 [ ] Check for sensitive info in committed files (passwords, API keys, credentials)
 [ ] If sensitive info found: treat as critical issue, require immediate removal from commit history
@@ -51,5 +51,5 @@
 [ ] Each issue should be a checkbox item with file path and line number
 [ ] If no issues found, all items should be marked [x]
 [ ] Do NOT provide code solutions, only identify issues
-[ ] Return ONLY the status code in your response
-[ ] Return appropriate status code
+[ ] Update blackboard and next-step baton to hand off to the next workflow target
+[ ] Keep the response brief; workflow transitions are controlled by the baton

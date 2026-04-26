@@ -94,13 +94,15 @@ class DynamicStepTyperGroup(TyperGroup):
     """Typer group that resolves playbook-defined step commands on demand."""
 
     def get_command(self, ctx: click.Context, cmd_name: str) -> Optional[click.Command]:
+        if cmd_name == "dev":
+            return None
         command = super().get_command(ctx, cmd_name)
         if command is not None:
             return command
         return _build_dynamic_step_click_command(cmd_name)
 
     def list_commands(self, ctx: click.Context) -> List[str]:
-        commands = list(super().list_commands(ctx))
+        commands = [command for command in super().list_commands(ctx) if command != "dev"]
         for step_name in _load_playbook_step_names(_resolve_runtime_playbook_name()):
             if step_name not in commands:
                 commands.append(step_name)
@@ -1225,6 +1227,44 @@ def _display_iteration_delta(
 
         delta_display = DeltaDisplay()
         delta_display.display_delta(current_file, previous_file, console)
+
+
+def _print_workflow_pause_guidance(*, step_name: str, status_code: Optional[str]) -> None:
+    """Render actionable recovery guidance for paused workflows."""
+    if status_code == "INVALID_STATUS_CODE":
+        console.print(
+            "[dim]Agent returned an invalid CAFE status code for this step. "
+            "Fix prompt/agent output and run cafe make again to resume.[/dim]"
+        )
+        return
+
+    if status_code == "NO_BATON_TRANSITION":
+        console.print("[dim]Agent finished without updating the workflow baton for this step.[/dim]")
+        if step_name == "pr":
+            console.print("[bold]Recommended next action:[/bold] Open chat with role `developer`")
+            console.print("[bold]Suggested prompt:[/bold]")
+            console.print(
+                "  Do not wait for remote PR existence. Complete the local PR artifact/checklist,"
+            )
+            console.print(
+                "  update the workflow baton, and treat remote PR publish as a later host-side hook."
+            )
+        else:
+            console.print(
+                "[bold]Recommended next action:[/bold] Open chat with the role responsible for this step,"
+            )
+            console.print("  or leave a handoff note in the workflow UI before resuming.")
+        console.print("[dim]After the chat or handoff is written back, run cafe make again to resume.[/dim]")
+        return
+
+    if status_code == "NO_STATUS_TRANSITION":
+        console.print(
+            "[dim]Agent returned a status code, but the playbook has no transition for it. "
+            "Open chat with the step role or fix the playbook mapping, then run cafe make again.[/dim]"
+        )
+        return
+
+    console.print("[dim]Resolve the requested input, then run cafe make again to resume.[/dim]")
 
 
 @app.command()
@@ -5925,12 +5965,16 @@ def workflow(
         interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
         generic_phase = GenericPhase(SkillLoader())
 
-        def dry_executor(step_name: str, step_def: Dict, blackboard_state: object) -> tuple[str, Dict[str, str]]:
+        def dry_executor(step_name: str, step_def: Dict, blackboard_state: object) -> StepExecutionResult:
             output_key = step_def.get("output_artifact", step_name)
             output_path = issue_dir / step_name / "output.md"
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_text(f"# {step_name}\n\nDry-run output\n", encoding="utf-8")
-            return "CAFE_CONFIRMED", {str(output_key): str(output_path)}
+            return StepExecutionResult(
+                response="dry-run",
+                artifacts={str(output_key): str(output_path)},
+                status_code="CAFE_CONFIRMED",
+            )
         step_executor = None if dry_run else _build_workflow_step_executor(
             config_manager=config_manager,
             issue_dir=issue_dir,
@@ -6068,13 +6112,26 @@ def workflow(
                 console.print(
                     f"[yellow]Workflow paused[/yellow] step={result.final_step} status={result.final_status_code} next={latest_blackboard.current_step}"
                 )
-                if result.final_status_code == "INVALID_STATUS_CODE":
-                    console.print(
-                        "[dim]Agent returned an invalid CAFE status code for this step. "
-                        "Fix prompt/agent output and run cafe make again to resume.[/dim]"
+                _print_workflow_pause_guidance(
+                    step_name=result.final_step,
+                    status_code=result.final_status_code,
+                )
+                if (
+                    interactive
+                    and not dry_run
+                    and not single_step
+                    and result.final_status_code in {"NO_BATON_TRANSITION", "NO_STATUS_TRANSITION"}
+                ):
+                    recovery_step = _handle_user_phase(
+                        issue_name=issue_name,
+                        issue_dir=issue_dir,
+                        playbook_data=playbook_data,
+                        blackboard=latest_blackboard,
+                        phase_name=result.final_step,
                     )
-                else:
-                    console.print("[dim]Resolve the requested input, then run cafe make again to resume.[/dim]")
+                    if recovery_step:
+                        pending_start_step = recovery_step
+                        continue
             return
     except CriticalPhaseError as e:
         _handle_phase_exception(e, "workflow")

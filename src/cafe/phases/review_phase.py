@@ -11,7 +11,7 @@ from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
-from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
+from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 from cafe.utils.prompt_utils import format_checklist_instruction
 
@@ -292,8 +292,7 @@ class ReviewPhase(Phase):
 
             # Fallback: In interactive mode, base class may return None for complete_codes
             # Extract status code from response and return completion result
-            from cafe.core.status_codes import StatusCodeParser
-            status_code = StatusCodeParser.extract(
+            status_code = self._extract_status_code_from_response(
                 response,
                 valid_codes=[
                     PhaseStatusCode.CONFIRMED,
@@ -429,16 +428,7 @@ class ReviewPhase(Phase):
 """
 
         # Generate status code prompt
-        status_code_prompt = generate_status_code_prompt(
-            valid_codes=[
-                PhaseStatusCode.CONFIRMED,
-                PhaseStatusCode.NEEDS_CHANGES,
-            ],
-            descriptions={
-                PhaseStatusCode.CONFIRMED: "Code review passed, no issues",
-                PhaseStatusCode.NEEDS_CHANGES: "Changes needed",
-            },
-        )
+        status_code_prompt = ""
 
         # Add restriction for iteration 4+
         restriction = ""
