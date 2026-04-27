@@ -2,11 +2,12 @@
 
 from collections.abc import Iterator
 from pathlib import Path
+from types import MethodType
 from types import SimpleNamespace
 from unittest.mock import patch
 import pytest
 
-from cafe.core.blackboard import BlackboardStore
+from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore
 from cafe.core.types import AgentCLI, TokenUsage
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
@@ -753,6 +754,61 @@ def test_generic_workflow_step_restores_pr_runtime_allowed_tools(tmp_path: Path,
     assert "web_search" in allowed_tools
     assert "edit(./.cafe/issues/issue-pr-tools/pr/iteration_001/output.md)" in allowed_tools
     assert "edit(./.cafe/issues/issue-pr-tools/pr/iteration_001/checklist.md)" in allowed_tools
+
+
+def test_generic_workflow_step_pr_does_not_require_status_code(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-statusless"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "Nick"}},
+        "steps": {
+            "pr": {
+                "skill": "pr",
+                "role": "developer",
+                "output_artifact": "pr_result",
+                "allowed_tools": ["Read"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("pr")
+    state.artifacts["spec"] = ArtifactEntry(
+        name="spec",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="spec",
+        path="spec/iteration_001/output.md",
+    )
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="plan",
+        path="plan/iteration_001/output.md",
+    )
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-pr-statusless",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("local artifact updated"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "Nick"},
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_execute_agent_iteration(self, **kwargs):
+        captured["require_status_code"] = kwargs["require_status_code"]
+        return "local artifact updated", None
+
+    executor._execute_agent_iteration = MethodType(fake_execute_agent_iteration, executor)
+
+    result = executor.execute_step("pr", playbook["steps"]["pr"], state)
+
+    assert captured["require_status_code"] is False
+    assert result.status_code is None
 
 
 def test_generic_workflow_step_applies_phase_specific_model_per_step(tmp_path: Path, monkeypatch) -> None:

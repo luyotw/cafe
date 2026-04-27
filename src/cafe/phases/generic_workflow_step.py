@@ -133,7 +133,7 @@ class GenericWorkflowStepExecutor(Phase):
                 prompt=prompt,
                 user_input=resolved_user_input,
                 valid_status_codes=valid_status_codes,
-                require_status_code=True,
+                require_status_code=self._step_requires_status_code(step_name),
                 allowed_tools=allowed_tools,
                 phase_specific_data=phase_specific_data,
             )
@@ -374,9 +374,13 @@ class GenericWorkflowStepExecutor(Phase):
             "blackboard_path": self._display_path(self.issue_dir / "blackboard.json"),
             "next_step_path": self._display_path(self.issue_dir / "next_step.txt"),
             "output_file": self._display_path(output_file),
-            "status_code_instruction": generate_status_code_prompt(
-                self._resolve_valid_status_codes(step_def),
-                {},
+            "status_code_instruction": (
+                generate_status_code_prompt(
+                    self._resolve_valid_status_codes(step_def),
+                    {},
+                )
+                if self._step_requires_status_code(step_name)
+                else ""
             ),
         }
 
@@ -560,6 +564,10 @@ class GenericWorkflowStepExecutor(Phase):
     @staticmethod
     def _should_validate_checklist(status_code: PhaseStatusCode) -> bool:
         return status_code in {PhaseStatusCode.CONFIRMED, PhaseStatusCode.READY_FOR_REVIEW}
+
+    @staticmethod
+    def _step_requires_status_code(step_name: str) -> bool:
+        return step_name != "pr"
 
     @staticmethod
     def _resolve_handoff_intent(step_name: str, status_code: PhaseStatusCode) -> Optional[str]:
