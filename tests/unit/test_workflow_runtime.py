@@ -352,3 +352,72 @@ def test_runtime_resumes_from_next_step_when_current_step_already_confirmed(tmp_
     assert result.completed is True
     assert result.final_step == "plan"
     assert executed_steps == ["plan"]
+
+
+def test_runtime_records_done_handoff_for_non_pr_terminal_transition(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "done-transition"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "review": {
+                "skill": "spec_first",
+                "role": "reviewer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object):
+        return ("CAFE_CONFIRMED", {})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="review")
+
+    assert result.completed is True
+    assert result.final_status_code == "CAFE_CONFIRMED"
+    blackboard = BlackboardStore(issue_dir).load_or_create("review")
+    assert blackboard.current_step == "done"
+    assert blackboard.handoff_contract is not None
+    assert blackboard.handoff_contract.to_owner.value == "done"
+    assert blackboard.handoff_contract.intent.value == "workflow_complete"
+    assert blackboard.events[-1].event_type == "workflow_completed"
+
+
+def test_runtime_pauses_for_non_pr_transition_to_user(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "user-transition"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "review": {
+                "skill": "spec_first",
+                "role": "reviewer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "user"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object):
+        return ("CAFE_CONFIRMED", {})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="review")
+
+    assert result.completed is False
+    assert result.final_status_code == "CAFE_CONFIRMED"
+    blackboard = BlackboardStore(issue_dir).load_or_create("review")
+    assert blackboard.current_step == "user"
+    assert blackboard.handoff_contract is not None
+    assert blackboard.handoff_contract.to_owner.value == "user"
+    assert blackboard.handoff_contract.to_step == "user"
+    assert blackboard.handoff_contract.intent.value == "manual_handoff"
+    assert blackboard.events[-1].event_type == "workflow_paused"

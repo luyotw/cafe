@@ -8,10 +8,10 @@ from typing import Any, Dict, List, Optional
 
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardState, BlackboardStore
-from cafe.core.playbook_runner import StepExecutionResult
 from cafe.core.git import GitOperations
 from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
+from cafe.core.workflow_models import StepExecutionResult
 from cafe.phases.generic_phase import GenericPhase
 from cafe.utils.checklist_generator import (
     generate_develop_checklist,

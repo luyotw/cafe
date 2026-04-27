@@ -3,37 +3,17 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field
 from pathlib import Path
 import re
 from typing import Any, Callable, Dict, Optional
 
 from cafe.core.blackboard import BlackboardState, BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
+from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult
 from cafe.phases.generic_phase import GenericPhase
 
 
 StepExecutor = Callable[[str, Dict, BlackboardState], Any]
-
-
-@dataclass
-class StepExecutionResult:
-    """Normalized executor output for one step."""
-
-    response: str
-    artifacts: Dict[str, str]
-    status_code: Optional[str] = None
-    auto_continue: bool = False
-    events: list[dict[str, Any]] = field(default_factory=list)
-
-
-@dataclass
-class PlaybookRunResult:
-    """Result of one playbook run."""
-
-    final_step: str
-    final_status_code: str
-    completed: bool
 
 
 PAUSE_STATUS_CODES = {

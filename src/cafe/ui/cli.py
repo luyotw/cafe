@@ -22,7 +22,7 @@ from rich.console import Console
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.git import GitOperations
-from cafe.core.playbook_runner import StepExecutionResult
+from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.core.permission import PermissionHandler
 from cafe.core.types import AgentCLI, AgentConfig, CriticalPhaseError
@@ -659,7 +659,7 @@ def _execute_single_step_alias(
     output_file = _get_latest_versioned_file(step_name, issue_name)
     return {
         "result": result,
-        "status_code": status_data.get("status_code", result.final_status_code),
+        "status_code": result.final_status_code,
         "iterations": status_data.get("iteration"),
         "output_file": str(output_file) if output_file else None,
     }

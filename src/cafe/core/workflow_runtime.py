@@ -13,8 +13,8 @@ import re
 from typing import Any, Dict, Optional
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.core.playbook_runner import PlaybookRunResult, StepExecutionResult
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
+from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult
 
 
 STATUS_TOKEN_PATTERN = re.compile(r"\bCAFE_[A-Z0-9_]+\b")
@@ -734,13 +734,62 @@ class BlackboardWorkflowRuntime:
                 )
 
             if next_step not in self.steps:
-                final_step = "done" if next_step == "done" else "user"
-                self.blackboard_store.set_current_step(self.blackboard, final_step)
-                return PlaybookRunResult(
-                    final_step=current_step,
-                    final_status_code=status_code,
-                    completed=True,
-                )
+                if next_step in {"done", "_done"}:
+                    self.blackboard_store.record_event(
+                        self.blackboard,
+                        "workflow_completed",
+                        {
+                            "step": current_step,
+                            "status_code": status_code,
+                            "next_step": next_step,
+                            "reason": "status_transition",
+                            "runtime": "legacy_until_boundary",
+                        },
+                    )
+                    self.blackboard_store.set_current_step(self.blackboard, "done")
+                    self.blackboard_store.update_handoff_contract(
+                        self.blackboard,
+                        from_step=current_step,
+                        to_owner=HandoffOwner.DONE,
+                        to_step="done",
+                        intent=HandoffIntent.WORKFLOW_COMPLETE,
+                        status_code=status_code,
+                        source="workflow.transition",
+                    )
+                    return PlaybookRunResult(
+                        final_step=current_step,
+                        final_status_code=status_code,
+                        completed=True,
+                    )
+
+                if next_step == "user":
+                    self.blackboard_store.record_event(
+                        self.blackboard,
+                        "workflow_paused",
+                        {
+                            "step": current_step,
+                            "status_code": status_code,
+                            "reason": "status_transition_to_user",
+                            "runtime": "legacy_until_boundary",
+                        },
+                    )
+                    self.blackboard_store.set_current_step(self.blackboard, "user")
+                    self.blackboard_store.update_handoff_contract(
+                        self.blackboard,
+                        from_step=current_step,
+                        to_owner=HandoffOwner.USER,
+                        to_step="user",
+                        intent=HandoffIntent.MANUAL_HANDOFF,
+                        status_code=status_code,
+                        source="workflow.transition",
+                    )
+                    return PlaybookRunResult(
+                        final_step=current_step,
+                        final_status_code=status_code,
+                        completed=False,
+                    )
+
+                raise RuntimeError(f"Unknown terminal target '{next_step}' from step '{current_step}'")
 
             self.blackboard_store.record_decision(
                 self.blackboard,
