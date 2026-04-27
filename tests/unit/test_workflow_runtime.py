@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from cafe.core.blackboard import BlackboardStore
+from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.playbook_runner import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 
@@ -305,16 +305,8 @@ def test_runtime_legacy_step_honors_review_confirmed_advance(tmp_path: Path) -> 
     assert blackboard.current_step == "pr"
 
 
-def test_runtime_resumes_from_next_step_when_current_step_already_confirmed(tmp_path: Path) -> None:
+def test_runtime_resumes_from_blackboard_current_step(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-resume"
-    spec_dir = issue_dir / "spec"
-    spec_dir.mkdir(parents=True, exist_ok=True)
-    (spec_dir / "status.json").write_text(
-        '{"status_code":"CAFE_CONFIRMED","iteration":3}',
-        encoding="utf-8",
-    )
-    (issue_dir / "plan").mkdir(parents=True, exist_ok=True)
-
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -346,6 +338,16 @@ def test_runtime_resumes_from_next_step_when_current_step_already_confirmed(tmp_
         issue_dir=issue_dir,
         playbook=playbook,
         executor=executor,
+    )
+    runtime.blackboard_store.set_current_step(runtime.blackboard, "plan")
+    runtime.blackboard_store.update_handoff_contract(
+        runtime.blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.AGENT,
+        to_step="plan",
+        intent=HandoffIntent.AWAIT_AGENT,
+        status_code="CAFE_CONFIRMED",
+        source="test.resume",
     )
     result = runtime.run(max_transitions=5)
 

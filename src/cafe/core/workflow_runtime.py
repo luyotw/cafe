@@ -89,58 +89,6 @@ class BlackboardWorkflowRuntime:
                 f"Baton target mismatch before step '{current_step}': baton points to '{contract.to_step}'"
             )
 
-    def _load_step_status_code(self, step_name: str) -> Optional[str]:
-        status_file = self.issue_dir / step_name / "status.json"
-        if not status_file.exists():
-            return None
-        try:
-            import json
-
-            raw = json.loads(status_file.read_text(encoding="utf-8"))
-        except Exception:
-            return None
-        status_code = raw.get("status_code")
-        return str(status_code) if status_code else None
-
-    def _align_current_step_with_saved_progress(self, current_step: str) -> str:
-        while current_step in self.steps:
-            saved_status_code = self._load_step_status_code(current_step)
-            if not saved_status_code or saved_status_code in PAUSE_STATUS_CODES:
-                return current_step
-
-            next_step, transition_source = self._resolve_next_step(
-                current_step=current_step,
-                response=saved_status_code,
-                status_code=saved_status_code,
-            )
-            if next_step is None or next_step not in self.steps:
-                return current_step
-
-            self.blackboard_store.record_event(
-                self.blackboard,
-                "resume_aligned",
-                {
-                    "from": current_step,
-                    "to": next_step,
-                    "status_code": saved_status_code,
-                    "source": transition_source,
-                    "runtime": "blackboard",
-                },
-            )
-            self.blackboard_store.set_current_step(self.blackboard, next_step)
-            self.blackboard_store.update_handoff_contract(
-                self.blackboard,
-                from_step=current_step,
-                to_owner=HandoffOwner.AGENT,
-                to_step=next_step,
-                intent=HandoffIntent.AWAIT_AGENT,
-                status_code=saved_status_code,
-                source="workflow.resume_aligned",
-            )
-            current_step = next_step
-
-        return current_step
-
     def _resolve_next_step(
         self,
         *,
@@ -915,8 +863,6 @@ class BlackboardWorkflowRuntime:
             current_step = start_step or self.blackboard.current_step
             if current_step not in self.steps:
                 raise ValueError(f"Unknown playbook step '{current_step}'")
-            if start_step is None:
-                current_step = self._align_current_step_with_saved_progress(current_step)
             if start_step is not None:
                 self.blackboard_store.set_current_step(self.blackboard, current_step)
                 self.blackboard_store.update_handoff_contract(
@@ -932,8 +878,6 @@ class BlackboardWorkflowRuntime:
         current_step = start_step or self.blackboard.current_step
         if current_step not in self.steps:
             raise ValueError(f"Unknown playbook step '{current_step}'")
-        if start_step is None:
-            current_step = self._align_current_step_with_saved_progress(current_step)
 
         if start_step is not None:
             self.blackboard_store.set_current_step(self.blackboard, current_step)

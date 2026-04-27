@@ -733,6 +733,7 @@ def test_workflow_command_resumes_incomplete_iteration_before_user_phase(tmp_pat
                 "step_name": "spec",
                 "skill_name": "spec_revise",
                 "user_input": "confirmed clarification answers",
+                "status_code": "CAFE_READY_FOR_REVIEW",
                 "timestamp": "2026-04-14T10:00:00+08:00",
             }
         ),

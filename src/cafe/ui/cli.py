@@ -354,7 +354,7 @@ def _find_incomplete_workflow_step(*, issue_dir: Path, playbook_data: Dict[str, 
         except (OSError, json.JSONDecodeError):
             continue
 
-        if context_data.get("end_time") or context_data.get("status_code") is not None:
+        if context_data.get("end_time"):
             continue
 
         timestamp = context_file.stat().st_mtime
