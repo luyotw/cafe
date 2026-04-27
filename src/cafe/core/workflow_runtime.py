@@ -15,10 +15,10 @@ from typing import Any, Dict, Optional
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.playbook_runner import PlaybookRunResult, StepExecutionResult
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
-from cafe.phases.generic_phase import GenericPhase
 
 
 STATUS_TOKEN_PATTERN = re.compile(r"\bCAFE_[A-Z0-9_]+\b")
+GOTO_PATTERN = re.compile(r"CAFE_GOTO\s*:\s*([a-zA-Z0-9_-]+)")
 PAUSE_STATUS_CODES = {
     PhaseStatusCode.READY_FOR_REVIEW.value,
     PhaseStatusCode.NEED_CLARIFICATION.value,
@@ -36,12 +36,10 @@ class BlackboardWorkflowRuntime:
         *,
         issue_dir: Path,
         playbook: Dict,
-        generic_phase: GenericPhase,
         executor: Any,
     ) -> None:
         self.issue_dir = issue_dir
         self.playbook = playbook
-        self.generic_phase = generic_phase
         self.executor = executor
 
         playbook_meta = playbook["playbook"]
@@ -51,6 +49,13 @@ class BlackboardWorkflowRuntime:
 
         self.blackboard_store = BlackboardStore(issue_dir)
         self.blackboard = self.blackboard_store.load_or_create(self.start_step, playbook_id=self.playbook_id)
+
+    @staticmethod
+    def _extract_goto_target(response: str) -> Optional[str]:
+        match = GOTO_PATTERN.search(response)
+        if not match:
+            return None
+        return match.group(1)
 
     @staticmethod
     def _has_event(execution_result: Any, event_type: str) -> bool:
@@ -145,7 +150,7 @@ class BlackboardWorkflowRuntime:
     ) -> tuple[Optional[str], str]:
         step = self.steps[current_step]
         transitions = step.get("on", {})
-        goto_target = self.generic_phase.extract_goto_target(response)
+        goto_target = self._extract_goto_target(response)
         if goto_target:
             allowed_targets = {str(target) for target in step.get("allowed_goto", [])}
             if goto_target in allowed_targets:
@@ -289,19 +294,16 @@ class BlackboardWorkflowRuntime:
             for code in step_def.get("valid_status_codes", [])
             if code in {item.value for item in PhaseStatusCode}
         ]
+        goto_target = self._extract_goto_target(response)
         status_code_obj = (
             PhaseStatusCode(explicit_status_code)
             if explicit_status_code in {item.value for item in PhaseStatusCode}
             else None
         )
-        _, goto_target = self.generic_phase.parse_response(
-            response=response,
-            valid_status_codes=valid_codes or list(PhaseStatusCode),
-        )
         if status_code_obj is None:
-            status_code_obj, _ = self.generic_phase.parse_response(
-                response=response,
-                valid_status_codes=valid_codes or list(PhaseStatusCode),
+            status_code_obj = StatusCodeParser.extract(
+                response,
+                valid_codes=valid_codes or list(PhaseStatusCode),
             )
         if status_code_obj is None:
             status_code_obj = StatusCodeParser.coerce_completion_alias(

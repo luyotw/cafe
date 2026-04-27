@@ -6,24 +6,6 @@ from pathlib import Path
 from cafe.core.blackboard import BlackboardStore
 from cafe.core.playbook_runner import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
-from cafe.phases.generic_phase import GenericPhase
-from cafe.skills.loader import SkillLoader
-
-
-def _build_loader(tmp_path: Path) -> GenericPhase:
-    skill_dir = tmp_path / "builtin" / "skills" / "spec_first"
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    (skill_dir / "SKILL.md").write_text(
-        "---\nname: spec_first\ndescription: d\n---\n\ntext\n",
-        encoding="utf-8",
-    )
-    loader = SkillLoader(
-        project_root=tmp_path / "project",
-        global_root=tmp_path / "global",
-        builtin_root=tmp_path / "builtin",
-    )
-    loader.discover()
-    return GenericPhase(loader)
 
 
 def _write_baton(issue_dir: Path, *, from_step: str, to_owner: str, to_step: str, intent: str) -> None:
@@ -60,7 +42,6 @@ def test_runtime_blocks_pr_done_without_publish_receipt(tmp_path: Path) -> None:
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
         executor=executor,
     )
     result = runtime.run(start_step="pr")
@@ -92,7 +73,6 @@ def test_runtime_completes_pr_when_publish_receipt_exists(tmp_path: Path) -> Non
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
         executor=executor,
     )
     result = runtime.run(start_step="pr")
@@ -122,7 +102,6 @@ def test_runtime_delegates_non_pr_steps_to_legacy_runner(tmp_path: Path) -> None
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
         executor=executor,
     )
     result = runtime.run(start_step="spec")
@@ -159,7 +138,6 @@ def test_runtime_hands_off_to_pr_runtime_boundary(tmp_path: Path) -> None:
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
         executor=executor,
     )
     result = runtime.run(start_step="review")
@@ -195,7 +173,6 @@ def test_runtime_single_step_executes_non_pr_locally(tmp_path: Path) -> None:
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
         executor=executor,
     )
     result = runtime.run(start_step="develop", single_step=True)
@@ -228,7 +205,6 @@ def test_runtime_single_step_executes_pr_without_legacy_runner(tmp_path: Path) -
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
         executor=executor,
     )
     result = runtime.run(start_step="pr", single_step=True)
@@ -271,7 +247,6 @@ def test_runtime_legacy_step_uses_default_transition_when_status_missing(tmp_pat
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
         executor=executor,
     )
     result = runtime.run(start_step="spec")
@@ -319,7 +294,6 @@ def test_runtime_legacy_step_honors_review_confirmed_advance(tmp_path: Path) -> 
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
         executor=executor,
     )
     result = runtime.run(start_step="review")
@@ -371,7 +345,6 @@ def test_runtime_resumes_from_next_step_when_current_step_already_confirmed(tmp_
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
         executor=executor,
     )
     result = runtime.run(max_transitions=5)

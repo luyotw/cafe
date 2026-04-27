@@ -652,7 +652,6 @@ def _execute_single_step_alias(
     runner = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook_data,
-        generic_phase=generic_phase,
         executor=step_executor.execute_step,
     )
     result = runner.run(start_step=step_name, single_step=True)
@@ -6105,7 +6104,6 @@ def workflow(
             runner = BlackboardWorkflowRuntime(
                 issue_dir=issue_dir,
                 playbook=playbook_data,
-                generic_phase=generic_phase,
                 executor=wrapped_executor,
             )
             result = runner.run(start_step=effective_start_step, single_step=single_step)
