@@ -1034,11 +1034,13 @@ Artifact 分工：
 
 以下清單是目前 `v0.2` blackboard runtime 重構的 live backlog。重點不是再補 status-code 相容，而是持續把 workflow 主路徑收斂到 `artifact + baton + capability receipt`。
 
+- [x] 建立 `BlackboardWorkflowRuntime` 作為新的 workflow 核心入口，讓 workflow 主路徑與 phase alias 能 hand off 到 blackboard / baton 模型，而不是直接依賴 legacy `PlaybookRunner.run()`
+- [x] 讓 `pr` step 改成 baton-driven + receipt-gated completion；host-side publish / comment / open-link hooks 也接受 `pr -> done` baton，不再只依賴 `CAFE_CONFIRMED`
+- [x] 補齊 summary / timeline 對 baton-driven phases 的支援：phase `status.json` 缺席時，能從 iteration `context.json` + blackboard / baton 推導 phase 狀態，避免 `cafe summary` 失真
 - [ ] 繼續縮小 `GenericWorkflowStepExecutor` 的責任邊界，移除剩餘的 status-code persistence 與 `context.json` / `status.json` 依賴，讓 step executor 只負責 iteration 執行與 artifact 產出
 - [ ] 清掉 generic workflow prompt / context 組裝裡殘留的 status-code 語意，避免新 runtime 仍被舊 completion model 反向污染
 - [ ] 把 `cafe spec`、`cafe plan`、`cafe develop`、`cafe review`、`cafe pr` 收斂成 `BlackboardWorkflowRuntime` 的 thin wrapper，不再維持各自獨立的 status-code-driven UX
 - [ ] 盤點並移除 CLI / workflow entry / resume / debug 路徑上剩餘的 legacy 狀態來源，確保 pause、resume、complete 的判定都只信 blackboard 與 baton
-- [ ] 延續 `pr` step 的 receipt-gated completion 模型，明確區分 artifact completion 與 capability completion，避免 workflow 在 host-side 動作未完成時被提前收成 `done`
 - [ ] 將 `core/phase.py` 與 legacy `spec_phase.py`、`plan_phase.py`、`develop_phase.py`、`review_phase.py`、`pr_phase.py` 逐步隔離出 workflow 核心路徑，最後只保留過渡用途或直接刪除
 - [ ] 讓 `PlaybookRunner` 退出 active workflow path，只保留必要的過渡層與測試依賴；等新 runtime 接完主流程後再刪除
 - [ ] 當 default workflow 主路徑已完全切到 blackboard runtime 後，再集中做真實情境手測：`cafe make`、pause/resume、chat handoff、`cafe reset` 後續跑、`pr` publish / receipt

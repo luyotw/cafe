@@ -91,6 +91,153 @@ class TestLoadPhaseStatus:
         result = service.load_phase_status("nonexistent-issue", "spec")
         assert result is None
 
+    def test_load_phase_status_synthesizes_completed_from_iterations(self, tmp_path, monkeypatch):
+        """Test synthesizing phase status when status.json is absent."""
+        from cafe.services.summary_service import SummaryService
+
+        monkeypatch.chdir(tmp_path)
+
+        issue_dir = tmp_path / ".cafe/issues/test-issue"
+        phase_dir = issue_dir / "pr"
+        (phase_dir / "iteration_001").mkdir(parents=True)
+        (phase_dir / "iteration_001/context.json").write_text(
+            json.dumps(
+                {
+                    "iteration": 1,
+                    "timestamp": "2026-04-27T10:00:00+08:00",
+                    "end_time": "2026-04-27T10:15:00+08:00",
+                    "status_code": "CAFE_CONFIRMED",
+                }
+            )
+        )
+        (issue_dir / "blackboard.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "current_step": "done",
+                    "owner": "done",
+                    "playbook_id": "default",
+                    "artifacts": {},
+                    "events": [],
+                    "decisions": [],
+                    "handoff_summary": "",
+                    "handoff_contract": {
+                        "version": 1,
+                        "from_step": "pr",
+                        "to_owner": "done",
+                        "to_step": "done",
+                        "intent": "workflow_complete",
+                        "status_code": "",
+                        "created_at": "2026-04-27T10:16:00+08:00",
+                        "source": "workflow",
+                    },
+                    "updated_at": "2026-04-27T10:16:00+08:00",
+                }
+            )
+        )
+        (issue_dir / "next_step.txt").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "from_step": "pr",
+                    "to_owner": "done",
+                    "to_step": "done",
+                    "intent": "workflow_complete",
+                    "status_code": "",
+                    "created_at": "2026-04-27T10:16:00+08:00",
+                    "source": "workflow",
+                }
+            )
+        )
+
+        service = SummaryService()
+        result = service.load_phase_status("test-issue", "pr")
+        assert result is not None
+        assert result["status"] == "completed"
+        assert result["timestamp"] == "2026-04-27T10:00:00+08:00"
+        assert result["end_time"] == "2026-04-27T10:15:00+08:00"
+        assert result["status_code"] == "CAFE_CONFIRMED"
+
+    def test_load_phase_status_synthesizes_in_progress_from_user_baton(self, tmp_path, monkeypatch):
+        """Test paused phases stay in-progress without a phase status file."""
+        from cafe.services.summary_service import SummaryService
+
+        monkeypatch.chdir(tmp_path)
+
+        issue_dir = tmp_path / ".cafe/issues/test-issue"
+        phase_dir = issue_dir / "spec"
+        (phase_dir / "iteration_001").mkdir(parents=True)
+        (phase_dir / "iteration_001/context.json").write_text(
+            json.dumps(
+                {
+                    "iteration": 1,
+                    "timestamp": "2026-04-27T09:00:00+08:00",
+                    "status_code": "CAFE_NEED_CLARIFICATION",
+                }
+            )
+        )
+        baton = {
+            "version": 1,
+            "from_step": "spec",
+            "to_owner": "user",
+            "to_step": "user",
+            "intent": "confirm_output",
+            "status_code": "CAFE_NEED_CLARIFICATION",
+            "created_at": "2026-04-27T09:05:00+08:00",
+            "source": "workflow",
+        }
+        (issue_dir / "blackboard.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "current_step": "user",
+                    "owner": "user",
+                    "playbook_id": "default",
+                    "artifacts": {},
+                    "events": [],
+                    "decisions": [],
+                    "handoff_summary": "",
+                    "handoff_contract": baton,
+                    "updated_at": "2026-04-27T09:05:00+08:00",
+                }
+            )
+        )
+        (issue_dir / "next_step.txt").write_text(json.dumps(baton))
+
+        service = SummaryService()
+        result = service.load_phase_status("test-issue", "spec")
+        assert result is not None
+        assert result["status"] == "in_progress"
+        assert result["timestamp"] == "2026-04-27T09:00:00+08:00"
+        assert result["status_code"] == "CAFE_NEED_CLARIFICATION"
+        assert "end_time" not in result
+
+    def test_load_phase_status_does_not_create_blackboard_files(self, tmp_path, monkeypatch):
+        """Test summary fallback stays read-only when workflow state is absent."""
+        from cafe.services.summary_service import SummaryService
+
+        monkeypatch.chdir(tmp_path)
+
+        phase_dir = tmp_path / ".cafe/issues/test-issue/pr"
+        (phase_dir / "iteration_001").mkdir(parents=True)
+        (phase_dir / "iteration_001/context.json").write_text(
+            json.dumps(
+                {
+                    "iteration": 1,
+                    "timestamp": "2026-04-27T10:00:00+08:00",
+                    "end_time": "2026-04-27T10:15:00+08:00",
+                    "status_code": "CAFE_CONFIRMED",
+                }
+            )
+        )
+
+        service = SummaryService()
+        result = service.load_phase_status("test-issue", "pr")
+        assert result is not None
+        assert result["status"] == "completed"
+        assert not (tmp_path / ".cafe/issues/test-issue/blackboard.json").exists()
+        assert not (tmp_path / ".cafe/issues/test-issue/next_step.txt").exists()
+
     def test_load_phase_status_returns_correct_structure(self, tmp_path, monkeypatch):
         """Test that loaded status has required fields."""
         from cafe.services.summary_service import SummaryService

@@ -43,6 +43,42 @@ def _get_previous_iteration_status(phase: Any) -> Optional[str]:
     return raw.get("status_code")
 
 
+def _hook_status_value(raw_status: Any) -> str:
+    """Normalize hook status input to its string value."""
+    if isinstance(raw_status, PhaseStatusCode):
+        return raw_status.value
+    if isinstance(raw_status, str):
+        return raw_status
+    return ""
+
+
+def _pr_publish_requested(*, phase: Any, step_name: str, status_code: Any) -> bool:
+    """Return True when the PR step has reached its publish handoff."""
+    if step_name != "pr":
+        return False
+    if _hook_status_value(status_code) == PhaseStatusCode.CONFIRMED.value:
+        return True
+
+    issue_dir = getattr(phase, "issue_dir", None)
+    if not isinstance(issue_dir, Path):
+        return False
+
+    baton_file = issue_dir / "next_step.txt"
+    if not baton_file.exists():
+        return False
+
+    try:
+        payload = json.loads(baton_file.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+
+    return (
+        str(payload.get("from_step", "")) == "pr"
+        and str(payload.get("to_owner", "")) == "done"
+        and str(payload.get("to_step", "")) == "done"
+    )
+
+
 class UserInputCollector(NoOpHook):
     """Collect user input before agent execution when the previous round requested it."""
 
@@ -492,12 +528,12 @@ class GitHubPRCreator(NoOpHook):
         )
 
     def _publish_output(self, **kwargs: Any) -> HookResult:
-        if kwargs.get("status_code") != PhaseStatusCode.CONFIRMED:
-            return HookResult()
-        if str(kwargs.get("step_name") or "") != "pr":
-            return HookResult()
-
         phase = kwargs.get("phase")
+        step_name = str(kwargs.get("step_name") or "")
+        if phase is None:
+            return HookResult()
+        if not _pr_publish_requested(phase=phase, step_name=step_name, status_code=kwargs.get("status_code")):
+            return HookResult()
         output_file = kwargs.get("output_file")
         if phase is None or not isinstance(output_file, Path) or not output_file.exists():
             return HookResult()
@@ -642,11 +678,12 @@ class PRCommentPoster(NoOpHook):
     def run(self, **kwargs: Any) -> HookResult:
         if kwargs.get("stage") != "publish_output":
             return HookResult()
-
-        if kwargs.get("status_code") != PhaseStatusCode.CONFIRMED:
-            return HookResult()
-
         phase = kwargs.get("phase")
+        step_name = str(kwargs.get("step_name") or "")
+        if phase is None:
+            return HookResult()
+        if not _pr_publish_requested(phase=phase, step_name=step_name, status_code=kwargs.get("status_code")):
+            return HookResult()
         output_file = kwargs.get("output_file")
         if phase is None or not isinstance(output_file, Path) or not output_file.exists():
             return HookResult()
@@ -811,9 +848,11 @@ class PRLinkOpener(NoOpHook):
     def run(self, **kwargs: Any) -> HookResult:
         if kwargs.get("stage") != "publish_output":
             return HookResult()
-
-        status_code = kwargs.get("status_code")
-        if status_code != PhaseStatusCode.CONFIRMED:
+        phase = kwargs.get("phase")
+        step_name = str(kwargs.get("step_name") or "")
+        if phase is None:
+            return HookResult()
+        if not _pr_publish_requested(phase=phase, step_name=step_name, status_code=kwargs.get("status_code")):
             return HookResult()
 
         try:

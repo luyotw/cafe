@@ -433,6 +433,23 @@ class TestPopulateTokenUsageInIterations:
         assert entry is not None
         assert entry.cost_usd == 0.15
 
+    def test_create_iteration_entry_infers_completed_from_end_time_without_status_code(self):
+        """Baton-driven contexts may omit status_code but still represent a completed iteration."""
+        from cafe.core.types import PhaseStatus
+
+        builder = TimelineBuilder("test-issue")
+
+        iteration_status = {
+            "iteration": 1,
+            "timestamp": "2026-04-27T10:00:00+08:00",
+            "end_time": "2026-04-27T10:15:00+08:00",
+        }
+
+        entry = builder._create_iteration_entry("pr", iteration_status)
+
+        assert entry is not None
+        assert entry.status == PhaseStatus.COMPLETED
+
     def test_build_timeline_entries_includes_token_usage(self):
         """Test that build_timeline_entries() preserves token usage data"""
         builder = TimelineBuilder("test-issue")

@@ -736,6 +736,30 @@ def _alias_is_done(alias_result: Dict[str, Any]) -> bool:
     return _alias_handoff_owner(alias_result) == "done"
 
 
+def _alias_targets(alias_result: Dict[str, Any], step_name: str) -> bool:
+    return _alias_next_step(alias_result) == step_name
+
+
+def _alias_pause_intent(alias_result: Dict[str, Any], *intents: str) -> bool:
+    return _alias_is_user_pause(alias_result) and _alias_handoff_intent(alias_result) in set(intents)
+
+
+def _alias_is_confirmed_transition(alias_result: Dict[str, Any], step_name: str) -> bool:
+    return _alias_targets(alias_result, step_name) or _alias_status(alias_result) == "CAFE_CONFIRMED"
+
+
+def _alias_needs_clarification(alias_result: Dict[str, Any]) -> bool:
+    return _alias_pause_intent(alias_result, "need_clarification") or _alias_status(alias_result) == "CAFE_NEED_CLARIFICATION"
+
+
+def _alias_needs_permission(alias_result: Dict[str, Any]) -> bool:
+    return _alias_pause_intent(alias_result, "need_permission") or _alias_status(alias_result) == "CAFE_NEED_PERMISSION"
+
+
+def _alias_confirm_output_pause(alias_result: Dict[str, Any]) -> bool:
+    return _alias_pause_intent(alias_result, "confirm_output") or _alias_status(alias_result) == "CAFE_READY_FOR_REVIEW"
+
+
 def _reject_unsupported_phase_options(phase_name: str, unsupported_options: Dict[str, bool]) -> None:
     """Exit when a legacy-only CLI option is requested."""
     unsupported = [name for name, enabled in unsupported_options.items() if enabled]
@@ -780,9 +804,9 @@ def _run_iterative_alias_step(
             user_input=current_input,
             show_prompt=show_prompt,
         )
-        status_code = alias_result["status_code"]
-        handoff_owner = alias_result.get("handoff_owner")
-        handoff_intent = alias_result.get("handoff_intent")
+        status_code = _alias_status(alias_result)
+        handoff_owner = _alias_handoff_owner(alias_result)
+        handoff_intent = _alias_handoff_intent(alias_result)
         should_iterate = (
             handoff_owner == "user" and handoff_intent in {"need_clarification", "confirm_output"}
         ) or status_code in continuation_statuses
@@ -3367,10 +3391,8 @@ def spec(
             clarification_prompt="Additional details:",
         )
         status_code = _alias_status(alias_result)
-        handoff_intent = _alias_handoff_intent(alias_result)
-        next_step = _alias_next_step(alias_result)
         console.print()
-        if next_step == "plan" or status_code == "CAFE_CONFIRMED":
+        if _alias_is_confirmed_transition(alias_result, "plan"):
             console.print("[bold green]✅ Spec clarification completed![/bold green]")
             console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
             if alias_result.get("output_file"):
@@ -3380,14 +3402,14 @@ def spec(
                 _execute_next_phase_auto("plan", issue_name)
             else:
                 console.print("[dim]Next step:[/dim] [bold]cafe plan[/bold]")
-        elif (_alias_is_user_pause(alias_result) and handoff_intent == "confirm_output") or status_code == "CAFE_READY_FOR_REVIEW":
+        elif _alias_confirm_output_pause(alias_result):
             console.print("[bold green]✅ Spec draft completed![/bold green]")
             console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
             if alias_result.get("output_file"):
                 console.print(f"Saved to: {alias_result['output_file']}")
             console.print()
             console.print("[dim]Please review the spec and run:[/dim] [bold]cafe spec[/bold]")
-        elif (_alias_is_user_pause(alias_result) and handoff_intent == "need_clarification") or status_code == "CAFE_NEED_CLARIFICATION":
+        elif _alias_needs_clarification(alias_result):
             console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
             console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
             if alias_result.get("output_file"):
@@ -3539,24 +3561,22 @@ def plan(
             clarification_prompt="Additional planning details:",
         )
         status_code = _alias_status(alias_result)
-        handoff_intent = _alias_handoff_intent(alias_result)
-        next_step = _alias_next_step(alias_result)
         console.print()
-        if (_alias_is_user_pause(alias_result) and handoff_intent == "need_clarification") or status_code == "CAFE_NEED_CLARIFICATION":
+        if _alias_needs_clarification(alias_result):
             console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
             console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
             if alias_result.get("output_file"):
                 console.print(f"Saved to: {alias_result['output_file']}")
             console.print()
             console.print("[dim]To continue, run:[/dim] [bold]cafe plan[/bold]")
-        elif (_alias_is_user_pause(alias_result) and handoff_intent == "confirm_output") or status_code == "CAFE_READY_FOR_REVIEW":
+        elif _alias_confirm_output_pause(alias_result):
             console.print("[bold yellow]📋 Plan ready for review[/bold yellow]")
             console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
             if alias_result.get("output_file"):
                 console.print(f"Saved to: {alias_result['output_file']}")
             console.print()
             console.print("[dim]To review the plan, run:[/dim] [bold]cafe plan[/bold]")
-        elif next_step == "develop" or status_code == "CAFE_CONFIRMED":
+        elif _alias_is_confirmed_transition(alias_result, "develop"):
             console.print("[bold green]✅ Implementation plan completed![/bold green]")
             console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
             if alias_result.get("output_file"):
@@ -3692,10 +3712,8 @@ def develop(
             show_prompt=show_prompt,
         )
         status_code = _alias_status(alias_result)
-        handoff_intent = _alias_handoff_intent(alias_result)
-        next_step = _alias_next_step(alias_result)
         console.print()
-        resolved_next_step = next_step
+        resolved_next_step = _alias_next_step(alias_result)
         if not resolved_next_step:
             if status_code == "CAFE_CONFIRMED_SKIP_REVIEW":
                 resolved_next_step = "pr"
@@ -3717,7 +3735,7 @@ def develop(
                 console.print("[dim]Next step:[/dim] [bold]cafe pr[/bold]")
             else:
                 console.print("[dim]Next step:[/dim] [bold]cafe review[/bold]")
-        elif (_alias_is_user_pause(alias_result) and handoff_intent in {"need_clarification", "need_permission"}) or status_code in {"CAFE_NEED_CLARIFICATION", "CAFE_NEED_PERMISSION"}:
+        elif _alias_needs_clarification(alias_result) or _alias_needs_permission(alias_result):
             if auto:
                 _execute_next_phase_auto("develop", issue_name)
             else:
@@ -3887,10 +3905,8 @@ def review(
             show_prompt=show_prompt,
         )
         status_code = _alias_status(alias_result)
-        handoff_intent = _alias_handoff_intent(alias_result)
-        next_step = _alias_next_step(alias_result)
         console.print()
-        if next_step == "pr" or status_code == "CAFE_CONFIRMED":
+        if _alias_is_confirmed_transition(alias_result, "pr"):
             console.print("[bold green]✅ Code review passed![/bold green]")
             if alias_result.get("output_file"):
                 console.print(f"Saved to: {alias_result['output_file']}")
@@ -3900,7 +3916,7 @@ def review(
             else:
                 console.print("[dim]Next steps:[/dim]")
                 console.print("[dim]  1. Create PR: cafe pr[/dim]")
-        elif next_step == "develop" or status_code == "CAFE_NEEDS_CHANGES":
+        elif _alias_targets(alias_result, "develop") or status_code == "CAFE_NEEDS_CHANGES":
             console.print(f"[bold yellow]📝 Code review completed with status: {status_code}[/bold yellow]")
             if alias_result.get("output_file"):
                 console.print(f"[dim]Review feedback saved to:[/dim] [dim]{alias_result['output_file']}[/dim]")
@@ -3924,7 +3940,7 @@ def review(
                 console.print("[dim]Next steps:[/dim]")
                 console.print("[dim]  1. Make changes: cafe develop[/dim]")
                 console.print("[dim]  2. Review again: cafe review[/dim]")
-        elif (_alias_is_user_pause(alias_result) and handoff_intent == "need_clarification") or status_code == "CAFE_NEED_CLARIFICATION":
+        elif _alias_needs_clarification(alias_result):
             console.print("[bold yellow]💬 Review needs clarification[/bold yellow]")
             if alias_result.get("output_file"):
                 console.print(f"Saved to: {alias_result['output_file']}")
@@ -4056,7 +4072,6 @@ def pr(
             show_prompt=False,
         )
         status_code = _alias_status(alias_result)
-        next_step = _alias_next_step(alias_result)
         console.print()
         if _alias_is_done(alias_result) or status_code == "CAFE_CONFIRMED":
             console.print("[bold green]✅ PR content completed![/bold green]")
@@ -4065,7 +4080,7 @@ def pr(
                 console.print(f"Saved to: {alias_result['output_file']}")
             console.print()
             console.print("[dim]Next step:[/dim] [bold]Review and submit the PR[/bold]")
-        elif next_step == "develop" or status_code == "CAFE_NEEDS_CHANGES":
+        elif _alias_targets(alias_result, "develop") or status_code == "CAFE_NEEDS_CHANGES":
             console.print(f"[bold yellow]PR step completed with status: {status_code}[/bold yellow]")
             if alias_result.get("output_file"):
                 console.print(f"Saved to: {alias_result['output_file']}")

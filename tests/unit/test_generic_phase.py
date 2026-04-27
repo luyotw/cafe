@@ -68,6 +68,28 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
     assert "Blackboard digest:" not in prompt
 
 
+def test_build_prompt_uses_baton_wording_when_status_code_not_required(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+    prompt = phase.build_prompt(
+        skill_name="plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
+        context={
+            "blackboard_path": ".cafe/issues/demo/blackboard.json",
+            "handoff_summary": "Reopen PR and complete the local artifact before host-side publish.",
+            "next_step_path": ".cafe/issues/demo/next_step.txt",
+        },
+        output_file=Path("out.md"),
+        checklist_file=Path("checklist.md"),
+        require_status_code=False,
+    )
+
+    assert "Before finishing this step" in prompt
+    assert "Do NOT finish this step until ALL checklist items are marked as [x]." in prompt
+    assert "Before returning a status code" not in prompt
+    assert "Do NOT return a status code" not in prompt
+
+
 def test_parse_response_extracts_status_and_goto(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     status, goto_target = phase.parse_response(

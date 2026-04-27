@@ -158,6 +158,7 @@ class GenericWorkflowStepExecutor(Phase):
                 "questions_xml_file": questions_xml_file,
                 "blackboard_state": blackboard_state,
             },
+            require_status_code=self._step_requires_status_code(step_name),
         )
 
         response = execution.response

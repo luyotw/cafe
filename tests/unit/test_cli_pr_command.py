@@ -59,6 +59,21 @@ class TestPRCommand:
         assert "PR content completed" in result.stdout
         mock_execute_alias.assert_called_once()
 
+    @patch("cafe.ui.cli._execute_single_step_alias")
+    @patch("cafe.ui.cli.GitOperations")
+    def test_pr_uses_done_baton_without_status_code(self, mock_git_cls, mock_execute_alias, temp_repo_dir):
+        _mock_git(mock_git_cls)
+        mock_execute_alias.return_value = {
+            "handoff_owner": "done",
+            "iterations": 1,
+            "output_file": ".cafe/issues/test-issue/pr/iteration_001/output.md",
+        }
+
+        result = runner.invoke(app, ["pr"])
+
+        assert result.exit_code == 0
+        assert "PR content completed" in result.stdout
+
     @patch("cafe.ui.cli.GitOperations")
     def test_pr_rejects_legacy_flags(self, mock_git_cls, temp_repo_dir):
         _mock_git(mock_git_cls)
@@ -74,7 +89,7 @@ class TestPRCommand:
     def test_pr_routes_needs_changes_to_develop(self, mock_git_cls, mock_execute_alias, temp_repo_dir):
         _mock_git(mock_git_cls)
         mock_execute_alias.return_value = {
-            "status_code": "CAFE_NEEDS_CHANGES",
+            "next_step": "develop",
             "iterations": 2,
             "output_file": ".cafe/issues/test-issue/pr/iteration_002/output.md",
         }
@@ -82,5 +97,4 @@ class TestPRCommand:
         result = runner.invoke(app, ["pr"])
 
         assert result.exit_code == 0
-        assert "CAFE_NEEDS_CHANGES" in result.stdout
         assert "cafe develop" in result.stdout

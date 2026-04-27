@@ -773,6 +773,7 @@ def test_generic_workflow_step_pr_does_not_require_status_code(tmp_path: Path, m
         },
     }
     state = BlackboardStore(issue_dir).load_or_create("pr")
+    state.handoff_summary = "Reopen PR and complete the local artifact before host-side publish."
     state.artifacts["spec"] = ArtifactEntry(
         name="spec",
         kind=ArtifactKind.DOCUMENT,
@@ -810,6 +811,59 @@ def test_generic_workflow_step_pr_does_not_require_status_code(tmp_path: Path, m
     assert captured["require_status_code"] is False
     assert result.status_code is None
     assert not (issue_dir / "pr" / "status.json").exists()
+
+
+def test_generic_workflow_step_pr_prompt_uses_baton_wording(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-prompt"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "Nick"}},
+        "steps": {
+            "pr": {
+                "skill": "pr",
+                "role": "developer",
+                "output_artifact": "pr_result",
+                "allowed_tools": ["Read"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("pr")
+    state.handoff_summary = "Reopen PR and complete the local artifact before host-side publish."
+    state.artifacts["spec"] = ArtifactEntry(
+        name="spec",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="spec",
+        path="spec/iteration_001/output.md",
+    )
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="plan",
+        path="plan/iteration_001/output.md",
+    )
+    agent_manager = FakeAgentManager("local artifact updated")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-pr-prompt",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "Nick"},
+    )
+
+    executor.execute_step("pr", playbook["steps"]["pr"], state)
+
+    assert any("Before finishing this step" in prompt for prompt in agent_manager.prompts)
+    assert any(
+        "Do NOT finish this step until ALL checklist items are marked as [x]." in prompt
+        for prompt in agent_manager.prompts
+    )
+    assert not any("Before returning a status code" in prompt for prompt in agent_manager.prompts)
 
 
 def test_generic_workflow_step_applies_phase_specific_model_per_step(tmp_path: Path, monkeypatch) -> None:

@@ -289,6 +289,52 @@ class TestPlanCommand:
 
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli.select_template")
+    @patch("cafe.ui.cli._execute_single_step_alias")
+    def test_plan_local_mode_uses_next_step_without_status_code(
+        self,
+        mock_execute_alias: Mock,
+        mock_select_template: Mock,
+        mock_git_ops: Mock,
+        tmp_path: Path,
+    ) -> None:
+        _create_minimal_config(tmp_path)
+
+        branch_name = "test-issue"
+        spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
+        iter_dir = spec_dir / "iteration_001"
+        iter_dir.mkdir(parents=True, exist_ok=True)
+        spec_file = iter_dir / "output.md"
+        spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
+
+        template_dir = tmp_path / ".cafe" / "templates" / "plan"
+        template_dir.mkdir(parents=True, exist_ok=True)
+        (template_dir / "default.md").write_text("# Plan Template")
+
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = branch_name
+        mock_git_ops.return_value = mock_git_instance
+        mock_select_template.return_value = "default"
+
+        mock_execute_alias.return_value = {
+            "next_step": "develop",
+            "iterations": 2,
+            "output_file": str(spec_file),
+        }
+
+        import os
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["plan", "--no-interactive", "--template", "default"])
+        finally:
+            os.chdir(old_cwd)
+
+        assert result.exit_code == 0
+        assert "Implementation plan completed" in result.stdout
+
+    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.cli.select_template")
     def test_plan_github_mode_with_issue_is_unsupported(
         self,
         mock_select_template: Mock,

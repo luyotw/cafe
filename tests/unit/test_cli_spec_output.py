@@ -113,6 +113,22 @@ class TestSpecCommandOutputWithReadyForReview:
         assert result.exit_code == 0
         assert "Saved to: .cafe/issues/test-branch/spec/iteration_001/output.md" in result.stdout
 
+    def test_ready_for_review_uses_baton_pause_without_status_code(
+        self, runner, mock_git_ops, mock_execute_alias, mock_agent_manager, mock_permission_handler, setup_test_env
+    ):
+        """confirm_output baton should render review-ready messaging without relying on status_code."""
+        mock_execute_alias.return_value = {
+            "iterations": 2,
+            "handoff_owner": "user",
+            "handoff_intent": "confirm_output",
+        }
+
+        result = runner.invoke(app, ["spec", "--interactive", "--user-input", "test input"])
+
+        assert result.exit_code == 0
+        assert "✅ Spec draft completed!" in result.stdout
+        assert "Please review the spec and run:" in result.stdout
+
 
 class TestSpecCommandOutputWithConfirmed:
     """測試 CONFIRMED 狀態輸出訊息."""
@@ -150,6 +166,21 @@ class TestSpecCommandOutputWithConfirmed:
 
         assert result.exit_code == 0
         assert "Iterations: 5" in result.stdout
+
+    def test_confirmed_transition_uses_next_step_without_status_code(
+        self, runner, mock_git_ops, mock_execute_alias, mock_agent_manager, mock_permission_handler, setup_test_env
+    ):
+        """next_step should drive completion messaging even when status_code is absent."""
+        mock_execute_alias.return_value = {
+            "iterations": 3,
+            "next_step": "plan",
+        }
+
+        result = runner.invoke(app, ["spec", "--interactive", "--user-input", "test"])
+
+        assert result.exit_code == 0
+        assert "✅ Spec clarification completed!" in result.stdout
+        assert "cafe plan" in result.stdout
 
 
 class TestSpecCommandOutputWithNeedClarification:
