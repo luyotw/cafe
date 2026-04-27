@@ -529,6 +529,8 @@ class GenericWorkflowStepExecutor(Phase):
         checklist_file.write_text("", encoding="utf-8")
 
     def _persist_final_status(self, status_code: Optional[PhaseStatusCode]) -> None:
+        if not self._step_requires_status_code(self.phase_name):
+            return
         context_file = self._get_iteration_dir(self.iteration) / "context.json"
         if context_file.exists():
             context_data = json.loads(context_file.read_text(encoding="utf-8"))

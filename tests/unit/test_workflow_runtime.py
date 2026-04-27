@@ -181,7 +181,10 @@ def test_runtime_single_step_executes_non_pr_locally(tmp_path: Path) -> None:
     assert result.final_step == "develop"
     assert result.final_status_code == "CAFE_CONFIRMED"
     blackboard = BlackboardStore(issue_dir).load_or_create("develop")
-    assert blackboard.current_step == "develop"
+    assert blackboard.current_step == "done"
+    assert blackboard.handoff_contract is not None
+    assert blackboard.handoff_contract.to_owner == HandoffOwner.DONE
+    assert blackboard.handoff_contract.intent == HandoffIntent.WORKFLOW_COMPLETE
     assert blackboard.artifacts["develop_result"].path == "d1"
 
 
@@ -213,7 +216,9 @@ def test_runtime_single_step_executes_pr_without_legacy_runner(tmp_path: Path) -
     assert result.final_step == "pr"
     assert result.final_status_code == "BATON_WORKFLOW_COMPLETE"
     blackboard = BlackboardStore(issue_dir).load_or_create("pr")
-    assert blackboard.current_step == "pr"
+    assert blackboard.current_step == "done"
+    assert blackboard.handoff_contract is not None
+    assert blackboard.handoff_contract.to_owner == HandoffOwner.DONE
     assert blackboard.artifacts["pr_result"].path == "p1"
 
 

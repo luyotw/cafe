@@ -73,8 +73,12 @@ def test_single_step_alias_updates_workflow_pointer_to_requested_step(tmp_path: 
         )
 
     assert result["status_code"] == "CAFE_NO_CHANGES_NEEDED"
+    assert result["handoff_owner"] == "agent"
+    assert result["handoff_intent"] == "await_agent"
+    assert result["next_step"] == "review"
+    assert result["current_step"] == "review"
     blackboard_data = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
-    assert blackboard_data["current_step"] == "develop"
+    assert blackboard_data["current_step"] == "review"
 
 
 def test_workflow_command_runs_dry_mode(tmp_path: Path, monkeypatch) -> None:

@@ -9,7 +9,7 @@
 2. **Phase 不特化** — 只有一個 GenericPhase 作為 Skill 執行引擎，透過 lifecycle hooks 實現可擴展行為
 3. **Playbook = builtin + custom** — 編排器，透過 YAML 宣告 Skill 的執行順序和轉換邏輯
 4. **Blackboard** — 共享狀態，解決跨 step 資訊斷層
-5. **CAFE_GOTO** — agent 自主指定下一棒
+5. **Baton + Receipt** — workflow 以 baton 決定下一棒，以 host-side capability receipt 驗證外部副作用是否真的完成
 6. **WorkflowInstance** — `.cafe/issues/{issue}/` = 一個流程實例，為 v0.4 subflow 鋪路
 
 ## 為什麼 Skill 是核心
@@ -28,8 +28,9 @@ v0.2 的解法：**一個 Skill folder = 一個 step 的全部知識**。Skill �
 │  Playbooks (builtin + custom)                                │
 │  宣告 step 順序 + 轉換邏輯 + role 綁定                       │
 ├─────────────────────────────────────────────────────────────┤
-│  PlaybookRunner — 編排器                                     │
-│  讀 playbook → 依序啟動 step → 處理 status code + CAFE_GOTO  │
+│  BlackboardWorkflowRuntime — 編排器                           │
+│  讀 playbook → 執行 step → 依 blackboard / baton / receipt    │
+│  決定 pause、resume、transition、complete                    │
 ├─────────────────────────────────────────────────────────────┤
 │  GenericPhase — Skill 執行引擎（lifecycle hooks pipeline）    │
 │  載入 Skill → hooks → 執行 agent → hooks → 回傳結果          │
@@ -108,6 +109,8 @@ Write spec to: {output_file}
 {status_code_instruction}
 ```
 
+> 註：這個區塊在 `v0.2` 後半段主要是給 legacy steps / 過渡相容用；blackboard-first steps 可以不再把 status code 當主要 completion signal。
+
 ### Frontmatter 欄位
 
 | 欄位 | 必要 | 說明 |
@@ -117,7 +120,7 @@ Write spec to: {output_file}
 | `version` | 否 | Skill 版本 |
 | `tags` | 否 | 標籤，用於搜尋和分類 |
 
-`allowed_tools`、`valid_status_codes`、`max_iterations` 等執行層面的設定放在 **Playbook** 而非 SKILL.md，因為同一個 Skill 在不同 Playbook 裡可能有不同的權限和限制。
+`allowed_tools`、`max_iterations` 等執行層面的設定放在 **Playbook** 而非 SKILL.md，因為同一個 Skill 在不同 Playbook 裡可能有不同的權限和限制。`valid_status_codes` 在 `v0.2` 後半段只視為 legacy 相容欄位；新 workflow 核心不應再依賴它作為主要 transition 依據。
 
 ### Progressive Disclosure（漸進式揭露）
 
@@ -584,19 +587,18 @@ ArtifactEntry(
 
 ### Artifact Publish 規則
 
-「iteration 正常結束」和「artifact 可 publish」是**兩個不同���念**：
+「iteration 正常結束」和「artifact 可 publish」是**兩個不同概念**：
 
-- **iteration 正常結束** = agent 回傳了 valid status code，沒有 crash/timeout
+- **iteration 正常結束** = step 寫出了可接受的 baton / terminal intent，且沒有 crash/timeout
 - **artifact_ready** = 這輪產出了值得 publish 的 output
 
-| Status Code | iteration 正常結束 | artifact_ready |
+| Baton / 結果類型 | iteration 正常結束 | artifact_ready |
 |---|---|---|
-| `CAFE_CONFIRMED` | ✅ | ✅ |
-| `CAFE_NEEDS_CHANGES` | ✅ | ✅（review 完成了工作） |
-| `CAFE_READY_FOR_REVIEW` | ✅ | ✅（有初稿可看） |
-| `CAFE_NEED_CLARIFICATION` | ✅ | **❌**（只是吐 questions，還沒最終產出） |
-| `CAFE_NEED_PERMISSION` | ✅ | ❌ |
-| 失敗 / 中斷 | ❌ | ❌ |
+| `workflow_complete` / `done` | ✅ | ✅ |
+| `review_requested` / 可供下一步消費的產出 | ✅ | ✅ |
+| `clarification_needed` / `user` | ✅ | **❌**（只是吐 questions，還沒最終產出） |
+| `permission_needed` / `user` | ✅ | ❌ |
+| 失敗 / 中斷 / 無 transition | ❌ | ❌ |
 
 Hook 可以 override `artifact_ready`（透過 HookResult）。
 
@@ -693,6 +695,8 @@ Runtime store 立場：
 - v0.4 再評估是否抽離到 structured store（SQLite 或 remote）
 
 ## CAFE_GOTO
+
+> Legacy note: `CAFE_GOTO` 與 status code 是舊 transition 模型的產物。`v0.2` 後半段的主路徑應以 blackboard baton 為準；這一節保留的是遷移期相容語意，而不是新核心的主要設計。
 
 ### 解析規則
 
@@ -909,7 +913,7 @@ Artifact 分工：
 | `src/cafe/skills/native_bridge.py` | 將 CAFE skill 安裝到 repo-local CLI-native skills 目錄並回傳 invocation |
 | `src/cafe/phases/generic_phase.py` | GenericPhase — lifecycle hooks pipeline + Skill 執行 |
 | `src/cafe/core/hooks/` | Builtin hook 實作（GitHubIssueFetcher, UserInputCollector, InteractiveQAHandler, PermissionRetryHandler, NewChangesGate, GitHubPRCreator, PRCommentPoster） |
-| `src/cafe/core/playbook_runner.py` | PlaybookRunner — 編排、status code 轉換、CAFE_GOTO、loop detection |
+| `src/cafe/core/playbook_runner.py` | Legacy runner 過渡層；在新 runtime 接手前保留既有流程與測試支撐 |
 | `src/cafe/data/skills/` | Builtin Skills（spec_first, spec_revise, plan, develop, review, pr） |
 | `src/cafe/data/playbooks/` | Builtin Playbooks（default, hotfix） |
 
@@ -926,8 +930,8 @@ Artifact 分工：
 
 ### 修改
 - `src/cafe/core/phase.py` — 加入 Blackboard 屬性和 hook pipeline 基礎設施
-- `src/cafe/ui/cli.py` — `make()` 委派 PlaybookRunner；動態 phases/roles
-- `src/cafe/core/status_codes.py` — 加入 CAFE_GOTO 解析
+- `src/cafe/ui/cli.py` — `make()` 委派 BlackboardWorkflowRuntime；動態 phases/roles
+- `src/cafe/core/status_codes.py` — 僅保留 legacy status code / goto 相容邏輯，逐步退出主流程
 - `src/cafe/utils/config.py` — 加入 playbook key；動態 roles
 - `src/cafe/services/timeline_builder.py` — 動態 phase 列表
 
@@ -972,7 +976,7 @@ Artifact 分工：
 
 ### Milestone B: 執行模型重寫
 
-目標：用 GenericPhase + PlaybookRunner 取代 5 個特化 Phase class。
+目標：用 GenericPhase + BlackboardWorkflowRuntime 取代 5 個特化 Phase class，並讓 workflow transition 以 blackboard / baton / capability receipt 為主。
 
 5. **Blackboard**
    - `blackboard.py` — 資料模型、持久化、rebuild
@@ -983,18 +987,18 @@ Artifact 分工：
    - `hooks/` — 所有 builtin hook 實作
    - 測試：GenericPhase + mock agent + Blackboard
 
-7. **PlaybookRunner**
-   - `runner.py` — 編排、status code 轉換、CAFE_GOTO、loop detection
-   - `status_codes.py` 加入 CAFE_GOTO 解析
+7. **BlackboardWorkflowRuntime**
+   - `workflow_runtime.py` — 編排、pause / resume、baton transition、capability receipt gate
+   - `playbook_runner.py` / `status_codes.py` 只保留必要過渡層
    - 測試：完整 playbook 執行流程
 
 8. **接線到 CLI（Wave 1）**
-   - `make()` → PlaybookRunner
-   - 個別 step 命令 → `PlaybookRunner.run(start_step=X, single_step=True)`
+   - `make()` → BlackboardWorkflowRuntime
+   - 個別 step 命令 → `BlackboardWorkflowRuntime.run(start_step=X, single_step=True)` 或對應 thin wrapper
    - `summary` / `show` / timeline 的 phase 列表改從 playbook 讀取
    - 刪除 5 個 Phase class
 
-交付物：`cafe make` 走 PlaybookRunner，default playbook 行為與 v0.1 一致。
+交付物：`cafe make` 走 BlackboardWorkflowRuntime，default playbook 的主流程不再依賴 status code 才能完成 transition。
 
 ### Milestone C: 全面動態化
 
@@ -1026,6 +1030,19 @@ Artifact 分工：
 
 > **Note**: `cafe playbook simulate`（mock executor 走 graph）列為 v0.2.x 目標，不是 Milestone C 的 blocking item。
 
+## 目前待執行項目
+
+以下清單是目前 `v0.2` blackboard runtime 重構的 live backlog。重點不是再補 status-code 相容，而是持續把 workflow 主路徑收斂到 `artifact + baton + capability receipt`。
+
+- [ ] 繼續縮小 `GenericWorkflowStepExecutor` 的責任邊界，移除剩餘的 status-code persistence 與 `context.json` / `status.json` 依賴，讓 step executor 只負責 iteration 執行與 artifact 產出
+- [ ] 清掉 generic workflow prompt / context 組裝裡殘留的 status-code 語意，避免新 runtime 仍被舊 completion model 反向污染
+- [ ] 把 `cafe spec`、`cafe plan`、`cafe develop`、`cafe review`、`cafe pr` 收斂成 `BlackboardWorkflowRuntime` 的 thin wrapper，不再維持各自獨立的 status-code-driven UX
+- [ ] 盤點並移除 CLI / workflow entry / resume / debug 路徑上剩餘的 legacy 狀態來源，確保 pause、resume、complete 的判定都只信 blackboard 與 baton
+- [ ] 延續 `pr` step 的 receipt-gated completion 模型，明確區分 artifact completion 與 capability completion，避免 workflow 在 host-side 動作未完成時被提前收成 `done`
+- [ ] 將 `core/phase.py` 與 legacy `spec_phase.py`、`plan_phase.py`、`develop_phase.py`、`review_phase.py`、`pr_phase.py` 逐步隔離出 workflow 核心路徑，最後只保留過渡用途或直接刪除
+- [ ] 讓 `PlaybookRunner` 退出 active workflow path，只保留必要的過渡層與測試依賴；等新 runtime 接完主流程後再刪除
+- [ ] 當 default workflow 主路徑已完全切到 blackboard runtime 後，再集中做真實情境手測：`cafe make`、pause/resume、chat handoff、`cafe reset` 後續跑、`pr` publish / receipt
+
 ## v0.2 預留但不完整實作的入口
 
 為了讓後續版本能自然演化，v0.2 在以下地方預留擴充點：
@@ -1055,7 +1072,7 @@ v0.2 **不賦予 `assignee_type: human` 任何 runtime 語意**，避免過早�
 
 1. **不做 HumanTask 正式實作** — v0.3 專門做，v0.2 只預留入口
 2. **不做 scripts/ 自動執行** — v0.2.x 或 v0.3 開放 custom hooks via shell script
-3. **不做 AI 驅動編排** — 確定性的 status codes + CAFE_GOTO 已足夠
+3. **不做 AI 驅動編排** — workflow 仍維持確定性編排；agent 只負責產出 artifact / baton，外部副作用由 host capability 執行與驗證
 4. **不做 runtime 動態新增 step** — 所有 step 在 playbook 載入時確定
 5. **不做特化 Phase class** — 全部用 GenericPhase + hooks
 6. **不做 Business Object** — v0.4 才做，且傾向獨立系統（路徑 B），不演化 Blackboard
@@ -1063,12 +1080,12 @@ v0.2 **不賦予 `assignee_type: human` 任何 runtime 語意**，避免過早�
 ## 驗證方式
 
 1. **Milestone A**: `cafe make` 行為與 v0.1 完全一致（prompt 來源改變，輸出不變）
-2. **Milestone B**: `cafe make` 走 PlaybookRunner，default playbook 行為與 v0.1 一致
+2. **Milestone B**: `cafe make` 走 BlackboardWorkflowRuntime，default playbook 主流程以 blackboard / baton / receipt 完成 transition
 3. **Milestone C**:
    - 自訂 Skill + Playbook 能正確執行（security_audit 範例）
    - 覆蓋 builtin skill 能正確載入 custom 版本
    - Blackboard 正確追蹤 artifact 版本，各 step 看到跨 step 更新
-   - CAFE_GOTO 正確跳轉，loop detection 正常
+   - baton transition 與 capability receipt gate 正常
    - Progressive disclosure 只在需要時載入 Skill 內容
    - 向下相容：沒有 playbook key 的 config 預設 default
    - `cafe playbook validate` 能正確檢查自訂 playbook

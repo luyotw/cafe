@@ -809,6 +809,7 @@ def test_generic_workflow_step_pr_does_not_require_status_code(tmp_path: Path, m
 
     assert captured["require_status_code"] is False
     assert result.status_code is None
+    assert not (issue_dir / "pr" / "status.json").exists()
 
 
 def test_generic_workflow_step_applies_phase_specific_model_per_step(tmp_path: Path, monkeypatch) -> None:
