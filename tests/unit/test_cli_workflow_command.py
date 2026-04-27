@@ -348,6 +348,70 @@ def test_workflow_command_prints_paused_when_human_input_is_needed(tmp_path: Pat
         assert "Workflow is waiting for user input" in result.stdout
 
 
+def test_workflow_command_prints_capability_receipt_guidance(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-240"
+
+    class FakeExecutor:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object):
+            assert step_name == "pr"
+            _write_baton(issue_dir, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete")
+            return StepExecutionResult(response="done", artifacts={})
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-240"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute", "--start-step", "pr"])
+
+    assert result.exit_code == 0
+    assert "Workflow paused" in result.stdout
+    assert "Host capability did not complete for this step" in result.stdout
+    assert "Required receipt: pr_synced" in result.stdout
+
+
+def test_workflow_command_prints_transition_guidance_when_status_missing(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    playbook_dir = tmp_path / ".cafe" / "playbooks"
+    playbook_dir.mkdir(parents=True, exist_ok=True)
+    (playbook_dir / "statusless.yaml").write_text(
+        """
+playbook:
+  id: statusless
+steps:
+  spec:
+    skill: spec_first
+    role: pm
+    valid_status_codes: [CAFE_CONFIRMED]
+    on: {}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    class FakeExecutor:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object):
+            return ("this response has no workflow token", {})
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-241"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "statusless", "--execute"])
+
+    assert result.exit_code == 0
+    assert "Workflow paused" in result.stdout
+    assert "Agent response did not include a recognizable workflow transition" in result.stdout
+
+
 def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CAFE_FORCE_INTERACTIVE", "1")

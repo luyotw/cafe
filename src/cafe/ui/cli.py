@@ -666,6 +666,45 @@ def _execute_single_step_alias(
     }
 
 
+def _build_workflow_pause_guidance(*, blackboard: object, final_status_code: str) -> str:
+    events = getattr(blackboard, "events", None)
+    if isinstance(events, list):
+        for event in reversed(events):
+            event_type = getattr(event, "event_type", "")
+            data = getattr(event, "data", {}) or {}
+            if event_type == "workflow_blocked" and data.get("reason") == "missing_capability_receipt":
+                required_event = str(data.get("required_event", "")).strip()
+                if required_event:
+                    return (
+                        f"Host capability did not complete for this step. "
+                        f"Required receipt: {required_event}. Resolve the host-side action, then run cafe make again."
+                    )
+                return "Host capability did not complete for this step. Resolve the host-side action, then run cafe make again."
+            if event_type == "baton_missing_transition":
+                return "Agent did not hand off to a new step. Open chat with the current role or update the baton, then run cafe make again."
+            if event_type == "status_code_invalid":
+                invalid_codes = data.get("invalid_status_codes")
+                if isinstance(invalid_codes, list) and invalid_codes:
+                    rendered = ", ".join(str(code) for code in invalid_codes)
+                    return (
+                        f"Agent response did not match a valid workflow transition ({rendered}). "
+                        "Fix the agent output or prompt, then run cafe make again."
+                    )
+                return "Agent response did not match a valid workflow transition. Fix the agent output or prompt, then run cafe make again."
+            if event_type == "status_code_missing":
+                return "Agent response did not include a recognizable workflow transition. Fix the agent output or prompt, then run cafe make again."
+
+    if final_status_code == "INVALID_STATUS_CODE":
+        return "Agent response did not match a valid workflow transition. Fix the agent output or prompt, then run cafe make again."
+    if final_status_code == "NO_STATUS_CODE":
+        return "Agent response did not include a recognizable workflow transition. Fix the agent output or prompt, then run cafe make again."
+    if final_status_code == "NO_BATON_TRANSITION":
+        return "Agent did not hand off to a new step. Open chat with the current role or update the baton, then run cafe make again."
+    if final_status_code == "MISSING_CAPABILITY_RECEIPT":
+        return "Host capability did not complete for this step. Resolve the host-side action, then run cafe make again."
+    return "Resolve the requested input, then run cafe make again to resume."
+
+
 def _reject_unsupported_phase_options(phase_name: str, unsupported_options: Dict[str, bool]) -> None:
     """Exit when a legacy-only CLI option is requested."""
     unsupported = [name for name, enabled in unsupported_options.items() if enabled]
@@ -6095,13 +6134,9 @@ def workflow(
                 console.print(
                     f"[yellow]Workflow paused[/yellow] step={result.final_step} status={result.final_status_code} next={latest_blackboard.current_step}"
                 )
-                if result.final_status_code == "INVALID_STATUS_CODE":
-                    console.print(
-                        "[dim]Agent returned an invalid CAFE status code for this step. "
-                        "Fix prompt/agent output and run cafe make again to resume.[/dim]"
-                    )
-                else:
-                    console.print("[dim]Resolve the requested input, then run cafe make again to resume.[/dim]")
+                console.print(
+                    f"[dim]{_build_workflow_pause_guidance(blackboard=latest_blackboard, final_status_code=result.final_status_code)}[/dim]"
+                )
             return
     except CriticalPhaseError as e:
         _handle_phase_exception(e, "workflow")
