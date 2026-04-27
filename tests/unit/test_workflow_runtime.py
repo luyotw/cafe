@@ -329,3 +329,53 @@ def test_runtime_legacy_step_honors_review_confirmed_advance(tmp_path: Path) -> 
     assert result.final_status_code == "CAFE_CONFIRMED"
     blackboard = BlackboardStore(issue_dir).load_or_create("review")
     assert blackboard.current_step == "pr"
+
+
+def test_runtime_resumes_from_next_step_when_current_step_already_confirmed(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-resume"
+    spec_dir = issue_dir / "spec"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    (spec_dir / "status.json").write_text(
+        '{"status_code":"CAFE_CONFIRMED","iteration":3}',
+        encoding="utf-8",
+    )
+    (issue_dir / "plan").mkdir(parents=True, exist_ok=True)
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "plan"},
+            },
+            "plan": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+    executed_steps: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        executed_steps.append(step_name)
+        return StepExecutionResult(
+            response="CAFE_CONFIRMED",
+            artifacts={},
+            status_code="CAFE_CONFIRMED",
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    result = runtime.run(max_transitions=5)
+
+    assert result.completed is True
+    assert result.final_step == "plan"
+    assert executed_steps == ["plan"]
