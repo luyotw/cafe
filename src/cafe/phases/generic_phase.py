@@ -117,6 +117,14 @@ class GenericPhase:
                     "If the handoff asks for a retry, re-run, re-sync, or re-open action, do not treat an old artifact or a closed external object as completion.",
                 ]
             )
+            if skill_name == "pr":
+                runtime_context.extend(
+                    [
+                        "For the PR phase, completion is local-only: finish the PR artifact and checklist, then update the workflow baton.",
+                        "Do not wait for, verify, or require a remote GitHub branch/PR before updating the workflow baton.",
+                        "Remote PR publish happens later in the host-side publish_output hook.",
+                    ]
+                )
         if context and context.get("user_input"):
             runtime_context.extend(["Current user input for this iteration:", context["user_input"]])
 
@@ -244,20 +252,6 @@ class GenericPhase:
                 require_status_code=require_status_code,
             )
             response = agent_executor(prompt)
-            valid_codes = [
-                PhaseStatusCode(code)
-                for code in step_def.get("valid_status_codes", [])
-                if code in {item.value for item in PhaseStatusCode}
-            ] or list(PhaseStatusCode)
-            status_code, goto_target = self.parse_response(
-                response=response,
-                valid_status_codes=valid_codes,
-            )
-            if questions_xml_file is not None:
-                self.validate_clarification_output(
-                    status_code=status_code,
-                    questions_xml_file=questions_xml_file,
-                )
 
             after = self._run_hook_stage(
                 "after_execute",

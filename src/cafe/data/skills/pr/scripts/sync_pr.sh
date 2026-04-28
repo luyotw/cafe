@@ -8,6 +8,27 @@ set -euo pipefail
 
 OUTPUT_FILE=""
 BASE_BRANCH=""
+SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../../../.." && pwd)"
+
+resolve_python_bin() {
+  if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
+    echo "$REPO_ROOT/.venv/bin/python"
+    return 0
+  fi
+  local repo_root
+  if repo_root=$(git rev-parse --show-toplevel 2>/dev/null); then
+    if [[ -x "$repo_root/.venv/bin/python" ]]; then
+      echo "$repo_root/.venv/bin/python"
+      return 0
+    fi
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    command -v python3
+    return 0
+  fi
+  return 1
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -39,6 +60,11 @@ fi
 
 if [[ ! -f "$OUTPUT_FILE" ]]; then
   echo "Error: output file not found: $OUTPUT_FILE" >&2
+  exit 1
+fi
+
+if ! PYTHON_BIN=$(resolve_python_bin); then
+  echo "Error: python3 is required." >&2
   exit 1
 fi
 
@@ -75,7 +101,7 @@ post_todo_comment() {
   local todo_result todo_action todo_body user_input_path
   local post_enabled is_todo has_unchecked
 
-  issue_dir=$(python3 - "$OUTPUT_FILE" <<'PY'
+  issue_dir=$("$PYTHON_BIN" - "$OUTPUT_FILE" <<'PY'
 from pathlib import Path
 import sys
 out = Path(sys.argv[1]).resolve()
@@ -84,7 +110,7 @@ PY
 )
   issue_yaml="$issue_dir/issue.yaml"
 
-  post_enabled=$(python3 - "$issue_yaml" <<'PY'
+  post_enabled=$("$PYTHON_BIN" - "$issue_yaml" <<'PY'
 import sys
 from pathlib import Path
 import yaml
@@ -108,7 +134,7 @@ PY
     return 0
   fi
 
-  todo_result=$(python3 - "$issue_dir" <<'PY'
+  todo_result=$("$PYTHON_BIN" - "$issue_dir" <<'PY'
 from pathlib import Path
 import json
 import re
@@ -146,16 +172,16 @@ print(json.dumps({"action": "skipped", "reason": "todo_iteration_not_found"}))
 PY
 )
 
-  todo_action=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("action",""))' <<<"$todo_result")
+  todo_action=$("$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin).get("action",""))' <<<"$todo_result")
   if [[ "$todo_action" != "ready" ]]; then
-    echo "skipped: $(python3 -c 'import json,sys; print(json.load(sys.stdin).get("reason","unknown"))' <<<"$todo_result")" >&2
+    echo "skipped: $("$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin).get("reason","unknown"))' <<<"$todo_result")" >&2
     return 0
   fi
 
-  todo_body=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("todo_content",""))' <<<"$todo_result")
-  user_input_path=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("user_input_path",""))' <<<"$todo_result")
+  todo_body=$("$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin).get("todo_content",""))' <<<"$todo_result")
+  user_input_path=$("$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin).get("user_input_path",""))' <<<"$todo_result")
 
-  gh pr comment "$pr_number" --body "$(python3 - "$todo_body" "$user_input_path" <<'PY'
+  gh pr comment "$pr_number" --body "$("$PYTHON_BIN" - "$todo_body" "$user_input_path" <<'PY'
 import sys
 todo_content = sys.argv[1]
 user_input_path = sys.argv[2]
@@ -178,15 +204,15 @@ fi
 EXISTING_PR=$(gh pr view --json number,url,state,baseRefName 2>/dev/null || echo "")
 
 if [[ -n "$EXISTING_PR" ]]; then
-  PR_STATE=$(echo "$EXISTING_PR" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['state'])")
+  PR_STATE=$(echo "$EXISTING_PR" | "$PYTHON_BIN" -c "import sys,json; d=json.load(sys.stdin); print(d['state'])")
 else
   PR_STATE=""
 fi
 
 if [[ "$PR_STATE" == "OPEN" ]]; then
-  PR_NUMBER=$(echo "$EXISTING_PR" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['number'])")
-  PR_URL=$(echo "$EXISTING_PR" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['url'])")
-  PR_BASE=$(echo "$EXISTING_PR" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('baseRefName', ''))")
+  PR_NUMBER=$(echo "$EXISTING_PR" | "$PYTHON_BIN" -c "import sys,json; d=json.load(sys.stdin); print(d['number'])")
+  PR_URL=$(echo "$EXISTING_PR" | "$PYTHON_BIN" -c "import sys,json; d=json.load(sys.stdin); print(d['url'])")
+  PR_BASE=$(echo "$EXISTING_PR" | "$PYTHON_BIN" -c "import sys,json; d=json.load(sys.stdin); print(d.get('baseRefName', ''))")
   echo "Updating PR #$PR_NUMBER..." >&2
   gh pr edit "$PR_NUMBER" --title "$TITLE" --body "$BODY" >&2
   post_todo_comment "$PR_NUMBER"

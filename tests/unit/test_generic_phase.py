@@ -211,7 +211,7 @@ def test_execute_runs_prepare_input_and_after_execute_retry(tmp_path: Path) -> N
     assert "Phase skill: /plan" in prompts[0]
     assert "Shared skills:" in prompts[1]
     assert "Phase skill: /plan" in prompts[1]
-    assert result.status_code == PhaseStatusCode.CONFIRMED
+    assert result.status_code is None
 
 
 def test_execute_skips_publish_when_artifact_not_ready(tmp_path: Path) -> None:

@@ -77,11 +77,17 @@ class GenericWorkflowStepExecutor(Phase):
         output_file = self._get_versioned_file_path(step_name, self.iteration, self.phase_dir)
         checklist_file = iteration_dir / "checklist.md"
         questions_xml_file = iteration_dir / "questions.xml"
+        publish_request_file = iteration_dir / "publish_request.json"
         self._current_output_file = output_file
 
         if self.iteration > 1:
             self._copy_previous_version(step_name, self.iteration, self.phase_dir)
         self._ensure_output_file_initialized(step_name, output_file)
+        if step_name == "pr":
+            self._write_publish_request(
+                output_file=output_file,
+                publish_request_file=publish_request_file,
+            )
 
         skill_name = self._resolve_skill_name(step_def, self.iteration)
         valid_status_codes = self._resolve_valid_status_codes(step_def)
@@ -133,7 +139,7 @@ class GenericWorkflowStepExecutor(Phase):
                 prompt=prompt,
                 user_input=resolved_user_input,
                 valid_status_codes=valid_status_codes,
-                require_status_code=self._step_requires_status_code(step_name),
+                require_status_code=False,
                 allowed_tools=allowed_tools,
                 phase_specific_data=phase_specific_data,
             )
@@ -156,6 +162,7 @@ class GenericWorkflowStepExecutor(Phase):
                 "iteration_dir": iteration_dir,
                 "output_file": output_file,
                 "questions_xml_file": questions_xml_file,
+                "publish_request_file": publish_request_file if step_name == "pr" else None,
                 "blackboard_state": blackboard_state,
             },
             require_status_code=self._step_requires_status_code(step_name),
@@ -164,10 +171,19 @@ class GenericWorkflowStepExecutor(Phase):
         response = execution.response
         status_code = execution.status_code
         if status_code is None:
+            status_code = StatusCodeParser.extract(response, valid_status_codes)
+        if status_code is None:
             status_code = StatusCodeParser.coerce_completion_alias(response, valid_status_codes)
+        if status_code is None:
+            status_code = self._coerce_ready_for_review_completion(response=response, step_def=step_def)
 
         agent_was_invoked = bool(last_prompt)
-        if agent_was_invoked and status_code is not None and self._should_validate_checklist(status_code):
+        if (
+            agent_was_invoked
+            and execution.status_code is not None
+            and status_code is not None
+            and self._should_validate_checklist(status_code)
+        ):
             resolved_user_input = self._resolve_iteration_user_input(step_name)
             response, validated_status, validation_passed = self._validate_and_retry_checklist_completion(
                 agent_name=agent_name,
@@ -179,6 +195,15 @@ class GenericWorkflowStepExecutor(Phase):
             )
             if validation_passed and validated_status is not None:
                 status_code = validated_status
+        status_code = status_code or self._coerce_ready_for_review_completion(
+            response=response,
+            step_def=step_def,
+        )
+        if status_code == PhaseStatusCode.READY_FOR_REVIEW:
+            status_code = self._coerce_ready_for_review_completion(
+                response=response,
+                step_def=step_def,
+            ) or status_code
 
         self._persist_final_status(status_code)
 
@@ -573,6 +598,25 @@ class GenericWorkflowStepExecutor(Phase):
         return step_name != "pr"
 
     @staticmethod
+    def _coerce_ready_for_review_completion(
+        *,
+        response: str,
+        step_def: Dict[str, Any],
+    ) -> Optional[PhaseStatusCode]:
+        valid_codes = {
+            code
+            for code in step_def.get("valid_status_codes", [])
+            if isinstance(code, str)
+        }
+        if PhaseStatusCode.CONFIRMED.value not in valid_codes:
+            return None
+        if PhaseStatusCode.READY_FOR_REVIEW.value in valid_codes:
+            return None
+        if response.strip().upper() != PhaseStatusCode.READY_FOR_REVIEW.value:
+            return None
+        return PhaseStatusCode.CONFIRMED
+
+    @staticmethod
     def _resolve_handoff_intent(step_name: str, status_code: PhaseStatusCode) -> Optional[str]:
         if status_code == PhaseStatusCode.READY_FOR_REVIEW:
             if step_name in {"spec", "plan"}:
@@ -615,6 +659,55 @@ class GenericWorkflowStepExecutor(Phase):
             )
             return
         output_file.write_text("", encoding="utf-8")
+
+    def _write_publish_request(
+        self,
+        *,
+        output_file: Path,
+        publish_request_file: Path,
+    ) -> None:
+        publish_request_file.write_text(
+            json.dumps(
+                self._build_publish_request(output_file=output_file),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    def _build_publish_request(self, *, output_file: Path) -> Dict[str, Any]:
+        base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
+        resolved_base = str(base_branch or self.git_ops.get_main_branch())
+        return {
+            "capability": "publish_pr",
+            "script": "src/cafe/data/skills/pr/scripts/sync_pr.sh",
+            "args": {
+                "output": self._repo_relative_path(output_file),
+                "base": resolved_base,
+            },
+            "permissions": {
+                "network": ["github.com", "api.github.com"],
+                "writes": [
+                    ".git",
+                    self._repo_relative_path(self.issue_dir),
+                ],
+            },
+        }
+
+    def _repo_relative_path(self, path: Path) -> str:
+        repo_root = self._resolve_repo_root()
+        resolved = path.resolve()
+        try:
+            return str(resolved.relative_to(repo_root))
+        except ValueError:
+            return str(resolved)
+
+    def _resolve_repo_root(self) -> Path:
+        try:
+            repo_root = self.git_ops.get_repo_root()
+        except Exception:
+            repo_root = Path.cwd()
+        return Path(repo_root).resolve()
 
     @staticmethod
     def _display_path(path: Path) -> str:

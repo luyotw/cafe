@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 
+from cafe.core.blackboard import HandoffContract, HandoffIntent, HandoffOwner
 from cafe.core.hooks import HookResult, NoOpHook
 from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
 from cafe.core.status_codes import PhaseStatusCode
@@ -52,30 +53,41 @@ def _hook_status_value(raw_status: Any) -> str:
     return ""
 
 
-def _pr_publish_requested(*, phase: Any, step_name: str, status_code: Any) -> bool:
+def _pr_publish_requested(
+    *,
+    phase: Any,
+    step_name: str,
+    status_code: Any,
+    context: Optional[dict[str, Any]] = None,
+) -> bool:
     """Return True when the PR step has reached its publish handoff."""
-    if step_name != "pr":
+    if step_name and step_name != "pr":
         return False
     if _hook_status_value(status_code) == PhaseStatusCode.CONFIRMED.value:
         return True
 
-    issue_dir = getattr(phase, "issue_dir", None)
-    if not isinstance(issue_dir, Path):
-        return False
-
-    baton_file = issue_dir / "next_step.txt"
-    if not baton_file.exists():
+    baton_file: Optional[Path] = None
+    if isinstance(context, dict):
+        next_step_path = context.get("next_step_path")
+        if next_step_path:
+            baton_file = Path(str(next_step_path))
+    if baton_file is None:
+        issue_dir = getattr(phase, "issue_dir", None)
+        if isinstance(issue_dir, Path):
+            baton_file = issue_dir / "next_step.txt"
+    if baton_file is None or not baton_file.exists():
         return False
 
     try:
-        payload = json.loads(baton_file.read_text(encoding="utf-8"))
+        contract = HandoffContract.from_dict(json.loads(baton_file.read_text(encoding="utf-8")))
     except Exception:
         return False
 
     return (
-        str(payload.get("from_step", "")) == "pr"
-        and str(payload.get("to_owner", "")) == "done"
-        and str(payload.get("to_step", "")) == "done"
+        contract.from_step == "pr"
+        and contract.to_owner == HandoffOwner.DONE
+        and contract.to_step == "done"
+        and contract.intent == HandoffIntent.WORKFLOW_COMPLETE
     )
 
 
@@ -456,6 +468,7 @@ class GitHubPRCreator(NoOpHook):
     """Prepare generic PR iterations for GitHub mode and sync PR metadata."""
 
     name = "GitHubPRCreator"
+    TRUSTED_PR_SCRIPT = "src/cafe/data/skills/pr/scripts/sync_pr.sh"
 
     def run(self, **kwargs: Any) -> HookResult:
         stage = kwargs.get("stage")
@@ -532,7 +545,12 @@ class GitHubPRCreator(NoOpHook):
         step_name = str(kwargs.get("step_name") or "")
         if phase is None:
             return HookResult()
-        if not _pr_publish_requested(phase=phase, step_name=step_name, status_code=kwargs.get("status_code")):
+        if not _pr_publish_requested(
+            phase=phase,
+            step_name=step_name,
+            status_code=kwargs.get("status_code"),
+            context=kwargs.get("context"),
+        ):
             return HookResult()
         output_file = kwargs.get("output_file")
         if phase is None or not isinstance(output_file, Path) or not output_file.exists():
@@ -541,12 +559,12 @@ class GitHubPRCreator(NoOpHook):
             return HookResult()
 
         repo_root = self._resolve_repo_root(phase)
-        script_path = self._resolve_sync_script(repo_root)
-        base_branch = self._resolve_base_branch(phase)
-
-        cmd = ["/bin/bash", str(script_path), "--output", str(output_file)]
-        if base_branch:
-            cmd.extend(["--base", base_branch])
+        publish_request_file = kwargs.get("publish_request_file")
+        cmd = self._build_publish_command(
+            repo_root=repo_root,
+            output_file=output_file,
+            publish_request_file=publish_request_file if isinstance(publish_request_file, Path) else None,
+        )
 
         result = subprocess.run(
             cmd,
@@ -635,6 +653,93 @@ class GitHubPRCreator(NoOpHook):
             return None
         return str(value).strip() if value else None
 
+    def _build_publish_command(
+        self,
+        *,
+        repo_root: Path,
+        output_file: Path,
+        publish_request_file: Optional[Path],
+    ) -> list[str]:
+        request = self._load_publish_request(
+            publish_request_file=publish_request_file,
+            repo_root=repo_root,
+        )
+        if str(request.get("capability") or "").strip() != "publish_pr":
+            raise RuntimeError("PR publish request has unsupported capability")
+
+        script_path = self._resolve_contract_script(
+            repo_root=repo_root,
+            script=str(request.get("script") or ""),
+        )
+        args = request.get("args")
+        if not isinstance(args, dict):
+            raise RuntimeError("PR publish request is missing args")
+
+        output_arg = self._resolve_contract_path(
+            repo_root=repo_root,
+            raw_path=str(args.get("output") or ""),
+            field_name="output",
+        )
+        if output_arg != output_file.resolve():
+            raise RuntimeError("PR publish request output does not match current PR artifact")
+
+        cmd = ["/bin/bash", str(script_path), "--output", str(output_arg)]
+        base_arg = str(args.get("base") or "").strip()
+        if base_arg:
+            cmd.extend(["--base", base_arg])
+        return cmd
+
+    @staticmethod
+    def _load_publish_request(
+        *,
+        publish_request_file: Optional[Path],
+        repo_root: Path,
+    ) -> dict[str, Any]:
+        if publish_request_file is None:
+            raise RuntimeError("PR publish request is missing")
+        request_file = publish_request_file.resolve()
+        if not request_file.exists():
+            raise RuntimeError(f"PR publish request not found: {request_file}")
+        try:
+            payload = json.loads(request_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"PR publish request is invalid JSON: {request_file}") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError("PR publish request must be a JSON object")
+        permissions = payload.get("permissions")
+        if permissions is not None and not isinstance(permissions, dict):
+            raise RuntimeError("PR publish request permissions must be an object")
+        return payload
+
+    def _resolve_contract_script(self, *, repo_root: Path, script: str) -> Path:
+        if not script.strip():
+            raise RuntimeError("PR publish request is missing script")
+        normalized_script = script.strip()
+        requested = self._resolve_contract_path(
+            repo_root=repo_root,
+            raw_path=normalized_script,
+            field_name="script",
+        )
+        trusted = self._resolve_sync_script(repo_root).resolve()
+        canonical = (repo_root / self.TRUSTED_PR_SCRIPT).resolve()
+        if requested not in {trusted, canonical} and normalized_script != self.TRUSTED_PR_SCRIPT:
+            raise RuntimeError("PR publish request references an untrusted script")
+        return trusted
+
+    @staticmethod
+    def _resolve_contract_path(
+        *,
+        repo_root: Path,
+        raw_path: str,
+        field_name: str,
+    ) -> Path:
+        if not raw_path.strip():
+            raise RuntimeError(f"PR publish request is missing {field_name}")
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = repo_root / path
+        return path.resolve()
+
     @staticmethod
     def _parse_sync_result(stdout: str) -> dict[str, Any]:
         for line in reversed(stdout.splitlines()):
@@ -680,9 +785,12 @@ class PRCommentPoster(NoOpHook):
             return HookResult()
         phase = kwargs.get("phase")
         step_name = str(kwargs.get("step_name") or "")
-        if phase is None:
-            return HookResult()
-        if not _pr_publish_requested(phase=phase, step_name=step_name, status_code=kwargs.get("status_code")):
+        if not _pr_publish_requested(
+            phase=phase,
+            step_name=step_name,
+            status_code=kwargs.get("status_code"),
+            context=kwargs.get("context"),
+        ):
             return HookResult()
         output_file = kwargs.get("output_file")
         if phase is None or not isinstance(output_file, Path) or not output_file.exists():
@@ -767,14 +875,19 @@ class LocalPRReviewer(NoOpHook):
     def run(self, **kwargs: Any) -> HookResult:
         if kwargs.get("stage") != "publish_output":
             return HookResult()
-        if kwargs.get("status_code") != PhaseStatusCode.CONFIRMED:
-            return HookResult()
-
         phase = kwargs.get("phase")
-        output_file = kwargs.get("output_file")
-        if phase is None or not isinstance(output_file, Path):
+        step_name = str(kwargs.get("step_name") or "")
+        if not _pr_publish_requested(
+            phase=phase,
+            step_name=step_name,
+            status_code=kwargs.get("status_code"),
+            context=kwargs.get("context"),
+        ):
             return HookResult()
-        if str(kwargs.get("step_name") or "") != "pr":
+        output_file = kwargs.get("output_file")
+        if not isinstance(output_file, Path):
+            return HookResult()
+        if step_name != "pr":
             return HookResult()
         if not self._is_local_pr_mode(phase):
             return HookResult()
@@ -850,9 +963,12 @@ class PRLinkOpener(NoOpHook):
             return HookResult()
         phase = kwargs.get("phase")
         step_name = str(kwargs.get("step_name") or "")
-        if phase is None:
-            return HookResult()
-        if not _pr_publish_requested(phase=phase, step_name=step_name, status_code=kwargs.get("status_code")):
+        if not _pr_publish_requested(
+            phase=phase,
+            step_name=step_name,
+            status_code=kwargs.get("status_code"),
+            context=kwargs.get("context"),
+        ):
             return HookResult()
 
         try:

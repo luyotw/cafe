@@ -12,6 +12,27 @@ set -euo pipefail
 
 PHASE=""
 OUTPUT_FILE=""
+SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../../../.." && pwd)"
+
+resolve_python_bin() {
+  if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
+    echo "$REPO_ROOT/.venv/bin/python"
+    return 0
+  fi
+  local repo_root
+  if repo_root=$(git rev-parse --show-toplevel 2>/dev/null); then
+    if [[ -x "$repo_root/.venv/bin/python" ]]; then
+      echo "$repo_root/.venv/bin/python"
+      return 0
+    fi
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    command -v python3
+    return 0
+  fi
+  return 1
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,12 +70,12 @@ if [[ ! -f "$OUTPUT_FILE" ]]; then
   exit 1
 fi
 
-if ! command -v python3 >/dev/null 2>&1; then
+if ! PYTHON_BIN=$(resolve_python_bin); then
   echo "Error: python3 is required." >&2
   exit 1
 fi
 
-ISSUE_DIR=$(python3 - "$OUTPUT_FILE" <<'PY'
+ISSUE_DIR=$("$PYTHON_BIN" - "$OUTPUT_FILE" <<'PY'
 from pathlib import Path
 import sys
 out = Path(sys.argv[1]).resolve()
@@ -69,7 +90,7 @@ if [[ ! -f "$ISSUE_YAML" ]]; then
   exit 0
 fi
 
-READ_RESULT=$(python3 - "$ISSUE_YAML" "$PHASE" <<'PY'
+READ_RESULT=$("$PYTHON_BIN" - "$ISSUE_YAML" "$PHASE" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -92,8 +113,8 @@ print(json.dumps({
 PY
 )
 
-SYNC_ENABLED=$(python3 -c 'import json,sys; print("true" if json.load(sys.stdin).get("sync_enabled") else "false")' <<<"$READ_RESULT")
-ISSUE_ID=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("issue_id",""))' <<<"$READ_RESULT")
+SYNC_ENABLED=$("$PYTHON_BIN" -c 'import json,sys; print("true" if json.load(sys.stdin).get("sync_enabled") else "false")' <<<"$READ_RESULT")
+ISSUE_ID=$("$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin).get("issue_id",""))' <<<"$READ_RESULT")
 
 if [[ "$SYNC_ENABLED" != "true" ]]; then
   echo '{"action":"skipped","reason":"sync_disabled"}'
@@ -115,7 +136,7 @@ if ! gh auth status >/dev/null 2>&1; then
   exit 1
 fi
 
-CONTENT=$(python3 - "$OUTPUT_FILE" <<'PY'
+CONTENT=$("$PYTHON_BIN" - "$OUTPUT_FILE" <<'PY'
 from pathlib import Path
 import json
 import sys
@@ -129,7 +150,7 @@ else
   HEADER="### 📝 Implementation Plan (Confirmed)"
 fi
 
-BODY=$(python3 - "$HEADER" "$CONTENT" <<'PY'
+BODY=$("$PYTHON_BIN" - "$HEADER" "$CONTENT" <<'PY'
 import json
 import sys
 header = sys.argv[1]
