@@ -30,6 +30,33 @@ def _write_develop_iteration(
     (develop_dir / "context.json").write_text(json.dumps(payload))
 
 
+def _write_pr_iteration(
+    issue_dir: Path,
+    *,
+    iteration: int = 1,
+    timestamp: str = "2026-01-27T10:00:00+08:00",
+    end_time: str | None = None,
+    response: str | None = None,
+    status_code: str | None = None,
+    user_input: str | None = None,
+) -> None:
+    pr_dir = issue_dir / "pr" / f"iteration_{iteration:03d}"
+    pr_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "iteration": iteration,
+        "timestamp": timestamp,
+    }
+    if end_time is not None:
+        payload["end_time"] = end_time
+    if response is not None:
+        payload["response"] = response
+    if status_code is not None:
+        payload["status_code"] = status_code
+    (pr_dir / "context.json").write_text(json.dumps(payload))
+    if user_input is not None:
+        (pr_dir / "user_input.md").write_text(user_input)
+
+
 class TestPRPhaseIterationLogic:
     """Test PR phase iteration decision logic."""
 
@@ -410,6 +437,73 @@ class TestPRPhaseIterationLogic:
             # Assert
             assert result is not None
             assert result == datetime.fromisoformat("2026-01-27T10:05:00+08:00")
+
+    def test_get_pr_review_timestamp_uses_latest_completed_iteration_context(self, tmp_path, mock_dependencies):
+        """Local PR timestamp should come from the latest completed PR iteration context."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        _write_pr_iteration(
+            issue_dir,
+            iteration=1,
+            timestamp="2026-01-27T10:00:00+08:00",
+            end_time="2026-01-27T10:05:00+08:00",
+            response="CAFE_CONFIRMED",
+        )
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            result = phase._get_pr_review_timestamp()
+
+            assert result == datetime.fromisoformat("2026-01-27T10:05:00+08:00")
+
+    def test_execute_local_review_mode_uses_iteration_context_for_confirmed_short_circuit(
+        self, tmp_path, mock_dependencies
+    ):
+        """Confirmed local reviews should short-circuit from iteration context without status.json."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        _write_pr_iteration(
+            issue_dir,
+            iteration=1,
+            timestamp="2026-01-27T10:00:00+08:00",
+            end_time="2026-01-27T10:05:00+08:00",
+            status_code="CAFE_CONFIRMED",
+        )
+
+        _write_develop_iteration(
+            issue_dir,
+            iteration=1,
+            timestamp="2026-01-27T10:00:00+08:00",
+            end_time="2026-01-27T10:02:00+08:00",
+        )
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            result = phase._execute_local_review_mode()
+
+            assert result.status == PhaseStatus.COMPLETED
+            assert result.data["status_code"] == "CAFE_CONFIRMED"
+            mock_dependencies["git_ops"].get_diff.assert_not_called()
 
     def test_get_incomplete_iteration_info_no_iterations(self, tmp_path, mock_dependencies):
         """Test _get_incomplete_iteration_info returns None when no iterations exist."""

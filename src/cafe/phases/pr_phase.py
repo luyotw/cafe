@@ -141,7 +141,7 @@ class PRPhase(Phase):
         """Get PR review timestamp.
 
         For GitHub mode: use latest PR comment timestamp
-        For local mode: use pr/status.json timestamp
+        For local mode: use latest completed PR iteration context
 
         Returns:
             datetime object of PR review, or None if no review exists
@@ -169,37 +169,36 @@ class PRPhase(Phase):
             except Exception:
                 pass  # Fall through to local mode
 
-        # Fall back to local pr/status.json
-        pr_status_file = self.issue_dir / "pr" / "status.json"
-        if pr_status_file.exists():
-            try:
-                with open(pr_status_file, encoding='utf-8') as f:
-                    pr_data = json.load(f)
-                return datetime.fromisoformat(pr_data["timestamp"])
-            except Exception:
-                pass
+        # Fall back to latest completed local PR iteration context
+        pr_context = self._get_latest_iteration_context("pr", require_completed=True)
+        if pr_context:
+            for key in ("end_time", "timestamp"):
+                timestamp_str = pr_context.get(key)
+                if not isinstance(timestamp_str, str) or not timestamp_str:
+                    continue
+                try:
+                    review_time = datetime.fromisoformat(timestamp_str)
+                except ValueError:
+                    continue
+                if review_time.tzinfo is None:
+                    from datetime import timezone
+                    review_time = review_time.replace(tzinfo=timezone.utc)
+                return review_time
 
         return None
 
     def _check_if_develop_is_newer_than_pr(self) -> bool:
         """Check if develop phase timestamp is newer than last PR review.
 
-        Works for both GitHub mode (PR comments) and local mode (pr/status.json).
+        Works for both GitHub mode (PR comments) and local mode (latest PR iteration context).
 
         Returns:
             True if develop is newer (needs re-review), False otherwise
         """
-        from datetime import datetime
-
         try:
-            # Get develop timestamp
-            develop_status_file = self.issue_dir / "develop" / "status.json"
-            if not develop_status_file.exists():
+            develop_time = self._get_latest_develop_end_time()
+            if develop_time is None:
                 return False  # No develop status, no need to re-review
-
-            with open(develop_status_file, encoding='utf-8') as f:
-                develop_data = json.load(f)
-            develop_time = datetime.fromisoformat(develop_data["timestamp"])
 
             # Get PR review timestamp (GitHub comments or local status.json)
             pr_time = self._get_pr_review_timestamp()
@@ -871,52 +870,41 @@ class PRPhase(Phase):
         console = Console()
 
         # Check if we already have a status from previous run
-        pr_dir = self.issue_dir / "pr"
-        status_file = pr_dir / "status.json"
+        latest_pr_iteration = self._get_latest_pr_iteration_info()
+        previous_status_code = latest_pr_iteration.get("status_code") if latest_pr_iteration else None
 
-        if status_file.exists():
-            try:
-                with open(status_file, 'r', encoding='utf-8') as f:
-                    status_data = json.load(f)
+        # If previously CONFIRMED, check if develop has newer changes
+        if previous_status_code == PhaseStatusCode.CONFIRMED.value:
+            if not self._check_if_develop_is_newer_than_pr():
+                # No new changes, just return completion message
+                console.print()
+                console.print("[bold green]✅ Local review already completed and confirmed![/bold green]")
+                console.print()
 
-                previous_status_code = status_data.get("status_code")
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message="Local review completed - changes confirmed",
+                    data={"status_code": PhaseStatusCode.CONFIRMED.value, "local_review": True},
+                )
+            # If develop is newer, continue with normal review flow
 
-                # If previously CONFIRMED, check if develop has newer changes
-                if previous_status_code == PhaseStatusCode.CONFIRMED.value:
-                    if not self._check_if_develop_is_newer_than_pr():
-                        # No new changes, just return completion message
-                        console.print()
-                        console.print("[bold green]✅ Local review already completed and confirmed![/bold green]")
-                        console.print()
+        # If previously NEEDS_CHANGES, check if develop has addressed the changes
+        elif previous_status_code == PhaseStatusCode.NEEDS_CHANGES.value:
+            if not self._check_if_develop_is_newer_than_pr():
+                # Develop hasn't run since last PR review, no new changes to review
+                console.print()
+                console.print("[bold yellow]⏳ Waiting for changes to be addressed...[/bold yellow]")
+                console.print()
+                console.print("[dim]Last PR review requested changes, but no new development since then.[/dim]")
+                console.print("[dim]Next step: Run [bold]cafe develop --auto[/bold] to address the changes[/dim]")
+                console.print()
 
-                        return PhaseResult(
-                            status=PhaseStatus.COMPLETED,
-                            message="Local review completed - changes confirmed",
-                            data={"status_code": PhaseStatusCode.CONFIRMED.value, "local_review": True},
-                        )
-                    # If develop is newer, continue with normal review flow
-
-                # If previously NEEDS_CHANGES, check if develop has addressed the changes
-                elif previous_status_code == PhaseStatusCode.NEEDS_CHANGES.value:
-                    if not self._check_if_develop_is_newer_than_pr():
-                        # Develop hasn't run since last PR review, no new changes to review
-                        console.print()
-                        console.print("[bold yellow]⏳ Waiting for changes to be addressed...[/bold yellow]")
-                        console.print()
-                        console.print("[dim]Last PR review requested changes, but no new development since then.[/dim]")
-                        console.print("[dim]Next step: Run [bold]cafe develop --auto[/bold] to address the changes[/dim]")
-                        console.print()
-
-                        return PhaseResult(
-                            status=PhaseStatus.COMPLETED,
-                            message="Waiting for changes to be addressed",
-                            data={"status_code": PhaseStatusCode.NEEDS_CHANGES.value, "local_review": True},
-                        )
-                    # If develop is newer, continue with normal review flow (developer may have addressed changes)
-
-            except Exception:
-                # If error reading status, continue with normal flow
-                pass
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message="Waiting for changes to be addressed",
+                    data={"status_code": PhaseStatusCode.NEEDS_CHANGES.value, "local_review": True},
+                )
+            # If develop is newer, continue with normal review flow (developer may have addressed changes)
 
         # Get git diff
         try:
