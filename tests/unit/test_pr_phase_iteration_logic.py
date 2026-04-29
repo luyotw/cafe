@@ -131,6 +131,38 @@ class TestPRPhaseIterationLogic:
             assert result["iteration_number"] == 1
             assert result["has_user_input"] is False
 
+    def test_get_latest_pr_iteration_info_accepts_end_time_without_status_code(self, tmp_path, mock_dependencies):
+        """Completed iterations should still be visible when only end_time/response are present."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        pr_dir = issue_dir / "pr"
+        iteration_dir = pr_dir / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        context_file = iteration_dir / "context.json"
+        context_file.write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "response": "CAFE_READY_FOR_REVIEW"
+        }))
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            result = phase._get_latest_pr_iteration_info()
+
+            assert result is not None
+            assert result["iteration_number"] == 1
+            assert result["status_code"] == "CAFE_READY_FOR_REVIEW"
+
     def test_should_start_new_iteration_no_iterations(self, tmp_path, mock_dependencies):
         """Test _should_start_new_iteration returns True when no iterations exist."""
         # Setup
@@ -431,6 +463,36 @@ class TestPRPhaseIterationLogic:
             result = phase._get_incomplete_iteration_info()
 
             # Assert
+            assert result is None
+
+    def test_get_incomplete_iteration_info_treats_end_time_as_complete(self, tmp_path, mock_dependencies):
+        """Latest iteration with end_time should not be treated as incomplete."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        pr_dir = issue_dir / "pr"
+        iteration_dir = pr_dir / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        context_file = iteration_dir / "context.json"
+        context_file.write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "response": "CAFE_CONFIRMED"
+        }))
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            result = phase._get_incomplete_iteration_info()
+
             assert result is None
 
     def test_get_incomplete_iteration_info_incomplete_with_user_input(self, tmp_path, mock_dependencies):

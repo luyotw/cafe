@@ -152,8 +152,7 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert (iteration_dir / "output.md").exists()
     assert (iteration_dir / "artifact.json").exists()
     status_file = issue_dir / "spec" / "status.json"
-    assert status_file.exists()
-    assert '"status_code": "CAFE_CONFIRMED"' in status_file.read_text(encoding="utf-8")
+    assert not status_file.exists()
 
 
 def test_generic_workflow_step_does_not_retry_for_legacy_status_tokens(tmp_path: Path, monkeypatch) -> None:
@@ -196,9 +195,8 @@ def test_generic_workflow_step_executor_uses_iteration_specific_skill_mapping(tm
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-2"
     phase_dir = issue_dir / "spec" / "iteration_001"
     phase_dir.mkdir(parents=True, exist_ok=True)
-    (phase_dir / "context.json").write_text('{"iteration": 1, "status_code": "CAFE_CONFIRMED"}', encoding="utf-8")
-    (issue_dir / "spec" / "status.json").write_text(
-        '{"phase":"spec","status":"completed","status_code":"CAFE_CONFIRMED","timestamp":"2026-04-09T00:00:00+08:00","iteration":1}',
+    (phase_dir / "context.json").write_text(
+        '{"iteration": 1, "response": "CAFE_CONFIRMED", "end_time": "2026-04-09T00:00:00+08:00"}',
         encoding="utf-8",
     )
 
@@ -644,8 +642,8 @@ def test_generic_workflow_step_keeps_missing_status_without_continue_prompt(tmp_
     assert "done without status" in result.response
     assert result.status_code is None
     assert len(executor.agent_manager.prompts) == 1
-    context_data = (issue_dir / "spec" / "iteration_001" / "context.json").read_text(encoding="utf-8")
-    assert '"status_code": null' in context_data
+    context_data = json.loads((issue_dir / "spec" / "iteration_001" / "context.json").read_text(encoding="utf-8"))
+    assert "status_code" not in context_data
 
 
 def test_generic_workflow_step_does_not_recover_from_unchanged_output(tmp_path: Path, monkeypatch) -> None:
@@ -1131,5 +1129,4 @@ def test_generic_workflow_step_persists_ready_for_review_as_confirmed_for_develo
     result = executor.execute_step("develop", playbook["steps"]["develop"], state)
 
     assert result.status_code == "CAFE_CONFIRMED"
-    status_data = (issue_dir / "develop" / "status.json").read_text(encoding="utf-8")
-    assert '"status_code": "CAFE_CONFIRMED"' in status_data
+    assert not (issue_dir / "develop" / "status.json").exists()

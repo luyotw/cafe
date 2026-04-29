@@ -211,6 +211,7 @@ class Phase(ABC):
         status_code: Optional[PhaseStatusCode] = None,
         token_usage: Optional["TokenUsage"] = None,
         model: Optional[str] = None,
+        persist_status: bool = True,
     ) -> None:
         """Update iteration history with agent response and metadata.
 
@@ -227,6 +228,7 @@ class Phase(ABC):
             status_code: Phase status code (e.g. CONFIRMED, NEED_CLARIFICATION)
             token_usage: Token usage stats
             model: Model name used
+            persist_status: Whether to persist status_code into iteration metadata
         """
         # Ensure phase_dir exists
         if not hasattr(self, "phase_dir"):
@@ -275,7 +277,7 @@ class Phase(ABC):
             context_data["denied_tools"] = None
         if "cli_command_args" not in context_data:
             context_data["cli_command_args"] = None
-        if "status_code" not in context_data:
+        if persist_status and "status_code" not in context_data:
             context_data["status_code"] = None
         if "model" not in context_data:
             context_data["model"] = None
@@ -293,7 +295,7 @@ class Phase(ABC):
             context_data["denied_tools"] = denied_tools
         if cli_command_args is not None:
             context_data["cli_command_args"] = cli_command_args
-        if status_code is not None:
+        if persist_status and status_code is not None:
             context_data["status_code"] = status_code.value
 
         # Update model (only if provided, to preserve existing value)
@@ -319,7 +321,7 @@ class Phase(ABC):
             "iteration": self.iteration,
             "timestamp": context_data.get("timestamp", datetime.now().astimezone().isoformat()),
             "end_time": context_data.get("end_time"),
-            "status": status_code.value if status_code is not None else None,
+            "status": status_code.value if persist_status and status_code is not None else None,
             "has_error": "error" in context_data,
         }
         try:
@@ -432,6 +434,7 @@ class Phase(ABC):
         user_input: str,
         valid_status_codes: List[PhaseStatusCode],
         require_status_code: bool = True,
+        persist_status: bool = True,
         allowed_tools: Optional[List[str]] = None,
         denied_tools: Optional[List[str]] = None,
         phase_specific_data: Optional[Dict[str, Any]] = None,
@@ -454,6 +457,7 @@ class Phase(ABC):
             user_input: User input for this round
             valid_status_codes: Valid status codes accepted by this phase
             require_status_code: Whether missing/invalid status code should trigger retry/failure
+            persist_status: Whether to persist status into phase metadata files
             allowed_tools: Tools available to agent (default None)
             denied_tools: Tools unavailable to agent (default None)
             phase_specific_data: Phase-specific initial data (default None)
@@ -664,10 +668,11 @@ class Phase(ABC):
                     cli_command_args=cli_args,
                     status_code=status_code,
                     model=model,
+                    persist_status=persist_status,
                 )
 
                 # Save progress
-                if hasattr(self, "_save_progress") and status_code is not None:
+                if persist_status and hasattr(self, "_save_progress") and status_code is not None:
                     self._save_progress(status_code)
 
                 # Return recovered result
@@ -722,6 +727,7 @@ class Phase(ABC):
                 status_code=no_response_status,
                 token_usage=cumulative_token_usage,
                 model=model,
+                persist_status=persist_status,
             )
             return response, no_response_status
 
@@ -741,6 +747,7 @@ class Phase(ABC):
                 status_code=None,
                 token_usage=cumulative_token_usage,
                 model=model,
+                persist_status=persist_status,
             )
             return response, None
 
@@ -798,6 +805,7 @@ class Phase(ABC):
             status_code=None,  # Don't save status_code yet - will be saved after checklist validation
             token_usage=cumulative_token_usage,
             model=model,
+            persist_status=persist_status,
         )
 
         # 8. Don't save progress yet - will be saved after checklist validation
@@ -3238,17 +3246,16 @@ The system will verify checklist completion. If unchecked items remain, you will
         if count >= 999:
             raise ValueError("Cannot exceed 999")
 
-        # Check if the last iteration was interrupted (has no status_code)
+        # Check if the last iteration was interrupted (has no end_time)
         last_context_file = existing_iterations[-1]
         try:
             import json
             with open(last_context_file, 'r', encoding='utf-8') as f:
                 last_iteration_data = json.load(f)
 
-            # If last iteration has no status_code, it was interrupted
+            # If last iteration has no end_time, it was interrupted
             # Return the same iteration number to retry (don't increment)
-            # Use status_code instead of response because response may exist but checklist validation not passed
-            if not last_iteration_data.get("status_code"):
+            if not last_iteration_data.get("end_time"):
                 return count
         except (json.JSONDecodeError, KeyError, FileNotFoundError):
             # If we can't read the file, treat it as corrupted/interrupted

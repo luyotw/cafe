@@ -12,7 +12,7 @@ from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
-from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
 from cafe.core.types import PhaseResult, PhaseStatus
 from cafe.ui.inquirer_prompts import prompt_confirm
 from cafe.utils.github import GitHubOps, GitHubError, get_all_pr_comments
@@ -21,6 +21,43 @@ from cafe.utils.prompt_utils import format_checklist_instruction
 
 class PRPhase(Phase):
     """Legacy compatibility implementation for the PR phase."""
+
+    @staticmethod
+    def _context_marks_completed(context: dict) -> bool:
+        """Return True when iteration context represents a completed PR iteration."""
+        if context.get("end_time"):
+            return True
+
+        raw_status = context.get("status_code")
+        if isinstance(raw_status, str) and raw_status:
+            return True
+
+        response = context.get("response")
+        if not isinstance(response, str) or not response.strip():
+            return False
+
+        parsed = StatusCodeParser.extract(response, valid_codes=list(PhaseStatusCode))
+        if parsed is not None:
+            return True
+
+        return StatusCodeParser.coerce_completion_alias(response, list(PhaseStatusCode)) is not None
+
+    @staticmethod
+    def _context_status_code(context: dict) -> Optional[str]:
+        raw_status = context.get("status_code")
+        if isinstance(raw_status, str) and raw_status:
+            return raw_status
+
+        response = context.get("response")
+        if not isinstance(response, str) or not response.strip():
+            return None
+
+        parsed = StatusCodeParser.extract(response, valid_codes=list(PhaseStatusCode))
+        if parsed is not None:
+            return parsed.value
+
+        aliased = StatusCodeParser.coerce_completion_alias(response, list(PhaseStatusCode))
+        return aliased.value if aliased is not None else None
 
     def __init__(
         self,
@@ -247,7 +284,7 @@ class PRPhase(Phase):
             json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
 
     def _get_incomplete_iteration_info(self) -> Optional[dict]:
-        """Get information about the latest incomplete iteration (without status_code).
+        """Get information about the latest incomplete iteration.
 
         Returns:
             Dictionary with iteration info, or None if no incomplete iteration exists:
@@ -267,15 +304,14 @@ class PRPhase(Phase):
         if not iteration_dirs:
             return None
 
-        # Check the last iteration - if it has no status_code, it's incomplete
+        # Check the last iteration - if it has no completion marker, it's incomplete
         last_iter_dir = iteration_dirs[-1]
         context_file = last_iter_dir / "context.json"
 
         if context_file.exists():
             with open(context_file, "r", encoding="utf-8") as f:
                 context = json.load(f)
-                # If has status_code, it's complete, not incomplete
-                if context.get("status_code"):
+                if self._context_marks_completed(context):
                     return None
 
         # Last iteration is incomplete - check for user_input.md
@@ -311,12 +347,12 @@ class PRPhase(Phase):
         if not pr_dir.exists():
             return None
 
-        # Find latest completed iteration directory (with status_code in context.json)
+        # Find latest completed iteration directory
         iteration_dirs = sorted(pr_dir.glob("iteration_*"))
         if not iteration_dirs:
             return None
 
-        # Find the latest iteration with status_code (completed iteration)
+        # Find the latest completed iteration
         latest_iteration_dir = None
         iteration_num = None
         end_time = None
@@ -327,11 +363,10 @@ class PRPhase(Phase):
             if context_file.exists():
                 with open(context_file, "r", encoding="utf-8") as f:
                     context = json.load(f)
-                    # Only consider iterations with status_code (completed)
-                    if context.get("status_code"):
+                    if self._context_marks_completed(context):
                         latest_iteration_dir = iter_dir
                         iteration_num = int(iter_dir.name.split("_")[1])
-                        status_code = context.get("status_code")
+                        status_code = self._context_status_code(context)
 
                         # Get end_time only, do not fall back to timestamp
                         end_time_str = context.get("end_time")

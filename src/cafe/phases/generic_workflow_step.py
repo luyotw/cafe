@@ -140,6 +140,7 @@ class GenericWorkflowStepExecutor(Phase):
                 user_input=resolved_user_input,
                 valid_status_codes=valid_status_codes,
                 require_status_code=False,
+                persist_status=False,
                 allowed_tools=allowed_tools,
                 phase_specific_data=phase_specific_data,
             )
@@ -204,8 +205,6 @@ class GenericWorkflowStepExecutor(Phase):
                 response=response,
                 step_def=step_def,
             ) or status_code
-
-        self._persist_final_status(status_code)
 
         output_key = str(step_def.get("output_artifact", step_name))
         artifacts: Dict[str, str] = {}
@@ -553,17 +552,6 @@ class GenericWorkflowStepExecutor(Phase):
             return
 
         checklist_file.write_text("", encoding="utf-8")
-
-    def _persist_final_status(self, status_code: Optional[PhaseStatusCode]) -> None:
-        if not self._step_requires_status_code(self.phase_name):
-            return
-        context_file = self._get_iteration_dir(self.iteration) / "context.json"
-        if context_file.exists():
-            context_data = json.loads(context_file.read_text(encoding="utf-8"))
-            context_data["status_code"] = status_code.value if status_code is not None else None
-            context_file.write_text(json.dumps(context_data, ensure_ascii=False, indent=2), encoding="utf-8")
-        if status_code is not None:
-            self._save_progress(status_code)
 
     def _write_artifact_record(
         self,

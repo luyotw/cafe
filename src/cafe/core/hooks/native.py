@@ -12,7 +12,7 @@ from typing import Any, Optional
 from cafe.core.blackboard import HandoffContract, HandoffIntent, HandoffOwner
 from cafe.core.hooks import HookResult, NoOpHook
 from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
-from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
 from cafe.skills.loader import SkillLoader
 from cafe.ui.interactive_qa import interactive_qa_flow
 from cafe.ui.inquirer_prompts import prompt_multiline
@@ -41,7 +41,20 @@ def _get_previous_iteration_status(phase: Any) -> Optional[str]:
         raw = json.loads(context_file.read_text(encoding="utf-8"))
     except Exception:
         return None
-    return raw.get("status_code")
+    saved_status = raw.get("status_code")
+    if isinstance(saved_status, str) and saved_status:
+        return saved_status
+
+    response = raw.get("response")
+    if not isinstance(response, str) or not response.strip():
+        return None
+
+    parsed = StatusCodeParser.extract(response, valid_codes=list(PhaseStatusCode))
+    if parsed is not None:
+        return parsed.value
+
+    aliased = StatusCodeParser.coerce_completion_alias(response, list(PhaseStatusCode))
+    return aliased.value if aliased is not None else None
 
 
 def _hook_status_value(raw_status: Any) -> str:
