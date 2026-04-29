@@ -154,11 +154,8 @@ class DevelopPhase(Phase):
 
         # Check review status
         review_feedback_info = self._get_latest_review_feedback_info()
-        if review_feedback_info:
-            status_code = review_feedback_info.get("status_code")
-            # If review is CONFIRMED, no need to address it
-            if status_code == "CAFE_CONFIRMED":
-                return False
+        if self._feedback_is_confirmed(review_feedback_info):
+            return False
 
         return True
 
@@ -199,6 +196,24 @@ class DevelopPhase(Phase):
             }
 
         return None
+
+    @staticmethod
+    def _feedback_status(info: Optional[Dict[str, Any]]) -> Optional[str]:
+        """Return normalized status code from a feedback info dict."""
+        if not info:
+            return None
+        status = info.get("status_code")
+        return status if isinstance(status, str) and status else None
+
+    @classmethod
+    def _feedback_is_confirmed(cls, info: Optional[Dict[str, Any]]) -> bool:
+        """Return True when feedback info represents a confirmed review."""
+        return cls._feedback_status(info) == PhaseStatusCode.CONFIRMED.value
+
+    @classmethod
+    def _feedback_needs_changes(cls, info: Optional[Dict[str, Any]]) -> bool:
+        """Return True when feedback info represents needs-changes feedback."""
+        return cls._feedback_status(info) == PhaseStatusCode.NEEDS_CHANGES.value
 
     def _save_issue_config(self, base_branch: str, feature_branch: str) -> None:
         """Save issue configuration including base branch.
@@ -291,10 +306,7 @@ class DevelopPhase(Phase):
         # FIRST: Always check and set review feedback flag (do this BEFORE checking existing_progress)
         # This ensures the flag is set for _generate_prompt even on first execution
         review_feedback_info = self._get_latest_review_feedback_info()
-        if review_feedback_info and review_feedback_info.get("status_code") == "CAFE_NEEDS_CHANGES":
-            self._has_review_feedback = True
-        else:
-            self._has_review_feedback = False
+        self._has_review_feedback = self._feedback_needs_changes(review_feedback_info)
 
         existing_progress = self._load_progress()
         if not existing_progress or existing_progress.status != PhaseStatus.COMPLETED:
@@ -312,11 +324,11 @@ class DevelopPhase(Phase):
         pr_needs_changes_time = None
 
         # Check review phase end_time
-        if review_feedback_info and review_feedback_info.get("status_code") == PhaseStatusCode.NEEDS_CHANGES.value:
+        if self._feedback_needs_changes(review_feedback_info):
             review_needs_changes_time = review_feedback_info.get("end_time")
 
         pr_feedback_info = self._get_latest_pr_feedback_info()
-        if pr_feedback_info and pr_feedback_info.get("status_code") == PhaseStatusCode.NEEDS_CHANGES.value:
+        if self._feedback_needs_changes(pr_feedback_info):
             pr_needs_changes_time = pr_feedback_info.get("end_time")
 
         # Filter: only keep phases newer than develop's end_time
@@ -349,7 +361,7 @@ class DevelopPhase(Phase):
 
         # If review has NEEDS_CHANGES but no end_time available, assume it needs handling
         if self._has_review_feedback and not review_needs_changes_time:
-            if review_feedback_info and review_feedback_info.get("status_code") == PhaseStatusCode.NEEDS_CHANGES.value:
+            if self._feedback_needs_changes(review_feedback_info):
                 if not review_feedback_info.get("end_time"):
                     return None
 
