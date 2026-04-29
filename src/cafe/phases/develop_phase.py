@@ -153,9 +153,9 @@ class DevelopPhase(Phase):
             return False
 
         # Check review status
-        review_status = self._load_review_status()
-        if review_status:
-            status_code = review_status.get("status_code")
+        review_feedback_info = self._get_latest_review_feedback_info()
+        if review_feedback_info:
+            status_code = review_feedback_info.get("status_code")
             # If review is CONFIRMED, no need to address it
             if status_code == "CAFE_CONFIRMED":
                 return False
@@ -199,39 +199,6 @@ class DevelopPhase(Phase):
             }
 
         return None
-
-    def _load_review_status(self) -> Optional[Dict[str, Any]]:
-        """Load review phase status from iteration context, falling back to status.json.
-
-        Returns:
-            Review status dict if exists, None otherwise
-        """
-        review_info = self._get_latest_review_feedback_info()
-        if review_info:
-            data = {
-                "status_code": review_info.get("status_code"),
-            }
-            end_time = review_info.get("end_time")
-            if end_time is not None:
-                data["end_time"] = end_time.isoformat()
-            timestamp = review_info.get("context", {}).get("timestamp")
-            if timestamp:
-                data["timestamp"] = timestamp
-            return data
-
-        spec_path = Path(self.spec_file)
-        issue_dir = spec_path.parent.parent.parent
-        review_status_file = issue_dir / "review" / "status.json"
-
-        if not review_status_file.exists():
-            return None
-
-        try:
-            with open(review_status_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, KeyError):
-            return None
-
 
     def _save_issue_config(self, base_branch: str, feature_branch: str) -> None:
         """Save issue configuration including base branch.
@@ -323,8 +290,8 @@ class DevelopPhase(Phase):
         """
         # FIRST: Always check and set review feedback flag (do this BEFORE checking existing_progress)
         # This ensures the flag is set for _generate_prompt even on first execution
-        review_status = self._load_review_status()
-        if review_status and review_status.get("status_code") == "CAFE_NEEDS_CHANGES":
+        review_feedback_info = self._get_latest_review_feedback_info()
+        if review_feedback_info and review_feedback_info.get("status_code") == "CAFE_NEEDS_CHANGES":
             self._has_review_feedback = True
         else:
             self._has_review_feedback = False
@@ -345,10 +312,8 @@ class DevelopPhase(Phase):
         pr_needs_changes_time = None
 
         # Check review phase end_time
-        if review_status and review_status.get("status_code") == "CAFE_NEEDS_CHANGES":
-            review_end_time_str = review_status.get("end_time")
-            if review_end_time_str:
-                review_needs_changes_time = datetime.fromisoformat(review_end_time_str)
+        if review_feedback_info and review_feedback_info.get("status_code") == PhaseStatusCode.NEEDS_CHANGES.value:
+            review_needs_changes_time = review_feedback_info.get("end_time")
 
         pr_feedback_info = self._get_latest_pr_feedback_info()
         if pr_feedback_info and pr_feedback_info.get("status_code") == PhaseStatusCode.NEEDS_CHANGES.value:
@@ -384,9 +349,8 @@ class DevelopPhase(Phase):
 
         # If review has NEEDS_CHANGES but no end_time available, assume it needs handling
         if self._has_review_feedback and not review_needs_changes_time:
-            if review_status and review_status.get("status_code") == "CAFE_NEEDS_CHANGES":
-                review_end_time_str = review_status.get("end_time")
-                if not review_end_time_str:
+            if review_feedback_info and review_feedback_info.get("status_code") == PhaseStatusCode.NEEDS_CHANGES.value:
+                if not review_feedback_info.get("end_time"):
                     return None
 
         # No review feedback or PR comments newer than develop, phase is truly completed
@@ -996,12 +960,6 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 
                 if review_feedback_info:
                     review_end_time = review_feedback_info.get("end_time")
-                else:
-                    review_status = self._load_review_status()
-                    if review_status:
-                        review_end_time_str = review_status.get("end_time")
-                        if review_end_time_str:
-                            review_end_time = datetime.fromisoformat(review_end_time_str)
 
             # Select feedback file based on end_time priority
             if pr_feedback_file and review_feedback_file:

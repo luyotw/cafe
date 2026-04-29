@@ -70,17 +70,13 @@ class TestDevelopPhasePromptGeneration:
         plan_file.write_text("Test plan")
 
         # Create review feedback (NEEDS_CHANGES)
-        review_dir = issue_dir / "review"
-        review_status_file = review_dir / "status.json"
-        review_status_file.parent.mkdir(parents=True, exist_ok=True)
-        review_status_file.write_text(json.dumps({
-            "status_code": "CAFE_NEEDS_CHANGES",
-            "timestamp": "2026-01-07T11:39:41+08:00"
-        }))
-
-        review_output = review_dir / "iteration_001" / "output.md"
-        review_output.parent.mkdir(parents=True, exist_ok=True)
-        review_output.write_text("Please fix commit message format")
+        _write_review_iteration(
+            issue_dir,
+            iteration=1,
+            status_code="CAFE_NEEDS_CHANGES",
+            timestamp="2026-01-07T11:39:41+08:00",
+            output="Please fix commit message format",
+        )
 
         # Create agent file
         agent_dir = tmp_path / ".cafe" / "agents" / "developer"
@@ -238,17 +234,13 @@ class TestDevelopPhasePromptGeneration:
         plan_file.write_text("Test plan")
 
         # Create review feedback with APPROVED status
-        review_dir = issue_dir / "review"
-        review_status_file = review_dir / "status.json"
-        review_status_file.parent.mkdir(parents=True, exist_ok=True)
-        review_status_file.write_text(json.dumps({
-            "status_code": "CAFE_CONFIRMED",  # Approved, not NEEDS_CHANGES
-            "timestamp": "2026-01-07T11:39:41+08:00"
-        }))
-
-        review_output = review_dir / "iteration_001" / "output.md"
-        review_output.parent.mkdir(parents=True, exist_ok=True)
-        review_output.write_text("Looks good!")
+        _write_review_iteration(
+            issue_dir,
+            iteration=1,
+            status_code="CAFE_CONFIRMED",
+            timestamp="2026-01-07T11:39:41+08:00",
+            output="Looks good!",
+        )
 
         # Create agent file
         agent_dir = tmp_path / ".cafe" / "agents" / "developer"
@@ -313,17 +305,13 @@ class TestDevelopPhasePromptGeneration:
         plan_file.write_text("Test plan")
 
         # Create review feedback
-        review_dir = issue_dir / "review"
-        review_status_file = review_dir / "status.json"
-        review_status_file.parent.mkdir(parents=True, exist_ok=True)
-        review_status_file.write_text(json.dumps({
-            "status_code": "CAFE_NEEDS_CHANGES",
-            "timestamp": "2026-01-07T11:39:41+08:00"
-        }))
-
-        review_output = review_dir / "iteration_001" / "output.md"
-        review_output.parent.mkdir(parents=True, exist_ok=True)
-        review_output.write_text("## Todo List\n\n- [ ] Fix issue")
+        _write_review_iteration(
+            issue_dir,
+            iteration=1,
+            status_code="CAFE_NEEDS_CHANGES",
+            timestamp="2026-01-07T11:39:41+08:00",
+            output="## Todo List\n\n- [ ] Fix issue",
+        )
 
         # Create agent file
         agent_dir = tmp_path / ".cafe" / "agents" / "developer"
@@ -381,18 +369,14 @@ class TestDevelopPhasePromptGeneration:
         plan_file.write_text("Test plan")
 
         # Create review feedback (older end_time)
-        review_dir = issue_dir / "review"
-        review_status_file = review_dir / "status.json"
-        review_status_file.parent.mkdir(parents=True, exist_ok=True)
-        review_status_file.write_text(json.dumps({
-            "status_code": "CAFE_NEEDS_CHANGES",
-            "timestamp": "2026-01-07T11:39:41+08:00",
-            "end_time": "2026-01-07T11:40:00+08:00"
-        }))
-
-        review_output = review_dir / "iteration_001" / "output.md"
-        review_output.parent.mkdir(parents=True, exist_ok=True)
-        review_output.write_text("## Todo List\n\n- [ ] Review issue")
+        _write_review_iteration(
+            issue_dir,
+            iteration=1,
+            status_code="CAFE_NEEDS_CHANGES",
+            timestamp="2026-01-07T11:39:41+08:00",
+            end_time="2026-01-07T11:40:00+08:00",
+            output="## Todo List\n\n- [ ] Review issue",
+        )
 
         # Create PR feedback (newer end_time — should take priority)
         pr_dir = issue_dir / "pr"
@@ -467,18 +451,14 @@ class TestDevelopPhasePromptGeneration:
         plan_file.write_text("Test plan")
 
         # Create review feedback (newer end_time — should take priority)
-        review_dir = issue_dir / "review"
-        review_status_file = review_dir / "status.json"
-        review_status_file.parent.mkdir(parents=True, exist_ok=True)
-        review_status_file.write_text(json.dumps({
-            "status_code": "CAFE_NEEDS_CHANGES",
-            "timestamp": "2026-01-07T11:58:24+08:00",
-            "end_time": "2026-01-07T11:58:24+08:00"
-        }))
-
-        review_output = review_dir / "iteration_001" / "output.md"
-        review_output.parent.mkdir(parents=True, exist_ok=True)
-        review_output.write_text("## Todo List\n\n- [ ] Review issue")
+        _write_review_iteration(
+            issue_dir,
+            iteration=1,
+            status_code="CAFE_NEEDS_CHANGES",
+            timestamp="2026-01-07T11:58:24+08:00",
+            end_time="2026-01-07T11:58:24+08:00",
+            output="## Todo List\n\n- [ ] Review issue",
+        )
 
         # Create PR feedback (older end_time)
         pr_dir = issue_dir / "pr"
@@ -558,17 +538,13 @@ class TestDevelopPhasePromptGeneration:
         plan_file.write_text("Test plan")
 
         # Create review feedback
-        review_dir = issue_dir / "review"
-        review_status_file = review_dir / "status.json"
-        review_status_file.parent.mkdir(parents=True, exist_ok=True)
-        review_status_file.write_text(json.dumps({
-            "status_code": "CAFE_NEEDS_CHANGES",
-            "timestamp": "2026-01-07T11:39:41+08:00"
-        }))
-
-        review_output = review_dir / "iteration_001" / "output.md"
-        review_output.parent.mkdir(parents=True, exist_ok=True)
-        review_output.write_text("## Todo List\n\n- [ ] Review issue")
+        _write_review_iteration(
+            issue_dir,
+            iteration=1,
+            status_code="CAFE_NEEDS_CHANGES",
+            timestamp="2026-01-07T11:39:41+08:00",
+            output="## Todo List\n\n- [ ] Review issue",
+        )
 
         # NO PR feedback
 
@@ -678,15 +654,14 @@ class TestReviewFeedbackDetectionByEndTime:
         setup = setup_issue_dir
         issue_dir = setup["issue_dir"]
 
-        # Create review status with NEEDS_CHANGES
-        review_dir = issue_dir / "review"
-        review_status_file = review_dir / "status.json"
-        review_status_file.parent.mkdir(parents=True, exist_ok=True)
-        review_status_file.write_text(json.dumps({
-            "status_code": "CAFE_NEEDS_CHANGES",
-            "timestamp": "2026-01-07T10:00:00+08:00",
-            "end_time": "2026-01-07T10:05:00+08:00",
-        }))
+        # Create review feedback with NEEDS_CHANGES
+        _write_review_iteration(
+            issue_dir,
+            iteration=1,
+            status_code="CAFE_NEEDS_CHANGES",
+            timestamp="2026-01-07T10:00:00+08:00",
+            end_time="2026-01-07T10:05:00+08:00",
+        )
 
         # Create develop status with end_time AFTER review
         develop_dir = issue_dir / "develop"
@@ -717,15 +692,14 @@ class TestReviewFeedbackDetectionByEndTime:
         setup = setup_issue_dir
         issue_dir = setup["issue_dir"]
 
-        # Create review status with NEEDS_CHANGES, end_time AFTER develop
-        review_dir = issue_dir / "review"
-        review_status_file = review_dir / "status.json"
-        review_status_file.parent.mkdir(parents=True, exist_ok=True)
-        review_status_file.write_text(json.dumps({
-            "status_code": "CAFE_NEEDS_CHANGES",
-            "timestamp": "2026-01-07T10:20:00+08:00",
-            "end_time": "2026-01-07T10:25:00+08:00",
-        }))
+        # Create review feedback with NEEDS_CHANGES, end_time AFTER develop
+        _write_review_iteration(
+            issue_dir,
+            iteration=1,
+            status_code="CAFE_NEEDS_CHANGES",
+            timestamp="2026-01-07T10:20:00+08:00",
+            end_time="2026-01-07T10:25:00+08:00",
+        )
 
         # Create develop status with end_time BEFORE review
         develop_dir = issue_dir / "develop"
@@ -790,15 +764,14 @@ class TestReviewFeedbackDetectionByEndTime:
         setup = setup_issue_dir
         issue_dir = setup["issue_dir"]
 
-        # Create review status with NEEDS_CHANGES
-        review_dir = issue_dir / "review"
-        review_status_file = review_dir / "status.json"
-        review_status_file.parent.mkdir(parents=True, exist_ok=True)
-        review_status_file.write_text(json.dumps({
-            "status_code": "CAFE_NEEDS_CHANGES",
-            "timestamp": "2026-01-07T10:20:00+08:00",
-            "end_time": "2026-01-07T10:25:00+08:00",
-        }))
+        # Create review feedback with NEEDS_CHANGES
+        _write_review_iteration(
+            issue_dir,
+            iteration=1,
+            status_code="CAFE_NEEDS_CHANGES",
+            timestamp="2026-01-07T10:20:00+08:00",
+            end_time="2026-01-07T10:25:00+08:00",
+        )
 
         # Create develop status WITHOUT end_time
         develop_dir = issue_dir / "develop"
@@ -827,14 +800,13 @@ class TestReviewFeedbackDetectionByEndTime:
         setup = setup_issue_dir
         issue_dir = setup["issue_dir"]
 
-        # Create review status with NEEDS_CHANGES but NO end_time
-        review_dir = issue_dir / "review"
-        review_status_file = review_dir / "status.json"
-        review_status_file.parent.mkdir(parents=True, exist_ok=True)
-        review_status_file.write_text(json.dumps({
-            "status_code": "CAFE_NEEDS_CHANGES",
-            "timestamp": "2026-01-07T10:20:00+08:00",
-        }))
+        # Create review feedback with NEEDS_CHANGES but NO end_time
+        _write_review_iteration(
+            issue_dir,
+            iteration=1,
+            status_code="CAFE_NEEDS_CHANGES",
+            timestamp="2026-01-07T10:20:00+08:00",
+        )
 
         # Create develop status with end_time
         develop_dir = issue_dir / "develop"
