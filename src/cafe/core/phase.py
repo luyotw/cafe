@@ -1382,6 +1382,12 @@ class Phase(ABC):
         Returns:
             ISO format end_time string if phase status exists and has end_time, None otherwise
         """
+        latest_context = self._get_latest_iteration_context(phase_name, require_completed=True)
+        if latest_context:
+            end_time = latest_context.get("end_time")
+            if isinstance(end_time, str) and end_time:
+                return end_time
+
         phase_status_file = self.issue_dir / phase_name / "status.json"
         if not phase_status_file.exists():
             return None
@@ -1392,6 +1398,43 @@ class Phase(ABC):
             return phase_status.get("end_time")
         except (json.JSONDecodeError, KeyError, IOError):
             return None
+
+    def _get_latest_iteration_context(
+        self,
+        phase_name: str,
+        *,
+        require_completed: bool = False,
+        valid_codes: Optional[List[PhaseStatusCode]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Load the latest iteration context for a phase.
+
+        Args:
+            phase_name: Name of the phase (e.g., "develop", "review", "pr")
+            require_completed: When True, skip incomplete iterations
+            valid_codes: Optional valid status codes for completion detection
+
+        Returns:
+            Parsed context dict for the latest matching iteration, or None
+        """
+        phase_dir = self.issue_dir / phase_name
+        if not phase_dir.exists():
+            return None
+
+        for context_file in reversed(sorted(phase_dir.glob("iteration_*/context.json"))):
+            try:
+                with open(context_file, "r", encoding="utf-8") as f:
+                    context = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                continue
+
+            if require_completed and not self._context_marks_completed(
+                context,
+                valid_codes=valid_codes,
+            ):
+                continue
+            return context
+
+        return None
 
     def _print_token_usage_summary(self) -> None:
         """Display token usage summary (common method).

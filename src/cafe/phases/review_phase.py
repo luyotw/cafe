@@ -104,17 +104,13 @@ class ReviewPhase(Phase):
             has_new_commits_to_review = False  # Flag to skip completion check if there are new commits
             has_unpushed = self.git_ops.has_unpushed_commits()
             if has_unpushed:
-                review_status_file = self.issue_dir / "review" / "status.json"
-
-                if review_status_file.exists():
+                review_context = self._get_latest_iteration_context("review", require_completed=True)
+                if review_context:
                     try:
                         from datetime import datetime, timezone
 
-                        with open(review_status_file, 'r', encoding='utf-8') as f:
-                            review_status = json.load(f)
-
                         # Use end_time for comparison, skip if not available
-                        review_end_time_str = review_status.get("end_time", "")
+                        review_end_time_str = review_context.get("end_time", "")
                         if review_end_time_str:
                             review_end_time = datetime.fromisoformat(review_end_time_str)
                             if review_end_time.tzinfo is None:
@@ -138,7 +134,7 @@ class ReviewPhase(Phase):
                                         status=PhaseStatus.COMPLETED,
                                         message=f"Review already completed - no new development since last review",
                                         data={
-                                            "status_code": review_status.get("status_code"),
+                                            "status_code": self._context_status_code(review_context),
                                             "review_timestamp": review_end_time.isoformat(),
                                             "latest_develop_timestamp": develop_end_time.isoformat(),
                                         },
@@ -187,7 +183,7 @@ class ReviewPhase(Phase):
                         continue
                     with open(context_file, "r", encoding="utf-8") as f:
                         ctx = json.load(f)
-                    if not ctx.get("status_code"):
+                    if not self._context_marks_completed(ctx):
                         continue
                     pr_user_input_file = iteration_dir_pr / "user_input.md"
                     if pr_user_input_file.exists() and pr_user_input_file.read_text(encoding="utf-8").strip():
@@ -367,35 +363,13 @@ class ReviewPhase(Phase):
             True if develop is newer (need to re-run all checks), False otherwise
         """
         try:
-            # Get issue name
-            if not self.spec_file:
-                return False  # No spec file, cannot compare timestamps
-            spec_path = Path(self.spec_file).resolve()
-            issue_name = spec_path.parent.parent.name
-
-            # Read develop/status.json (using path relative to spec_file)
-            issue_dir = spec_path.parent.parent
-            develop_status_file = issue_dir / "develop" / "status.json"
-            if not develop_status_file.exists():
+            develop_end_time_str = self._get_phase_end_time("develop")
+            if not develop_end_time_str:
                 return False
 
-            # Read review/status.json
-            review_status_file = issue_dir / "review" / "status.json"
-            if not review_status_file.exists():
+            review_end_time_str = self._get_phase_end_time("review")
+            if not review_end_time_str:
                 # First review, need to re-run all checks
-                return True
-
-            # Compare end_time values, skip if not available
-            with open(develop_status_file) as f:
-                develop_data = json.load(f)
-            with open(review_status_file) as f:
-                review_data = json.load(f)
-
-            develop_end_time_str = develop_data.get("end_time")
-            review_end_time_str = review_data.get("end_time")
-
-            # If either end_time is missing, return True to re-run checks (graceful skip)
-            if not develop_end_time_str or not review_end_time_str:
                 return True
 
             develop_time = datetime.fromisoformat(develop_end_time_str)

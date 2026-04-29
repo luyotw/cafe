@@ -254,3 +254,29 @@ class TestReviewDecisionDisplayCallback:
         mock_display_delta.assert_called_once()
         assert mock_review_decision.call_args.kwargs["display_callback"] is mock_display_delta
         assert mock_review_decision.call_args.kwargs["output_file"] == prev_plan_file
+
+    def test_ready_for_review_response_without_status_code_still_prompts_review_menu(self, plan_phase, tmp_path):
+        """測試上一輪只留下 response 時，仍能辨識 READY_FOR_REVIEW。"""
+        plan_phase.iteration = 2
+        plan_phase.interactive = True
+
+        prev_plan_file = plan_phase._get_versioned_file_path("plan", 1, plan_phase.phase_dir)
+        prev_plan_file.parent.mkdir(parents=True, exist_ok=True)
+        prev_plan_file.write_text("## Plan\n")
+
+        with patch.object(plan_phase, "_display_current_plan"), \
+             patch.object(plan_phase, "_display_iteration_delta") as mock_display_delta, \
+             patch.object(
+                 plan_phase,
+                 "_load_previous_iteration_data",
+                 return_value={"response": "CAFE_READY_FOR_REVIEW"},
+             ), \
+             patch.object(plan_phase, "_ask_user_for_review_decision", return_value="confirm") as mock_review_decision, \
+             patch.object(plan_phase, "_process_review_decision", return_value="confirm"):
+
+            result = plan_phase._prepare_user_input_for_iteration()
+
+        assert result == "confirm"
+        mock_display_delta.assert_called_once()
+        assert mock_review_decision.call_args.kwargs["display_callback"] is mock_display_delta
+        assert mock_review_decision.call_args.kwargs["output_file"] == prev_plan_file

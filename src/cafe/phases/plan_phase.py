@@ -597,7 +597,7 @@ Continue analyzing the latest version of {spec_file_path}.
         if not prev_data:
             return ""
 
-        prev_status = prev_data.get("status_code", "")
+        prev_status = self._context_status_code(prev_data) or ""
 
         # Get user input based on previous round status
         if prev_status == "CAFE_READY_FOR_REVIEW":
