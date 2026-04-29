@@ -679,34 +679,6 @@ class DevelopPhase(Phase):
         # Fallback to base class prompt with chat option
         return super()._ask_user_for_clarification(role=role, agent_name=self.dev_agent)
 
-    def _get_last_develop_timestamp(self):
-        """Get timestamp from last develop/status.json.
-
-        Returns:
-            datetime object (timezone-aware) or None if not found
-        """
-        try:
-            status_file = self.history_dir.parent / "status.json"
-            if not status_file.exists():
-                return None
-
-            with open(status_file, 'r', encoding='utf-8') as f:
-                status_data = json.load(f)
-                timestamp_str = status_data.get("timestamp")
-                if timestamp_str:
-                    from datetime import datetime, timezone
-                    # Ensure we always get a timezone-aware datetime
-                    if timestamp_str.endswith('Z'):
-                        timestamp_str = timestamp_str.replace('Z', '+00:00')
-                    dt = datetime.fromisoformat(timestamp_str)
-                    # If datetime is naive, assume UTC
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    return dt
-        except Exception:
-            pass
-        return None
-
     def _is_clarification_answered(self, develop_file: Path) -> bool:
         """Check if develop clarification has already been answered.
 
