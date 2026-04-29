@@ -427,6 +427,58 @@ class Phase(ABC):
             return None
         return StatusCodeParser.extract(response, valid_codes=valid_codes)
 
+    @staticmethod
+    def _context_marks_completed(
+        context: Dict[str, Any],
+        *,
+        valid_codes: Optional[List[PhaseStatusCode]] = None,
+    ) -> bool:
+        """Return True when iteration context represents a completed iteration."""
+        if context.get("end_time"):
+            return True
+
+        raw_status = context.get("status_code")
+        if isinstance(raw_status, str) and raw_status:
+            return True
+
+        response = context.get("response")
+        if not isinstance(response, str) or not response.strip():
+            return False
+
+        parsed = StatusCodeParser.extract(response, valid_codes=valid_codes)
+        if parsed is not None:
+            return True
+
+        return StatusCodeParser.coerce_completion_alias(
+            response,
+            valid_codes or list(PhaseStatusCode),
+        ) is not None
+
+    @staticmethod
+    def _context_status_code(
+        context: Dict[str, Any],
+        *,
+        valid_codes: Optional[List[PhaseStatusCode]] = None,
+    ) -> Optional[str]:
+        """Return a status-like code from iteration context when one is available."""
+        raw_status = context.get("status_code")
+        if isinstance(raw_status, str) and raw_status:
+            return raw_status
+
+        response = context.get("response")
+        if not isinstance(response, str) or not response.strip():
+            return None
+
+        parsed = StatusCodeParser.extract(response, valid_codes=valid_codes)
+        if parsed is not None:
+            return parsed.value
+
+        aliased = StatusCodeParser.coerce_completion_alias(
+            response,
+            valid_codes or list(PhaseStatusCode),
+        )
+        return aliased.value if aliased is not None else None
+
     def _execute_agent_iteration(
         self,
         agent_name: str,
@@ -1254,12 +1306,12 @@ class Phase(ABC):
         if not pr_dir.exists():
             return None
 
-        # Find latest PR iteration directory with a completed status_code
+        # Find latest completed PR iteration directory
         iteration_dirs = sorted(pr_dir.glob("iteration_*"))
         if not iteration_dirs:
             return None
 
-        # Search backwards for the latest iteration that has a status_code
+        # Search backwards for the latest completed iteration
         latest_pr_iteration_dir = None
         pr_context = None
         for iteration_dir in reversed(iteration_dirs):
@@ -1268,7 +1320,7 @@ class Phase(ABC):
                 continue
             with open(context_file, "r", encoding="utf-8") as f:
                 ctx = json.load(f)
-            if ctx.get("status_code"):
+            if self._context_marks_completed(ctx):
                 latest_pr_iteration_dir = iteration_dir
                 pr_context = ctx
                 break
@@ -2252,7 +2304,7 @@ class Phase(ABC):
         if not iteration_dirs:
             return 0
 
-        # Search from back to front for first complete iteration (has status_code)
+        # Search from back to front for first complete iteration
         for iteration_dir in reversed(iteration_dirs):
             context_file = iteration_dir / "context.json"
             if not context_file.exists():
@@ -2261,9 +2313,7 @@ class Phase(ABC):
             with open(context_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            # Check if has status_code (complete iteration)
-            # Use status_code instead of response because response may exist but checklist validation not passed
-            if "status_code" in data and data["status_code"]:
+            if self._context_marks_completed(data):
                 return data.get("iteration", 0)
 
         # All iterations incomplete, return 0

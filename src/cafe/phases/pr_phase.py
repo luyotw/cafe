@@ -1,5 +1,6 @@
 """Pull Request creation phase."""
 
+from datetime import datetime
 import json
 import re
 import subprocess
@@ -12,7 +13,7 @@ from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
-from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
+from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import PhaseResult, PhaseStatus
 from cafe.ui.inquirer_prompts import prompt_confirm
 from cafe.utils.github import GitHubOps, GitHubError, get_all_pr_comments
@@ -21,43 +22,6 @@ from cafe.utils.prompt_utils import format_checklist_instruction
 
 class PRPhase(Phase):
     """Legacy compatibility implementation for the PR phase."""
-
-    @staticmethod
-    def _context_marks_completed(context: dict) -> bool:
-        """Return True when iteration context represents a completed PR iteration."""
-        if context.get("end_time"):
-            return True
-
-        raw_status = context.get("status_code")
-        if isinstance(raw_status, str) and raw_status:
-            return True
-
-        response = context.get("response")
-        if not isinstance(response, str) or not response.strip():
-            return False
-
-        parsed = StatusCodeParser.extract(response, valid_codes=list(PhaseStatusCode))
-        if parsed is not None:
-            return True
-
-        return StatusCodeParser.coerce_completion_alias(response, list(PhaseStatusCode)) is not None
-
-    @staticmethod
-    def _context_status_code(context: dict) -> Optional[str]:
-        raw_status = context.get("status_code")
-        if isinstance(raw_status, str) and raw_status:
-            return raw_status
-
-        response = context.get("response")
-        if not isinstance(response, str) or not response.strip():
-            return None
-
-        parsed = StatusCodeParser.extract(response, valid_codes=list(PhaseStatusCode))
-        if parsed is not None:
-            return parsed.value
-
-        aliased = StatusCodeParser.coerce_completion_alias(response, list(PhaseStatusCode))
-        return aliased.value if aliased is not None else None
 
     def __init__(
         self,
@@ -439,21 +403,35 @@ class PRPhase(Phase):
         if not develop_dir.exists():
             return None
 
-        status_file = develop_dir / "status.json"
-        if not status_file.exists():
-            return None
+        iteration_dirs = sorted(develop_dir.glob("iteration_*"))
+        for iter_dir in reversed(iteration_dirs):
+            context_file = iter_dir / "context.json"
+            if not context_file.exists():
+                continue
+            try:
+                with open(context_file, "r", encoding="utf-8") as f:
+                    context = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                continue
 
-        try:
-            with open(status_file, "r", encoding="utf-8") as f:
-                from cafe.core.types import PhaseProgress
-                status_data = json.load(f)
-                progress = PhaseProgress.from_dict(status_data)
+            if not self._context_marks_completed(context):
+                continue
 
-                # Return end_time only, do not fall back to timestamp
-                end_time = getattr(progress, 'end_time', None)
-                return end_time
-        except Exception:
-            return None
+            end_time_str = context.get("end_time")
+            if not end_time_str:
+                return None
+
+            try:
+                end_time = datetime.fromisoformat(end_time_str)
+            except ValueError:
+                return None
+
+            if end_time.tzinfo is None:
+                from datetime import timezone
+                end_time = end_time.replace(tzinfo=timezone.utc)
+            return end_time
+
+        return None
 
     def _should_start_new_iteration(self, pr_iteration_info: Optional[dict]) -> bool:
         """Determine if we should start a new PR iteration.

@@ -344,14 +344,8 @@ class TestDevelopPhasePromptGeneration:
         pr_context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "status_code": "CAFE_NEEDS_CHANGES"
-        }))
-
-        # Create PR status.json with newer end_time
-        pr_status_file = pr_dir / "status.json"
-        pr_status_file.write_text(json.dumps({
             "status_code": "CAFE_NEEDS_CHANGES",
-            "end_time": "2026-01-07T11:50:00+08:00"
+            "end_time": "2026-01-07T11:50:00+08:00",
         }))
 
         # Create agent file

@@ -93,6 +93,7 @@ class DevelopPhase(Phase):
 
         # Restore state from last iteration file (if resuming)
         self.iteration = self._load_iteration_counter()
+
     def _check_plan_exists(self) -> bool:
         """Check if plan file exists (versioned or legacy plan.md).
 
@@ -227,6 +228,44 @@ class DevelopPhase(Phase):
                     print(f"  → PR comments: {user_input_path}")
                 break
 
+    def _get_latest_pr_feedback_info(self) -> Optional[Dict[str, Any]]:
+        """Return latest completed PR iteration info from iteration contexts."""
+        pr_dir = self.issue_dir / "pr"
+        if not pr_dir.exists():
+            return None
+
+        for iteration_dir in reversed(sorted(pr_dir.glob("iteration_*"))):
+            context_file = iteration_dir / "context.json"
+            if not context_file.exists():
+                continue
+            try:
+                with open(context_file, "r", encoding="utf-8") as f:
+                    ctx = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            if not self._context_marks_completed(ctx):
+                continue
+
+            end_time = None
+            end_time_str = ctx.get("end_time")
+            if isinstance(end_time_str, str) and end_time_str:
+                try:
+                    end_time = datetime.fromisoformat(end_time_str)
+                except ValueError:
+                    end_time = None
+
+            output_file = iteration_dir / "output.md"
+            return {
+                "iteration_dir": iteration_dir,
+                "context": ctx,
+                "status_code": self._context_status_code(ctx),
+                "end_time": end_time,
+                "output_file": output_file if output_file.exists() else None,
+            }
+
+        return None
+
     def _check_if_already_completed_with_review(self) -> Optional[PhaseResult]:
         """Check if phase is already completed, considering special logic for review feedback and PR comments.
 
@@ -253,8 +292,6 @@ class DevelopPhase(Phase):
         # Only phases newer than develop's end_time need to be handled
         develop_end_time = getattr(existing_progress, 'end_time', None)
 
-        from cafe.core.status_codes import PhaseStatusCode
-
         review_needs_changes_time = None
         pr_needs_changes_time = None
 
@@ -264,19 +301,9 @@ class DevelopPhase(Phase):
             if review_end_time_str:
                 review_needs_changes_time = datetime.fromisoformat(review_end_time_str)
 
-        # Check PR phase end_time
-        pr_status_file = self.issue_dir / "pr" / "status.json"
-        if pr_status_file.exists():
-            try:
-                with open(pr_status_file, 'r', encoding='utf-8') as f:
-                    pr_status = json.load(f)
-
-                if pr_status.get("status_code") == PhaseStatusCode.NEEDS_CHANGES.value:
-                    pr_end_time_str = pr_status.get("end_time")
-                    if pr_end_time_str:
-                        pr_needs_changes_time = datetime.fromisoformat(pr_end_time_str)
-            except Exception:
-                pass
+        pr_feedback_info = self._get_latest_pr_feedback_info()
+        if pr_feedback_info and pr_feedback_info.get("status_code") == PhaseStatusCode.NEEDS_CHANGES.value:
+            pr_needs_changes_time = pr_feedback_info.get("end_time")
 
         # Filter: only keep phases newer than develop's end_time
         if develop_end_time:
@@ -924,36 +951,15 @@ Read {agent_file} to understand your complete role definition and responsibiliti
             from cafe.utils.git_utils import to_cwd_relative_path
 
             # Collect PR feedback file and its end_time
-            pr_dir = self.issue_dir / "pr"
-            if pr_dir.exists():
-                iteration_dirs = sorted(pr_dir.glob("iteration_*"))
-                for iteration_dir in reversed(iteration_dirs):
-                    context_file = iteration_dir / "context.json"
-                    if not context_file.exists():
-                        continue
-                    with open(context_file, "r", encoding="utf-8") as f:
-                        ctx = json.load(f)
-                    if not ctx.get("status_code"):
-                        continue
-                    pr_output_file = iteration_dir / "output.md"
-                    if pr_output_file.exists() and pr_output_file.read_text(encoding="utf-8").strip():
-                        try:
-                            pr_feedback_file = to_cwd_relative_path(pr_output_file)
-                        except ValueError:
-                            pr_feedback_file = str(pr_output_file.resolve())
-                    break
-
-                # Get PR end_time from status.json
-                pr_status_file = self.issue_dir / "pr" / "status.json"
-                if pr_status_file.exists():
+            pr_feedback_info = self._get_latest_pr_feedback_info()
+            if pr_feedback_info:
+                pr_output_file = pr_feedback_info.get("output_file")
+                if pr_output_file and pr_output_file.read_text(encoding="utf-8").strip():
                     try:
-                        with open(pr_status_file, 'r', encoding='utf-8') as f:
-                            pr_status_data = json.load(f)
-                        pr_end_time_str = pr_status_data.get("end_time")
-                        if pr_end_time_str:
-                            pr_end_time = datetime.fromisoformat(pr_end_time_str)
-                    except Exception:
-                        pass
+                        pr_feedback_file = to_cwd_relative_path(pr_output_file)
+                    except ValueError:
+                        pr_feedback_file = str(pr_output_file.resolve())
+                pr_end_time = pr_feedback_info.get("end_time")
 
             # Collect review feedback file and its end_time
             if correction_mode:

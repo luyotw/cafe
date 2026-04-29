@@ -132,6 +132,47 @@ class TestReadIterationsIndex:
 
         assert result == []
 
+
+class TestLoadIterationCounter:
+    """Tests for _load_iteration_counter() fallback behavior."""
+
+    def test_uses_completed_context_with_end_time_when_status_missing(self, tmp_path):
+        phase_dir = tmp_path / "spec"
+        iteration_dir = phase_dir / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+        phase = ConcretePhase(phase_dir=phase_dir)
+
+        (iteration_dir / "context.json").write_text(
+            json.dumps(
+                {
+                    "iteration": 1,
+                    "response": "CAFE_CONFIRMED",
+                    "end_time": "2026-04-29T10:00:00+08:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert phase._load_iteration_counter() == 1
+
+    def test_ignores_incomplete_context_without_end_time(self, tmp_path):
+        phase_dir = tmp_path / "spec"
+        iteration_dir = phase_dir / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+        phase = ConcretePhase(phase_dir=phase_dir)
+
+        (iteration_dir / "context.json").write_text(
+            json.dumps(
+                {
+                    "iteration": 1,
+                    "response": "draft only",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert phase._load_iteration_counter() == 0
+
     def test_reads_all_iteration_records(self, tmp_path):
         """驗證能讀取所有 iterations 記錄"""
         phase_dir = tmp_path / "spec"

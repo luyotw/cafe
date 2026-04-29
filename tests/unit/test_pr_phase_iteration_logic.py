@@ -10,6 +10,26 @@ from cafe.phases.pr_phase import PRPhase
 from cafe.core.types import PhaseStatus
 
 
+def _write_develop_iteration(
+    issue_dir: Path,
+    *,
+    iteration: int = 1,
+    timestamp: str = "2026-01-27T10:00:00+08:00",
+    end_time: str | None = None,
+    response: str = "CAFE_CONFIRMED",
+) -> None:
+    develop_dir = issue_dir / "develop" / f"iteration_{iteration:03d}"
+    develop_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "iteration": iteration,
+        "timestamp": timestamp,
+        "response": response,
+    }
+    if end_time is not None:
+        payload["end_time"] = end_time
+    (develop_dir / "context.json").write_text(json.dumps(payload))
+
+
 class TestPRPhaseIterationLogic:
     """Test PR phase iteration decision logic."""
 
@@ -225,18 +245,12 @@ class TestPRPhaseIterationLogic:
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Test Spec")
 
-        # Create develop status (older than PR iteration)
-        develop_dir = issue_dir / "develop"
-        develop_dir.mkdir(parents=True)
-        develop_status_file = develop_dir / "status.json"
-        develop_status_file.write_text(json.dumps({
-            "phase": "develop",
-            "status": "completed",
-            "iteration": 1,
-            "timestamp": "2026-01-27T10:00:00+08:00",
-            "end_time": "2026-01-27T10:02:00+08:00",
-            "status_code": "CAFE_CONFIRMED"
-        }))
+        _write_develop_iteration(
+            issue_dir,
+            iteration=1,
+            timestamp="2026-01-27T10:00:00+08:00",
+            end_time="2026-01-27T10:02:00+08:00",
+        )
 
         pr_iteration_info = {
             "iteration_number": 1,
@@ -267,18 +281,12 @@ class TestPRPhaseIterationLogic:
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Test Spec")
 
-        # Create develop status (newer than PR iteration)
-        develop_dir = issue_dir / "develop"
-        develop_dir.mkdir(parents=True)
-        develop_status_file = develop_dir / "status.json"
-        develop_status_file.write_text(json.dumps({
-            "phase": "develop",
-            "status": "completed",
-            "iteration": 2,
-            "timestamp": "2026-01-27T10:10:00+08:00",
-            "end_time": "2026-01-27T10:15:00+08:00",
-            "status_code": "CAFE_CONFIRMED"
-        }))
+        _write_develop_iteration(
+            issue_dir,
+            iteration=2,
+            timestamp="2026-01-27T10:10:00+08:00",
+            end_time="2026-01-27T10:15:00+08:00",
+        )
 
         pr_iteration_info = {
             "iteration_number": 1,
@@ -382,18 +390,12 @@ class TestPRPhaseIterationLogic:
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Test Spec")
 
-        # Create develop status with end_time
-        develop_dir = issue_dir / "develop"
-        develop_dir.mkdir(parents=True)
-        develop_status_file = develop_dir / "status.json"
-        develop_status_file.write_text(json.dumps({
-            "phase": "develop",
-            "status": "completed",
-            "iteration": 1,
-            "timestamp": "2026-01-27T10:00:00+08:00",
-            "end_time": "2026-01-27T10:05:00+08:00",
-            "status_code": "CAFE_CONFIRMED"
-        }))
+        _write_develop_iteration(
+            issue_dir,
+            iteration=1,
+            timestamp="2026-01-27T10:00:00+08:00",
+            end_time="2026-01-27T10:05:00+08:00",
+        )
 
         with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
             phase = PRPhase(
@@ -692,17 +694,12 @@ class TestPRPhaseIterationLogic:
         user_input_file = iteration_dir / "user_input.md"
         user_input_file.write_text("Please fix")
 
-        # Create develop status at 10:10 (after PR feedback)
-        develop_dir = issue_dir / "develop"
-        develop_dir.mkdir(parents=True)
-        develop_status_file = develop_dir / "status.json"
-        develop_status_file.write_text(json.dumps({
-            "phase": "develop",
-            "status": "completed",
-            "timestamp": "2026-01-27T10:10:00+08:00",
-            "end_time": "2026-01-27T10:10:00+08:00",
-            "iteration": 2
-        }))
+        _write_develop_iteration(
+            issue_dir,
+            iteration=2,
+            timestamp="2026-01-27T10:10:00+08:00",
+            end_time="2026-01-27T10:10:00+08:00",
+        )
 
         with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
             phase = PRPhase(
@@ -742,21 +739,18 @@ class TestPhaseComparisonWithMissingEndTime:
         """Test _get_latest_develop_end_time returns None when end_time is missing (not falling back to timestamp)."""
         # Setup
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
-        develop_dir = issue_dir / "develop"
-        develop_dir.mkdir(parents=True)
 
         spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Test Spec")
 
-        # Create develop status.json without end_time
-        develop_status_file = develop_dir / "status.json"
-        develop_status_file.write_text(json.dumps({
-            "phase": "develop",
-            "status": "in_progress",
-            "timestamp": "2026-01-27T10:00:00+08:00",
-            "iteration": 1
-        }))
+        _write_develop_iteration(
+            issue_dir,
+            iteration=1,
+            timestamp="2026-01-27T10:00:00+08:00",
+            end_time=None,
+            response="work in progress",
+        )
 
         with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
             phase = PRPhase(
@@ -831,17 +825,12 @@ class TestPhaseComparisonWithMissingEndTime:
         user_input_file = iteration_dir / "user_input.md"
         user_input_file.write_text("Please fix")
 
-        # Create develop status with end_time
-        develop_dir = issue_dir / "develop"
-        develop_dir.mkdir(parents=True)
-        develop_status_file = develop_dir / "status.json"
-        develop_status_file.write_text(json.dumps({
-            "phase": "develop",
-            "status": "completed",
-            "timestamp": "2026-01-27T10:10:00+08:00",
-            "end_time": "2026-01-27T10:10:00+08:00",
-            "iteration": 1
-        }))
+        _write_develop_iteration(
+            issue_dir,
+            iteration=1,
+            timestamp="2026-01-27T10:10:00+08:00",
+            end_time="2026-01-27T10:10:00+08:00",
+        )
 
         with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
             phase = PRPhase(
@@ -880,16 +869,13 @@ class TestPhaseComparisonWithMissingEndTime:
         user_input_file = iteration_dir / "user_input.md"
         user_input_file.write_text("Please fix")
 
-        # Create develop status without end_time (in progress)
-        develop_dir = issue_dir / "develop"
-        develop_dir.mkdir(parents=True)
-        develop_status_file = develop_dir / "status.json"
-        develop_status_file.write_text(json.dumps({
-            "phase": "develop",
-            "status": "in_progress",
-            "timestamp": "2026-01-27T10:10:00+08:00",
-            "iteration": 1
-        }))
+        _write_develop_iteration(
+            issue_dir,
+            iteration=1,
+            timestamp="2026-01-27T10:10:00+08:00",
+            end_time=None,
+            response="still working",
+        )
 
         with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
             phase = PRPhase(
