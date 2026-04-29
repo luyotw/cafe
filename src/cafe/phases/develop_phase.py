@@ -162,15 +162,64 @@ class DevelopPhase(Phase):
 
         return True
 
+    def _get_latest_review_feedback_info(self) -> Optional[Dict[str, Any]]:
+        """Return latest completed review iteration info from iteration contexts."""
+        review_dir = self.issue_dir / "review"
+        if not review_dir.exists():
+            return None
+
+        for iteration_dir in reversed(sorted(review_dir.glob("iteration_*"))):
+            context_file = iteration_dir / "context.json"
+            if not context_file.exists():
+                continue
+            try:
+                with open(context_file, "r", encoding="utf-8") as f:
+                    ctx = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            if not self._context_marks_completed(ctx):
+                continue
+
+            end_time = None
+            end_time_str = ctx.get("end_time")
+            if isinstance(end_time_str, str) and end_time_str:
+                try:
+                    end_time = datetime.fromisoformat(end_time_str)
+                except ValueError:
+                    end_time = None
+
+            output_file = iteration_dir / "output.md"
+            return {
+                "iteration_dir": iteration_dir,
+                "context": ctx,
+                "status_code": self._context_status_code(ctx),
+                "end_time": end_time,
+                "output_file": output_file if output_file.exists() else None,
+            }
+
+        return None
+
     def _load_review_status(self) -> Optional[Dict[str, Any]]:
-        """Load review phase status from status.json.
+        """Load review phase status from iteration context, falling back to status.json.
 
         Returns:
             Review status dict if exists, None otherwise
         """
+        review_info = self._get_latest_review_feedback_info()
+        if review_info:
+            data = {
+                "status_code": review_info.get("status_code"),
+            }
+            end_time = review_info.get("end_time")
+            if end_time is not None:
+                data["end_time"] = end_time.isoformat()
+            timestamp = review_info.get("context", {}).get("timestamp")
+            if timestamp:
+                data["timestamp"] = timestamp
+            return data
+
         spec_path = Path(self.spec_file)
-        # spec_file is like .cafe/issues/{issue_name}/spec/iteration_XXX/output.md
-        # Go up: output.md -> iteration_XXX -> spec -> issue_name
         issue_dir = spec_path.parent.parent.parent
         review_status_file = issue_dir / "review" / "status.json"
 
@@ -563,7 +612,7 @@ class DevelopPhase(Phase):
             self.user_input = ""  # Clear after first use
             return user_input
 
-        prev_status = prev_data.get("status_code", "")
+        prev_status = self._context_status_code(prev_data) or ""
 
         # Handle pending NEED_PERMISSION from previous run
         if prev_status == "CAFE_NEED_PERMISSION":
@@ -963,16 +1012,24 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 
             # Collect review feedback file and its end_time
             if correction_mode:
-                review_dir = self.issue_dir / "review"
-                review_file_path = self._get_latest_versioned_file("review", review_dir)
-                if review_file_path and review_file_path.exists():
-                    review_feedback_file = str(review_file_path)
+                review_feedback_info = self._get_latest_review_feedback_info()
+                review_output_file = review_feedback_info.get("output_file") if review_feedback_info else None
+                if review_output_file and review_output_file.exists():
+                    review_feedback_file = str(review_output_file)
+                else:
+                    review_dir = self.issue_dir / "review"
+                    review_file_path = self._get_latest_versioned_file("review", review_dir)
+                    if review_file_path and review_file_path.exists():
+                        review_feedback_file = str(review_file_path)
 
-                review_status = self._load_review_status()
-                if review_status:
-                    review_end_time_str = review_status.get("end_time")
-                    if review_end_time_str:
-                        review_end_time = datetime.fromisoformat(review_end_time_str)
+                if review_feedback_info:
+                    review_end_time = review_feedback_info.get("end_time")
+                else:
+                    review_status = self._load_review_status()
+                    if review_status:
+                        review_end_time_str = review_status.get("end_time")
+                        if review_end_time_str:
+                            review_end_time = datetime.fromisoformat(review_end_time_str)
 
             # Select feedback file based on end_time priority
             if pr_feedback_file and review_feedback_file:

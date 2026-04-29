@@ -219,6 +219,22 @@ class TestDevelopNeedPermissionFallback:
         assert result == "You may run git commit for this task."
         assert phase.user_input == ""
 
+    def test_prepare_user_input_recovers_need_permission_from_response_only(self, phase, monkeypatch, tmp_path):
+        """Should recover NEED_PERMISSION when previous data omitted explicit status_code."""
+        monkeypatch.chdir(tmp_path)
+        phase.iteration = 2
+        phase.user_input = "You may run git commit for this task."
+
+        with patch.object(
+            phase,
+            "_load_previous_iteration_data",
+            return_value={"iteration": 1, "response": "CAFE_NEED_PERMISSION"},
+        ):
+            result = phase._prepare_user_input_for_iteration()
+
+        assert result == "You may run git commit for this task."
+        assert phase.user_input == ""
+
     def test_prepare_user_input_fails_without_noninteractive_permission_input(self, phase, monkeypatch, tmp_path):
         """Should fail in non-interactive mode when no freeform permission input is provided."""
         monkeypatch.chdir(tmp_path)

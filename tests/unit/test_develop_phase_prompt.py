@@ -10,6 +10,28 @@ from cafe.core.types import PhaseStatus
 from cafe.phases.develop_phase import DevelopPhase
 
 
+def _write_review_iteration(
+    issue_dir: Path,
+    *,
+    iteration: int = 1,
+    status_code: str = "CAFE_NEEDS_CHANGES",
+    timestamp: str = "2026-01-07T11:39:41+08:00",
+    end_time: str | None = None,
+    output: str = "## Todo List\n\n- [ ] Review issue",
+) -> None:
+    review_dir = issue_dir / "review" / f"iteration_{iteration:03d}"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "iteration": iteration,
+        "timestamp": timestamp,
+        "status_code": status_code,
+    }
+    if end_time is not None:
+        payload["end_time"] = end_time
+    (review_dir / "context.json").write_text(json.dumps(payload))
+    (review_dir / "output.md").write_text(output)
+
+
 class TestDevelopPhasePromptGeneration:
     """Test that prompt generation correctly handles review feedback vs PR comments."""
 
@@ -95,6 +117,46 @@ class TestDevelopPhasePromptGeneration:
 
         # Assert: Review feedback and PR feedback are handled via checklist, not in prompt
         # The prompt should reference the checklist for these items
+        assert "checklist.md" in prompt.lower()
+
+    def test_prompt_uses_review_iteration_context_without_status_file(
+        self, tmp_path, mock_git_ops, mock_agent_manager, mock_permission_handler
+    ):
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("Test spec")
+
+        plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("Test plan")
+
+        _write_review_iteration(
+            issue_dir,
+            iteration=1,
+            status_code="CAFE_NEEDS_CHANGES",
+            end_time="2026-01-07T11:40:00+08:00",
+            output="Please fix review issue from iteration context",
+        )
+
+        agent_dir = tmp_path / ".cafe" / "agents" / "developer"
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        agent_file = agent_dir / "test-dev.md"
+        agent_file.write_text("Test developer agent")
+
+        with patch('cafe.agents.manager.AgentManager.get_agent_file_path', return_value=str(agent_file)):
+            phase = DevelopPhase(
+                agent_manager=mock_agent_manager,
+                permission_handler=mock_permission_handler,
+                git_ops=mock_git_ops,
+                spec_file=str(spec_file),
+                plan_file=str(plan_file),
+                issue_name="test-issue",
+            )
+            phase._check_if_already_completed_with_review()
+            phase.iteration = 1
+            prompt = phase._generate_prompt(user_input="")
+
         assert "checklist.md" in prompt.lower()
 
     def test_pr_feedback_handled_via_checklist_when_no_review_feedback(
@@ -684,6 +746,40 @@ class TestReviewFeedbackDetectionByEndTime:
             result = phase._check_if_already_completed_with_review()
 
         # Should return None (need to handle review feedback)
+        assert result is None
+        assert phase._has_review_feedback is True
+
+    def test_review_needs_handling_from_iteration_context_without_status_file(
+        self, tmp_path, setup_issue_dir, mock_git_ops, mock_agent_manager, mock_permission_handler
+    ):
+        setup = setup_issue_dir
+        issue_dir = setup["issue_dir"]
+
+        _write_review_iteration(
+            issue_dir,
+            iteration=1,
+            status_code="CAFE_NEEDS_CHANGES",
+            timestamp="2026-01-07T10:20:00+08:00",
+            end_time="2026-01-07T10:25:00+08:00",
+        )
+
+        develop_dir = issue_dir / "develop"
+        develop_status_file = develop_dir / "status.json"
+        develop_status_file.parent.mkdir(parents=True, exist_ok=True)
+        develop_status_file.write_text(json.dumps({
+            "phase": "develop",
+            "status": "completed",
+            "status_code": "CAFE_CONFIRMED",
+            "timestamp": "2026-01-07T10:10:00+08:00",
+            "iteration": 3,
+            "message": "Phase completed with CAFE_CONFIRMED",
+            "end_time": "2026-01-07T10:15:00+08:00",
+        }))
+
+        with patch('cafe.agents.manager.AgentManager.get_agent_file_path', return_value=str(setup["agent_file"])):
+            phase = self._create_phase(setup, mock_git_ops, mock_agent_manager, mock_permission_handler)
+            result = phase._check_if_already_completed_with_review()
+
         assert result is None
         assert phase._has_review_feedback is True
 
