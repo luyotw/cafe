@@ -68,6 +68,24 @@ class MockAgentExecutor:
             permission_denials=[]
         )
 
+    def preview_cli_command_args(
+        self,
+        prompt: str,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None,
+    ) -> List[str]:
+        """Return deterministic preview args for workflow logging/tests."""
+        return [
+            "--mock-agent",
+            self.config.name,
+            "--prompt",
+            prompt,
+        ]
+
+    def preview_cli_environment(self) -> dict[str, str]:
+        """Return mock execution environment."""
+        return {}
+
     def set_response(self, response: str):
         """Set response for next execution."""
         self._response = response

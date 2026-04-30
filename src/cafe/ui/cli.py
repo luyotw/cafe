@@ -5036,6 +5036,12 @@ def make(
         "-c",
         help="Path to configuration file",
     ),
+    user_input: Optional[str] = typer.Option(
+        None,
+        "--user-input",
+        "-u",
+        help="Initial requirements to pass into the first spec step",
+    ),
 ) -> None:
     """🚀 Check environment and execute complete development workflow.
 
@@ -5050,6 +5056,7 @@ def make(
     Examples:
         cafe make
         cafe make --config /path/to/config.yaml
+        cafe make --user-input "As a user, I want to export CSV reports."
     """
     # Load configuration
     config_manager = ConfigManager(Path(config_file).parent)
@@ -5086,6 +5093,8 @@ def make(
 
     # Build command
     cmd = [sys.executable, "-m", "cafe.ui.cli", "workflow", "--execute"]
+    if user_input:
+        cmd.extend(["--user-input", user_input])
 
     # Execute the command
     try:
@@ -6111,6 +6120,12 @@ def workflow(
     start_step: Optional[str] = typer.Option(None, "--start-step", help="Start execution from a specific step"),
     single_step: bool = typer.Option(False, "--single-step", help="Run only one playbook step"),
     dry_run: bool = typer.Option(True, "--dry-run/--execute", help="Run with built-in dry executor"),
+    user_input: Optional[str] = typer.Option(
+        None,
+        "--user-input",
+        "-u",
+        help="Initial requirements to pass into the first spec step",
+    ),
 ) -> None:
     """Run playbook workflow using the new generic runner."""
     try:
@@ -6179,6 +6194,7 @@ def workflow(
             issue_name=issue_name,
             playbook_data=playbook_data,
             generic_phase=generic_phase,
+            step_user_inputs={"spec": user_input} if user_input else None,
             interactive=interactive,
         )
 

@@ -183,18 +183,21 @@ class UserInputCollector(NoOpHook):
         # Restore plan phase iteration-1 initial user input (development guide).
         if step_name == "plan" and getattr(phase, "iteration", 0) == 1:
             if step_name not in phase.step_user_inputs:
-                development_guide_prompt = (
-                    "Please enter development guide (can be left empty)\n"
-                    "Suggested content:\n"
-                    "- Technical solution/direction\n"
-                    "- Related code locations\n"
-                    "- Technical constraints or dependencies\n"
-                    "- Key background information\n"
-                    "(Press Esc + Enter to finish)"
-                )
-                user_input = prompt_multiline(
-                    development_guide_prompt
-                ).strip()
+                if getattr(phase, "interactive", True):
+                    development_guide_prompt = (
+                        "Please enter development guide (can be left empty)\n"
+                        "Suggested content:\n"
+                        "- Technical solution/direction\n"
+                        "- Related code locations\n"
+                        "- Technical constraints or dependencies\n"
+                        "- Key background information\n"
+                        "(Press Esc + Enter to finish)"
+                    )
+                    user_input = prompt_multiline(
+                        development_guide_prompt
+                    ).strip()
+                else:
+                    user_input = ""
                 phase.step_user_inputs[step_name] = user_input
             return HookResult(
                 context_updates={"user_input": phase.step_user_inputs.get(step_name, "")},
@@ -353,6 +356,27 @@ class GitHubIssueFetcher(NoOpHook):
         if output_file.exists() and output_file.read_text(encoding="utf-8").strip():
             return HookResult()
 
+        content = self._resolve_prefilled_input(
+            phase=phase,
+            step_name=step_name,
+            context=kwargs.get("context"),
+        )
+        if content is not None:
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(
+                f"# Initial Requirements\n\n{content}\n", encoding="utf-8"
+            )
+            return HookResult(
+                context_updates={"user_input": content},
+                events=[
+                    {
+                        "type": "user_input_collected",
+                        "step": step_name,
+                        "source": "workflow_user_input",
+                    }
+                ],
+            )
+
         config_file = phase.issue_dir / "issue.yaml"
         input_method, issue_id = self._load_input_config(config_file)
 
@@ -380,6 +404,27 @@ class GitHubIssueFetcher(NoOpHook):
                 }
             ],
         )
+
+    @staticmethod
+    def _resolve_prefilled_input(
+        *,
+        phase: Any,
+        step_name: str,
+        context: Any,
+    ) -> Optional[str]:
+        if hasattr(phase, "step_user_inputs"):
+            step_user_inputs = getattr(phase, "step_user_inputs")
+            if isinstance(step_user_inputs, dict):
+                raw_user_input = step_user_inputs.get(step_name)
+                if isinstance(raw_user_input, str) and raw_user_input.strip():
+                    return raw_user_input.strip()
+
+        if isinstance(context, dict):
+            raw_user_input = context.get("user_input")
+            if isinstance(raw_user_input, str) and raw_user_input.strip():
+                return raw_user_input.strip()
+
+        return None
 
     @staticmethod
     def _load_input_config(config_file: Path) -> tuple[Optional[str], Optional[int]]:

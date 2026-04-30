@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cafe.core.hooks.native import (
+    GitHubIssueFetcher,
     GitHubPRCreator,
     LocalPRReviewer,
     PRCommentPoster,
@@ -256,6 +257,94 @@ def test_user_input_collector_prompts_initial_plan_user_input_on_first_iteration
     prompt_text = mock_prompt.call_args.args[0]
     assert "Suggested content:" in prompt_text
     assert "Technical solution/direction" in prompt_text
+
+
+def test_user_input_collector_skips_initial_plan_prompt_in_noninteractive_mode(tmp_path: Path) -> None:
+    phase_dir = tmp_path / "plan"
+    phase_dir.mkdir(parents=True, exist_ok=True)
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.interactive = False
+    hook = UserInputCollector()
+
+    with patch("cafe.core.hooks.native.prompt_multiline") as mock_prompt:
+        result = hook.run(
+            stage="prepare_input",
+            phase=phase,
+            step_name="plan",
+            step_def={"role": "developer"},
+            agent_name="David",
+        )
+
+    assert result.context_updates["user_input"] == ""
+    assert result.events == [{"type": "user_input_collected", "step": "plan", "source": "initial_prompt"}]
+    assert phase.step_user_inputs["plan"] == ""
+    mock_prompt.assert_not_called()
+
+
+def test_github_issue_fetcher_uses_context_user_input_without_prompting(tmp_path: Path) -> None:
+    phase_dir = tmp_path / "spec"
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    output_file = phase._get_iteration_dir(1) / "output.md"
+    hook = GitHubIssueFetcher()
+
+    with (
+        patch.object(hook, "_prompt_input_method") as mock_prompt_method,
+        patch.object(hook, "_prompt_manual_input") as mock_prompt_manual,
+        patch.object(hook, "_fetch_github_issue") as mock_fetch_issue,
+    ):
+        result = hook.run(
+            stage="prepare_input",
+            phase=phase,
+            step_name="spec",
+            output_file=output_file,
+            context={"user_input": "Build a standalone myip command."},
+        )
+
+    assert output_file.read_text(encoding="utf-8") == "# Initial Requirements\n\nBuild a standalone myip command.\n"
+    assert result.context_updates["user_input"] == "Build a standalone myip command."
+    assert result.events == [
+        {
+            "type": "user_input_collected",
+            "step": "spec",
+            "source": "workflow_user_input",
+        }
+    ]
+    mock_prompt_method.assert_not_called()
+    mock_prompt_manual.assert_not_called()
+    mock_fetch_issue.assert_not_called()
+
+
+def test_github_issue_fetcher_uses_phase_step_user_input_without_prompting(tmp_path: Path) -> None:
+    phase_dir = tmp_path / "spec"
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.step_user_inputs["spec"] = "Build a standalone myip command."
+    output_file = phase._get_iteration_dir(1) / "output.md"
+    hook = GitHubIssueFetcher()
+
+    with (
+        patch.object(hook, "_prompt_input_method") as mock_prompt_method,
+        patch.object(hook, "_prompt_manual_input") as mock_prompt_manual,
+        patch.object(hook, "_fetch_github_issue") as mock_fetch_issue,
+    ):
+        result = hook.run(
+            stage="prepare_input",
+            phase=phase,
+            step_name="spec",
+            output_file=output_file,
+        )
+
+    assert output_file.read_text(encoding="utf-8") == "# Initial Requirements\n\nBuild a standalone myip command.\n"
+    assert result.context_updates["user_input"] == "Build a standalone myip command."
+    assert result.events == [
+        {
+            "type": "user_input_collected",
+            "step": "spec",
+            "source": "workflow_user_input",
+        }
+    ]
+    mock_prompt_method.assert_not_called()
+    mock_prompt_manual.assert_not_called()
+    mock_fetch_issue.assert_not_called()
 
 
 def test_execute_step_skips_checklist_validation_when_confirmed_without_agent_run(tmp_path: Path) -> None:

@@ -129,3 +129,23 @@ class TestMockAgentExecutor:
         # Assert
         assert executor.config.name == "TestAgent"
         assert executor.config.cli == AgentCLI.GEMINI
+
+    def test_preview_cli_command_args_available(self):
+        """測試 mock executor 提供 preview args 介面"""
+        config = AgentConfig(name="TestAgent", cli=AgentCLI.CODEX)
+        executor = MockAgentExecutor(config=config)
+
+        result = executor.preview_cli_command_args(
+            "test prompt",
+            allowed_tools=["read"],
+            allowed_directories=["/tmp"],
+        )
+
+        assert result == ["--mock-agent", "TestAgent", "--prompt", "test prompt"]
+
+    def test_preview_cli_environment_available(self):
+        """測試 mock executor 提供 preview env 介面"""
+        config = AgentConfig(name="TestAgent", cli=AgentCLI.CODEX)
+        executor = MockAgentExecutor(config=config)
+
+        assert executor.preview_cli_environment() == {}

@@ -166,6 +166,39 @@ class TestMakeCommand:
             assert "workflow" in call_args
             assert "--execute" in call_args
 
+    def test_make_command_forwards_initial_user_input(self) -> None:
+        """測試 cafe make 會把 --user-input 透傳給 workflow."""
+        from typer.testing import CliRunner
+
+        from cafe.ui.cli import app
+
+        runner = CliRunner()
+
+        with (
+            patch("cafe.ui.cli.ConfigManager") as mock_config_class,
+            patch("shutil.which") as mock_which,
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_config = MagicMock()
+            mock_config.get.side_effect = lambda key, default: {
+                "agents.pm": {"name": "Roger", "cli": "copilot"},
+                "agents.developer": {"name": "David", "cli": "claude"},
+                "agents.reviewer": {"name": "Richard", "cli": "gemini"},
+            }.get(key, default)
+            mock_config_class.return_value = mock_config
+            mock_which.return_value = "/usr/local/bin/cli"
+            mock_run.return_value = MagicMock(returncode=0)
+
+            result = runner.invoke(
+                app,
+                ["make", "--user-input", "As a user, I want to export CSV reports."],
+            )
+
+        assert result.exit_code == 0
+        call_args = mock_run.call_args[0][0]
+        assert "--user-input" in call_args
+        assert "As a user, I want to export CSV reports." in call_args
+
     def test_make_command_displays_correct_error_message(self) -> None:
         """測試 cafe make 指令顯示正確錯誤提示訊息."""
         from typer.testing import CliRunner

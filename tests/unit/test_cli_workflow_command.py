@@ -150,6 +150,40 @@ def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None
         assert executed_steps == ["spec", "plan", "develop", "review", "pr"]
 
 
+def test_workflow_command_passes_initial_user_input_to_spec_step(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    class FakeExecutor:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
+            return _result(status_code="CAFE_CONFIRMED", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()) as mock_builder,
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-201"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "default",
+                "--execute",
+                "--user-input",
+                "As a user, I want a smoke-test workflow.",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert mock_builder.called
+    assert mock_builder.call_args.kwargs["step_user_inputs"] == {
+        "spec": "As a user, I want a smoke-test workflow."
+    }
+
+
 def test_workflow_command_prints_pr_url_when_pr_step_reports_sync_event(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     executed_steps: list[str] = []
