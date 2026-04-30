@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import textwrap
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -69,6 +70,71 @@ def _resolve_runtime_playbook_name() -> str:
         if issue_playbook != "default" or blackboard_path.exists():
             return issue_playbook
     return _resolve_selected_playbook(None)
+
+
+def _find_repo_checkout_root(start: Optional[Path] = None) -> Optional[Path]:
+    """Return the current checkout root when running inside the cafe repo."""
+    current = (start or Path.cwd()).resolve()
+    candidates = [current, *current.parents]
+    for candidate in candidates:
+        pyproject = candidate / "pyproject.toml"
+        repo_cli = candidate / "src" / "cafe" / "ui" / "cli.py"
+        if not pyproject.exists() or not repo_cli.exists():
+            continue
+        try:
+            content = pyproject.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if 'name = "cafe-engine"' in content:
+            return candidate
+    return None
+
+
+def _build_repo_entrypoint_mismatch_message(
+    *,
+    cwd: Optional[Path] = None,
+    imported_cli_file: Optional[Path] = None,
+) -> Optional[str]:
+    """Describe a repo/install mismatch when the CLI is not loaded from this checkout."""
+    repo_root = _find_repo_checkout_root(cwd)
+    if repo_root is None:
+        return None
+
+    expected_cli = (repo_root / "src" / "cafe" / "ui" / "cli.py").resolve()
+    actual_cli = (imported_cli_file or Path(__file__)).resolve()
+    if actual_cli == expected_cli:
+        return None
+
+    python_bin = Path(sys.executable).resolve()
+    return textwrap.dedent(
+        f"""
+        Error: `cafe` is running from a different installation than this checkout.
+
+          checkout: {repo_root}
+          expected CLI: {expected_cli}
+          actual CLI:   {actual_cli}
+
+        This usually means the `cafe` command is pointing at an older/global install,
+        so commands added in this checkout will not appear.
+
+        Fix one of these before continuing:
+          1. Reinstall this checkout into the same interpreter:
+             {python_bin} -m pip install -e .
+          2. Or run the checkout directly:
+             PYTHONPATH=src {python_bin} -m cafe.ui.cli <command>
+        """
+    ).strip()
+
+
+def _check_repo_entrypoint_alignment() -> None:
+    """Fail fast when running inside a checkout but importing a different install."""
+    if os.getenv("CAFE_SKIP_ENTRYPOINT_CHECK"):
+        return
+    message = _build_repo_entrypoint_mismatch_message()
+    if message is None:
+        return
+    console.print(f"[red]{message}[/red]")
+    raise typer.Exit(1)
 
 
 def _build_dynamic_step_click_command(step_name: str) -> Optional[click.Command]:
@@ -5835,6 +5901,7 @@ def main() -> None:
     """Entry point for CLI."""
     # Check if all dependencies are installed
     _check_dependencies()
+    _check_repo_entrypoint_alignment()
     # Check for updates and auto-upgrade if available
     _check_for_updates()
     app()
