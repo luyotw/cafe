@@ -10,7 +10,7 @@ from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardState, BlackboardStore
 from cafe.core.git import GitOperations
 from cafe.core.phase import Phase
-from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
+from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.phases.generic_phase import GenericPhase
 from cafe.utils.checklist_generator import (
@@ -399,14 +399,6 @@ class GenericWorkflowStepExecutor(Phase):
             "blackboard_path": self._display_path(self.issue_dir / "blackboard.json"),
             "next_step_path": self._display_path(self.issue_dir / "next_step.txt"),
             "output_file": self._display_path(output_file),
-            "status_code_instruction": (
-                generate_status_code_prompt(
-                    self._resolve_valid_status_codes(step_def),
-                    {},
-                )
-                if self._step_requires_status_code(step_name)
-                else ""
-            ),
         }
 
         for artifact_name in step_def.get("input_artifacts", []):
