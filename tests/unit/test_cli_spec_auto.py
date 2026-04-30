@@ -322,4 +322,4 @@ class TestSpecAutoMode:
             
             # Verify - should only run once
             assert mock_phase.execute.call_count == 1
-            assert "To continue, run:" in result.stdout
+            assert "Add clarification and continue with:" in result.stdout

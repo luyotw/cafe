@@ -97,4 +97,4 @@ class TestPRCommand:
         result = runner.invoke(app, ["pr"])
 
         assert result.exit_code == 0
-        assert "cafe develop" in result.stdout
+        assert "cafe make" in result.stdout

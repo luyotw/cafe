@@ -3636,14 +3636,10 @@ def plan(
         help="Sync plan to GitHub issue when confirmed (default: auto-detect based on issue_id)",
     ),
 ) -> None:
-    """Run plan phase: Implementation planning with developer agent.
+    """Legacy wrapper for the planning step.
 
-    The developer agent will analyze the specification and create a detailed
-    implementation plan with technical considerations and development guide.
-
-    This command automatically uses the current Git branch name as the issue identifier.
-
-    Use 'cafe edit plan' to edit the latest plan file.
+    Prefer `cafe make` to continue the workflow.
+    Use `cafe edit plan` to edit the latest plan artifact.
 
     \b
     Examples:
@@ -3676,6 +3672,10 @@ def plan(
     try:
         # Get and validate current branch
         issue_name = _get_and_validate_branch(ctx, "plan")
+        _print_legacy_phase_command_notice(
+            phase_name="plan",
+            preferred_command="cafe make",
+        )
 
         config_dir = (
             str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
@@ -3690,7 +3690,7 @@ def plan(
         spec_file_path = _get_latest_versioned_file("spec", issue_name)
         if spec_file_path is None:
             console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
-            console.print("[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
+            console.print("[dim]Hint: Run 'cafe make --user-input ...' first.[/dim]")
             raise typer.Exit(1)
         is_interactive = (interactive and sys.stdin.isatty()) or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
         if auto and not is_interactive:
@@ -3726,14 +3726,14 @@ def plan(
             if alias_result.get("output_file"):
                 console.print(f"Saved to: {alias_result['output_file']}")
             console.print()
-            console.print("[dim]To continue, run:[/dim] [bold]cafe plan[/bold]")
+            console.print("[dim]Add planning details and continue with:[/dim] [bold]cafe make[/bold]")
         elif _alias_confirm_output_pause(alias_result):
             console.print("[bold yellow]📋 Plan ready for review[/bold yellow]")
             console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
             if alias_result.get("output_file"):
                 console.print(f"Saved to: {alias_result['output_file']}")
             console.print()
-            console.print("[dim]To review the plan, run:[/dim] [bold]cafe plan[/bold]")
+            console.print("[dim]Review the plan, then continue with:[/dim] [bold]cafe make[/bold]")
         elif _alias_is_confirmed_transition(alias_result, "develop"):
             console.print("[bold green]✅ Implementation plan completed![/bold green]")
             console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
@@ -3743,7 +3743,7 @@ def plan(
             if auto:
                 _execute_next_phase_auto("develop", issue_name)
             else:
-                console.print("[dim]Next step:[/dim] [bold]cafe develop[/bold]")
+                console.print("[dim]Continue the workflow with:[/dim] [bold]cafe make[/bold]")
         else:
             console.print(f"[bold yellow]Status: {status_code}[/bold yellow]")
             raise typer.Exit(1)
@@ -3810,12 +3810,9 @@ def develop(
         help="Auto mode: continue iterations automatically and execute cafe review after completion",
     ),
 ) -> None:
-    """Run develop phase: Execute development work according to plan.
+    """Legacy wrapper for the development step.
 
-    The developer agent will implement the planned features, running tests and
-    making commits according to the implementation plan.
-
-    This command automatically uses the current Git branch name as the issue identifier.
+    Prefer `cafe make` to continue the workflow.
 
     \b
     Examples:
@@ -3827,6 +3824,10 @@ def develop(
     try:
         # Get and validate current branch
         issue_name = _get_and_validate_branch(ctx, "develop")
+        _print_legacy_phase_command_notice(
+            phase_name="develop",
+            preferred_command="cafe make",
+        )
 
         config_dir = (
             str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
@@ -3841,15 +3842,13 @@ def develop(
         spec_file_path = _get_latest_versioned_file("spec", issue_name)
         if spec_file_path is None:
             console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
-            console.print("[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
+            console.print("[dim]Hint: Run 'cafe make --user-input ...' first.[/dim]")
             raise typer.Exit(1)
 
         plan_file_path = _get_latest_versioned_file("plan", issue_name)
         if plan_file_path is None:
             console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
-            console.print(
-                "[dim]Hint: Run 'cafe plan' first to create the implementation plan.[/dim]"
-            )
+            console.print("[dim]Hint: Run 'cafe make' first.[/dim]")
             raise typer.Exit(1)
         _reject_unsupported_phase_options(
             "develop",
@@ -3889,16 +3888,14 @@ def develop(
                     resolved_next_step,
                     issue_name,
                 )
-            elif resolved_next_step == "pr":
-                console.print("[dim]Next step:[/dim] [bold]cafe pr[/bold]")
             else:
-                console.print("[dim]Next step:[/dim] [bold]cafe review[/bold]")
+                console.print("[dim]Continue the workflow with:[/dim] [bold]cafe make[/bold]")
         elif _alias_needs_clarification(alias_result) or _alias_needs_permission(alias_result):
             if auto:
                 _execute_next_phase_auto("develop", issue_name)
             else:
                 console.print(f"[yellow]⏸️  Development paused: {status_code}[/yellow]")
-                console.print("[dim]Resume with: cafe develop[/dim]")
+                console.print("[dim]Resume with:[/dim] [bold]cafe make[/bold]")
         else:
             console.print(f"[bold red]❌ Development failed: {status_code}[/bold red]")
             raise typer.Exit(1)
@@ -3978,12 +3975,9 @@ def review(
         help="Force re-execution even if review already completed",
     ),
 ) -> None:
-    """Run review phase: Code review by reviewer agent.
+    """Legacy wrapper for the review step.
 
-    The reviewer agent will review code changes and provide feedback.
-    Each execution performs one review iteration.
-
-    This command automatically uses the current Git branch name as the issue identifier.
+    Prefer `cafe make` to continue the workflow.
 
     \b
     Examples:
@@ -4016,6 +4010,10 @@ def review(
     try:
         # Get and validate current branch
         issue_name = _get_and_validate_branch(ctx, "review")
+        _print_legacy_phase_command_notice(
+            phase_name="review",
+            preferred_command="cafe make",
+        )
 
         config_dir = (
             str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
@@ -4030,15 +4028,13 @@ def review(
         spec_file_path = _get_latest_versioned_file("spec", issue_name)
         if spec_file_path is None:
             console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
-            console.print("[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
+            console.print("[dim]Hint: Run 'cafe make --user-input ...' first.[/dim]")
             raise typer.Exit(1)
 
         plan_file_path = _get_latest_versioned_file("plan", issue_name)
         if plan_file_path is None:
             console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
-            console.print(
-                "[dim]Hint: Run 'cafe plan' first to create the implementation plan.[/dim]"
-            )
+            console.print("[dim]Hint: Run 'cafe make' first.[/dim]")
             raise typer.Exit(1)
         _reject_unsupported_phase_options(
             "review",
@@ -4069,8 +4065,7 @@ def review(
             if auto:
                 _execute_next_phase_auto("pr", issue_name)
             else:
-                console.print("[dim]Next steps:[/dim]")
-                console.print("[dim]  1. Create PR: cafe pr[/dim]")
+                console.print("[dim]Continue the workflow with:[/dim] [bold]cafe make[/bold]")
         elif _alias_targets(alias_result, "develop") or status_code == "CAFE_NEEDS_CHANGES":
             console.print(f"[bold yellow]📝 Code review completed with status: {status_code}[/bold yellow]")
             if alias_result.get("output_file"):
@@ -4086,20 +4081,18 @@ def review(
                 if current_iteration >= max_iterations:
                     console.print(f"[bold yellow]⚠️  Review loop limit reached ({max_iterations} times)[/bold yellow]")
                     console.print("[dim]You can:[/dim]")
-                    console.print("[dim]  • Continue: [bold]cafe review[/bold] (without --auto)[/dim]")
+                    console.print("[dim]  • Continue with: [bold]cafe make[/bold][/dim]")
                     console.print("[dim]  • Adjust limit: [bold]cafe config set auto.max_review_iterations 10[/bold][/dim]")
                 else:
                     console.print(f"[dim]Review iteration: {current_iteration}/{max_iterations}[/dim]")
                     _execute_next_phase_auto("develop", issue_name)
             else:
-                console.print("[dim]Next steps:[/dim]")
-                console.print("[dim]  1. Make changes: cafe develop[/dim]")
-                console.print("[dim]  2. Review again: cafe review[/dim]")
+                console.print("[dim]Continue the workflow with:[/dim] [bold]cafe make[/bold]")
         elif _alias_needs_clarification(alias_result):
             console.print("[bold yellow]💬 Review needs clarification[/bold yellow]")
             if alias_result.get("output_file"):
                 console.print(f"Saved to: {alias_result['output_file']}")
-            console.print("[dim]Resume with:[/dim] [bold]cafe review[/bold]")
+            console.print("[dim]Resume with:[/dim] [bold]cafe make[/bold]")
         else:
             console.print(f"[bold red]❌ Review failed: {status_code}[/bold red]")
             raise typer.Exit(1)
@@ -4165,11 +4158,9 @@ def pr(
         help="Post organized todo list as PR comment (default: auto-detect from config)",
     ),
 ) -> None:
-    """Create pull request for the issue.
+    """Legacy wrapper for the PR step.
 
-    The PR phase will push the feature branch and create a GitHub Pull Request.
-
-    This command automatically uses the current Git branch name as the issue identifier.
+    Prefer `cafe make` to continue the workflow.
 
     \b
     Examples:
@@ -4181,18 +4172,22 @@ def pr(
     try:
         # Get and validate current branch
         issue_name = _get_and_validate_branch(ctx, "pr")
+        _print_legacy_phase_command_notice(
+            phase_name="pr",
+            preferred_command="cafe make",
+        )
 
         # Get latest versioned files
         spec_file_path = _get_latest_versioned_file("spec", issue_name)
         if spec_file_path is None:
             console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
-            console.print("[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
+            console.print("[dim]Hint: Run 'cafe make --user-input ...' first.[/dim]")
             raise typer.Exit(1)
 
         plan_file_path = _get_latest_versioned_file("plan", issue_name)
         if plan_file_path is None:
             console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
-            console.print("[dim]Hint: Run 'cafe plan' first to create the plan.[/dim]")
+            console.print("[dim]Hint: Run 'cafe make' first.[/dim]")
             raise typer.Exit(1)
 
         # Initialize components
@@ -4240,7 +4235,7 @@ def pr(
             if alias_result.get("output_file"):
                 console.print(f"Saved to: {alias_result['output_file']}")
             console.print()
-            console.print("[dim]Next step:[/dim] [bold]cafe develop[/bold]")
+            console.print("[dim]Continue the workflow with:[/dim] [bold]cafe make[/bold]")
         else:
             console.print(f"[bold red]❌ PR failed: {status_code}[/bold red]")
             raise typer.Exit(1)
