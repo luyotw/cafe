@@ -1832,7 +1832,7 @@ class Phase(ABC):
             return ([], "")
 
         # Only handle permission denials if previous status was CAFE_NEED_PERMISSION
-        prev_status = prev_data.get("status_code", "")
+        prev_status = self._context_status_code(prev_data) or ""
         if prev_status != "CAFE_NEED_PERMISSION":
             return ([], "")
 
@@ -2404,7 +2404,18 @@ class Phase(ABC):
         if status_data.get("status") != "completed":
             return None
 
-        status_code_value = status_data.get("status_code", "")
+        status_code_value = str(status_data.get("status_code", "") or "")
+        if not status_code_value:
+            latest_context = self._get_latest_iteration_context(
+                self.phase_name,
+                require_completed=True,
+                valid_codes=complete_status_codes,
+            )
+            if latest_context:
+                status_code_value = self._context_status_code(
+                    latest_context,
+                    valid_codes=complete_status_codes,
+                ) or ""
         for complete_code in complete_status_codes:
             if status_code_value == complete_code.value:
                 self._cleanup_codex_approved_rules()

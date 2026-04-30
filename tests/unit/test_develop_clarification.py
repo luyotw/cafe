@@ -312,6 +312,23 @@ class TestDevelopNeedPermissionFallback:
         assert recovered[0].tool_name == "Bash"
         assert recovered[0].tool_input["command"] == 'git add src/cafe/ui/cli.py && git commit -m "msg"'
 
+    def test_handle_previous_permission_denials_recovers_status_from_response_only(
+        self, phase, monkeypatch, tmp_path
+    ):
+        """Should treat response-only NEED_PERMISSION as the previous round status."""
+        monkeypatch.chdir(tmp_path)
+        phase.iteration = 2
+
+        with patch.object(
+            phase,
+            "_load_previous_iteration_data",
+            return_value={"iteration": 1, "response": "CAFE_NEED_PERMISSION"},
+        ):
+            approved_tools, user_input = phase._handle_previous_permission_denials()
+
+        assert approved_tools == []
+        assert user_input == ""
+
 class TestCodexPermissionRules:
     """Tests for Codex blocked-command handling."""
 

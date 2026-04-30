@@ -98,3 +98,52 @@ class TestSaveProgressEndTime:
         datetime.fromisoformat(status_data["end_time"].replace("Z", "+00:00"))
         # Verify status is COMPLETED (READY_FOR_REVIEW is a completed status)
         assert status_data["status"] == PhaseStatus.COMPLETED.value
+
+
+class TestAlreadyCompletedFallback:
+    """Test completion checks that recover status from iteration context."""
+
+    def test_completed_phase_recovers_missing_status_code_from_latest_context(self, tmp_path):
+        phase_dir = tmp_path / "test_phase"
+        phase_dir.mkdir()
+        phase = ConcretePhase(phase_dir=phase_dir)
+        phase.issue_dir = tmp_path
+        phase.agent_manager = type(
+            "AgentManagerStub",
+            (),
+            {"get_total_token_usage": staticmethod(lambda: type(
+                "UsageStub",
+                (),
+                {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "total_cost_usd": 0.0,
+                },
+            )())},
+        )()
+
+        status_file = phase_dir / "status.json"
+        status_file.write_text(
+            json.dumps({"status": "completed", "iteration": 1}),
+            encoding="utf-8",
+        )
+        iteration_dir = phase_dir / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+        (iteration_dir / "context.json").write_text(
+            json.dumps(
+                {
+                    "iteration": 1,
+                    "response": "CAFE_CONFIRMED",
+                    "end_time": "2026-04-30T00:00:00+08:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = phase._check_if_already_completed([PhaseStatusCode.CONFIRMED])
+
+        assert result is not None
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data["status_code"] == PhaseStatusCode.CONFIRMED.value
