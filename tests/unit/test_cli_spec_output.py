@@ -78,10 +78,10 @@ def setup_test_env(tmp_path, monkeypatch):
 class TestSpecCommandOutputWithReadyForReview:
     """測試 READY_FOR_REVIEW 狀態輸出訊息."""
 
-    def test_ready_for_review_prompts_user_to_run_spec_again(
+    def test_ready_for_review_prompts_user_to_continue_with_make(
         self, runner, mock_git_ops, mock_execute_alias, mock_agent_manager, mock_permission_handler, setup_test_env
     ):
-        """READY_FOR_REVIEW 狀態應提示使用者再次執行 cafe spec 確認."""
+        """READY_FOR_REVIEW 狀態應提示使用者回到 workflow 主入口."""
         mock_execute_alias.return_value = {
             "iterations": 2,
             "status_code": "CAFE_READY_FOR_REVIEW",
@@ -93,10 +93,9 @@ class TestSpecCommandOutputWithReadyForReview:
         # Verify
         assert result.exit_code == 0
         assert "✅ Spec draft completed!" in result.stdout
-        assert "Please review the spec and run:" in result.stdout
-        assert "cafe spec" in result.stdout
-        # Should NOT suggest cafe plan
-        assert "cafe plan" not in result.stdout
+        assert "Please review the spec, then continue with:" in result.stdout
+        assert "cafe make" in result.stdout
+        assert "Please review the spec and run:" not in result.stdout
 
     def test_ready_for_review_shows_saved_location(
         self, runner, mock_git_ops, mock_execute_alias, mock_agent_manager, mock_permission_handler, setup_test_env
@@ -127,16 +126,16 @@ class TestSpecCommandOutputWithReadyForReview:
 
         assert result.exit_code == 0
         assert "✅ Spec draft completed!" in result.stdout
-        assert "Please review the spec and run:" in result.stdout
+        assert "Please review the spec, then continue with:" in result.stdout
 
 
 class TestSpecCommandOutputWithConfirmed:
     """測試 CONFIRMED 狀態輸出訊息."""
 
-    def test_confirmed_prompts_user_to_run_plan(
+    def test_confirmed_prompts_user_to_continue_workflow(
         self, runner, mock_git_ops, mock_execute_alias, mock_agent_manager, mock_permission_handler, setup_test_env
     ):
-        """CONFIRMED 狀態應提示使用者執行 cafe plan."""
+        """CONFIRMED 狀態應提示使用者回到 workflow 主入口."""
         mock_execute_alias.return_value = {
             "iterations": 3,
             "status_code": "CAFE_CONFIRMED",
@@ -148,9 +147,8 @@ class TestSpecCommandOutputWithConfirmed:
         # Verify
         assert result.exit_code == 0
         assert "✅ Spec clarification completed!" in result.stdout
-        assert "Next step:" in result.stdout
-        assert "cafe plan" in result.stdout
-        # Should NOT suggest running cafe spec again
+        assert "Continue the workflow with:" in result.stdout
+        assert "cafe make" in result.stdout
         assert "Please review the spec" not in result.stdout
 
     def test_confirmed_shows_iteration_count(
@@ -180,7 +178,7 @@ class TestSpecCommandOutputWithConfirmed:
 
         assert result.exit_code == 0
         assert "✅ Spec clarification completed!" in result.stdout
-        assert "cafe plan" in result.stdout
+        assert "cafe make" in result.stdout
 
 
 class TestSpecCommandOutputWithNeedClarification:
@@ -189,7 +187,7 @@ class TestSpecCommandOutputWithNeedClarification:
     def test_need_clarification_prompts_to_continue(
         self, runner, mock_git_ops, mock_execute_alias, mock_agent_manager, mock_permission_handler, setup_test_env
     ):
-        """NEED_CLARIFICATION 狀態應提示使用者繼續執行 cafe spec."""
+        """NEED_CLARIFICATION 狀態應提示使用者回到 workflow 主入口."""
         mock_execute_alias.return_value = {
             "iterations": 1,
             "status_code": "CAFE_NEED_CLARIFICATION",
@@ -199,8 +197,8 @@ class TestSpecCommandOutputWithNeedClarification:
 
         assert result.exit_code == 0
         assert "💬 Agent needs clarification" in result.stdout
-        assert "To continue, run:" in result.stdout
-        assert "cafe spec" in result.stdout
+        assert "Add clarification and continue with:" in result.stdout
+        assert "cafe make" in result.stdout
 
 
 class TestSpecCommandOutputComparison:
@@ -222,9 +220,25 @@ class TestSpecCommandOutputComparison:
 
         # Verify they have different messages
         assert "Spec draft completed!" in result_ready.stdout
-        assert "cafe spec" in result_ready.stdout
-        assert "cafe plan" not in result_ready.stdout
+        assert "cafe make" in result_ready.stdout
 
         assert "Spec clarification completed!" in result_confirmed.stdout
-        assert "cafe plan" in result_confirmed.stdout
+        assert "cafe make" in result_confirmed.stdout
         assert "Please review the spec" not in result_confirmed.stdout
+
+
+class TestSpecCommandLegacyNotice:
+    def test_spec_command_prints_legacy_wrapper_notice(
+        self, runner, mock_git_ops, mock_execute_alias, mock_agent_manager, mock_permission_handler, setup_test_env
+    ):
+        mock_execute_alias.return_value = {
+            "iterations": 1,
+            "status_code": "CAFE_CONFIRMED",
+        }
+
+        result = runner.invoke(app, ["spec", "--interactive", "--user-input", "test"])
+
+        assert result.exit_code == 0
+        assert "Legacy phase command:" in result.stdout
+        assert "cafe spec" in result.stdout
+        assert "cafe make --user-input" in result.stdout

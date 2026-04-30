@@ -1063,7 +1063,7 @@ class TestSpecEditCommand:
         # Verify
         assert result.exit_code == 1
         assert "No spec file found" in result.stdout
-        assert "cafe spec" in result.stdout
+        assert "cafe make --user-input" in result.stdout
 
     @patch("cafe.ui.cli.GitOperations")
     def test_spec_edit_not_in_issue_branch_shows_error(

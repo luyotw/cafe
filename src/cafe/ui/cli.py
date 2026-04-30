@@ -843,6 +843,17 @@ def _reject_unsupported_phase_options(phase_name: str, unsupported_options: Dict
     raise typer.Exit(1)
 
 
+def _print_legacy_phase_command_notice(*, phase_name: str, preferred_command: str) -> None:
+    """Show migration guidance for legacy phase aliases."""
+    console.print(
+        f"[yellow]Legacy phase command:[/yellow] [bold]cafe {phase_name}[/bold] is being retired."
+    )
+    console.print(
+        f"[dim]Preferred entrypoint:[/dim] [bold]{preferred_command}[/bold]"
+    )
+    console.print()
+
+
 def _run_iterative_alias_step(
     *,
     issue_name: str,
@@ -3406,23 +3417,16 @@ def spec(
         help="Sync spec to GitHub issue when confirmed (default: auto-detect based on issue_id)",
     ),
 ) -> None:
-    """Run specification phase: Spec clarification with conversational generation.
+    """Legacy wrapper for the specification step.
 
-    The PM agent will engage in a dialogue with you to clarify and generate
-    a complete specification document. No technical details will be discussed.
-
-    This command automatically uses the current Git branch name as the issue identifier.
-
-    Use 'cafe spec edit' to edit the latest specification file.
+    Prefer `cafe make --user-input ...` or
+    `cafe workflow --start-step spec --execute --user-input ...`.
+    Use `cafe spec edit` only to open the latest spec artifact.
 
     \b
     Examples:
-        cafe spec
-        cafe spec --auto
-        cafe spec -m github
-        cafe spec -m github -i 123
-        cafe spec --pm CustomPM
-        cafe spec --rigor low
+        cafe make --user-input "Add CSV export"
+        cafe workflow --start-step spec --execute --user-input "Add CSV export"
         cafe spec edit
     """
     # Handle edit action
@@ -3436,7 +3440,7 @@ def spec(
             if not spec_file:
                 console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
                 console.print(
-                    "[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]"
+                    "[dim]Hint: Run 'cafe make --user-input ...' or 'cafe workflow --start-step spec --execute --user-input ...' first.[/dim]"
                 )
                 raise typer.Exit(1)
 
@@ -3453,6 +3457,10 @@ def spec(
     try:
         # Get and validate current branch
         issue_name = _get_and_validate_branch(ctx, "spec")
+        _print_legacy_phase_command_notice(
+            phase_name="spec",
+            preferred_command="cafe make --user-input '...'",
+        )
 
         config_dir = (
             str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
@@ -3507,21 +3515,21 @@ def spec(
             if auto:
                 _execute_next_phase_auto("plan", issue_name)
             else:
-                console.print("[dim]Next step:[/dim] [bold]cafe plan[/bold]")
+                console.print("[dim]Continue the workflow with:[/dim] [bold]cafe make[/bold]")
         elif _alias_confirm_output_pause(alias_result):
             console.print("[bold green]✅ Spec draft completed![/bold green]")
             console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
             if alias_result.get("output_file"):
                 console.print(f"Saved to: {alias_result['output_file']}")
             console.print()
-            console.print("[dim]Please review the spec and run:[/dim] [bold]cafe spec[/bold]")
+            console.print("[dim]Please review the spec, then continue with:[/dim] [bold]cafe make[/bold]")
         elif _alias_needs_clarification(alias_result):
             console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
             console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
             if alias_result.get("output_file"):
                 console.print(f"Saved to: {alias_result['output_file']}")
             console.print()
-            console.print("[dim]To continue, run:[/dim] [bold]cafe spec[/bold]")
+            console.print("[dim]Add clarification and continue with:[/dim] [bold]cafe make[/bold]")
         else:
             console.print(f"[bold yellow]Status: {status_code}[/bold yellow]")
             if alias_result.get("output_file"):
