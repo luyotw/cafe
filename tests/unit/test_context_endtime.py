@@ -94,3 +94,30 @@ class TestContextJsonEndTime:
         # Verify it's an ISO format timestamp string
         from datetime import datetime
         datetime.fromisoformat(context_data["end_time"].replace("Z", "+00:00"))
+
+    def test_update_iteration_history_omits_status_code_when_persist_disabled(self, tmp_path):
+        """Verify status_code key is not persisted for baton-first workflow steps."""
+        phase_dir = tmp_path / "spec"
+        phase_dir.mkdir()
+
+        phase = ConcretePhase(phase_dir=phase_dir)
+        phase.iteration = 1
+
+        phase._update_iteration_history(
+            phase_specific_data={
+                "response": "done without status",
+                "status_code": "stale",
+            },
+            status_code=MagicMock(value="CAFE_CONFIRMED"),
+            persist_status=False,
+        )
+
+        context_file = phase._get_iteration_dir(1) / "context.json"
+        context_data = json.loads(context_file.read_text(encoding="utf-8"))
+
+        assert context_data["response"] == "done without status"
+        assert "status_code" not in context_data
+
+        iterations_file = phase_dir / "iterations.jsonl"
+        iteration_entry = json.loads(iterations_file.read_text(encoding="utf-8").strip())
+        assert "status" not in iteration_entry

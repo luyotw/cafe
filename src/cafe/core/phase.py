@@ -277,8 +277,6 @@ class Phase(ABC):
             context_data["denied_tools"] = None
         if "cli_command_args" not in context_data:
             context_data["cli_command_args"] = None
-        if persist_status and "status_code" not in context_data:
-            context_data["status_code"] = None
         if "model" not in context_data:
             context_data["model"] = None
 
@@ -297,6 +295,8 @@ class Phase(ABC):
             context_data["cli_command_args"] = cli_command_args
         if persist_status and status_code is not None:
             context_data["status_code"] = status_code.value
+        elif not persist_status:
+            context_data.pop("status_code", None)
 
         # Update model (only if provided, to preserve existing value)
         if model is not None:
@@ -321,9 +321,10 @@ class Phase(ABC):
             "iteration": self.iteration,
             "timestamp": context_data.get("timestamp", datetime.now().astimezone().isoformat()),
             "end_time": context_data.get("end_time"),
-            "status": status_code.value if persist_status and status_code is not None else None,
             "has_error": "error" in context_data,
         }
+        if persist_status and status_code is not None:
+            iteration_index_data["status"] = status_code.value
         try:
             self._append_iteration_index(iteration_index_data)
         except Exception as e:
@@ -641,7 +642,10 @@ class Phase(ABC):
                         context_data = json.load(f)
 
                     context_data["response"] = None
-                    context_data["status_code"] = None
+                    if persist_status:
+                        context_data["status_code"] = None
+                    else:
+                        context_data.pop("status_code", None)
                     context_data["error"] = str(e)
                     context_data["display_error"] = display_error
                     context_data["error_type"] = e.error_type
@@ -739,7 +743,10 @@ class Phase(ABC):
                         history_data = json.load(f)
 
                     history_data["response"] = None
-                    history_data["status_code"] = None
+                    if persist_status:
+                        history_data["status_code"] = None
+                    else:
+                        history_data.pop("status_code", None)
                     history_data["error"] = str(e)
 
                     # Record error type (if any)
