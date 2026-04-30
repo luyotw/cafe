@@ -3399,7 +3399,7 @@ def reset(
         raise typer.Exit(1)
 
 
-@app.command()
+@app.command(hidden=True)
 def spec(
     ctx: typer.Context,
     action: Optional[str] = typer.Argument(None, help="Action: edit (to edit latest spec file)"),
@@ -3588,7 +3588,7 @@ def spec(
         _handle_phase_exception(e, "spec")
 
 
-@app.command()
+@app.command(hidden=True)
 def plan(
     ctx: typer.Context,
     action: Optional[str] = typer.Argument(None, help="Action: edit (to edit latest plan file)"),
@@ -3643,10 +3643,8 @@ def plan(
 
     \b
     Examples:
-        cafe plan
-        cafe plan --auto
-        cafe plan -i 123
-        cafe plan --dev CustomDev
+        cafe make --user-input "Draft the implementation approach"
+        cafe make
         cafe edit plan
     """
     # Handle edit action
@@ -3753,7 +3751,7 @@ def plan(
         _handle_phase_exception(e, "plan")
 
 
-@app.command()
+@app.command(hidden=True)
 def develop(
     ctx: typer.Context,
     mode: str = typer.Option(
@@ -3807,7 +3805,7 @@ def develop(
     auto: bool = typer.Option(
         False,
         "--auto",
-        help="Auto mode: continue iterations automatically and execute cafe review after completion",
+        help="Auto mode: continue iterations automatically within the legacy wrapper",
     ),
 ) -> None:
     """Legacy wrapper for the development step.
@@ -3816,10 +3814,9 @@ def develop(
 
     \b
     Examples:
-        cafe develop
-        cafe develop --dev CustomDev
-        cafe develop --pr-number 123
-        cafe develop --no-interactive --approve-denied-tools 0,2 --user-input "Please be careful"
+        cafe make
+        cafe make --user-input "Please be careful"
+        cafe edit develop
     """
     try:
         # Get and validate current branch
@@ -3907,10 +3904,10 @@ def develop(
 
 # Add "dev" as an alias for "develop"
 # Use the same function with different name to ensure parameter sync
-app.command(name="dev", hidden=False)(develop)
+app.command(name="dev", hidden=True)(develop)
 
 
-@app.command()
+@app.command(hidden=True)
 def review(
     ctx: typer.Context,
     action: Optional[str] = typer.Argument(None, help="Action: edit (to edit latest review file)"),
@@ -3981,10 +3978,7 @@ def review(
 
     \b
     Examples:
-        cafe review
-        cafe review --commit abc123
-        cafe review --reviewer CustomReviewer
-        cafe review --force
+        cafe make
         cafe edit review
     """
     # Handle edit action
@@ -4102,7 +4096,7 @@ def review(
         _handle_phase_exception(e, "review")
 
 
-@app.command()
+@app.command(hidden=True)
 def pr(
     ctx: typer.Context,
     base: str = typer.Option(
@@ -4164,10 +4158,8 @@ def pr(
 
     \b
     Examples:
-        cafe pr
-        cafe pr --no-draft
-        cafe pr --title "Add user authentication" --body "Implements login/logout"
-        cafe pr --no-interactive
+        cafe make
+        cafe edit pr
     """
     try:
         # Get and validate current branch

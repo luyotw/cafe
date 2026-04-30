@@ -896,7 +896,7 @@ class PRPhase(Phase):
                 console.print("[bold yellow]⏳ Waiting for changes to be addressed...[/bold yellow]")
                 console.print()
                 console.print("[dim]Last PR review requested changes, but no new development since then.[/dim]")
-                console.print("[dim]Next step: Run [bold]cafe develop --auto[/bold] to address the changes[/dim]")
+                console.print("[dim]Continue the workflow with:[/dim] [bold]cafe make[/bold]")
                 console.print()
 
                 return PhaseResult(

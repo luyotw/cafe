@@ -120,6 +120,65 @@ class TestDevelopClarificationQuestionsXml:
         assert result.status == PhaseStatus.IN_PROGRESS
         assert result.data.get("status_code") == PhaseStatusCode.NEED_CLARIFICATION.value
 
+    def test_need_permission_interactive_points_back_to_make(
+        self, interactive_phase, tmp_path, monkeypatch, capsys
+    ):
+        """Interactive permission prompts should send users back through workflow."""
+        monkeypatch.chdir(tmp_path)
+        with patch.object(interactive_phase, "_check_if_already_completed_with_review", return_value=None):
+            with patch.object(interactive_phase, "_prepare_user_input_for_iteration", return_value=""):
+                with patch.object(interactive_phase, "_handle_previous_permission_denials", return_value=([], "")):
+                    with patch.object(interactive_phase, "_merge_allowed_tools", return_value=["read", "edit"]):
+                        with patch.object(
+                            interactive_phase,
+                            "_execute_and_handle_agent_response",
+                            return_value=(None, "CAFE_NEED_PERMISSION"),
+                        ):
+                            with patch("cafe.utils.checklist_generator.generate_develop_checklist"):
+                                result = interactive_phase.execute()
+
+        captured = capsys.readouterr()
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert "Resume with 'cafe make'" in captured.out
+
+    def test_need_clarification_interactive_points_back_to_make(
+        self, interactive_phase, tmp_path, monkeypatch, capsys
+    ):
+        """Interactive clarification prompts should send users back through workflow."""
+        monkeypatch.chdir(tmp_path)
+        iter_dir = interactive_phase.issue_dir / "develop" / "iteration_001"
+        iter_dir.mkdir(parents=True, exist_ok=True)
+        questions_xml = iter_dir / "questions.xml"
+        questions_xml.write_text("""<?xml version="1.0" encoding="UTF-8"?>
+<questions>
+  <question id="1">
+    <title>Which approach?</title>
+    <options>
+      <option>Option A</option>
+      <option>Option B</option>
+    </options>
+  </question>
+</questions>""")
+
+        with patch.object(interactive_phase, "_check_if_already_completed_with_review", return_value=None):
+            with patch.object(interactive_phase, "_prepare_user_input_for_iteration", return_value=""):
+                with patch.object(interactive_phase, "_handle_previous_permission_denials", return_value=([], "")):
+                    with patch.object(interactive_phase, "_merge_allowed_tools", return_value=["read", "edit"]):
+                        with patch.object(
+                            interactive_phase,
+                            "_execute_and_handle_agent_response",
+                            return_value=(None, "CAFE_NEED_CLARIFICATION"),
+                        ):
+                            with patch.object(
+                                interactive_phase, "_validate_and_retry_questions_xml", return_value=True
+                            ):
+                                with patch("cafe.utils.checklist_generator.generate_develop_checklist"):
+                                    result = interactive_phase.execute()
+
+        captured = capsys.readouterr()
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert "Resume with 'cafe make'" in captured.out
+
 
 class TestDevelopAskUserForClarification:
     """Tests for _ask_user_for_clarification using questions.xml."""

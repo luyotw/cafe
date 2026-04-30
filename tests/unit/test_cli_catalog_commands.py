@@ -395,3 +395,12 @@ steps:
 
     assert result.exit_code == 0
     assert "qa" in result.stdout
+
+
+def test_help_hides_legacy_phase_aliases() -> None:
+    result = runner.invoke(app, ["--help"])
+
+    assert result.exit_code == 0
+    commands_section = result.stdout.split("╭─ Commands", 1)[1]
+    for command_name in ("spec", "plan", "develop", "dev", "review", "pr"):
+        assert f"│ {command_name} " not in commands_section

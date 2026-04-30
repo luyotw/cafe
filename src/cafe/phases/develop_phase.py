@@ -884,7 +884,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
             if not self._check_plan_exists():
                 return PhaseResult(
                     status=PhaseStatus.FAILED,
-                    message=f"Plan file not found: {self.plan_file}. Please run 'cafe plan' first.",
+                    message=f"Plan file not found: {self.plan_file}. Please run 'cafe make' first.",
                 )
 
             # Validate inputs
@@ -1085,7 +1085,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                         print(f"{'='*60}")
                         print(response)
                         print(f"{'='*60}\n")
-                        print("💡 Developer requested permissions. Run 'cafe develop' again to respond.")
+                        print("💡 Developer requested permissions. Resume with 'cafe make'.")
 
                         return PhaseResult(
                             status=PhaseStatus.IN_PROGRESS,
@@ -1240,7 +1240,7 @@ Do NOT return any other status code until you have written your reasoning."""
 
                     # Valid questions.xml exists — pause and wait for user response
                     if self.interactive:
-                        print("💡 Developer needs clarification. Run 'cafe develop' again to respond.")
+                        print("💡 Developer needs clarification. Resume with 'cafe make'.")
 
                     return PhaseResult(
                         status=PhaseStatus.IN_PROGRESS,

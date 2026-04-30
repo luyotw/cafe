@@ -2,8 +2,10 @@
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from cafe.phases.review_phase import ReviewPhase
+from cafe.core.types import PhaseStatus
 
 
 def _write_iteration_context(
@@ -89,3 +91,31 @@ def test_check_if_develop_is_newer_returns_false_when_review_is_latest(tmp_path:
     phase = _make_review_phase(issue_dir)
 
     assert phase._check_if_develop_is_newer() is False
+
+
+def test_execute_completed_review_points_back_to_make(tmp_path: Path, capsys) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+    _write_iteration_context(
+        issue_dir,
+        "develop",
+        iteration=1,
+        end_time="2026-04-29T09:00:00+08:00",
+        response="CAFE_CONFIRMED",
+    )
+    _write_iteration_context(
+        issue_dir,
+        "review",
+        iteration=1,
+        end_time="2026-04-29T10:00:00+08:00",
+        response="CAFE_CONFIRMED",
+    )
+    phase = _make_review_phase(issue_dir)
+    phase.git_ops = MagicMock()
+    phase.git_ops.has_unpushed_commits.return_value = True
+    phase.force = False
+
+    result = phase.execute()
+
+    captured = capsys.readouterr()
+    assert result.status == PhaseStatus.COMPLETED
+    assert "Continue the workflow with: 'cafe make'" in captured.out

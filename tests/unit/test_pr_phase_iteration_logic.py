@@ -8,6 +8,7 @@ import pytest
 
 from cafe.phases.pr_phase import PRPhase
 from cafe.core.types import PhaseStatus
+from cafe.core.status_codes import PhaseStatusCode
 
 
 def _write_develop_iteration(
@@ -504,6 +505,36 @@ class TestPRPhaseIterationLogic:
             assert result.status == PhaseStatus.COMPLETED
             assert result.data["status_code"] == "CAFE_CONFIRMED"
             mock_dependencies["git_ops"].get_diff.assert_not_called()
+
+    def test_execute_local_review_mode_needs_changes_points_back_to_make(
+        self, tmp_path, mock_dependencies, capsys
+    ):
+        """Needs-changes local reviews should direct users back through workflow."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            with patch.object(
+                phase,
+                "_get_latest_pr_iteration_info",
+                return_value={"status_code": PhaseStatusCode.NEEDS_CHANGES.value},
+            ):
+                with patch.object(phase, "_check_if_develop_is_newer_than_pr", return_value=False):
+                    result = phase._execute_local_review_mode()
+
+        captured = capsys.readouterr()
+        assert result.status == PhaseStatus.COMPLETED
+        assert "cafe make" in captured.out
 
     def test_get_incomplete_iteration_info_no_iterations(self, tmp_path, mock_dependencies):
         """Test _get_incomplete_iteration_info returns None when no iterations exist."""

@@ -128,7 +128,7 @@ class ReviewPhase(Phase):
                                     print(f"✅ Code review already completed - no new development since last review")
                                     print(f"   Last review: {review_end_time.isoformat()}")
                                     print(f"   Latest develop: {develop_end_time.isoformat()}")
-                                    print(f"   Next step: Run 'cafe pr' to push changes")
+                                    print(f"   Continue the workflow with: 'cafe make'")
 
                                     return PhaseResult(
                                         status=PhaseStatus.COMPLETED,
