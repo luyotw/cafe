@@ -854,6 +854,58 @@ def _print_legacy_phase_command_notice(*, phase_name: str, preferred_command: st
     console.print()
 
 
+def _edit_latest_phase_artifact(
+    *,
+    ctx: typer.Context,
+    phase_name: str,
+    missing_hint: str,
+) -> None:
+    """Open the latest phase artifact in the user's editor."""
+    issue_name = _get_and_validate_branch(ctx, phase_name)
+    phase_file = _get_latest_versioned_file(phase_name, issue_name)
+    if not phase_file:
+        console.print(f"[red]Error: No {phase_name} file found for issue '{issue_name}'[/red]")
+        console.print(f"[dim]Hint: {missing_hint}[/dim]")
+        raise typer.Exit(1)
+
+    _edit_file_with_editor(phase_file)
+
+
+@app.command()
+def edit(
+    ctx: typer.Context,
+    phase_name: str = typer.Argument(..., help="Phase artifact to edit: spec, plan, develop, review, pr"),
+) -> None:
+    """Open the latest phase artifact in your editor."""
+    supported_phases = {"spec", "plan", "develop", "review", "pr"}
+    if phase_name not in supported_phases:
+        console.print(
+            "[red]Error: phase must be one of spec, plan, develop, review, pr[/red]"
+        )
+        raise typer.Exit(1)
+
+    missing_hints = {
+        "spec": "Run 'cafe make --user-input ...' or 'cafe workflow --start-step spec --execute --user-input ...' first.",
+        "plan": "Run 'cafe make' first.",
+        "develop": "Run 'cafe make' first.",
+        "review": "Run 'cafe make' first.",
+        "pr": "Run 'cafe make' first.",
+    }
+
+    try:
+        _edit_latest_phase_artifact(
+            ctx=ctx,
+            phase_name=phase_name,
+            missing_hint=missing_hints[phase_name],
+        )
+        return
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
 def _run_iterative_alias_step(
     *,
     issue_name: str,
@@ -3421,31 +3473,26 @@ def spec(
 
     Prefer `cafe make --user-input ...` or
     `cafe workflow --start-step spec --execute --user-input ...`.
-    Use `cafe spec edit` only to open the latest spec artifact.
+    Use `cafe edit spec` to open the latest spec artifact.
 
     \b
     Examples:
         cafe make --user-input "Add CSV export"
         cafe workflow --start-step spec --execute --user-input "Add CSV export"
-        cafe spec edit
+        cafe edit spec
     """
     # Handle edit action
     if action == "edit":
         try:
-            # Get and validate current branch
-            issue_name = _get_and_validate_branch(ctx, "spec")
-
-            # Find latest spec file
-            spec_file = _get_latest_versioned_file("spec", issue_name)
-            if not spec_file:
-                console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
-                console.print(
-                    "[dim]Hint: Run 'cafe make --user-input ...' or 'cafe workflow --start-step spec --execute --user-input ...' first.[/dim]"
-                )
-                raise typer.Exit(1)
-
-            # Edit the file
-            _edit_file_with_editor(spec_file)
+            _print_legacy_phase_command_notice(
+                phase_name="spec edit",
+                preferred_command="cafe edit spec",
+            )
+            _edit_latest_phase_artifact(
+                ctx=ctx,
+                phase_name="spec",
+                missing_hint="Run 'cafe make --user-input ...' or 'cafe workflow --start-step spec --execute --user-input ...' first.",
+            )
             return
 
         except typer.Exit:
@@ -3596,7 +3643,7 @@ def plan(
 
     This command automatically uses the current Git branch name as the issue identifier.
 
-    Use 'cafe plan edit' to edit the latest plan file.
+    Use 'cafe edit plan' to edit the latest plan file.
 
     \b
     Examples:
@@ -3604,23 +3651,20 @@ def plan(
         cafe plan --auto
         cafe plan -i 123
         cafe plan --dev CustomDev
-        cafe plan edit
+        cafe edit plan
     """
     # Handle edit action
     if action == "edit":
         try:
-            # Get and validate current branch
-            issue_name = _get_and_validate_branch(ctx, "plan")
-
-            # Find latest plan file
-            plan_file = _get_latest_versioned_file("plan", issue_name)
-            if not plan_file:
-                console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
-                console.print("[dim]Hint: Run 'cafe plan' first to create the plan.[/dim]")
-                raise typer.Exit(1)
-
-            # Edit the file
-            _edit_file_with_editor(plan_file)
+            _print_legacy_phase_command_notice(
+                phase_name="plan edit",
+                preferred_command="cafe edit plan",
+            )
+            _edit_latest_phase_artifact(
+                ctx=ctx,
+                phase_name="plan",
+                missing_hint="Run 'cafe make' first.",
+            )
             return
 
         except typer.Exit:
@@ -3947,23 +3991,20 @@ def review(
         cafe review --commit abc123
         cafe review --reviewer CustomReviewer
         cafe review --force
-        cafe review edit
+        cafe edit review
     """
     # Handle edit action
     if action == "edit":
         try:
-            # Get and validate current branch
-            issue_name = _get_and_validate_branch(ctx, "review")
-
-            # Find latest review file
-            review_file = _get_latest_versioned_file("review", issue_name)
-            if not review_file:
-                console.print(f"[red]Error: No review file found for issue '{issue_name}'[/red]")
-                console.print("[dim]Hint: Run 'cafe review' first to create the review.[/dim]")
-                raise typer.Exit(1)
-
-            # Edit the file
-            _edit_file_with_editor(review_file)
+            _print_legacy_phase_command_notice(
+                phase_name="review edit",
+                preferred_command="cafe edit review",
+            )
+            _edit_latest_phase_artifact(
+                ctx=ctx,
+                phase_name="review",
+                missing_hint="Run 'cafe make' first.",
+            )
             return
 
         except typer.Exit:

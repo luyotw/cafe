@@ -990,15 +990,21 @@ class TestEditFileWithEditor:
         assert exc_info.value.exit_code == 1
 
 
-class TestSpecEditCommand:
-    """測試 cafe spec edit 指令"""
+class TestEditCommand:
+    """測試 cafe edit <phase> 指令"""
+
+    def test_edit_rejects_unknown_phase(self) -> None:
+        result = runner.invoke(app, ["edit", "unknown"])
+
+        assert result.exit_code == 1
+        assert "phase must be one of spec, plan, develop, review, pr" in result.stdout
 
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli._edit_file_with_editor")
-    def test_spec_edit_opens_latest_file(
+    def test_edit_spec_opens_latest_file(
         self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
-        """測試正確找到並開啟最新 spec_XXX.md 檔案"""
+        """測試正確找到並開啟最新 spec artifact."""
         import os
 
         # Setup
@@ -1023,7 +1029,7 @@ class TestSpecEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["spec", "edit"])
+            result = runner.invoke(app, ["edit", "spec"])
         finally:
             os.chdir(old_cwd)
 
@@ -1035,7 +1041,7 @@ class TestSpecEditCommand:
         assert called_path.parent.name == "iteration_002"
 
     @patch("cafe.ui.cli.GitOperations")
-    def test_spec_edit_no_file_shows_error(
+    def test_edit_spec_no_file_shows_error(
         self, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
         """測試沒有 spec 檔案時顯示錯誤"""
@@ -1056,7 +1062,7 @@ class TestSpecEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["spec", "edit"])
+            result = runner.invoke(app, ["edit", "spec"])
         finally:
             os.chdir(old_cwd)
 
@@ -1066,7 +1072,7 @@ class TestSpecEditCommand:
         assert "cafe make --user-input" in result.stdout
 
     @patch("cafe.ui.cli.GitOperations")
-    def test_spec_edit_not_in_issue_branch_shows_error(
+    def test_edit_spec_not_in_issue_branch_shows_error(
         self, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
         """測試不在 issue branch 上時顯示錯誤"""
@@ -1083,7 +1089,7 @@ class TestSpecEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["spec", "edit"])
+            result = runner.invoke(app, ["edit", "spec"])
         finally:
             os.chdir(old_cwd)
 
@@ -1094,7 +1100,7 @@ class TestSpecEditCommand:
 
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli._edit_file_with_editor")
-    def test_spec_edit_shows_success_message(
+    def test_edit_spec_shows_success_message(
         self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
         """測試編輯完成後顯示成功訊息"""
@@ -1118,7 +1124,7 @@ class TestSpecEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["spec", "edit"])
+            result = runner.invoke(app, ["edit", "spec"])
         finally:
             os.chdir(old_cwd)
 
@@ -1127,15 +1133,12 @@ class TestSpecEditCommand:
         mock_edit.assert_called_once()
 
 
-class TestPlanEditCommand:
-    """測試 cafe plan edit 指令"""
-
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli._edit_file_with_editor")
-    def test_plan_edit_opens_latest_file(
+    def test_edit_plan_opens_latest_file(
         self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
-        """測試正確找到並開啟最新 plan_XXX.md 檔案"""
+        """測試正確找到並開啟最新 plan artifact."""
         import os
 
         # Setup
@@ -1160,7 +1163,7 @@ class TestPlanEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan", "edit"])
+            result = runner.invoke(app, ["edit", "plan"])
         finally:
             os.chdir(old_cwd)
 
@@ -1172,7 +1175,7 @@ class TestPlanEditCommand:
         assert called_path.parent.name == "iteration_002"
 
     @patch("cafe.ui.cli.GitOperations")
-    def test_plan_edit_no_file_shows_error(
+    def test_edit_plan_no_file_shows_error(
         self, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
         """測試沒有 plan 檔案時顯示錯誤"""
@@ -1193,17 +1196,17 @@ class TestPlanEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan", "edit"])
+            result = runner.invoke(app, ["edit", "plan"])
         finally:
             os.chdir(old_cwd)
 
         # Verify
         assert result.exit_code == 1
         assert "No plan file found" in result.stdout
-        assert "cafe plan" in result.stdout
+        assert "Run 'cafe make' first." in result.stdout
 
     @patch("cafe.ui.cli.GitOperations")
-    def test_plan_edit_not_in_issue_branch_shows_error(
+    def test_edit_plan_not_in_issue_branch_shows_error(
         self, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
         """測試不在 issue branch 上時顯示錯誤"""
@@ -1220,7 +1223,7 @@ class TestPlanEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan", "edit"])
+            result = runner.invoke(app, ["edit", "plan"])
         finally:
             os.chdir(old_cwd)
 
@@ -1231,7 +1234,7 @@ class TestPlanEditCommand:
 
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli._edit_file_with_editor")
-    def test_plan_edit_shows_success_message(
+    def test_edit_plan_shows_success_message(
         self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
         """測試編輯完成後顯示成功訊息"""
@@ -1255,7 +1258,7 @@ class TestPlanEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan", "edit"])
+            result = runner.invoke(app, ["edit", "plan"])
         finally:
             os.chdir(old_cwd)
 
@@ -1264,15 +1267,12 @@ class TestPlanEditCommand:
         mock_edit.assert_called_once()
 
 
-class TestReviewEditCommand:
-    """測試 cafe review edit 指令"""
-
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli._edit_file_with_editor")
-    def test_review_edit_opens_latest_file(
+    def test_edit_review_opens_latest_file(
         self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
-        """測試正確找到並開啟最新 review_XXX.md 檔案"""
+        """測試正確找到並開啟最新 review artifact."""
         import os
 
         # Setup
@@ -1297,7 +1297,7 @@ class TestReviewEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["review", "edit"])
+            result = runner.invoke(app, ["edit", "review"])
         finally:
             os.chdir(old_cwd)
 
@@ -1309,7 +1309,7 @@ class TestReviewEditCommand:
         assert called_path.parent.name == "iteration_002"
 
     @patch("cafe.ui.cli.GitOperations")
-    def test_review_edit_no_file_shows_error(
+    def test_edit_review_no_file_shows_error(
         self, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
         """測試沒有 review 檔案時顯示錯誤"""
@@ -1330,17 +1330,17 @@ class TestReviewEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["review", "edit"])
+            result = runner.invoke(app, ["edit", "review"])
         finally:
             os.chdir(old_cwd)
 
         # Verify
         assert result.exit_code == 1
         assert "No review file found" in result.stdout
-        assert "cafe review" in result.stdout
+        assert "Run 'cafe make' first." in result.stdout
 
     @patch("cafe.ui.cli.GitOperations")
-    def test_review_edit_not_in_issue_branch_shows_error(
+    def test_edit_review_not_in_issue_branch_shows_error(
         self, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
         """測試不在 issue branch 上時顯示錯誤"""
@@ -1357,7 +1357,7 @@ class TestReviewEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["review", "edit"])
+            result = runner.invoke(app, ["edit", "review"])
         finally:
             os.chdir(old_cwd)
 
@@ -1368,7 +1368,7 @@ class TestReviewEditCommand:
 
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli._edit_file_with_editor")
-    def test_review_edit_shows_success_message(
+    def test_edit_review_shows_success_message(
         self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
         """測試編輯完成後顯示成功訊息"""
@@ -1392,12 +1392,39 @@ class TestReviewEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["review", "edit"])
+            result = runner.invoke(app, ["edit", "review"])
         finally:
             os.chdir(old_cwd)
 
         # Verify - message from _edit_file_with_editor
         assert result.exit_code == 0
+        mock_edit.assert_called_once()
+
+    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.cli._edit_file_with_editor")
+    def test_legacy_spec_edit_still_works_with_notice(
+        self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
+    ) -> None:
+        import os
+
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = "test-issue"
+        mock_git_ops_class.return_value = mock_git_instance
+
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "iteration_001"
+        issue_dir.mkdir(parents=True)
+        (issue_dir / "output.md").write_text("Spec content")
+
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["spec", "edit"])
+        finally:
+            os.chdir(old_cwd)
+
+        assert result.exit_code == 0
+        assert "cafe edit spec" in result.stdout
         mock_edit.assert_called_once()
 
 
