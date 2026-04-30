@@ -130,6 +130,7 @@ class GenericWorkflowStepExecutor(Phase):
             "skill_name": skill_name,
             "playbook_id": self.playbook.get("playbook", {}).get("id"),
         }
+        require_status_code = self._step_requires_status_code(step_name)
 
         def run_agent(prompt: str) -> str:
             last_prompt[:] = [prompt]
@@ -166,20 +167,23 @@ class GenericWorkflowStepExecutor(Phase):
                 "publish_request_file": publish_request_file if step_name == "pr" else None,
                 "blackboard_state": blackboard_state,
             },
-            require_status_code=self._step_requires_status_code(step_name),
+            require_status_code=require_status_code,
         )
 
         response = execution.response
         status_code = execution.status_code
-        if status_code is None:
-            status_code = StatusCodeParser.extract(response, valid_status_codes)
-        if status_code is None:
-            status_code = StatusCodeParser.coerce_completion_alias(response, valid_status_codes)
-        if status_code is None:
-            status_code = self._coerce_ready_for_review_completion(response=response, step_def=step_def)
+        if require_status_code:
+            if status_code is None:
+                status_code = StatusCodeParser.extract(response, valid_status_codes)
+            if status_code is None:
+                status_code = StatusCodeParser.coerce_completion_alias(response, valid_status_codes)
+            if status_code is None:
+                status_code = self._coerce_ready_for_review_completion(response=response, step_def=step_def)
 
         agent_was_invoked = bool(last_prompt)
         if (
+            require_status_code
+            and
             agent_was_invoked
             and execution.status_code is not None
             and status_code is not None
@@ -196,15 +200,16 @@ class GenericWorkflowStepExecutor(Phase):
             )
             if validation_passed and validated_status is not None:
                 status_code = validated_status
-        status_code = status_code or self._coerce_ready_for_review_completion(
-            response=response,
-            step_def=step_def,
-        )
-        if status_code == PhaseStatusCode.READY_FOR_REVIEW:
-            status_code = self._coerce_ready_for_review_completion(
+        if require_status_code:
+            status_code = status_code or self._coerce_ready_for_review_completion(
                 response=response,
                 step_def=step_def,
-            ) or status_code
+            )
+            if status_code == PhaseStatusCode.READY_FOR_REVIEW:
+                status_code = self._coerce_ready_for_review_completion(
+                    response=response,
+                    step_def=step_def,
+                ) or status_code
 
         output_key = str(step_def.get("output_artifact", step_name))
         artifacts: Dict[str, str] = {}
@@ -223,7 +228,7 @@ class GenericWorkflowStepExecutor(Phase):
             for event in execution.events
             if isinstance(event, dict)
         )
-        if self.interactive and status_code in {
+        if require_status_code and self.interactive and status_code in {
             PhaseStatusCode.NEED_CLARIFICATION,
             PhaseStatusCode.READY_FOR_REVIEW,
         }:
@@ -234,7 +239,7 @@ class GenericWorkflowStepExecutor(Phase):
             for event in execution.events
             if isinstance(event, dict)
         ]
-        if status_code is not None:
+        if require_status_code and status_code is not None:
             handoff_intent = self._resolve_handoff_intent(step_name, status_code)
             if handoff_intent is not None:
                 events.append(

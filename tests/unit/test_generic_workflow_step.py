@@ -10,6 +10,7 @@ import pytest
 
 from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore
 from cafe.core.types import AgentCLI, TokenUsage
+from cafe.phases.generic_phase import GenericPhaseExecution
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.skills.loader import SkillLoader
@@ -958,6 +959,67 @@ def test_generic_workflow_step_pr_does_not_require_status_code(tmp_path: Path, m
     assert captured["require_status_code"] is False
     assert result.status_code is None
     assert not (issue_dir / "pr" / "status.json").exists()
+
+
+def test_generic_workflow_step_pr_does_not_parse_status_from_response(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-no-parse"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "Nick"}},
+        "steps": {
+            "pr": {
+                "skill": "pr",
+                "role": "developer",
+                "output_artifact": "pr_result",
+                "allowed_tools": ["Read"],
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("pr")
+    state.handoff_summary = "Refresh the local PR artifact only."
+    state.artifacts["spec"] = ArtifactEntry(
+        name="spec",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="spec",
+        path="spec/iteration_001/output.md",
+    )
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="plan",
+        path="plan/iteration_001/output.md",
+    )
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-pr-no-parse",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("unused"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "Nick"},
+    )
+
+    def fake_execute(*args, **kwargs):
+        return GenericPhaseExecution(
+            response="CAFE_CONFIRMED",
+            status_code=None,
+            goto_target=None,
+            context_updates={},
+            events=[],
+        )
+
+    executor.generic_phase.execute = fake_execute
+
+    result = executor.execute_step("pr", playbook["steps"]["pr"], state)
+
+    assert result.response == "CAFE_CONFIRMED"
+    assert result.status_code is None
+    assert all(event.get("type") != "handoff_intent" for event in result.events)
 
 
 def test_generic_workflow_step_pr_prompt_uses_baton_wording(tmp_path: Path, monkeypatch) -> None:
