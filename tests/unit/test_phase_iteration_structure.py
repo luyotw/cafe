@@ -248,8 +248,9 @@ class TestSaveUserInput:
         assert "iteration" in data
         assert data["iteration"] == 1
         assert "timestamp" in data
-        assert "user_input" in data
-        assert data["user_input"] == "Test user input"
+        # user_input is no longer duplicated into context.json;
+        # it lives in user_input.md instead
+        assert "user_input" not in data
 
     def test_saves_phase_specific_data(self, tmp_path):
         """驗證能儲存 phase_specific_data"""
@@ -298,8 +299,8 @@ class TestSaveUserInput:
         content = user_input_file.read_text(encoding="utf-8")
         assert content == user_input_content
 
-    def test_maintains_backward_compatibility_with_context_json(self, tmp_path):
-        """驗證 context.json 中仍保留 user_input（向後相容）"""
+    def test_user_input_no_longer_in_context_json(self, tmp_path):
+        """驗證 context.json 不再包含 user_input（改用 user_input.md）"""
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir()
         phase = ConcretePhase(phase_dir=phase_dir)
@@ -308,11 +309,14 @@ class TestSaveUserInput:
         user_input_content = "Test input for backward compatibility"
         phase._save_user_input(user_input_content)
 
-        # 驗證 context.json 仍包含 user_input
+        # user_input is now stored exclusively in user_input.md
         context_file = phase_dir / "iteration_001" / "context.json"
         data = json.loads(context_file.read_text())
-        assert "user_input" in data
-        assert data["user_input"] == user_input_content
+        assert "user_input" not in data
+
+        user_input_file = phase_dir / "iteration_001" / "user_input.md"
+        assert user_input_file.exists()
+        assert user_input_file.read_text() == user_input_content
 
 
 class TestLoadUserInput:
@@ -343,8 +347,8 @@ class TestLoadUserInput:
         result = phase._load_user_input(1)
         assert result == "Content from user_input.md"
 
-    def test_fallback_to_context_json_when_md_not_found(self, tmp_path):
-        """驗證當 user_input.md 不存在時，回退到 context.json"""
+    def test_returns_empty_string_when_md_not_found(self, tmp_path):
+        """驗證當 user_input.md 不存在時返回空字串"""
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir()
         phase = ConcretePhase(phase_dir=phase_dir)
@@ -360,12 +364,12 @@ class TestLoadUserInput:
         }
         context_file.write_text(json.dumps(context_data), encoding="utf-8")
 
-        # 載入並驗證
+        # _load_user_input no longer falls back to context.json
         result = phase._load_user_input(1)
-        assert result == "Content from context.json only"
+        assert result == ""
 
-    def test_returns_empty_string_when_both_not_found(self, tmp_path):
-        """驗證當兩者都不存在時返回空字串"""
+    def test_returns_empty_string_when_no_iteration_dir(self, tmp_path):
+        """驗證當 iteration 目錄不存在時返回空字串"""
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir()
         phase = ConcretePhase(phase_dir=phase_dir)
