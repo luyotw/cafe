@@ -1,8 +1,7 @@
 """Blackboard-first workflow runtime.
 
-This runtime is the new workflow-core entry point. It keeps blackboard/baton
-state as the primary source of truth, while temporarily delegating non-migrated
-steps to the legacy ``PlaybookRunner`` until they are rewritten.
+The workflow-core entry point. It keeps blackboard/baton state as the
+primary source of truth for step transitions.
 """
 
 from __future__ import annotations
@@ -694,6 +693,16 @@ class BlackboardWorkflowRuntime:
                     intent=pause_intent,
                     status_code=status_code,
                     source="workflow.pause",
+                )
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "workflow_paused",
+                    {
+                        "step": current_step,
+                        "status_code": status_code,
+                        "reason": "awaiting_user_input",
+                        "runtime": "legacy_until_boundary",
+                    },
                 )
                 self.blackboard_store.set_current_step(self.blackboard, "user")
                 return PlaybookRunResult(

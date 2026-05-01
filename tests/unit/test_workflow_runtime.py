@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.core.playbook_runner import StepExecutionResult
+from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 
 

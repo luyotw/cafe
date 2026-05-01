@@ -1037,12 +1037,16 @@ Artifact 分工：
 - [x] 建立 `BlackboardWorkflowRuntime` 作為新的 workflow 核心入口，讓 workflow 主路徑與 phase alias 能 hand off 到 blackboard / baton 模型，而不是直接依賴 legacy `PlaybookRunner.run()`
 - [x] 讓 `pr` step 改成 baton-driven + receipt-gated completion；host-side publish / comment / open-link hooks 也接受 `pr -> done` baton，不再只依賴 `CAFE_CONFIRMED`
 - [x] 補齊 summary / timeline 對 baton-driven phases 的支援：phase `status.json` 缺席時，能從 iteration `context.json` + blackboard / baton 推導 phase 狀態，避免 `cafe summary` 失真
+- [x] 讓 workflow 主入口可直接承接初始需求：`cafe make --user-input ...` / `cafe workflow --execute --user-input ...` 能直接把需求送進第一個 `spec` step，不再需要先跑 `cafe spec`
+- [x] 統一人工編輯入口為 `cafe edit <phase>`，並將 `cafe spec edit` / `cafe plan edit` / `cafe review edit` 收斂為 legacy wrapper
 - [ ] 繼續縮小 `GenericWorkflowStepExecutor` 的責任邊界，移除剩餘的 status-code persistence 與 `context.json` / `status.json` 依賴，讓 step executor 只負責 iteration 執行與 artifact 產出
 - [ ] 清掉 generic workflow prompt / context 組裝裡殘留的 status-code 語意，避免新 runtime 仍被舊 completion model 反向污染
-- [ ] 把 `cafe spec`、`cafe plan`、`cafe develop`、`cafe review`、`cafe pr` 收斂成 `BlackboardWorkflowRuntime` 的 thin wrapper，不再維持各自獨立的 status-code-driven UX
+- [x] 把 `cafe spec`、`cafe plan`、`cafe develop`、`cafe review`、`cafe pr` 收斂成 `BlackboardWorkflowRuntime` 的 thin wrapper，不再維持各自獨立的 status-code-driven UX
+- [x] 將 `spec/plan/develop/review/pr/dev` 從 `cafe --help` 主命令清單隱藏，並把 wrapper / runtime 內部的使用者提示全面導回 `cafe make`
 - [ ] 盤點並移除 CLI / workflow entry / resume / debug 路徑上剩餘的 legacy 狀態來源，確保 pause、resume、complete 的判定都只信 blackboard 與 baton
+- [ ] 決定 legacy phase alias 的最終退場形式：保留一段過渡期後直接刪除，或保留極薄兼容層但完全退出主要文件與互動流程
 - [ ] 將 `core/phase.py` 與 legacy `spec_phase.py`、`plan_phase.py`、`develop_phase.py`、`review_phase.py`、`pr_phase.py` 逐步隔離出 workflow 核心路徑，最後只保留過渡用途或直接刪除
-- [ ] 讓 `PlaybookRunner` 退出 active workflow path，只保留必要的過渡層與測試依賴；等新 runtime 接完主流程後再刪除
+- [x] 讓 `PlaybookRunner` 退出 active workflow path，只保留必要的過渡層與測試依賴；等新 runtime 接完主流程後再刪除
 - [ ] 當 default workflow 主路徑已完全切到 blackboard runtime 後，再集中做真實情境手測：`cafe make`、pause/resume、chat handoff、`cafe reset` 後續跑、`pr` publish / receipt
 
 ## v0.2 預留但不完整實作的入口

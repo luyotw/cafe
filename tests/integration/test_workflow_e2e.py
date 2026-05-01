@@ -17,38 +17,78 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from cafe.core.blackboard import BlackboardState, BlackboardStore
-from cafe.core.playbook_runner import PlaybookRunner, StepExecutionResult
-from cafe.phases.generic_phase import GenericPhase
+from cafe.core.blackboard import (
+    BlackboardState,
+    BlackboardStore,
+    HandoffIntent,
+    HandoffOwner,
+)
+from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
-from cafe.skills.loader import SkillLoader
 from cafe.ui.cli import _consume_pending_chat_handoff, app
+
+
+def _write_pr_done_baton(issue_dir: Path) -> None:
+    """Write a baton announcing PR -> done so the baton-driven runtime advances."""
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+    store.update_handoff_contract(
+        state,
+        from_step="pr",
+        to_owner=HandoffOwner.DONE,
+        to_step="done",
+        intent=HandoffIntent.WORKFLOW_COMPLETE,
+        status_code="CAFE_CONFIRMED",
+        source="test.executor",
+    )
 
 
 # ---------------------------------------------------------------------------
 # 輔助函式
 # ---------------------------------------------------------------------------
 
-def _build_generic_phase(tmp_path: Path) -> GenericPhase:
-    """建立只含最小 skill 的 GenericPhase，供 PlaybookRunner 使用。"""
-    skill_dir = tmp_path / "builtin" / "skills" / "spec_first"
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    (skill_dir / "SKILL.md").write_text(
-        "---\nname: spec_first\ndescription: d\n---\n\ntext\n",
-        encoding="utf-8",
-    )
-    loader = SkillLoader(
-        project_root=tmp_path / "project",
-        global_root=tmp_path / "global",
-        builtin_root=tmp_path / "builtin",
-    )
-    loader.discover()
-    return GenericPhase(loader)
-
 
 def _load_default_playbook() -> dict:
     """載入真實 default playbook。"""
     return PlaybookLoader().load("default")
+
+
+def _run_until_settled(
+    *,
+    issue_dir: Path,
+    playbook: dict,
+    executor,
+    max_outer_loops: int = 8,
+    max_transitions: int = 30,
+):
+    """Drive BlackboardWorkflowRuntime through every boundary handoff.
+
+    Mirrors the production CLI loop: when the runtime returns mid-flight at a
+    boundary (e.g. PR step takes over from the legacy slice), call ``run`` again
+    starting from the blackboard's current_step until the workflow either
+    completes or pauses on user input.
+    """
+    last_result = None
+    pending_start: str | None = None
+    for _ in range(max_outer_loops):
+        runner = BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            executor=executor,
+        )
+        last_result = runner.run(start_step=pending_start, max_transitions=max_transitions)
+        latest = BlackboardStore(issue_dir).load_or_create(
+            str(playbook.get("entry_point") or next(iter(playbook["steps"].keys()))),
+            playbook_id=str(playbook["playbook"]["id"]),
+        )
+        if last_result.completed:
+            return last_result
+        if latest.current_step in {"user", "done"}:
+            return last_result
+        # Continue from blackboard's current_step (boundary handoff).
+        pending_start = latest.current_step
+    return last_result
 
 
 
@@ -62,22 +102,24 @@ class TestHappyPath:
         """完整 spec→plan→develop→review→pr→_done happy path。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-e2e-happy"
         playbook = _load_default_playbook()
-        generic_phase = _build_generic_phase(tmp_path)
-
         def executor(step_name: str, step_def: dict, state: BlackboardState) -> StepExecutionResult:
+            events = []
+            if step_name == "pr":
+                _write_pr_done_baton(issue_dir)
+                events.append({"type": "pr_synced", "url": "https://example.com/pr/1"})
             return StepExecutionResult(
                 response="CAFE_CONFIRMED",
                 artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
                 status_code="CAFE_CONFIRMED",
+                events=events,
             )
 
-        runner = PlaybookRunner(
+        result = _run_until_settled(
             issue_dir=issue_dir,
             playbook=playbook,
-            generic_phase=generic_phase,
             executor=executor,
+            max_transitions=20,
         )
-        result = runner.run(max_transitions=20)
 
         assert result.completed is True
         assert result.final_step == "pr"
@@ -95,23 +137,25 @@ class TestHappyPath:
         """每個步驟的 artifact 正確寫入 blackboard。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-e2e-artifacts"
         playbook = _load_default_playbook()
-        generic_phase = _build_generic_phase(tmp_path)
-
         def executor(step_name: str, step_def: dict, state: BlackboardState) -> StepExecutionResult:
             artifact_key = str(step_def.get("output_artifact", step_name))
+            events = []
+            if step_name == "pr":
+                _write_pr_done_baton(issue_dir)
+                events.append({"type": "pr_synced", "url": "https://example.com/pr/1"})
             return StepExecutionResult(
                 response="CAFE_CONFIRMED",
                 artifacts={artifact_key: f"{step_name}/iteration_001/output.md"},
                 status_code="CAFE_CONFIRMED",
+                events=events,
             )
 
-        runner = PlaybookRunner(
+        _run_until_settled(
             issue_dir=issue_dir,
             playbook=playbook,
-            generic_phase=generic_phase,
             executor=executor,
+            max_transitions=20,
         )
-        runner.run(max_transitions=20)
 
         blackboard = BlackboardStore(issue_dir).load_or_create("spec")
         # spec, plan, review_feedback, pr_result 等 artifact 應存在
@@ -138,7 +182,6 @@ class TestSelfLoop:
         """執行單步驟 self-loop 場景的通用輔助。"""
         issue_dir = tmp_path / ".cafe" / "issues" / f"issue-loop-{start_step}"
         playbook = _load_default_playbook()
-        generic_phase = _build_generic_phase(tmp_path)
 
         call_counts: dict = {start_step: 0}
         subsequent_calls: dict = {}
@@ -159,21 +202,24 @@ class TestSelfLoop:
                     artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
                     status_code=final_status,
                 )
-            # 其他步驟一律 CAFE_CONFIRMED
             subsequent_calls[step_name] = subsequent_calls.get(step_name, 0) + 1
+            events = []
+            if step_name == "pr":
+                _write_pr_done_baton(issue_dir)
+                events.append({"type": "pr_synced", "url": "https://example.com/pr/1"})
             return StepExecutionResult(
                 response="CAFE_CONFIRMED",
                 artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
                 status_code="CAFE_CONFIRMED",
+                events=events,
             )
 
-        runner = PlaybookRunner(
+        result = _run_until_settled(
             issue_dir=issue_dir,
             playbook=playbook,
-            generic_phase=generic_phase,
             executor=executor,
+            max_transitions=30,
         )
-        result = runner.run(max_transitions=30)
         return result, call_counts, subsequent_calls
 
     def test_spec_self_loop_then_confirms(self, tmp_path: Path) -> None:
@@ -236,7 +282,6 @@ class TestSelfLoop:
         """review 超過 max_iterations=3 應拋出 RuntimeError。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-loop-overflow"
         playbook = _load_default_playbook()
-        generic_phase = _build_generic_phase(tmp_path)
         call_counts: dict = {}
 
         def executor(step_name: str, step_def: dict, state: BlackboardState) -> StepExecutionResult:
@@ -253,10 +298,9 @@ class TestSelfLoop:
                 status_code="CAFE_CONFIRMED",
             )
 
-        runner = PlaybookRunner(
+        runner = BlackboardWorkflowRuntime(
             issue_dir=issue_dir,
             playbook=playbook,
-            generic_phase=generic_phase,
             executor=executor,
         )
         with pytest.raises(RuntimeError, match="exceeded max_iterations"):
@@ -269,7 +313,6 @@ class TestSelfLoop:
         """self-loop 期間 blackboard events 應包含正確的 visit 計數。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-loop-events"
         playbook = _load_default_playbook()
-        generic_phase = _build_generic_phase(tmp_path)
         spec_calls = 0
 
         def executor(step_name: str, step_def: dict, state: BlackboardState) -> StepExecutionResult:
@@ -289,10 +332,9 @@ class TestSelfLoop:
                 status_code="CAFE_CONFIRMED",
             )
 
-        runner = PlaybookRunner(
+        runner = BlackboardWorkflowRuntime(
             issue_dir=issue_dir,
             playbook=playbook,
-            generic_phase=generic_phase,
             executor=executor,
         )
         runner.run(max_transitions=30)
@@ -315,7 +357,6 @@ class TestUserHandoff:
         """spec 回傳 CAFE_NEED_CLARIFICATION（auto_continue=False）→ workflow 應暫停。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-handoff-pause"
         playbook = _load_default_playbook()
-        generic_phase = _build_generic_phase(tmp_path)
 
         def executor(step_name: str, step_def: dict, state: BlackboardState) -> StepExecutionResult:
             return StepExecutionResult(
@@ -325,13 +366,12 @@ class TestUserHandoff:
                 auto_continue=False,
             )
 
-        runner = PlaybookRunner(
+        runner = BlackboardWorkflowRuntime(
             issue_dir=issue_dir,
             playbook=playbook,
-            generic_phase=generic_phase,
             executor=executor,
         )
-        result = runner.run(max_transitions=10)
+        result = runner.run(start_step="spec", max_transitions=10)
 
         assert result.completed is False
         blackboard = BlackboardStore(issue_dir).load_or_create("spec")
@@ -343,7 +383,6 @@ class TestUserHandoff:
         """spec 先 CAFE_NEED_CLARIFICATION（auto_continue=True），再 CAFE_CONFIRMED → 不暫停，直接流向 plan。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-handoff-resume"
         playbook = _load_default_playbook()
-        generic_phase = _build_generic_phase(tmp_path)
         spec_calls = 0
 
         def executor(step_name: str, step_def: dict, state: BlackboardState) -> StepExecutionResult:
@@ -357,19 +396,23 @@ class TestUserHandoff:
                         status_code="CAFE_NEED_CLARIFICATION",
                         auto_continue=True,
                     )
+            events = []
+            if step_name == "pr":
+                _write_pr_done_baton(issue_dir)
+                events.append({"type": "pr_synced", "url": "https://example.com/pr/1"})
             return StepExecutionResult(
                 response="CAFE_CONFIRMED",
                 artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
                 status_code="CAFE_CONFIRMED",
+                events=events,
             )
 
-        runner = PlaybookRunner(
+        result = _run_until_settled(
             issue_dir=issue_dir,
             playbook=playbook,
-            generic_phase=generic_phase,
             executor=executor,
+            max_transitions=30,
         )
-        result = runner.run(max_transitions=30)
 
         assert result.completed is True
         assert spec_calls == 2  # 1 loop + 1 confirm

@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 from typer.testing import CliRunner
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.core.playbook_runner import StepExecutionResult
+from cafe.core.workflow_models import StepExecutionResult
 from cafe.ui.cli import app, _execute_single_step_alias, _find_external_resume_step
 from cafe.utils.config import ConfigManager
 

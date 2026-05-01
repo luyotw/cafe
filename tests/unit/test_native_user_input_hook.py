@@ -14,7 +14,7 @@ from cafe.core.hooks.native import (
     PRLinkOpener,
     UserInputCollector,
 )
-from cafe.core.playbook_runner import StepExecutionResult
+from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.phases.generic_phase import GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
