@@ -450,10 +450,7 @@ class Phase(ABC):
         if parsed is not None:
             return True
 
-        return StatusCodeParser.coerce_completion_alias(
-            response,
-            valid_codes or list(PhaseStatusCode),
-        ) is not None
+        return False
 
     @staticmethod
     def _context_status_code(
@@ -474,11 +471,7 @@ class Phase(ABC):
         if parsed is not None:
             return parsed.value
 
-        aliased = StatusCodeParser.coerce_completion_alias(
-            response,
-            valid_codes or list(PhaseStatusCode),
-        )
-        return aliased.value if aliased is not None else None
+        return None
 
     def _execute_agent_iteration(
         self,

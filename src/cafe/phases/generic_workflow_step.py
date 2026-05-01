@@ -175,10 +175,6 @@ class GenericWorkflowStepExecutor(Phase):
         if require_status_code:
             if status_code is None:
                 status_code = StatusCodeParser.extract(response, valid_status_codes)
-            if status_code is None:
-                status_code = StatusCodeParser.coerce_completion_alias(response, valid_status_codes)
-            if status_code is None:
-                status_code = self._coerce_ready_for_review_completion(response=response, step_def=step_def)
 
         agent_was_invoked = bool(last_prompt)
         if (
@@ -200,16 +196,6 @@ class GenericWorkflowStepExecutor(Phase):
             )
             if validation_passed and validated_status is not None:
                 status_code = validated_status
-        if require_status_code:
-            status_code = status_code or self._coerce_ready_for_review_completion(
-                response=response,
-                step_def=step_def,
-            )
-            if status_code == PhaseStatusCode.READY_FOR_REVIEW:
-                status_code = self._coerce_ready_for_review_completion(
-                    response=response,
-                    step_def=step_def,
-                ) or status_code
 
         output_key = str(step_def.get("output_artifact", step_name))
         artifacts: Dict[str, str] = {}
@@ -581,25 +567,6 @@ class GenericWorkflowStepExecutor(Phase):
     @staticmethod
     def _step_requires_status_code(step_name: str) -> bool:
         return step_name != "pr"
-
-    @staticmethod
-    def _coerce_ready_for_review_completion(
-        *,
-        response: str,
-        step_def: Dict[str, Any],
-    ) -> Optional[PhaseStatusCode]:
-        valid_codes = {
-            code
-            for code in step_def.get("valid_status_codes", [])
-            if isinstance(code, str)
-        }
-        if PhaseStatusCode.CONFIRMED.value not in valid_codes:
-            return None
-        if PhaseStatusCode.READY_FOR_REVIEW.value in valid_codes:
-            return None
-        if response.strip().upper() != PhaseStatusCode.READY_FOR_REVIEW.value:
-            return None
-        return PhaseStatusCode.CONFIRMED
 
     @staticmethod
     def _resolve_handoff_intent(step_name: str, status_code: PhaseStatusCode) -> Optional[str]:

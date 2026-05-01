@@ -1148,10 +1148,7 @@ def test_generic_workflow_step_applies_phase_specific_model_per_step(tmp_path: P
     assert "claude-opus-4.6" in (agent_manager.preview_calls[1] or [])
 
 
-def test_generic_workflow_step_persists_ready_for_review_as_confirmed_for_develop(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
+def test_generic_workflow_step_develop_confirmed(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-develop-ready"
     playbook = {
@@ -1190,7 +1187,7 @@ def test_generic_workflow_step_persists_ready_for_review_as_confirmed_for_develo
         playbook=playbook,
         generic_phase=_build_loader(tmp_path),
         agent_manager=FakeAgentManager(
-            "CAFE_READY_FOR_REVIEW",
+            "CAFE_CONFIRMED",
             on_execute=_mark_checklist_complete,
         ),
         git_ops=FakeGitOperations(),
@@ -1200,4 +1197,3 @@ def test_generic_workflow_step_persists_ready_for_review_as_confirmed_for_develo
     result = executor.execute_step("develop", playbook["steps"]["develop"], state)
 
     assert result.status_code == "CAFE_CONFIRMED"
-    assert not (issue_dir / "develop" / "status.json").exists()

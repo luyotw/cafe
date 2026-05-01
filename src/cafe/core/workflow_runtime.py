@@ -262,11 +262,6 @@ class BlackboardWorkflowRuntime:
                 response,
                 valid_codes=valid_codes or list(PhaseStatusCode),
             )
-        if status_code_obj is None:
-            status_code_obj = StatusCodeParser.coerce_completion_alias(
-                response,
-                valid_codes or list(PhaseStatusCode),
-            )
         return status_code_obj, goto_target, valid_codes
 
     @staticmethod
