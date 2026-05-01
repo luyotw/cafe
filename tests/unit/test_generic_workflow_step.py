@@ -550,6 +550,15 @@ def test_generic_workflow_step_collects_clarification_before_next_agent_run(
     assert first_result.response == "CAFE_NEED_CLARIFICATION"
     assert first_result.auto_continue is False
 
+    # Mirror the runtime which records a `step_completed` event after each step
+    # so the second iteration's hooks can read the previous status from the
+    # blackboard.
+    store.record_event(
+        state,
+        "step_completed",
+        {"step": "spec", "status_code": first_result.status_code},
+    )
+
     with patch(
         "cafe.core.hooks.native.interactive_qa_flow",
         return_value="Q1: Which flow should we support first?\nA1: CLI only",

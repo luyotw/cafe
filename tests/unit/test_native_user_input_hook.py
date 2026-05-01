@@ -24,6 +24,7 @@ class _FakePhase:
     def __init__(self, phase_dir: Path, iteration: int, issue_name: str = "demo") -> None:
         self.phase_dir = phase_dir
         self.issue_dir = phase_dir.parent
+        self.phase_name = phase_dir.name
         self.iteration = iteration
         self.issue_name = issue_name
         self.interactive = True
@@ -37,6 +38,8 @@ class _FakePhase:
 
     def _load_previous_iteration_data(self) -> dict:
         context_file = self._get_iteration_dir(self.iteration - 1) / "context.json"
+        if not context_file.exists():
+            return {}
         return json.loads(context_file.read_text(encoding="utf-8"))
 
     def _get_issue_config_value(self, config_file: Path, key: str):
@@ -53,15 +56,26 @@ class _FakePhase:
         return value
 
 
+def _record_previous_step_status(issue_dir: Path, step_name: str, status_code: str) -> None:
+    """Seed the blackboard with a `step_completed` event for the prior iteration."""
+    from cafe.core.blackboard import BlackboardStore
+
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create(step_name)
+    store.record_event(
+        state,
+        "step_completed",
+        {"step": step_name, "status_code": status_code},
+    )
+
+
 def test_user_input_collector_confirms_ready_for_review_without_running_agent(tmp_path: Path) -> None:
     phase_dir = tmp_path / "spec"
     prev_iter_dir = phase_dir / "iteration_002"
     prev_iter_dir.mkdir(parents=True, exist_ok=True)
-    (prev_iter_dir / "context.json").write_text(
-        json.dumps({"status_code": "CAFE_READY_FOR_REVIEW"}),
-        encoding="utf-8",
-    )
     (prev_iter_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
+    _record_previous_step_status(tmp_path, "spec", "CAFE_READY_FOR_REVIEW")
 
     phase = _FakePhase(phase_dir=phase_dir, iteration=3)
     phase._ask_user_for_review_decision = MagicMock(return_value="confirm")
@@ -98,11 +112,8 @@ def test_user_input_collector_plan_ready_for_review_skips_full_output_display_wh
 
     prev_iter_dir = phase_dir / "iteration_002"
     prev_iter_dir.mkdir(parents=True, exist_ok=True)
-    (prev_iter_dir / "context.json").write_text(
-        json.dumps({"status_code": "CAFE_READY_FOR_REVIEW"}),
-        encoding="utf-8",
-    )
     (prev_iter_dir / "output.md").write_text("# Plan v2\n", encoding="utf-8")
+    _record_previous_step_status(tmp_path, "plan", "CAFE_READY_FOR_REVIEW")
 
     phase = _FakePhase(phase_dir=phase_dir, iteration=3)
     phase._ask_user_for_review_decision = MagicMock(return_value="confirm")
@@ -129,11 +140,8 @@ def test_user_input_collector_plan_ready_for_review_falls_back_to_full_output_wi
     phase_dir = tmp_path / "plan"
     prev_iter_dir = phase_dir / "iteration_001"
     prev_iter_dir.mkdir(parents=True, exist_ok=True)
-    (prev_iter_dir / "context.json").write_text(
-        json.dumps({"status_code": "CAFE_READY_FOR_REVIEW"}),
-        encoding="utf-8",
-    )
     (prev_iter_dir / "output.md").write_text("# Plan\n", encoding="utf-8")
+    _record_previous_step_status(tmp_path, "plan", "CAFE_READY_FOR_REVIEW")
 
     phase = _FakePhase(phase_dir=phase_dir, iteration=2)
     phase._ask_user_for_review_decision = MagicMock(return_value="confirm")
@@ -161,11 +169,8 @@ def test_user_input_collector_loads_interactive_qa_for_need_clarification(tmp_pa
     phase_dir = tmp_path / "spec"
     prev_iter_dir = phase_dir / "iteration_001"
     prev_iter_dir.mkdir(parents=True, exist_ok=True)
-    (prev_iter_dir / "context.json").write_text(
-        json.dumps({"status_code": "CAFE_NEED_CLARIFICATION"}),
-        encoding="utf-8",
-    )
     (prev_iter_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
+    _record_previous_step_status(tmp_path, "spec", "CAFE_NEED_CLARIFICATION")
     (prev_iter_dir / "questions.xml").write_text(
         """<?xml version="1.0" encoding="UTF-8"?>
 <questions>
@@ -204,11 +209,8 @@ def test_user_input_collector_reuses_existing_user_input_file_without_reasking(t
     current_iter_dir = phase_dir / "iteration_002"
     prev_iter_dir.mkdir(parents=True, exist_ok=True)
     current_iter_dir.mkdir(parents=True, exist_ok=True)
-    (prev_iter_dir / "context.json").write_text(
-        json.dumps({"status_code": "CAFE_NEED_CLARIFICATION"}),
-        encoding="utf-8",
-    )
     (prev_iter_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
+    _record_previous_step_status(tmp_path, "spec", "CAFE_NEED_CLARIFICATION")
     (current_iter_dir / "user_input.md").write_text(
         "Q1: Question?\nA1: Confirmed answer",
         encoding="utf-8",
