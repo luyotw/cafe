@@ -187,8 +187,6 @@ class Phase(ABC):
 
         return ""
 
-        return ""
-
     def _update_iteration_history(
         self,
         phase_specific_data: Dict[str, Any],
