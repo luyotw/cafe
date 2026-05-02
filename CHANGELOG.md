@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Breaking
+- Issues created before the issue241 series no longer guarantee resume compatibility. The legacy `context.json` fallbacks for `_load_user_input` and `_get_previous_iteration_status` have been removed in favor of `user_input.md` and the blackboard `step_completed` event log respectively. If you have an in-progress issue from a prior version that has not yet recorded `step_completed` events on its blackboard (or stored `user_input` only inside `context.json`), the next iteration may skip the clarification / review prompt or resume with an empty user input. Workarounds: (a) finish the issue on the previous version before upgrading, (b) re-run the issue from scratch, or (c) manually create the missing `iteration_NNN/user_input.md` file.
+
 ## [0.1.6]
 
 ### Added
