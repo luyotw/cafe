@@ -428,3 +428,266 @@ def test_runtime_pauses_for_non_pr_transition_to_user(tmp_path: Path) -> None:
     assert blackboard.handoff_contract.to_step == "user"
     assert blackboard.handoff_contract.intent.value == "manual_handoff"
     assert blackboard.events[-1].event_type == "workflow_paused"
+
+
+def test_runtime_records_status_code_invalid_event(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "invalid-status"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object):
+        return ("CAFE_READY_FOR_REVIEW", {})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="spec")
+
+    assert result.completed is False
+    assert result.final_status_code == "INVALID_STATUS_CODE"
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    invalid_events = [e for e in blackboard.events if e.event_type == "status_code_invalid"]
+    assert invalid_events
+    latest = invalid_events[-1].data
+    assert latest["invalid_status_codes"] == ["CAFE_READY_FOR_REVIEW"]
+    assert latest["allowed_status_codes"] == ["CAFE_CONFIRMED"]
+    assert latest["runtime"] == "legacy_until_boundary"
+
+
+def test_runtime_records_status_code_missing_event(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "missing-status"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object):
+        return ("plain response without status token", {})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="spec")
+
+    assert result.completed is False
+    assert result.final_status_code == "NO_STATUS_CODE"
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    missing_events = [e for e in blackboard.events if e.event_type == "status_code_missing"]
+    assert missing_events
+    assert missing_events[-1].data["runtime"] == "legacy_until_boundary"
+
+
+def test_runtime_pauses_ready_for_review_with_confirm_output_intent(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "ready-for-review-pause"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_status_codes": ["CAFE_READY_FOR_REVIEW", "CAFE_CONFIRMED"],
+                "on": {"CAFE_READY_FOR_REVIEW": "spec", "CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="CAFE_READY_FOR_REVIEW",
+            artifacts={},
+            status_code="CAFE_READY_FOR_REVIEW",
+            auto_continue=False,
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="spec")
+
+    assert result.completed is False
+    assert result.final_status_code == "CAFE_READY_FOR_REVIEW"
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    assert blackboard.current_step == "user"
+    assert blackboard.handoff_contract is not None
+    assert blackboard.handoff_contract.to_owner == HandoffOwner.USER
+    assert blackboard.handoff_contract.intent == HandoffIntent.CONFIRM_OUTPUT
+
+
+def test_runtime_continues_when_auto_continue_is_true(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "auto-continue"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_status_codes": ["CAFE_NEED_CLARIFICATION", "CAFE_CONFIRMED"],
+                "on": {
+                    "CAFE_NEED_CLARIFICATION": "spec",
+                    "CAFE_CONFIRMED": "_done",
+                },
+            },
+        },
+    }
+    call_count = 0
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return StepExecutionResult(
+                response="CAFE_NEED_CLARIFICATION",
+                artifacts={},
+                status_code="CAFE_NEED_CLARIFICATION",
+                auto_continue=True,
+            )
+        return StepExecutionResult(
+            response="CAFE_CONFIRMED",
+            artifacts={},
+            status_code="CAFE_CONFIRMED",
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="spec", max_transitions=5)
+
+    assert result.completed is True
+    assert call_count == 2
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    pause_events = [e for e in blackboard.events if e.event_type == "workflow_paused"]
+    assert not pause_events
+
+
+def test_runtime_emits_expected_runtime_labels_per_path(tmp_path: Path) -> None:
+    # legacy -> boundary_handoff
+    issue_dir_legacy = tmp_path / ".cafe" / "issues" / "runtime-labels-legacy"
+    playbook_legacy = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "review": {
+                "skill": "spec_first",
+                "role": "reviewer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "pr"},
+            },
+            "pr": {"skill": "spec_first", "role": "developer", "on": {"CAFE_CONFIRMED": "_done"}},
+        },
+    }
+
+    def legacy_executor(step_name: str, step_def: dict, state: object):
+        return ("CAFE_CONFIRMED", {})
+
+    legacy_runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir_legacy,
+        playbook=playbook_legacy,
+        executor=legacy_executor,
+    )
+    legacy_runtime.run(start_step="review")
+    legacy_state = BlackboardStore(issue_dir_legacy).load_or_create("review")
+    review_started = [
+        e for e in legacy_state.events if e.event_type == "step_started" and e.data.get("step") == "review"
+    ]
+    review_completed = [
+        e for e in legacy_state.events if e.event_type == "step_completed" and e.data.get("step") == "review"
+    ]
+    boundary_transition = [
+        e
+        for e in legacy_state.events
+        if e.event_type == "transition"
+        and e.data.get("from") == "review"
+        and e.data.get("to") == "pr"
+    ]
+    assert review_started[-1].data["runtime"] == "legacy_until_boundary"
+    assert review_completed[-1].data["runtime"] == "legacy_until_boundary"
+    assert boundary_transition[-1].data["runtime"] == "boundary_handoff"
+
+    # baton-driven
+    issue_dir_pr = tmp_path / ".cafe" / "issues" / "runtime-labels-pr"
+    playbook_pr = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "pr": {"skill": "spec_first", "role": "developer", "on": {"CAFE_CONFIRMED": "_done"}},
+        },
+    }
+
+    def pr_executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        _write_baton(issue_dir_pr, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete")
+        return StepExecutionResult(
+            response="done",
+            artifacts={},
+            events=[{"type": "pr_synced"}],
+        )
+
+    pr_runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir_pr,
+        playbook=playbook_pr,
+        executor=pr_executor,
+    )
+    pr_runtime.run(start_step="pr")
+    pr_state = BlackboardStore(issue_dir_pr).load_or_create("pr")
+    pr_started = [e for e in pr_state.events if e.event_type == "step_started"]
+    pr_completed = [e for e in pr_state.events if e.event_type == "step_completed"]
+    pr_workflow_done = [e for e in pr_state.events if e.event_type == "workflow_completed"]
+    assert pr_started[-1].data["runtime"] == "blackboard"
+    assert pr_completed[-1].data["runtime"] == "blackboard"
+    assert pr_workflow_done[-1].data["runtime"] == "blackboard"
+
+    # single_step
+    issue_dir_single = tmp_path / ".cafe" / "issues" / "runtime-labels-single"
+    playbook_single = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+
+    def single_executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="CAFE_CONFIRMED",
+            artifacts={},
+            status_code="CAFE_CONFIRMED",
+        )
+
+    single_runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir_single,
+        playbook=playbook_single,
+        executor=single_executor,
+    )
+    single_runtime.run(start_step="develop", single_step=True)
+    single_state = BlackboardStore(issue_dir_single).load_or_create("develop")
+    single_started = [e for e in single_state.events if e.event_type == "step_started"]
+    single_completed = [e for e in single_state.events if e.event_type == "single_step_completed"]
+    single_done = [e for e in single_state.events if e.event_type == "workflow_completed"]
+    assert single_started[-1].data["runtime"] == "single_step"
+    assert single_completed[-1].data["runtime"] == "single_step"
+    assert single_done[-1].data["runtime"] == "single_step"
