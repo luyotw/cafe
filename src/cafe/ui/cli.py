@@ -17,6 +17,19 @@ from typer.core import TyperGroup
 
 from cafe.ui.inquirer_prompts import prompt_checkbox, prompt_confirm, prompt_list, prompt_multiline, prompt_text
 from cafe.ui.menu import InteractiveMenu
+from cafe.ui.cli_shared import (
+    CONTENT_TYPE_FILE_MAP,
+    VALID_CONTENT_TYPES,
+    check_agent_clis_available as _shared_check_agent_clis_available,
+    display_iteration_delta as _shared_display_iteration_delta,
+    find_latest_iteration_dir as _shared_find_latest_iteration_dir,
+    get_latest_review_iteration as _shared_get_latest_review_iteration,
+    get_latest_versioned_file as _shared_get_latest_versioned_file,
+    get_show_file_path as _shared_get_show_file_path,
+    resolve_iteration_index as _shared_resolve_iteration_index,
+    resolve_iteration_number as _shared_resolve_iteration_number,
+    setup_agents as _shared_setup_agents,
+)
 import yaml
 from rich.console import Console
 
@@ -26,7 +39,7 @@ from cafe.core.git import GitOperations
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.core.permission import PermissionHandler
-from cafe.core.types import AgentCLI, AgentConfig, CriticalPhaseError
+from cafe.core.types import CriticalPhaseError
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.playbooks.loader import PlaybookLoader
@@ -45,7 +58,6 @@ from cafe.ui.init_helpers import (
 )
 from cafe.ui.phase_prompts import prompt_for_input_method, prompt_for_rigor
 from cafe.ui.template_selector import select_template
-from cafe.services.delta_display import DeltaDisplay
 from cafe.utils.config import ConfigManager, ConfigError
 from cafe.utils.git_utils import is_branch_initialized
 from cafe.utils.github import (
@@ -199,21 +211,6 @@ ALL_PHASES = ["spec", "plan", "develop", "review", "pr"]
 
 # Constants for cafe show command
 VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
-VALID_CONTENT_TYPES = [
-    "context", "output", "streaming", "error",
-    "status", "iterations", "checklist", "user_input", "questions"
-]
-CONTENT_TYPE_FILE_MAP = {
-    "context": "context.json",
-    "output": "output.md",
-    "streaming": "streaming.jsonl",
-    "error": "error.json",
-    "status": "status.json",
-    "iterations": "iterations.jsonl",
-    "checklist": "checklist.md",
-    "user_input": "user_input.md",
-    "questions": "questions.xml",
-}
 
 
 def _resolve_issue_playbook_name(issue_name: str) -> str:
@@ -995,30 +992,8 @@ def _display_iteration_questions(*, issue_name: str, step_name: str, alias_resul
 
 
 def _check_agent_clis_available(config_manager: ConfigManager) -> List[str]:
-    """Check if all agent CLI tools are installed.
-
-    Args:
-        config_manager: Configuration manager
-
-    Returns:
-        List of missing CLI tools (empty list if none missing)
-    """
-    # Read all agent configurations
-    pm_config = config_manager.get("agents.pm", {"name": "Roger", "cli": "copilot"})
-    dev_config = config_manager.get("agents.developer", {"name": "David", "cli": "copilot"})
-    reviewer_config = config_manager.get("agents.reviewer", {"name": "Richard", "cli": "copilot"})
-
-    # Collect all CLI tools to check
-    required_clis = [pm_config["cli"], dev_config["cli"], reviewer_config["cli"]]
-
-    # Check if each CLI exists
-    missing_clis = []
-    for cli in required_clis:
-        if shutil.which(cli) is None:
-            if cli not in missing_clis:  # Avoid duplicates
-                missing_clis.append(cli)
-
-    return missing_clis
+    """Check if all agent CLI tools are installed."""
+    return _shared_check_agent_clis_available(config_manager)
 
 
 def _get_and_validate_branch(ctx: typer.Context, phase_name: str) -> str:
@@ -1074,155 +1049,22 @@ def _setup_agents(
     issue_name: Optional[str] = None,
     phase_name: Optional[str] = None,
 ) -> AgentManager:
-    """Setup agent manager with default agents.
-
-    Args:
-        config_manager: Configuration manager
-        issue_name: Issue name for issue-specific sessions
-        phase_name: Current phase name for phase-specific model resolution
-
-    Returns:
-        Configured agent manager
-    """
-    agent_manager = AgentManager(issue_name=issue_name)
-
-    # Get agent configurations from config or use defaults
-    pm_config = config_manager.get(
-        "agents.pm",
-        {
-            "name": "Roger",
-            "cli": "copilot",
-        },
+    """Setup agent manager with default agents."""
+    return _shared_setup_agents(
+        config_manager=config_manager,
+        issue_name=issue_name,
+        phase_name=phase_name,
     )
-    dev_config = config_manager.get(
-        "agents.developer",
-        {
-            "name": "David",
-            "cli": "copilot",
-        },
-    )
-    reviewer_config = config_manager.get(
-        "agents.reviewer",
-        {
-            "name": "Richard",
-            "cli": "copilot",
-        },
-    )
-
-    # Helper to resolve model
-    def resolve_model(config: dict, phase: Optional[str]) -> Optional[str]:
-        model = None
-        if phase and phase in config:
-            phase_config = config[phase]
-            if isinstance(phase_config, dict):
-                model = phase_config.get("model")
-
-        if model is None:
-            model = config.get("model")
-
-        return model
-
-    # Helper to resolve backup CLIs (filter out entries that match the primary CLI)
-    def resolve_backup_clis(config: dict, primary_cli: AgentCLI) -> List[AgentCLI]:
-        backup_raw = config.get("backup", [])
-        seen = {primary_cli}
-        result = []
-        for cli_str in backup_raw:
-            try:
-                cli = AgentCLI(cli_str)
-            except ValueError:
-                continue
-            if cli not in seen:
-                seen.add(cli)
-                result.append(cli)
-        return result
-
-    # Helper to resolve models config dict
-    def resolve_models_config(config: dict) -> Dict[str, Dict[str, str]]:
-        raw = config.get("models", {})
-        if not isinstance(raw, dict):
-            return {}
-        result: Dict[str, Dict[str, str]] = {}
-        for cli_name, phase_models in raw.items():
-            if isinstance(phase_models, dict):
-                result[cli_name] = {k: str(v) for k, v in phase_models.items()}
-        return result
-
-    # Register agents
-    pm_cli = AgentCLI(pm_config["cli"])
-    agent_manager.register_agent(
-        AgentConfig(
-            name=pm_config["name"],
-            cli=pm_cli,
-            model=resolve_model(pm_config, phase_name),
-            backup_clis=resolve_backup_clis(pm_config, pm_cli),
-            models_config=resolve_models_config(pm_config),
-        )
-    )
-    dev_cli = AgentCLI(dev_config["cli"])
-    agent_manager.register_agent(
-        AgentConfig(
-            name=dev_config["name"],
-            cli=dev_cli,
-            model=resolve_model(dev_config, phase_name),
-            backup_clis=resolve_backup_clis(dev_config, dev_cli),
-            models_config=resolve_models_config(dev_config),
-        )
-    )
-    reviewer_cli = AgentCLI(reviewer_config["cli"])
-    agent_manager.register_agent(
-        AgentConfig(
-            name=reviewer_config["name"],
-            cli=reviewer_cli,
-            model=resolve_model(reviewer_config, phase_name),
-            backup_clis=resolve_backup_clis(reviewer_config, reviewer_cli),
-            models_config=resolve_models_config(reviewer_config),
-        )
-    )
-
-    return agent_manager
 
 
 def _get_latest_versioned_file(phase_name: str, issue_name: str) -> Optional[Path]:
-    """Get the latest versioned file for a phase.
-
-    Args:
-        phase_name: Phase name (e.g., "spec", "plan")
-        issue_name: Issue name
-
-    Returns:
-        Path to the latest iteration's output.md, or None if no output files exist
-    """
-    phase_dir = Path(f".cafe/issues/{issue_name}/{phase_name}")
-    if not phase_dir.exists():
-        return None
-
-    # Find all iteration output files (iteration_XXX/output.md)
-    output_files = sorted(phase_dir.glob("iteration_*/output.md"))
-
-    if output_files:
-        # Return the latest (highest numbered iteration) file
-        return output_files[-1]
-
-    return None
+    """Get the latest versioned file for a phase."""
+    return _shared_get_latest_versioned_file(phase_name, issue_name)
 
 
 def _find_latest_iteration_dir(phase_dir: Path) -> Optional[Path]:
     """Find latest iteration directory by numeric suffix."""
-    iteration_dirs = sorted(phase_dir.glob("iteration_*"))
-    valid: List[tuple[int, Path]] = []
-    for path in iteration_dirs:
-        if not path.is_dir():
-            continue
-        try:
-            number = int(path.name.split("_")[1])
-        except (IndexError, ValueError):
-            continue
-        valid.append((number, path))
-    if not valid:
-        return None
-    valid.sort(key=lambda item: item[0])
-    return valid[-1][1]
+    return _shared_find_latest_iteration_dir(phase_dir)
 
 
 def _edit_file_with_editor(file_path: Path) -> None:
@@ -1250,161 +1092,23 @@ def _edit_file_with_editor(file_path: Path) -> None:
 
 
 def _resolve_iteration_index(iteration_numbers: List[int], iteration_input: int) -> int:
-    """Resolve iteration number from user input.
-
-    Shared iteration resolution logic used by both cafe show and cafe reset.
-
-    Args:
-        iteration_numbers: Sorted list of available iteration numbers
-        iteration_input: User input iteration number (can be positive, 0, negative)
-
-    Returns:
-        Actual iteration number (positive integer)
-
-    Raises:
-        ValueError: When iteration number does not exist or index out of range
-
-    Examples:
-        If iteration_numbers = [1, 2, 3, 4, 5]:
-        - iteration_input = 0 → returns 5 (latest)
-        - iteration_input = 3 → returns 3 (exact match)
-        - iteration_input = -1 → returns 4 (one before latest)
-        - iteration_input = -2 → returns 3 (two before latest)
-    """
-    if not iteration_numbers:
-        raise ValueError("No iterations available")
-
-    # Handle different iteration number formats
-    if iteration_input == 0:
-        # Zero means latest iteration
-        return iteration_numbers[-1]
-    elif iteration_input > 0:
-        # Positive number used directly, but need to verify existence
-        if iteration_input not in iteration_numbers:
-            raise ValueError(
-                f"Iteration {iteration_input} not found. "
-                f"Available iterations: {iteration_numbers}"
-            )
-        return iteration_input
-    else:
-        # Negative number: -1 means one before latest, -2 means two before, etc.
-        # Since 0 already represents latest (iteration_numbers[-1]),
-        # we need to offset: -1 -> [-2], -2 -> [-3], etc.
-        try:
-            return iteration_numbers[iteration_input - 1]
-        except IndexError:
-            raise ValueError(
-                f"Iteration index {iteration_input} out of range. "
-                f"Available iterations: {iteration_numbers}"
-            )
+    """Resolve iteration number from user input."""
+    return _shared_resolve_iteration_index(iteration_numbers, iteration_input)
 
 
 def _resolve_iteration_number(phase_dir: Path, iteration_input: int, content_type: str) -> int:
-    """Resolve iteration number based on iterations that have the specified file.
-
-    Args:
-        phase_dir: Phase directory path (e.g., .cafe/issues/issue84/spec)
-        iteration_input: User input iteration number (can be positive, 0, negative)
-        content_type: Content type to search for (output, context, etc.)
-
-    Returns:
-        Actual iteration number (positive integer)
-
-    Raises:
-        ValueError: When iteration number does not exist or file not found
-    """
-    # Get filename for the content type
-    filename = CONTENT_TYPE_FILE_MAP.get(content_type)
-    if not filename:
-        raise ValueError(f"Unknown content type: {content_type}")
-
-    # Get all iteration directories (verified by context.json file)
-    all_iteration_files = sorted(phase_dir.glob("iteration_*/context.json"))
-
-    if not all_iteration_files:
-        raise ValueError(f"No iterations found in {phase_dir}")
-
-    # Extract all iteration numbers
-    all_iteration_numbers = []
-    for file_path in all_iteration_files:
-        dir_name = file_path.parent.name
-        if dir_name.startswith("iteration_"):
-            try:
-                num = int(dir_name.split("_")[1])
-                all_iteration_numbers.append(num)
-            except (IndexError, ValueError):
-                continue
-
-    if not all_iteration_numbers:
-        raise ValueError(f"No valid iterations found in {phase_dir}")
-
-    # Find iterations that have the requested file
-    iteration_numbers_with_file = []
-    for iter_num in all_iteration_numbers:
-        iteration_dir = phase_dir / f"iteration_{iter_num:03d}"
-        file_path = iteration_dir / filename
-        if file_path.exists():
-            iteration_numbers_with_file.append(iter_num)
-
-    if not iteration_numbers_with_file:
-        raise ValueError(
-            f"No iterations found with file '{filename}'. "
-            f"Available iterations: {all_iteration_numbers}"
-        )
-
-    # Use shared iteration resolution logic
-    return _resolve_iteration_index(iteration_numbers_with_file, iteration_input)
+    """Resolve iteration number based on iterations that have the specified file."""
+    return _shared_resolve_iteration_number(phase_dir, iteration_input, content_type)
 
 
 def _get_show_file_path(phase_dir: Path, iteration: int, content_type: str) -> Path:
-    """Get file path for specified content type.
-
-    Args:
-        phase_dir: Phase directory path
-        iteration: Iteration number (resolved to positive integer)
-        content_type: Content type (context, output, streaming, etc.)
-
-    Returns:
-        Complete file path
-    """
-    filename = CONTENT_TYPE_FILE_MAP.get(content_type)
-    if not filename:
-        raise ValueError(f"Unknown content type: {content_type}")
-
-    # status and iterations are located at phase directory root level
-    if content_type in ["status", "iterations"]:
-        return phase_dir / filename
-    else:
-        # Other files are located in iteration directory
-        iteration_dir = phase_dir / f"iteration_{iteration:03d}"
-        return iteration_dir / filename
+    """Get file path for specified content type."""
+    return _shared_get_show_file_path(phase_dir, iteration, content_type)
 
 
 def _get_latest_review_iteration(issue_name: str) -> int:
-    """Get the latest review iteration number from iteration directories.
-
-    Args:
-        issue_name: Issue name
-
-    Returns:
-        Latest iteration number, or 0 if no iterations exist
-    """
-    review_dir = Path(f".cafe/issues/{issue_name}/review")
-    if not review_dir.exists():
-        return 0
-
-    # Find all iteration directories
-    iteration_dirs = sorted(review_dir.glob("iteration_*"))
-    if not iteration_dirs:
-        return 0
-
-    # Extract iteration number from the latest directory (e.g., iteration_005 -> 5)
-    latest_dir = iteration_dirs[-1]
-    try:
-        iteration_num = int(latest_dir.name.split("_")[1])
-        return iteration_num
-    except (IndexError, ValueError):
-        return 0
+    """Get the latest review iteration number from iteration directories."""
+    return _shared_get_latest_review_iteration(issue_name)
 
 
 def _execute_next_phase_auto(next_phase: str, issue_name: str) -> None:
@@ -1439,23 +1143,8 @@ def _display_iteration_delta(
     output_file: Optional[str],
     console: Console,
 ) -> None:
-    """Display delta between current and previous iteration output files.
-
-    Args:
-        iteration_count: Current iteration number
-        output_file: Path to current iteration output file (spec_file or plan_file)
-        console: Rich console for output
-    """
-    if iteration_count > 1 and output_file:
-        current_file = Path(output_file)
-        # Calculate previous iteration path
-        iteration_dir = current_file.parent
-        phase_dir = iteration_dir.parent
-        prev_iteration_num = iteration_count - 1
-        previous_file = phase_dir / f"iteration_{prev_iteration_num:03d}" / "output.md"
-
-        delta_display = DeltaDisplay()
-        delta_display.display_delta(current_file, previous_file, console)
+    """Display delta between current and previous iteration output files."""
+    _shared_display_iteration_delta(iteration_count, output_file, console)
 
 
 def _print_workflow_pause_guidance(*, step_name: str, status_code: Optional[str]) -> None:
