@@ -537,7 +537,7 @@ class SpecPhase(Phase):
         # Iteration 2+: Check if current iteration was interrupted (has user_input but no response)
         current_data = self._load_current_iteration_data()
         if current_data and not current_data.get("response"):
-            # Resume interrupted iteration, load user_input from user_input.md or context.json
+            # Resume interrupted iteration, load user_input from user_input.md
             user_input = self._load_user_input(self.iteration)
             if user_input:
                 return user_input

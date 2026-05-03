@@ -574,7 +574,7 @@ class DevelopPhase(Phase):
             # Check if this iteration was interrupted (has prompt but no response)
             if current_data.get("prompt") and not current_data.get("response"):
                 # Reuse the user_input from interrupted iteration
-                # Load from user_input.md or context.json for backward compatibility
+                # Load from user_input.md
                 interrupted_user_input = self._load_user_input(self.iteration)
                 return interrupted_user_input
 
@@ -694,7 +694,7 @@ class DevelopPhase(Phase):
                 continue
 
             try:
-                # Load user_input from user_input.md or context.json for backward compatibility
+                # Load user_input from user_input.md
                 user_input = self._load_user_input(iteration_num)
                 # If this iteration has user_input, the clarification was answered
                 if user_input.strip():

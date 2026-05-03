@@ -279,6 +279,24 @@ class TestAskUserForClarification:
         assert result == "first iteration answer"
 
 
+class TestInterruptedIterationUserInput:
+    """測試中斷迭代的 user_input 邏輯"""
+
+    def test_interrupted_iteration_does_not_fallback_to_context_json_user_input(self, spec_phase):
+        """context.json 的 legacy user_input 不應再作為中斷恢復來源。"""
+        spec_phase.iteration = 2
+
+        iteration_dir = spec_phase._get_iteration_dir(2)
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        (iteration_dir / "context.json").write_text('{"user_input":"legacy only"}', encoding="utf-8")
+
+        with patch.object(spec_phase, "_load_current_iteration_data", return_value={"prompt": "x"}), \
+             patch.object(spec_phase, "_load_previous_iteration_data", return_value=None):
+            result = spec_phase._prepare_user_input_for_iteration()
+
+        assert result == ""
+
+
 class TestReviewDecisionDisplayCallback:
     """測試 READY_FOR_REVIEW 時的 diff 顯示 callback 接線"""
 
