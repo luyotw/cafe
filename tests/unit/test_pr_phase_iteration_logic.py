@@ -1307,6 +1307,50 @@ class TestGetLastSeenCommentIds:
 
         assert result == set()
 
+    def test_reads_from_artifact_file_when_present(self, tmp_path, mock_dependencies):
+        """Test _get_last_seen_comment_ids reads runtime artifact first."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        artifact_dir = issue_dir / "pr" / "artifacts"
+        artifact_dir.mkdir(parents=True)
+        (artifact_dir / "pr_last_seen_comments.json").write_text(
+            json.dumps({"last_seen_comment_ids": ["A1", "B2"]})
+        )
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = self._make_phase(issue_dir, mock_dependencies)
+            result = phase._get_last_seen_comment_ids()
+
+        assert result == {"A1", "B2"}
+
+    def test_artifact_takes_precedence_over_legacy_context(self, tmp_path, mock_dependencies):
+        """Artifact data should override older context.json snapshots."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        pr_dir = issue_dir / "pr"
+
+        iter_dir = pr_dir / "iteration_001"
+        iter_dir.mkdir(parents=True)
+        (iter_dir / "context.json").write_text(
+            json.dumps(
+                {
+                    "iteration": 1,
+                    "status_code": "CAFE_READY_FOR_REVIEW",
+                    "last_seen_comment_ids": ["OLD_CONTEXT"],
+                }
+            )
+        )
+
+        artifact_dir = pr_dir / "artifacts"
+        artifact_dir.mkdir(parents=True)
+        (artifact_dir / "pr_last_seen_comments.json").write_text(
+            json.dumps({"last_seen_comment_ids": ["NEW_ARTIFACT"]})
+        )
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = self._make_phase(issue_dir, mock_dependencies)
+            result = phase._get_last_seen_comment_ids()
+
+        assert result == {"NEW_ARTIFACT"}
+
     def test_latest_iteration_has_last_seen_comment_ids(self, tmp_path, mock_dependencies):
         """Test _get_last_seen_comment_ids returns IDs from latest iteration context.
 

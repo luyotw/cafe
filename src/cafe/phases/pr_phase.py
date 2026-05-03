@@ -117,6 +117,39 @@ class PRPhase(Phase):
         # Load iteration counter (same pattern as other phases)
         self.iteration = self._load_iteration_counter()
 
+    def _last_seen_comments_artifact_file(self) -> Path:
+        """Return artifact path used to persist previously seen PR comment IDs."""
+        return self.phase_dir / "artifacts" / "pr_last_seen_comments.json"
+
+    def _persist_last_seen_comment_ids(self, comment_ids: list[str]) -> None:
+        """Persist the latest seen PR comment IDs to a runtime artifact file."""
+        artifact_file = self._last_seen_comments_artifact_file()
+        artifact_file.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "last_seen_comment_ids": [str(comment_id) for comment_id in comment_ids],
+            "updated_at": datetime.now().astimezone().isoformat(),
+        }
+        artifact_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _load_last_seen_comment_ids_from_artifact(self) -> Optional[set[str]]:
+        """Load seen PR comment IDs from runtime artifact file."""
+        artifact_file = self._last_seen_comments_artifact_file()
+        if not artifact_file.exists():
+            return None
+        try:
+            payload = json.loads(artifact_file.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                raw_ids = payload.get("last_seen_comment_ids", [])
+            elif isinstance(payload, list):
+                raw_ids = payload
+            else:
+                raw_ids = []
+            if not isinstance(raw_ids, list):
+                return set()
+            return {str(item) for item in raw_ids}
+        except (json.JSONDecodeError, OSError, TypeError):
+            return set()
+
     def _get_latest_iteration_dir(self, pr_dir: Path) -> Optional[Path]:
         """Get the latest iteration directory in pr folder.
 
@@ -357,18 +390,19 @@ class PRPhase(Phase):
         }
 
     def _get_last_seen_comment_ids(self) -> "Set[str]":
-        """Get last seen comment IDs by searching PR iteration history backwards.
+        """Get last seen comment IDs from runtime artifact with legacy fallback.
 
-        Searches all PR iteration directories in reverse order to find the most
-        recent context.json containing the last_seen_comment_ids field.
-        This is necessary because last_seen_comment_ids is only recorded in push
-        iterations (CAFE_READY_FOR_REVIEW), not in comment-fetch iterations
-        (CAFE_NEEDS_CHANGES). The relevant data may be 2+ iterations back.
+        Primary source is pr/artifacts/pr_last_seen_comments.json.
+        For backward compatibility with existing issue history, falls back to
+        scanning legacy context.json records.
 
         Returns:
-            Set of comment IDs seen at the last push, or empty set if no such
-            record exists (first iteration or backward compatibility)
+            Set of comment IDs seen at the last push, or empty set if none exists.
         """
+        artifact_ids = self._load_last_seen_comment_ids_from_artifact()
+        if artifact_ids is not None:
+            return artifact_ids
+
         pr_dir = self.issue_dir / "pr"
         if not pr_dir.exists():
             return set()
@@ -377,7 +411,7 @@ class PRPhase(Phase):
         if not iteration_dirs:
             return set()
 
-        # Search backwards through all iterations for the most recent last_seen_comment_ids
+        # Legacy fallback: search old context.json snapshots
         for iter_dir in reversed(iteration_dirs):
             context_file = iter_dir / "context.json"
             if not context_file.exists():
@@ -541,23 +575,6 @@ class PRPhase(Phase):
                 # Save progress with the actual status code returned by agent
                 result_status = result.data.get("status_code", PhaseStatusCode.NEEDS_CHANGES.value) if result and result.data else PhaseStatusCode.NEEDS_CHANGES.value
                 self._save_progress(PhaseStatusCode(result_status))
-
-                # Update iteration context.json with status_code only,
-                # preserving agent metadata already saved by _execute_agent_iteration
-                iteration_dir = self._get_iteration_dir(self.iteration)
-                iteration_dir.mkdir(parents=True, exist_ok=True)
-                context_file = iteration_dir / "context.json"
-                if context_file.exists():
-                    with open(context_file, "r", encoding="utf-8") as f:
-                        context_data = json.load(f)
-                else:
-                    context_data = {}
-                if result and result.data:
-                    context_data.update(result.data)
-                context_data["status_code"] = result_status
-                with open(context_file, "w", encoding="utf-8") as f:
-                    json.dump(context_data, f, ensure_ascii=False, indent=2)
-
                 return result
             else:
                 # No user_input - this was a PR create/update iteration that is incomplete
@@ -781,23 +798,6 @@ class PRPhase(Phase):
                     # Save progress with the actual status code returned by agent
                     result_status = result.data.get("status_code", PhaseStatusCode.NEEDS_CHANGES.value) if result and result.data else PhaseStatusCode.NEEDS_CHANGES.value
                     self._save_progress(PhaseStatusCode(result_status))
-
-                    # Update iteration context.json with status_code only,
-                    # preserving agent metadata already saved by _execute_agent_iteration
-                    iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
-                    iteration_dir.mkdir(parents=True, exist_ok=True)
-                    context_file = iteration_dir / "context.json"
-                    if context_file.exists():
-                        with open(context_file, "r", encoding="utf-8") as f:
-                            context_data = json.load(f)
-                    else:
-                        context_data = {}
-                    if result and result.data:
-                        context_data.update(result.data)
-                    context_data["status_code"] = result_status
-                    with open(context_file, "w", encoding="utf-8") as f:
-                        json.dump(context_data, f, ensure_ascii=False, indent=2)
-
                     return result
                 else:
                     # No comments yet - still waiting for review
@@ -1465,7 +1465,7 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
         # Display token usage summary before returning
         self._print_token_usage_summary()
 
-        # Save status_code to context.json
+        # Persist final status_code in iteration metadata.
         # _execute_agent_iteration intentionally saves status_code=None (deferred for checklist validation),
         # so we must persist the final status_code here after validation passes.
         self._update_iteration_history(
@@ -1715,6 +1715,7 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
 
             # Snapshot all current comment IDs so next iteration only fetches new ones
             last_seen_comment_ids = self._snapshot_current_comment_ids(pr_number)
+            self._persist_last_seen_comment_ids(last_seen_comment_ids)
 
             # Save progress - READY_FOR_REVIEW means waiting for reviewer feedback
             self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
@@ -1725,7 +1726,6 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
                     "pr_number": pr_number,
                     "pr_url": pr_url,
                     "branch": branch_name,
-                    "last_seen_comment_ids": last_seen_comment_ids,
                 },
                 status_code=PhaseStatusCode.READY_FOR_REVIEW,
             )
@@ -1764,6 +1764,7 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
 
             # Snapshot all current comment IDs so next iteration only fetches new ones
             last_seen_comment_ids = self._snapshot_current_comment_ids(pr_number)
+            self._persist_last_seen_comment_ids(last_seen_comment_ids)
 
             # Save progress - READY_FOR_REVIEW means waiting for reviewer feedback
             self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
@@ -1774,7 +1775,6 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
                     "pr_number": pr_number,
                     "pr_url": pr_url,
                     "branch": branch_name,
-                    "last_seen_comment_ids": last_seen_comment_ids,
                 },
                 status_code=PhaseStatusCode.READY_FOR_REVIEW,
             )

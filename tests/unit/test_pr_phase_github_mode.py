@@ -379,23 +379,19 @@ class TestPRPhaseStep0ResumeIncomplete:
                     message="Organized",
                     data={"status_code": "CAFE_NEEDS_CHANGES"}
                 )
+                with patch.object(PRPhase, "_save_progress") as mock_save_progress:
+                    phase = PRPhase(
+                        spec_file=str(spec_file),
+                        issue_name="test-issue",
+                        **mock_dependencies
+                    )
 
-                phase = PRPhase(
-                    spec_file=str(spec_file),
-                    issue_name="test-issue",
-                    **mock_dependencies
-                )
-
-                result = phase._execute_github_mode()
+                    result = phase._execute_github_mode()
 
         # Assert - should have resumed and completed
+        assert result.status == PhaseStatus.COMPLETED
         mock_organize.assert_called_once()
-
-        # Verify status_code was saved to context.json
-        context_file = iteration_001 / "context.json"
-        with open(context_file) as f:
-            context = json.load(f)
-        assert context.get("status_code") == "CAFE_NEEDS_CHANGES"
+        mock_save_progress.assert_called_once_with(PhaseStatusCode.NEEDS_CHANGES)
 
     def test_resume_incomplete_iteration_without_user_input(
         self, tmp_path, mock_dependencies, setup_issue_dir
@@ -860,7 +856,7 @@ class TestPRPhaseAgentCalled:
 
 
 class TestCreateOrUpdatePRRecordsLastSeenCommentIds:
-    """Test that _create_or_update_pr() records last_seen_comment_ids in context.json."""
+    """Test that _create_or_update_pr() records last_seen_comment_ids in artifact file."""
 
     @pytest.fixture
     def mock_dependencies(self):
@@ -899,10 +895,10 @@ class TestCreateOrUpdatePRRecordsLastSeenCommentIds:
     def test_create_pr_records_last_seen_comment_ids_when_comments_exist(
         self, tmp_path, mock_dependencies, setup_issue_dir
     ):
-        """Test 3.1: create PR 後 context.json 中有 last_seen_comment_ids（有 comments 的情況）
+        """Test 3.1: create PR 後 artifact 中有 last_seen_comment_ids（有 comments 的情況）
 
         情境：PR 建立成功，GitHub 上有現有 comments
-        預期：context.json 包含 last_seen_comment_ids，記錄當前所有 comment IDs
+        預期：artifact 包含 last_seen_comment_ids，記錄當前所有 comment IDs
         """
         from cafe.utils.github import PRComment
 
@@ -936,21 +932,18 @@ class TestCreateOrUpdatePRRecordsLastSeenCommentIds:
 
         assert result.status == PhaseStatus.COMPLETED
 
-        context_file = issue_dir / "pr" / "iteration_001" / "context.json"
-        assert context_file.exists()
-        with open(context_file) as f:
-            context = json.load(f)
-
-        assert "last_seen_comment_ids" in context
-        assert set(context["last_seen_comment_ids"]) == {"R1", "T1"}
+        artifact_file = issue_dir / "pr" / "artifacts" / "pr_last_seen_comments.json"
+        assert artifact_file.exists()
+        artifact = json.loads(artifact_file.read_text())
+        assert set(artifact["last_seen_comment_ids"]) == {"R1", "T1"}
 
     def test_create_pr_records_empty_last_seen_comment_ids_when_no_comments(
         self, tmp_path, mock_dependencies, setup_issue_dir
     ):
-        """Test 3.2: create PR 後 context.json 中有空的 last_seen_comment_ids（沒有 comments 的情況）
+        """Test 3.2: create PR 後 artifact 中有空的 last_seen_comment_ids（沒有 comments 的情況）
 
         情境：PR 建立成功，GitHub 上沒有 comments（首次建立 PR）
-        預期：context.json 包含空的 last_seen_comment_ids
+        預期：artifact 包含空的 last_seen_comment_ids
         """
         from cafe.utils.github import GitHubError
 
@@ -979,22 +972,18 @@ class TestCreateOrUpdatePRRecordsLastSeenCommentIds:
 
         assert result.status == PhaseStatus.COMPLETED
 
-        context_file = issue_dir / "pr" / "iteration_001" / "context.json"
-        assert context_file.exists()
-        with open(context_file) as f:
-            context = json.load(f)
-
-        # Should still have the field, just empty
-        assert "last_seen_comment_ids" in context
-        assert context["last_seen_comment_ids"] == []
+        artifact_file = issue_dir / "pr" / "artifacts" / "pr_last_seen_comments.json"
+        assert artifact_file.exists()
+        artifact = json.loads(artifact_file.read_text())
+        assert artifact["last_seen_comment_ids"] == []
 
     def test_update_pr_records_last_seen_comment_ids(
         self, tmp_path, mock_dependencies, setup_issue_dir
     ):
-        """Test 3.3: update PR 後 context.json 中有 last_seen_comment_ids
+        """Test 3.3: update PR 後 artifact 中有 last_seen_comment_ids
 
         情境：PR 更新成功，GitHub 上有現有 comments
-        預期：新 iteration 的 context.json 包含 last_seen_comment_ids
+        預期：artifact 包含最新 last_seen_comment_ids
         """
         from cafe.utils.github import PRComment
 
@@ -1040,13 +1029,10 @@ class TestCreateOrUpdatePRRecordsLastSeenCommentIds:
 
         assert result.status == PhaseStatus.COMPLETED
 
-        context_file = issue_dir / "pr" / "iteration_002" / "context.json"
-        assert context_file.exists()
-        with open(context_file) as f:
-            context = json.load(f)
-
-        assert "last_seen_comment_ids" in context
-        assert set(context["last_seen_comment_ids"]) == {"OLD1", "NEW1"}
+        artifact_file = issue_dir / "pr" / "artifacts" / "pr_last_seen_comments.json"
+        assert artifact_file.exists()
+        artifact = json.loads(artifact_file.read_text())
+        assert set(artifact["last_seen_comment_ids"]) == {"OLD1", "NEW1"}
 
 
 class TestSavePRCommentsFiltersLastSeen:
@@ -1087,23 +1073,18 @@ class TestSavePRCommentsFiltersLastSeen:
     def test_filters_out_previously_seen_comments(self, tmp_path, mock_dependencies):
         """Test 4.1: _save_pr_comments_to_user_input() 只儲存新 comments
 
-        情境：上一輪 push 後記錄了 last_seen_comment_ids，現在有舊 comments 和新 comments
+        情境：artifact 記錄了 last_seen_comment_ids，現在有舊 comments 和新 comments
         預期：get_all_pr_comments 以 exclude_ids 呼叫，只有新 comment 被儲存到 user_input.md
         """
         from cafe.utils.github import PRComment
-        from unittest.mock import call
 
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
-
-        # iteration_001: push iteration with last_seen_comment_ids
         pr_dir = issue_dir / "pr"
-        iter_001 = pr_dir / "iteration_001"
-        iter_001.mkdir(parents=True)
-        (iter_001 / "context.json").write_text(json.dumps({
-            "iteration": 1,
-            "status_code": "CAFE_READY_FOR_REVIEW",
-            "last_seen_comment_ids": ["OLD1", "OLD2"]
-        }))
+        artifact_dir = pr_dir / "artifacts"
+        artifact_dir.mkdir(parents=True)
+        (artifact_dir / "pr_last_seen_comments.json").write_text(
+            json.dumps({"last_seen_comment_ids": ["OLD1", "OLD2"]})
+        )
 
         # Mock returns only the new comment (simulating what get_all_pr_comments
         # actually returns after applying exclude_ids filtering)
