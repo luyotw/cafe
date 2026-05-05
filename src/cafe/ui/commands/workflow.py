@@ -2,9 +2,48 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 import typer
+from rich.console import Console
+
+from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.git import GitOperations
+from cafe.core.types import CriticalPhaseError
+from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+from cafe.phases.generic_phase import GenericPhase
+from cafe.playbooks.loader import PlaybookLoader
+from cafe.skills.loader import SkillLoader
+from cafe.ui.cli_shared import (
+    VALID_CONTENT_TYPES,
+    get_show_file_path as _get_show_file_path,
+    resolve_iteration_number as _resolve_iteration_number,
+)
+from cafe.utils.config import ConfigError, ConfigManager
+
+console = Console()
+
+
+def _missing_runtime(*args: Any, **kwargs: Any) -> Any:
+    raise RuntimeError("workflow runtime dependencies are not initialized")
+
+
+_check_agent_clis_available: Any = _missing_runtime
+_load_issue_step_names: Any = _missing_runtime
+_resolve_selected_playbook: Any = _missing_runtime
+_build_workflow_step_executor: Any = _missing_runtime
+_consume_pending_chat_handoff: Any = _missing_runtime
+_find_incomplete_workflow_step: Any = _missing_runtime
+_find_external_resume_step: Any = _missing_runtime
+_handle_user_phase: Any = _missing_runtime
+_build_workflow_pause_guidance: Any = _missing_runtime
+_print_workflow_pause_guidance: Any = _missing_runtime
+_handle_phase_exception: Any = _missing_runtime
 
 
 def set_runtime(runtime_globals: Dict[str, Any]) -> None:

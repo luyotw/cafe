@@ -2,9 +2,42 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+import os
+import sys
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 import typer
+from rich.console import Console
+
+from cafe.ui.cli_shared import get_latest_review_iteration as _get_latest_review_iteration
+from cafe.ui.cli_shared import get_latest_versioned_file as _get_latest_versioned_file
+from cafe.ui.inquirer_prompts import prompt_multiline
+from cafe.utils.config import ConfigError, ConfigManager
+
+console = Console()
+
+
+def _missing_runtime(*args: Any, **kwargs: Any) -> Any:
+    raise RuntimeError("phases_legacy runtime dependencies are not initialized")
+
+
+_print_legacy_phase_command_notice: Any = _missing_runtime
+_edit_latest_phase_artifact: Any = _missing_runtime
+_get_and_validate_branch: Any = _missing_runtime
+_reject_unsupported_phase_options: Any = _missing_runtime
+_run_iterative_alias_step: Any = _missing_runtime
+_alias_status: Any = _missing_runtime
+_alias_is_confirmed_transition: Any = _missing_runtime
+_execute_next_phase_auto: Any = _missing_runtime
+_alias_confirm_output_pause: Any = _missing_runtime
+_alias_needs_clarification: Any = _missing_runtime
+_execute_single_step_alias: Any = _missing_runtime
+_alias_needs_permission: Any = _missing_runtime
+_alias_next_step: Any = _missing_runtime
+_alias_targets: Any = _missing_runtime
+_alias_is_done: Any = _missing_runtime
+_handle_phase_exception: Any = _missing_runtime
 
 
 def set_runtime(runtime_globals: Dict[str, Any]) -> None:

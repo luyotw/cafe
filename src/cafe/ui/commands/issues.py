@@ -2,9 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+import shutil
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 import typer
+import yaml
+from rich.console import Console
+
+from cafe.ui.commands import lifecycle as lifecycle_commands
+from cafe.ui.inquirer_prompts import prompt_confirm, prompt_text
+from cafe.utils.config import ConfigError, ConfigManager
+
+ALL_PHASES = ["spec", "plan", "develop", "review", "pr"]
+console = Console()
 
 
 def set_runtime(runtime_globals: Dict[str, Any]) -> None:
@@ -169,8 +181,6 @@ def list_issues() -> None:
         config_file = issue / "issue.yaml"
         if config_file.exists():
             try:
-                import yaml
-
                 with open(config_file, "r") as f:
                     config = yaml.safe_load(f)
                     if config and "worktree_path" in config:
@@ -206,9 +216,7 @@ def list_issues() -> None:
         phases_str = ", ".join(phases) if phases else "empty"
 
         # Get last modified time
-        import datetime
-
-        mtime = datetime.datetime.fromtimestamp(issue.stat().st_mtime)
+        mtime = datetime.fromtimestamp(issue.stat().st_mtime)
         mtime_str = mtime.strftime("%Y-%m-%d %H:%M")
 
         issue_name = str(issue.relative_to(issues_dir))
@@ -323,7 +331,7 @@ def remove_issue(
             if worktree_path is not None and worktree_path.exists():
                 worktree_issue_dir = worktree_path / ".cafe" / "issues" / issue_name
                 if worktree_issue_dir.exists():
-                    archive_path = _backup_issue_directory(worktree_issue_dir, issue_name)
+                    archive_path = lifecycle_commands._backup_issue_directory(worktree_issue_dir, issue_name)
                     backup_info = str(archive_path)
                     console.print(f"[green]✓[/green] Backed up issue '{issue_name}' to {archive_path}")
                 shutil.rmtree(worktree_path)
