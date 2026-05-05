@@ -3,11 +3,9 @@
 import copy
 import json
 import os
-import shutil
 import subprocess
 import sys
 import textwrap
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -22,8 +20,8 @@ from cafe.ui.commands import phases_legacy as phases_legacy_commands
 from cafe.ui.commands import issues as issues_commands
 from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.cli_shared import (
-    CONTENT_TYPE_FILE_MAP,
-    VALID_CONTENT_TYPES,
+    CONTENT_TYPE_FILE_MAP as _SHARED_CONTENT_TYPE_FILE_MAP,
+    VALID_CONTENT_TYPES as _SHARED_VALID_CONTENT_TYPES,
     check_agent_clis_available as _shared_check_agent_clis_available,
     display_iteration_delta as _shared_display_iteration_delta,
     find_latest_iteration_dir as _shared_find_latest_iteration_dir,
@@ -40,10 +38,10 @@ from rich.console import Console
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.git import GitOperations
-from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.permission import PermissionHandler as _CompatPermissionHandler
+from cafe.core.types import CriticalPhaseError as _CompatCriticalPhaseError
+from cafe.core.workflow_models import StepExecutionResult as _CompatStepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
-from cafe.core.permission import PermissionHandler
-from cafe.core.types import CriticalPhaseError
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.playbooks.loader import PlaybookLoader
@@ -51,8 +49,8 @@ from cafe.skills.importer import SkillImportSummary, import_skills, preview_impo
 from cafe.skills.loader import SkillLoader
 from cafe.skills.remover import SkillRemoveSummary, remove_skills
 from cafe.templates.manager import TemplateManager
-from cafe.ui import init_helpers
-from cafe.ui.chat import get_chat_next_step_path, launch_chat_session
+from cafe.ui import init_helpers as _compat_init_helpers
+from cafe.ui.chat import get_chat_next_step_path as _compat_get_chat_next_step_path, launch_chat_session
 from cafe.ui.display import Display
 from cafe.ui.init_helpers import (
     check_available_clis,
@@ -216,6 +214,17 @@ ALL_PHASES = ["spec", "plan", "develop", "review", "pr"]
 
 # Constants for cafe show command
 VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
+VALID_CONTENT_TYPES = _SHARED_VALID_CONTENT_TYPES
+CONTENT_TYPE_FILE_MAP = _SHARED_CONTENT_TYPE_FILE_MAP
+
+# Backward-compat re-exports for test patch targets
+import shutil as _shutil  # noqa: F401 — re-exported for backward compat
+shutil = _shutil
+PermissionHandler = _CompatPermissionHandler
+StepExecutionResult = _CompatStepExecutionResult
+CriticalPhaseError = _CompatCriticalPhaseError
+init_helpers = _compat_init_helpers
+get_chat_next_step_path = _compat_get_chat_next_step_path
 
 
 def _resolve_issue_playbook_name(issue_name: str) -> str:
@@ -1433,8 +1442,6 @@ def _interactive_agent_setup(available_clis: list) -> dict:
     Raises:
         typer.Exit: If user cancels or agents not found
     """
-    from InquirerPy.separator import Separator
-
     agents_config = {}
     roles = [("pm", "PM"), ("developer", "Developer"), ("reviewer", "Reviewer")]
 
@@ -1738,6 +1745,26 @@ app.command()(workflow_commands.summary)
 app.command()(workflow_commands.workflow)
 
 
+# Backward-compatible module-level command aliases for tests and integrations.
+prepare = lifecycle_commands.prepare
+close = lifecycle_commands.close
+restore = lifecycle_commands.restore
+reset = lifecycle_commands.reset
+
+spec = phases_legacy_commands.spec
+plan = phases_legacy_commands.plan
+develop = phases_legacy_commands.develop
+review = phases_legacy_commands.review
+pr = phases_legacy_commands.pr
+
+config = issues_commands.config
+list_issues = issues_commands.list_issues
+remove_issue = issues_commands.remove_issue
+
+make = workflow_commands.make
+show = workflow_commands.show
+summary = workflow_commands.summary
+workflow = workflow_commands.workflow
 
 
 # Template management commands
@@ -1759,8 +1786,6 @@ def template_add(
         cafe template add --source-file path/to/template.md --name my-template --type plan
         cafe template add  # Interactive mode
     """
-    import tempfile
-
     # Interactive prompting for missing arguments
     try:
         if not template_type:
@@ -2519,7 +2544,6 @@ def agent_ls(
 @agent_app.command(name="rm")
 def agent_rm() -> None:
     """Remove an agent interactively."""
-    from pathlib import Path
     from cafe.utils.config import get_global_cafe_dir
 
     # Get global agents directory
@@ -2987,7 +3011,6 @@ def _check_for_updates() -> None:
     import urllib.request
     import json
     import importlib.metadata
-    from pathlib import Path
     import subprocess
 
     # Check if update check is explicitly disabled via environment variable
