@@ -25,8 +25,8 @@ def _make_phase(issue_name: str = "test-issue") -> ConcretePhase:
 class TestAskUserForClarificationChatFallback:
     """Tests for chat option in the base class _ask_user_for_clarification() fallback."""
 
-    @patch("cafe.core.phase.prompt_multiline")
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.prompt_multiline")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_without_role_calls_prompt_multiline_directly(
         self, mock_prompt_list, mock_multiline
     ):
@@ -39,9 +39,9 @@ class TestAskUserForClarificationChatFallback:
         assert result == "user answer"
         mock_prompt_list.assert_not_called()
 
-    @patch("cafe.core.phase.prompt_multiline")
-    @patch("cafe.core.phase.launch_chat_session")
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.prompt_multiline")
+    @patch("cafe.core.phase_review_mixin.launch_chat_session")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_with_role_shows_select_with_chat_option(
         self, mock_prompt_list, mock_launch_chat, mock_multiline
     ):
@@ -58,9 +58,9 @@ class TestAskUserForClarificationChatFallback:
         chat_choices = [c for c in choices if isinstance(c, dict) and c.get("value") == "chat"]
         assert len(chat_choices) == 1
 
-    @patch("cafe.core.phase.prompt_multiline")
-    @patch("cafe.core.phase.launch_chat_session")
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.prompt_multiline")
+    @patch("cafe.core.phase_review_mixin.launch_chat_session")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_selecting_answer_proceeds_to_multiline(
         self, mock_prompt_list, mock_launch_chat, mock_multiline
     ):
@@ -74,9 +74,9 @@ class TestAskUserForClarificationChatFallback:
         assert result == "user's detailed answer"
         mock_launch_chat.assert_not_called()
 
-    @patch("cafe.core.phase.prompt_multiline")
-    @patch("cafe.core.phase.launch_chat_session")
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.prompt_multiline")
+    @patch("cafe.core.phase_review_mixin.launch_chat_session")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_selecting_chat_launches_session_then_re_prompts(
         self, mock_prompt_list, mock_launch_chat, mock_multiline
     ):
@@ -91,9 +91,9 @@ class TestAskUserForClarificationChatFallback:
         mock_launch_chat.assert_called_once_with("pm", "my-issue")
         assert mock_prompt_list.call_count == 2
 
-    @patch("cafe.core.phase.prompt_multiline")
-    @patch("cafe.core.phase.launch_chat_session")
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.prompt_multiline")
+    @patch("cafe.core.phase_review_mixin.launch_chat_session")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_selecting_chat_multiple_times(
         self, mock_prompt_list, mock_launch_chat, mock_multiline
     ):
@@ -108,9 +108,9 @@ class TestAskUserForClarificationChatFallback:
         assert mock_launch_chat.call_count == 2
         assert mock_prompt_list.call_count == 3
 
-    @patch("cafe.core.phase.prompt_multiline")
-    @patch("cafe.core.phase.launch_chat_session")
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.prompt_multiline")
+    @patch("cafe.core.phase_review_mixin.launch_chat_session")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_chat_label_uses_agent_name_not_role(
         self, mock_prompt_list, mock_launch_chat, mock_multiline
     ):

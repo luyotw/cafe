@@ -215,8 +215,8 @@ class TestDevelopAskUserForClarification:
         phase.iteration = 2
         # No questions.xml created
 
-        with patch("cafe.core.phase.prompt_list", return_value="answer") as mock_list:
-            with patch("cafe.core.phase.prompt_multiline", return_value="user answer") as mock_prompt:
+        with patch("cafe.core.phase_review_mixin.prompt_list", return_value="answer") as mock_list:
+            with patch("cafe.core.phase_review_mixin.prompt_multiline", return_value="user answer") as mock_prompt:
                 result = phase._ask_user_for_clarification()
 
         mock_list.assert_called_once()
@@ -228,8 +228,8 @@ class TestDevelopAskUserForClarification:
         monkeypatch.chdir(tmp_path)
         phase.iteration = 1
 
-        with patch("cafe.core.phase.prompt_list", return_value="answer") as mock_list:
-            with patch("cafe.core.phase.prompt_multiline", return_value="user answer") as mock_prompt:
+        with patch("cafe.core.phase_review_mixin.prompt_list", return_value="answer") as mock_list:
+            with patch("cafe.core.phase_review_mixin.prompt_multiline", return_value="user answer") as mock_prompt:
                 result = phase._ask_user_for_clarification()
 
         mock_list.assert_called_once()
@@ -418,7 +418,7 @@ class TestCodexPermissionRules:
             },
         ):
             with patch("cafe.ui.inquirer_prompts.prompt_list") as mock_prompt_list:
-                with patch("cafe.core.phase.subprocess.run") as mock_run:
+                with patch("cafe.core.phase_codex_mixin.subprocess.run") as mock_run:
                     mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
                     approved_tools, user_input = interactive_phase._handle_previous_permission_denials()
 
@@ -455,7 +455,7 @@ class TestCodexPermissionRules:
             },
         ):
             with patch("cafe.ui.inquirer_prompts.prompt_list", side_effect=["approve", "confirm"]):
-                with patch("cafe.core.phase.subprocess.run") as mock_run:
+                with patch("cafe.core.phase_codex_mixin.subprocess.run") as mock_run:
                     mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
                     approved_tools, user_input = interactive_phase._handle_previous_permission_denials()
 
@@ -578,7 +578,7 @@ class TestCodexPermissionRules:
             tool_input={"command": 'git commit -m "msg"'},
         )
 
-        with patch("cafe.core.phase.subprocess.run") as mock_run:
+        with patch("cafe.core.phase_codex_mixin.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
             note = phase._execute_approved_codex_commands([denial], [0])
 
@@ -599,7 +599,7 @@ class TestCodexPermissionRules:
             tool_input={"command": 'git commit -m "msg"'},
         )
 
-        with patch("cafe.core.phase.subprocess.run") as mock_run:
+        with patch("cafe.core.phase_codex_mixin.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="",
                 stderr="nothing to commit, working tree clean\n",

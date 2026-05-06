@@ -196,8 +196,8 @@ class TestFallbackFlow:
         # 模擬第 2 輪：由於 XML 被刪除，應 fallback
         spec_phase.iteration = 2
         with patch("cafe.phases.spec_phase.interactive_qa_flow") as mock_qa_flow, \
-             patch("cafe.core.phase.prompt_list", return_value="answer"), \
-             patch("cafe.core.phase.prompt_multiline", return_value="manual answer"):
+             patch("cafe.core.phase_review_mixin.prompt_list", return_value="answer"), \
+             patch("cafe.core.phase_review_mixin.prompt_multiline", return_value="manual answer"):
 
             answer = spec_phase._ask_user_for_clarification()
 
@@ -213,8 +213,8 @@ class TestFallbackFlow:
         iter1_dir.mkdir(parents=True, exist_ok=True)
 
         with patch("cafe.phases.spec_phase.interactive_qa_flow") as mock_qa_flow, \
-             patch("cafe.core.phase.prompt_list", return_value="answer"), \
-             patch("cafe.core.phase.prompt_multiline", return_value="typed answer"):
+             patch("cafe.core.phase_review_mixin.prompt_list", return_value="answer"), \
+             patch("cafe.core.phase_review_mixin.prompt_multiline", return_value="typed answer"):
 
             answer = spec_phase._ask_user_for_clarification()
 

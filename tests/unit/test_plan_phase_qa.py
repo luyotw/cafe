@@ -187,8 +187,8 @@ class TestAskUserForClarification:
         prev_iter_dir.mkdir(parents=True, exist_ok=True)
 
         with patch("cafe.phases.plan_phase.interactive_qa_flow") as mock_qa_flow, \
-             patch("cafe.core.phase.prompt_list", return_value="answer"), \
-             patch("cafe.core.phase.prompt_multiline", return_value="manual answer"):
+             patch("cafe.core.phase_review_mixin.prompt_list", return_value="answer"), \
+             patch("cafe.core.phase_review_mixin.prompt_multiline", return_value="manual answer"):
 
             result = plan_phase._ask_user_for_clarification()
 
@@ -207,8 +207,8 @@ class TestAskUserForClarification:
         xml_path.write_text(INVALID_QUESTIONS_XML)
 
         with patch("cafe.phases.plan_phase.interactive_qa_flow") as mock_qa_flow, \
-             patch("cafe.core.phase.prompt_list", return_value="answer"), \
-             patch("cafe.core.phase.prompt_multiline", return_value="fallback answer"):
+             patch("cafe.core.phase_review_mixin.prompt_list", return_value="answer"), \
+             patch("cafe.core.phase_review_mixin.prompt_multiline", return_value="fallback answer"):
 
             result = plan_phase._ask_user_for_clarification()
 
@@ -221,8 +221,8 @@ class TestAskUserForClarification:
         plan_phase.interactive = True
 
         with patch("cafe.phases.plan_phase.interactive_qa_flow") as mock_qa_flow, \
-             patch("cafe.core.phase.prompt_list", return_value="answer"), \
-             patch("cafe.core.phase.prompt_multiline", return_value="first iteration answer"):
+             patch("cafe.core.phase_review_mixin.prompt_list", return_value="answer"), \
+             patch("cafe.core.phase_review_mixin.prompt_multiline", return_value="first iteration answer"):
 
             result = plan_phase._ask_user_for_clarification()
 
