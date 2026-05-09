@@ -1,15 +1,23 @@
 """Base class for workflow phases."""
 
+from __future__ import annotations
+
 import json
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from cafe.core.git import GitOperations
 
 from cafe.core.phase_checklist_mixin import PhaseChecklistMixin
 from cafe.core.phase_codex_mixin import PhaseCodexMixin
 from cafe.core.phase_review_mixin import PhaseReviewMixin
-from cafe.core.phase_state_mixin import PhaseStateMixin, ensure_agent_file_exists
+from cafe.core.phase_state_mixin import PhaseStateMixin
+
+# Backward-compat re-export for test imports
+from cafe.core.phase_state_mixin import ensure_agent_file_exists  # noqa: F401
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, TokenUsage
 

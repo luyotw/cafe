@@ -12,19 +12,31 @@ import yaml
 from rich.console import Console
 
 from cafe.ui.commands import lifecycle as lifecycle_commands
-from cafe.ui.inquirer_prompts import prompt_confirm, prompt_text
+from cafe.ui.inquirer_prompts import prompt_confirm, prompt_text  # noqa: F401 — kept for type resolution; actual calls go through cli for test-patch compat
 from cafe.utils.config import ConfigError, ConfigManager
 
 ALL_PHASES = ["spec", "plan", "develop", "review", "pr"]
 console = Console()
 
 
+# Late-import proxies for test-patch compatibility (tests patch cafe.ui.cli.prompt_confirm etc.)
+
+
+def _cli_prompt_confirm(*a, **kw):
+    from cafe.ui.cli import prompt_confirm as _fn
+    return _fn(*a, **kw)
+
+
+def _cli_prompt_text(*a, **kw):
+    from cafe.ui.cli import prompt_text as _fn
+    return _fn(*a, **kw)
+
+
 def set_runtime(runtime_globals: Dict[str, Any]) -> None:
-    """Inject runtime symbols from cafe.ui.cli into this module."""
-    for key, value in runtime_globals.items():
-        if key.startswith("__") or key == "set_runtime":
-            continue
-        globals()[key] = value
+    """No-op retained for backward compatibility.
+
+    Runtime dependencies are now imported directly or defined locally.
+    """
 
 
 def config(
@@ -112,7 +124,7 @@ def config(
 
     elif action == "reset":
         try:
-            confirm = prompt_confirm("Reset configuration to defaults?", default=False)
+            confirm = _cli_prompt_confirm("Reset configuration to defaults?", default=False)
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]Cancelled[/dim]")
             raise typer.Exit(0)
@@ -239,7 +251,7 @@ def remove_issue(
     if not issue_names:
         list_issues()
         console.print()
-        issue_input = prompt_text("Issue name(s) to remove (space-separated):")
+        issue_input = _cli_prompt_text("Issue name(s) to remove (space-separated):")
         if not issue_input or not issue_input.strip():
             console.print("[dim]Cancelled[/dim]")
             raise typer.Exit(0)
@@ -301,7 +313,7 @@ def remove_issue(
         console.print()
 
         try:
-            confirm = prompt_confirm(f"Are you sure you want to delete {len(existing_issues)} issue(s)?", default=False)
+            confirm = _cli_prompt_confirm(f"Are you sure you want to delete {len(existing_issues)} issue(s)?", default=False)
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]Cancelled[/dim]")
             raise typer.Exit(0)
