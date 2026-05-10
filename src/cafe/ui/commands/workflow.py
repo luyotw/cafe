@@ -118,6 +118,11 @@ def make(
         "-u",
         help="Initial requirements to pass into the first spec step",
     ),
+    auto_advance: bool = typer.Option(
+        False,
+        "--auto-advance",
+        help="Auto-confirm user handoffs and advance without interactive prompts",
+    ),
 ) -> None:
     """🚀 Check environment and execute complete development workflow.
 
@@ -171,6 +176,8 @@ def make(
     cmd = [sys.executable, "-m", "cafe.ui.cli", "workflow", "--execute"]
     if user_input:
         cmd.extend(["--user-input", user_input])
+    if auto_advance:
+        cmd.append("--auto-advance")
 
     # Execute the command
     try:
@@ -361,6 +368,7 @@ def workflow(
     issue: Optional[str] = typer.Option(None, "--issue", help="Issue directory name"),
     start_step: Optional[str] = typer.Option(None, "--start-step", help="Start execution from a specific step"),
     single_step: bool = typer.Option(False, "--single-step", help="Run only one playbook step"),
+    auto_advance: bool = typer.Option(False, "--auto-advance", help="Auto-confirm user handoffs and advance without interactive prompts"),
     dry_run: bool = typer.Option(True, "--dry-run/--execute", help="Run with built-in dry executor"),
     user_input: Optional[str] = typer.Option(
         None,
@@ -398,7 +406,7 @@ def workflow(
 
         playbook_loader = PlaybookLoader()
         playbook_data = playbook_loader.load(selected_playbook)
-        interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
+        interactive = (sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1") and not auto_advance
         generic_phase = GenericPhase(SkillLoader())
 
         def dry_executor(step_name: str, step_def: Dict, blackboard_state: object) -> StepExecutionResult:
@@ -521,9 +529,49 @@ def workflow(
                     )
                     continue
             if not dry_run and active_step in {"user", "done"}:
+                if active_step == "done" and not interactive:
+                    console.print("[green]Workflow already completed[/green] step=done")
+                    console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
+                    return
+                # active_step in {"user", "done"} (done only reaches here in interactive mode)
                 if not interactive:
-                    if active_step == "done":
-                        console.print("[green]Workflow already completed[/green] step=done")
+                    if auto_advance:
+                        # Baton-first auto-advance: look at the handoff
+                        # contract to find which step produced the output,
+                        # then advance to the natural next step in the
+                        # playbook (the step after from_step).
+                        contract = BlackboardStore(issue_dir).load_handoff_contract(blackboard)
+                        from_step = getattr(contract, "from_step", None) or blackboard.current_step
+                        step_keys = list(playbook_data.get("steps", {}).keys())
+                        next_step = None
+                        try:
+                            idx = step_keys.index(from_step)
+                            next_step = step_keys[idx + 1] if idx + 1 < len(step_keys) else None
+                        except ValueError:
+                            pass
+                        if next_step is not None:
+                            store = BlackboardStore(issue_dir)
+                            store.set_current_step(blackboard, next_step)
+                            store.set_handoff_summary(blackboard, f"Auto-advanced from {from_step} to {next_step}")
+                            store.update_handoff_contract(
+                                blackboard,
+                                from_step=from_step,
+                                to_owner=HandoffOwner.AGENT,
+                                to_step=next_step,
+                                intent=HandoffIntent.MANUAL_HANDOFF,
+                                source="workflow.auto_advance",
+                            )
+                            store.record_event(
+                                blackboard,
+                                "auto_advance",
+                                {"from_phase": from_step, "to_step": next_step},
+                            )
+                            console.print(f"[dim]Auto-advancing[/dim] step={from_step} → {next_step}")
+                            pending_start_step = next_step
+                            continue
+                        else:
+                            console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
+                            return
                     console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
                     return
                 user_selected_step = _handle_user_phase(
@@ -564,6 +612,9 @@ def workflow(
                 pending_start_step = "user"
                 continue
             if not interactive and not dry_run and not single_step and latest_blackboard.current_step == "user":
+                if auto_advance:
+                    pending_start_step = "user"
+                    continue
                 console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
                 return
             if result.completed:
