@@ -1,29 +1,28 @@
 """Command-line interface for CAFE."""
 
 import copy
-import json
 import os
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 import typer
 import click
 from typer.core import TyperGroup
 
-from cafe.ui.inquirer_prompts import prompt_checkbox, prompt_confirm, prompt_list, prompt_multiline, prompt_text
+from cafe.ui.inquirer_prompts import prompt_checkbox, prompt_confirm, prompt_list, prompt_multiline, prompt_text  # noqa: F401 — backward-compat re-export for test patch targets
 from cafe.ui.menu import InteractiveMenu
 from cafe.ui.commands import lifecycle as lifecycle_commands
 from cafe.ui.commands import phases_legacy as phases_legacy_commands
 from cafe.ui.commands import issues as issues_commands
 from cafe.ui.commands import templates as template_commands
+from cafe.ui.commands import catalog as catalog_commands
 from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.cli_shared import (
     CONTENT_TYPE_FILE_MAP as _SHARED_CONTENT_TYPE_FILE_MAP,
     VALID_CONTENT_TYPES as _SHARED_VALID_CONTENT_TYPES,
-    check_agent_clis_available as _shared_check_agent_clis_available,
     display_iteration_delta as _shared_display_iteration_delta,
     find_latest_iteration_dir as _shared_find_latest_iteration_dir,
     get_latest_review_iteration as _shared_get_latest_review_iteration,
@@ -32,23 +31,17 @@ from cafe.ui.cli_shared import (
     resolve_iteration_index as _shared_resolve_iteration_index,
     resolve_iteration_number as _shared_resolve_iteration_number,
     setup_agents as _shared_setup_agents,
+    # Back-imports: functions moved to cli_shared that cli.py still calls directly
+    _load_playbook_step_names,
+    _resolve_issue_playbook_name,
 )
-import yaml
 from rich.console import Console
 
 from cafe.agents.manager import AgentManager
-from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler as _CompatPermissionHandler
 from cafe.core.types import CriticalPhaseError as _CompatCriticalPhaseError
 from cafe.core.workflow_models import StepExecutionResult as _CompatStepExecutionResult
-from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
-from cafe.phases.generic_phase import GenericPhase
-from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
-from cafe.playbooks.loader import PlaybookLoader
-from cafe.skills.importer import SkillImportSummary, import_skills, preview_importable_skills
-from cafe.skills.loader import SkillLoader
-from cafe.skills.remover import SkillRemoveSummary, remove_skills
 from cafe.templates.manager import TemplateManager
 from cafe.ui import init_helpers as _compat_init_helpers
 from cafe.ui.chat import get_chat_next_step_path as _compat_get_chat_next_step_path, launch_chat_session
@@ -61,9 +54,9 @@ from cafe.ui.init_helpers import (
 )
 from cafe.ui.phase_prompts import prompt_for_input_method, prompt_for_rigor
 from cafe.ui.template_selector import select_template
-from cafe.utils.config import ConfigManager, ConfigError
-from cafe.utils.git_utils import is_branch_initialized
-from cafe.utils.github import (
+from cafe.utils.config import ConfigManager
+from cafe.utils.git_utils import is_branch_initialized  # noqa: F401 — backward-compat re-export for test patch targets
+from cafe.utils.github import (  # noqa: F401 — backward-compat re-exports for test patch targets
     GitHubError,
     GitHubOps,
     filter_unresolved_comments,
@@ -227,660 +220,46 @@ CriticalPhaseError = _CompatCriticalPhaseError
 init_helpers = _compat_init_helpers
 get_chat_next_step_path = _compat_get_chat_next_step_path
 
+# Backward-compat re-exports for functions moved to cli_shared.
+# Tests and integrations import/patch these names from cafe.ui.cli.
+from cafe.ui.cli_shared import (  # noqa: F401
+    _alias_confirm_output_pause,
+    _alias_is_confirmed_transition,
+    _alias_is_done,
+    _alias_needs_clarification,
+    _alias_needs_permission,
+    _alias_next_step,
+    _alias_status,
+    _alias_targets,
+    _build_workflow_pause_guidance,
+    _build_workflow_step_executor,
+    _check_agent_clis_available,
+    _consume_pending_chat_handoff,
+    _edit_file_with_editor,
+    _edit_latest_phase_artifact,
+    _execute_next_phase_auto,
+    _execute_single_step_alias,
+    _find_external_resume_step,
+    _find_incomplete_workflow_step,
+    _get_and_validate_branch,
+    _handle_phase_exception,
+    _handle_user_phase,
+    _load_issue_step_names,
+    _print_legacy_phase_command_notice,
+    _print_workflow_pause_guidance,
+    _reject_unsupported_phase_options,
+    _resolve_selected_playbook,
+    _run_iterative_alias_step,
+)
 
-def _resolve_issue_playbook_name(issue_name: str) -> str:
-    """Resolve the playbook id associated with an issue."""
-    blackboard_file = Path.cwd() / ".cafe" / "issues" / issue_name / "blackboard.json"
-    if not blackboard_file.exists():
-        return "default"
 
-    try:
-        raw = json.loads(blackboard_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return "default"
 
-    playbook_id = raw.get("playbook_id")
-    return str(playbook_id) if playbook_id else "default"
 
 
-def _load_playbook_step_names(playbook_name: str) -> List[str]:
-    """Load ordered step names from a playbook."""
-    try:
-        playbook = PlaybookLoader().load(playbook_name)
-        return list(playbook["steps"].keys())
-    except Exception:
-        return list(ALL_PHASES)
 
 
-def _load_issue_step_names(issue_name: str) -> List[str]:
-    """Load ordered step names for the current issue playbook."""
-    playbook_name = _resolve_issue_playbook_name(issue_name)
-    return _load_playbook_step_names(playbook_name)
 
 
-def _resolve_selected_playbook(playbook_name: Optional[str]) -> str:
-    """Resolve workflow playbook from CLI or config."""
-    if playbook_name:
-        return playbook_name
-
-    try:
-        config_manager = ConfigManager(".cafe")
-        try:
-            config_manager.load_config()
-        except ConfigError:
-            config_manager._config = config_manager.get_default_config()
-    except ConfigError:
-        return "default"
-
-    selected = config_manager.get("playbook", "default")
-    return str(selected) if selected else "default"
-
-
-def _build_playbook_loader() -> PlaybookLoader:
-    """Build playbook loader with cwd-based project root."""
-    return PlaybookLoader(project_root=Path.cwd())
-
-
-def _build_skill_loader() -> SkillLoader:
-    """Build skill loader with cwd-based project root."""
-    return SkillLoader(project_root=Path.cwd())
-
-
-def _build_workflow_role_agent_map(config_manager: ConfigManager, playbook_data: Dict[str, Any]) -> Dict[str, str]:
-    """Resolve playbook roles to configured agent names."""
-    mapping: Dict[str, str] = {
-        "pm": str(config_manager.get("agents.pm.name", "Roger")),
-        "developer": str(config_manager.get("agents.developer.name", "David")),
-        "reviewer": str(config_manager.get("agents.reviewer.name", "Richard")),
-    }
-    for role_name, role_def in playbook_data.get("roles", {}).items():
-        if role_name in mapping:
-            continue
-        if isinstance(role_def, dict) and role_def.get("default_agent"):
-            mapping[str(role_name)] = str(role_def["default_agent"])
-    return mapping
-
-
-def _build_workflow_step_executor(
-    *,
-    config_manager: ConfigManager,
-    issue_dir: Path,
-    issue_name: str,
-    playbook_data: Dict[str, Any],
-    generic_phase: GenericPhase,
-    phase_name: Optional[str] = None,
-    role_agent_map_override: Optional[Dict[str, str]] = None,
-    step_user_inputs: Optional[Dict[str, str]] = None,
-    interactive: bool = False,
-) -> GenericWorkflowStepExecutor:
-    """Create the GenericPhase-backed executor for workflow steps."""
-    role_agent_map = _build_workflow_role_agent_map(config_manager, playbook_data)
-    if role_agent_map_override:
-        role_agent_map.update(role_agent_map_override)
-    role_configs = {
-        "pm": config_manager.get("agents.pm", {}),
-        "developer": config_manager.get("agents.developer", {}),
-        "reviewer": config_manager.get("agents.reviewer", {}),
-    }
-    return GenericWorkflowStepExecutor(
-        issue_dir=issue_dir,
-        issue_name=issue_name,
-        playbook=playbook_data,
-        generic_phase=generic_phase,
-        agent_manager=_setup_agents(config_manager, issue_name=issue_name, phase_name=phase_name),
-        git_ops=GitOperations(),
-        role_agent_map=role_agent_map,
-        role_configs=role_configs,
-        step_user_inputs=step_user_inputs,
-        interactive=interactive,
-    )
-
-
-def _consume_pending_chat_handoff(
-    *,
-    issue_dir: Path,
-    playbook_data: Dict[str, Any],
-    requested_start_step: Optional[str],
-) -> Optional[str]:
-    """Consume a chat-authored next-step baton before workflow execution."""
-    if requested_start_step is not None:
-        return requested_start_step
-
-    store = BlackboardStore(issue_dir)
-    # Do not call load_or_create before this check: it bootstraps next_step.txt via
-    # ensure_baton(), which would falsely look like a chat handoff existed.
-    if not store.next_step_path.exists():
-        return None
-
-    blackboard = store.load_or_create(
-        str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
-        playbook_id=str(playbook_data["playbook"]["id"]),
-    )
-    contract = store.load_handoff_contract(
-        blackboard,
-        allowed_steps=list(playbook_data["steps"].keys()),
-        allow_legacy_text=True,
-    )
-
-    # `next_step.txt` is now persistent from workflow initialization onward.
-    # Ignore the bootstrap/persistent baton itself; only consume a chat-authored
-    # pending handoff (or legacy step-name text) when the baton meaning is real.
-    if contract.source in {"bootstrap", "chat.bootstrap"}:
-        return None
-
-    target_step = contract.to_step
-    if target_step not in {"user", "done"} and GitOperations().has_uncommitted_changes():
-        console.print(
-            "[yellow]Chat handoff was not consumed because the worktree still has uncommitted changes.[/yellow]"
-        )
-        console.print(
-            "[yellow]Commit or stash the chat changes first, then run `cafe make` again.[/yellow]"
-        )
-        return None
-
-    store.set_current_step(blackboard, target_step)
-    if target_step == "done":
-        store.update_handoff_contract(
-            blackboard,
-            from_step=contract.from_step,
-            to_owner=HandoffOwner.DONE,
-            to_step="done",
-            intent=HandoffIntent.WORKFLOW_COMPLETE,
-            status_code=contract.status_code,
-            source="workflow.consume_handoff",
-        )
-    elif target_step == "user":
-        store.update_handoff_contract(
-            blackboard,
-            from_step=contract.from_step,
-            to_owner=HandoffOwner.USER,
-            to_step="user",
-            intent=contract.intent,
-            status_code=contract.status_code,
-            source="workflow.consume_handoff",
-        )
-    else:
-        store.update_handoff_contract(
-            blackboard,
-            from_step=contract.from_step,
-            to_owner=HandoffOwner.AGENT,
-            to_step=target_step,
-            intent=HandoffIntent.AWAIT_AGENT,
-            status_code=contract.status_code,
-            source="workflow.consume_handoff",
-        )
-    return target_step
-
-
-def _find_incomplete_workflow_step(*, issue_dir: Path, playbook_data: Dict[str, Any]) -> Optional[str]:
-    """Return the most recent workflow step with an unfinished iteration context."""
-    latest_incomplete: tuple[float, str] | None = None
-
-    for step_name in playbook_data["steps"].keys():
-        step_dir = issue_dir / step_name
-        if not step_dir.exists():
-            continue
-
-        iteration_dirs = sorted(path for path in step_dir.glob("iteration_*") if path.is_dir())
-        if not iteration_dirs:
-            continue
-
-        context_file = iteration_dirs[-1] / "context.json"
-        if not context_file.exists():
-            continue
-
-        try:
-            context_data = json.loads(context_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-
-        if context_data.get("end_time"):
-            continue
-
-        timestamp = context_file.stat().st_mtime
-        if latest_incomplete is None or timestamp > latest_incomplete[0]:
-            latest_incomplete = (timestamp, step_name)
-
-    return latest_incomplete[1] if latest_incomplete is not None else None
-
-
-def _find_external_resume_step(
-    *,
-    issue_dir: Path,
-    playbook_data: Dict[str, Any],
-    git_ops: GitOperations,
-) -> Optional[str]:
-    """Return a workflow step that should resume due to new external PR feedback.
-
-    This restores the legacy behavior where `cafe make` could auto-resume the PR
-    phase after new GitHub PR comments arrived, even when the workflow was
-    currently paused at `user` or `done`.
-    """
-    for step_name, step_def in playbook_data["steps"].items():
-        hooks = step_def.get("hooks", {})
-        prepare_hooks = hooks.get("prepare_input", [])
-        if "GitHubPRCreator" not in prepare_hooks:
-            continue
-
-        try:
-            branch_name = git_ops.get_current_branch()
-        except Exception:
-            return None
-        if not branch_name:
-            return None
-
-        try:
-            existing_pr = GitHubOps().get_pr_for_branch(branch_name)
-        except Exception:
-            return None
-        if not existing_pr:
-            return None
-
-        try:
-            has_unpushed_commits = git_ops.has_unpushed_commits()
-        except Exception:
-            has_unpushed_commits = False
-        if has_unpushed_commits:
-            return None
-
-        try:
-            exclude_ids = get_processed_comment_ids_from_history(issue_dir / step_name)
-            comments = get_all_pr_comments(int(existing_pr["number"]), exclude_ids=exclude_ids)
-            unresolved_comments = filter_unresolved_comments(comments)
-        except Exception:
-            return None
-
-        if unresolved_comments:
-            return step_name
-
-    return None
-
-
-def _handle_user_phase(
-    *,
-    issue_name: str,
-    issue_dir: Path,
-    playbook_data: Dict[str, Any],
-    blackboard,
-    phase_name: str = "user",
-) -> Optional[str]:
-    phase_labels = {
-        "spec": "Update requirements spec",
-        "plan": "Revise implementation plan",
-        "develop": "Continue implementation",
-        "review": "Run review again",
-        "pr": "Refresh PR output",
-    }
-    summary = getattr(blackboard, "handoff_summary", "").strip()
-    if phase_name == "done":
-        console.print("[green]Workflow already completed[/green] step=done")
-        console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
-    else:
-        console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
-    if summary:
-        console.print(f"[dim]{summary}[/dim]")
-
-    action = prompt_list(
-        "Select next action",
-        [
-            "Leave a handoff note and continue the workflow",
-            "Open chat with a role",
-            "Mark the workflow complete",
-            "Leave it for now",
-        ],
-    )
-    store = BlackboardStore(issue_dir)
-
-    if action == "Leave a handoff note and continue the workflow":
-        note = prompt_multiline(
-            "What should be written to the blackboard before continuing?",
-            default=summary,
-        ).strip()
-        if not note:
-            note = "user handed workflow back without additional note"
-
-        step_names = list(playbook_data["steps"].keys())
-        step_labels = [
-            f"{phase_labels.get(step_name, step_name)} ({step_name})"
-            for step_name in step_names
-        ]
-        default_step = str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys())))
-        default_label = f"{phase_labels.get(default_step, default_step)} ({default_step})"
-        selected_label = prompt_list(
-            "Which phase should continue next?",
-            step_labels,
-            default=default_label,
-        )
-        target_step = step_names[step_labels.index(selected_label)]
-        console.print()
-        console.print("[bold]Handoff summary[/bold]")
-        console.print(f"  Next phase: {selected_label}")
-        console.print(f"  Note: {note}")
-        console.print()
-        if not prompt_confirm("Write this handoff to the blackboard and continue now?"):
-            console.print("[dim]No workflow action taken.[/dim]")
-            return ""
-        store.set_current_step(blackboard, target_step)
-        store.set_handoff_summary(blackboard, note)
-        store.update_handoff_contract(
-            blackboard,
-            from_step="user",
-            to_owner=HandoffOwner.AGENT,
-            to_step=target_step,
-            intent=HandoffIntent.MANUAL_HANDOFF,
-            source="user.phase",
-        )
-        store.record_event(
-            blackboard,
-            "user_handoff",
-            {"from_phase": "user", "to_step": target_step, "note": note},
-        )
-        return str(target_step)
-
-    if action == "Open chat with a role":
-        role_choices = list(playbook_data.get("roles", {}).keys()) or ["pm", "developer", "reviewer"]
-        role = prompt_list("Select role", role_choices)
-        launch_chat_session(str(role), issue_name)
-        target_step = _consume_pending_chat_handoff(
-            issue_dir=issue_dir,
-            playbook_data=playbook_data,
-            requested_start_step=None,
-        )
-        if target_step is not None:
-            store.set_handoff_summary(
-                blackboard,
-                f"chat handed workflow to {target_step}",
-            )
-        return target_step
-
-    if action == "Mark the workflow complete":
-        store.set_current_step(blackboard, "done")
-        store.set_handoff_summary(blackboard, "workflow completed by user")
-        store.update_handoff_contract(
-            blackboard,
-            from_step="user",
-            to_owner=HandoffOwner.DONE,
-            to_step="done",
-            intent=HandoffIntent.WORKFLOW_COMPLETE,
-            source="user.phase",
-        )
-        store.record_event(
-            blackboard,
-            "workflow_completed_by_user",
-            {"step": "user"},
-        )
-        console.print("[green]Workflow completed by user[/green]")
-        return ""
-
-    console.print("[dim]No workflow action taken.[/dim]")
-    return ""
-
-
-def _handle_phase_exception(e: Exception, phase_name: str) -> None:
-    """Unified exception handling for phase execution.
-
-    Args:
-        e: Caught exception
-        phase_name: Phase name (for error messages)
-
-    Raises:
-        typer.Exit: Always raises exit(1)
-    """
-    from cafe.core.types import CriticalPhaseError
-
-    # typer.Exit propagating up from a subprocess chain — already handled, just re-raise
-    if isinstance(e, typer.Exit):
-        raise e
-
-    console.print()
-
-    # Check if it's a critical error that should stop the entire workflow
-    if isinstance(e, CriticalPhaseError):
-        console.print(f"[bold red]❌ Critical error in {phase_name} phase[/bold red]")
-        console.print()
-        if e.error_type == "rate_limit":
-            error_msg = str(e)
-            all_agents_exhausted = "All agents failed" in error_msg
-            console.print("[yellow]⚠️  API rate limit reached[/yellow]")
-            console.print()
-            if all_agents_exhausted:
-                console.print("[dim]All configured agents (primary + backups) have been exhausted.[/dim]")
-                console.print()
-                console.print(f"[dim]{error_msg}[/dim]")
-            else:
-                console.print(f"[dim]{error_msg}[/dim]")
-                console.print("[dim]The workflow has been stopped to prevent wasting resources.[/dim]")
-            console.print()
-            console.print("[bold]Next steps (choose one):[/bold]")
-            console.print("  • Wait for quota reset or switch to a different account, OR")
-            console.print("  • Use [cyan]cafe config edit[/cyan] to add backup agents or switch CLI tool")
-            console.print()
-            console.print("Then run [cyan]cafe make[/cyan] again to resume from where it stopped")
-            console.print()
-        elif e.error_type == "cli_not_found":
-            console.print("[yellow]⚠️  Required CLI tool not found. Please install it and try again.[/yellow]")
-            console.print()
-            console.print("[dim]ℹ️  The workflow has been stopped to prevent wasting resources.[/dim]")
-            console.print()
-        else:
-            console.print(f"[yellow]⚠️  {e}[/yellow]")
-            console.print()
-            console.print("[dim]ℹ️  The workflow has been stopped to prevent wasting resources.[/dim]")
-            console.print()
-    else:
-        console.print(f"[bold red]❌ Error in {phase_name} phase: {e}[/bold red]")
-        console.print()
-
-    raise typer.Exit(1)
-
-
-def _execute_single_step_alias(
-    *,
-    issue_name: str,
-    step_name: str,
-    config_manager: ConfigManager,
-    selected_playbook: Optional[str] = None,
-    role_agent_map_override: Optional[Dict[str, str]] = None,
-    user_input: Optional[str] = None,
-    show_prompt: bool = False,
-) -> Dict[str, Any]:
-    """Execute one workflow step directly and return the latest step metadata."""
-    issue_dir = Path(".cafe/issues") / issue_name
-    playbook_name = selected_playbook or _resolve_selected_playbook(None)
-    playbook_data = PlaybookLoader().load(playbook_name)
-    if step_name not in playbook_data["steps"]:
-        raise ValueError(f"Playbook '{playbook_name}' does not define step '{step_name}'")
-    blackboard = BlackboardStore(issue_dir).load_or_create(
-        str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
-        playbook_id=str(playbook_data["playbook"]["id"]),
-    )
-    store = BlackboardStore(issue_dir)
-    store.set_current_step(blackboard, step_name)
-    store.update_handoff_contract(
-        blackboard,
-        from_step=step_name,
-        to_owner=HandoffOwner.AGENT,
-        to_step=step_name,
-        intent=HandoffIntent.AWAIT_AGENT,
-        source="single_step_alias",
-    )
-
-    generic_phase = GenericPhase(SkillLoader())
-    step_executor = _build_workflow_step_executor(
-        config_manager=config_manager,
-        issue_dir=issue_dir,
-        issue_name=issue_name,
-        playbook_data=playbook_data,
-        generic_phase=generic_phase,
-        phase_name=step_name,
-        role_agent_map_override=role_agent_map_override,
-        step_user_inputs={step_name: user_input or f"{step_name} alias execute"},
-    )
-    step_executor.agent_manager.show_prompt = show_prompt
-
-    runner = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir,
-        playbook=playbook_data,
-        executor=step_executor.execute_step,
-    )
-    result = runner.run(start_step=step_name, single_step=True)
-    latest_blackboard = store.load_or_create(
-        str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
-        playbook_id=str(playbook_data["playbook"]["id"]),
-    )
-    handoff = store.load_handoff_contract(
-        latest_blackboard,
-        allowed_steps=list(playbook_data["steps"].keys()),
-        allow_legacy_text=True,
-    )
-    latest_iteration_dir = _find_latest_iteration_dir(issue_dir / step_name)
-    iteration = None
-    if latest_iteration_dir is not None:
-        try:
-            iteration = int(latest_iteration_dir.name.split("_")[1])
-        except (IndexError, ValueError):
-            iteration = None
-    output_file = _get_latest_versioned_file(step_name, issue_name)
-    return {
-        "result": result,
-        "status_code": result.final_status_code,
-        "iterations": iteration,
-        "output_file": str(output_file) if output_file else None,
-        "current_step": latest_blackboard.current_step,
-        "handoff_owner": handoff.to_owner.value,
-        "handoff_intent": handoff.intent.value,
-        "next_step": handoff.to_step,
-    }
-
-
-def _build_workflow_pause_guidance(*, blackboard: object, final_status_code: str) -> str:
-    events = getattr(blackboard, "events", None)
-    if isinstance(events, list):
-        for event in reversed(events):
-            event_type = getattr(event, "event_type", "")
-            data = getattr(event, "data", {}) or {}
-            if event_type == "workflow_blocked" and data.get("reason") == "missing_capability_receipt":
-                required_event = str(data.get("required_event", "")).strip()
-                if required_event:
-                    return (
-                        f"Host capability did not complete for this step. "
-                        f"Required receipt: {required_event}. Resolve the host-side action, then run cafe make again."
-                    )
-                return "Host capability did not complete for this step. Resolve the host-side action, then run cafe make again."
-            if event_type == "baton_missing_transition":
-                return "Agent did not hand off to a new step. Open chat with the current role or update the baton, then run cafe make again."
-            if event_type == "status_code_invalid":
-                invalid_codes = data.get("invalid_status_codes")
-                if isinstance(invalid_codes, list) and invalid_codes:
-                    rendered = ", ".join(str(code) for code in invalid_codes)
-                    return (
-                        f"Agent response did not match a valid workflow transition ({rendered}). "
-                        "Fix the agent output or prompt, then run cafe make again."
-                    )
-                return "Agent response did not match a valid workflow transition. Fix the agent output or prompt, then run cafe make again."
-            if event_type == "status_code_missing":
-                return "Agent response did not include a recognizable workflow transition. Fix the agent output or prompt, then run cafe make again."
-
-    if final_status_code == "INVALID_STATUS_CODE":
-        return "Agent response did not match a valid workflow transition. Fix the agent output or prompt, then run cafe make again."
-    if final_status_code == "NO_STATUS_CODE":
-        return "Agent response did not include a recognizable workflow transition. Fix the agent output or prompt, then run cafe make again."
-    if final_status_code == "NO_BATON_TRANSITION":
-        return "Agent did not hand off to a new step. Open chat with the current role or update the baton, then run cafe make again."
-    if final_status_code == "MISSING_CAPABILITY_RECEIPT":
-        return "Host capability did not complete for this step. Resolve the host-side action, then run cafe make again."
-    return "Resolve the requested input, then run cafe make again to resume."
-
-
-def _alias_status(alias_result: Dict[str, Any]) -> str:
-    return str(alias_result.get("status_code", ""))
-
-
-def _alias_handoff_owner(alias_result: Dict[str, Any]) -> str:
-    return str(alias_result.get("handoff_owner", ""))
-
-
-def _alias_handoff_intent(alias_result: Dict[str, Any]) -> str:
-    return str(alias_result.get("handoff_intent", ""))
-
-
-def _alias_next_step(alias_result: Dict[str, Any]) -> str:
-    return str(alias_result.get("next_step", ""))
-
-
-def _alias_is_user_pause(alias_result: Dict[str, Any]) -> bool:
-    return _alias_handoff_owner(alias_result) == "user"
-
-
-def _alias_is_done(alias_result: Dict[str, Any]) -> bool:
-    return _alias_handoff_owner(alias_result) == "done"
-
-
-def _alias_targets(alias_result: Dict[str, Any], step_name: str) -> bool:
-    return _alias_next_step(alias_result) == step_name
-
-
-def _alias_pause_intent(alias_result: Dict[str, Any], *intents: str) -> bool:
-    return _alias_is_user_pause(alias_result) and _alias_handoff_intent(alias_result) in set(intents)
-
-
-def _alias_is_confirmed_transition(alias_result: Dict[str, Any], step_name: str) -> bool:
-    return _alias_targets(alias_result, step_name) or _alias_status(alias_result) == "CAFE_CONFIRMED"
-
-
-def _alias_needs_clarification(alias_result: Dict[str, Any]) -> bool:
-    return _alias_pause_intent(alias_result, "need_clarification") or _alias_status(alias_result) == "CAFE_NEED_CLARIFICATION"
-
-
-def _alias_needs_permission(alias_result: Dict[str, Any]) -> bool:
-    return _alias_pause_intent(alias_result, "need_permission") or _alias_status(alias_result) == "CAFE_NEED_PERMISSION"
-
-
-def _alias_confirm_output_pause(alias_result: Dict[str, Any]) -> bool:
-    return _alias_pause_intent(alias_result, "confirm_output") or _alias_status(alias_result) == "CAFE_READY_FOR_REVIEW"
-
-
-def _reject_unsupported_phase_options(phase_name: str, unsupported_options: Dict[str, bool]) -> None:
-    """Exit when a legacy-only CLI option is requested."""
-    unsupported = [name for name, enabled in unsupported_options.items() if enabled]
-    if not unsupported:
-        return
-    rendered = ", ".join(f"--{name}" for name in unsupported)
-    console.print(
-        f"[red]Error: {phase_name} no longer supports legacy phase options: {rendered}[/red]"
-    )
-    console.print(
-        "[dim]Use the workflow runtime directly or rerun without those flags.[/dim]"
-    )
-    raise typer.Exit(1)
-
-
-def _print_legacy_phase_command_notice(*, phase_name: str, preferred_command: str) -> None:
-    """Show migration guidance for legacy phase aliases."""
-    console.print(
-        f"[yellow]Legacy phase command:[/yellow] [bold]cafe {phase_name}[/bold] is being retired."
-    )
-    console.print(
-        f"[dim]Preferred entrypoint:[/dim] [bold]{preferred_command}[/bold]"
-    )
-    console.print()
-
-
-def _edit_latest_phase_artifact(
-    *,
-    ctx: typer.Context,
-    phase_name: str,
-    missing_hint: str,
-) -> None:
-    """Open the latest phase artifact in the user's editor."""
-    issue_name = _get_and_validate_branch(ctx, phase_name)
-    phase_file = _get_latest_versioned_file(phase_name, issue_name)
-    if not phase_file:
-        console.print(f"[red]Error: No {phase_name} file found for issue '{issue_name}'[/red]")
-        console.print(f"[dim]Hint: {missing_hint}[/dim]")
-        raise typer.Exit(1)
-
-    _edit_file_with_editor(phase_file)
 
 
 @app.command()
@@ -918,145 +297,10 @@ def edit(
         raise typer.Exit(1)
 
 
-def _run_iterative_alias_step(
-    *,
-    issue_name: str,
-    step_name: str,
-    config_manager: ConfigManager,
-    interactive: bool,
-    auto: bool,
-    continuation_statuses: List[str],
-    role_agent_map_override: Optional[Dict[str, str]] = None,
-    user_input: Optional[str] = None,
-    show_prompt: bool = False,
-    clarification_prompt: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Execute one step repeatedly through workflow aliases until it settles."""
-    current_input = user_input
-    iteration_count = 1
-
-    while True:
-        if iteration_count > 1:
-            console.print(f"\n[bold cyan]━━━ Iteration {iteration_count} ━━━[/bold cyan]\n")
-
-        alias_result = _execute_single_step_alias(
-            issue_name=issue_name,
-            step_name=step_name,
-            config_manager=config_manager,
-            role_agent_map_override=role_agent_map_override,
-            user_input=current_input,
-            show_prompt=show_prompt,
-        )
-        status_code = _alias_status(alias_result)
-        handoff_owner = _alias_handoff_owner(alias_result)
-        handoff_intent = _alias_handoff_intent(alias_result)
-        should_iterate = (
-            handoff_owner == "user" and handoff_intent in {"need_clarification", "confirm_output"}
-        ) or status_code in continuation_statuses
-        if not should_iterate:
-            return alias_result
-        if not interactive:
-            return alias_result
-
-        console.print()
-        if handoff_intent == "need_clarification" or status_code == "CAFE_NEED_CLARIFICATION":
-            console.print("[yellow]💬 Agent needs clarification[/yellow]")
-            _display_iteration_questions(issue_name=issue_name, step_name=step_name, alias_result=alias_result)
-        else:
-            console.print("[yellow]📝 Draft ready for review[/yellow]")
-
-        should_continue = auto or prompt_confirm("Continue to next iteration?", default=True)
-        if not should_continue:
-            console.print("[dim]Stopped by user.[/dim]")
-            return alias_result
-
-        if (handoff_intent == "need_clarification" or status_code == "CAFE_NEED_CLARIFICATION") and clarification_prompt:
-            current_input = prompt_multiline(clarification_prompt).strip() or current_input
-        iteration_count += 1
-        console.print("[dim]Continuing...[/dim]")
 
 
-def _display_iteration_questions(*, issue_name: str, step_name: str, alias_result: Dict[str, Any]) -> None:
-    """Render clarification questions from the latest iteration when available."""
-    iteration = alias_result.get("iterations")
-    if not isinstance(iteration, int) or iteration <= 0:
-        return
-
-    questions_file = Path(".cafe") / "issues" / issue_name / step_name / f"iteration_{iteration:03d}" / "questions.xml"
-    if not questions_file.exists():
-        return
-
-    try:
-        from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
-
-        if not validate_questions_xml(questions_file):
-            return
-
-        questions = parse_questions_xml(questions_file)
-    except Exception:
-        return
-
-    if not questions:
-        return
-
-    console.print("Questions to confirm:")
-    for idx, question in enumerate(questions, start=1):
-        console.print(f"{idx}. {question.title}")
-        for option in question.options:
-            console.print(f"   - {option}")
 
 
-def _check_agent_clis_available(config_manager: ConfigManager) -> List[str]:
-    """Check if all agent CLI tools are installed."""
-    return _shared_check_agent_clis_available(config_manager)
-
-
-def _get_and_validate_branch(ctx: typer.Context, phase_name: str) -> str:
-    """Get current branch and validate it for core phase commands.
-
-    Args:
-        ctx: Typer context (used to check for extra arguments)
-        phase_name: Name of the phase (for error messages)
-
-    Returns:
-        Current branch name
-
-    Raises:
-        typer.Exit: If validation fails
-    """
-    # Check for extra positional arguments
-    if ctx.args:
-        console.print(
-            f"[red]Error: The '{phase_name}' command no longer accepts an issue name. "
-            f"It automatically uses the current Git branch.[/red]"
-        )
-        raise typer.Exit(1)
-
-    # Get current branch
-    git = GitOperations()
-    try:
-        if not git.is_valid_branch():
-            console.print(
-                "[red]Error: You are not currently on a valid Git branch. "
-                "Please checkout a branch first.[/red]"
-            )
-            raise typer.Exit(1)
-
-        branch_name = git.get_current_branch()
-
-        # Check if branch is initialized
-        if not is_branch_initialized(branch_name):
-            console.print(
-                "[red]Error: This branch has not been initialized. "
-                "Please run 'cafe prepare' first.[/red]"
-            )
-            raise typer.Exit(1)
-
-        return branch_name
-
-    except Exception as e:
-        console.print(f"[red]Error: Failed to get current branch: {e}[/red]")
-        raise typer.Exit(1)
 
 
 def _setup_agents(
@@ -1082,28 +326,7 @@ def _find_latest_iteration_dir(phase_dir: Path) -> Optional[Path]:
     return _shared_find_latest_iteration_dir(phase_dir)
 
 
-def _edit_file_with_editor(file_path: Path) -> None:
-    """Open a file in the user's editor.
 
-    Args:
-        file_path: Path to the file to edit
-
-    Raises:
-        typer.Exit: If editor is not found or execution fails
-    """
-    # Use EDITOR env var, or fallback to vim
-    editor = os.environ.get("EDITOR", "vim")
-
-    try:
-        subprocess.run([editor, str(file_path)], check=True)
-        console.print(f"[green]✓ File edited: {file_path}[/green]")
-    except subprocess.CalledProcessError:
-        console.print("[red]Error: Failed to edit file[/red]")
-        raise typer.Exit(1)
-    except FileNotFoundError:
-        console.print(f"[red]Error: Editor '{editor}' not found[/red]")
-        console.print("[dim]Set EDITOR environment variable or install vim[/dim]")
-        raise typer.Exit(1)
 
 
 def _resolve_iteration_index(iteration_numbers: List[int], iteration_input: int) -> int:
@@ -1126,31 +349,7 @@ def _get_latest_review_iteration(issue_name: str) -> int:
     return _shared_get_latest_review_iteration(issue_name)
 
 
-def _execute_next_phase_auto(next_phase: str, issue_name: str) -> None:
-    """Execute the next phase in auto mode.
 
-    Args:
-        next_phase: Name of the next phase to execute ("plan", "develop", "review", "pr")
-        issue_name: Issue name for tracking
-    """
-    console.print()
-    console.print(f"[bold cyan]🤖 Auto mode: executing [bold]{next_phase}[/bold]...[/bold cyan]")
-    console.print()
-
-    # Build command
-    cmd = [sys.executable, "-m", "cafe.ui.cli", next_phase, "--auto"]
-
-    # Execute the command
-    try:
-        result = subprocess.run(cmd, check=False)
-        if result.returncode != 0:
-            # Error already printed by the phase command, just exit
-            raise typer.Exit(result.returncode)
-    except typer.Exit:
-        raise
-    except Exception as e:
-        console.print(f"[bold red]❌ Error executing {next_phase}: {e}[/bold red]")
-        raise typer.Exit(1)
 
 
 def _display_iteration_delta(
@@ -1162,42 +361,7 @@ def _display_iteration_delta(
     _shared_display_iteration_delta(iteration_count, output_file, console)
 
 
-def _print_workflow_pause_guidance(*, step_name: str, status_code: Optional[str]) -> None:
-    """Render actionable recovery guidance for paused workflows."""
-    if status_code == "INVALID_STATUS_CODE":
-        console.print(
-            "[dim]Agent returned an invalid CAFE status code for this step. "
-            "Fix prompt/agent output and run cafe make again to resume.[/dim]"
-        )
-        return
 
-    if status_code == "NO_BATON_TRANSITION":
-        console.print("[dim]Agent finished without updating the workflow baton for this step.[/dim]")
-        if step_name == "pr":
-            console.print("[bold]Recommended next action:[/bold] Open chat with role `developer`")
-            console.print("[bold]Suggested prompt:[/bold]")
-            console.print(
-                "  Do not wait for remote PR existence. Complete the local PR artifact/checklist,"
-            )
-            console.print(
-                "  update the workflow baton, and treat remote PR publish as a later host-side hook."
-            )
-        else:
-            console.print(
-                "[bold]Recommended next action:[/bold] Open chat with the role responsible for this step,"
-            )
-            console.print("  or leave a handoff note in the workflow UI before resuming.")
-        console.print("[dim]After the chat or handoff is written back, run cafe make again to resume.[/dim]")
-        return
-
-    if status_code == "NO_STATUS_TRANSITION":
-        console.print(
-            "[dim]Agent returned a status code, but the playbook has no transition for it. "
-            "Open chat with the step role or fix the playbook mapping, then run cafe make again.[/dim]"
-        )
-        return
-
-    console.print("[dim]Resolve the requested input, then run cafe make again to resume.[/dim]")
 
 
 @app.command()
@@ -1694,9 +858,6 @@ def _sync_lifecycle_runtime() -> None:
         valid_phases=VALID_PHASES,
         path_cls=Path,
     )
-    phases_legacy_commands.set_runtime(globals())
-    issues_commands.set_runtime(globals())
-    workflow_commands.set_runtime(globals())
 
 
 def _get_project_path() -> str:
@@ -1721,9 +882,6 @@ app.command()(lifecycle_commands.restore)
 app.command()(lifecycle_commands.reset)
 
 
-
-
-phases_legacy_commands.set_runtime(globals())
 app.command(hidden=True)(phases_legacy_commands.spec)
 app.command(hidden=True)(phases_legacy_commands.plan)
 app.command(hidden=True)(phases_legacy_commands.develop)
@@ -1731,15 +889,11 @@ app.command(hidden=True)(phases_legacy_commands.review)
 app.command(hidden=True)(phases_legacy_commands.pr)
 
 
-
-
-issues_commands.set_runtime(globals())
 app.command()(issues_commands.config)
 app.command(name="ls")(issues_commands.list_issues)
 app.command(name="rm")(issues_commands.remove_issue)
 
 
-workflow_commands.set_runtime(globals())
 app.command()(workflow_commands.make)
 app.command()(workflow_commands.show)
 app.command()(workflow_commands.summary)
@@ -1769,7 +923,6 @@ workflow = workflow_commands.workflow
 
 
 # Template management commands
-template_commands.set_runtime(globals())
 app.add_typer(template_commands.template_app, name="template")
 
 # Backward-compatible alias for TEMPLATE_TYPES (now defined in templates module)
@@ -1781,11 +934,9 @@ TEMPLATE_TYPES = template_commands.TEMPLATE_TYPES
 agent_app = typer.Typer(help="Manage agents")
 app.add_typer(agent_app, name="agent")
 
-playbook_app = typer.Typer(help="Inspect and validate playbooks")
-app.add_typer(playbook_app, name="playbook")
-
-skill_app = typer.Typer(help="Inspect and validate skills")
-app.add_typer(skill_app, name="skill")
+# Playbook and skill management commands
+app.add_typer(catalog_commands.playbook_app, name="playbook")
+app.add_typer(catalog_commands.skill_app, name="skill")
 
 
 def _print_agents(custom_only: bool = False) -> None:
@@ -1814,240 +965,6 @@ def _print_agents(custom_only: bool = False) -> None:
         return
 
     console.print(table)
-
-
-@playbook_app.command(name="list")
-def playbook_list() -> None:
-    """List resolved playbooks from builtin/global/project catalogs."""
-    loader = _build_playbook_loader()
-    for name in loader.list_playbooks():
-        loaded = loader.load_model(name)
-        console.print(f"{name}\t{loaded.source}\t{loaded.path}")
-
-
-@playbook_app.command(name="show")
-def playbook_show(
-    name: str = typer.Argument(..., help="Playbook name"),
-) -> None:
-    """Show the resolved playbook definition."""
-    try:
-        loaded = _build_playbook_loader().load_model(name)
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
-
-    console.print(yaml.dump(loaded.as_dict(), allow_unicode=True, default_flow_style=False, sort_keys=False))
-    console.print(f"\n[dim]source={loaded.source} path={loaded.path}[/dim]")
-    for warning in loaded.warnings:
-        console.print(f"[yellow]warning:[/yellow] {warning}")
-
-
-@playbook_app.command(name="validate")
-def playbook_validate(
-    name: str = typer.Argument(..., help="Playbook name"),
-    strict: bool = typer.Option(False, "--strict", help="Treat warnings as errors"),
-) -> None:
-    """Validate one playbook and print warnings if present."""
-    try:
-        loaded = _build_playbook_loader().load_model(name, strict=strict)
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
-
-    console.print(f"[green]Valid[/green] {name} source={loaded.source}")
-    if loaded.warnings:
-        for warning in loaded.warnings:
-            console.print(f"[yellow]warning:[/yellow] {warning}")
-
-
-@skill_app.command(name="list")
-def skill_list() -> None:
-    """List resolved skills from builtin/global/project catalogs."""
-    try:
-        items = _build_skill_loader().discover()
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
-
-    for item in items:
-        console.print(f"{item.name}\t{item.source}\t{item.directory}")
-
-
-@skill_app.command(name="show")
-def skill_show(
-    name: str = typer.Argument(..., help="Skill name"),
-) -> None:
-    """Show resolved skill body and references path."""
-    try:
-        loader = _build_skill_loader()
-        items = {item.name: item for item in loader.discover()}
-        body = loader.activate(name)
-        item = items[name]
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
-
-    console.print(body)
-    console.print(f"\n[dim]source={item.source} path={item.directory}[/dim]")
-    if item.warning:
-        console.print(f"[yellow]warning:[/yellow] {item.warning}")
-
-
-@skill_app.command(name="validate")
-def skill_validate(
-    strict: bool = typer.Option(False, "--strict", help="Treat warnings as errors"),
-) -> None:
-    """Validate all discovered skills."""
-    try:
-        items = _build_skill_loader().discover(strict=strict)
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
-
-    warnings = [item.warning for item in items if item.warning]
-    console.print(f"[green]Valid[/green] {len(items)} skill(s)")
-    for warning in warnings:
-        console.print(f"[yellow]warning:[/yellow] {warning}")
-
-
-def _print_skill_import_summary(summary: SkillImportSummary) -> None:
-    """Print skill import result summary."""
-    console.print(f"[green]Imported {summary.imported_count} skill(s)[/green]")
-    if summary.skipped_count:
-        console.print(f"[yellow]Skipped {summary.skipped_count} item(s)[/yellow]")
-    if summary.failed_count:
-        console.print(f"[red]Failed {summary.failed_count} item(s)[/red]")
-
-    for item in summary.results:
-        if item.status == "imported":
-            reason_suffix = f" ({item.reason})" if item.reason else ""
-            console.print(f"[green]imported:[/green] {item.name}{reason_suffix}")
-        elif item.status == "skipped":
-            console.print(f"[yellow]skipped:[/yellow] {item.name} ({item.reason})")
-        else:
-            console.print(f"[red]failed:[/red] {item.name} ({item.reason})")
-
-
-def _print_skill_remove_summary(summary: SkillRemoveSummary) -> None:
-    """Print skill removal result summary."""
-    console.print(f"[green]Removed {summary.removed_count} skill(s)[/green]")
-    if summary.skipped_count:
-        console.print(f"[yellow]Skipped {summary.skipped_count} item(s)[/yellow]")
-    if summary.failed_count:
-        console.print(f"[red]Failed {summary.failed_count} item(s)[/red]")
-
-    for item in summary.results:
-        if item.status == "removed":
-            console.print(f"[green]removed:[/green] {item.name}")
-        elif item.status == "skipped":
-            console.print(f"[yellow]skipped:[/yellow] {item.name} ({item.reason})")
-        else:
-            console.print(f"[red]failed:[/red] {item.name} ({item.reason})")
-
-
-@skill_app.command(name="import")
-def skill_import(
-    path: str = typer.Argument(..., help="Directory containing one or more skill folders"),
-) -> None:
-    """Import skill folders into the current project's `.cafe/skills` directory."""
-    try:
-        skill_names = preview_importable_skills(Path(path))
-        console.print(f"[yellow]Found {len(skill_names)} skill(s) to import:[/yellow]")
-        for name in skill_names:
-            console.print(f"  • {name}")
-        console.print()
-
-        if not prompt_confirm(
-            f"Continue importing {len(skill_names)} skill(s)?",
-            default=False,
-        ):
-            console.print("[dim]Cancelled[/dim]")
-            raise typer.Exit(0)
-
-        summary = import_skills(
-            Path(path),
-            Path.cwd(),
-            overwrite_decider=lambda name, destination: prompt_confirm(
-                f"Skill '{name}' already exists at '{destination}'. Overwrite?",
-                default=False,
-            ),
-        )
-    except typer.Exit:
-        raise
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
-
-    _print_skill_import_summary(summary)
-
-
-@skill_app.command(name="rm")
-def skill_rm(
-    names: Optional[list[str]] = typer.Argument(None, help="Names of skills to remove"),
-    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
-) -> None:
-    """Remove one or more project skills."""
-    project_root = Path.cwd()
-    skills_root = project_root / ".cafe" / "skills"
-
-    try:
-        if not names:
-            available_skills = sorted(
-                item.name for item in skills_root.iterdir()
-                if item.is_dir() or item.is_symlink()
-            ) if skills_root.exists() else []
-            if not available_skills:
-                console.print("[yellow]No project skills found[/yellow]")
-                raise typer.Exit(0)
-
-            selected = prompt_checkbox(
-                message="Select skill(s) to delete: (Press space to select, enter to confirm)",
-                choices=available_skills,
-            )
-            if not selected:
-                console.print("[dim]Cancelled[/dim]")
-                raise typer.Exit(0)
-            names = selected
-    except (KeyboardInterrupt, EOFError):
-        console.print("\n[dim]Cancelled[/dim]")
-        raise typer.Exit(0)
-
-    names = list(dict.fromkeys(names))
-    existing_names = [
-        name for name in names
-        if (skills_root / name).exists() or (skills_root / name).is_symlink()
-    ]
-
-    if not existing_names:
-        summary = remove_skills(names, project_root)
-        _print_skill_remove_summary(summary)
-        raise typer.Exit(1)
-
-    if not force:
-        console.print(f"[yellow]About to delete {len(existing_names)} skill(s):[/yellow]")
-        for name in existing_names:
-            console.print(f"  • {name} [dim]({skills_root / name})[/dim]")
-        console.print()
-        try:
-            confirm = prompt_confirm(
-                f"Are you sure you want to delete {len(existing_names)} skill(s)?",
-                default=False,
-            )
-        except (KeyboardInterrupt, EOFError):
-            console.print("\n[dim]Cancelled[/dim]")
-            raise typer.Exit(0)
-        if not confirm:
-            console.print("[dim]Cancelled[/dim]")
-            raise typer.Exit(0)
-
-    summary = remove_skills(names, project_root)
-    _print_skill_remove_summary(summary)
-
-    if summary.failed_count:
-        raise typer.Exit(1)
-
-    if summary.removed_count == 0:
-        raise typer.Exit(1)
 
 
 @agent_app.command(name="ls")

@@ -12,7 +12,6 @@ import typer
 from rich.console import Console
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.core.git import GitOperations
 from cafe.core.types import CriticalPhaseError
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -24,34 +23,86 @@ from cafe.ui.cli_shared import (
     get_show_file_path as _get_show_file_path,
     resolve_iteration_number as _resolve_iteration_number,
 )
-from cafe.utils.config import ConfigError, ConfigManager
+from cafe.utils.config import ConfigError
+
+# Lazy access to GitOperations via cli for backward-compat test patching.
+def _get_GitOperations():
+    from cafe.ui.cli import GitOperations
+    return GitOperations
+
+
+# Lazy access to ConfigManager via cli for backward-compat test patching.
+def _get_ConfigManager():
+    from cafe.ui.cli import ConfigManager
+    return ConfigManager
+
+# Functions moved to cli_shared, accessed through cli module for
+# backward-compatible test patching (tests patch ``cafe.ui.cli._func``).
+# Using late imports to avoid circular-import issues at module load time.
+
+
+def _build_workflow_pause_guidance(*a, **kw):
+    from cafe.ui.cli import _build_workflow_pause_guidance as _fn
+    return _fn(*a, **kw)
+
+
+def _build_workflow_step_executor(*a, **kw):
+    from cafe.ui.cli import _build_workflow_step_executor as _fn
+    return _fn(*a, **kw)
+
+
+def _check_agent_clis_available(*a, **kw):
+    from cafe.ui.cli import _check_agent_clis_available as _fn
+    return _fn(*a, **kw)
+
+
+def _consume_pending_chat_handoff(*a, **kw):
+    from cafe.ui.cli import _consume_pending_chat_handoff as _fn
+    return _fn(*a, **kw)
+
+
+def _find_external_resume_step(*a, **kw):
+    from cafe.ui.cli import _find_external_resume_step as _fn
+    return _fn(*a, **kw)
+
+
+def _find_incomplete_workflow_step(*a, **kw):
+    from cafe.ui.cli import _find_incomplete_workflow_step as _fn
+    return _fn(*a, **kw)
+
+
+def _handle_phase_exception(*a, **kw):
+    from cafe.ui.cli import _handle_phase_exception as _fn
+    return _fn(*a, **kw)
+
+
+def _handle_user_phase(*a, **kw):
+    from cafe.ui.cli import _handle_user_phase as _fn
+    return _fn(*a, **kw)
+
+
+def _load_issue_step_names(*a, **kw):
+    from cafe.ui.cli import _load_issue_step_names as _fn
+    return _fn(*a, **kw)
+
+
+def _print_workflow_pause_guidance(*a, **kw):
+    from cafe.ui.cli import _print_workflow_pause_guidance as _fn
+    return _fn(*a, **kw)
+
+
+def _resolve_selected_playbook(*a, **kw):
+    from cafe.ui.cli import _resolve_selected_playbook as _fn
+    return _fn(*a, **kw)
 
 console = Console()
 
 
-def _missing_runtime(*args: Any, **kwargs: Any) -> Any:
-    raise RuntimeError("workflow runtime dependencies are not initialized")
-
-
-_check_agent_clis_available: Any = _missing_runtime
-_load_issue_step_names: Any = _missing_runtime
-_resolve_selected_playbook: Any = _missing_runtime
-_build_workflow_step_executor: Any = _missing_runtime
-_consume_pending_chat_handoff: Any = _missing_runtime
-_find_incomplete_workflow_step: Any = _missing_runtime
-_find_external_resume_step: Any = _missing_runtime
-_handle_user_phase: Any = _missing_runtime
-_build_workflow_pause_guidance: Any = _missing_runtime
-_print_workflow_pause_guidance: Any = _missing_runtime
-_handle_phase_exception: Any = _missing_runtime
-
-
 def set_runtime(runtime_globals: Dict[str, Any]) -> None:
-    """Inject runtime symbols from cafe.ui.cli into this module."""
-    for key, value in runtime_globals.items():
-        if key.startswith("__") or key == "set_runtime":
-            continue
-        globals()[key] = value
+    """No-op retained for backward compatibility.
+
+    Runtime dependencies are now imported directly from ``cafe.ui.cli_shared``.
+    """
 
 
 def make(
@@ -84,7 +135,7 @@ def make(
         cafe make --user-input "As a user, I want to export CSV reports."
     """
     # Load configuration
-    config_manager = ConfigManager(Path(config_file).parent)
+    config_manager = _get_ConfigManager()(Path(config_file).parent)
     config_manager.load_config()
 
     # Check if all agent CLIs are available
@@ -163,7 +214,7 @@ def show(
     """
     # Get current branch name (issue_name)
     try:
-        git_ops = GitOperations()
+        git_ops = _get_GitOperations()()
         issue_name = git_ops.get_current_branch()
     except Exception as e:
         console.print(f"[red]Error: Failed to get current branch: {e}[/red]")
@@ -335,11 +386,11 @@ def workflow(
                 return count
             return count + 1
 
-        git = GitOperations()
+        git = _get_GitOperations()()
         issue_name = issue or git.get_current_branch()
         issue_dir = Path(".cafe/issues") / issue_name
         selected_playbook = _resolve_selected_playbook(playbook)
-        config_manager = ConfigManager(".cafe")
+        config_manager = _get_ConfigManager()(".cafe")
         try:
             config_manager.load_config()
         except ConfigError:

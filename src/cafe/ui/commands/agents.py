@@ -3,18 +3,15 @@
 from __future__ import annotations
 
 import copy
-import json
-import os
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import typer
 from rich.console import Console
 
-from cafe.ui.inquirer_prompts import prompt_checkbox, prompt_confirm, prompt_list, prompt_multiline, prompt_text
-from cafe.utils.config import get_global_cafe_dir
+from cafe.ui.inquirer_prompts import prompt_confirm, prompt_list, prompt_text
+from cafe.ui.init_helpers import list_available_agents
 
 # ---------------------------------------------------------------------------
 # Sentinel constants & role-phase mapping (agent-setup flow)
@@ -41,11 +38,10 @@ console = Console()
 
 
 def set_runtime(runtime_globals: Dict[str, Any]) -> None:
-    """Inject runtime symbols from cafe.ui.cli into this module."""
-    for key, value in runtime_globals.items():
-        if key.startswith("__") or key == "set_runtime":
-            continue
-        globals()[key] = value
+    """No-op retained for backward compatibility.
+
+    Runtime dependencies are now imported directly or defined locally.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +336,6 @@ def _display_agent_summary(agents_config: dict) -> None:
 def _print_agents(custom_only: bool = False) -> None:
     """Print agents table. Used by agent ls, edit, rm."""
     from rich.table import Table
-    from cafe.ui.init_helpers import list_available_agents
 
     roles = ["pm", "developer", "reviewer"]
     has_agents = False
@@ -638,8 +633,6 @@ def agent_cat(
         cafe agent cat --role developer --name Nick
         cafe agent cat  # Interactive mode
     """
-    from cafe.ui.init_helpers import list_available_agents
-
     # Interactive prompting for missing arguments
     try:
         if not role:

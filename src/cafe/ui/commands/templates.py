@@ -22,11 +22,10 @@ console = Console()
 
 
 def set_runtime(runtime_globals: Dict[str, Any]) -> None:
-    """Inject runtime symbols from cafe.ui.cli into this module."""
-    for key, value in runtime_globals.items():
-        if key.startswith("__") or key == "set_runtime":
-            continue
-        globals()[key] = value
+    """No-op retained for backward compatibility.
+
+    Runtime dependencies are now imported directly or defined locally.
+    """
 
 
 @template_app.command(name="add")

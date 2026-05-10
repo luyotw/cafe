@@ -10,42 +10,110 @@ from typing import Any, Dict, Optional
 import typer
 from rich.console import Console
 
-from cafe.ui.cli_shared import get_latest_review_iteration as _get_latest_review_iteration
-from cafe.ui.cli_shared import get_latest_versioned_file as _get_latest_versioned_file
-from cafe.ui.inquirer_prompts import prompt_multiline
-from cafe.utils.config import ConfigError, ConfigManager
+from cafe.ui.cli_shared import (
+    get_latest_review_iteration as _get_latest_review_iteration,
+    get_latest_versioned_file as _get_latest_versioned_file,
+)
+from cafe.ui.inquirer_prompts import prompt_multiline  # noqa: F401 — kept for type resolution; actual calls go through cli for test-patch compat
+from cafe.utils.config import ConfigError
+
+# Functions moved to cli_shared, accessed through cli module for
+# backward-compatible test patching (tests patch ``cafe.ui.cli._func``).
+# Using late imports to avoid circular-import issues at module load time.
+
+# Lazy access to ConfigManager via cli for backward-compat test patching.
+def _get_ConfigManager():
+    from cafe.ui.cli import ConfigManager
+    return ConfigManager
+
+
+def _alias_confirm_output_pause(*a, **kw):
+    from cafe.ui.cli import _alias_confirm_output_pause as _fn
+    return _fn(*a, **kw)
+
+
+def _alias_is_confirmed_transition(*a, **kw):
+    from cafe.ui.cli import _alias_is_confirmed_transition as _fn
+    return _fn(*a, **kw)
+
+
+def _alias_is_done(*a, **kw):
+    from cafe.ui.cli import _alias_is_done as _fn
+    return _fn(*a, **kw)
+
+
+def _alias_needs_clarification(*a, **kw):
+    from cafe.ui.cli import _alias_needs_clarification as _fn
+    return _fn(*a, **kw)
+
+
+def _alias_needs_permission(*a, **kw):
+    from cafe.ui.cli import _alias_needs_permission as _fn
+    return _fn(*a, **kw)
+
+
+def _alias_next_step(*a, **kw):
+    from cafe.ui.cli import _alias_next_step as _fn
+    return _fn(*a, **kw)
+
+
+def _alias_status(*a, **kw):
+    from cafe.ui.cli import _alias_status as _fn
+    return _fn(*a, **kw)
+
+
+def _alias_targets(*a, **kw):
+    from cafe.ui.cli import _alias_targets as _fn
+    return _fn(*a, **kw)
+
+
+def _edit_latest_phase_artifact(*a, **kw):
+    from cafe.ui.cli import _edit_latest_phase_artifact as _fn
+    return _fn(*a, **kw)
+
+
+def _execute_next_phase_auto(*a, **kw):
+    from cafe.ui.cli import _execute_next_phase_auto as _fn
+    return _fn(*a, **kw)
+
+
+def _execute_single_step_alias(*a, **kw):
+    from cafe.ui.cli import _execute_single_step_alias as _fn
+    return _fn(*a, **kw)
+
+
+def _get_and_validate_branch(*a, **kw):
+    from cafe.ui.cli import _get_and_validate_branch as _fn
+    return _fn(*a, **kw)
+
+
+def _handle_phase_exception(*a, **kw):
+    from cafe.ui.cli import _handle_phase_exception as _fn
+    return _fn(*a, **kw)
+
+
+def _print_legacy_phase_command_notice(*a, **kw):
+    from cafe.ui.cli import _print_legacy_phase_command_notice as _fn
+    return _fn(*a, **kw)
+
+
+def _reject_unsupported_phase_options(*a, **kw):
+    from cafe.ui.cli import _reject_unsupported_phase_options as _fn
+    return _fn(*a, **kw)
+
+
+def _run_iterative_alias_step(*a, **kw):
+    from cafe.ui.cli import _run_iterative_alias_step as _fn
+    return _fn(*a, **kw)
 
 console = Console()
 
 
-def _missing_runtime(*args: Any, **kwargs: Any) -> Any:
-    raise RuntimeError("phases_legacy runtime dependencies are not initialized")
-
-
-_print_legacy_phase_command_notice: Any = _missing_runtime
-_edit_latest_phase_artifact: Any = _missing_runtime
-_get_and_validate_branch: Any = _missing_runtime
-_reject_unsupported_phase_options: Any = _missing_runtime
-_run_iterative_alias_step: Any = _missing_runtime
-_alias_status: Any = _missing_runtime
-_alias_is_confirmed_transition: Any = _missing_runtime
-_execute_next_phase_auto: Any = _missing_runtime
-_alias_confirm_output_pause: Any = _missing_runtime
-_alias_needs_clarification: Any = _missing_runtime
-_execute_single_step_alias: Any = _missing_runtime
-_alias_needs_permission: Any = _missing_runtime
-_alias_next_step: Any = _missing_runtime
-_alias_targets: Any = _missing_runtime
-_alias_is_done: Any = _missing_runtime
-_handle_phase_exception: Any = _missing_runtime
-
-
 def set_runtime(runtime_globals: Dict[str, Any]) -> None:
-    """Inject runtime symbols from cafe.ui.cli into this module."""
-    for key, value in runtime_globals.items():
-        if key.startswith("__") or key == "set_runtime":
-            continue
-        globals()[key] = value
+    """No-op retained for backward compatibility.
+
+    Runtime dependencies are now imported directly from ``cafe.ui.cli_shared``.
+    """
 
 
 def spec(
@@ -160,7 +228,7 @@ def spec(
         config_dir = (
             str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
         )
-        config_manager = ConfigManager(config_dir)
+        config_manager = _get_ConfigManager()(config_dir)
         try:
             config_manager.load_config()
         except ConfigError:
@@ -182,7 +250,8 @@ def spec(
 
         current_input = user_input
         if is_interactive and not current_input:
-            current_input = prompt_multiline("Requirements:").strip()
+            from cafe.ui.cli import prompt_multiline as _pm
+            current_input = _pm("Requirements:").strip()
         if not is_interactive and not current_input:
             console.print("[red]Error: --user-input is required when using --no-interactive[/red]")
             raise typer.Exit(1)
@@ -325,7 +394,7 @@ def plan(
         config_dir = (
             str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
         )
-        config_manager = ConfigManager(config_dir)
+        config_manager = _get_ConfigManager()(config_dir)
         try:
             config_manager.load_config()
         except ConfigError:
@@ -475,7 +544,7 @@ def develop(
         config_dir = (
             str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
         )
-        config_manager = ConfigManager(config_dir)
+        config_manager = _get_ConfigManager()(config_dir)
         try:
             config_manager.load_config()
         except ConfigError:
@@ -652,7 +721,7 @@ def review(
         config_dir = (
             str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
         )
-        config_manager = ConfigManager(config_dir)
+        config_manager = _get_ConfigManager()(config_dir)
         try:
             config_manager.load_config()
         except ConfigError:
@@ -825,7 +894,7 @@ def pr(
         config_dir = (
             str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
         )
-        config_manager = ConfigManager(config_dir)
+        config_manager = _get_ConfigManager()(config_dir)
         try:
             config_manager.load_config()
         except ConfigError:
