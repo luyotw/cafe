@@ -583,18 +583,15 @@ def _find_external_resume_step(
             return None
 
         try:
-            has_unpushed_commits = git_ops.has_unpushed_commits()
-        except Exception:
-            has_unpushed_commits = False
-        if has_unpushed_commits:
-            return None
-
-        try:
             _get_processed_ids, _get_comments, _filter_comments = _get_github_helpers()
             exclude_ids = _get_processed_ids(issue_dir / step_name)
             comments = _get_comments(int(existing_pr["number"]), exclude_ids=exclude_ids)
             unresolved_comments = _filter_comments(comments)
-        except Exception:
+        except Exception as exc:
+            console.print(
+                "[red]Error:[/red] could not evaluate unresolved PR discussion for external resume "
+                f"({exc}). Leaving workflow paused."
+            )
             return None
 
         if unresolved_comments:

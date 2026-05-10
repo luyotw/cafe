@@ -508,6 +508,10 @@ def workflow(
                     pending_start_step = external_step
                     store = BlackboardStore(issue_dir)
                     store.set_current_step(blackboard, external_step)
+                    store.set_handoff_summary(
+                        blackboard,
+                        "Unresolved PR discussion detected while the workflow was paused; resuming the PR step.",
+                    )
                     store.update_handoff_contract(
                         blackboard,
                         from_step=external_step,

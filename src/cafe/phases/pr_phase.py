@@ -1,5 +1,6 @@
 """Pull Request creation phase."""
 
+from dataclasses import dataclass
 from datetime import datetime
 import json
 import re
@@ -18,6 +19,14 @@ from cafe.core.types import PhaseResult, PhaseStatus
 from cafe.ui.inquirer_prompts import prompt_confirm
 from cafe.utils.github import GitHubOps, GitHubError, get_all_pr_comments
 from cafe.utils.prompt_utils import format_checklist_instruction
+
+
+@dataclass(frozen=True)
+class PRCommentPersistOutcome:
+    """Result of persisting PR discussion into the issue workspace."""
+
+    path: Optional[str] = None
+    error: Optional[str] = None
 
 
 class PRPhase(Phase):
@@ -774,9 +783,15 @@ class PRPhase(Phase):
                 self.iteration = pr_iteration_info["iteration_number"] + 1
 
                 # Fetch comments from GitHub
-                user_input_path = self._save_pr_comments_to_user_input(int(pr_number))
+                outcome = self._save_pr_comments_to_user_input(int(pr_number))
+                if outcome.error:
+                    return PhaseResult(
+                        status=PhaseStatus.FAILED,
+                        message=outcome.error,
+                    )
 
-                if user_input_path:
+                if outcome.path:
+                    user_input_path = outcome.path
                     # New comments found - organize into todo list
                     pr_dir = self.issue_dir / "pr"
                     iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
@@ -1036,7 +1051,7 @@ class PRPhase(Phase):
 
         return result
 
-    def _save_pr_comments_to_user_input(self, pr_number: int) -> Optional[str]:
+    def _save_pr_comments_to_user_input(self, pr_number: int) -> PRCommentPersistOutcome:
         """Fetch PR comments from GitHub and save to pr/iteration_XXX/user_input.md.
 
         This centralizes PR comment detection in the PR phase. When a PR exists on GitHub,
@@ -1047,7 +1062,8 @@ class PRPhase(Phase):
             pr_number: GitHub PR number
 
         Returns:
-            Path to saved user_input.md file if comments were saved, None if no new comments
+            ``path`` set when comments were saved; empty outcome when there is nothing new;
+            ``error`` set when discussion data could not be loaded or persisted.
         """
         from cafe.utils.github import format_comments_for_prompt, GitHubOps
         from datetime import datetime
@@ -1066,14 +1082,14 @@ class PRPhase(Phase):
 
             if not comments:
                 print(f"  → No new comments found for PR #{pr_number}")
-                return None
+                return PRCommentPersistOutcome()
 
             # Format comments for saving
             formatted_comments = format_comments_for_prompt(comments)
 
             if not formatted_comments or not formatted_comments.strip():
                 print(f"  → No non-empty comments to save")
-                return None
+                return PRCommentPersistOutcome()
 
             # Save to pr/iteration_XXX/user_input.md
             pr_dir = self.issue_dir / "pr"
@@ -1142,12 +1158,12 @@ class PRPhase(Phase):
             console.print(f"[green]✓ Saved {len(comments)} PR comments to {user_input_file_display}[/green]")
             console.print()
 
-            return str(user_input_file)
+            return PRCommentPersistOutcome(path=str(user_input_file))
 
         except Exception as e:
-            # Log error but don't fail the PR phase
-            console.print(f"[yellow]⚠️  Warning: Failed to fetch/save PR comments: {e}[/yellow]")
-            return None
+            message = f"Failed to fetch/save PR comments: {e}"
+            console.print(f"[yellow]⚠️  Warning: {message}[/yellow]")
+            return PRCommentPersistOutcome(error=message)
 
     @staticmethod
     def _build_todo_list_comment(todo_content: str, user_input_path: str) -> str:

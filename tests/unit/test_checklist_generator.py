@@ -209,6 +209,22 @@ class TestGenerateReviewChecklist:
         assert "- [ ]" in content
         assert "- [x]" in content
 
+    def test_review_checklist_embeds_pr_todo_path_when_provided(self, tmp_path):
+        checklist_path = tmp_path / "checklist.md"
+        pr_todo = ".cafe/issues/demo/pr/iteration_001/output.md"
+
+        generate_review_checklist(
+            agent_name="Richard",
+            spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+            review_file_path=".cafe/issues/test/review/iteration_001/output.md",
+            base_branch="main",
+            checklist_file_path=checklist_path,
+            pr_todo_list_file_path=pr_todo,
+        )
+
+        content = checklist_path.read_text()
+        assert pr_todo in content
+
 
 class TestGeneratePRChecklist:
     """Tests for generate_pr_checklist function."""

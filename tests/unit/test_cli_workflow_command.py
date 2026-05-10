@@ -871,13 +871,58 @@ def test_find_external_resume_step_returns_pr_when_new_pr_comments_exist(tmp_pat
 
     with (
         patch("cafe.ui.cli.GitHubOps") as mock_github_ops,
-        patch("cafe.ui.cli.get_processed_comment_ids_from_history", return_value=set()),
-        patch("cafe.ui.cli.get_all_pr_comments", return_value=["comment-1"]),
-        patch("cafe.ui.cli.filter_unresolved_comments", return_value=["comment-1"]),
+        patch(
+            "cafe.utils.github.get_processed_comment_ids_from_history",
+            return_value=set(),
+        ),
+        patch("cafe.utils.github.get_all_pr_comments", return_value=["comment-1"]),
+        patch("cafe.utils.github.filter_unresolved_comments", return_value=["comment-1"]),
     ):
         mock_github_ops.return_value.get_pr_for_branch.return_value = {
             "number": 238,
             "url": "https://github.com/test/repo/pull/238",
+        }
+
+        result = _find_external_resume_step(
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            git_ops=git_ops,
+        )
+
+    assert result == "pr"
+
+
+def test_find_external_resume_step_returns_pr_when_unpushed_commits_but_unresolved_exist(
+    tmp_path: Path,
+) -> None:
+    """Unresolved feedback must still wake the PR step even with local commits."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-239"
+    (issue_dir / "pr").mkdir(parents=True, exist_ok=True)
+    playbook_data = {
+        "steps": {
+            "pr": {
+                "hooks": {
+                    "prepare_input": ["GitHubPRCreator", "UserInputCollector"],
+                },
+            },
+        },
+    }
+    git_ops = MagicMock()
+    git_ops.get_current_branch.return_value = "issue-239"
+    git_ops.has_unpushed_commits.return_value = True
+
+    with (
+        patch("cafe.ui.cli.GitHubOps") as mock_github_ops,
+        patch(
+            "cafe.utils.github.get_processed_comment_ids_from_history",
+            return_value=set(),
+        ),
+        patch("cafe.utils.github.get_all_pr_comments", return_value=["comment-1"]),
+        patch("cafe.utils.github.filter_unresolved_comments", return_value=["comment-1"]),
+    ):
+        mock_github_ops.return_value.get_pr_for_branch.return_value = {
+            "number": 239,
+            "url": "https://github.com/test/repo/pull/239",
         }
 
         result = _find_external_resume_step(
