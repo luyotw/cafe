@@ -934,6 +934,37 @@ def test_find_external_resume_step_returns_pr_when_unpushed_commits_but_unresolv
     assert result == "pr"
 
 
+def test_find_external_resume_step_returns_none_when_no_github_pr(tmp_path: Path) -> None:
+    """Control case: missing remote PR means no resume (plan Test 1.3 branch)."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-240"
+    (issue_dir / "pr").mkdir(parents=True, exist_ok=True)
+    playbook_data = {
+        "steps": {
+            "pr": {
+                "hooks": {
+                    "prepare_input": ["GitHubPRCreator", "UserInputCollector"],
+                },
+            },
+        },
+    }
+    git_ops = MagicMock()
+    git_ops.get_current_branch.return_value = "issue-240"
+
+    with (
+        patch("cafe.ui.cli.GitHubOps") as mock_github_ops,
+        patch("cafe.utils.github.get_all_pr_comments") as mock_fetch,
+    ):
+        mock_github_ops.return_value.get_pr_for_branch.return_value = None
+        result = _find_external_resume_step(
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            git_ops=git_ops,
+        )
+
+    assert result is None
+    mock_fetch.assert_not_called()
+
+
 def test_workflow_command_resumes_pr_when_external_feedback_arrives_while_done(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     executed_steps: list[str] = []
