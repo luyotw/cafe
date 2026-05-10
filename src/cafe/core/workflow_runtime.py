@@ -163,6 +163,31 @@ class BlackboardWorkflowRuntime:
                 continue
         return None
 
+    def _resolve_next_step_from_handoff(self, *, current_step: str) -> Optional[str]:
+        """Derive the next step from the blackboard handoff contract.
+
+        When an agent omits a status code but the step executor has already
+        written a handoff contract (e.g. ``confirm_output`` → ``user``),
+        we use the contract's ``to_step`` to advance the workflow.  This
+        keeps the engine baton-first rather than status-code-first.
+        """
+        try:
+            contract = self.blackboard_store.load_handoff_contract(
+                self.blackboard,
+                allowed_steps=list(self.steps.keys()),
+                allow_legacy_text=True,
+            )
+        except Exception:
+            return None
+        to_step = getattr(contract, "to_step", None)
+        if to_step is None or to_step == current_step:
+            return None
+        # Validate the target step exists in the playbook or is a known
+        # synthetic step (user, done, _done).
+        if to_step in self.steps or to_step in {"user", "done", "_done"}:
+            return str(to_step)
+        return None
+
     def _pr_step_requires_publish_receipt(self, current_step: str) -> bool:
         if current_step != "pr":
             return False
@@ -769,20 +794,46 @@ class BlackboardWorkflowRuntime:
                             completed=False,
                         )
                     else:
-                        self.blackboard_store.record_event(
-                            self.blackboard,
-                            "status_code_missing",
-                            {
-                                "step": current_step,
-                                "response": frame.response,
-                                "runtime": runtime_label,
-                            },
+                        # Baton-first fallback: when the agent omits a
+                        # status code, use the handoff contract on the
+                        # blackboard (written by the step executor) to
+                        # determine the next step.  This advances the
+                        # engine deterministically via the baton model
+                        # rather than falling back to status-code transitions.
+                        baton_next = self._resolve_next_step_from_handoff(
+                            current_step=current_step,
                         )
-                        return PlaybookRunResult(
-                            final_step=current_step,
-                            final_status_code="NO_STATUS_CODE",
-                            completed=False,
-                        )
+                        if baton_next is not None:
+                            self.blackboard_store.record_event(
+                                self.blackboard,
+                                "status_code_missing",
+                                {
+                                    "step": current_step,
+                                    "response": frame.response,
+                                    "runtime": runtime_label,
+                                    "baton_fallback": True,
+                                    "fallback_next_step": baton_next,
+                                },
+                            )
+                            handoff_next_step = baton_next
+                            handoff_transition_source = "baton"
+                            status_code = "NO_STATUS_CODE"
+                            last_status_code = status_code
+                        else:
+                            self.blackboard_store.record_event(
+                                self.blackboard,
+                                "status_code_missing",
+                                {
+                                    "step": current_step,
+                                    "response": frame.response,
+                                    "runtime": runtime_label,
+                                },
+                            )
+                            return PlaybookRunResult(
+                                final_step=current_step,
+                                final_status_code="NO_STATUS_CODE",
+                                completed=False,
+                            )
             else:
                 handoff_next_step = None
                 handoff_transition_source = "terminal"

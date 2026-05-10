@@ -591,6 +591,7 @@ def test_runtime_records_status_code_invalid_event(tmp_path: Path) -> None:
 
 def test_runtime_records_status_code_missing_event(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "missing-status"
+    issue_dir.mkdir(parents=True, exist_ok=True)
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -604,6 +605,17 @@ def test_runtime_records_status_code_missing_event(tmp_path: Path) -> None:
     }
 
     def executor(step_name: str, step_def: dict, state: object):
+        # Simulate what a real step executor does: write a handoff
+        # contract pointing to "user" with confirm_output intent.
+        store = BlackboardStore(issue_dir)
+        store.update_handoff_contract(
+            state,
+            from_step="spec",
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.CONFIRM_OUTPUT,
+            source="test.executor",
+        )
         return ("plain response without status token", {})
 
     runtime = BlackboardWorkflowRuntime(
@@ -613,12 +625,57 @@ def test_runtime_records_status_code_missing_event(tmp_path: Path) -> None:
     )
     result = runtime.run(start_step="spec")
 
+    # The baton-first fallback resolves the next step from the handoff
+    # contract.  When the contract points to "user" (confirm_output),
+    # the runtime pauses for user input — this is the correct baton
+    # outcome, not a stall.
     assert result.completed is False
     assert result.final_status_code == "NO_STATUS_CODE"
     blackboard = BlackboardStore(issue_dir).load_or_create("spec")
     missing_events = [e for e in blackboard.events if e.event_type == "status_code_missing"]
     assert missing_events
-    assert missing_events[-1].data["runtime"] == "legacy_until_boundary"
+    latest = missing_events[-1].data
+    assert latest["runtime"] == "legacy_until_boundary"
+    assert latest["baton_fallback"] is True
+    assert latest["fallback_next_step"] == "user"
+    # Verify the blackboard was advanced to "user"
+    assert blackboard.current_step == "user"
+
+
+def test_runtime_status_code_missing_no_handoff_contract(tmp_path: Path) -> None:
+    """When the agent omits a status code and no handoff contract exists, the runtime still pauses."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "missing-no-handoff"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_status_codes": ["CAFE_NEED_CLARIFICATION"],
+                "on": {"CAFE_NEED_CLARIFICATION": "spec"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object):
+        # No handoff contract written — agent produced nothing useful.
+        return ("plain response without status token", {})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="spec")
+
+    # No handoff contract → baton fallback not possible → still pauses
+    assert result.completed is False
+    assert result.final_status_code == "NO_STATUS_CODE"
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    missing_events = [e for e in blackboard.events if e.event_type == "status_code_missing"]
+    assert missing_events
+    # No baton_fallback key when fallback was not possible
+    assert "baton_fallback" not in missing_events[-1].data
 
 
 def test_runtime_pauses_ready_for_review_with_confirm_output_intent(tmp_path: Path) -> None:
