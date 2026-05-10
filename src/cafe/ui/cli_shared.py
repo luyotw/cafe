@@ -1,4 +1,10 @@
-"""Shared helper functions and constants used by the CLI module."""
+"""Shared helper functions and constants used by the CLI module.
+
+NOTE: Several helpers in this module use late imports from ``cafe.ui.cli``
+(via ``_lazy_get_*`` getters) to avoid circular imports. Do NOT add
+top-level imports of ``cafe.ui.cli`` here — always use the lazy getters
+or local imports inside function bodies.
+"""
 
 from __future__ import annotations
 

@@ -34,7 +34,7 @@ playbook_app = typer.Typer(help="Inspect and validate playbooks")
 skill_app = typer.Typer(help="Inspect and validate skills")
 
 # ---------------------------------------------------------------------------
-# Runtime bridge – injected from cafe.ui.cli at import time
+# Console and backward-compat runtime bridge
 # ---------------------------------------------------------------------------
 console = Console()
 
