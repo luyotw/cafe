@@ -54,7 +54,7 @@ Follow these in addition to **Shared Rules** whenever you are in **develop** or 
 - The runtime prompt includes concrete paths to the blackboard and `next_step` baton; read them before changing workflow state.
 - `blackboard.current_step` is the workflow pointer; you may set it to the built-in `user` phase when pausing for a human.
 - **Reasonable feedback:** if the other role’s request is technically sound, implement or accept it without extra handoff drama.
-- **Disagreement:** if you reject the other role’s position, write technical reasoning in this iteration’s `output.md` and append a short dispute summary to blackboard `events`.
+- **Disagreement:** if you reject the other role’s position, first read their full `output.md` and the dispute summary in blackboard `events` before deciding; then write technical reasoning in this iteration’s `output.md` and append a short dispute summary to blackboard `events`.
 - **First pushback from develop:** set blackboard `current_step` to `review` and write the baton target `review`.
 - **Round limit:** the same disagreement may go back and forth at most **three** times between develop and review. If the blackboard already shows three rounds without convergence, do **not** send the baton to the other engineering step again.
 - **User arbitration:** if you still disagree after the limit (or the issue is product-level), capture both sides in `questions.xml`, record whether the developer or reviewer requested arbitration in blackboard `events`, set `current_step` to `user`, and write the baton target `user`.
