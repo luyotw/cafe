@@ -287,7 +287,7 @@ class GenericWorkflowStepExecutor(Phase):
                     }
                 )
 
-        if require_status_code and status_code is not None:
+        if status_code is not None:
             align_pr_baton_after_execution(
                 issue_dir=self.issue_dir,
                 playbook=self.playbook,

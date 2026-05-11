@@ -544,9 +544,12 @@ def workflow(
                         # contract to find which step produced the output,
                         # then advance to the natural next step in the
                         # playbook (the step after from_step).
-                        contract = BlackboardStore(issue_dir).load_handoff_contract(blackboard)
-                        from_step = getattr(contract, "from_step", None) or blackboard.current_step
                         step_keys = list(playbook_data.get("steps", {}).keys())
+                        contract = BlackboardStore(issue_dir).load_handoff_contract(
+                            blackboard,
+                            allowed_steps=step_keys,
+                        )
+                        from_step = getattr(contract, "from_step", None) or blackboard.current_step
                         next_step = None
                         try:
                             idx = step_keys.index(from_step)
