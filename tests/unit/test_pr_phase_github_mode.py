@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 
-from cafe.phases.pr_phase import PRPhase
+from cafe.phases.pr_phase import PRCommentPersistOutcome, PRPhase
 from cafe.core.types import PhaseStatus, PhaseResult
 from cafe.core.status_codes import PhaseStatusCode
 
@@ -205,7 +205,9 @@ class TestPRPhaseGitHubMode:
         # Mock fetching comments
         with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
             with patch.object(PRPhase, "_save_pr_comments_to_user_input") as mock_save_comments:
-                mock_save_comments.return_value = iteration_001 / "iteration_002" / "user_input.md"
+                mock_save_comments.return_value = PRCommentPersistOutcome(
+                    path=str(tmp_path / "stub_user_input.md")
+                )
                 with patch.object(PRPhase, "_organize_comments_to_todo_list") as mock_organize:
                     mock_organize.return_value = PhaseResult(
                         status=PhaseStatus.COMPLETED,
@@ -224,6 +226,50 @@ class TestPRPhaseGitHubMode:
         # Assert
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") in ["CAFE_NEEDS_CHANGES", "CAFE_CONFIRMED"]
+
+    def test_scenario_d_comment_fetch_failure_returns_failed(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """When discussion cannot be fetched, surface failure instead of 'no comments'."""
+        issue_dir, spec_file = setup_issue_dir
+
+        pr_dir = issue_dir / "pr"
+        iteration_001 = pr_dir / "iteration_001"
+        iteration_001.mkdir(parents=True)
+        (iteration_001 / "context.json").write_text(
+            json.dumps(
+                {
+                    "iteration": 1,
+                    "timestamp": "2026-01-27T10:00:00+08:00",
+                    "end_time": "2026-01-27T10:05:00+08:00",
+                    "status_code": "CAFE_READY_FOR_REVIEW",
+                }
+            )
+        )
+
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = False
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = {
+            "number": 1,
+            "url": "https://github.com/test/repo/pull/1",
+        }
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            with patch.object(
+                PRPhase,
+                "_save_pr_comments_to_user_input",
+                return_value=PRCommentPersistOutcome(error="GitHub unreachable"),
+            ):
+                phase = PRPhase(
+                    spec_file=str(spec_file),
+                    issue_name="test-issue",
+                    **mock_dependencies,
+                )
+
+                result = phase._execute_github_mode()
+
+        assert result.status == PhaseStatus.FAILED
+        assert "GitHub unreachable" in result.message
 
     # =========================================================================
     # Scenario E: No new commits, PR exists, last iteration CONFIRMED
@@ -1098,7 +1144,7 @@ class TestSavePRCommentsFiltersLastSeen:
                 phase = self._make_phase(issue_dir, mock_dependencies, iteration=2)
                 result = phase._save_pr_comments_to_user_input(42)
 
-        assert result is not None
+        assert result.path is not None
         user_input_file = pr_dir / "iteration_002" / "user_input.md"
         assert user_input_file.exists()
         content = user_input_file.read_text()
@@ -1130,7 +1176,7 @@ class TestSavePRCommentsFiltersLastSeen:
                 phase = self._make_phase(issue_dir, mock_dependencies, iteration=2)
                 result = phase._save_pr_comments_to_user_input(42)
 
-        assert result is None
+        assert result.path is None and result.error is None
         # user_input.md should NOT be created
         user_input_file = pr_dir / "iteration_002" / "user_input.md"
         assert not user_input_file.exists()
@@ -1161,7 +1207,7 @@ class TestSavePRCommentsFiltersLastSeen:
                 phase = self._make_phase(issue_dir, mock_dependencies, iteration=1)
                 result = phase._save_pr_comments_to_user_input(42)
 
-        assert result is not None
+        assert result.path is not None
         pr_dir = issue_dir / "pr"
         user_input_file = pr_dir / "iteration_001" / "user_input.md"
         assert user_input_file.exists()

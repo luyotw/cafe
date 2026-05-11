@@ -8,7 +8,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import pytest
 
-from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore
+from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import AgentCLI, TokenUsage
 from cafe.phases.generic_phase import GenericPhaseExecution
 from cafe.phases.generic_phase import GenericPhase
@@ -1029,6 +1030,90 @@ def test_generic_workflow_step_pr_does_not_parse_status_from_response(tmp_path: 
     assert result.response == "CAFE_CONFIRMED"
     assert result.status_code is None
     assert all(event.get("type") != "handoff_intent" for event in result.events)
+
+
+def test_generic_workflow_step_pr_aligns_baton_when_execute_returns_needs_changes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """align_pr_baton_after_execution must run for pr even though require_status_code is False."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-baton-integrate"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "Nick"}},
+        "steps": {
+            "pr": {
+                "skill": "pr",
+                "role": "developer",
+                "output_artifact": "pr_result",
+                "allowed_tools": ["Read"],
+                "on": {"CAFE_NEEDS_CHANGES": "develop"},
+            },
+            "develop": {"skill": "develop", "role": "developer", "allowed_tools": ["Read"]},
+        },
+    }
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": "pr",
+                "to_owner": "agent",
+                "to_step": "pr",
+                "intent": "await_agent",
+                "status_code": "",
+                "created_at": "2026-05-11T12:00:00+08:00",
+                "source": "test",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    state = BlackboardStore(issue_dir).load_or_create("pr")
+    state.handoff_summary = "PR feedback requires follow-up."
+    state.artifacts["spec"] = ArtifactEntry(
+        name="spec",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="spec",
+        path="spec/iteration_001/output.md",
+    )
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="plan",
+        path="plan/iteration_001/output.md",
+    )
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-pr-baton-integrate",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("unused"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "Nick"},
+    )
+
+    def fake_execute(*args, **kwargs):
+        return GenericPhaseExecution(
+            response="CAFE_NEEDS_CHANGES",
+            status_code=PhaseStatusCode.NEEDS_CHANGES,
+            goto_target=None,
+            context_updates={},
+            events=[],
+        )
+
+    executor.generic_phase.execute = fake_execute
+
+    result = executor.execute_step("pr", playbook["steps"]["pr"], state)
+
+    assert result.status_code == "CAFE_NEEDS_CHANGES"
+    reloaded = BlackboardStore(issue_dir).load_or_create("pr")
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.to_step == "develop"
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
+    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
 
 
 def test_generic_workflow_step_pr_prompt_uses_baton_wording(tmp_path: Path, monkeypatch) -> None:

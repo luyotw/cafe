@@ -4,6 +4,7 @@
 """
 
 import pytest
+from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 import json
 from cafe.utils.github import (
@@ -1096,3 +1097,29 @@ class TestGetProcessedCommentIDs:
             # Should only include valid comment IDs
             assert "111" in result
             assert len(result) == 1
+
+
+def test_load_pr_last_seen_comment_ids_reads_artifact(tmp_path: Path) -> None:
+    from cafe.utils.github import load_pr_last_seen_comment_ids
+
+    pr_dir = tmp_path / "pr"
+    art = pr_dir / "artifacts" / "pr_last_seen_comments.json"
+    art.parent.mkdir(parents=True, exist_ok=True)
+    art.write_text(
+        json.dumps({"last_seen_comment_ids": ["a", "b"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    assert load_pr_last_seen_comment_ids(pr_dir) == {"a", "b"}
+
+
+def test_load_pr_last_seen_comment_ids_legacy_context(tmp_path: Path) -> None:
+    from cafe.utils.github import load_pr_last_seen_comment_ids
+
+    pr_dir = tmp_path / "pr"
+    it = pr_dir / "iteration_001"
+    it.mkdir(parents=True)
+    (it / "context.json").write_text(
+        json.dumps({"last_seen_comment_ids": ["x"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    assert load_pr_last_seen_comment_ids(pr_dir) == {"x"}

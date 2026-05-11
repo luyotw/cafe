@@ -871,9 +871,8 @@ def test_find_external_resume_step_returns_pr_when_new_pr_comments_exist(tmp_pat
 
     with (
         patch("cafe.ui.cli.GitHubOps") as mock_github_ops,
-        patch("cafe.ui.cli.get_processed_comment_ids_from_history", return_value=set()),
-        patch("cafe.ui.cli.get_all_pr_comments", return_value=["comment-1"]),
-        patch("cafe.ui.cli.filter_unresolved_comments", return_value=["comment-1"]),
+        patch("cafe.utils.github.get_all_pr_comments", return_value=["comment-1"]),
+        patch("cafe.utils.github.filter_unresolved_comments", return_value=["comment-1"]),
     ):
         mock_github_ops.return_value.get_pr_for_branch.return_value = {
             "number": 238,
@@ -887,6 +886,122 @@ def test_find_external_resume_step_returns_pr_when_new_pr_comments_exist(tmp_pat
         )
 
     assert result == "pr"
+
+
+def test_find_external_resume_step_returns_none_when_last_seen_covers_all_comments(
+    tmp_path: Path,
+) -> None:
+    """P2: stale context.json processed fields must not be the only source; last-seen artifact excludes known IDs."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-241"
+    pr_dir = issue_dir / "pr"
+    artifact = pr_dir / "artifacts" / "pr_last_seen_comments.json"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(
+        json.dumps({"last_seen_comment_ids": ["c1", "c2"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    playbook_data = {
+        "steps": {
+            "pr": {
+                "hooks": {
+                    "prepare_input": ["GitHubPRCreator", "UserInputCollector"],
+                },
+            },
+        },
+    }
+    git_ops = MagicMock()
+    git_ops.get_current_branch.return_value = "issue-241"
+
+    with (
+        patch("cafe.ui.cli.GitHubOps") as mock_github_ops,
+        patch("cafe.utils.github.get_all_pr_comments") as mock_fetch,
+        patch("cafe.utils.github.filter_unresolved_comments", return_value=[]),
+    ):
+        mock_github_ops.return_value.get_pr_for_branch.return_value = {
+            "number": 241,
+            "url": "https://github.com/test/repo/pull/241",
+        }
+        mock_fetch.return_value = []
+
+        result = _find_external_resume_step(
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            git_ops=git_ops,
+        )
+
+    assert result is None
+    mock_fetch.assert_called_once()
+    call_kw = mock_fetch.call_args[1]
+    assert call_kw["exclude_ids"] == {"c1", "c2"}
+
+
+def test_find_external_resume_step_returns_pr_when_unpushed_commits_but_unresolved_exist(
+    tmp_path: Path,
+) -> None:
+    """Unresolved feedback must still wake the PR step even with local commits."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-239"
+    (issue_dir / "pr").mkdir(parents=True, exist_ok=True)
+    playbook_data = {
+        "steps": {
+            "pr": {
+                "hooks": {
+                    "prepare_input": ["GitHubPRCreator", "UserInputCollector"],
+                },
+            },
+        },
+    }
+    git_ops = MagicMock()
+    git_ops.get_current_branch.return_value = "issue-239"
+    git_ops.has_unpushed_commits.return_value = True
+
+    with (
+        patch("cafe.ui.cli.GitHubOps") as mock_github_ops,
+        patch("cafe.utils.github.get_all_pr_comments", return_value=["comment-1"]),
+        patch("cafe.utils.github.filter_unresolved_comments", return_value=["comment-1"]),
+    ):
+        mock_github_ops.return_value.get_pr_for_branch.return_value = {
+            "number": 239,
+            "url": "https://github.com/test/repo/pull/239",
+        }
+
+        result = _find_external_resume_step(
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            git_ops=git_ops,
+        )
+
+    assert result == "pr"
+
+
+def test_find_external_resume_step_returns_none_when_no_github_pr(tmp_path: Path) -> None:
+    """Control case: missing remote PR means no resume (plan Test 1.3 branch)."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-240"
+    (issue_dir / "pr").mkdir(parents=True, exist_ok=True)
+    playbook_data = {
+        "steps": {
+            "pr": {
+                "hooks": {
+                    "prepare_input": ["GitHubPRCreator", "UserInputCollector"],
+                },
+            },
+        },
+    }
+    git_ops = MagicMock()
+    git_ops.get_current_branch.return_value = "issue-240"
+
+    with (
+        patch("cafe.ui.cli.GitHubOps") as mock_github_ops,
+        patch("cafe.utils.github.get_all_pr_comments") as mock_fetch,
+    ):
+        mock_github_ops.return_value.get_pr_for_branch.return_value = None
+        result = _find_external_resume_step(
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            git_ops=git_ops,
+        )
+
+    assert result is None
+    mock_fetch.assert_not_called()
 
 
 def test_workflow_command_resumes_pr_when_external_feedback_arrives_while_done(tmp_path: Path, monkeypatch) -> None:

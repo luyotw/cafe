@@ -89,9 +89,8 @@ def _get_github_helpers():
     from cafe.utils.github import (
         filter_unresolved_comments,
         get_all_pr_comments,
-        get_processed_comment_ids_from_history,
     )
-    return get_processed_comment_ids_from_history, get_all_pr_comments, filter_unresolved_comments
+    return get_all_pr_comments, filter_unresolved_comments
 
 
 def check_agent_clis_available(config_manager: ConfigManager) -> List[str]:
@@ -583,18 +582,17 @@ def _find_external_resume_step(
             return None
 
         try:
-            has_unpushed_commits = git_ops.has_unpushed_commits()
-        except Exception:
-            has_unpushed_commits = False
-        if has_unpushed_commits:
-            return None
+            from cafe.utils.github import load_pr_last_seen_comment_ids
 
-        try:
-            _get_processed_ids, _get_comments, _filter_comments = _get_github_helpers()
-            exclude_ids = _get_processed_ids(issue_dir / step_name)
+            _get_comments, _filter_comments = _get_github_helpers()
+            exclude_ids = load_pr_last_seen_comment_ids(issue_dir / step_name)
             comments = _get_comments(int(existing_pr["number"]), exclude_ids=exclude_ids)
             unresolved_comments = _filter_comments(comments)
-        except Exception:
+        except Exception as exc:
+            console.print(
+                "[red]Error:[/red] could not evaluate unresolved PR discussion for external resume "
+                f"({exc}). Leaving workflow paused."
+            )
             return None
 
         if unresolved_comments:

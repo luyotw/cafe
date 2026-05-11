@@ -872,3 +872,101 @@ def test_runtime_emits_expected_runtime_labels_per_path(tmp_path: Path) -> None:
     assert single_started[-1].data["runtime"] == "single_step"
     assert single_completed[-1].data["runtime"] == "single_step"
     assert single_done[-1].data["runtime"] == "single_step"
+
+
+def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path) -> None:
+    """PR (NEEDS_CHANGES) → develop → review with baton updates (issue-225 plan Test 4.2)."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "e2e-chain-225"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "current_step": "pr",
+                "owner": "agent",
+                "playbook_id": "default",
+                "artifacts": {},
+                "events": [],
+                "decisions": [],
+                "handoff_summary": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_baton(issue_dir, from_step="pr", to_owner="agent", to_step="pr", intent="await_agent")
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "pr": {"skill": "spec_first", "role": "developer", "assignee_type": "agent", "on": {}},
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "assignee_type": "agent",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "review"},
+            },
+            "review": {
+                "skill": "review",
+                "role": "reviewer",
+                "assignee_type": "agent",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        store = BlackboardStore(issue_dir)
+        if step_name == "pr":
+            store.update_handoff_contract(
+                state,
+                from_step="pr",
+                to_owner=HandoffOwner.AGENT,
+                to_step="develop",
+                intent=HandoffIntent.AWAIT_AGENT,
+                status_code="CAFE_NEEDS_CHANGES",
+                source="test",
+            )
+            return StepExecutionResult(response="todos", artifacts={}, status_code="CAFE_NEEDS_CHANGES")
+        if step_name == "develop":
+            store.update_handoff_contract(
+                state,
+                from_step="develop",
+                to_owner=HandoffOwner.AGENT,
+                to_step="review",
+                intent=HandoffIntent.AWAIT_AGENT,
+                status_code="CAFE_CONFIRMED",
+                source="test",
+            )
+            return StepExecutionResult(response="done", artifacts={}, status_code="CAFE_CONFIRMED")
+        if step_name == "review":
+            store.update_handoff_contract(
+                state,
+                from_step="review",
+                to_owner=HandoffOwner.USER,
+                to_step="user",
+                intent=HandoffIntent.MANUAL_HANDOFF,
+                status_code="CAFE_CONFIRMED",
+                source="test",
+            )
+            return StepExecutionResult(response="lgtm", artifacts={}, status_code="CAFE_CONFIRMED")
+        raise AssertionError(f"unexpected step {step_name}")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="pr", max_transitions=15)
+
+    assert calls == ["pr", "develop", "review"]
+    assert result.completed is False
+    blackboard = BlackboardStore(issue_dir).load_or_create("pr")
+    assert blackboard.current_step == "user"
+    transitions = [e for e in blackboard.events if e.event_type == "transition"]
+    assert any(e.data.get("to") == "develop" for e in transitions)
+    assert any(e.data.get("to") == "review" for e in transitions)

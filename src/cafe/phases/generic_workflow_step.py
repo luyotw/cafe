@@ -7,7 +7,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from cafe.agents.manager import AgentManager
-from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardState, BlackboardStore
+from cafe.core.blackboard import (
+    ArtifactEntry,
+    ArtifactKind,
+    BlackboardState,
+    BlackboardStore,
+    HandoffIntent,
+    HandoffOwner,
+)
 from cafe.core.git import GitOperations
 from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
@@ -21,6 +28,50 @@ from cafe.utils.checklist_generator import (
     generate_spec_checklist,
 )
 from cafe.utils.git_utils import to_cwd_relative_path
+
+
+def align_pr_baton_after_execution(
+    *,
+    issue_dir: Path,
+    playbook: Dict[str, Any],
+    blackboard_state: BlackboardState,
+    step_name: str,
+    status_code: Optional[str],
+) -> None:
+    """If PR feedback needs code changes, ensure the baton leaves the PR step.
+
+    Agents should update ``next_step.txt`` themselves, but when they return
+    ``CAFE_NEEDS_CHANGES`` while the baton still targets ``pr``, advance it to
+    ``develop`` so ``BlackboardWorkflowRuntime`` can transition.
+    """
+    if step_name != "pr" or not status_code:
+        return
+    if status_code != PhaseStatusCode.NEEDS_CHANGES.value:
+        return
+
+    allowed = list(playbook.get("steps", {}).keys())
+    store = BlackboardStore(issue_dir)
+    contract = store.load_handoff_contract(
+        blackboard_state,
+        allowed_steps=allowed,
+        allow_legacy_text=True,
+    )
+    if contract.to_owner != HandoffOwner.AGENT or contract.to_step != "pr":
+        return
+
+    store.update_handoff_contract(
+        blackboard_state,
+        from_step="pr",
+        to_owner=HandoffOwner.AGENT,
+        to_step="develop",
+        intent=HandoffIntent.AWAIT_AGENT,
+        status_code=status_code,
+        source="workflow.pr_needs_changes",
+    )
+    store.set_handoff_summary(
+        blackboard_state,
+        "PR feedback requires development work; next playbook step is develop.",
+    )
 
 
 class GenericWorkflowStepExecutor(Phase):
@@ -235,6 +286,15 @@ class GenericWorkflowStepExecutor(Phase):
                         "intent": handoff_intent,
                     }
                 )
+
+        if status_code is not None:
+            align_pr_baton_after_execution(
+                issue_dir=self.issue_dir,
+                playbook=self.playbook,
+                blackboard_state=blackboard_state,
+                step_name=step_name,
+                status_code=status_code.value,
+            )
 
         return StepExecutionResult(
             response=response,
