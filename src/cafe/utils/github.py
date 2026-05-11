@@ -1065,6 +1065,56 @@ def get_all_pr_comments(pr_number: int, exclude_ids: Optional[Set[str]] = None) 
     return list(comments_by_id.values())
 
 
+def load_pr_last_seen_comment_ids(pr_dir: Path) -> Set[str]:
+    """Comment IDs already synced for PR resume / external-feedback detection.
+
+    Matches :meth:`cafe.phases.pr_phase.PRPhase._get_last_seen_comment_ids` without
+    constructing ``PRPhase``: primary source is
+    ``<pr_dir>/artifacts/pr_last_seen_comments.json`` (written by
+    ``_persist_last_seen_comment_ids``); legacy fallback scans
+    ``<pr_dir>/iteration_*/context.json`` for ``last_seen_comment_ids``.
+
+    ``get_processed_comment_ids_from_history`` (``pr_comments_processed`` /
+    ``pr_comments_skipped``) is not used here: those fields are not populated in
+    normal runs, so relying on them caused false external resumes.
+    """
+    artifact_file = pr_dir / "artifacts" / "pr_last_seen_comments.json"
+    if artifact_file.exists():
+        try:
+            payload = json.loads(artifact_file.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                raw_ids = payload.get("last_seen_comment_ids", [])
+            elif isinstance(payload, list):
+                raw_ids = payload
+            else:
+                raw_ids = []
+            if not isinstance(raw_ids, list):
+                return set()
+            return {str(item) for item in raw_ids}
+        except (json.JSONDecodeError, OSError, TypeError):
+            return set()
+
+    if not pr_dir.exists():
+        return set()
+
+    iteration_dirs = sorted(pr_dir.glob("iteration_*"))
+    for iter_dir in reversed(iteration_dirs):
+        context_file = iter_dir / "context.json"
+        if not context_file.exists():
+            continue
+        try:
+            with open(context_file, encoding="utf-8") as f:
+                context = json.load(f)
+            if isinstance(context, dict) and "last_seen_comment_ids" in context:
+                raw = context["last_seen_comment_ids"]
+                if isinstance(raw, list):
+                    return {str(x) for x in raw}
+        except (json.JSONDecodeError, TypeError, OSError):
+            continue
+
+    return set()
+
+
 def get_processed_comment_ids_from_history(phase_dir: "Path") -> set:
     """Get all processed and skipped comment IDs from previous iterations' history.
 
