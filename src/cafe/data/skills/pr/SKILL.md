@@ -28,9 +28,9 @@ In workflow mode, do not run this script directly from the agent. The CAFE
 host-side `GitHubPRCreator` publish hook runs it after the PR artifact is ready,
 so GitHub/network access happens outside the agent sandbox.
 
-Important ordering: the host-side publish hook cannot run until this agent
-finishes the local PR artifact and returns the workflow status. Do not wait for,
-verify, or require a remote GitHub branch/PR before returning the status code.
+When the generic runtime includes a handoff block for the PR step, it repeats
+local-first completion and publish ordering; treat that text as authoritative
+alongside this skill.
 
 ## Instructions
 

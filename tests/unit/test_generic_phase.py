@@ -90,6 +90,105 @@ def test_build_prompt_uses_baton_wording_when_status_code_not_required(tmp_path:
     assert "Do NOT return a status code" not in prompt
 
 
+def test_build_prompt_omits_questions_line_when_questions_file_not_passed(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+    prompt = phase.build_prompt(
+        skill_name="plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
+        context={
+            "blackboard_path": ".cafe/issues/demo/blackboard.json",
+            "next_step_path": ".cafe/issues/demo/next_step.txt",
+        },
+        output_file=Path("out.md"),
+        checklist_file=Path("checklist.md"),
+        questions_xml_file=None,
+    )
+    assert "questions_file=" not in prompt
+
+
+def test_build_prompt_includes_user_input_when_set(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+    prompt = phase.build_prompt(
+        skill_name="plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
+        context={
+            "blackboard_path": ".cafe/issues/demo/blackboard.json",
+            "next_step_path": ".cafe/issues/demo/next_step.txt",
+            "user_input": "Please prioritize the auth module.",
+        },
+        output_file=Path("out.md"),
+        checklist_file=Path("checklist.md"),
+    )
+    assert "Current user input for this iteration:" in prompt
+    assert "Please prioritize the auth module." in prompt
+
+
+def test_build_prompt_pr_phase_appends_publish_ordering_when_handoff_present(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+    prompt = phase.build_prompt(
+        skill_name="pr",
+        skill_invocation="/pr",
+        shared_skill_invocations=["/workflow-common", "/github_sync"],
+        context={
+            "blackboard_path": ".cafe/issues/demo/blackboard.json",
+            "handoff_summary": "Finish local PR artifact.",
+            "next_step_path": ".cafe/issues/demo/next_step.txt",
+        },
+        output_file=Path("pr.md"),
+        checklist_file=Path("checklist.md"),
+    )
+    assert "For the PR phase, completion is local-only" in prompt
+    assert "host-side publish_output hook" in prompt
+
+
+def assert_runtime_handoff_guardrails_persist(prompt: str) -> None:
+    """When ``handoff_summary`` is injected, these lines must stay in the runtime prompt.
+
+    They intentionally overlap the spirit of ``workflow-common`` (read real state first)
+    but remain concrete execution checks for the agent. Removing them should fail this
+    test and force a coordinated update with the packaged ``workflow-common`` skill.
+    """
+
+    assert "Latest workflow handoff from blackboard:" in prompt
+    assert "Treat this handoff as the highest-priority current request" in prompt
+    assert "verify whether the requested state change has actually happened" in prompt
+    assert "do not treat an old artifact or a closed external object as completion" in prompt
+
+
+def test_build_prompt_contract_covers_shared_skills_files_context_and_gate(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+    prompt = phase.build_prompt(
+        skill_name="develop",
+        skill_invocation="/develop",
+        shared_skill_invocations=["/workflow-common", "/github_sync"],
+        context={
+            "blackboard_path": ".cafe/issues/demo/blackboard.json",
+            "next_step_path": ".cafe/issues/demo/next_step.txt",
+            "user_input": "iteration notes",
+            "handoff_summary": "Continue milestone B cleanup.",
+        },
+        output_file=Path("develop/out.md"),
+        checklist_file=Path("develop/checklist.md"),
+        questions_xml_file=Path("develop/questions.xml"),
+    )
+    assert prompt.startswith("Shared skills:")
+    assert "/workflow-common" in prompt
+    assert "/github_sync" in prompt
+    assert "Phase skill: /develop" in prompt
+    for line in (
+        "output_file=develop/out.md",
+        "checklist_file=develop/checklist.md",
+        "questions_file=develop/questions.xml",
+        "blackboard_file=.cafe/issues/demo/blackboard.json",
+        "next_step_file=.cafe/issues/demo/next_step.txt",
+    ):
+        assert line in prompt
+    assert "Do NOT return a status code until ALL checklist items are marked as [x]." in prompt
+    assert_runtime_handoff_guardrails_persist(prompt)
+
+
 def test_parse_response_extracts_status_and_goto(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     status, goto_target = phase.parse_response(

@@ -1,5 +1,7 @@
 """Tests for CLI phase commands passing phase_name to setup."""
 
+from pathlib import Path
+
 import pytest
 from unittest.mock import patch, MagicMock, ANY
 from typer.testing import CliRunner
@@ -9,11 +11,17 @@ runner = CliRunner()
 
 @pytest.fixture
 def mock_dependencies():
+    def _fake_latest_versioned_file(phase_name: str, issue_name: str) -> Path:
+        return Path(f".cafe/issues/{issue_name}/{phase_name}/iteration_001/output.md")
+
     with patch("cafe.ui.cli.ConfigManager") as mock_config_manager, \
          patch("cafe.ui.cli._execute_single_step_alias") as mock_execute_alias, \
          patch("cafe.ui.cli._setup_agents") as mock_setup_agents, \
          patch("cafe.ui.cli.GitOperations") as mock_git_ops, \
-         patch("cafe.ui.cli._get_latest_versioned_file") as mock_get_latest_file, \
+         patch(
+             "cafe.ui.commands.phases_legacy._get_latest_versioned_file",
+             side_effect=_fake_latest_versioned_file,
+         ) as mock_get_latest_file, \
          patch("cafe.ui.cli.is_branch_initialized", return_value=True):
         
         # Setup common mocks
@@ -29,7 +37,6 @@ def mock_dependencies():
         mock_agent_manager.get_agent.return_value = mock_agent_executor
         mock_setup_agents.return_value = mock_agent_manager
         
-        mock_get_latest_file.return_value = "some/file/path"
         mock_execute_alias.return_value = {"status_code": "CAFE_CONFIRMED", "iterations": 1}
         
         yield {
