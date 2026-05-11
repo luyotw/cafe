@@ -1,7 +1,11 @@
 """Tests for checklist generator."""
 
-import pytest
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from cafe.agents.manager import AgentManager
 from cafe.utils.checklist_generator import (
     generate_spec_checklist,
     generate_plan_checklist,
@@ -266,20 +270,24 @@ class TestChecklistFileCreation:
         assert checklist_path.parent.exists()
 
     def test_resolves_agent_guidelines_from_real_agent_file(self, tmp_path):
-        """Test resolves agent guidelines from actual agent file."""
+        """Agent guidelines come from the resolved agent file (hermetic stub)."""
         checklist_path = tmp_path / "checklist.md"
-
-        # Use a real agent name that exists in the system
-        generate_spec_checklist(
-            iteration=1,
-            agent_name="Roger",
-            current_spec_file=".cafe/issues/test/spec/iteration_001/output.md",
-            prev_spec_file=None,
-            checklist_file_path=checklist_path,
+        agent_md = tmp_path / "Roger.md"
+        agent_md.write_text(
+            "- **Test guideline**: Example guideline for checklist extraction.\n",
+            encoding="utf-8",
         )
 
+        with patch.object(AgentManager, "get_agent_file_path", return_value=str(agent_md)):
+            generate_spec_checklist(
+                iteration=1,
+                agent_name="Roger",
+                current_spec_file=".cafe/issues/test/spec/iteration_001/output.md",
+                prev_spec_file=None,
+                checklist_file_path=checklist_path,
+            )
+
         content = checklist_path.read_text()
-        # Should have agent guidelines checklist section
         assert "## Agent Guidelines Checklist" in content
 
 
