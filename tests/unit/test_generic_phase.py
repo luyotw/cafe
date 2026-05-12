@@ -82,7 +82,6 @@ def test_build_prompt_uses_baton_wording_when_status_code_not_required(tmp_path:
         },
         output_file=Path("out.md"),
         checklist_file=Path("checklist.md"),
-        require_status_code=False,
     )
 
     assert "Before finishing this step" in prompt

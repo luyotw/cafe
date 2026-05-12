@@ -217,7 +217,6 @@ class GenericWorkflowStepExecutor(Phase):
                 "publish_request_file": publish_request_file if step_name == "pr" else None,
                 "blackboard_state": blackboard_state,
             },
-            require_status_code=require_status_code,
         )
 
         response = execution.response

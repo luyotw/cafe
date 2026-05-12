@@ -69,7 +69,6 @@ class GenericPhase:
         output_file: Optional[Path] = None,
         checklist_file: Optional[Path] = None,
         questions_xml_file: Optional[Path] = None,
-        require_status_code: bool = True,
     ) -> str:
         lines = []
         runtime_files: list[str] = []
@@ -179,7 +178,6 @@ class GenericPhase:
         questions_xml_file: Optional[Path] = None,
         hook_context: Optional[Dict[str, Any]] = None,
         max_retries: int = 3,
-        require_status_code: bool = True,
     ) -> GenericPhaseExecution:
         runtime_context = dict(context or {})
         events: List[Dict[str, Any]] = []
@@ -241,7 +239,6 @@ class GenericPhase:
                 output_file=output_file,
                 checklist_file=checklist_file,
                 questions_xml_file=questions_xml_file,
-                require_status_code=require_status_code,
             )
             response = agent_executor(prompt)
 
