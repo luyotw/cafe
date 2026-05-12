@@ -483,6 +483,7 @@ def workflow(
             blackboard = BlackboardStore(issue_dir).load_or_create(
                 str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
                 playbook_id=str(playbook_data["playbook"]["id"]),
+                allow_legacy_text=True,
             )
 
             active_step = pending_start_step or blackboard.current_step

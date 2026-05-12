@@ -1043,11 +1043,18 @@ Artifact 分工：
 - [ ] 清掉 generic workflow prompt / context 組裝裡殘留的 status-code 語意，避免新 runtime 仍被舊 completion model 反向污染
 - [x] 把 `cafe spec`、`cafe plan`、`cafe develop`、`cafe review`、`cafe pr` 收斂成 `BlackboardWorkflowRuntime` 的 thin wrapper，不再維持各自獨立的 status-code-driven UX
 - [x] 將 `spec/plan/develop/review/pr/dev` 從 `cafe --help` 主命令清單隱藏，並把 wrapper / runtime 內部的使用者提示全面導回 `cafe make`
+- [x] 將純文字 `next_step.txt` 相容解析限制在 chat / CLI handoff 邊界；workflow runtime 與 PR baton alignment 預設只接受結構化 baton contract
 - [ ] 盤點並移除 CLI / workflow entry / resume / debug 路徑上剩餘的 legacy 狀態來源，確保 pause、resume、complete 的判定都只信 blackboard 與 baton
 - [ ] 決定 legacy phase alias 的最終退場形式：保留一段過渡期後直接刪除，或保留極薄兼容層但完全退出主要文件與互動流程
 - [ ] 將 `core/phase.py` 與 legacy `spec_phase.py`、`plan_phase.py`、`develop_phase.py`、`review_phase.py`、`pr_phase.py` 逐步隔離出 workflow 核心路徑，最後只保留過渡用途或直接刪除
 - [x] 讓 `PlaybookRunner` 退出 active workflow path，只保留必要的過渡層與測試依賴；等新 runtime 接完主流程後再刪除
 - [ ] 當 default workflow 主路徑已完全切到 blackboard runtime 後，再集中做真實情境手測：`cafe make`、pause/resume、chat handoff、`cafe reset` 後續跑、`pr` publish / receipt
+
+### 保留的相容層
+
+- `next_step.txt` 的純文字 step name 格式只保留給 chat / CLI handoff 過渡使用，讀取時必須顯式傳入 `allow_legacy_text=True`。
+- Workflow runtime、baton validation、PR feedback alignment 只讀結構化 baton contract，避免 Milestone C 期間繼續把 legacy handoff shape 當成核心執行模型。
+- Hidden legacy phase commands (`cafe spec` / `plan` / `develop` / `review` / `pr`) 暫時保留為 thin wrapper，使用者導引與主要入口都指向 `cafe make` / `cafe workflow`。
 
 ## v0.2 預留但不完整實作的入口
 

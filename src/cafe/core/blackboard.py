@@ -308,19 +308,25 @@ class BlackboardStore:
         self.file_path = issue_dir / BLACKBOARD_FILENAME
         self.next_step_path = issue_dir / NEXT_STEP_FILENAME
 
-    def load_or_create(self, initial_step: str, playbook_id: str = "default") -> BlackboardState:
+    def load_or_create(
+        self,
+        initial_step: str,
+        playbook_id: str = "default",
+        *,
+        allow_legacy_text: bool = False,
+    ) -> BlackboardState:
         if self.file_path.exists():
             raw = json.loads(self.file_path.read_text(encoding="utf-8"))
             state = BlackboardState.from_dict(raw, initial_step=initial_step)
             if not getattr(state, "playbook_id", None):
                 state.playbook_id = playbook_id
                 self.save(state)
-            self.ensure_baton(state)
+            self.ensure_baton(state, allow_legacy_text=allow_legacy_text)
             return state
 
         state = BlackboardState(current_step=initial_step, playbook_id=playbook_id)
         self.save(state)
-        self.ensure_baton(state)
+        self.ensure_baton(state, allow_legacy_text=allow_legacy_text)
         return state
 
     def save(self, state: BlackboardState) -> None:
@@ -331,10 +337,19 @@ class BlackboardStore:
             encoding="utf-8",
         )
 
-    def ensure_baton(self, state: BlackboardState) -> HandoffContract:
+    def ensure_baton(
+        self,
+        state: BlackboardState,
+        *,
+        allow_legacy_text: bool = False,
+    ) -> HandoffContract:
         """Ensure a persistent baton file exists for this issue."""
         if self.next_step_path.exists():
-            contract = self.load_handoff_contract(state, allowed_steps=[])
+            contract = self.load_handoff_contract(
+                state,
+                allowed_steps=[],
+                allow_legacy_text=allow_legacy_text,
+            )
             state.handoff_contract = contract
             self.save(state)
             return contract
@@ -361,9 +376,15 @@ class BlackboardStore:
         state: BlackboardState,
         *,
         allowed_steps: List[str],
-        allow_legacy_text: bool = True,
+        allow_legacy_text: bool = False,
     ) -> HandoffContract:
-        """Load and parse baton contract from next_step.txt."""
+        """Load and parse a structured baton contract from next_step.txt.
+
+        Plain step-name batons are a compatibility format used only at
+        chat/CLI handoff boundaries. Core workflow execution should keep the
+        default strict so deprecated handoff shapes do not leak back into the
+        runtime path.
+        """
         if not self.next_step_path.exists():
             raise ValueError(f"Baton file is missing: {self.next_step_path}")
 

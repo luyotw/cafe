@@ -60,7 +60,7 @@ def get_chat_next_step_path(issue_dir: Path) -> Path:
 
 
 def _load_chat_workflow_context(issue_dir: Path) -> tuple[str, list[str], str]:
-    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec", allow_legacy_text=True)
     playbook_id = getattr(blackboard, "playbook_id", "default") or "default"
     current_step = blackboard.current_step
 
@@ -77,7 +77,7 @@ def _prepare_chat_handoff_state(issue_dir: Path) -> tuple[str, list[str], str]:
     current_step, valid_steps, playbook_id = _load_chat_workflow_context(issue_dir)
     issue_dir.mkdir(parents=True, exist_ok=True)
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create(current_step)
+    blackboard = store.load_or_create(current_step, allow_legacy_text=True)
     if current_step == "done":
         store.update_handoff_contract(
             blackboard,
@@ -261,7 +261,7 @@ def launch_chat_session(role: str, issue_name: str) -> int:
         return _handle_chat_launch_failure(agent_cli, result)
 
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create(_current_step)
+    blackboard = store.load_or_create(_current_step, allow_legacy_text=True)
     contract = store.load_handoff_contract(
         blackboard,
         allowed_steps=_valid_steps,

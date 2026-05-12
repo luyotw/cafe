@@ -94,7 +94,6 @@ class BlackboardWorkflowRuntime:
         contract = self.blackboard_store.load_handoff_contract(
             self.blackboard,
             allowed_steps=list(self.steps.keys()),
-            allow_legacy_text=True,
         )
         if contract.to_owner != HandoffOwner.AGENT:
             raise RuntimeError(
@@ -175,7 +174,6 @@ class BlackboardWorkflowRuntime:
             contract = self.blackboard_store.load_handoff_contract(
                 self.blackboard,
                 allowed_steps=list(self.steps.keys()),
-                allow_legacy_text=True,
             )
         except Exception:
             return None
@@ -207,7 +205,6 @@ class BlackboardWorkflowRuntime:
         contract = self.blackboard_store.load_handoff_contract(
             self.blackboard,
             allowed_steps=list(self.steps.keys()),
-            allow_legacy_text=True,
         )
         if contract.to_owner == HandoffOwner.AGENT and contract.to_step == current_step:
             explicit_status_code = getattr(execution_result, "status_code", None)
@@ -220,7 +217,6 @@ class BlackboardWorkflowRuntime:
         contract = self.blackboard_store.load_handoff_contract(
             self.blackboard,
             allowed_steps=list(self.steps.keys()),
-            allow_legacy_text=True,
         )
         if contract.from_step != current_step:
             return None
@@ -587,7 +583,6 @@ class BlackboardWorkflowRuntime:
             contract = self.blackboard_store.load_handoff_contract(
                 self.blackboard,
                 allowed_steps=list(self.steps.keys()),
-                allow_legacy_text=True,
             )
             next_step = contract.to_step
 

@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -109,6 +111,47 @@ def test_runtime_delegates_non_pr_steps_to_legacy_runner(tmp_path: Path) -> None
     assert result.completed is True
     assert result.final_step == "spec"
     assert result.final_status_code == "CAFE_CONFIRMED"
+
+
+def test_runtime_rejects_legacy_text_baton_in_core_path(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "strict-baton"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "playbook_id": "default",
+                "current_step": "spec",
+                "artifacts": {},
+                "events": [],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (issue_dir / "next_step.txt").write_text("spec\n", encoding="utf-8")
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object):
+        return ("CAFE_CONFIRMED", {})
+
+    with pytest.raises(ValueError, match="Invalid baton contract payload"):
+        runtime = BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            executor=executor,
+        )
+        runtime.run()
 
 
 def test_runtime_hands_off_to_pr_runtime_boundary(tmp_path: Path) -> None:

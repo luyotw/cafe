@@ -54,7 +54,6 @@ def align_pr_baton_after_execution(
     contract = store.load_handoff_contract(
         blackboard_state,
         allowed_steps=allowed,
-        allow_legacy_text=True,
     )
     if contract.to_owner != HandoffOwner.AGENT or contract.to_step != "pr":
         return
