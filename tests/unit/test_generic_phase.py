@@ -60,7 +60,8 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
     assert "blackboard_file=.cafe/issues/demo/blackboard.json" in prompt
     assert "next_step_file=.cafe/issues/demo/next_step.txt" in prompt
     assert "Runtime context:" in prompt
-    assert "Do NOT return a status code until ALL checklist items are marked as [x]." in prompt
+    assert "Do NOT finish this step until ALL checklist items are marked as [x]." in prompt
+    assert "Do NOT return a status code" not in prompt
     assert "Latest workflow handoff from blackboard:" in prompt
     assert "Implement cafe skill rm" in prompt
     assert "verify whether the requested state change has actually happened" in prompt
@@ -185,7 +186,8 @@ def test_build_prompt_contract_covers_shared_skills_files_context_and_gate(tmp_p
         "next_step_file=.cafe/issues/demo/next_step.txt",
     ):
         assert line in prompt
-    assert "Do NOT return a status code until ALL checklist items are marked as [x]." in prompt
+    assert "Do NOT finish this step until ALL checklist items are marked as [x]." in prompt
+    assert "Do NOT return a status code" not in prompt
     assert_runtime_handoff_guardrails_persist(prompt)
 
 

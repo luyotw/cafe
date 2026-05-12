@@ -287,6 +287,14 @@ class GenericWorkflowStepExecutor(Phase):
                 )
 
         if status_code is not None:
+            self._write_status_transition_handoff(
+                blackboard_state=blackboard_state,
+                step_name=step_name,
+                step_def=step_def,
+                response=response,
+                status_code=status_code,
+                auto_continue=auto_continue,
+            )
             align_pr_baton_after_execution(
                 issue_dir=self.issue_dir,
                 playbook=self.playbook,
@@ -638,6 +646,111 @@ class GenericWorkflowStepExecutor(Phase):
         if status_code == PhaseStatusCode.NEED_PERMISSION:
             return "need_permission"
         return None
+
+    def _write_status_transition_handoff(
+        self,
+        *,
+        blackboard_state: BlackboardState,
+        step_name: str,
+        step_def: Dict[str, Any],
+        response: str,
+        status_code: PhaseStatusCode,
+        auto_continue: bool,
+    ) -> None:
+        """Write the structured baton for status-based step contracts.
+
+        Status codes are still accepted as the step-level result language for
+        existing skills, but the workflow runtime should consume the baton
+        written here instead of re-deriving transitions from agent text.
+        """
+        if step_name == "pr":
+            return
+
+        store = BlackboardStore(self.issue_dir)
+        if not auto_continue and status_code.value in {
+            PhaseStatusCode.READY_FOR_REVIEW.value,
+            PhaseStatusCode.NEED_CLARIFICATION.value,
+            PhaseStatusCode.NEED_PERMISSION.value,
+        }:
+            raw_intent = self._resolve_handoff_intent(step_name, status_code) or "manual_handoff"
+            store.update_handoff_contract(
+                blackboard_state,
+                from_step=step_name,
+                to_owner=HandoffOwner.USER,
+                to_step="user",
+                intent=HandoffIntent(raw_intent),
+                status_code=status_code.value,
+                source="workflow.status_transition_adapter",
+            )
+            return
+
+        next_step = self._resolve_next_step_for_status(
+            step_name=step_name,
+            step_def=step_def,
+            response=response,
+            status_code=status_code,
+        )
+        if next_step is None:
+            return
+
+        if next_step in {"done", "_done"}:
+            store.update_handoff_contract(
+                blackboard_state,
+                from_step=step_name,
+                to_owner=HandoffOwner.DONE,
+                to_step="done",
+                intent=HandoffIntent.WORKFLOW_COMPLETE,
+                status_code=status_code.value,
+                source="workflow.status_transition_adapter",
+            )
+            return
+
+        if next_step == "user":
+            store.update_handoff_contract(
+                blackboard_state,
+                from_step=step_name,
+                to_owner=HandoffOwner.USER,
+                to_step="user",
+                intent=HandoffIntent.MANUAL_HANDOFF,
+                status_code=status_code.value,
+                source="workflow.status_transition_adapter",
+            )
+            return
+
+        if next_step not in self.playbook.get("steps", {}):
+            return
+
+        store.update_handoff_contract(
+            blackboard_state,
+            from_step=step_name,
+            to_owner=HandoffOwner.AGENT,
+            to_step=next_step,
+            intent=HandoffIntent.AWAIT_AGENT,
+            status_code=status_code.value,
+            source="workflow.status_transition_adapter",
+        )
+
+    def _resolve_next_step_for_status(
+        self,
+        *,
+        step_name: str,
+        step_def: Dict[str, Any],
+        response: str,
+        status_code: PhaseStatusCode,
+    ) -> Optional[str]:
+        goto_target = self.generic_phase.extract_goto_target(response)
+        if goto_target:
+            allowed_targets = {str(target) for target in step_def.get("allowed_goto", [])}
+            if goto_target in allowed_targets:
+                return goto_target
+
+        transitions = step_def.get("on", {})
+        if not isinstance(transitions, dict):
+            return None
+        target = transitions.get(status_code.value)
+        if target is None:
+            target = transitions.get("default")
+        return str(target) if target else None
 
     def _artifact_path(self, blackboard_state: BlackboardState, name: str) -> Optional[str]:
         entry = blackboard_state.artifacts.get(name)

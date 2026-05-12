@@ -1039,22 +1039,34 @@ Artifact 分工：
 - [x] 補齊 summary / timeline 對 baton-driven phases 的支援：phase `status.json` 缺席時，能從 iteration `context.json` + blackboard / baton 推導 phase 狀態，避免 `cafe summary` 失真
 - [x] 讓 workflow 主入口可直接承接初始需求：`cafe make --user-input ...` / `cafe workflow --execute --user-input ...` 能直接把需求送進第一個 `spec` step，不再需要先跑 `cafe spec`
 - [x] 統一人工編輯入口為 `cafe edit <phase>`，並將 `cafe spec edit` / `cafe plan edit` / `cafe review edit` 收斂為 legacy wrapper
-- [ ] 繼續縮小 `GenericWorkflowStepExecutor` 的責任邊界，移除剩餘的 status-code persistence 與 `context.json` / `status.json` 依賴，讓 step executor 只負責 iteration 執行與 artifact 產出
-- [ ] 清掉 generic workflow prompt / context 組裝裡殘留的 status-code 語意，避免新 runtime 仍被舊 completion model 反向污染
+- [x] 繼續縮小 `GenericWorkflowStepExecutor` 的責任邊界，移除剩餘的 status-code persistence 與 `context.json` / `status.json` 依賴，讓 step executor 只負責 iteration 執行與 artifact 產出
+- [x] 清掉 generic workflow prompt / context 組裝裡殘留的 status-code 語意，避免新 runtime 仍被舊 completion model 反向污染
 - [x] 把 `cafe spec`、`cafe plan`、`cafe develop`、`cafe review`、`cafe pr` 收斂成 `BlackboardWorkflowRuntime` 的 thin wrapper，不再維持各自獨立的 status-code-driven UX
 - [x] 將 `spec/plan/develop/review/pr/dev` 從 `cafe --help` 主命令清單隱藏，並把 wrapper / runtime 內部的使用者提示全面導回 `cafe make`
 - [x] 將純文字 `next_step.txt` 相容解析限制在 chat / CLI handoff 邊界；workflow runtime 與 PR baton alignment 預設只接受結構化 baton contract
-- [ ] 盤點並移除 CLI / workflow entry / resume / debug 路徑上剩餘的 legacy 狀態來源，確保 pause、resume、complete 的判定都只信 blackboard 與 baton
-- [ ] 決定 legacy phase alias 的最終退場形式：保留一段過渡期後直接刪除，或保留極薄兼容層但完全退出主要文件與互動流程
-- [ ] 將 `core/phase.py` 與 legacy `spec_phase.py`、`plan_phase.py`、`develop_phase.py`、`review_phase.py`、`pr_phase.py` 逐步隔離出 workflow 核心路徑，最後只保留過渡用途或直接刪除
+- [x] 盤點並移除 CLI / workflow entry / resume / debug 路徑上剩餘的 legacy 狀態來源，確保 pause、resume、complete 的判定都只信 blackboard 與 baton
+- [x] 決定 legacy phase alias 的最終退場形式：保留一段過渡期後直接刪除，或保留極薄兼容層但完全退出主要文件與互動流程
+- [x] 將 `core/phase.py` 與 legacy `spec_phase.py`、`plan_phase.py`、`develop_phase.py`、`review_phase.py`、`pr_phase.py` 逐步隔離出 workflow 核心路徑，最後只保留過渡用途或直接刪除
 - [x] 讓 `PlaybookRunner` 退出 active workflow path，只保留必要的過渡層與測試依賴；等新 runtime 接完主流程後再刪除
-- [ ] 當 default workflow 主路徑已完全切到 blackboard runtime 後，再集中做真實情境手測：`cafe make`、pause/resume、chat handoff、`cafe reset` 後續跑、`pr` publish / receipt
+- [x] 當 default workflow 主路徑已完全切到 blackboard runtime 後，再集中做真實情境手測：`cafe make`、pause/resume、chat handoff、`cafe reset` 後續跑、`pr` publish / receipt
 
 ### 保留的相容層
 
 - `next_step.txt` 的純文字 step name 格式只保留給 chat / CLI handoff 過渡使用，讀取時必須顯式傳入 `allow_legacy_text=True`。
 - Workflow runtime、baton validation、PR feedback alignment 只讀結構化 baton contract，避免 Milestone C 期間繼續把 legacy handoff shape 當成核心執行模型。
 - Hidden legacy phase commands (`cafe spec` / `plan` / `develop` / `review` / `pr`) 暫時保留為 thin wrapper，使用者導引與主要入口都指向 `cafe make` / `cafe workflow`。
+- Generic workflow step 仍會接受現有 skill 回傳的 `CAFE_*` 結果，但只在 step executor 邊界轉成結構化 baton contract（`workflow.status_transition_adapter`）。`BlackboardWorkflowRuntime` 先消費 baton，再把 status parser 留給 mock / legacy executor 測試與過渡 wrapper。
+- `core/phase.py` 在 generic workflow path 僅保留 iteration 目錄、session、token、checklist retry 等執行輔助；它不再是 workflow transition owner。Legacy `*_phase.py` class 僅供隱藏 phase alias 與過渡測試使用。
+- `context.json` 保留作 iteration debug / summary input；`status.json` 不再由 generic workflow step 寫入，也不是 workflow pause、resume、complete 的權威來源。
+
+### #227 smoke / verification
+
+- Targeted runtime tests: `uv run --with pytest pytest tests/unit/test_generic_phase.py tests/unit/test_generic_workflow_step.py tests/unit/test_workflow_runtime.py`
+- CLI / integration coverage: `uv run --with pytest pytest tests/unit/test_cli_workflow_command.py tests/integration/test_workflow_e2e.py`
+- Full suite: `uv run --with pytest pytest` (`1899 passed, 5 skipped, 1 xfailed`)
+- Temp repo smoke: `cafe workflow --issue issue227-smoke --dry-run --user-input "issue 227 smoke test"` 跑完 `spec -> plan -> develop -> review -> pr -> done`，PR 以 `BATON_WORKFLOW_COMPLETE` 完成。
+- `cafe make` 由 `tests/unit/test_cli_make.py` 覆蓋入口轉接與 `--user-input`；此命令沒有 dry-run option，未在 smoke 中啟動真實 agent。
+- `cafe reset pr` 在 dry-run smoke issue 上沒有 versioned iteration 可 reset；reset 對 real iteration 的行為由 `tests/unit/test_reset_command.py` 覆蓋，未在本 cleanup 引入新的 reset state source。
 
 ## v0.2 預留但不完整實作的入口
 

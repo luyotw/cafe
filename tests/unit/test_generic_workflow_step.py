@@ -155,6 +155,52 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert (iteration_dir / "artifact.json").exists()
     status_file = issue_dir / "spec" / "status.json"
     assert not status_file.exists()
+    reloaded = BlackboardStore(issue_dir).load_or_create("spec")
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.DONE
+    assert reloaded.handoff_contract.to_step == "done"
+    assert reloaded.handoff_contract.intent == HandoffIntent.WORKFLOW_COMPLETE
+    assert reloaded.handoff_contract.status_code == "CAFE_CONFIRMED"
+    assert reloaded.handoff_contract.source == "workflow.status_transition_adapter"
+
+
+def test_generic_workflow_step_writes_review_pause_contract(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-review-pause"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": {"1": "spec_first", "default": "spec_first"},
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_status_codes": ["CAFE_READY_FOR_REVIEW", "CAFE_CONFIRMED"],
+                "on": {"CAFE_READY_FOR_REVIEW": "spec", "CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-review-pause",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("CAFE_READY_FOR_REVIEW"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+
+    result = executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    assert result.status_code == "CAFE_READY_FOR_REVIEW"
+    reloaded = BlackboardStore(issue_dir).load_or_create("spec")
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
+    assert reloaded.handoff_contract.to_step == "user"
+    assert reloaded.handoff_contract.intent == HandoffIntent.CONFIRM_OUTPUT
+    assert reloaded.handoff_contract.source == "workflow.status_transition_adapter"
 
 
 def test_generic_workflow_step_does_not_retry_for_legacy_status_tokens(tmp_path: Path, monkeypatch) -> None:
