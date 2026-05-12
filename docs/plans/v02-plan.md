@@ -404,6 +404,42 @@ before_execute → prepare_input → execute_agent → after_execute → publish
 
 **v0.2.x 擴展**：使用者可在 Skill 的 `scripts/` 定義 custom hook（shell script），透過 playbook 的 `hooks:` 欄位掛載。
 
+#### Script Hook Contract (v0.2.x)
+
+v0.2.x 支援在 `before_execute` / `after_execute` 直接宣告 script hook（與字串型 builtin hook 並存）：
+
+```yaml
+hooks:
+  after_execute:
+    - script: sync_github.sh
+      when_status_codes: [CAFE_CONFIRMED]
+      args:
+        phase: plan
+        output: "{output_file}"
+      schema:
+        type: object
+        required: [phase, output]
+        additionalProperties: false
+        properties:
+          phase:
+            type: string
+            enum: [spec, plan]
+          output:
+            type: string
+```
+
+執行規則：
+- `script` 必須是 skill `scripts/` 目錄下的相對路徑；禁止 absolute path、`..` traversal、或跳出 skill 目錄。
+- `args` 會轉為 CLI 參數（`--key value`），並支援 placeholder interpolation（如 `{output_file}`）。
+- `schema` 採最小 JSON-schema 子集：`type=object`、`required`、`properties`、`additionalProperties=false`、primitive type（string/boolean/integer/number）、`enum`。
+- `when_status_codes`（可選）只在 `after_execute` 使用，狀態不匹配時跳過執行。
+- script 以 sandbox 內 subprocess 執行；非 0 exit code 或 schema 驗證失敗會中止 pipeline，並回報可觀測事件。
+
+blackboard 事件 payload（`event_type=script_hook`）：
+- `type`, `step`, `skill`, `stage`, `script`, `status`
+- `exit_code`, `stdout`, `stderr`
+- `validation_errors`
+
 ### Hook Result Contract
 
 每個 hook 回傳統一的 `HookResult`，GenericPhase 根據結果決定後續行為：

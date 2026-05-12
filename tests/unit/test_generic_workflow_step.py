@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.hooks import HookResult
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import AgentCLI, TokenUsage
 from cafe.phases.generic_phase import GenericPhaseExecution
@@ -617,6 +618,134 @@ def test_generic_workflow_step_collects_clarification_before_next_agent_run(
         "Current user input for this iteration:" in prompt and "A1: CLI only" in prompt
         for prompt in agent_manager.prompts
     )
+
+
+def test_initial_requirements_collection_does_not_auto_continue_clarification(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-initial-input"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": {"1": "spec_first", "default": "spec_first"},
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_status_codes": ["CAFE_NEED_CLARIFICATION", "CAFE_CONFIRMED"],
+                "hooks": {"prepare_input": ["GitHubIssueFetcher"]},
+                "on": {
+                    "CAFE_NEED_CLARIFICATION": "spec",
+                    "CAFE_CONFIRMED": "_done",
+                },
+            }
+        },
+    }
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "spec:\n  input_method: manual\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-initial-input",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("CAFE_NEED_CLARIFICATION"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+        step_user_inputs={"spec": "Initial issue text"},
+    )
+
+    result = executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    assert result.status_code == "CAFE_NEED_CLARIFICATION"
+    assert result.auto_continue is False
+    reloaded = BlackboardStore(issue_dir).load_or_create("spec")
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
+    assert reloaded.handoff_contract.to_step == "user"
+    assert reloaded.handoff_contract.intent == HandoffIntent.NEED_CLARIFICATION
+
+
+def test_generic_workflow_step_records_script_hook_events_to_blackboard(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-script-event"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "output_artifact": "code",
+                "allowed_tools": ["Read"],
+                "hooks": {"before_execute": ["ScriptHook"]},
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+
+    class ScriptHook:
+        name = "ScriptHook"
+
+        def run(self, **kwargs):
+            return HookResult(
+                events=[
+                    {
+                        "type": "script_hook",
+                        "step": "develop",
+                        "skill": "develop",
+                        "stage": "before_execute",
+                        "script": "demo.sh",
+                        "status": "success",
+                        "exit_code": 0,
+                        "stdout": "ok",
+                        "stderr": "",
+                        "validation_errors": [],
+                    }
+                ]
+            )
+
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+
+    base_phase = _build_loader(tmp_path)
+    phase_with_hook = GenericPhase(
+        base_phase.skill_loader,
+        hook_registry={"ScriptHook": ScriptHook},
+        skill_bridge=base_phase.skill_bridge,
+    )
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-script-event",
+        playbook=playbook,
+        generic_phase=phase_with_hook,
+        agent_manager=FakeAgentManager("CAFE_CONFIRMED"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    result = executor.execute_step("develop", playbook["steps"]["develop"], state)
+
+    assert result.status_code == "CAFE_CONFIRMED"
+    reloaded = BlackboardStore(issue_dir).load_or_create("develop")
+    script_event = next(item for item in reloaded.events if item.event_type == "script_hook")
+    assert script_event.data["script"] == "demo.sh"
+    assert script_event.data["status"] == "success"
 
 
 def test_generic_workflow_step_auto_continues_pause_statuses_in_interactive_mode(tmp_path: Path, monkeypatch) -> None:

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from cafe.core.hooks import BUILTIN_HOOKS, HookResult
+from cafe.core.hooks.script_schema import validate_script_args_schema
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
 from cafe.skills.loader import SkillLoader
@@ -35,6 +37,7 @@ class GenericPhase:
     """Build prompts from skill content and run lifecycle hooks."""
 
     GOTO_PATTERN = re.compile(r"CAFE_GOTO\s*:\s*([a-zA-Z0-9_-]+)")
+    SCRIPT_HOOK_STAGES = {"before_execute", "after_execute"}
 
     def __init__(
         self,
@@ -257,6 +260,16 @@ class GenericPhase:
             artifact_ready = artifact_ready and after.artifact_ready
             if after.override_status_code is not None:
                 status_code = after.override_status_code
+            if not after.continue_pipeline:
+                return GenericPhaseExecution(
+                    response=response,
+                    status_code=status_code,
+                    goto_target=goto_target,
+                    context_updates=runtime_context,
+                    events=events,
+                    artifact_ready=artifact_ready,
+                    published=False,
+                )
 
             if not after.retry_requested:
                 break
@@ -297,16 +310,30 @@ class GenericPhase:
         stage: str,
         **kwargs: Any,
     ) -> HookResult:
-        hook_names = kwargs["step_def"].get("hooks", {}).get(stage, [])
+        hook_entries = kwargs["step_def"].get("hooks", {}).get(stage, [])
         aggregate = HookResult()
 
-        for hook_name in hook_names:
-            hook_cls = self.hook_registry.get(str(hook_name))
-            if hook_cls is None:
-                raise ValueError(f"Unknown hook '{hook_name}' in stage '{stage}'")
+        for hook_entry in hook_entries:
+            result: HookResult
+            if isinstance(hook_entry, str):
+                hook_cls = self.hook_registry.get(str(hook_entry))
+                if hook_cls is None:
+                    raise ValueError(f"Unknown hook '{hook_entry}' in stage '{stage}'")
+                hook = hook_cls()
+                result = hook.run(stage=stage, **kwargs)
+            elif isinstance(hook_entry, dict):
+                result = self._run_script_hook(
+                    stage=stage,
+                    declaration=hook_entry,
+                    step_def=kwargs["step_def"],
+                    skill_name=str(kwargs.get("skill_name", "")),
+                    context=kwargs.get("context"),
+                    response=kwargs.get("response"),
+                    hook_kwargs=kwargs,
+                )
+            else:
+                raise ValueError(f"Unsupported hook entry type '{type(hook_entry).__name__}' in stage '{stage}'")
 
-            hook = hook_cls()
-            result = hook.run(stage=stage, **kwargs)
             aggregate.context_updates.update(result.context_updates)
             aggregate.events.extend(result.events)
             aggregate.artifact_ready = aggregate.artifact_ready and result.artifact_ready
@@ -318,3 +345,240 @@ class GenericPhase:
                 break
 
         return aggregate
+
+    def _run_script_hook(
+        self,
+        *,
+        stage: str,
+        declaration: Dict[str, Any],
+        step_def: Dict[str, Any],
+        skill_name: str,
+        context: Optional[Dict[str, str]],
+        response: Optional[str],
+        hook_kwargs: Dict[str, Any],
+    ) -> HookResult:
+        if stage not in self.SCRIPT_HOOK_STAGES:
+            raise ValueError(f"Script hooks are only supported in {sorted(self.SCRIPT_HOOK_STAGES)}")
+
+        script, args_template, schema, when_status_codes = self._parse_script_hook_declaration(declaration)
+
+        if when_status_codes:
+            detected_status = self._detect_status_code(response=response or "", step_def=step_def)
+            if detected_status not in when_status_codes:
+                return HookResult(
+                    events=[
+                        {
+                            "type": "script_hook",
+                            "step": str(hook_kwargs.get("step_name") or ""),
+                            "skill": skill_name,
+                            "stage": stage,
+                            "script": script,
+                            "status": "skipped",
+                            "reason": "status_mismatch",
+                            "detected_status": detected_status,
+                            "when_status_codes": when_status_codes,
+                        }
+                    ]
+                )
+
+        script_path = self._resolve_script_path(skill_name=skill_name, script=script)
+        resolved_args = self._resolve_script_args(
+            args_template=args_template,
+            context=context or {},
+            hook_kwargs=hook_kwargs,
+        )
+
+        validation_errors: list[str] = []
+        if schema is not None:
+            validation_errors = validate_script_args_schema(args=resolved_args, schema=schema)
+            if validation_errors:
+                return HookResult(
+                    continue_pipeline=False,
+                    override_status_code=PhaseStatusCode.NEED_PERMISSION,
+                    events=[
+                        {
+                            "type": "script_hook",
+                            "step": str(hook_kwargs.get("step_name") or ""),
+                            "skill": skill_name,
+                            "stage": stage,
+                            "script": script,
+                            "status": "validation_failed",
+                            "exit_code": None,
+                            "stdout": "",
+                            "stderr": "",
+                            "validation_errors": validation_errors,
+                        }
+                    ],
+                )
+
+        cmd = self._build_script_command(script_path=script_path, args=resolved_args)
+        result = subprocess.run(
+            cmd,
+            cwd=str(Path.cwd().resolve()),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return HookResult(
+                continue_pipeline=False,
+                override_status_code=PhaseStatusCode.NEED_PERMISSION,
+                events=[
+                    {
+                        "type": "script_hook",
+                        "step": str(hook_kwargs.get("step_name") or ""),
+                        "skill": skill_name,
+                        "stage": stage,
+                        "script": script,
+                        "status": "failed",
+                        "exit_code": result.returncode,
+                        "stdout": result.stdout or "",
+                        "stderr": result.stderr or "",
+                        "validation_errors": [],
+                    }
+                ],
+            )
+
+        return HookResult(
+            events=[
+                {
+                    "type": "script_hook",
+                    "step": str(hook_kwargs.get("step_name") or ""),
+                    "skill": skill_name,
+                    "stage": stage,
+                    "script": script,
+                    "status": "success",
+                    "exit_code": result.returncode,
+                    "stdout": result.stdout or "",
+                    "stderr": result.stderr or "",
+                    "validation_errors": [],
+                }
+            ]
+        )
+
+    @staticmethod
+    def _parse_script_hook_declaration(
+        declaration: Dict[str, Any],
+    ) -> tuple[str, Dict[str, Any], Optional[Dict[str, Any]], list[str]]:
+        allowed_fields = {"script", "args", "schema", "when_status_codes"}
+        unknown = sorted(set(declaration.keys()) - allowed_fields)
+        if unknown:
+            raise ValueError(f"Script hook contains unsupported fields: {unknown}")
+
+        script = declaration.get("script")
+        if not isinstance(script, str) or not script.strip():
+            raise ValueError("Script hook requires non-empty 'script'")
+        script = script.strip()
+
+        args = declaration.get("args", {})
+        if args is None:
+            args = {}
+        if not isinstance(args, dict):
+            raise ValueError("Script hook 'args' must be an object")
+
+        schema = declaration.get("schema")
+        if schema is not None and not isinstance(schema, dict):
+            raise ValueError("Script hook 'schema' must be an object")
+
+        when_status_codes_raw = declaration.get("when_status_codes", [])
+        if when_status_codes_raw is None:
+            when_status_codes_raw = []
+        if not isinstance(when_status_codes_raw, list) or not all(
+            isinstance(item, str) for item in when_status_codes_raw
+        ):
+            raise ValueError("Script hook 'when_status_codes' must be a list of strings")
+
+        return script, args, schema, [item.strip() for item in when_status_codes_raw if item.strip()]
+
+    def _resolve_script_path(self, *, skill_name: str, script: str) -> Path:
+        script_path = Path(script)
+        if script_path.is_absolute():
+            raise ValueError("Script hook does not allow absolute paths")
+
+        script_parts = list(script_path.parts)
+        if any(part == ".." for part in script_parts):
+            raise ValueError("Script hook does not allow parent traversal")
+
+        if script_parts and script_parts[0] == "scripts":
+            script_parts = script_parts[1:]
+        if not script_parts:
+            raise ValueError("Script hook script path is empty")
+
+        skill_dir = self.skill_loader.get_skill_dir(skill_name)
+        scripts_dir = (skill_dir / "scripts").resolve()
+        candidate = (scripts_dir / Path(*script_parts)).resolve()
+
+        if not str(candidate).startswith(str(scripts_dir)):
+            raise ValueError("Script hook path must stay inside skill scripts directory")
+        if not candidate.exists() or not candidate.is_file():
+            raise ValueError(f"Script hook file not found: {candidate}")
+        return candidate
+
+    def _resolve_script_args(
+        self,
+        *,
+        args_template: Dict[str, Any],
+        context: Dict[str, str],
+        hook_kwargs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        template_values: Dict[str, str] = {}
+        for key, value in context.items():
+            if value is None:
+                continue
+            template_values[key] = str(value)
+
+        for key, value in hook_kwargs.items():
+            if value is None:
+                continue
+            if isinstance(value, (str, int, float, bool, Path)):
+                template_values[key] = str(value)
+
+        resolved: Dict[str, Any] = {}
+        for key, value in args_template.items():
+            resolved[str(key)] = self._resolve_script_arg_value(value=value, template_values=template_values)
+        return resolved
+
+    def _resolve_script_arg_value(
+        self,
+        *,
+        value: Any,
+        template_values: Dict[str, str],
+    ) -> Any:
+        if isinstance(value, str):
+            try:
+                return value.format(**template_values)
+            except KeyError as exc:
+                raise ValueError(f"Missing template value for '{exc.args[0]}' in script hook args") from exc
+        if isinstance(value, list):
+            return [self._resolve_script_arg_value(value=item, template_values=template_values) for item in value]
+        if isinstance(value, dict):
+            return {
+                str(key): self._resolve_script_arg_value(value=item, template_values=template_values)
+                for key, item in value.items()
+            }
+        return value
+
+    @staticmethod
+    def _build_script_command(*, script_path: Path, args: Dict[str, Any]) -> list[str]:
+        cmd = ["/bin/bash", str(script_path)]
+        for key, value in args.items():
+            flag = f"--{key}"
+            if isinstance(value, list):
+                for item in value:
+                    cmd.extend([flag, str(item)])
+                continue
+            if isinstance(value, bool):
+                cmd.extend([flag, "true" if value else "false"])
+                continue
+            cmd.extend([flag, str(value)])
+        return cmd
+
+    @staticmethod
+    def _detect_status_code(*, response: str, step_def: Dict[str, Any]) -> Optional[str]:
+        valid = [
+            PhaseStatusCode(code)
+            for code in step_def.get("valid_status_codes", [])
+            if code in {item.value for item in PhaseStatusCode}
+        ]
+        status_code = StatusCodeParser.extract(response, valid_codes=valid or list(PhaseStatusCode))
+        return status_code.value if status_code is not None else None

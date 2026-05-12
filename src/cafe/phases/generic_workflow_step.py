@@ -259,7 +259,7 @@ class GenericWorkflowStepExecutor(Phase):
             )
 
         auto_continue = any(
-            event.get("type") in {"user_input_collected", "review_modification_requested"}
+            self._event_allows_auto_continue(event)
             for event in execution.events
             if isinstance(event, dict)
         )
@@ -274,6 +274,14 @@ class GenericWorkflowStepExecutor(Phase):
             for event in execution.events
             if isinstance(event, dict)
         ]
+        store = BlackboardStore(self.issue_dir)
+        for event in events:
+            if event.get("type") != "script_hook":
+                continue
+            payload = dict(event)
+            payload.setdefault("step", step_name)
+            store.record_event(blackboard_state, "script_hook", payload)
+
         if require_status_code and status_code is not None:
             handoff_intent = self._resolve_handoff_intent(step_name, status_code)
             if handoff_intent is not None:
@@ -629,6 +637,22 @@ class GenericWorkflowStepExecutor(Phase):
     @staticmethod
     def _should_validate_checklist(status_code: PhaseStatusCode) -> bool:
         return status_code in {PhaseStatusCode.CONFIRMED, PhaseStatusCode.READY_FOR_REVIEW}
+
+    @staticmethod
+    def _event_allows_auto_continue(event: Dict[str, Any]) -> bool:
+        """Return whether a hook event represents user feedback for a paused step.
+
+        Initial requirement collection also emits ``user_input_collected`` so
+        the prompt can receive GitHub/manual issue text. That input is not a
+        response to a clarification pause and must not suppress workflow
+        pausing when the agent returns ``CAFE_NEED_CLARIFICATION``.
+        """
+        event_type = event.get("type")
+        if event_type == "review_modification_requested":
+            return True
+        if event_type != "user_input_collected":
+            return False
+        return event.get("source") in {"questions_xml", "prompt", "user_input_file"}
 
     @staticmethod
     def _step_requires_status_code(step_name: str) -> bool:

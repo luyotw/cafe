@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -40,10 +40,10 @@ class StepHooks(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    before_execute: List[str] = Field(default_factory=list)
-    prepare_input: List[str] = Field(default_factory=list)
-    after_execute: List[str] = Field(default_factory=list)
-    publish_output: List[str] = Field(default_factory=list)
+    before_execute: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
+    prepare_input: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
+    after_execute: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
+    publish_output: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
 
 
 SkillSelector = Union[str, Dict[str, str]]

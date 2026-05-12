@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 def test_phase_scripts_delegate_to_shared_implementation() -> None:
@@ -68,3 +69,17 @@ def test_sync_script_skips_when_sync_disabled_without_gh(
     payload = json.loads(result.stdout.strip())
     assert payload["action"] == "skipped"
     assert payload["reason"] == "sync_disabled"
+
+
+def test_default_playbook_migrates_plan_sync_to_script_hook() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    playbook_path = project_root / "src/cafe/data/playbooks/default.yaml"
+    data = yaml.safe_load(playbook_path.read_text(encoding="utf-8"))
+
+    plan_hooks = data["steps"]["plan"]["hooks"]["after_execute"]
+    assert isinstance(plan_hooks, list) and plan_hooks
+    script_hook = plan_hooks[0]
+    assert script_hook["script"] == "sync_github.sh"
+    assert script_hook["args"]["phase"] == "plan"
+    assert script_hook["args"]["output"] == "{output_file}"
+    assert script_hook["when_status_codes"] == ["CAFE_CONFIRMED"]
