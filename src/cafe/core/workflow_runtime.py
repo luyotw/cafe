@@ -94,7 +94,6 @@ class BlackboardWorkflowRuntime:
         contract = self.blackboard_store.load_handoff_contract(
             self.blackboard,
             allowed_steps=list(self.steps.keys()),
-            allow_legacy_text=True,
         )
         if contract.to_owner != HandoffOwner.AGENT:
             raise RuntimeError(
@@ -175,7 +174,6 @@ class BlackboardWorkflowRuntime:
             contract = self.blackboard_store.load_handoff_contract(
                 self.blackboard,
                 allowed_steps=list(self.steps.keys()),
-                allow_legacy_text=True,
             )
         except Exception:
             return None
@@ -207,7 +205,6 @@ class BlackboardWorkflowRuntime:
         contract = self.blackboard_store.load_handoff_contract(
             self.blackboard,
             allowed_steps=list(self.steps.keys()),
-            allow_legacy_text=True,
         )
         if contract.to_owner == HandoffOwner.AGENT and contract.to_step == current_step:
             explicit_status_code = getattr(execution_result, "status_code", None)
@@ -220,7 +217,6 @@ class BlackboardWorkflowRuntime:
         contract = self.blackboard_store.load_handoff_contract(
             self.blackboard,
             allowed_steps=list(self.steps.keys()),
-            allow_legacy_text=True,
         )
         if contract.from_step != current_step:
             return None
@@ -587,7 +583,6 @@ class BlackboardWorkflowRuntime:
             contract = self.blackboard_store.load_handoff_contract(
                 self.blackboard,
                 allowed_steps=list(self.steps.keys()),
-                allow_legacy_text=True,
             )
             next_step = contract.to_step
 
@@ -730,6 +725,47 @@ class BlackboardWorkflowRuntime:
                 visit_count=visit_count,
                 validate_assignee_type=True,
             )
+            self._store_artifacts(frame.artifacts)
+
+            post_contract = self._load_step_handoff_contract(current_step=current_step)
+            if post_contract is not None and not (
+                post_contract.to_owner == HandoffOwner.AGENT and post_contract.to_step == current_step
+            ):
+                status_code = (
+                    post_contract.status_code
+                    or frame.explicit_status_code
+                    or f"BATON_{post_contract.intent.value.upper()}"
+                )
+                last_status_code = status_code
+                self._record_step_completion(
+                    event_type=completion_event_type,
+                    current_step=current_step,
+                    status_code=status_code,
+                    runtime=runtime_label,
+                    visit_count=visit_count,
+                    hop_count=hop_count,
+                )
+                post_contract_result = self._handle_post_contract(
+                    current_step=current_step,
+                    status_code=status_code,
+                    runtime=runtime_label,
+                    update_contract_on_transition=False,
+                )
+                if post_contract_result is not None:
+                    status_code = post_contract_result.status_code
+                    last_status_code = status_code
+                    if post_contract_result.terminal_result is not None:
+                        return post_contract_result.terminal_result
+                    if post_contract_result.next_step is not None:
+                        if single_step_mode:
+                            return PlaybookRunResult(
+                                final_step=current_step,
+                                final_status_code=status_code,
+                                completed=False,
+                            )
+                        current_step = post_contract_result.next_step
+                        continue
+
             status_code_obj, goto_target, valid_codes = self._parse_legacy_status(
                 step_def=step_def,
                 response=frame.response,
@@ -840,7 +876,6 @@ class BlackboardWorkflowRuntime:
                 status_code = status_code_obj.value
                 last_status_code = status_code
 
-            self._store_artifacts(frame.artifacts)
             self._record_step_completion(
                 event_type=completion_event_type,
                 current_step=current_step,
@@ -862,6 +897,12 @@ class BlackboardWorkflowRuntime:
                 if post_contract_result.terminal_result is not None:
                     return post_contract_result.terminal_result
                 if post_contract_result.next_step is not None:
+                    if single_step_mode:
+                        return PlaybookRunResult(
+                            final_step=current_step,
+                            final_status_code=status_code,
+                            completed=False,
+                        )
                     current_step = post_contract_result.next_step
                     continue
 

@@ -460,6 +460,7 @@ def _consume_pending_chat_handoff(
     blackboard = store.load_or_create(
         str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
         playbook_id=str(playbook_data["playbook"]["id"]),
+        allow_legacy_text=True,
     )
     contract = store.load_handoff_contract(
         blackboard,
@@ -805,6 +806,7 @@ def _execute_single_step_alias(
     blackboard = BlackboardStore(issue_dir).load_or_create(
         str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
         playbook_id=str(playbook_data["playbook"]["id"]),
+        allow_legacy_text=True,
     )
     store = BlackboardStore(issue_dir)
     store.set_current_step(blackboard, step_name)
@@ -841,6 +843,7 @@ def _execute_single_step_alias(
     latest_blackboard = store.load_or_create(
         str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
         playbook_id=str(playbook_data["playbook"]["id"]),
+        allow_legacy_text=True,
     )
     handoff = store.load_handoff_contract(
         latest_blackboard,

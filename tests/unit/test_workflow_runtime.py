@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -109,6 +111,47 @@ def test_runtime_delegates_non_pr_steps_to_legacy_runner(tmp_path: Path) -> None
     assert result.completed is True
     assert result.final_step == "spec"
     assert result.final_status_code == "CAFE_CONFIRMED"
+
+
+def test_runtime_rejects_legacy_text_baton_in_core_path(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "strict-baton"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "playbook_id": "default",
+                "current_step": "spec",
+                "artifacts": {},
+                "events": [],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (issue_dir / "next_step.txt").write_text("spec\n", encoding="utf-8")
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object):
+        return ("CAFE_CONFIRMED", {})
+
+    with pytest.raises(ValueError, match="Invalid baton contract payload"):
+        runtime = BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            executor=executor,
+        )
+        runtime.run()
 
 
 def test_runtime_hands_off_to_pr_runtime_boundary(tmp_path: Path) -> None:
@@ -589,8 +632,8 @@ def test_runtime_records_status_code_invalid_event(tmp_path: Path) -> None:
     assert latest["runtime"] == "legacy_until_boundary"
 
 
-def test_runtime_records_status_code_missing_event(tmp_path: Path) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "missing-status"
+def test_runtime_prefers_step_baton_over_missing_status_text(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "missing-status-with-baton"
     issue_dir.mkdir(parents=True, exist_ok=True)
     playbook = {
         "playbook": {"id": "default"},
@@ -625,21 +668,66 @@ def test_runtime_records_status_code_missing_event(tmp_path: Path) -> None:
     )
     result = runtime.run(start_step="spec")
 
-    # The baton-first fallback resolves the next step from the handoff
-    # contract.  When the contract points to "user" (confirm_output),
-    # the runtime pauses for user input — this is the correct baton
-    # outcome, not a stall.
     assert result.completed is False
-    assert result.final_status_code == "NO_STATUS_CODE"
+    assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
     blackboard = BlackboardStore(issue_dir).load_or_create("spec")
     missing_events = [e for e in blackboard.events if e.event_type == "status_code_missing"]
-    assert missing_events
-    latest = missing_events[-1].data
-    assert latest["runtime"] == "legacy_until_boundary"
-    assert latest["baton_fallback"] is True
-    assert latest["fallback_next_step"] == "user"
-    # Verify the blackboard was advanced to "user"
+    assert missing_events == []
     assert blackboard.current_step == "user"
+    completed_events = [e for e in blackboard.events if e.event_type == "step_completed"]
+    assert completed_events[-1].data["status_code"] == "BATON_CONFIRM_OUTPUT"
+
+
+def test_runtime_prefers_step_baton_over_invalid_status_text(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "invalid-status-with-baton"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "plan"},
+            },
+            "plan": {
+                "skill": "plan",
+                "role": "developer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object):
+        if step_name == "spec":
+            store = BlackboardStore(issue_dir)
+            store.update_handoff_contract(
+                state,
+                from_step="spec",
+                to_owner=HandoffOwner.AGENT,
+                to_step="plan",
+                intent=HandoffIntent.AWAIT_AGENT,
+                status_code="CAFE_CONFIRMED",
+                source="test.executor",
+            )
+            return ("CAFE_READY_FOR_REVIEW", {})
+        return ("CAFE_CONFIRMED", {})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="spec")
+
+    assert result.completed is True
+    assert result.final_step == "plan"
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    invalid_events = [e for e in blackboard.events if e.event_type == "status_code_invalid"]
+    assert invalid_events == []
+    transitions = [e for e in blackboard.events if e.event_type == "transition"]
+    assert transitions[0].data["source"] == "baton"
 
 
 def test_runtime_status_code_missing_no_handoff_contract(tmp_path: Path) -> None:

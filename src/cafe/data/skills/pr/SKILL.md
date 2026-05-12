@@ -52,7 +52,7 @@ alongside this skill.
 5. 完成本地 PR artifact 與 checklist 後，依照本輪結果更新 blackboard 與 next-step baton
 6. CAFE host-side hook 會執行 `scripts/sync_pr.sh --output {output_file}`，依 `issue.yaml` 的 `base_branch` 自動加上 `--base`
 7. Hook 會把 PR URL 作為 `pr_synced` event 回傳，CLI 會印出 PR URL
-8. 若目前 runtime 仍透過 phase-level status code 完成遷移，才回傳 `CAFE_CONFIRMED`
+8. 完成本地 artifact 後，把 next-step baton 寫成 `done`；不要用 response text status code 代表 workflow completion
 
 ### Gotchas
 - Script 的 progress/error 輸出在 stderr，JSON result 在 stdout
