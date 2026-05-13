@@ -508,7 +508,9 @@ class GenericPhase:
         scripts_dir = (skill_dir / "scripts").resolve()
         candidate = (scripts_dir / Path(*script_parts)).resolve()
 
-        if not str(candidate).startswith(str(scripts_dir)):
+        try:
+            candidate.relative_to(scripts_dir)
+        except ValueError:
             raise ValueError("Script hook path must stay inside skill scripts directory")
         if not candidate.exists() or not candidate.is_file():
             raise ValueError(f"Script hook file not found: {candidate}")

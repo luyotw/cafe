@@ -551,6 +551,41 @@ def test_execute_rejects_script_hook_path_traversal(tmp_path: Path) -> None:
         )
 
 
+def test_execute_rejects_script_hook_symlink_outside_scripts_dir(tmp_path: Path) -> None:
+    loader = _setup_loader(tmp_path)
+    phase = GenericPhase(loader)
+    skill_dir = loader.get_skill_dir("plan")
+    scripts_dir = skill_dir / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+
+    escaped_dir = skill_dir / "scripts_evil"
+    escaped_dir.mkdir(parents=True, exist_ok=True)
+    escaped_script = escaped_dir / "escaped.sh"
+    escaped_script.write_text("#!/usr/bin/env bash\necho escaped\n", encoding="utf-8")
+
+    link_script = scripts_dir / "escape.sh"
+    link_script.symlink_to(escaped_script)
+
+    with pytest.raises(ValueError, match="must stay inside"):
+        phase.execute(
+            skill_name="plan",
+            skill_invocation="/plan",
+            shared_skill_invocations=["/workflow-common"],
+            step_def={
+                "hooks": {
+                    "before_execute": [
+                        {
+                            "script": "escape.sh",
+                            "args": {},
+                        }
+                    ]
+                },
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+            },
+            agent_executor=lambda prompt: "CAFE_CONFIRMED",
+        )
+
+
 def test_execute_script_hook_validation_failure_stops_pipeline(tmp_path: Path) -> None:
     loader = _setup_loader(tmp_path)
     marker = tmp_path / "marker.txt"
