@@ -23,6 +23,7 @@ from cafe.utils.github import (
     format_comments_for_prompt,
     get_all_pr_comments,
     get_processed_comment_ids_from_history,
+    load_pr_last_seen_comment_ids,
 )
 
 
@@ -109,6 +110,37 @@ def _pr_publish_requested(
         and contract.to_owner == HandoffOwner.DONE
         and contract.to_step == "done"
         and contract.intent == HandoffIntent.WORKFLOW_COMPLETE
+    )
+
+
+def _extract_pr_comment_ids(comments: list[Any]) -> list[str]:
+    comment_ids: list[str] = []
+    for comment in comments:
+        raw_id = getattr(comment, "id", None)
+        if raw_id is None and isinstance(comment, dict):
+            raw_id = comment.get("id")
+        if raw_id is not None:
+            comment_ids.append(str(raw_id))
+    return comment_ids
+
+
+def _persist_pr_last_seen_comment_ids(pr_dir: Path, comment_ids: list[str]) -> None:
+    if not comment_ids:
+        return
+
+    seen_ids = load_pr_last_seen_comment_ids(pr_dir)
+    seen_ids.update(str(comment_id) for comment_id in comment_ids)
+
+    artifact_file = pr_dir / "artifacts" / "pr_last_seen_comments.json"
+    artifact_file.parent.mkdir(parents=True, exist_ok=True)
+    artifact_file.write_text(
+        json.dumps(
+            {"last_seen_comment_ids": sorted(seen_ids)},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
     )
 
 
@@ -578,8 +610,11 @@ class GitHubPRCreator(NoOpHook):
             return HookResult(context_updates=context_updates)
 
         try:
-            exclude_ids = get_processed_comment_ids_from_history(phase.phase_dir)
+            exclude_ids = load_pr_last_seen_comment_ids(phase.phase_dir)
+            if not exclude_ids:
+                exclude_ids = get_processed_comment_ids_from_history(phase.phase_dir)
             comments = get_all_pr_comments(int(existing_pr["number"]), exclude_ids=exclude_ids)
+            _persist_pr_last_seen_comment_ids(phase.phase_dir, _extract_pr_comment_ids(comments))
             unresolved_comments = filter_unresolved_comments(comments)
         except Exception:
             return HookResult(context_updates=context_updates)

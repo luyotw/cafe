@@ -523,6 +523,44 @@ def test_github_pr_creator_prepare_input_loads_unresolved_comments(tmp_path: Pat
     assert result.events == [{"type": "pr_comments_loaded", "count": 1, "pr_number": "42"}]
 
 
+def test_github_pr_creator_prepare_input_uses_and_updates_last_seen_comments(tmp_path: Path) -> None:
+    phase_dir = tmp_path / "pr"
+    artifact_file = phase_dir / "artifacts" / "pr_last_seen_comments.json"
+    artifact_file.parent.mkdir(parents=True, exist_ok=True)
+    artifact_file.write_text(
+        json.dumps({"last_seen_comment_ids": ["OLD"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    phase = _FakePhase(phase_dir=phase_dir, iteration=2)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_current_branch.return_value = "issue-250"
+    phase.git_ops.has_unpushed_commits.return_value = False
+
+    comment = MagicMock()
+    comment.id = "NEW"
+
+    hook = GitHubPRCreator()
+
+    with (
+        patch("cafe.core.hooks.native.get_processed_comment_ids_from_history") as mock_processed,
+        patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
+        patch("cafe.core.hooks.native.get_all_pr_comments", return_value=[comment]) as mock_comments,
+        patch("cafe.core.hooks.native.filter_unresolved_comments", return_value=[comment]),
+        patch("cafe.core.hooks.native.format_comments_for_prompt", return_value="Comment #1\nPlease fix this"),
+    ):
+        mock_github_ops.return_value.get_pr_for_branch.return_value = {
+            "number": 250,
+            "url": "https://github.com/test/repo/pull/250",
+        }
+        result = hook.run(stage="prepare_input", phase=phase, step_name="pr")
+
+    mock_processed.assert_not_called()
+    mock_comments.assert_called_once_with(250, exclude_ids={"OLD"})
+    assert result.events == [{"type": "pr_comments_loaded", "count": 1, "pr_number": "250"}]
+    payload = json.loads(artifact_file.read_text(encoding="utf-8"))
+    assert payload["last_seen_comment_ids"] == ["NEW", "OLD"]
+
+
 def test_github_pr_creator_publish_output_runs_sync_pr_script(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     phase_dir = issue_dir / "pr"
