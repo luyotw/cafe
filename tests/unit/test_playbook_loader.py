@@ -125,6 +125,93 @@ steps:
     }
 
 
+def test_load_supports_dictionary_script_hook_declarations(tmp_path: Path) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "plan")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "default",
+        """
+playbook:
+  id: default
+roles:
+  developer:
+    description: dev
+steps:
+  plan:
+    skill: plan
+    role: developer
+    hooks:
+      after_execute:
+        - script: sync_github.sh
+          when_status_codes: [CAFE_CONFIRMED]
+          args:
+            phase: plan
+            output: "{output_file}"
+          schema:
+            type: object
+            required: [phase, output]
+            additionalProperties: false
+            properties:
+              phase:
+                type: string
+                enum: [spec, plan]
+              output:
+                type: string
+    valid_status_codes: [CAFE_READY_FOR_REVIEW, CAFE_CONFIRMED]
+    on:
+      CAFE_READY_FOR_REVIEW: plan
+      CAFE_CONFIRMED: _done
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+    result = loader.load_model("default")
+
+    hook_entry = result.model.steps["plan"].hooks.after_execute[0]
+    assert isinstance(hook_entry, dict)
+    assert hook_entry["script"] == "sync_github.sh"
+
+
+def test_load_rejects_script_hook_dict_in_unsupported_stage(tmp_path: Path) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "pr")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "default",
+        """
+playbook:
+  id: default
+roles:
+  developer:
+    description: dev
+steps:
+  pr:
+    skill: pr
+    role: developer
+    hooks:
+      publish_output:
+        - script: sync_pr.sh
+    valid_status_codes: [CAFE_CONFIRMED]
+    on:
+      CAFE_CONFIRMED: _done
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="unsupported stage 'publish_output'"):
+        loader.load_model("default")
+
+
 def test_load_missing_skill_raises(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
     _write_playbook(

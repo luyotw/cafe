@@ -1,5 +1,6 @@
 """Tests for GenericPhase."""
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -461,3 +462,378 @@ def test_validate_skills_does_not_install_any_files(tmp_path: Path) -> None:
     bridge = _make_bridge(tmp_path)
     bridge.validate_skills(["plan", "workflow-common"], AgentCLI.CLAUDE)
     assert not (tmp_path / "project" / ".claude" / "skills").exists()
+
+
+def _write_skill_script(loader: SkillLoader, *, skill_name: str, script_name: str, body: str) -> Path:
+    skill_dir = loader.get_skill_dir(skill_name)
+    script_dir = skill_dir / "scripts"
+    script_dir.mkdir(parents=True, exist_ok=True)
+    script_path = script_dir / script_name
+    script_path.write_text(body, encoding="utf-8")
+    return script_path
+
+
+def test_execute_runs_script_hook_with_schema_and_interpolation(tmp_path: Path) -> None:
+    loader = _setup_loader(tmp_path)
+    _write_skill_script(
+        loader,
+        skill_name="plan",
+        script_name="echo_args.sh",
+        body=(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            "echo \"$1|$2|$3|$4\"\n"
+        ),
+    )
+    phase = GenericPhase(loader)
+    output_file = tmp_path / "out.md"
+    output_file.write_text("x", encoding="utf-8")
+
+    result = phase.execute(
+        skill_name="plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
+        context={"output_file": str(output_file)},
+        step_def={
+            "hooks": {
+                "before_execute": [
+                    {
+                        "script": "echo_args.sh",
+                        "args": {
+                            "phase": "plan",
+                            "output": "{output_file}",
+                        },
+                        "schema": {
+                            "type": "object",
+                            "required": ["phase", "output"],
+                            "additionalProperties": False,
+                            "properties": {
+                                "phase": {"type": "string", "enum": ["spec", "plan"]},
+                                "output": {"type": "string"},
+                            },
+                        },
+                    }
+                ]
+            },
+            "valid_status_codes": ["CAFE_CONFIRMED"],
+        },
+        output_file=output_file,
+        agent_executor=lambda prompt: "CAFE_CONFIRMED",
+    )
+
+    event = next(item for item in result.events if item.get("type") == "script_hook")
+    assert event["status"] == "success"
+    assert event["stage"] == "before_execute"
+    assert "--phase|plan|--output" in event["stdout"]
+    assert str(output_file) in event["stdout"]
+
+
+def test_execute_rejects_script_hook_path_traversal(tmp_path: Path) -> None:
+    loader = _setup_loader(tmp_path)
+    phase = GenericPhase(loader)
+
+    with pytest.raises(ValueError, match="parent traversal"):
+        phase.execute(
+            skill_name="plan",
+            skill_invocation="/plan",
+            shared_skill_invocations=["/workflow-common"],
+            step_def={
+                "hooks": {
+                    "before_execute": [
+                        {
+                            "script": "../evil.sh",
+                            "args": {},
+                        }
+                    ]
+                },
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+            },
+            agent_executor=lambda prompt: "CAFE_CONFIRMED",
+        )
+
+
+def test_execute_rejects_script_hook_symlink_outside_scripts_dir(tmp_path: Path) -> None:
+    loader = _setup_loader(tmp_path)
+    phase = GenericPhase(loader)
+    skill_dir = loader.get_skill_dir("plan")
+    scripts_dir = skill_dir / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+
+    escaped_dir = skill_dir / "scripts_evil"
+    escaped_dir.mkdir(parents=True, exist_ok=True)
+    escaped_script = escaped_dir / "escaped.sh"
+    escaped_script.write_text("#!/usr/bin/env bash\necho escaped\n", encoding="utf-8")
+
+    link_script = scripts_dir / "escape.sh"
+    link_script.symlink_to(escaped_script)
+
+    with pytest.raises(ValueError, match="must stay inside"):
+        phase.execute(
+            skill_name="plan",
+            skill_invocation="/plan",
+            shared_skill_invocations=["/workflow-common"],
+            step_def={
+                "hooks": {
+                    "before_execute": [
+                        {
+                            "script": "escape.sh",
+                            "args": {},
+                        }
+                    ]
+                },
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+            },
+            agent_executor=lambda prompt: "CAFE_CONFIRMED",
+        )
+
+
+def test_execute_script_hook_validation_failure_stops_pipeline(tmp_path: Path) -> None:
+    loader = _setup_loader(tmp_path)
+    marker = tmp_path / "marker.txt"
+    _write_skill_script(
+        loader,
+        skill_name="plan",
+        script_name="touch_marker.sh",
+        body=(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            "echo touched > \"" + str(marker) + "\"\n"
+        ),
+    )
+    phase = GenericPhase(loader)
+
+    result = phase.execute(
+        skill_name="plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
+        step_def={
+            "hooks": {
+                "before_execute": [
+                    {
+                        "script": "touch_marker.sh",
+                        "args": {"phase": 7},
+                        "schema": {
+                            "type": "object",
+                            "required": ["phase"],
+                            "additionalProperties": False,
+                            "properties": {"phase": {"type": "string"}},
+                        },
+                    }
+                ]
+            },
+            "valid_status_codes": ["CAFE_NEED_PERMISSION", "CAFE_CONFIRMED"],
+        },
+        agent_executor=lambda prompt: "CAFE_CONFIRMED",
+    )
+
+    assert not marker.exists()
+    assert result.status_code == PhaseStatusCode.NEED_PERMISSION
+    event = next(item for item in result.events if item.get("type") == "script_hook")
+    assert event["status"] == "validation_failed"
+    assert "expected type 'string'" in " ".join(event["validation_errors"])
+
+
+def test_execute_script_hook_failure_stops_pipeline(tmp_path: Path) -> None:
+    loader = _setup_loader(tmp_path)
+    _write_skill_script(
+        loader,
+        skill_name="plan",
+        script_name="fail.sh",
+        body=(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            "echo boom >&2\n"
+            "exit 9\n"
+        ),
+    )
+    phase = GenericPhase(loader)
+
+    result = phase.execute(
+        skill_name="plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
+        step_def={
+            "hooks": {
+                "after_execute": [
+                    {
+                        "script": "fail.sh",
+                        "args": {},
+                        "when_status_codes": ["CAFE_CONFIRMED"],
+                    }
+                ]
+            },
+            "valid_status_codes": ["CAFE_CONFIRMED", "CAFE_NEED_PERMISSION"],
+        },
+        agent_executor=lambda prompt: "CAFE_CONFIRMED",
+    )
+
+    assert result.status_code == PhaseStatusCode.NEED_PERMISSION
+    event = next(item for item in result.events if item.get("type") == "script_hook")
+    assert event["status"] == "failed"
+    assert event["exit_code"] == 9
+    assert "boom" in event["stderr"]
+
+
+def test_execute_script_hook_can_skip_when_status_mismatch(tmp_path: Path) -> None:
+    loader = _setup_loader(tmp_path)
+    _write_skill_script(
+        loader,
+        skill_name="plan",
+        script_name="noop.sh",
+        body=(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            "echo noop\n"
+        ),
+    )
+    phase = GenericPhase(loader)
+
+    result = phase.execute(
+        skill_name="plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
+        step_def={
+            "hooks": {
+                "after_execute": [
+                    {
+                        "script": "noop.sh",
+                        "args": {},
+                        "when_status_codes": ["CAFE_CONFIRMED"],
+                    }
+                ]
+            },
+            "valid_status_codes": ["CAFE_READY_FOR_REVIEW", "CAFE_CONFIRMED"],
+        },
+        agent_executor=lambda prompt: "CAFE_READY_FOR_REVIEW",
+    )
+
+    event = next(item for item in result.events if item.get("type") == "script_hook")
+    assert event["status"] == "skipped"
+    assert event["reason"] == "status_mismatch"
+
+
+def test_execute_script_hook_passes_timeout_to_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loader = _setup_loader(tmp_path)
+    _write_skill_script(
+        loader,
+        skill_name="plan",
+        script_name="noop.sh",
+        body="#!/usr/bin/env bash\necho noop\n",
+    )
+    phase = GenericPhase(loader)
+    captured: dict[str, object] = {}
+
+    def _run(*args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr("cafe.phases.generic_phase.subprocess.run", _run)
+
+    result = phase.execute(
+        skill_name="plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
+        step_def={
+            "hooks": {
+                "before_execute": [
+                    {
+                        "script": "noop.sh",
+                        "args": {},
+                        "timeout_seconds": 2.5,
+                    }
+                ]
+            },
+            "valid_status_codes": ["CAFE_CONFIRMED"],
+        },
+        agent_executor=lambda prompt: "CAFE_CONFIRMED",
+    )
+
+    assert captured["timeout"] == 2.5
+    event = next(item for item in result.events if item.get("type") == "script_hook")
+    assert event["status"] == "success"
+
+
+def test_execute_script_hook_timeout_stops_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loader = _setup_loader(tmp_path)
+    _write_skill_script(
+        loader,
+        skill_name="plan",
+        script_name="slow.sh",
+        body="#!/usr/bin/env bash\nsleep 30\n",
+    )
+    phase = GenericPhase(loader)
+
+    def _run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=1.0, output="partial", stderr="timed out")
+
+    monkeypatch.setattr("cafe.phases.generic_phase.subprocess.run", _run)
+
+    result = phase.execute(
+        skill_name="plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
+        step_def={
+            "hooks": {
+                "before_execute": [
+                    {
+                        "script": "slow.sh",
+                        "args": {},
+                        "timeout_seconds": 1.0,
+                    }
+                ]
+            },
+            "valid_status_codes": ["CAFE_CONFIRMED", "CAFE_NEED_PERMISSION"],
+        },
+        agent_executor=lambda prompt: "CAFE_CONFIRMED",
+    )
+
+    assert result.status_code == PhaseStatusCode.NEED_PERMISSION
+    event = next(item for item in result.events if item.get("type") == "script_hook")
+    assert event["status"] == "timeout"
+    assert event["exit_code"] is None
+    assert "partial" in event["stdout"]
+    assert "timed out" in event["stderr"]
+
+
+def test_execute_script_hook_timeout_decodes_bytes_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loader = _setup_loader(tmp_path)
+    _write_skill_script(
+        loader,
+        skill_name="plan",
+        script_name="slow.sh",
+        body="#!/usr/bin/env bash\nsleep 30\n",
+    )
+    phase = GenericPhase(loader)
+
+    def _run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=1.0, output=b"partial-bytes", stderr=b"timed-bytes")
+
+    monkeypatch.setattr("cafe.phases.generic_phase.subprocess.run", _run)
+
+    result = phase.execute(
+        skill_name="plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
+        step_def={
+            "hooks": {
+                "before_execute": [
+                    {
+                        "script": "slow.sh",
+                        "args": {},
+                        "timeout_seconds": 1.0,
+                    }
+                ]
+            },
+            "valid_status_codes": ["CAFE_CONFIRMED", "CAFE_NEED_PERMISSION"],
+        },
+        agent_executor=lambda prompt: "CAFE_CONFIRMED",
+    )
+
+    assert result.status_code == PhaseStatusCode.NEED_PERMISSION
+    event = next(item for item in result.events if item.get("type") == "script_hook")
+    assert event["status"] == "timeout"
+    assert event["exit_code"] is None
+    assert "partial-bytes" in event["stdout"]
+    assert "timed-bytes" in event["stderr"]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -14,6 +14,7 @@ from cafe.skills.loader import SkillLoader
 
 
 DONE_TARGET = "_done"
+SCRIPT_HOOK_STAGES = {"before_execute", "after_execute"}
 
 
 class PlaybookMeta(BaseModel):
@@ -40,10 +41,10 @@ class StepHooks(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    before_execute: List[str] = Field(default_factory=list)
-    prepare_input: List[str] = Field(default_factory=list)
-    after_execute: List[str] = Field(default_factory=list)
-    publish_output: List[str] = Field(default_factory=list)
+    before_execute: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
+    prepare_input: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
+    after_execute: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
+    publish_output: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
 
 
 SkillSelector = Union[str, Dict[str, str]]
@@ -185,6 +186,7 @@ def validate_playbook(
     for step_name, step in steps.items():
         _validate_step_role(step_name, step, model.roles)
         _validate_step_skills(step_name, step, skill_loader)
+        _validate_script_hook_stages(step_name, step.hooks)
         _validate_targets(step_name, step.allowed_goto, steps, "allowed_goto")
         _validate_transition_targets(step_name, step.on, steps)
         warnings.extend(_collect_tool_warnings(step_name, step.allowed_tools))
@@ -229,6 +231,23 @@ def _validate_step_skills(step_name: str, step: StepConfig, skill_loader: SkillL
             raise ValueError(
                 f"Step '{step_name}' references unknown skill '{skill_name}'"
             ) from exc
+
+
+def _validate_script_hook_stages(step_name: str, hooks: StepHooks) -> None:
+    stage_entries = {
+        "before_execute": hooks.before_execute,
+        "prepare_input": hooks.prepare_input,
+        "after_execute": hooks.after_execute,
+        "publish_output": hooks.publish_output,
+    }
+    for stage_name, entries in stage_entries.items():
+        if stage_name in SCRIPT_HOOK_STAGES:
+            continue
+        for entry in entries:
+            if isinstance(entry, dict) and "script" in entry:
+                raise ValueError(
+                    f"Step '{step_name}' has script hook in unsupported stage '{stage_name}'"
+                )
 
 
 def _validate_targets(
