@@ -97,7 +97,10 @@ def _pr_publish_requested(
         return False
 
     try:
-        contract = HandoffContract.from_dict(json.loads(baton_file.read_text(encoding="utf-8")))
+        raw_baton = baton_file.read_text(encoding="utf-8").strip()
+        contract = HandoffContract.from_dict(json.loads(raw_baton))
+    except json.JSONDecodeError:
+        return raw_baton == "done"
     except Exception:
         return False
 

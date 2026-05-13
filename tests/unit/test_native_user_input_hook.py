@@ -662,6 +662,67 @@ def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_with
     ]
 
 
+def test_github_pr_creator_publish_output_runs_from_legacy_done_baton(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "pr"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    publish_request_file = phase_dir / "iteration_001" / "publish_request.json"
+    next_step_file = issue_dir / "next_step.txt"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Test PR\n\nBody\n", encoding="utf-8")
+    publish_request_file.write_text(
+        json.dumps(
+            {
+                "capability": "publish_pr",
+                "script": "src/cafe/data/skills/pr/scripts/sync_pr.sh",
+                "args": {
+                    "output": ".cafe/issues/demo/pr/iteration_001/output.md",
+                    "base": "develop",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    next_step_file.write_text("done\n", encoding="utf-8")
+
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+
+    completed = MagicMock()
+    completed.returncode = 0
+    completed.stdout = (
+        '{"action":"updated","pr_number":"42",'
+        '"pr_url":"https://github.com/test/repo/pull/42"}\n'
+    )
+    completed.stderr = ""
+
+    hook = GitHubPRCreator()
+    with patch("cafe.core.hooks.native.subprocess.run", return_value=completed) as mock_run:
+        result = hook.run(
+            stage="publish_output",
+            phase=phase,
+            step_name="pr",
+            output_file=output_file,
+            publish_request_file=publish_request_file,
+            context={"next_step_path": str(next_step_file)},
+            status_code=None,
+        )
+
+    mock_run.assert_called_once()
+    assert result.events == [
+        {
+            "type": "pr_synced",
+            "url": "https://github.com/test/repo/pull/42",
+            "pr_number": "42",
+            "action": "updated",
+            "source": "skill_script",
+        }
+    ]
+
+
 def test_github_pr_creator_publish_output_skips_local_pr_mode(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     phase_dir = issue_dir / "pr"
