@@ -356,6 +356,117 @@ def test_workflow_command_rejects_malformed_baton_json(tmp_path: Path, monkeypat
     assert "Baton contract step '{not-json' is not valid" in result.stdout
 
 
+def test_workflow_command_start_step_rebuilds_stale_text_baton(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-206c"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "playbook_id": "default",
+                "current_step": "spec",
+                "artifacts": {},
+                "events": [],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (issue_dir / "next_step.txt").write_text("done\n", encoding="utf-8")
+
+    class FakeExecutor:
+        def execute_step(
+            self,
+            step_name: str,
+            step_def: dict,
+            blackboard_state: object,
+        ) -> StepExecutionResult:
+            return _result(
+                status_code="CAFE_NEED_CLARIFICATION",
+                step_name=step_name,
+                step_def=step_def,
+                artifacts={},
+            )
+
+    with patch("cafe.ui.cli.GitOperations") as mock_git_cls, patch(
+        "cafe.ui.cli._build_workflow_step_executor",
+        return_value=FakeExecutor(),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-206c"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "default",
+                "--execute",
+                "--start-step",
+                "spec",
+                "--single-step",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "Invalid baton contract payload" not in result.stdout
+
+    baton = json.loads((issue_dir / "next_step.txt").read_text(encoding="utf-8"))
+    assert baton["from_step"] == "spec"
+    assert baton["to_step"] in {"spec", "user"}
+
+
+def test_workflow_command_prints_guidance_for_invalid_runtime_baton(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-206d"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+
+    class FakeExecutor:
+        def execute_step(
+            self,
+            step_name: str,
+            step_def: dict,
+            blackboard_state: object,
+        ) -> StepExecutionResult:
+            return _result(
+                status_code="CAFE_NEED_CLARIFICATION",
+                step_name=step_name,
+                step_def=step_def,
+                artifacts={},
+            )
+
+    class FailingRuntime:
+        def __init__(self, *args, **kwargs) -> None:
+            raise ValueError(
+                "Invalid baton contract payload: Expecting value: line 1 column 1 (char 0)"
+            )
+
+    with patch("cafe.ui.cli.GitOperations") as mock_git_cls, patch(
+        "cafe.ui.cli._build_workflow_step_executor",
+        return_value=FakeExecutor(),
+    ), patch("cafe.ui.commands.workflow.BlackboardWorkflowRuntime", FailingRuntime):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-206d"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+
+    assert result.exit_code == 1
+    assert "Workflow baton file is not a valid handoff contract" in result.stdout
+    assert "cafe workflow" in result.stdout
+    assert "--playbook default" in result.stdout
+    assert "--execute" in result.stdout
+    assert "--start-step <step>" in result.stdout
+    assert "Error: workflow run failed: Invalid baton contract payload" in result.stdout
+
+
 def test_workflow_command_prints_paused_when_human_input_is_needed(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
 
