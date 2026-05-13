@@ -115,7 +115,6 @@ class TestLoadPhaseStatus:
                 {
                     "schema_version": 1,
                     "current_step": "done",
-                    "owner": "done",
                     "playbook_id": "default",
                     "artifacts": {},
                     "events": [],
@@ -191,7 +190,6 @@ class TestLoadPhaseStatus:
                 {
                     "schema_version": 1,
                     "current_step": "user",
-                    "owner": "user",
                     "playbook_id": "default",
                     "artifacts": {},
                     "events": [],

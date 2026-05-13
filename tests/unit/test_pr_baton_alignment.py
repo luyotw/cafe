@@ -14,7 +14,6 @@ def _bootstrap_issue(issue_dir: Path) -> None:
             {
                 "schema_version": 1,
                 "current_step": "pr",
-                "owner": "agent",
                 "playbook_id": "default",
                 "artifacts": {},
                 "events": [],

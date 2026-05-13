@@ -12,6 +12,7 @@ import typer
 from rich.console import Console
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
 from cafe.core.types import CriticalPhaseError
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -596,47 +597,91 @@ def workflow(
                 # active_step in {"user", "done"} (done only reaches here in interactive mode)
                 if not interactive:
                     if auto_advance:
-                        # Baton-first auto-advance: look at the handoff
-                        # contract to find which step produced the output,
-                        # then advance to the natural next step in the
-                        # playbook (the step after from_step).
+                        # Smart auto-advance: read the handoff contract to
+                        # understand why we paused at user, then either answer
+                        # pending questions or confirm the output, and resume
+                        # the originating step so it can process the input.
                         step_keys = list(playbook_data.get("steps", {}).keys())
                         contract = BlackboardStore(issue_dir).load_handoff_contract(
                             blackboard,
                             allowed_steps=step_keys,
                         )
                         from_step = getattr(contract, "from_step", None) or blackboard.current_step
-                        next_step = None
-                        try:
-                            idx = step_keys.index(from_step)
-                            next_step = step_keys[idx + 1] if idx + 1 < len(step_keys) else None
-                        except ValueError:
-                            pass
-                        if next_step is not None:
-                            store = BlackboardStore(issue_dir)
-                            store.set_current_step(blackboard, next_step)
-                            store.set_handoff_summary(blackboard, f"Auto-advanced from {from_step} to {next_step}")
-                            store.update_handoff_contract(
-                                blackboard,
-                                from_step=from_step,
-                                to_owner=HandoffOwner.AGENT,
-                                to_step=next_step,
-                                intent=HandoffIntent.MANUAL_HANDOFF,
-                                source="workflow.auto_advance",
-                            )
-                            store.record_event(
-                                blackboard,
-                                "auto_advance",
-                                {"from_phase": from_step, "to_step": next_step},
-                            )
-                            console.print(f"[dim]Auto-advancing[/dim] step={from_step} → {next_step}")
-                            pending_start_step = next_step
-                            continue
-                        else:
-                            console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
-                            return
-                    console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
-                    return
+                        handoff_intent = getattr(contract, "intent", None)
+                        intent_value = handoff_intent.value if handoff_intent else ""
+
+                        store = BlackboardStore(issue_dir)
+
+                        # Determine the originating step's latest iteration
+                        # directory so we can locate questions.xml.
+                        from_step_dir = issue_dir / from_step
+                        iteration_dirs = sorted(from_step_dir.glob("iteration_*")) if from_step_dir.exists() else []
+                        latest_iteration = iteration_dirs[-1] if iteration_dirs else None
+
+                        # Build auto-answer text from questions.xml if present.
+                        auto_answer = ""
+                        if latest_iteration is not None:
+                            questions_xml_path = latest_iteration / "questions.xml"
+                            if questions_xml_path.exists() and validate_questions_xml(questions_xml_path):
+                                questions = parse_questions_xml(questions_xml_path)
+                                answer_lines = []
+                                for q in questions:
+                                    if q.multi_select:
+                                        # Select all options for checkbox questions.
+                                        selected = q.options
+                                        answer_lines.append(f"Q: {q.title}")
+                                        answer_lines.append(f"A: {'; '.join(selected)}")
+                                    else:
+                                        # Select first option for single-select questions.
+                                        selected = q.options[0] if q.options else "(auto-confirmed)"
+                                        answer_lines.append(f"Q: {q.title}")
+                                        answer_lines.append(f"A: {selected}")
+                                auto_answer = "\n".join(answer_lines)
+
+                        # If no questions.xml, generate a generic confirmation.
+                        if not auto_answer:
+                            if intent_value == "confirm_output":
+                                auto_answer = "Confirmed. Proceed to the next step."
+                            elif intent_value == "need_clarification":
+                                auto_answer = "No additional clarification needed. Proceed as proposed."
+                            else:
+                                auto_answer = "Auto-confirmed. Proceed."
+
+                        # Write the auto-answer into the next iteration's
+                        # user_input.md so the UserInputCollector hook can
+                        # pick it up when the step re-executes.
+                        next_iteration_num = len(iteration_dirs) + 1
+                        next_iteration_dir = from_step_dir / f"iteration_{next_iteration_num:03d}"
+                        next_iteration_dir.mkdir(parents=True, exist_ok=True)
+                        user_input_file = next_iteration_dir / "user_input.md"
+                        user_input_file.write_text(auto_answer, encoding="utf-8")
+
+                        # Hand the baton back to the originating step so it
+                        # can run its next iteration with the auto-answer.
+                        store.set_current_step(blackboard, from_step)
+                        store.set_handoff_summary(
+                            blackboard,
+                            f"Auto-advanced: answered user handoff from {from_step} (intent={intent_value})",
+                        )
+                        store.update_handoff_contract(
+                            blackboard,
+                            from_step=from_step,
+                            to_owner=HandoffOwner.AGENT,
+                            to_step=from_step,
+                            intent=HandoffIntent.AWAIT_AGENT,
+                            source="workflow.auto_advance",
+                        )
+                        store.record_event(
+                            blackboard,
+                            "auto_advance",
+                            {"from_phase": from_step, "intent": intent_value, "auto_answered": True},
+                        )
+                        console.print(f"[dim]Auto-advancing[/dim] user handoff from {from_step} (intent={intent_value}) → re-run {from_step} with auto-answer")
+                        pending_start_step = from_step
+                        continue
+                    else:
+                        console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
+                        return
                 user_selected_step = _handle_user_phase(
                     issue_name=issue_name,
                     issue_dir=issue_dir,
