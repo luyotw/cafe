@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from cafe.ui import cli
 from cafe.ui.cli import _build_repo_entrypoint_mismatch_message, _find_repo_checkout_root
 
 
@@ -60,3 +63,32 @@ def test_build_repo_entrypoint_mismatch_message_reports_external_install(tmp_pat
     assert str(repo_root.resolve()) in message
     assert str(external_cli.resolve()) in message
     assert "pip install -e ." in message
+
+
+def test_main_returns_error_code_without_traceback_for_entrypoint_mismatch(
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(cli, "_check_dependencies", lambda: None)
+    monkeypatch.setattr(
+        cli,
+        "_build_repo_entrypoint_mismatch_message",
+        lambda: "Error: `cafe` is running from a different installation than this checkout.",
+    )
+    monkeypatch.setattr(
+        cli,
+        "_check_for_updates",
+        lambda: pytest.fail("update check should not run on entrypoint mismatch"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "app",
+        lambda: pytest.fail("app should not run on entrypoint mismatch"),
+    )
+
+    result = cli.main()
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert "different installation than this checkout" in captured.out
+    assert "Traceback" not in captured.out

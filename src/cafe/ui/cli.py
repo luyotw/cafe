@@ -134,15 +134,15 @@ def _build_repo_entrypoint_mismatch_message(
     ).strip()
 
 
-def _check_repo_entrypoint_alignment() -> None:
+def _check_repo_entrypoint_alignment() -> bool:
     """Fail fast when running inside a checkout but importing a different install."""
     if os.getenv("CAFE_SKIP_ENTRYPOINT_CHECK"):
-        return
+        return True
     message = _build_repo_entrypoint_mismatch_message()
     if message is None:
-        return
+        return True
     console.print(f"[red]{message}[/red]")
-    raise typer.Exit(1)
+    return False
 
 
 def _build_dynamic_step_click_command(step_name: str) -> Optional[click.Command]:
@@ -1369,14 +1369,16 @@ def chat_with_agent(
     raise typer.Exit(launch_chat_session(role, issue_name))
 
 
-def main() -> None:
+def main() -> Optional[int]:
     """Entry point for CLI."""
     # Check if all dependencies are installed
     _check_dependencies()
-    _check_repo_entrypoint_alignment()
+    if not _check_repo_entrypoint_alignment():
+        return 1
     # Check for updates and auto-upgrade if available
     _check_for_updates()
     app()
+    return None
 
 
 def _check_dependencies() -> None:
@@ -1530,4 +1532,4 @@ def _check_for_updates() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
