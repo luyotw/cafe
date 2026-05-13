@@ -971,7 +971,6 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
             {
                 "schema_version": 1,
                 "current_step": "pr",
-                "owner": "agent",
                 "playbook_id": "default",
                 "artifacts": {},
                 "events": [],

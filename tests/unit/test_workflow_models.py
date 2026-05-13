@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore
+from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardState, BlackboardStore, HandoffOwner
 
 
 def test_blackboard_load_or_create_persists_current_step_and_playbook(tmp_path: Path) -> None:
@@ -123,3 +123,71 @@ def test_blackboard_can_rebuild_from_iteration_artifacts(tmp_path: Path) -> None
     assert rebuilt.artifacts["spec"].version == 1
     assert rebuilt.artifacts["code"].head_sha == "def5678"
     assert rebuilt.events[-1].event_type == "rebuild"
+
+
+def test_blackboard_from_dict_ignores_legacy_top_level_owner() -> None:
+    """Legacy blackboard.json may carry a stale top-level owner; baton is authoritative."""
+    contract = {
+        "version": 1,
+        "from_step": "plan",
+        "to_owner": "agent",
+        "to_step": "develop",
+        "intent": "await_agent",
+        "status_code": "",
+        "created_at": "2026-05-14T10:00:00+08:00",
+        "source": "test",
+    }
+    base: dict = {
+        "schema_version": 1,
+        "current_step": "plan",
+        "playbook_id": "default",
+        "artifacts": {},
+        "events": [],
+        "decisions": [],
+        "handoff_summary": "",
+        "handoff_contract": contract,
+        "updated_at": "2026-05-14T10:00:00+08:00",
+    }
+    with_legacy = dict(base, owner="user")
+    without_legacy = dict(base)
+
+    a = BlackboardState.from_dict(with_legacy, initial_step="spec")
+    b = BlackboardState.from_dict(without_legacy, initial_step="spec")
+    assert a == b
+    assert a.handoff_contract is not None
+    assert a.handoff_contract.to_owner == HandoffOwner.AGENT
+    assert a.handoff_contract.to_step == "develop"
+
+
+def test_blackboard_saved_json_has_no_top_level_owner(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-owner-omit"
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec", playbook_id="default")
+    store.set_current_step(state, "plan")
+
+    raw = json.loads(store.file_path.read_text(encoding="utf-8"))
+    assert "owner" not in raw
+
+
+def test_blackboard_rebuild_save_has_no_top_level_owner(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-rebuild-owner"
+    spec_iteration = issue_dir / "spec" / "iteration_001"
+    spec_iteration.mkdir(parents=True, exist_ok=True)
+    (spec_iteration / "artifact.json").write_text(
+        json.dumps(
+            {
+                "name": "spec",
+                "kind": "document",
+                "version": 1,
+                "updated_by": "spec",
+                "updated_at": "2026-05-14T09:00:00+08:00",
+                "path": "spec/iteration_001/output.md",
+                "summary": "s",
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = BlackboardStore(issue_dir)
+    store.rebuild_from_iterations(initial_step="spec")
+    raw = json.loads(store.file_path.read_text(encoding="utf-8"))
+    assert "owner" not in raw

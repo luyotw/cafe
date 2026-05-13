@@ -238,7 +238,6 @@ class BlackboardState:
     """Shared state across workflow steps."""
 
     current_step: str
-    owner: str = "agent"
     playbook_id: str = "default"
     schema_version: int = BLACKBOARD_SCHEMA_VERSION
     artifacts: Dict[str, ArtifactEntry] = field(default_factory=dict)
@@ -252,7 +251,6 @@ class BlackboardState:
         return {
             "schema_version": self.schema_version,
             "current_step": self.current_step,
-            "owner": self.owner,
             "playbook_id": self.playbook_id,
             "artifacts": {name: entry.to_dict() for name, entry in self.artifacts.items()},
             "events": [entry.to_dict() for entry in self.events],
@@ -284,7 +282,6 @@ class BlackboardState:
 
         return cls(
             current_step=str(data.get("current_step", initial_step)),
-            owner=str(data.get("owner", "agent")),
             playbook_id=str(data.get("playbook_id", "default")),
             schema_version=int(data.get("schema_version", BLACKBOARD_SCHEMA_VERSION)),
             artifacts=artifacts,
@@ -459,10 +456,6 @@ class BlackboardStore:
 
     def set_current_step(self, state: BlackboardState, step: str) -> None:
         state.current_step = step
-        self.save(state)
-
-    def set_owner(self, state: BlackboardState, owner: str) -> None:
-        state.owner = owner
         self.save(state)
 
     def set_handoff_summary(self, state: BlackboardState, summary: str) -> None:
