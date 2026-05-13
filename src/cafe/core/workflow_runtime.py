@@ -186,6 +186,19 @@ class BlackboardWorkflowRuntime:
             return str(to_step)
         return None
 
+    def _load_agent_written_handoff_contract(self, *, current_step: str):
+        """Load and normalize a baton written by a just-finished agent step."""
+        contract = self.blackboard_store.load_handoff_contract(
+            self.blackboard,
+            allowed_steps=list(self.steps.keys()),
+            allow_legacy_text=True,
+        )
+        if contract.source == "legacy_text":
+            contract.from_step = current_step
+            contract.source = "workflow.legacy_baton_normalized"
+            self.blackboard_store.write_handoff_contract(self.blackboard, contract)
+        return contract
+
     def _pr_step_requires_publish_receipt(self, current_step: str) -> bool:
         if current_step != "pr":
             return False
@@ -202,22 +215,21 @@ class BlackboardWorkflowRuntime:
         return pr_cfg.get("auto_create", True) is not False
 
     def _status_from_contract(self, current_step: str, execution_result: Any) -> str:
-        contract = self.blackboard_store.load_handoff_contract(
-            self.blackboard,
-            allowed_steps=list(self.steps.keys()),
-        )
+        contract = self._load_agent_written_handoff_contract(current_step=current_step)
         if contract.to_owner == HandoffOwner.AGENT and contract.to_step == current_step:
             explicit_status_code = getattr(execution_result, "status_code", None)
             if explicit_status_code:
                 return str(explicit_status_code)
             return "NO_BATON_TRANSITION"
-        return contract.status_code or f"BATON_{contract.intent.value.upper()}"
+        explicit_status_code = getattr(execution_result, "status_code", None)
+        return (
+            contract.status_code
+            or str(explicit_status_code or "")
+            or f"BATON_{contract.intent.value.upper()}"
+        )
 
     def _load_step_handoff_contract(self, *, current_step: str):
-        contract = self.blackboard_store.load_handoff_contract(
-            self.blackboard,
-            allowed_steps=list(self.steps.keys()),
-        )
+        contract = self._load_agent_written_handoff_contract(current_step=current_step)
         if contract.from_step != current_step:
             return None
         return contract
@@ -580,10 +592,7 @@ class BlackboardWorkflowRuntime:
                 hop_count=hop_count,
             )
 
-            contract = self.blackboard_store.load_handoff_contract(
-                self.blackboard,
-                allowed_steps=list(self.steps.keys()),
-            )
+            contract = self._load_agent_written_handoff_contract(current_step=current_step)
             next_step = contract.to_step
 
             if contract.to_owner == HandoffOwner.AGENT and next_step == current_step:

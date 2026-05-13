@@ -1058,3 +1058,56 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
     transitions = [e for e in blackboard.events if e.event_type == "transition"]
     assert any(e.data.get("to") == "develop" for e in transitions)
     assert any(e.data.get("to") == "review" for e in transitions)
+
+
+def test_runtime_normalizes_legacy_baton_written_by_pr_agent(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "legacy-pr-handoff"
+    issue_dir.mkdir(parents=True)
+    _write_baton(issue_dir, from_step="pr", to_owner="agent", to_step="pr", intent="await_agent")
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "pr": {"skill": "spec_first", "role": "developer", "assignee_type": "agent", "on": {}},
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "assignee_type": "agent",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == "pr":
+            (issue_dir / "next_step.txt").write_text("develop\n", encoding="utf-8")
+            return StepExecutionResult(response="todo", artifacts={}, status_code="CAFE_NEEDS_CHANGES")
+        if step_name == "develop":
+            store = BlackboardStore(issue_dir)
+            store.update_handoff_contract(
+                state,
+                from_step="develop",
+                to_owner=HandoffOwner.DONE,
+                to_step="done",
+                intent=HandoffIntent.WORKFLOW_COMPLETE,
+                status_code="CAFE_CONFIRMED",
+                source="test",
+            )
+            return StepExecutionResult(response="done", artifacts={}, status_code="CAFE_CONFIRMED")
+        raise AssertionError(f"unexpected step {step_name}")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="pr", max_transitions=5)
+
+    assert calls == ["pr", "develop"]
+    assert result.completed is True
+    baton = json.loads((issue_dir / "next_step.txt").read_text(encoding="utf-8"))
+    assert baton["from_step"] == "develop"
+    assert baton["to_step"] == "done"
