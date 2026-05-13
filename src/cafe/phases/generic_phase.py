@@ -424,8 +424,8 @@ class GenericPhase:
                 timeout=timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:
-            stdout = exc.stdout if isinstance(exc.stdout, str) else ""
-            stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+            stdout = self._normalize_process_output(exc.stdout)
+            stderr = self._normalize_process_output(exc.stderr)
             return HookResult(
                 continue_pipeline=False,
                 override_status_code=PhaseStatusCode.NEED_PERMISSION,
@@ -529,6 +529,14 @@ class GenericPhase:
             [item.strip() for item in when_status_codes_raw if item.strip()],
             timeout_seconds,
         )
+
+    @staticmethod
+    def _normalize_process_output(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return ""
 
     def _resolve_script_path(self, *, skill_name: str, script: str) -> Path:
         script_path = Path(script)

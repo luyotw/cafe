@@ -793,3 +793,47 @@ def test_execute_script_hook_timeout_stops_pipeline(tmp_path: Path, monkeypatch:
     assert event["exit_code"] is None
     assert "partial" in event["stdout"]
     assert "timed out" in event["stderr"]
+
+
+def test_execute_script_hook_timeout_decodes_bytes_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loader = _setup_loader(tmp_path)
+    _write_skill_script(
+        loader,
+        skill_name="plan",
+        script_name="slow.sh",
+        body="#!/usr/bin/env bash\nsleep 30\n",
+    )
+    phase = GenericPhase(loader)
+
+    def _run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=1.0, output=b"partial-bytes", stderr=b"timed-bytes")
+
+    monkeypatch.setattr("cafe.phases.generic_phase.subprocess.run", _run)
+
+    result = phase.execute(
+        skill_name="plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
+        step_def={
+            "hooks": {
+                "before_execute": [
+                    {
+                        "script": "slow.sh",
+                        "args": {},
+                        "timeout_seconds": 1.0,
+                    }
+                ]
+            },
+            "valid_status_codes": ["CAFE_CONFIRMED", "CAFE_NEED_PERMISSION"],
+        },
+        agent_executor=lambda prompt: "CAFE_CONFIRMED",
+    )
+
+    assert result.status_code == PhaseStatusCode.NEED_PERMISSION
+    event = next(item for item in result.events if item.get("type") == "script_hook")
+    assert event["status"] == "timeout"
+    assert event["exit_code"] is None
+    assert "partial-bytes" in event["stdout"]
+    assert "timed-bytes" in event["stderr"]
