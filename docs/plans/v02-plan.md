@@ -432,8 +432,11 @@ hooks:
 - `script` 必須是 skill `scripts/` 目錄下的相對路徑；禁止 absolute path、`..` traversal、或跳出 skill 目錄。
 - `args` 會轉為 CLI 參數（`--key value`），並支援 placeholder interpolation（如 `{output_file}`）。
 - `schema` 採最小 JSON-schema 子集：`type=object`、`required`、`properties`、`additionalProperties=false`、primitive type（string/boolean/integer/number）、`enum`。
+- `timeout_seconds`（可選）可設定 script subprocess timeout；逾時會中止 pipeline 並回報 `script_hook` timeout 事件。
 - `when_status_codes`（可選）只在 `after_execute` 使用，狀態不匹配時跳過執行。
-- script 以 sandbox 內 subprocess 執行；非 0 exit code 或 schema 驗證失敗會中止 pipeline，並回報可觀測事件。
+- script 只允許掛在 `before_execute` / `after_execute`；若在 `prepare_input` 或 `publish_output` 宣告 script dict，playbook 載入時即報錯。
+- script 以 sandbox 內 subprocess 執行；非 0 exit code、schema 驗證失敗、或 timeout 皆會中止 pipeline，並回報可觀測事件。
+- `schema` 驗證失敗與 script 非 0 / timeout 目前都映射為 `CAFE_NEED_PERMISSION`，表示需要 host/operator 介入處理。
 
 blackboard 事件 payload（`event_type=script_hook`）：
 - `type`, `step`, `skill`, `stage`, `script`, `status`

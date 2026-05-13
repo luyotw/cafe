@@ -360,7 +360,9 @@ class GenericPhase:
         if stage not in self.SCRIPT_HOOK_STAGES:
             raise ValueError(f"Script hooks are only supported in {sorted(self.SCRIPT_HOOK_STAGES)}")
 
-        script, args_template, schema, when_status_codes = self._parse_script_hook_declaration(declaration)
+        script, args_template, schema, when_status_codes, timeout_seconds = self._parse_script_hook_declaration(
+            declaration
+        )
 
         if when_status_codes:
             detected_status = self._detect_status_code(response=response or "", step_def=step_def)
@@ -412,13 +414,36 @@ class GenericPhase:
                 )
 
         cmd = self._build_script_command(script_path=script_path, args=resolved_args)
-        result = subprocess.run(
-            cmd,
-            cwd=str(Path.cwd().resolve()),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=str(Path.cwd().resolve()),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+            stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+            return HookResult(
+                continue_pipeline=False,
+                override_status_code=PhaseStatusCode.NEED_PERMISSION,
+                events=[
+                    {
+                        "type": "script_hook",
+                        "step": str(hook_kwargs.get("step_name") or ""),
+                        "skill": skill_name,
+                        "stage": stage,
+                        "script": script,
+                        "status": "timeout",
+                        "exit_code": None,
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "validation_errors": [],
+                    }
+                ],
+            )
         if result.returncode != 0:
             return HookResult(
                 continue_pipeline=False,
@@ -459,8 +484,8 @@ class GenericPhase:
     @staticmethod
     def _parse_script_hook_declaration(
         declaration: Dict[str, Any],
-    ) -> tuple[str, Dict[str, Any], Optional[Dict[str, Any]], list[str]]:
-        allowed_fields = {"script", "args", "schema", "when_status_codes"}
+    ) -> tuple[str, Dict[str, Any], Optional[Dict[str, Any]], list[str], Optional[float]]:
+        allowed_fields = {"script", "args", "schema", "when_status_codes", "timeout_seconds"}
         unknown = sorted(set(declaration.keys()) - allowed_fields)
         if unknown:
             raise ValueError(f"Script hook contains unsupported fields: {unknown}")
@@ -488,7 +513,22 @@ class GenericPhase:
         ):
             raise ValueError("Script hook 'when_status_codes' must be a list of strings")
 
-        return script, args, schema, [item.strip() for item in when_status_codes_raw if item.strip()]
+        timeout_seconds_raw = declaration.get("timeout_seconds")
+        timeout_seconds: Optional[float] = None
+        if timeout_seconds_raw is not None:
+            if isinstance(timeout_seconds_raw, bool) or not isinstance(timeout_seconds_raw, (int, float)):
+                raise ValueError("Script hook 'timeout_seconds' must be a positive number")
+            if timeout_seconds_raw <= 0:
+                raise ValueError("Script hook 'timeout_seconds' must be a positive number")
+            timeout_seconds = float(timeout_seconds_raw)
+
+        return (
+            script,
+            args,
+            schema,
+            [item.strip() for item in when_status_codes_raw if item.strip()],
+            timeout_seconds,
+        )
 
     def _resolve_script_path(self, *, skill_name: str, script: str) -> Path:
         script_path = Path(script)

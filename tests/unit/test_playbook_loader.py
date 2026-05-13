@@ -177,6 +177,41 @@ steps:
     assert hook_entry["script"] == "sync_github.sh"
 
 
+def test_load_rejects_script_hook_dict_in_unsupported_stage(tmp_path: Path) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "pr")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "default",
+        """
+playbook:
+  id: default
+roles:
+  developer:
+    description: dev
+steps:
+  pr:
+    skill: pr
+    role: developer
+    hooks:
+      publish_output:
+        - script: sync_pr.sh
+    valid_status_codes: [CAFE_CONFIRMED]
+    on:
+      CAFE_CONFIRMED: _done
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="unsupported stage 'publish_output'"):
+        loader.load_model("default")
+
+
 def test_load_missing_skill_raises(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
     _write_playbook(

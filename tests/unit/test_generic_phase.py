@@ -1,5 +1,6 @@
 """Tests for GenericPhase."""
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -709,3 +710,86 @@ def test_execute_script_hook_can_skip_when_status_mismatch(tmp_path: Path) -> No
     event = next(item for item in result.events if item.get("type") == "script_hook")
     assert event["status"] == "skipped"
     assert event["reason"] == "status_mismatch"
+
+
+def test_execute_script_hook_passes_timeout_to_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loader = _setup_loader(tmp_path)
+    _write_skill_script(
+        loader,
+        skill_name="plan",
+        script_name="noop.sh",
+        body="#!/usr/bin/env bash\necho noop\n",
+    )
+    phase = GenericPhase(loader)
+    captured: dict[str, object] = {}
+
+    def _run(*args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr("cafe.phases.generic_phase.subprocess.run", _run)
+
+    result = phase.execute(
+        skill_name="plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
+        step_def={
+            "hooks": {
+                "before_execute": [
+                    {
+                        "script": "noop.sh",
+                        "args": {},
+                        "timeout_seconds": 2.5,
+                    }
+                ]
+            },
+            "valid_status_codes": ["CAFE_CONFIRMED"],
+        },
+        agent_executor=lambda prompt: "CAFE_CONFIRMED",
+    )
+
+    assert captured["timeout"] == 2.5
+    event = next(item for item in result.events if item.get("type") == "script_hook")
+    assert event["status"] == "success"
+
+
+def test_execute_script_hook_timeout_stops_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loader = _setup_loader(tmp_path)
+    _write_skill_script(
+        loader,
+        skill_name="plan",
+        script_name="slow.sh",
+        body="#!/usr/bin/env bash\nsleep 30\n",
+    )
+    phase = GenericPhase(loader)
+
+    def _run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=1.0, output="partial", stderr="timed out")
+
+    monkeypatch.setattr("cafe.phases.generic_phase.subprocess.run", _run)
+
+    result = phase.execute(
+        skill_name="plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
+        step_def={
+            "hooks": {
+                "before_execute": [
+                    {
+                        "script": "slow.sh",
+                        "args": {},
+                        "timeout_seconds": 1.0,
+                    }
+                ]
+            },
+            "valid_status_codes": ["CAFE_CONFIRMED", "CAFE_NEED_PERMISSION"],
+        },
+        agent_executor=lambda prompt: "CAFE_CONFIRMED",
+    )
+
+    assert result.status_code == PhaseStatusCode.NEED_PERMISSION
+    event = next(item for item in result.events if item.get("type") == "script_hook")
+    assert event["status"] == "timeout"
+    assert event["exit_code"] is None
+    assert "partial" in event["stdout"]
+    assert "timed out" in event["stderr"]
