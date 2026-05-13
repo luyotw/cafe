@@ -159,6 +159,27 @@ def test_blackboard_from_dict_ignores_legacy_top_level_owner() -> None:
     assert a.handoff_contract.to_step == "develop"
 
 
+def test_blackboard_from_dict_ignores_legacy_owner_without_contract() -> None:
+    """Legacy top-level owner is ignored even when handoff_contract is absent."""
+    base: dict = {
+        "schema_version": 1,
+        "current_step": "plan",
+        "playbook_id": "default",
+        "artifacts": {},
+        "events": [],
+        "decisions": [],
+        "handoff_summary": "",
+        "updated_at": "2026-05-14T10:00:00+08:00",
+    }
+    with_legacy = dict(base, owner="user")
+    without_legacy = dict(base)
+
+    a = BlackboardState.from_dict(with_legacy, initial_step="spec")
+    b = BlackboardState.from_dict(without_legacy, initial_step="spec")
+    assert a == b
+    assert a.handoff_contract is None
+
+
 def test_blackboard_saved_json_has_no_top_level_owner(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-owner-omit"
     store = BlackboardStore(issue_dir)
