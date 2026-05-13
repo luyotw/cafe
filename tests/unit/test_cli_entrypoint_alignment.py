@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cafe.ui.cli import _build_repo_entrypoint_mismatch_message, _find_repo_checkout_root
+import pytest
+
+from cafe.ui import cli
+from cafe.ui.cli import (
+    _build_repo_entrypoint_mismatch_message,
+    _build_repo_entrypoint_reexec_command,
+    _build_repo_entrypoint_reexec_env,
+    _find_repo_checkout_root,
+)
 
 
 def _write_repo_marker(repo_root: Path) -> None:
@@ -60,3 +68,61 @@ def test_build_repo_entrypoint_mismatch_message_reports_external_install(tmp_pat
     assert str(repo_root.resolve()) in message
     assert str(external_cli.resolve()) in message
     assert "pip install -e ." in message
+
+
+def test_reexec_command_preserves_cli_args(monkeypatch, tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    monkeypatch.setattr(cli.sys, "argv", ["cafe", "make", "--auto-advance"])
+
+    command = _build_repo_entrypoint_reexec_command(repo_root)
+
+    assert command[1:] == ["-m", "cafe.ui.cli", "make", "--auto-advance"]
+
+
+def test_reexec_env_prefers_checkout_src(monkeypatch, tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    (repo_root / "src").mkdir(parents=True)
+    monkeypatch.setenv("PYTHONPATH", "/existing/path")
+
+    env = _build_repo_entrypoint_reexec_env(repo_root)
+
+    assert env["PYTHONPATH"].split(":")[0] == str((repo_root / "src").resolve())
+    assert "/existing/path" in env["PYTHONPATH"].split(":")
+
+
+def test_main_returns_error_code_without_traceback_when_auto_reexec_fails(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    expected_cli = repo_root / "src" / "cafe" / "ui" / "cli.py"
+    actual_cli = tmp_path / "global" / "cafe" / "ui" / "cli.py"
+    monkeypatch.setattr(cli, "_check_dependencies", lambda: None)
+    monkeypatch.setattr(
+        cli,
+        "_resolve_repo_entrypoint_mismatch",
+        lambda **_: (repo_root, expected_cli, actual_cli),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_reexec_repo_entrypoint",
+        lambda repo_root: (_ for _ in ()).throw(OSError("exec failed")),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_check_for_updates",
+        lambda: pytest.fail("update check should not run when re-exec fails"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "app",
+        lambda: pytest.fail("app should not run when re-exec fails"),
+    )
+
+    result = cli.main()
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert "different installation than this checkout" in captured.out
+    assert "Traceback" not in captured.out

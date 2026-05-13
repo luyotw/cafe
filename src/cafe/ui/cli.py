@@ -104,14 +104,14 @@ def _build_repo_entrypoint_mismatch_message(
     imported_cli_file: Optional[Path] = None,
 ) -> Optional[str]:
     """Describe a repo/install mismatch when the CLI is not loaded from this checkout."""
-    repo_root = _find_repo_checkout_root(cwd)
-    if repo_root is None:
+    mismatch = _resolve_repo_entrypoint_mismatch(
+        cwd=cwd,
+        imported_cli_file=imported_cli_file,
+    )
+    if mismatch is None:
         return None
 
-    expected_cli = (repo_root / "src" / "cafe" / "ui" / "cli.py").resolve()
-    actual_cli = (imported_cli_file or Path(__file__)).resolve()
-    if actual_cli == expected_cli:
-        return None
+    repo_root, expected_cli, actual_cli = mismatch
 
     python_bin = Path(sys.executable).resolve()
     return textwrap.dedent(
@@ -134,15 +134,71 @@ def _build_repo_entrypoint_mismatch_message(
     ).strip()
 
 
-def _check_repo_entrypoint_alignment() -> None:
+def _resolve_repo_entrypoint_mismatch(
+    *,
+    cwd: Optional[Path] = None,
+    imported_cli_file: Optional[Path] = None,
+) -> Optional[tuple[Path, Path, Path]]:
+    """Return checkout/expected/actual paths when a CLI install mismatch exists."""
+    repo_root = _find_repo_checkout_root(cwd)
+    if repo_root is None:
+        return None
+
+    expected_cli = (repo_root / "src" / "cafe" / "ui" / "cli.py").resolve()
+    actual_cli = (imported_cli_file or Path(__file__)).resolve()
+    if actual_cli == expected_cli:
+        return None
+    return repo_root, expected_cli, actual_cli
+
+
+def _build_repo_entrypoint_reexec_command(repo_root: Path) -> list[str]:
+    """Build a command that runs the CLI from the detected checkout."""
+    return [str(Path(sys.executable).resolve()), "-m", "cafe.ui.cli", *sys.argv[1:]]
+
+
+def _build_repo_entrypoint_reexec_env(repo_root: Path) -> dict[str, str]:
+    """Build an environment that imports CAFE from the detected checkout."""
+    env = os.environ.copy()
+    checkout_src = str((repo_root / "src").resolve())
+    current_pythonpath = env.get("PYTHONPATH", "")
+    if current_pythonpath:
+        env["PYTHONPATH"] = os.pathsep.join([checkout_src, current_pythonpath])
+    else:
+        env["PYTHONPATH"] = checkout_src
+    return env
+
+
+def _reexec_repo_entrypoint(repo_root: Path) -> None:
+    """Replace the current process with the checkout-local CLI."""
+    os.execvpe(
+        _build_repo_entrypoint_reexec_command(repo_root)[0],
+        _build_repo_entrypoint_reexec_command(repo_root),
+        _build_repo_entrypoint_reexec_env(repo_root),
+    )
+
+
+def _check_repo_entrypoint_alignment() -> bool:
     """Fail fast when running inside a checkout but importing a different install."""
     if os.getenv("CAFE_SKIP_ENTRYPOINT_CHECK"):
-        return
+        return True
+    mismatch = _resolve_repo_entrypoint_mismatch()
+    if mismatch is None:
+        return True
+    repo_root, _, _ = mismatch
+    try:
+        _reexec_repo_entrypoint(repo_root)
+    except OSError:
+        pass
+
     message = _build_repo_entrypoint_mismatch_message()
     if message is None:
-        return
+        return True
     console.print(f"[red]{message}[/red]")
-    raise typer.Exit(1)
+    console.print(
+        "[yellow]Failed to automatically run the checkout-local CLI. "
+        "Use the command above manually.[/yellow]"
+    )
+    return False
 
 
 def _build_dynamic_step_click_command(step_name: str) -> Optional[click.Command]:
@@ -1369,14 +1425,16 @@ def chat_with_agent(
     raise typer.Exit(launch_chat_session(role, issue_name))
 
 
-def main() -> None:
+def main() -> Optional[int]:
     """Entry point for CLI."""
     # Check if all dependencies are installed
     _check_dependencies()
-    _check_repo_entrypoint_alignment()
+    if not _check_repo_entrypoint_alignment():
+        return 1
     # Check for updates and auto-upgrade if available
     _check_for_updates()
     app()
+    return None
 
 
 def _check_dependencies() -> None:
@@ -1530,4 +1588,4 @@ def _check_for_updates() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
