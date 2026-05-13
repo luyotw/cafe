@@ -363,6 +363,54 @@ def summary() -> None:
         raise typer.Exit(1)
 
 
+def _is_baton_contract_error(error: Exception) -> bool:
+    message = str(error)
+    return "Invalid baton contract payload" in message or "Baton file is empty" in message
+
+
+def _print_baton_contract_recovery_guidance(
+    *,
+    issue_dir: Optional[Path],
+    playbook_name: Optional[str],
+) -> None:
+    baton_path = (
+        issue_dir / "next_step.txt"
+        if issue_dir is not None
+        else Path(".cafe/issues/<issue>/next_step.txt")
+    )
+    playbook_arg = f" --playbook {playbook_name}" if playbook_name else ""
+    console.print(
+        f"[yellow]Workflow baton file is not a valid handoff contract: {baton_path}[/yellow]"
+    )
+    console.print(
+        "[dim]If you know the step to resume, run "
+        f"`cafe workflow{playbook_arg} --execute --start-step <step>`; "
+        "the command will rebuild the baton for that step.[/dim]"
+    )
+    console.print(
+        "[dim]If you are not sure, inspect `blackboard.json` for `current_step` first.[/dim]"
+    )
+
+
+def _reset_baton_for_explicit_start_step(
+    *,
+    issue_dir: Path,
+    blackboard: object,
+    active_step: str,
+) -> None:
+    """Make an explicit --start-step runnable even when the persisted baton is stale."""
+    store = BlackboardStore(issue_dir)
+    store.set_current_step(blackboard, active_step)
+    store.update_handoff_contract(
+        blackboard,
+        from_step=active_step,
+        to_owner=HandoffOwner.AGENT,
+        to_step=active_step,
+        intent=HandoffIntent.AWAIT_AGENT,
+        source="workflow.start_step",
+    )
+
+
 def workflow(
     playbook: Optional[str] = typer.Option(None, "--playbook", help="Playbook name"),
     issue: Optional[str] = typer.Option(None, "--issue", help="Issue directory name"),
@@ -467,6 +515,7 @@ def workflow(
 
         pending_start_step = start_step
         while True:
+            has_explicit_start_step = pending_start_step is not None
             if dry_run:
                 pending_start_step = pending_start_step or str(
                     playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))
@@ -487,6 +536,12 @@ def workflow(
             )
 
             active_step = pending_start_step or blackboard.current_step
+            if not dry_run and has_explicit_start_step and active_step not in {"user", "done"}:
+                _reset_baton_for_explicit_start_step(
+                    issue_dir=issue_dir,
+                    blackboard=blackboard,
+                    active_step=active_step,
+                )
             if not dry_run and active_step in {"user", "done"}:
                 incomplete_step = _find_incomplete_workflow_step(
                     issue_dir=issue_dir,
@@ -660,5 +715,10 @@ def workflow(
     except CriticalPhaseError as e:
         _handle_phase_exception(e, "workflow")
     except Exception as e:
+        if _is_baton_contract_error(e):
+            _print_baton_contract_recovery_guidance(
+                issue_dir=locals().get("issue_dir"),
+                playbook_name=locals().get("selected_playbook"),
+            )
         console.print(f"[red]Error: workflow run failed: {e}[/red]")
         raise typer.Exit(1)
