@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, transition_map_key
-from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult
+from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult, StepInterrupted
 
 
 STATUS_TOKEN_PATTERN = re.compile(r"\bCAFE_[A-Z0-9_]+\b")
@@ -381,7 +381,20 @@ class BlackboardWorkflowRuntime:
             },
         )
 
-        execution_result = self.executor(current_step, step_def, self.blackboard)
+        try:
+            execution_result = self.executor(current_step, step_def, self.blackboard)
+        except KeyboardInterrupt:
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "step_interrupted",
+                {
+                    "step": current_step,
+                    "visit": visit_count,
+                    "hop": hop_count,
+                    "runtime": runtime,
+                },
+            )
+            raise StepInterrupted(step=current_step, hop=hop_count)
         if validate_assignee_type:
             self._validate_assignee_type(current_step, step_def)
 
@@ -763,14 +776,32 @@ class BlackboardWorkflowRuntime:
                 )
                 raise RuntimeError(f"Step '{current_step}' exceeded max_iterations={max_iterations}")
 
-            frame = self._execute_one_iteration(
-                current_step=current_step,
-                step_def=step_def,
-                runtime=runtime_label,
-                hop_count=hop_count,
-                visit_count=visit_count,
-                validate_assignee_type=True,
-            )
+            try:
+                frame = self._execute_one_iteration(
+                    current_step=current_step,
+                    step_def=step_def,
+                    runtime=runtime_label,
+                    hop_count=hop_count,
+                    visit_count=visit_count,
+                    validate_assignee_type=True,
+                )
+            except StepInterrupted:
+                if pause_record_event:
+                    self.blackboard_store.record_event(
+                        self.blackboard,
+                        "workflow_paused",
+                        {
+                            "step": current_step,
+                            "status_code": "INTERRUPTED",
+                            "reason": "step_interrupted",
+                            "runtime": runtime_label,
+                        },
+                    )
+                return PlaybookRunResult(
+                    final_step=current_step,
+                    final_status_code="INTERRUPTED",
+                    completed=False,
+                )
             self._store_artifacts(frame.artifacts)
 
             post_contract = self._load_step_handoff_contract(current_step=current_step)

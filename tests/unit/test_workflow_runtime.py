@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.workflow_models import StepExecutionResult, StepInterrupted
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 
 
@@ -1147,3 +1147,48 @@ def test_runtime_normalizes_legacy_baton_written_by_pr_agent(tmp_path: Path) -> 
     baton = json.loads((issue_dir / "next_step.txt").read_text(encoding="utf-8"))
     assert baton["from_step"] == "develop"
     assert baton["to_step"] == "done"
+
+
+def test_runtime_handles_keyboard_interrupt(tmp_path: Path) -> None:
+    """KeyboardInterrupt during step execution records step_interrupted event and returns INTERRUPTED result."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-interrupt"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "plan"}},
+            "plan": {"skill": "plan", "role": "developer", "on": {"await_agent": "_done"}},
+        },
+    }
+
+    call_count = 0
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        nonlocal call_count
+        call_count += 1
+        if step_name == "spec" and call_count == 1:
+            raise KeyboardInterrupt()
+        return StepExecutionResult(
+            response="done",
+            artifacts={},
+            status_code="confirmed",
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+
+    result = runtime.run(start_step="spec", max_transitions=5)
+
+    # Should return INTERRUPTED result, not raise
+    assert result.completed is False
+    assert result.final_status_code == "INTERRUPTED"
+    assert result.final_step == "spec"
+
+    # Verify event was recorded
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    interrupted_events = [e for e in bb.events if e.event_type == "step_interrupted"]
+    assert len(interrupted_events) == 1
+    msg = json.loads(interrupted_events[0].message) if isinstance(interrupted_events[0].message, str) else interrupted_events[0].message
+    assert msg["step"] == "spec"

@@ -14,7 +14,7 @@ from rich.console import Console
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
 from cafe.core.types import CriticalPhaseError
-from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.workflow_models import StepExecutionResult, StepInterrupted
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.phases.generic_phase import GenericPhase
 from cafe.playbooks.loader import PlaybookLoader
@@ -124,6 +124,12 @@ def make(
         "--auto-advance",
         help="Auto-confirm user handoffs and advance without interactive prompts",
     ),
+    timeout: int = typer.Option(
+        0,
+        "--timeout",
+        "-t",
+        help="Overall workflow timeout in seconds (0 = no timeout)",
+    ),
 ) -> None:
     """🚀 Check environment and execute complete development workflow.
 
@@ -181,11 +187,16 @@ def make(
         cmd.append("--auto-advance")
 
     # Execute the command
+    timeout_sec = timeout if timeout > 0 else None
     try:
-        result = subprocess.run(cmd, check=False)
+        result = subprocess.run(cmd, check=False, timeout=timeout_sec)
         if result.returncode != 0:
             # Error already printed by spec phase command, just exit
             raise typer.Exit(result.returncode)
+    except subprocess.TimeoutExpired:
+        console.print(f"[red]Workflow timed out after {timeout}s[/red]")
+        console.print("[dim]The workflow was interrupted. Run 'cafe make' again to resume.[/dim]")
+        raise typer.Exit(2)
     except typer.Exit:
         raise
     except Exception as e:
@@ -729,6 +740,14 @@ def workflow(
                 console.print(
                     f"[green]Workflow completed[/green] step={result.final_step} status={result.final_status_code} next={latest_blackboard.current_step}"
                 )
+            elif result.final_status_code == "INTERRUPTED":
+                console.print(
+                    f"[yellow]Workflow interrupted[/yellow] step={result.final_step}"
+                )
+                console.print(
+                    "[dim]Run 'cafe make' again to resume from this step.[/dim]"
+                )
+                return
             else:
                 console.print(
                     f"[yellow]Workflow paused[/yellow] step={result.final_step} status={result.final_status_code} next={latest_blackboard.current_step}"
