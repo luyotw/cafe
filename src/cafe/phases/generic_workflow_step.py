@@ -295,14 +295,18 @@ class GenericWorkflowStepExecutor(Phase):
                 )
 
         if status_code is not None:
-            self._write_status_transition_handoff(
-                blackboard_state=blackboard_state,
-                step_name=step_name,
-                step_def=step_def,
-                response=response,
-                status_code=status_code,
-                auto_continue=auto_continue,
-            )
+            # If the agent already wrote a valid baton (next_step.txt),
+            # skip the status-code-driven baton write so we don't overwrite
+            # the agent's explicit handoff.  This is the baton-first path.
+            if not self._agent_wrote_baton(step_name):
+                self._write_status_transition_handoff(
+                    blackboard_state=blackboard_state,
+                    step_name=step_name,
+                    step_def=step_def,
+                    response=response,
+                    status_code=status_code,
+                    auto_continue=auto_continue,
+                )
             align_pr_baton_after_execution(
                 issue_dir=self.issue_dir,
                 playbook=self.playbook,
@@ -693,6 +697,28 @@ class GenericWorkflowStepExecutor(Phase):
         if status_code == PhaseStatusCode.NEED_PERMISSION:
             return "need_permission"
         return None
+
+    def _agent_wrote_baton(self, step_name: str) -> bool:
+        """Check whether the agent already wrote a valid baton (next_step.txt).
+
+        A baton is considered agent-written when it exists, parses as valid
+        JSON, ``from_step`` matches the current step, and the baton targets a
+        *different* step (from_step != to_step).  Bootstrap batons where
+        from_step == to_step (self-pointing) are NOT considered agent-written.
+        """
+        baton_path = self.issue_dir / "next_step.txt"
+        if not baton_path.exists():
+            return False
+        try:
+            payload = json.loads(baton_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                return False
+            from_step = str(payload.get("from_step", ""))
+            to_step = str(payload.get("to_step", ""))
+            # Must be from current step AND targeting a different step
+            return from_step == step_name and from_step != to_step
+        except (json.JSONDecodeError, ValueError, OSError):
+            return False
 
     def _write_status_transition_handoff(
         self,

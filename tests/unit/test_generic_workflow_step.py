@@ -168,6 +168,64 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert reloaded.handoff_contract.source == "workflow.status_transition_adapter"
 
 
+def test_generic_workflow_step_agent_written_baton_preserved(tmp_path: Path, monkeypatch) -> None:
+    """When the agent writes a baton directly, the status-driven write is skipped."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-agent-baton"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": {"1": "spec_first", "default": "spec_first"},
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+
+    def on_execute(prompt, response, streaming_output_file=None):
+        # Simulate agent writing a baton targeting "plan" instead of "_done"
+        baton_path = issue_dir / "next_step.txt"
+        baton_path.write_text(json.dumps({
+            "version": 1,
+            "from_step": "spec",
+            "to_owner": "agent",
+            "to_step": "plan",
+            "intent": "await_agent",
+            "status_code": "confirmed",
+            "created_at": "2026-05-14T10:00:00+08:00",
+            "source": "spec.agent",
+        }), encoding="utf-8")
+
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-agent-baton",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed", on_execute=on_execute),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+
+    result = executor.execute_step("spec", playbook["steps"]["spec"], state)
+    assert result.response == "confirmed"
+
+    # The agent's baton should be preserved (to_step=plan), not overwritten
+    # by the status-driven transition (which would have set to_step=done)
+    reloaded = BlackboardStore(issue_dir).load_or_create("spec")
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.to_step == "plan"
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
+    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
+
+
 def test_generic_workflow_step_writes_review_pause_contract(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-review-pause"
