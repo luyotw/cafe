@@ -191,6 +191,22 @@ class GitOperations:
             # Fallback to "main"
             return "main"
 
+    def get_default_base_branch(self) -> str:
+        """Get the default base branch for PR creation and diffs.
+
+        Prefers ``develop`` when the remote has a develop branch, falling
+        back to the repo's main branch otherwise.  This matches the typical
+        Git-Flow convention where feature branches target develop.
+
+        Returns:
+            Default base branch name
+        """
+        try:
+            self.run_git("rev-parse", "--verify", "origin/develop")
+            return "develop"
+        except GitError:
+            return self.get_main_branch()
+
     def get_commits_between(self, base: str, head: str) -> str:
         """Get commit list between two refs.
 

@@ -101,10 +101,10 @@ class PRPhase(Phase):
             # CLI parameter takes precedence
             self.base_branch = base_branch
         else:
-            # Try to read from config.yaml, fallback to "main"
+            # Try to read from config.yaml, fallback to default base branch
             config_file = self.issue_dir / "issue.yaml"
             config_base = self._get_issue_config_value(config_file, "base_branch")
-            self.base_branch = config_base if config_base else "main"
+            self.base_branch = config_base if config_base else self.git_ops.get_default_base_branch()
 
         # Resolve post_todo_list: CLI value > config file value > default (True)
         if post_todo_list is not None:

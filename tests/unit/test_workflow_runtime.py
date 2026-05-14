@@ -84,6 +84,43 @@ def test_runtime_completes_pr_when_publish_receipt_exists(tmp_path: Path) -> Non
     assert result.final_status_code == "BATON_WORKFLOW_COMPLETE"
 
 
+def test_runtime_completes_pr_when_capability_receipt_success_exists(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-pr-cap"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "pr": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        _write_baton(issue_dir, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete")
+        return StepExecutionResult(
+            response="done",
+            artifacts={"pr_result": "p1"},
+            events=[
+                {
+                    "type": "capability_receipt",
+                    "capability": "cafe.pr.publish",
+                    "success": True,
+                    "correlation_id": "x",
+                    "category": None,
+                    "code": None,
+                }
+            ],
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="pr")
+
+    assert result.completed is True
+    assert result.final_status_code == "BATON_WORKFLOW_COMPLETE"
+
+
 def test_runtime_delegates_non_pr_steps_to_legacy_runner(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-spec"
     playbook = {

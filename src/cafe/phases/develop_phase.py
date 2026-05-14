@@ -753,7 +753,7 @@ class DevelopPhase(Phase):
         skill_section = f"{skill_body}\n\n" if skill_body else ""
 
         config_file = self.issue_dir / "issue.yaml"
-        base_branch = self._get_issue_config_value(config_file, "base_branch") or "main"
+        base_branch = self._get_issue_config_value(config_file, "base_branch") or self.git_ops.get_default_base_branch()
         worktree_path = self._get_issue_config_value(config_file, "worktree_path")
 
         worktree_note = ""

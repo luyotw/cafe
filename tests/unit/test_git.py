@@ -501,3 +501,18 @@ class TestGitOperations:
             timestamp = git.get_latest_unpushed_commit_timestamp()
 
             assert timestamp is None
+
+    def test_get_default_base_branch_prefers_develop(self) -> None:
+        """get_default_base_branch returns 'develop' when origin/develop exists."""
+        git = GitOperations()
+        with patch.object(git, "run_git") as mock_run:
+            mock_run.return_value = "abc123"  # rev-parse --verify succeeds
+            assert git.get_default_base_branch() == "develop"
+
+    def test_get_default_base_branch_falls_back_to_main(self) -> None:
+        """get_default_base_branch falls back to main branch when develop missing."""
+        git = GitOperations()
+        with patch.object(git, "run_git") as mock_run:
+            mock_run.side_effect = GitError("not found")
+            with patch.object(git, "get_main_branch", return_value="main"):
+                assert git.get_default_base_branch() == "main"

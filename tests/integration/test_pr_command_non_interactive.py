@@ -62,6 +62,7 @@ def mock_git_ops():
     """Mock GitOperations"""
     git_ops = MagicMock(spec=GitOperations)
     git_ops.get_main_branch.return_value = "main"
+    git_ops.get_default_base_branch.return_value = "main"
     git_ops.get_commits_between.return_value = """commit1: Add feature A
 commit2: Add feature B
 commit3: Add tests"""
