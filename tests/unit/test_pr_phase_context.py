@@ -1,4 +1,4 @@
-"""Test PR phase context.json field population."""
+"""Test PR phase iteration.json field population."""
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
@@ -13,7 +13,7 @@ from cafe.utils.github import PRComment
 pytestmark = pytest.mark.slow
 
 
-# Fields that must be present in context.json per issue #142
+# Fields that must be present in iteration.json per issue #142
 AGENT_CONTEXT_FIELDS = [
     "prompt",
     "cli",
@@ -26,7 +26,7 @@ AGENT_CONTEXT_FIELDS = [
 
 
 class TestPRPhaseContextFields:
-    """Verify context.json contains all agent execution context fields."""
+    """Verify iteration.json contains all agent execution context fields."""
 
     @pytest.fixture
     def mock_dependencies(self):
@@ -79,7 +79,7 @@ class TestPRPhaseContextFields:
 
         Regression test: the post-organize code previously called _update_iteration_history()
         with only phase_specific_data and status_code, overwriting agent metadata set by
-        _execute_agent_iteration(). The fix updates status_code directly in context.json.
+        _execute_agent_iteration(). The fix updates status_code directly in iteration.json.
         """
         issue_dir, spec_file = setup_issue_dir
         phase = self._create_phase(mock_dependencies, issue_dir, spec_file)
@@ -87,7 +87,7 @@ class TestPRPhaseContextFields:
         pr_dir = issue_dir / "pr"
         phase.iteration = 2
 
-        # Simulate: agent execution already wrote context.json with all agent fields
+        # Simulate: agent execution already wrote iteration.json with all agent fields
         iter_dir = pr_dir / "iteration_002"
         iter_dir.mkdir(parents=True, exist_ok=True)
         agent_context = {
@@ -104,13 +104,13 @@ class TestPRPhaseContextFields:
             "permission_denials": [],
             "streaming_log": [],
         }
-        (iter_dir / "context.json").write_text(json.dumps(agent_context))
+        (iter_dir / "iteration.json").write_text(json.dumps(agent_context))
 
         # Simulate the post-organize status_code update (new behavior: direct JSON update)
         result_status = "needs_changes"
         result_data = {"pr_number": "42", "status_code": "needs_changes"}
 
-        context_file = iter_dir / "context.json"
+        context_file = iter_dir / "iteration.json"
         with open(context_file, "r", encoding="utf-8") as f:
             context_data = json.load(f)
         context_data.update(result_data)
@@ -118,13 +118,13 @@ class TestPRPhaseContextFields:
         with open(context_file, "w", encoding="utf-8") as f:
             json.dump(context_data, f, ensure_ascii=False, indent=2)
 
-        # Read context.json - agent fields must be preserved
+        # Read iteration.json - agent fields must be preserved
         context = json.loads(context_file.read_text())
 
         for field in AGENT_CONTEXT_FIELDS:
-            assert field in context, f"Field '{field}' missing from context.json"
+            assert field in context, f"Field '{field}' missing from iteration.json"
             assert context[field] is not None, (
-                f"Field '{field}' is None in context.json - "
+                f"Field '{field}' is None in iteration.json - "
                 "agent metadata was erased by post-organize status update"
             )
 
@@ -136,7 +136,7 @@ class TestPRPhaseContextFields:
     def test_save_pr_comments_context_has_all_fields(
         self, tmp_path, mock_dependencies, setup_issue_dir
     ):
-        """_save_pr_comments_to_user_input must produce context.json with all required fields."""
+        """_save_pr_comments_to_user_input must produce iteration.json with all required fields."""
         issue_dir, spec_file = setup_issue_dir
         phase = self._create_phase(mock_dependencies, issue_dir, spec_file)
 
@@ -171,7 +171,7 @@ class TestPRPhaseContextFields:
     def test_local_review_modification_context_has_all_fields(
         self, tmp_path, mock_dependencies, setup_issue_dir
     ):
-        """Local review modification request must produce context.json with all required fields."""
+        """Local review modification request must produce iteration.json with all required fields."""
         issue_dir, spec_file = setup_issue_dir
         phase = self._create_phase(mock_dependencies, issue_dir, spec_file)
 
@@ -179,7 +179,7 @@ class TestPRPhaseContextFields:
         pr_dir = issue_dir / "pr"
         prev_iter_dir = pr_dir / "iteration_001"
         prev_iter_dir.mkdir(parents=True)
-        (prev_iter_dir / "context.json").write_text(json.dumps({
+        (prev_iter_dir / "iteration.json").write_text(json.dumps({
             "iteration": 1,
             "status_code": "ready_for_review",
         }))
@@ -218,7 +218,7 @@ class TestPRPhaseContextFields:
     def test_local_review_confirmation_context_has_all_fields(
         self, tmp_path, mock_dependencies, setup_issue_dir
     ):
-        """Local review confirmation must produce context.json with all required fields."""
+        """Local review confirmation must produce iteration.json with all required fields."""
         issue_dir, spec_file = setup_issue_dir
         phase = self._create_phase(mock_dependencies, issue_dir, spec_file)
 
@@ -248,7 +248,7 @@ class TestPRPhaseContextFields:
     def test_context_json_fields_present_after_save_pr_comments(
         self, tmp_path, mock_dependencies, setup_issue_dir
     ):
-        """Integration: context.json produced by _save_pr_comments_to_user_input has all fields."""
+        """Integration: iteration.json produced by _save_pr_comments_to_user_input has all fields."""
         issue_dir, spec_file = setup_issue_dir
         phase = self._create_phase(mock_dependencies, issue_dir, spec_file)
 
@@ -270,21 +270,21 @@ class TestPRPhaseContextFields:
             with patch.object(phase, "_append_iteration_index"):
                 phase._save_pr_comments_to_user_input(pr_number=42)
 
-        # Read context.json
+        # Read iteration.json
         iter_dir = issue_dir / "pr" / "iteration_001"
-        context_file = iter_dir / "context.json"
-        assert context_file.exists(), "context.json was not created"
+        context_file = iter_dir / "iteration.json"
+        assert context_file.exists(), "iteration.json was not created"
 
         context = json.loads(context_file.read_text())
 
         # All agent context fields must be present (even if None for pre-agent context)
         for field in AGENT_CONTEXT_FIELDS:
-            assert field in context, f"Field '{field}' missing from context.json"
+            assert field in context, f"Field '{field}' missing from iteration.json"
 
     def test_local_review_confirmation_context_fields_present(
         self, tmp_path, mock_dependencies, setup_issue_dir
     ):
-        """Integration: context.json for local review confirmation has all fields."""
+        """Integration: iteration.json for local review confirmation has all fields."""
         issue_dir, spec_file = setup_issue_dir
         phase = self._create_phase(mock_dependencies, issue_dir, spec_file)
 
@@ -303,11 +303,11 @@ class TestPRPhaseContextFields:
                 status_code=PhaseStatusCode.CONFIRMED,
             )
 
-        context = json.loads((iter_dir / "context.json").read_text())
+        context = json.loads((iter_dir / "iteration.json").read_text())
 
         # All agent context fields must be present
         for field in AGENT_CONTEXT_FIELDS:
-            assert field in context, f"Field '{field}' missing from context.json"
+            assert field in context, f"Field '{field}' missing from iteration.json"
 
         # status_code should be set
         assert context["status_code"] == "confirmed"
@@ -350,7 +350,7 @@ class TestPRPhaseContextFields:
                 status_code=PhaseStatusCode.READY_FOR_REVIEW,
             )
 
-        context = json.loads((iter_dir / "context.json").read_text())
+        context = json.loads((iter_dir / "iteration.json").read_text())
 
         # model must be preserved from first call
         assert context["model"] == "claude-haiku-4-5-20251001"

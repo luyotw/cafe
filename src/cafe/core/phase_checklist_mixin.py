@@ -78,7 +78,7 @@ class PhaseChecklistMixin:
             # If still not found after rebuild attempt, skip validation
             print(f"⚠️  Checklist file still not found after rebuild, skipping validation")
             # Get current response from context
-            context_file = iteration_dir / "context.json"
+            context_file = self._resolve_iteration_context_file(iteration_dir)
             if context_file.exists():
                 with open(context_file, "r", encoding="utf-8") as f:
                     context_data = json.load(f)
@@ -93,7 +93,7 @@ class PhaseChecklistMixin:
         if result.is_complete:
             print(f"✅ Checklist validation passed - all items completed")
             # Get current response from context
-            context_file = iteration_dir / "context.json"
+            context_file = self._resolve_iteration_context_file(iteration_dir)
             if context_file.exists():
                 with open(context_file, "r", encoding="utf-8") as f:
                     context_data = json.load(f)
@@ -150,7 +150,7 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
                     print(f"✅ Checklist validation passed after retry {retry_count}")
 
                     # Merge streaming logs
-                    context_file = iteration_dir / "context.json"
+                    context_file = self._resolve_iteration_context_file(iteration_dir)
                     original_streaming_log = []
                     original_response = ""
                     if context_file.exists():
@@ -169,7 +169,7 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
                             for log_entry in retry_streaming_log:
                                 f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
 
-                    # Update context.json with final response and merged streaming_log
+                    # Update iteration.json with final response and merged streaming_log
                     # Note: response is NOT merged, only keep the last one
                     if context_file.exists():
                         with open(context_file, "r", encoding="utf-8") as f:
@@ -203,7 +203,7 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
         print(f"   Please complete the checklist manually and re-run the command.")
 
         # Return the last response and status code
-        context_file = iteration_dir / "context.json"
+        context_file = self._resolve_iteration_context_file(iteration_dir)
         if context_file.exists():
             with open(context_file, "r", encoding="utf-8") as f:
                 context_data = json.load(f)

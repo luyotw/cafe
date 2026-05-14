@@ -37,7 +37,7 @@ class _FakePhase:
         return phase_dir / f"iteration_{iteration:03d}" / "output.md"
 
     def _load_previous_iteration_data(self) -> dict:
-        context_file = self._get_iteration_dir(self.iteration - 1) / "context.json"
+        context_file = self._get_iteration_dir(self.iteration - 1) / "iteration.json"
         if not context_file.exists():
             return {}
         return json.loads(context_file.read_text(encoding="utf-8"))

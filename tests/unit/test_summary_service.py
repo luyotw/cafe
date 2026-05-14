@@ -100,7 +100,7 @@ class TestLoadPhaseStatus:
         issue_dir = tmp_path / ".cafe/issues/test-issue"
         phase_dir = issue_dir / "pr"
         (phase_dir / "iteration_001").mkdir(parents=True)
-        (phase_dir / "iteration_001/context.json").write_text(
+        (phase_dir / "iteration_001/iteration.json").write_text(
             json.dumps(
                 {
                     "iteration": 1,
@@ -166,7 +166,7 @@ class TestLoadPhaseStatus:
         issue_dir = tmp_path / ".cafe/issues/test-issue"
         phase_dir = issue_dir / "spec"
         (phase_dir / "iteration_001").mkdir(parents=True)
-        (phase_dir / "iteration_001/context.json").write_text(
+        (phase_dir / "iteration_001/iteration.json").write_text(
             json.dumps(
                 {
                     "iteration": 1,
@@ -218,7 +218,7 @@ class TestLoadPhaseStatus:
 
         phase_dir = tmp_path / ".cafe/issues/test-issue/pr"
         (phase_dir / "iteration_001").mkdir(parents=True)
-        (phase_dir / "iteration_001/context.json").write_text(
+        (phase_dir / "iteration_001/iteration.json").write_text(
             json.dumps(
                 {
                     "iteration": 1,
@@ -287,8 +287,8 @@ class TestLoadIterationStatuses:
         phase_dir = tmp_path / ".cafe/issues/test-issue/spec"
         (phase_dir / "iteration_001").mkdir(parents=True)
         (phase_dir / "iteration_002").mkdir(parents=True)
-        (phase_dir / "iteration_001/context.json").write_text('{"iteration": 1, "status_code": "confirmed", "timestamp": "2026-01-14T10:00:00+08:00"}')
-        (phase_dir / "iteration_002/context.json").write_text('{"iteration": 2, "status_code": "confirmed", "timestamp": "2026-01-14T11:00:00+08:00"}')
+        (phase_dir / "iteration_001/iteration.json").write_text('{"iteration": 1, "status_code": "confirmed", "timestamp": "2026-01-14T10:00:00+08:00"}')
+        (phase_dir / "iteration_002/iteration.json").write_text('{"iteration": 2, "status_code": "confirmed", "timestamp": "2026-01-14T11:00:00+08:00"}')
 
         result = service.load_iteration_statuses("test-issue", "spec")
         assert isinstance(result, list)
@@ -319,7 +319,7 @@ class TestLoadIterationStatuses:
         assert result == []
 
     def test_load_iteration_statuses_parses_iteration_info(self, tmp_path, monkeypatch):
-        """Test parsing iteration number and metadata from context.json files."""
+        """Test parsing iteration number and metadata from iteration.json files."""
         from cafe.services.summary_service import SummaryService
 
         monkeypatch.chdir(tmp_path)
@@ -328,7 +328,7 @@ class TestLoadIterationStatuses:
         phase_dir = tmp_path / ".cafe/issues/test-issue/review"
         (phase_dir / "iteration_001").mkdir(parents=True)
         context_data = {"iteration": 1, "status_code": "need_clarification", "timestamp": "2025-01-04T14:00:00Z"}
-        (phase_dir / "iteration_001/context.json").write_text(json.dumps(context_data))
+        (phase_dir / "iteration_001/iteration.json").write_text(json.dumps(context_data))
 
         result = service.load_iteration_statuses("test-issue", "review")
         assert isinstance(result, list)
@@ -336,7 +336,7 @@ class TestLoadIterationStatuses:
         assert result[0]["iteration"] == 1
 
     def test_load_iteration_statuses_handles_malformed_iteration_json(self, tmp_path, monkeypatch):
-        """Test handling of malformed JSON in iteration context.json files."""
+        """Test handling of malformed JSON in iteration iteration.json files."""
         from cafe.services.summary_service import SummaryService
 
         monkeypatch.chdir(tmp_path)
@@ -344,7 +344,7 @@ class TestLoadIterationStatuses:
         service = SummaryService()
         phase_dir = tmp_path / ".cafe/issues/test-issue/pr"
         (phase_dir / "iteration_001").mkdir(parents=True)
-        (phase_dir / "iteration_001/context.json").write_text('{invalid json}')
+        (phase_dir / "iteration_001/iteration.json").write_text('{invalid json}')
 
         result = service.load_iteration_statuses("test-issue", "pr")
         # Should skip malformed file and return empty or populated list
@@ -368,7 +368,7 @@ class TestLoadIterationStatuses:
         assert isinstance(result, list)
 
     def test_load_iteration_statuses_from_context_files(self, tmp_path, monkeypatch):
-        """Test reading iterations from context.json files."""
+        """Test reading iterations from iteration.json files."""
         from cafe.services.summary_service import SummaryService
 
         monkeypatch.chdir(tmp_path)
@@ -377,7 +377,7 @@ class TestLoadIterationStatuses:
         phase_dir = tmp_path / ".cafe/issues/test-issue/review"
         phase_dir.mkdir(parents=True)
 
-        # Create 4 iteration context.json files
+        # Create 4 iteration iteration.json files
         for i in range(1, 5):
             (phase_dir / f"iteration_{i:03d}").mkdir(parents=True)
             context = {
@@ -385,7 +385,7 @@ class TestLoadIterationStatuses:
                 "timestamp": f"2026-01-05T00:{40+i*5:02d}:00.000000",
                 "status_code": "confirmed" if i == 4 else "needs_changes",
             }
-            (phase_dir / f"iteration_{i:03d}/context.json").write_text(json.dumps(context))
+            (phase_dir / f"iteration_{i:03d}/iteration.json").write_text(json.dumps(context))
 
         result = service.load_iteration_statuses("test-issue", "review")
         assert isinstance(result, list)
@@ -396,10 +396,10 @@ class TestLoadIterationStatuses:
 
 
 class TestLoadIterationContexts:
-    """Test loading iteration data from context.json"""
+    """Test loading iteration data from iteration.json"""
 
     def test_load_iteration_statuses_reads_from_context_json(self, tmp_path, monkeypatch):
-        """Verify load_iteration_statuses() reads data from context.json"""
+        """Verify load_iteration_statuses() reads data from iteration.json"""
         from cafe.services.summary_service import SummaryService
 
         monkeypatch.chdir(tmp_path)
@@ -409,7 +409,7 @@ class TestLoadIterationContexts:
         (phase_dir / "iteration_001").mkdir(parents=True)
         (phase_dir / "iteration_002").mkdir(parents=True)
 
-        # Create context.json files (including start_time and end_time)
+        # Create iteration.json files (including start_time and end_time)
         context1 = {
             "iteration": 1,
             "timestamp": "2026-01-14T10:00:00+08:00",
@@ -422,8 +422,8 @@ class TestLoadIterationContexts:
             "end_time": "2026-01-14T10:45:00+08:00",
             "status_code": "confirmed"
         }
-        (phase_dir / "iteration_001/context.json").write_text(json.dumps(context1))
-        (phase_dir / "iteration_002/context.json").write_text(json.dumps(context2))
+        (phase_dir / "iteration_001/iteration.json").write_text(json.dumps(context1))
+        (phase_dir / "iteration_002/iteration.json").write_text(json.dumps(context2))
 
         result = service.load_iteration_statuses("test-issue", "spec")
         assert isinstance(result, list)
@@ -443,13 +443,13 @@ class TestLoadIterationContexts:
         phase_dir = tmp_path / ".cafe/issues/test-issue/plan"
         (phase_dir / "iteration_001").mkdir(parents=True)
 
-        # Create context.json without end_time (simulating in-progress iteration)
+        # Create iteration.json without end_time (simulating in-progress iteration)
         context = {
             "iteration": 1,
             "timestamp": "2026-01-14T11:00:00+08:00",
             "status_code": "need_clarification"
         }
-        (phase_dir / "iteration_001/context.json").write_text(json.dumps(context))
+        (phase_dir / "iteration_001/iteration.json").write_text(json.dumps(context))
 
         result = service.load_iteration_statuses("test-issue", "plan")
         assert isinstance(result, list)
@@ -477,7 +477,7 @@ class TestLoadIterationContexts:
                 "end_time": f"2026-01-14T{10+i}:15:00+08:00",
                 "status_code": "confirmed"
             }
-            (phase_dir / f"iteration_{i:03d}/context.json").write_text(json.dumps(context))
+            (phase_dir / f"iteration_{i:03d}/iteration.json").write_text(json.dumps(context))
 
         result = service.load_iteration_statuses("test-issue", "develop")
         assert isinstance(result, list)
@@ -489,7 +489,7 @@ class TestLoadIterationContexts:
 
 
 class TestLoadTokenUsageData:
-    """Test loading token usage data from context.json"""
+    """Test loading token usage data from iteration.json"""
 
     def test_load_iteration_statuses_extracts_token_usage(self, tmp_path, monkeypatch):
         """Verify load_iteration_statuses() extracts cli, model, and stats fields"""
@@ -501,7 +501,7 @@ class TestLoadTokenUsageData:
         phase_dir = tmp_path / ".cafe/issues/test-issue/spec"
         (phase_dir / "iteration_001").mkdir(parents=True)
 
-        # Create context.json with token usage data
+        # Create iteration.json with token usage data
         context = {
             "iteration": 1,
             "timestamp": "2026-01-31T10:00:00+08:00",
@@ -519,7 +519,7 @@ class TestLoadTokenUsageData:
                 "duration_api_ms": 81850
             }
         }
-        (phase_dir / "iteration_001/context.json").write_text(json.dumps(context))
+        (phase_dir / "iteration_001/iteration.json").write_text(json.dumps(context))
 
         result = service.load_iteration_statuses("test-issue", "spec")
         assert len(result) == 1
@@ -539,13 +539,13 @@ class TestLoadTokenUsageData:
         phase_dir = tmp_path / ".cafe/issues/test-issue/plan"
         (phase_dir / "iteration_001").mkdir(parents=True)
 
-        # Create context.json without token usage data
+        # Create iteration.json without token usage data
         context = {
             "iteration": 1,
             "timestamp": "2026-01-31T11:00:00+08:00",
             "status_code": "confirmed"
         }
-        (phase_dir / "iteration_001/context.json").write_text(json.dumps(context))
+        (phase_dir / "iteration_001/iteration.json").write_text(json.dumps(context))
 
         result = service.load_iteration_statuses("test-issue", "plan")
         assert len(result) == 1
@@ -596,7 +596,7 @@ class TestLoadTokenUsageData:
 
         for i, context in enumerate(contexts, 1):
             (phase_dir / f"iteration_{i:03d}").mkdir(parents=True)
-            (phase_dir / f"iteration_{i:03d}/context.json").write_text(json.dumps(context))
+            (phase_dir / f"iteration_{i:03d}/iteration.json").write_text(json.dumps(context))
 
         result = service.load_iteration_statuses("test-issue", "spec")
         assert len(result) == 2

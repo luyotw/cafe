@@ -204,7 +204,11 @@ class PhaseStateMixin:
         if not phase_dir.exists():
             return 1
 
-        existing_iterations = sorted(phase_dir.glob("iteration_*/context.json"))
+        iter_dirs = sorted(d for d in phase_dir.glob("iteration_*") if d.is_dir())
+        existing_iterations = [
+            d for d in iter_dirs
+            if (d / "iteration.json").exists() or (d / "context.json").exists()
+        ]
         if not existing_iterations:
             return 1
 
@@ -213,7 +217,12 @@ class PhaseStateMixin:
         if count >= 999:
             raise ValueError("Cannot exceed 999")
 
-        last_context_file = existing_iterations[-1]
+        last_iter_dir = existing_iterations[-1]
+        last_context_file = (
+            last_iter_dir / "iteration.json"
+            if (last_iter_dir / "iteration.json").exists()
+            else last_iter_dir / "context.json"
+        )
         try:
             with open(last_context_file, "r", encoding="utf-8") as f:
                 last_iteration_data = json.load(f)

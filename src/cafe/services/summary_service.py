@@ -82,12 +82,16 @@ class SummaryService:
 
         iterations = []
 
-        # Read from context.json files in each iteration directory
+        # Read from iteration.json files (with context.json fallback) in each iteration directory
         for iteration_dir in sorted(phase_dir.glob("iteration_*")):
             if not iteration_dir.is_dir():
                 continue
 
-            context_file = iteration_dir / "context.json"
+            context_file = (
+                iteration_dir / "iteration.json"
+                if (iteration_dir / "iteration.json").exists()
+                else iteration_dir / "context.json"
+            )
             if not context_file.exists():
                 continue
 

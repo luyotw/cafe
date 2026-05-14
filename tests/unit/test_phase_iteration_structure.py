@@ -142,7 +142,7 @@ class TestLoadIterationCounter:
         iteration_dir.mkdir(parents=True)
         phase = ConcretePhase(phase_dir=phase_dir)
 
-        (iteration_dir / "context.json").write_text(
+        (iteration_dir / "iteration.json").write_text(
             json.dumps(
                 {
                     "iteration": 1,
@@ -161,7 +161,7 @@ class TestLoadIterationCounter:
         iteration_dir.mkdir(parents=True)
         phase = ConcretePhase(phase_dir=phase_dir)
 
-        (iteration_dir / "context.json").write_text(
+        (iteration_dir / "iteration.json").write_text(
             json.dumps(
                 {
                     "iteration": 1,
@@ -216,7 +216,7 @@ class TestSaveUserInput:
     """測試重構後的 _save_user_input() 方法"""
 
     def test_creates_iteration_directory_and_context_json(self, tmp_path):
-        """驗證會建立 iteration_XXX/context.json"""
+        """驗證會建立 iteration_XXX/iteration.json"""
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir()
         phase = ConcretePhase(phase_dir=phase_dir)
@@ -229,11 +229,11 @@ class TestSaveUserInput:
         assert iteration_dir.exists()
         assert iteration_dir.is_dir()
 
-        context_file = iteration_dir / "context.json"
+        context_file = iteration_dir / "iteration.json"
         assert context_file.exists()
 
     def test_context_json_contains_required_fields(self, tmp_path):
-        """驗證 context.json 包含所有必要欄位"""
+        """驗證 iteration.json 包含所有必要欄位"""
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir()
         phase = ConcretePhase(phase_dir=phase_dir)
@@ -241,14 +241,14 @@ class TestSaveUserInput:
 
         phase._save_user_input("Test user input")
 
-        context_file = phase_dir / "iteration_001" / "context.json"
+        context_file = phase_dir / "iteration_001" / "iteration.json"
         data = json.loads(context_file.read_text())
 
         # 驗證必要欄位
         assert "iteration" in data
         assert data["iteration"] == 1
         assert "timestamp" in data
-        # user_input is no longer duplicated into context.json;
+        # user_input is no longer duplicated into iteration.json;
         # it lives in user_input.md instead
         assert "user_input" not in data
 
@@ -266,7 +266,7 @@ class TestSaveUserInput:
 
         phase._save_user_input("Test input", phase_specific_data=phase_specific_data)
 
-        context_file = phase_dir / "iteration_002" / "context.json"
+        context_file = phase_dir / "iteration_002" / "iteration.json"
         data = json.loads(context_file.read_text())
 
         assert data["template"] == "default"
@@ -300,7 +300,7 @@ class TestSaveUserInput:
         assert content == user_input_content
 
     def test_user_input_no_longer_in_context_json(self, tmp_path):
-        """驗證 context.json 不再包含 user_input（改用 user_input.md）"""
+        """驗證 iteration.json 不再包含 user_input（改用 user_input.md）"""
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir()
         phase = ConcretePhase(phase_dir=phase_dir)
@@ -310,7 +310,7 @@ class TestSaveUserInput:
         phase._save_user_input(user_input_content)
 
         # user_input is now stored exclusively in user_input.md
-        context_file = phase_dir / "iteration_001" / "context.json"
+        context_file = phase_dir / "iteration_001" / "iteration.json"
         data = json.loads(context_file.read_text())
         assert "user_input" not in data
 
@@ -334,12 +334,12 @@ class TestLoadUserInput:
         user_input_file = iteration_dir / "user_input.md"
         user_input_file.write_text("Content from user_input.md", encoding="utf-8")
 
-        # 同時建立 context.json（但內容不同，以驗證優先讀取 .md）
-        context_file = iteration_dir / "context.json"
+        # 同時建立 iteration.json（但內容不同，以驗證優先讀取 .md）
+        context_file = iteration_dir / "iteration.json"
         context_data = {
             "iteration": 1,
             "timestamp": "2025-12-27T10:00:00Z",
-            "user_input": "Content from context.json",
+            "user_input": "Content from iteration.json",
         }
         context_file.write_text(json.dumps(context_data), encoding="utf-8")
 
@@ -353,18 +353,18 @@ class TestLoadUserInput:
         phase_dir.mkdir()
         phase = ConcretePhase(phase_dir=phase_dir)
 
-        # 只建立 context.json，不建立 user_input.md
+        # 只建立 iteration.json，不建立 user_input.md
         iteration_dir = phase_dir / "iteration_001"
         iteration_dir.mkdir()
-        context_file = iteration_dir / "context.json"
+        context_file = iteration_dir / "iteration.json"
         context_data = {
             "iteration": 1,
             "timestamp": "2025-12-27T10:00:00Z",
-            "user_input": "Content from context.json only",
+            "user_input": "Content from iteration.json only",
         }
         context_file.write_text(json.dumps(context_data), encoding="utf-8")
 
-        # _load_user_input no longer falls back to context.json
+        # _load_user_input no longer falls back to iteration.json
         result = phase._load_user_input(1)
         assert result == ""
 
@@ -379,15 +379,15 @@ class TestLoadUserInput:
         assert result == ""
 
     def test_returns_empty_string_when_user_input_key_missing_in_context(self, tmp_path):
-        """驗證當 context.json 存在但缺少 user_input 欄位時返回空字串"""
+        """驗證當 iteration.json 存在但缺少 user_input 欄位時返回空字串"""
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir()
         phase = ConcretePhase(phase_dir=phase_dir)
 
-        # 建立 context.json 但不包含 user_input 欄位
+        # 建立 iteration.json 但不包含 user_input 欄位
         iteration_dir = phase_dir / "iteration_001"
         iteration_dir.mkdir()
-        context_file = iteration_dir / "context.json"
+        context_file = iteration_dir / "iteration.json"
         context_data = {
             "iteration": 1,
             "timestamp": "2025-12-27T10:00:00Z",

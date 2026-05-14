@@ -1,6 +1,6 @@
 """Test that _validate_and_retry_checklist_completion preserves status code
-when context.json response doesn't contain the status code (e.g., after
-a continue-execution merged the status code into the response but context.json
+when iteration.json response doesn't contain the status code (e.g., after
+a continue-execution merged the status code into the response but iteration.json
 wasn't updated yet).
 """
 
@@ -39,15 +39,15 @@ def phase(tmp_path):
 
 class TestChecklistValidationPreservesStatusCode:
     """Bug: when agent needs a continue-execution to produce a status code,
-    the merged response (with status code) is NOT saved to context.json before
+    the merged response (with status code) is NOT saved to iteration.json before
     checklist validation runs. _validate_and_retry_checklist_completion reads
-    context.json, re-extracts status code from the stale response, gets None,
+    iteration.json, re-extracts status code from the stale response, gets None,
     and returns (response, None, True). This causes the caller to lose the
     status code and ultimately fail with "No valid status code returned".
     """
 
     def test_returns_status_code_when_context_response_has_it(self, phase, tmp_path):
-        """When context.json response contains the status code, it should be extracted."""
+        """When iteration.json response contains the status code, it should be extracted."""
         iteration_dir = phase._get_iteration_dir(1)
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
@@ -55,8 +55,8 @@ class TestChecklistValidationPreservesStatusCode:
         checklist = iteration_dir / "checklist.md"
         checklist.write_text("## Checklist\n\n[x] Task 1\n[x] Task 2\n")
 
-        # context.json has response WITH status code
-        context = iteration_dir / "context.json"
+        # iteration.json has response WITH status code
+        context = iteration_dir / "iteration.json"
         context.write_text(json.dumps({
             "response": "Done.\n\nneed_clarification",
         }))
@@ -72,7 +72,7 @@ class TestChecklistValidationPreservesStatusCode:
         assert status_code == PhaseStatusCode.NEED_CLARIFICATION
 
     def test_returns_none_when_context_response_missing_status_code(self, phase, tmp_path):
-        """When context.json response doesn't contain status code (stale after continue-execution),
+        """When iteration.json response doesn't contain status code (stale after continue-execution),
         _validate_and_retry_checklist_completion returns None for status_code.
         The caller (_execute_and_handle_agent_response) should preserve its own status_code.
         """
@@ -83,8 +83,8 @@ class TestChecklistValidationPreservesStatusCode:
         checklist = iteration_dir / "checklist.md"
         checklist.write_text("## Checklist\n\n[x] Task 1\n[x] Task 2\n")
 
-        # context.json has response WITHOUT status code (stale, pre-continue)
-        context = iteration_dir / "context.json"
+        # iteration.json has response WITHOUT status code (stale, pre-continue)
+        context = iteration_dir / "iteration.json"
         context.write_text(json.dumps({
             "response": "I'm working on the spec analysis...",
         }))
@@ -97,6 +97,6 @@ class TestChecklistValidationPreservesStatusCode:
         )
 
         assert passed is True
-        # Validation can't extract status code from stale context.json — returns None
+        # Validation can't extract status code from stale iteration.json — returns None
         assert status_code is None
         # The fix ensures the caller keeps its own status_code instead of overwriting with None

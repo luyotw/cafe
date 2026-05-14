@@ -1,4 +1,4 @@
-"""Test that context.json captures session_id created during agent execution."""
+"""Test that iteration.json captures session_id created during agent execution."""
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -10,7 +10,7 @@ from cafe.core.types import PhaseResult, PhaseStatus, TokenUsage
 
 
 class TestContextSessionIDUpdate:
-    """Verify context.json captures session_id created during agent execution."""
+    """Verify iteration.json captures session_id created during agent execution."""
 
     @pytest.fixture
     def mock_agent_manager(self):
@@ -47,7 +47,7 @@ class TestContextSessionIDUpdate:
     def test_context_json_captures_created_session_id(
         self, tmp_path, mock_agent_manager
     ):
-        """context.json should contain the session_id created during execution, not None."""
+        """iteration.json should contain the session_id created during execution, not None."""
         manager, executor = mock_agent_manager
         
         # Setup issue directory
@@ -77,18 +77,18 @@ class TestContextSessionIDUpdate:
             with patch.object(phase, "_check_if_already_completed", return_value=None):
                 result = phase.execute()
         
-        # Verify context.json exists
-        context_file = spec_dir / "iteration_001" / "context.json"
-        assert context_file.exists(), "context.json should be created"
+        # Verify iteration.json exists
+        context_file = spec_dir / "iteration_001" / "iteration.json"
+        assert context_file.exists(), "iteration.json should be created"
         
-        # Read context.json
+        # Read iteration.json
         with open(context_file) as f:
             context_data = json.load(f)
         
         # Verify session_id is the one created during execution, not None
         assert "session_id" in context_data
         assert context_data["session_id"] == "new-session-123", (
-            "context.json should capture the session_id created during execution"
+            "iteration.json should capture the session_id created during execution"
         )
         assert context_data["session_id"] is not None, (
             "session_id should not be None after agent execution"

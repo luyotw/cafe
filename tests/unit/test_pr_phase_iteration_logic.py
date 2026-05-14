@@ -28,7 +28,7 @@ def _write_develop_iteration(
     }
     if end_time is not None:
         payload["end_time"] = end_time
-    (develop_dir / "context.json").write_text(json.dumps(payload))
+    (develop_dir / "iteration.json").write_text(json.dumps(payload))
 
 
 def _write_pr_iteration(
@@ -53,7 +53,7 @@ def _write_pr_iteration(
         payload["response"] = response
     if status_code is not None:
         payload["status_code"] = status_code
-    (pr_dir / "context.json").write_text(json.dumps(payload))
+    (pr_dir / "iteration.json").write_text(json.dumps(payload))
     if user_input is not None:
         (pr_dir / "user_input.md").write_text(user_input)
 
@@ -114,8 +114,8 @@ class TestPRPhaseIterationLogic:
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Test Spec")
 
-        # Create context.json with status_code (completed iteration)
-        context_file = iteration_dir / "context.json"
+        # Create iteration.json with status_code (completed iteration)
+        context_file = iteration_dir / "iteration.json"
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
@@ -155,8 +155,8 @@ class TestPRPhaseIterationLogic:
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Test Spec")
 
-        # Create context.json with status_code (completed iteration, no user_input.md)
-        context_file = iteration_dir / "context.json"
+        # Create iteration.json with status_code (completed iteration, no user_input.md)
+        context_file = iteration_dir / "iteration.json"
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
@@ -190,7 +190,7 @@ class TestPRPhaseIterationLogic:
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Test Spec")
 
-        context_file = iteration_dir / "context.json"
+        context_file = iteration_dir / "iteration.json"
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
@@ -571,8 +571,8 @@ class TestPRPhaseIterationLogic:
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Test Spec")
 
-        # Create context.json with status_code (complete iteration)
-        context_file = iteration_dir / "context.json"
+        # Create iteration.json with status_code (complete iteration)
+        context_file = iteration_dir / "iteration.json"
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
@@ -603,7 +603,7 @@ class TestPRPhaseIterationLogic:
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Test Spec")
 
-        context_file = iteration_dir / "context.json"
+        context_file = iteration_dir / "iteration.json"
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
@@ -634,8 +634,8 @@ class TestPRPhaseIterationLogic:
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Test Spec")
 
-        # Create context.json without status_code (incomplete iteration)
-        context_file = iteration_dir / "context.json"
+        # Create iteration.json without status_code (incomplete iteration)
+        context_file = iteration_dir / "iteration.json"
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00"
@@ -673,8 +673,8 @@ class TestPRPhaseIterationLogic:
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Test Spec")
 
-        # Create context.json without status_code (incomplete iteration)
-        context_file = iteration_dir / "context.json"
+        # Create iteration.json without status_code (incomplete iteration)
+        context_file = iteration_dir / "iteration.json"
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00"
@@ -733,8 +733,8 @@ class TestPRPhaseIterationLogic:
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Test Spec")
 
-        # Create context.json with status_code but no user_input
-        context_file = iteration_dir / "context.json"
+        # Create iteration.json with status_code but no user_input
+        context_file = iteration_dir / "iteration.json"
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
@@ -768,7 +768,7 @@ class TestPRPhaseIterationLogic:
         spec_file.write_text("# Test Spec")
 
         # Create PR iteration with user_input (NEEDS_CHANGES)
-        pr_context_file = iteration_dir / "context.json"
+        pr_context_file = iteration_dir / "iteration.json"
         pr_context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
@@ -808,7 +808,7 @@ class TestPRPhaseIterationLogic:
         spec_file.write_text("# Test Spec")
 
         # Create PR iteration with user_input at 10:00
-        pr_context_file = iteration_dir / "context.json"
+        pr_context_file = iteration_dir / "iteration.json"
         pr_context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
@@ -902,8 +902,8 @@ class TestPhaseComparisonWithMissingEndTime:
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Test Spec")
 
-        # Create context.json with status_code but no end_time
-        context_file = iteration_dir / "context.json"
+        # Create iteration.json with status_code but no end_time
+        context_file = iteration_dir / "iteration.json"
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
@@ -940,7 +940,7 @@ class TestPhaseComparisonWithMissingEndTime:
         spec_file.write_text("# Test Spec")
 
         # Create PR iteration without end_time
-        context_file = iteration_dir / "context.json"
+        context_file = iteration_dir / "iteration.json"
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
@@ -983,7 +983,7 @@ class TestPhaseComparisonWithMissingEndTime:
         spec_file.write_text("# Test Spec")
 
         # Create PR iteration with end_time
-        context_file = iteration_dir / "context.json"
+        context_file = iteration_dir / "iteration.json"
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
@@ -1016,12 +1016,12 @@ class TestPhaseComparisonWithMissingEndTime:
             assert result is False
 
     def test_organize_comments_saves_status_code_to_context(self, tmp_path, mock_dependencies):
-        """Test that _organize_comments_to_todo_list saves status_code to context.json.
+        """Test that _organize_comments_to_todo_list saves status_code to iteration.json.
 
         Regression test: _execute_agent_iteration intentionally saves status_code=None
-        to context.json (waiting for checklist validation). _organize_comments_to_todo_list
-        must save the final status_code back to context.json before returning.
-        Without this fix, context.json ends up with status_code: null.
+        to iteration.json (waiting for checklist validation). _organize_comments_to_todo_list
+        must save the final status_code back to iteration.json before returning.
+        Without this fix, iteration.json ends up with status_code: null.
         """
         from cafe.core.status_codes import PhaseStatusCode
 
@@ -1047,8 +1047,8 @@ class TestPhaseComparisonWithMissingEndTime:
         checklist_file = iteration_dir / "checklist.md"
         checklist_file.write_text("- [x] Read PR comments\n- [x] Organize into todo list\n")
 
-        # Create context.json as _execute_agent_iteration would leave it (status_code=None)
-        context_file = iteration_dir / "context.json"
+        # Create iteration.json as _execute_agent_iteration would leave it (status_code=None)
+        context_file = iteration_dir / "iteration.json"
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
@@ -1093,10 +1093,10 @@ class TestPhaseComparisonWithMissingEndTime:
             assert result.status == PhaseStatus.COMPLETED
             assert result.data["status_code"] == "needs_changes"
 
-            # THE ACTUAL BUG CHECK: verify status_code was persisted to context.json
+            # THE ACTUAL BUG CHECK: verify status_code was persisted to iteration.json
             saved_context = json.loads(context_file.read_text())
             assert saved_context["status_code"] == "needs_changes", \
-                f"Bug: status_code in context.json is {saved_context.get('status_code')!r}, expected 'needs_changes'"
+                f"Bug: status_code in iteration.json is {saved_context.get('status_code')!r}, expected 'needs_changes'"
 
     def test_organize_comments_retries_when_output_md_empty(self, tmp_path, mock_dependencies):
         """Test that _organize_comments_to_todo_list retries when output.md is missing todo list markers."""
@@ -1124,8 +1124,8 @@ class TestPhaseComparisonWithMissingEndTime:
         checklist_file = iteration_dir / "checklist.md"
         checklist_file.write_text("- [x] Read PR comments\n- [x] Organize into todo list\n")
 
-        # Create context.json
-        context_file = iteration_dir / "context.json"
+        # Create iteration.json
+        context_file = iteration_dir / "iteration.json"
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
@@ -1205,8 +1205,8 @@ class TestPhaseComparisonWithMissingEndTime:
         checklist_file = iteration_dir / "checklist.md"
         checklist_file.write_text("- [x] Read PR comments\n- [x] Organize into todo list\n")
 
-        # Create context.json
-        context_file = iteration_dir / "context.json"
+        # Create iteration.json
+        context_file = iteration_dir / "iteration.json"
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
@@ -1323,13 +1323,13 @@ class TestGetLastSeenCommentIds:
         assert result == {"A1", "B2"}
 
     def test_artifact_takes_precedence_over_legacy_context(self, tmp_path, mock_dependencies):
-        """Artifact data should override older context.json snapshots."""
+        """Artifact data should override older iteration.json snapshots."""
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
         pr_dir = issue_dir / "pr"
 
         iter_dir = pr_dir / "iteration_001"
         iter_dir.mkdir(parents=True)
-        (iter_dir / "context.json").write_text(
+        (iter_dir / "iteration.json").write_text(
             json.dumps(
                 {
                     "iteration": 1,
@@ -1354,7 +1354,7 @@ class TestGetLastSeenCommentIds:
     def test_latest_iteration_has_last_seen_comment_ids(self, tmp_path, mock_dependencies):
         """Test _get_last_seen_comment_ids returns IDs from latest iteration context.
 
-        情境：最新一輪 iteration 的 context.json 包含 last_seen_comment_ids
+        情境：最新一輪 iteration 的 iteration.json 包含 last_seen_comment_ids
         預期：返回該 set
         """
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
@@ -1362,7 +1362,7 @@ class TestGetLastSeenCommentIds:
         iter_dir = pr_dir / "iteration_001"
         iter_dir.mkdir(parents=True)
 
-        context_file = iter_dir / "context.json"
+        context_file = iter_dir / "iteration.json"
         context_file.write_text(json.dumps({
             "iteration": 1,
             "status_code": "ready_for_review",
@@ -1388,7 +1388,7 @@ class TestGetLastSeenCommentIds:
         # iteration_001: push iteration with last_seen_comment_ids
         iter_001 = pr_dir / "iteration_001"
         iter_001.mkdir(parents=True)
-        (iter_001 / "context.json").write_text(json.dumps({
+        (iter_001 / "iteration.json").write_text(json.dumps({
             "iteration": 1,
             "status_code": "ready_for_review",
             "last_seen_comment_ids": ["R1", "T1"]
@@ -1397,7 +1397,7 @@ class TestGetLastSeenCommentIds:
         # iteration_002: comment-fetch iteration without last_seen_comment_ids
         iter_002 = pr_dir / "iteration_002"
         iter_002.mkdir(parents=True)
-        (iter_002 / "context.json").write_text(json.dumps({
+        (iter_002 / "iteration.json").write_text(json.dumps({
             "iteration": 2,
             "status_code": "needs_changes"
             # last_seen_comment_ids 欄位不存在
@@ -1412,7 +1412,7 @@ class TestGetLastSeenCommentIds:
     def test_no_iteration_has_last_seen_comment_ids_returns_empty(self, tmp_path, mock_dependencies):
         """Test _get_last_seen_comment_ids returns empty set when no iteration has the field.
 
-        情境：所有 iteration 都沒有 last_seen_comment_ids（舊版本 context.json）
+        情境：所有 iteration 都沒有 last_seen_comment_ids（舊版本 iteration.json）
         預期：返回空 set（向後兼容）
         """
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
@@ -1420,7 +1420,7 @@ class TestGetLastSeenCommentIds:
 
         iter_001 = pr_dir / "iteration_001"
         iter_001.mkdir(parents=True)
-        (iter_001 / "context.json").write_text(json.dumps({
+        (iter_001 / "iteration.json").write_text(json.dumps({
             "iteration": 1,
             "status_code": "ready_for_review"
             # 沒有 last_seen_comment_ids（舊版本）

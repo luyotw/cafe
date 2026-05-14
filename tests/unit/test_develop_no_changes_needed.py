@@ -54,7 +54,7 @@ class TestNoChangesNeededReasoningValidation:
         iteration_dir = develop_dir / "iteration_001"
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create context.json with NO_CHANGES_NEEDED response
+        # Create iteration.json with NO_CHANGES_NEEDED response
         context_data = {
             "iteration": 1,
             "response": "no_changes_needed\n\nThe reviewer is wrong.",
@@ -62,7 +62,7 @@ class TestNoChangesNeededReasoningValidation:
             "streaming_log": [],
             "prompt": "Test prompt"
         }
-        context_file = iteration_dir / "context.json"
+        context_file = iteration_dir / "iteration.json"
         context_file.write_text(json.dumps(context_data))
 
         # output.md does NOT exist or is empty
@@ -123,7 +123,7 @@ class TestNoChangesNeededReasoningValidation:
         iteration_dir = develop_dir / "iteration_001"
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create context.json
+        # Create iteration.json
         context_data = {
             "iteration": 1,
             "response": "no_changes_needed",
@@ -131,7 +131,7 @@ class TestNoChangesNeededReasoningValidation:
             "streaming_log": [],
             "prompt": "Test prompt"
         }
-        context_file = iteration_dir / "context.json"
+        context_file = iteration_dir / "iteration.json"
         context_file.write_text(json.dumps(context_data))
 
         # output.md does NOT exist

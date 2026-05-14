@@ -122,7 +122,11 @@ class PlanPhase(Phase):
                 )
 
             # Check if this is first iteration (no history files or plan files)
-            has_history = bool(list(self.phase_dir.glob("iteration_*/context.json")))
+            has_history = any(
+                (d / "iteration.json").exists() or (d / "context.json").exists()
+                for d in self.phase_dir.glob("iteration_*")
+                if d.is_dir()
+            )
             is_first_iteration = not has_history
 
             # First iteration requires template (unless template_mode is 'auto')

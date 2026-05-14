@@ -28,7 +28,7 @@ def _write_review_iteration(
     }
     if end_time is not None:
         payload["end_time"] = end_time
-    (review_dir / "context.json").write_text(json.dumps(payload))
+    (review_dir / "iteration.json").write_text(json.dumps(payload))
     (review_dir / "output.md").write_text(output)
 
 
@@ -186,8 +186,8 @@ class TestDevelopPhasePromptGeneration:
         output_file = pr_iteration_dir / "output.md"
         output_file.write_text("## Todo List\n\n- [ ] Fix issue 1\n- [ ] Fix issue 2")
 
-        # Create context.json for PR iteration with status_code
-        pr_context_file = pr_iteration_dir / "context.json"
+        # Create iteration.json for PR iteration with status_code
+        pr_context_file = pr_iteration_dir / "iteration.json"
         pr_context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -257,8 +257,8 @@ class TestDevelopPhasePromptGeneration:
         output_file = pr_iteration_dir / "output.md"
         output_file.write_text("## Todo List\n\n- [ ] Address PR comment 1")
 
-        # Create context.json for PR iteration with status_code
-        pr_context_file = pr_iteration_dir / "context.json"
+        # Create iteration.json for PR iteration with status_code
+        pr_context_file = pr_iteration_dir / "iteration.json"
         pr_context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -386,7 +386,7 @@ class TestDevelopPhasePromptGeneration:
         pr_output = pr_iteration_dir / "output.md"
         pr_output.write_text("## Todo List\n\n- [ ] PR issue")
 
-        pr_context_file = pr_iteration_dir / "context.json"
+        pr_context_file = pr_iteration_dir / "iteration.json"
         pr_context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -468,7 +468,7 @@ class TestDevelopPhasePromptGeneration:
         pr_output = pr_iteration_dir / "output.md"
         pr_output.write_text("## Todo List\n\n- [ ] PR issue")
 
-        pr_context_file = pr_iteration_dir / "context.json"
+        pr_context_file = pr_iteration_dir / "iteration.json"
         pr_context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": datetime.now(timezone.utc).isoformat(),

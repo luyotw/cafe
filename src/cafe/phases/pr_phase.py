@@ -311,7 +311,7 @@ class PRPhase(Phase):
 
         # Check the last iteration - if it has no completion marker, it's incomplete
         last_iter_dir = iteration_dirs[-1]
-        context_file = last_iter_dir / "context.json"
+        context_file = self._resolve_iteration_context_file(last_iter_dir)
 
         if context_file.exists():
             with open(context_file, "r", encoding="utf-8") as f:
@@ -364,7 +364,7 @@ class PRPhase(Phase):
         status_code = None
 
         for iter_dir in reversed(iteration_dirs):
-            context_file = iter_dir / "context.json"
+            context_file = self._resolve_iteration_context_file(iter_dir)
             if context_file.exists():
                 with open(context_file, "r", encoding="utf-8") as f:
                     context = json.load(f)
@@ -420,9 +420,9 @@ class PRPhase(Phase):
         if not iteration_dirs:
             return set()
 
-        # Legacy fallback: search old context.json snapshots
+        # Legacy fallback: search iteration snapshots
         for iter_dir in reversed(iteration_dirs):
-            context_file = iter_dir / "context.json"
+            context_file = self._resolve_iteration_context_file(iter_dir)
             if not context_file.exists():
                 continue
             try:
@@ -447,7 +447,7 @@ class PRPhase(Phase):
 
         iteration_dirs = sorted(develop_dir.glob("iteration_*"))
         for iter_dir in reversed(iteration_dirs):
-            context_file = iter_dir / "context.json"
+            context_file = self._resolve_iteration_context_file(iter_dir)
             if not context_file.exists():
                 continue
             try:

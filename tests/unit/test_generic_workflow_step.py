@@ -153,7 +153,7 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert result.response == "confirmed"
     assert "spec" in result.artifacts
     iteration_dir = issue_dir / "spec" / "iteration_001"
-    assert (iteration_dir / "context.json").exists()
+    assert (iteration_dir / "iteration.json").exists()
     assert (iteration_dir / "checklist.md").exists()
     assert (iteration_dir / "output.md").exists()
     assert (iteration_dir / "artifact.json").exists()
@@ -305,7 +305,7 @@ def test_generic_workflow_step_executor_uses_iteration_specific_skill_mapping(tm
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-2"
     phase_dir = issue_dir / "spec" / "iteration_001"
     phase_dir.mkdir(parents=True, exist_ok=True)
-    (phase_dir / "context.json").write_text(
+    (phase_dir / "iteration.json").write_text(
         '{"iteration": 1, "response": "confirmed", "end_time": "2026-04-09T00:00:00+08:00"}',
         encoding="utf-8",
     )
@@ -814,7 +814,7 @@ def test_generic_workflow_step_auto_continues_pause_statuses_in_interactive_mode
     spec_dir = issue_dir / "spec" / "iteration_001"
     spec_dir.mkdir(parents=True, exist_ok=True)
     (spec_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
-    (spec_dir / "context.json").write_text(
+    (spec_dir / "iteration.json").write_text(
         '{"iteration":1,"status_code":"confirmed"}',
         encoding="utf-8",
     )
@@ -888,7 +888,7 @@ def test_generic_workflow_step_keeps_missing_status_without_continue_prompt(tmp_
     assert "done without status" in result.response
     assert result.status_code is None
     assert len(executor.agent_manager.prompts) == 1
-    context_data = json.loads((issue_dir / "spec" / "iteration_001" / "context.json").read_text(encoding="utf-8"))
+    context_data = json.loads((issue_dir / "spec" / "iteration_001" / "iteration.json").read_text(encoding="utf-8"))
     assert "status_code" not in context_data
 
 

@@ -68,7 +68,7 @@ class TestConfirmedSyncInWorkflow:
             "status_code": "ready_for_review",
             "phase_specific_data": {"pm_agent": "Roger"}
         }
-        (prev_iteration_dir / "context.json").write_text(json.dumps(prev_context))
+        (prev_iteration_dir / "iteration.json").write_text(json.dumps(prev_context))
         
         # Create spec file
         spec_content = "# Final Spec\n\nConfirmed requirements"
@@ -106,7 +106,7 @@ class TestConfirmedSyncInWorkflow:
             "status_code": "ready_for_review",
             "phase_specific_data": {"pm_agent": "Roger"}
         }
-        (prev_iteration_dir / "context.json").write_text(json.dumps(prev_context))
+        (prev_iteration_dir / "iteration.json").write_text(json.dumps(prev_context))
         
         spec_phase._config_issue_id = "123"
         spec_phase.iteration = 2

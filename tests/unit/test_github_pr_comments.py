@@ -966,7 +966,7 @@ class TestGetProcessedCommentIDs:
         import json
 
         with TemporaryDirectory() as tmpdir:
-            # Create a mock iteration directory with context.json
+            # Create a mock iteration directory with iteration.json
             iteration_dir = Path(tmpdir) / "iteration_001"
             iteration_dir.mkdir(parents=True)
 
@@ -981,7 +981,7 @@ class TestGetProcessedCommentIDs:
                 ]
             }
 
-            with open(iteration_dir / "context.json", "w") as f:
+            with open(iteration_dir / "iteration.json", "w") as f:
                 json.dump(context_data, f)
 
             # Get processed comment IDs
@@ -1013,7 +1013,7 @@ class TestGetProcessedCommentIDs:
                 "pr_comments_processed": [{"id": "111", "description": "Fix 1"}],
                 "pr_comments_skipped": []
             }
-            with open(iter1_dir / "context.json", "w") as f:
+            with open(iter1_dir / "iteration.json", "w") as f:
                 json.dump(context1, f)
 
             # Create iteration 2
@@ -1024,7 +1024,7 @@ class TestGetProcessedCommentIDs:
                 "pr_comments_processed": [{"id": "222", "description": "Fix 2"}],
                 "pr_comments_skipped": [{"id": "333", "reason": "Skip"}]
             }
-            with open(iter2_dir / "context.json", "w") as f:
+            with open(iter2_dir / "iteration.json", "w") as f:
                 json.dump(context2, f)
 
             # Create iteration 3
@@ -1035,7 +1035,7 @@ class TestGetProcessedCommentIDs:
                 "pr_comments_processed": [],
                 "pr_comments_skipped": [{"id": "444", "reason": "Skip 2"}]
             }
-            with open(iter3_dir / "context.json", "w") as f:
+            with open(iter3_dir / "iteration.json", "w") as f:
                 json.dump(context3, f)
 
             # Get processed comment IDs
@@ -1063,9 +1063,9 @@ class TestGetProcessedCommentIDs:
             assert len(result) == 0
 
     def test_get_processed_comment_ids_ignores_malformed_files(self):
-        """測試當某些 context.json 文件格式錯誤時的情況
+        """測試當某些 iteration.json 文件格式錯誤時的情況
 
-        情境：有些 iteration 的 context.json 存在但沒有 comment 數據
+        情境：有些 iteration 的 iteration.json 存在但沒有 comment 數據
         預期：跳過格式錯誤的文件，返回有效的 comment IDs
         """
         from cafe.utils.github import get_processed_comment_ids_from_history
@@ -1081,14 +1081,14 @@ class TestGetProcessedCommentIDs:
                 "iteration": 1,
                 "pr_comments_processed": [{"id": "111", "description": "Fix"}]
             }
-            with open(iter1_dir / "context.json", "w") as f:
+            with open(iter1_dir / "iteration.json", "w") as f:
                 json.dump(context1, f)
 
             # Create iteration 2 with no comment data
             iter2_dir = Path(tmpdir) / "iteration_002"
             iter2_dir.mkdir(parents=True)
             context2 = {"iteration": 2}  # Missing pr_comments_processed
-            with open(iter2_dir / "context.json", "w") as f:
+            with open(iter2_dir / "iteration.json", "w") as f:
                 json.dump(context2, f)
 
             # Get processed comment IDs
@@ -1118,7 +1118,7 @@ def test_load_pr_last_seen_comment_ids_legacy_context(tmp_path: Path) -> None:
     pr_dir = tmp_path / "pr"
     it = pr_dir / "iteration_001"
     it.mkdir(parents=True)
-    (it / "context.json").write_text(
+    (it / "iteration.json").write_text(
         json.dumps({"last_seen_comment_ids": ["x"]}, ensure_ascii=False),
         encoding="utf-8",
     )

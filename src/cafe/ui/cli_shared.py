@@ -45,7 +45,7 @@ VALID_CONTENT_TYPES = [
 ]
 
 CONTENT_TYPE_FILE_MAP = {
-    "context": "context.json",
+    "context": "iteration.json",
     "output": "output.md",
     "streaming": "streaming.jsonl",
     "error": "error.json",
@@ -249,13 +249,17 @@ def resolve_iteration_number(phase_dir: Path, iteration_input: int, content_type
     if not filename:
         raise ValueError(f"Unknown content type: {content_type}")
 
-    all_iteration_files = sorted(phase_dir.glob("iteration_*/context.json"))
-    if not all_iteration_files:
+    iter_dirs = sorted(d for d in phase_dir.glob("iteration_*") if d.is_dir())
+    existing_iter_dirs = [
+        d for d in iter_dirs
+        if (d / "iteration.json").exists() or (d / "context.json").exists()
+    ]
+    if not existing_iter_dirs:
         raise ValueError(f"No iterations found in {phase_dir}")
 
     all_iteration_numbers = []
-    for file_path in all_iteration_files:
-        dir_name = file_path.parent.name
+    for iter_dir in existing_iter_dirs:
+        dir_name = iter_dir.name
         if dir_name.startswith("iteration_"):
             try:
                 num = int(dir_name.split("_")[1])
@@ -531,7 +535,12 @@ def _find_incomplete_workflow_step(*, issue_dir: Path, playbook_data: Dict[str, 
         if not iteration_dirs:
             continue
 
-        context_file = iteration_dirs[-1] / "context.json"
+        last_iter_dir = iteration_dirs[-1]
+        context_file = (
+            last_iter_dir / "iteration.json"
+            if (last_iter_dir / "iteration.json").exists()
+            else last_iter_dir / "context.json"
+        )
         if not context_file.exists():
             continue
 

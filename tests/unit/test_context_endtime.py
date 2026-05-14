@@ -1,4 +1,4 @@
-"""Tests for context.json end_time field saving."""
+"""Tests for iteration.json end_time field saving."""
 
 import json
 from pathlib import Path
@@ -24,10 +24,10 @@ class ConcretePhase(Phase):
 
 
 class TestContextEndTime:
-    """Test context.json contains end_time field"""
+    """Test iteration.json contains end_time field"""
 
     def test_context_json_contains_end_time_field(self, tmp_path):
-        """Verify context.json contains end_time field when iteration ends"""
+        """Verify iteration.json contains end_time field when iteration ends"""
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir()
         phase = ConcretePhase(phase_dir=phase_dir)
@@ -42,8 +42,8 @@ class TestContextEndTime:
             status_code=None,
         )
 
-        # Verify context.json contains end_time
-        context_file = phase._get_iteration_dir(1) / "context.json"
+        # Verify iteration.json contains end_time
+        context_file = phase._get_iteration_dir(1) / "iteration.json"
         assert context_file.exists()
 
         with open(context_file, "r", encoding="utf-8") as f:
@@ -58,10 +58,10 @@ class TestContextEndTime:
 
 
 class TestContextJsonEndTime:
-    """Test context.json end_time field"""
+    """Test iteration.json end_time field"""
 
     def test_context_json_contains_end_time_after_update(self, tmp_path):
-        """Verify _update_iteration_history() saves end_time to context.json"""
+        """Verify _update_iteration_history() saves end_time to iteration.json"""
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir()
 
@@ -80,9 +80,9 @@ class TestContextJsonEndTime:
             status_code=MagicMock(value="confirmed"),
         )
 
-        # Verify context.json contains end_time field
+        # Verify iteration.json contains end_time field
         iteration_dir = phase._get_iteration_dir(1)
-        context_file = iteration_dir / "context.json"
+        context_file = iteration_dir / "iteration.json"
         assert context_file.exists()
 
         with open(context_file, "r", encoding="utf-8") as f:
@@ -112,7 +112,7 @@ class TestContextJsonEndTime:
             persist_status=False,
         )
 
-        context_file = phase._get_iteration_dir(1) / "context.json"
+        context_file = phase._get_iteration_dir(1) / "iteration.json"
         context_data = json.loads(context_file.read_text(encoding="utf-8"))
 
         assert context_data["response"] == "done without status"
