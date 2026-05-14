@@ -21,7 +21,7 @@ class PhaseStateMixin:
     def _analyze_missing_status_code(
         self,
         agent_name: str,
-        valid_status_codes: List[PhaseStatusCode],
+        valid_intents: List[PhaseStatusCode],
     ) -> Optional[PhaseStatusCode]:
         """When response has no status code, call agent to analyze status."""
         prompt = self._get_status_analysis_prompt()
@@ -31,7 +31,7 @@ class PhaseStateMixin:
         response, _, _, _, _, _ = self.agent_manager.execute(
             agent_name, prompt, allowed_directories=self._get_allowed_directories()
         )
-        return self._extract_status_code_from_response(response, valid_codes=valid_status_codes)
+        return self._extract_status_code_from_response(response, valid_codes=valid_intents)
 
     @staticmethod
     def _infer_human_input_status_from_response(response: str) -> Optional[PhaseStatusCode]:
@@ -60,7 +60,7 @@ class PhaseStateMixin:
     def _analyze_missing_status_code_with_logging(
         self,
         agent_name: str,
-        valid_status_codes: List[PhaseStatusCode],
+        valid_intents: List[PhaseStatusCode],
         original_response: str,
     ) -> tuple[Optional[str], Optional[PhaseStatusCode]]:
         """When response has no status code, call agent to analyze status (with logging)."""
@@ -78,7 +78,7 @@ class PhaseStateMixin:
             )
             status_code = self._extract_status_code_from_response(
                 response,
-                valid_codes=valid_status_codes,
+                valid_codes=valid_intents,
             )
 
             return response, status_code
@@ -89,7 +89,7 @@ class PhaseStateMixin:
     def _write_status_code_error_log(
         self,
         original_response: str,
-        valid_status_codes: List[PhaseStatusCode],
+        valid_intents: List[PhaseStatusCode],
         status_code: Optional[PhaseStatusCode],
         analysis_attempted: bool,
         analysis_response: Optional[str],
@@ -123,7 +123,7 @@ class PhaseStateMixin:
             "iteration": self.iteration,
             "phase": self.phase_name if hasattr(self, "phase_name") else "unknown",
             "original_response": original_response,
-            "valid_status_codes": [code.value for code in valid_status_codes],
+            "valid_intents": [code.value for code in valid_intents],
             "extracted_status_code": status_code.value if status_code else None,
             "multiple_codes_found": [code.value for code in multiple_codes_found] if multiple_codes_found else None,
             "analysis_attempted": analysis_attempted,

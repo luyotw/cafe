@@ -471,7 +471,7 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
         agent_name: str,
         prompt: str,
         user_input: str,
-        valid_status_codes: List[PhaseStatusCode],
+        valid_intents: List[PhaseStatusCode],
         require_status_code: bool = True,
         persist_status: bool = True,
         allowed_tools: Optional[List[str]] = None,
@@ -494,7 +494,7 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
             agent_name: Agent name (e.g. pm_agent, dev_agent)
             prompt: Prompt to send to agent
             user_input: User input for this round
-            valid_status_codes: Valid status codes accepted by this phase
+            valid_intents: Valid status codes accepted by this phase
             require_status_code: Whether missing/invalid status code should trigger retry/failure
             persist_status: Whether to persist status into phase metadata files
             allowed_tools: Tools available to agent (default None)
@@ -657,7 +657,7 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
             # 4c. Attempt to recover response from written files
             recovered_response, recovered_status_code = self._recover_from_written_files(
                 changed_written_files,
-                valid_status_codes,
+                valid_intents,
             )
 
             # 4d. Create error.json file for debugging
@@ -799,24 +799,24 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
         # 6. Extract status code
         status_code = self._extract_status_code_from_response(
             response,
-            valid_codes=valid_status_codes,
+            valid_codes=valid_intents,
         )
         if (
             status_code is None
             and permission_denials
-            and PhaseStatusCode.NEED_PERMISSION in valid_status_codes
+            and PhaseStatusCode.NEED_PERMISSION in valid_intents
         ):
             status_code = PhaseStatusCode.NEED_PERMISSION
         elif status_code is None:
             inferred_human_input_status = self._infer_human_input_status_from_response(response)
-            if inferred_human_input_status in valid_status_codes:
+            if inferred_human_input_status in valid_intents:
                 status_code = inferred_human_input_status
 
         # 6.1. Record missing status code in error log (single-pass mode, no retry loop)
         if require_status_code and status_code is None:
             self._write_status_code_error_log(
                 original_response=response,
-                valid_status_codes=valid_status_codes,
+                valid_intents=valid_intents,
                 status_code=status_code,
                 analysis_attempted=False,
                 analysis_response=None,
@@ -914,13 +914,13 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
     def _recover_from_written_files(
         self,
         written_files: List[Path],
-        valid_status_codes: List[PhaseStatusCode],
+        valid_intents: List[PhaseStatusCode],
     ) -> tuple[Optional[str], Optional[PhaseStatusCode]]:
         """Attempt to recover agent response from written files.
 
         Args:
             written_files: List of files written by agent before failure
-            valid_status_codes: Valid status codes for this phase
+            valid_intents: Valid status codes for this phase
 
         Returns:
             Tuple[Optional[str], Optional[PhaseStatusCode]]:
@@ -939,7 +939,7 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
             # Extract status code from file content
             status_code = self._extract_status_code_from_response(
                 recovered_response,
-                valid_codes=valid_status_codes,
+                valid_codes=valid_intents,
             )
 
             return recovered_response, status_code
@@ -1325,7 +1325,7 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
         self,
         agent_name: str,
         user_input: str,
-        valid_status_codes: List[PhaseStatusCode],
+        valid_intents: List[PhaseStatusCode],
         allowed_tools: Optional[List[str]] = None,
         continue_codes: Optional[List[PhaseStatusCode]] = None,
         complete_codes: Optional[List[PhaseStatusCode]] = None,
@@ -1342,7 +1342,7 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
         Args:
             agent_name: Agent name
             user_input: User input for this round
-            valid_status_codes: List of valid status codes
+            valid_intents: List of valid status codes
             allowed_tools: List of allowed tools
             continue_codes: Status codes that should continue loop
             complete_codes: Status codes indicating near completion
@@ -1369,7 +1369,7 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
             agent_name=agent_name,
             prompt=prompt,
             user_input=user_input,
-            valid_status_codes=valid_status_codes,
+            valid_intents=valid_intents,
             allowed_tools=allowed_tools or ["write", "read"],
             phase_specific_data=phase_specific_data,
         )
@@ -1398,7 +1398,7 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
                 agent_name=agent_name,
                 prompt=prompt,
                 user_input=user_input,
-                valid_status_codes=valid_status_codes,
+                valid_intents=valid_intents,
                 allowed_tools=allowed_tools or ["write", "read"],
                 max_retries=3,
             )

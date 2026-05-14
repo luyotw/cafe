@@ -135,7 +135,7 @@ class TestAlreadyCompletedFallback:
             json.dumps(
                 {
                     "iteration": 1,
-                    "response": "CAFE_CONFIRMED",
+                    "response": "confirmed",
                     "end_time": "2026-04-30T00:00:00+08:00",
                 }
             ),

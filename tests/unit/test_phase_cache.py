@@ -41,7 +41,7 @@ class TestCacheEntry:
         data = entry.to_dict()
 
         assert data["phase_name"] == "analysis"
-        assert data["status_code"] == "CAFE_CONFIRMED"  # Status codes have CAFE_ prefix
+        assert data["status_code"] == "confirmed"  # Serialized as plain outcome token (no CAFE_ prefix)
         assert data["response"] == "Analysis complete"
         assert data["content_hash"] == "def456"
         assert data["timestamp"] == timestamp.isoformat()
@@ -51,7 +51,7 @@ class TestCacheEntry:
         timestamp = datetime.now()
         data = {
             "phase_name": "review",
-            "status_code": "CAFE_CONFIRMED",  # Status codes have CAFE_ prefix
+            "status_code": "confirmed",  # Plain outcome token in persisted cache entries
             "response": "Code looks good",
             "content_hash": "ghi789",
             "timestamp": timestamp.isoformat()

@@ -887,7 +887,7 @@ def _build_workflow_pause_guidance(*, blackboard: object, final_status_code: str
             if event_type == "baton_missing_transition":
                 return "Agent did not hand off to a new step. Open chat with the current role or update the baton, then run cafe make again."
             if event_type == "status_code_invalid":
-                invalid_codes = data.get("invalid_status_codes")
+                invalid_codes = data.get("invalid_intents")
                 if isinstance(invalid_codes, list) and invalid_codes:
                     rendered = ", ".join(str(code) for code in invalid_codes)
                     return (
@@ -942,19 +942,19 @@ def _alias_pause_intent(alias_result: Dict[str, Any], *intents: str) -> bool:
 
 
 def _alias_is_confirmed_transition(alias_result: Dict[str, Any], step_name: str) -> bool:
-    return _alias_targets(alias_result, step_name) or _alias_status(alias_result) == "CAFE_CONFIRMED"
+    return _alias_targets(alias_result, step_name) or _alias_status(alias_result) == "confirmed"
 
 
 def _alias_needs_clarification(alias_result: Dict[str, Any]) -> bool:
-    return _alias_pause_intent(alias_result, "need_clarification") or _alias_status(alias_result) == "CAFE_NEED_CLARIFICATION"
+    return _alias_pause_intent(alias_result, "need_clarification") or _alias_status(alias_result) == "need_clarification"
 
 
 def _alias_needs_permission(alias_result: Dict[str, Any]) -> bool:
-    return _alias_pause_intent(alias_result, "need_permission") or _alias_status(alias_result) == "CAFE_NEED_PERMISSION"
+    return _alias_pause_intent(alias_result, "need_permission") or _alias_status(alias_result) == "need_permission"
 
 
 def _alias_confirm_output_pause(alias_result: Dict[str, Any]) -> bool:
-    return _alias_pause_intent(alias_result, "confirm_output") or _alias_status(alias_result) == "CAFE_READY_FOR_REVIEW"
+    return _alias_pause_intent(alias_result, "confirm_output") or _alias_status(alias_result) == "ready_for_review"
 
 
 def _reject_unsupported_phase_options(phase_name: str, unsupported_options: Dict[str, bool]) -> None:
@@ -1098,7 +1098,7 @@ def _run_iterative_alias_step(
             return alias_result
 
         console.print()
-        if handoff_intent == "need_clarification" or status_code == "CAFE_NEED_CLARIFICATION":
+        if handoff_intent == "need_clarification" or status_code == "need_clarification":
             console.print("[yellow]💬 Agent needs clarification[/yellow]")
             _display_iteration_questions(issue_name=issue_name, step_name=step_name, alias_result=alias_result)
         else:
@@ -1110,7 +1110,7 @@ def _run_iterative_alias_step(
             console.print("[dim]Stopped by user.[/dim]")
             return alias_result
 
-        if (handoff_intent == "need_clarification" or status_code == "CAFE_NEED_CLARIFICATION") and clarification_prompt:
+        if (handoff_intent == "need_clarification" or status_code == "need_clarification") and clarification_prompt:
             from cafe.ui.cli import prompt_multiline as _pml2
             current_input = _pml2(clarification_prompt).strip() or current_input
         iteration_count += 1

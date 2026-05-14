@@ -79,7 +79,7 @@ class TestStatusAnalysisPrompt:
                 assert "PR title" in prompt or "title" in prompt.lower()
                 assert "PR body" in prompt or "body" in prompt.lower()
                 assert "H1 heading" in prompt or "#" in prompt
-                assert "CAFE_CONFIRMED" in prompt
+                assert "confirmed" in prompt
 
     def test_status_analysis_prompt_format(self, tmp_path):
         """Test that prompt has correct structure"""

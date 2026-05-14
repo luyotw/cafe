@@ -18,7 +18,7 @@ class TestMockAgentExecutor:
         agent_response = executor.execute("test prompt")
 
         # Assert
-        assert "CAFE_READY_FOR_REVIEW" in agent_response.response
+        assert "ready_for_review" in agent_response.response
         assert isinstance(agent_response.token_usage, TokenUsage)
 
     def test_custom_response(self):

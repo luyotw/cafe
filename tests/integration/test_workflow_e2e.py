@@ -39,7 +39,7 @@ def _write_pr_done_baton(issue_dir: Path) -> None:
         to_owner=HandoffOwner.DONE,
         to_step="done",
         intent=HandoffIntent.WORKFLOW_COMPLETE,
-        status_code="CAFE_CONFIRMED",
+        status_code="confirmed",
         source="test.executor",
     )
 
@@ -108,9 +108,9 @@ class TestHappyPath:
                 _write_pr_done_baton(issue_dir)
                 events.append({"type": "pr_synced", "url": "https://example.com/pr/1"})
             return StepExecutionResult(
-                response="CAFE_CONFIRMED",
+                response="confirmed",
                 artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
-                status_code="CAFE_CONFIRMED",
+                status_code="confirmed",
                 events=events,
             )
 
@@ -144,9 +144,9 @@ class TestHappyPath:
                 _write_pr_done_baton(issue_dir)
                 events.append({"type": "pr_synced", "url": "https://example.com/pr/1"})
             return StepExecutionResult(
-                response="CAFE_CONFIRMED",
+                response="confirmed",
                 artifacts={artifact_key: f"{step_name}/iteration_001/output.md"},
-                status_code="CAFE_CONFIRMED",
+                status_code="confirmed",
                 events=events,
             )
 
@@ -208,9 +208,9 @@ class TestSelfLoop:
                 _write_pr_done_baton(issue_dir)
                 events.append({"type": "pr_synced", "url": "https://example.com/pr/1"})
             return StepExecutionResult(
-                response="CAFE_CONFIRMED",
+                response="confirmed",
                 artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
-                status_code="CAFE_CONFIRMED",
+                status_code="confirmed",
                 events=events,
             )
 
@@ -223,13 +223,13 @@ class TestSelfLoop:
         return result, call_counts, subsequent_calls
 
     def test_spec_self_loop_then_confirms(self, tmp_path: Path) -> None:
-        """spec CAFE_NEED_CLARIFICATION×2 後 CAFE_CONFIRMED，最終流向 plan。"""
+        """spec need_clarification×2 後 confirmed，最終流向 plan。"""
         result, calls, subsequent = self._run_single_step_loop(
             tmp_path,
             start_step="spec",
-            loop_status="CAFE_NEED_CLARIFICATION",
+            loop_status="need_clarification",
             loop_count=2,
-            final_status="CAFE_CONFIRMED",
+            final_status="confirmed",
             expected_next_step="plan",
         )
         assert calls["spec"] == 3  # 2 loop + 1 confirm
@@ -237,13 +237,13 @@ class TestSelfLoop:
         assert result.completed is True
 
     def test_plan_self_loop_then_confirms(self, tmp_path: Path) -> None:
-        """plan CAFE_READY_FOR_REVIEW×2 後 CAFE_CONFIRMED，最終流向 develop。"""
+        """plan ready_for_review×2 後 confirmed，最終流向 develop。"""
         result, calls, subsequent = self._run_single_step_loop(
             tmp_path,
             start_step="plan",
-            loop_status="CAFE_READY_FOR_REVIEW",
+            loop_status="ready_for_review",
             loop_count=2,
-            final_status="CAFE_CONFIRMED",
+            final_status="confirmed",
             expected_next_step="develop",
         )
         assert calls["plan"] == 3
@@ -251,13 +251,13 @@ class TestSelfLoop:
         assert result.completed is True
 
     def test_develop_self_loop_then_confirms(self, tmp_path: Path) -> None:
-        """develop CAFE_NEED_CLARIFICATION×2 後 CAFE_CONFIRMED，最終流向 review。"""
+        """develop need_clarification×2 後 confirmed，最終流向 review。"""
         result, calls, subsequent = self._run_single_step_loop(
             tmp_path,
             start_step="develop",
-            loop_status="CAFE_NEED_CLARIFICATION",
+            loop_status="need_clarification",
             loop_count=2,
-            final_status="CAFE_CONFIRMED",
+            final_status="confirmed",
             expected_next_step="review",
         )
         assert calls["develop"] == 3
@@ -265,13 +265,13 @@ class TestSelfLoop:
         assert result.completed is True
 
     def test_review_self_loop_then_confirms(self, tmp_path: Path) -> None:
-        """review CAFE_NEED_CLARIFICATION×2 後 CAFE_CONFIRMED，在 max_iterations=3 限制內。"""
+        """review need_clarification×2 後 confirmed，在 max_iterations=3 限制內。"""
         result, calls, subsequent = self._run_single_step_loop(
             tmp_path,
             start_step="review",
-            loop_status="CAFE_NEED_CLARIFICATION",
+            loop_status="need_clarification",
             loop_count=2,
-            final_status="CAFE_CONFIRMED",
+            final_status="confirmed",
             expected_next_step="pr",
         )
         assert calls["review"] == 3  # 2 loop + 1 confirm，恰好在限制內
@@ -288,14 +288,14 @@ class TestSelfLoop:
             call_counts[step_name] = call_counts.get(step_name, 0) + 1
             if step_name == "review":
                 return StepExecutionResult(
-                    response="CAFE_NEEDS_CHANGES",
+                    response="needs_changes",
                     artifacts={},
-                    status_code="CAFE_NEEDS_CHANGES",
+                    status_code="needs_changes",
                 )
             return StepExecutionResult(
-                response="CAFE_CONFIRMED",
+                response="confirmed",
                 artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
-                status_code="CAFE_CONFIRMED",
+                status_code="confirmed",
             )
 
         runner = BlackboardWorkflowRuntime(
@@ -321,15 +321,15 @@ class TestSelfLoop:
                 spec_calls += 1
                 if spec_calls < 3:
                     return StepExecutionResult(
-                        response="CAFE_NEED_CLARIFICATION",
+                        response="need_clarification",
                         artifacts={},
-                        status_code="CAFE_NEED_CLARIFICATION",
+                        status_code="need_clarification",
                         auto_continue=True,
                     )
             return StepExecutionResult(
-                response="CAFE_CONFIRMED",
+                response="confirmed",
                 artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
-                status_code="CAFE_CONFIRMED",
+                status_code="confirmed",
             )
 
         runner = BlackboardWorkflowRuntime(
@@ -354,15 +354,15 @@ class TestSelfLoop:
 
 class TestUserHandoff:
     def test_user_handoff_pauses_workflow(self, tmp_path: Path) -> None:
-        """spec 回傳 CAFE_NEED_CLARIFICATION（auto_continue=False）→ workflow 應暫停。"""
+        """spec 回傳 need_clarification（auto_continue=False）→ workflow 應暫停。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-handoff-pause"
         playbook = _load_default_playbook()
 
         def executor(step_name: str, step_def: dict, state: BlackboardState) -> StepExecutionResult:
             return StepExecutionResult(
-                response="CAFE_NEED_CLARIFICATION",
+                response="need_clarification",
                 artifacts={},
-                status_code="CAFE_NEED_CLARIFICATION",
+                status_code="need_clarification",
                 auto_continue=False,
             )
 
@@ -380,7 +380,7 @@ class TestUserHandoff:
         assert pause_events, "workflow_paused event should be recorded"
 
     def test_user_handoff_auto_continue_resumes_in_same_run(self, tmp_path: Path) -> None:
-        """spec 先 CAFE_NEED_CLARIFICATION（auto_continue=True），再 CAFE_CONFIRMED → 不暫停，直接流向 plan。"""
+        """spec 先 need_clarification（auto_continue=True），再 confirmed → 不暫停，直接流向 plan。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-handoff-resume"
         playbook = _load_default_playbook()
         spec_calls = 0
@@ -391,9 +391,9 @@ class TestUserHandoff:
                 spec_calls += 1
                 if spec_calls == 1:
                     return StepExecutionResult(
-                        response="CAFE_NEED_CLARIFICATION",
+                        response="need_clarification",
                         artifacts={},
-                        status_code="CAFE_NEED_CLARIFICATION",
+                        status_code="need_clarification",
                         auto_continue=True,
                     )
             events = []
@@ -401,9 +401,9 @@ class TestUserHandoff:
                 _write_pr_done_baton(issue_dir)
                 events.append({"type": "pr_synced", "url": "https://example.com/pr/1"})
             return StepExecutionResult(
-                response="CAFE_CONFIRMED",
+                response="confirmed",
                 artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
-                status_code="CAFE_CONFIRMED",
+                status_code="confirmed",
                 events=events,
             )
 
@@ -440,15 +440,15 @@ class TestUserHandoff:
                     if spec_calls == 1:
                         # 第一次呼叫：暫停（auto_continue=False）
                         return StepExecutionResult(
-                            response="CAFE_NEED_CLARIFICATION",
+                            response="need_clarification",
                             artifacts={},
-                            status_code="CAFE_NEED_CLARIFICATION",
+                            status_code="need_clarification",
                             auto_continue=False,
                         )
                 return StepExecutionResult(
-                    response="CAFE_CONFIRMED",
+                    response="confirmed",
                     artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
-                    status_code="CAFE_CONFIRMED",
+                    status_code="confirmed",
                 )
 
         cli_runner = CliRunner()
@@ -510,7 +510,7 @@ class TestNextStepLifecycle:
                 self, step_name: str, step_def: dict, blackboard_state: object
             ) -> tuple[str, dict[str, str]]:
                 return (
-                    "CAFE_CONFIRMED",
+                    "confirmed",
                     {str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
                 )
 

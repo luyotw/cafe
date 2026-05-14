@@ -61,7 +61,7 @@ class TestSpecAutoMode:
     
     @pytest.mark.skip(reason="Complex CLI mocking - covered by integration tests")
     def test_auto_mode_continues_until_confirmed(self, mock_env):
-        """測試 auto 模式會自動循環直到 CAFE_CONFIRMED"""
+        """測試 auto 模式會自動循環直到 confirmed"""
         # Need to patch sys.stdin before importing
         import sys
         original_isatty = sys.stdin.isatty
@@ -110,15 +110,15 @@ class TestSpecAutoMode:
                 results = [
                     PhaseResult(
                         status=PhaseStatus.COMPLETED,
-                        data={"status_code": "CAFE_NEED_CLARIFICATION", "iterations": 1}
+                        data={"status_code": "need_clarification", "iterations": 1}
                     ),
                     PhaseResult(
                         status=PhaseStatus.COMPLETED,
-                        data={"status_code": "CAFE_READY_FOR_REVIEW", "iterations": 2}
+                        data={"status_code": "ready_for_review", "iterations": 2}
                     ),
                     PhaseResult(
                         status=PhaseStatus.COMPLETED,
-                        data={"status_code": "CAFE_CONFIRMED", "iterations": 3}
+                        data={"status_code": "confirmed", "iterations": 3}
                     ),
                 ]
                 mock_phase.execute.side_effect = results
@@ -185,11 +185,11 @@ class TestSpecAutoMode:
             results = [
                 PhaseResult(
                     status=PhaseStatus.COMPLETED,
-                    data={"status_code": "CAFE_NEED_CLARIFICATION", "iterations": 1}
+                    data={"status_code": "need_clarification", "iterations": 1}
                 ),
                 PhaseResult(
                     status=PhaseStatus.COMPLETED,
-                    data={"status_code": "CAFE_CONFIRMED", "iterations": 2}
+                    data={"status_code": "confirmed", "iterations": 2}
                 ),
             ]
             mock_phase.execute.side_effect = results
@@ -248,11 +248,11 @@ class TestSpecAutoMode:
             results = [
                 PhaseResult(
                     status=PhaseStatus.COMPLETED,
-                    data={"status_code": "CAFE_NEED_CLARIFICATION", "iterations": 1}
+                    data={"status_code": "need_clarification", "iterations": 1}
                 ),
                 PhaseResult(
                     status=PhaseStatus.COMPLETED,
-                    data={"status_code": "CAFE_CONFIRMED", "iterations": 2}
+                    data={"status_code": "confirmed", "iterations": 2}
                 ),
             ]
             mock_phase.execute.side_effect = results
@@ -309,7 +309,7 @@ class TestSpecAutoMode:
             
             mock_phase.execute.return_value = PhaseResult(
                 status=PhaseStatus.COMPLETED,
-                data={"status_code": "CAFE_NEED_CLARIFICATION", "iterations": 1}
+                data={"status_code": "need_clarification", "iterations": 1}
             )
             mock_phase_cls.return_value = mock_phase
             

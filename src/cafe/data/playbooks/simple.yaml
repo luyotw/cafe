@@ -27,10 +27,10 @@ steps:
       prepare_input: [GitHubIssueFetcher, UserInputCollector]
       after_execute: [InteractiveQAHandler]
     "on":
-      CAFE_READY_FOR_REVIEW: spec
-      CAFE_NEED_CLARIFICATION: spec
-      CAFE_NEED_PERMISSION: spec
-      CAFE_CONFIRMED: develop
+      confirm_output: spec
+      need_clarification: spec
+      need_permission: spec
+      await_agent: develop
 
   develop:
     type: skill
@@ -44,11 +44,9 @@ steps:
       prepare_input: [UserInputCollector]
       after_execute: [PermissionRetryHandler]
     "on":
-      CAFE_CONFIRMED: pr
-      CAFE_CONFIRMED_SKIP_REVIEW: pr
-      CAFE_NEED_CLARIFICATION: develop
-      CAFE_NEED_PERMISSION: develop
-      CAFE_NO_CHANGES_NEEDED: pr
+      await_agent: pr
+      need_clarification: develop
+      need_permission: develop
 
   pr:
     type: skill
@@ -63,8 +61,8 @@ steps:
       prepare_input: [GitHubPRCreator, UserInputCollector]
       publish_output: [GitHubPRCreator, LocalPRReviewer, PRLinkOpener]
     "on":
-      CAFE_CONFIRMED: _done
-      CAFE_NEED_PERMISSION: pr
-      CAFE_NEEDS_CHANGES: develop
+      await_agent: _done
+      need_permission: pr
+      manual_handoff: develop
 
 entry_point: spec

@@ -930,7 +930,7 @@ All tests are passing now.
         from cafe.utils.github import parse_comment_processing_results
 
         agent_response = """
-CAFE_CONFIRMED
+confirmed
 
 ### Processed Comments
 - [#IC_kwDOQCpNoM7hfWZl] Fixed the bug in authentication flow

@@ -219,9 +219,9 @@ steps:
   qa:
     skill: review
     role: reviewer
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: _done
+      await_agent: _done
 """.strip(),
             encoding="utf-8",
         )

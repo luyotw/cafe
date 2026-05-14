@@ -174,7 +174,7 @@ class TimelineBuilder:
         end_time = None
         elapsed_time = None
 
-        # Map status - iterations.jsonl has status codes like "CAFE_CONFIRMED", "CAFE_NEEDS_CHANGES"
+        # Map status - iterations.jsonl has status codes like "confirmed", "needs_changes"
         # These should map to "completed" since they represent completed iterations
         status_str = iteration_status.get("status")
         if status_str and status_str.startswith("CAFE_"):

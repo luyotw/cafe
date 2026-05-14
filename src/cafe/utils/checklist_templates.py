@@ -42,7 +42,7 @@ SPEC_EXECUTION_STEPS_ITERATION_N = """## Checklist
 XML_QUESTIONS_INSTRUCTION = """
 ## Interactive Q&A Questions
 
-[ ] If returning CAFE_NEED_CLARIFICATION: Write questions to {questions_xml_file} in the following XML format:
+[ ] If returning need_clarification: Write questions to {questions_xml_file} in the following XML format:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -155,8 +155,8 @@ DEVELOP_EXECUTION_STEPS_CORRECTION = """## Checklist
 
 ## Status Codes
 
-- CAFE_CONFIRMED: All issues fixed, ready for review
-- CAFE_NO_CHANGES_NEEDED: You believe reviewer's feedback is incorrect/unnecessary. Write your reasoning to {output_file} then return this code.
+- confirmed: All issues fixed, ready for review
+- no_changes_needed: You believe reviewer's feedback is incorrect/unnecessary. Write your reasoning to {output_file} then return this code.
 {xml_questions_instruction}"""
 
 
@@ -171,7 +171,7 @@ REVIEW_EXECUTION_STEPS = """## Checklist
 [ ] Prioritize user feedback from PR comments over spec requirements if there are conflicts
 
 ## Git Status and Security Check
-[ ] Check if there are new commits (use `git log {base_branch}..HEAD`). If no commits exist, development is incomplete - return CAFE_NEEDS_CHANGES
+[ ] Check if there are new commits (use `git log {base_branch}..HEAD`). If no commits exist, development is incomplete - return needs_changes
 [ ] Check for uncommitted changes (if any, development is incomplete)
 [ ] Check for sensitive info in committed files (passwords, API keys, credentials)
 [ ] If sensitive info found: treat as critical issue, require immediate removal from commit history
@@ -233,7 +233,7 @@ PR_EXECUTION_STEPS_ITERATION_1 = """## Checklist
 [ ] Include reference to original requirements
 [ ] List all major changes and commits in the Changes section
 [ ] Do not query or wait for a remote GitHub branch/PR; host-side publish runs after this phase returns
-[ ] Mark this checklist complete before returning CAFE_CONFIRMED
+[ ] Mark this checklist complete before returning confirmed
 """
 
 PR_EXECUTION_STEPS_ITERATION_N = """## Checklist
@@ -243,7 +243,7 @@ PR_EXECUTION_STEPS_ITERATION_N = """## Checklist
 [ ] Review unpushed commits to identify new changes
 [ ] Edit {current_pr_file} to update PR content based on new changes (NOT in your response)
 [ ] Do not query or wait for a remote GitHub branch/PR; host-side publish runs after this phase returns
-[ ] Mark this checklist complete before returning CAFE_CONFIRMED
+[ ] Mark this checklist complete before returning confirmed
 """
 
 PR_COMMENTS_ORGANIZATION_STEPS = """## Checklist

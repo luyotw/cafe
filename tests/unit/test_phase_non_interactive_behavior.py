@@ -99,7 +99,7 @@ class TestNonInteractiveModeWithNeedClarification:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_NEED_CLARIFICATION\n\n請確認技術選型是否正確？"
+            "need_clarification\n\n請確認技術選型是否正確？"
         )
 
         agent_manager = AgentManager()
@@ -123,7 +123,7 @@ class TestNonInteractiveModeWithNeedClarification:
 
         # 移除 while loop 後, NEED_CLARIFICATION 返回 COMPLETED（不再自動繼續）
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
+        assert result.data.get("status_code") == "need_clarification"
     
     def test_should_fail_after_first_need_clarification(
         self, mock_env, setup_plan_phase, mock_git_ops, monkeypatch
@@ -137,7 +137,7 @@ class TestNonInteractiveModeWithNeedClarification:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_NEED_CLARIFICATION\n\n請確認技術選型是否正確？"
+            "need_clarification\n\n請確認技術選型是否正確？"
         )
 
         agent_manager = AgentManager()
@@ -161,7 +161,7 @@ class TestNonInteractiveModeWithNeedClarification:
 
         # 移除 while loop 後, 只執行一次, 返回 COMPLETED（不再自動繼續）
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
+        assert result.data.get("status_code") == "need_clarification"
 
 
 class TestNonInteractiveModeCompleteImmediately:
@@ -179,7 +179,7 @@ class TestNonInteractiveModeCompleteImmediately:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n完整計畫內容."
+            "ready_for_review\n\n# 實作計畫\n\n完整計畫內容."
         )
 
         agent_manager = AgentManager()
@@ -214,4 +214,4 @@ class TestNonInteractiveModeCompleteImmediately:
 
         # Assert - 應該立即完成
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data["status_code"] == "CAFE_READY_FOR_REVIEW"
+        assert result.data["status_code"] == "ready_for_review"

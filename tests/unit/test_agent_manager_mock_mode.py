@@ -80,7 +80,7 @@ class TestAgentManagerMockMode:
         agent_response = executor.execute("test prompt")
 
         # Assert
-        assert "CAFE_READY_FOR_REVIEW" in agent_response.response
+        assert "ready_for_review" in agent_response.response
 
     def test_mock_executor_uses_custom_response_from_env(self, monkeypatch):
         """測試 mock executor 可以從環境變數自訂回應"""

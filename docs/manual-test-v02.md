@@ -28,7 +28,7 @@ Primary issue state used for isolated runs:
 ### 2) Workflow single-step pause behavior
 - Command: `workflow --issue manual-v02-smoke --dry-run --single-step --start-step spec`
 - Result: **PASS**
-- Observed: `Workflow paused step=spec status=CAFE_CONFIRMED next=plan` with handoff guidance.
+- Observed: `Workflow paused step=spec status=ready_for_review next=plan` with handoff guidance (plain outcome token + `next` pointer; no legacy `CAFE_*` prefix).
 
 ### 3) Workflow resume after pause
 - Command: `workflow --issue manual-v02-smoke --dry-run`
@@ -38,7 +38,7 @@ Primary issue state used for isolated runs:
 ### 4) Single-step pause near PR boundary
 - Command: `workflow --issue manual-v02-smoke --dry-run --single-step --start-step review`
 - Result: **PASS**
-- Observed: `Workflow paused step=review status=CAFE_CONFIRMED next=pr`.
+- Observed: `Workflow paused step=review status=confirmed next=pr` (outcome token reflects agent step result; routing uses baton / blackboard).
 
 ### 5) Edit artifact command
 - Command: `EDITOR=true edit spec`

@@ -228,7 +228,7 @@ class TestPRCommandCustomTitleAndBody:
 
         # Enable mock agent mode
         monkeypatch.setenv("CAFE_MOCK_AGENTS", "true")
-        monkeypatch.setenv("CAFE_MOCK_RESPONSE", "CAFE_CONFIRMED\n\nPR content generated")
+        monkeypatch.setenv("CAFE_MOCK_RESPONSE", "confirmed\n\nPR content generated")
 
         # Override mock to return specific PR URL
         mock_github_ops.create_pr.return_value = "https://github.com/user/repo/pull/4"

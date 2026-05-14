@@ -267,7 +267,7 @@ class TestPlanCommand:
         mock_select_template.return_value = "default"
 
         mock_execute_alias.return_value = {
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "iterations": 2,
             "output_file": str(spec_file),
         }
@@ -470,7 +470,7 @@ class TestPlanCommand:
         mock_git_ops.return_value = mock_git_instance
 
         mock_execute_alias.return_value = {
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "iterations": 1,
             "output_file": str(spec_file),
         }
@@ -536,7 +536,7 @@ class TestPlanCommand:
         mock_isatty.return_value = True
 
         mock_execute_alias.return_value = {
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "iterations": 1,
             "output_file": str(spec_file),
         }

@@ -78,7 +78,7 @@ def test_single_step_alias_updates_workflow_pointer_to_requested_step(tmp_path: 
             self.agent_manager = MagicMock()
 
         def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
-            return _result(status_code="CAFE_NO_CHANGES_NEEDED", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(status_code="no_changes_needed", step_name=step_name, step_def=step_def, artifacts={})
 
     with patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()):
         result = _execute_single_step_alias(
@@ -87,7 +87,7 @@ def test_single_step_alias_updates_workflow_pointer_to_requested_step(tmp_path: 
             config_manager=config_manager,
         )
 
-    assert result["status_code"] == "CAFE_NO_CHANGES_NEEDED"
+    assert result["status_code"] == "no_changes_needed"
     blackboard_data = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
     assert blackboard_data["current_step"] == "review"
 
@@ -123,10 +123,10 @@ def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None
                     state=blackboard_state,
                     from_step="pr",
                     to_step="user",
-                    status_code="CAFE_CONFIRMED",
+                    status_code="confirmed",
                     intent=HandoffIntent.MANUAL_HANDOFF,
                 )
-            return _result(status_code="CAFE_CONFIRMED", step_name=step_name, step_def=step_def)
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -155,7 +155,7 @@ def test_workflow_command_passes_initial_user_input_to_spec_step(tmp_path: Path,
 
     class FakeExecutor:
         def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
-            return _result(status_code="CAFE_CONFIRMED", step_name=step_name, step_def=step_def)
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -195,9 +195,9 @@ def test_workflow_command_prints_pr_url_when_pr_step_reports_sync_event(tmp_path
             if step_name == "pr":
                 events = [{"type": "pr_synced", "url": "https://github.com/test/repo/pull/238"}]
             return StepExecutionResult(
-                response="CAFE_CONFIRMED",
+                response="confirmed",
                 artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
-                status_code="CAFE_CONFIRMED",
+                status_code="confirmed",
                 events=events,
             )
 
@@ -248,10 +248,10 @@ def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, m
                     state=blackboard_state,
                     from_step="pr",
                     to_step="user",
-                    status_code="CAFE_CONFIRMED",
+                    status_code="confirmed",
                     intent=HandoffIntent.MANUAL_HANDOFF,
                 )
-            return _result(status_code="CAFE_CONFIRMED", step_name=step_name, step_def=step_def)
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -299,7 +299,7 @@ def test_workflow_command_does_not_consume_chat_baton_with_uncommitted_changes(t
     class FakeExecutor:
         def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
             executed_steps.append(step_name)
-            return _result(status_code="CAFE_CONFIRMED", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -384,7 +384,7 @@ def test_workflow_command_start_step_rebuilds_stale_text_baton(tmp_path: Path, m
             blackboard_state: object,
         ) -> StepExecutionResult:
             return _result(
-                status_code="CAFE_NEED_CLARIFICATION",
+                status_code="need_clarification",
                 step_name=step_name,
                 step_def=step_def,
                 artifacts={},
@@ -436,7 +436,7 @@ def test_workflow_command_prints_guidance_for_invalid_runtime_baton(
             blackboard_state: object,
         ) -> StepExecutionResult:
             return _result(
-                status_code="CAFE_NEED_CLARIFICATION",
+                status_code="need_clarification",
                 step_name=step_name,
                 step_def=step_def,
                 artifacts={},
@@ -472,7 +472,7 @@ def test_workflow_command_prints_paused_when_human_input_is_needed(tmp_path: Pat
 
     class FakeExecutor:
         def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
-            return _result(status_code="CAFE_NEED_CLARIFICATION", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(status_code="need_clarification", step_name=step_name, step_def=step_def, artifacts={})
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -596,10 +596,10 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
                     state=blackboard_state,
                     from_step="pr",
                     to_step="user",
-                    status_code="CAFE_CONFIRMED",
+                    status_code="confirmed",
                     intent=HandoffIntent.MANUAL_HANDOFF,
                 )
-            return _result(status_code="CAFE_CONFIRMED", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -698,10 +698,10 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(tmp_path: Pa
                     state=blackboard_state,
                     from_step="pr",
                     to_step="user",
-                    status_code="CAFE_CONFIRMED",
+                    status_code="confirmed",
                     intent=HandoffIntent.MANUAL_HANDOFF,
                 )
-            return _result(status_code="CAFE_CONFIRMED", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
 
     def fake_launch_chat(role: str, issue_name: str) -> int:
         assert role == "developer"
@@ -756,10 +756,10 @@ def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(tmp_
                 state=blackboard_state,
                 from_step="pr",
                 to_step="user",
-                status_code="CAFE_CONFIRMED",
+                status_code="confirmed",
                 intent=HandoffIntent.MANUAL_HANDOFF,
             )
-            return _result(status_code="CAFE_CONFIRMED", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -808,10 +808,10 @@ def test_workflow_command_noninteractive_stops_after_agent_handoff_to_user(tmp_p
                 state=blackboard_state,
                 from_step="pr",
                 to_step="user",
-                status_code="CAFE_CONFIRMED",
+                status_code="confirmed",
                 intent=HandoffIntent.MANUAL_HANDOFF,
             )
-            return _result(status_code="CAFE_CONFIRMED", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -861,10 +861,10 @@ def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkey
                     state=blackboard_state,
                     from_step="pr",
                     to_step="user",
-                    status_code="CAFE_CONFIRMED",
+                    status_code="confirmed",
                     intent=HandoffIntent.MANUAL_HANDOFF,
                 )
-            return _result(status_code="CAFE_CONFIRMED", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -937,13 +937,13 @@ def test_workflow_command_resumes_incomplete_iteration_before_user_phase(tmp_pat
                     {
                         "iteration": 3,
                         "step_name": "spec",
-                        "status_code": "CAFE_READY_FOR_REVIEW",
+                        "status_code": "ready_for_review",
                         "end_time": "2026-04-14T10:05:00+08:00",
                     }
                 ),
                 encoding="utf-8",
             )
-            return _result(status_code="CAFE_READY_FOR_REVIEW", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(status_code="ready_for_review", step_name=step_name, step_def=step_def, artifacts={})
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -1139,7 +1139,7 @@ def test_workflow_command_resumes_pr_when_external_feedback_arrives_while_done(t
     class FakeExecutor:
         def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
             executed_steps.append(step_name)
-            return _result(status_code="CAFE_CONFIRMED", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -1174,20 +1174,20 @@ steps:
     skill: spec_first
     role: pm
     allowed_goto: [develop]
-    valid_status_codes: [CAFE_CONFIRMED, CAFE_NEED_CLARIFICATION]
+    valid_intents: [confirmed, need_clarification]
     on:
-      CAFE_CONFIRMED: plan
-      CAFE_NEED_CLARIFICATION: develop
+      await_agent: plan
+      need_clarification: develop
   plan:
     skill: plan
     role: developer
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: _done
+      await_agent: _done
   develop:
     skill: develop
     role: developer
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on: {}
 """.strip(),
         encoding="utf-8",
@@ -1210,9 +1210,9 @@ steps:
                     state=blackboard_state,
                     from_step="spec",
                     to_step="develop",
-                    status_code="CAFE_CONFIRMED",
+                    status_code="confirmed",
                 )
-            return _result(status_code="CAFE_CONFIRMED", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
         executor.execute_step.side_effect = _execute
         mock_builder.return_value = executor
 
@@ -1235,15 +1235,15 @@ steps:
   plan:
     skill: plan
     role: developer
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: develop
+      await_agent: develop
   develop:
     skill: develop
     role: developer
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: _done
+      await_agent: _done
 """.strip(),
         encoding="utf-8",
     )
@@ -1257,7 +1257,7 @@ steps:
         mock_git_cls.return_value = git
         executor = MagicMock()
         executor.execute_step.side_effect = lambda step_name, step_def, blackboard_state: (
-            executed_steps.append(step_name) or _result(status_code="CAFE_CONFIRMED", step_name=step_name, step_def=step_def, artifacts={})
+            executed_steps.append(step_name) or _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
         )
         mock_builder.return_value = executor
 
@@ -1282,7 +1282,7 @@ def test_workflow_command_runs_hotfix_playbook(tmp_path: Path, monkeypatch) -> N
         mock_git_cls.return_value = git
         executor = MagicMock()
         executor.execute_step.side_effect = lambda step_name, step_def, blackboard_state: (
-            executed_steps.append(step_name) or _result(status_code="CAFE_CONFIRMED", step_name=step_name, step_def=step_def, artifacts={})
+            executed_steps.append(step_name) or _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
         )
         mock_builder.return_value = executor
 
@@ -1307,15 +1307,15 @@ steps:
   develop:
     skill: develop
     role: developer
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: pr
+      await_agent: pr
   pr:
     skill: pr
     role: developer
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: _done
+      await_agent: _done
 """.strip(),
         encoding="utf-8",
     )
@@ -1329,7 +1329,7 @@ steps:
         mock_git_cls.return_value = git
         executor = MagicMock()
         executor.execute_step.side_effect = lambda step_name, step_def, blackboard_state: (
-            executed_steps.append(step_name) or _result(status_code="CAFE_CONFIRMED", step_name=step_name, step_def=step_def, artifacts={})
+            executed_steps.append(step_name) or _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
         )
         mock_builder.return_value = executor
 

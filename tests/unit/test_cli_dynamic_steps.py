@@ -26,9 +26,9 @@ steps:
   qa:
     skill: review
     role: reviewer
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: _done
+      await_agent: _done
 """.strip(),
         encoding="utf-8",
     )
@@ -41,7 +41,7 @@ steps:
         git.get_current_branch.return_value = "issue-205"
         mock_git_cls.return_value = git
         executor = MagicMock()
-        executor.execute_step.return_value = ("CAFE_CONFIRMED", {})
+        executor.execute_step.return_value = ("confirmed", {})
         mock_builder.return_value = executor
 
         result = runner.invoke(app, ["qa"])

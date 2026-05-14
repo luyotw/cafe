@@ -485,7 +485,7 @@ def workflow(
             return StepExecutionResult(
                 response="dry-run",
                 artifacts={str(output_key): str(output_path)},
-                status_code="CAFE_CONFIRMED",
+                status_code="confirmed",
             )
         step_executor = None if dry_run else _build_workflow_step_executor(
             config_manager=config_manager,

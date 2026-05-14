@@ -17,7 +17,7 @@ from cafe.core.blackboard import (
 )
 from cafe.core.git import GitOperations
 from cafe.core.phase import Phase
-from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
+from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, transition_map_key
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.phases.generic_phase import GenericPhase
 from cafe.utils.checklist_generator import (
@@ -41,7 +41,7 @@ def align_pr_baton_after_execution(
     """If PR feedback needs code changes, ensure the baton leaves the PR step.
 
     Agents should update ``next_step.txt`` themselves, but when they return
-    ``CAFE_NEEDS_CHANGES`` while the baton still targets ``pr``, advance it to
+    ``manual_handoff`` while the baton still targets ``pr``, advance it to
     ``develop`` so ``BlackboardWorkflowRuntime`` can transition.
     """
     if step_name != "pr" or not status_code:
@@ -140,7 +140,7 @@ class GenericWorkflowStepExecutor(Phase):
             )
 
         skill_name = self._resolve_skill_name(step_def, self.iteration)
-        valid_status_codes = self._resolve_valid_status_codes(step_def)
+        valid_intents = self._resolve_valid_intents(step_def)
         agent_name = self._resolve_agent_name(step_def)
         self._apply_step_agent_model(step_name=step_name, step_def=step_def, agent_name=agent_name)
         agent_cli = self.agent_manager.get_agent(agent_name).config.cli
@@ -189,7 +189,7 @@ class GenericWorkflowStepExecutor(Phase):
                 agent_name=agent_name,
                 prompt=prompt,
                 user_input=resolved_user_input,
-                valid_status_codes=valid_status_codes,
+                valid_intents=valid_intents,
                 require_status_code=False,
                 persist_status=False,
                 allowed_tools=allowed_tools,
@@ -223,7 +223,7 @@ class GenericWorkflowStepExecutor(Phase):
         status_code = execution.status_code
         if require_status_code:
             if status_code is None:
-                status_code = StatusCodeParser.extract(response, valid_status_codes)
+                status_code = StatusCodeParser.extract(response, valid_intents)
 
         agent_was_invoked = bool(last_prompt)
         if (
@@ -239,7 +239,7 @@ class GenericWorkflowStepExecutor(Phase):
                 agent_name=agent_name,
                 prompt=last_prompt[0] if last_prompt else "",
                 user_input=resolved_user_input,
-                valid_status_codes=valid_status_codes,
+                valid_intents=valid_intents,
                 allowed_tools=allowed_tools,
                 max_retries=3,
             )
@@ -266,6 +266,7 @@ class GenericWorkflowStepExecutor(Phase):
         if require_status_code and self.interactive and status_code in {
             PhaseStatusCode.NEED_CLARIFICATION,
             PhaseStatusCode.READY_FOR_REVIEW,
+            PhaseStatusCode.CONFIRM_OUTPUT,
         }:
             auto_continue = True
 
@@ -379,10 +380,10 @@ class GenericWorkflowStepExecutor(Phase):
         return str(model) if model else None
 
     @staticmethod
-    def _resolve_valid_status_codes(step_def: Dict[str, Any]) -> List[PhaseStatusCode]:
+    def _resolve_valid_intents(step_def: Dict[str, Any]) -> List[PhaseStatusCode]:
         valid = []
         known_values = {item.value for item in PhaseStatusCode}
-        for code in step_def.get("valid_status_codes", []):
+        for code in step_def.get("valid_intents", []):
             if code in known_values:
                 valid.append(PhaseStatusCode(code))
         return valid or list(PhaseStatusCode)
@@ -636,7 +637,12 @@ class GenericWorkflowStepExecutor(Phase):
 
     @staticmethod
     def _should_validate_checklist(status_code: PhaseStatusCode) -> bool:
-        return status_code in {PhaseStatusCode.CONFIRMED, PhaseStatusCode.READY_FOR_REVIEW}
+        return status_code in {
+            PhaseStatusCode.CONFIRMED,
+            PhaseStatusCode.AWAIT_AGENT,
+            PhaseStatusCode.READY_FOR_REVIEW,
+            PhaseStatusCode.CONFIRM_OUTPUT,
+        }
 
     @staticmethod
     def _event_allows_auto_continue(event: Dict[str, Any]) -> bool:
@@ -645,7 +651,7 @@ class GenericWorkflowStepExecutor(Phase):
         Initial requirement collection also emits ``user_input_collected`` so
         the prompt can receive GitHub/manual issue text. That input is not a
         response to a clarification pause and must not suppress workflow
-        pausing when the agent returns ``CAFE_NEED_CLARIFICATION``.
+        pausing when the agent returns ``need_clarification``.
         """
         event_type = event.get("type")
         if event_type == "review_modification_requested":
@@ -661,6 +667,10 @@ class GenericWorkflowStepExecutor(Phase):
     @staticmethod
     def _resolve_handoff_intent(step_name: str, status_code: PhaseStatusCode) -> Optional[str]:
         if status_code == PhaseStatusCode.READY_FOR_REVIEW:
+            if step_name in {"spec", "plan"}:
+                return "confirm_output"
+            return "manual_handoff"
+        if status_code == PhaseStatusCode.CONFIRM_OUTPUT:
             if step_name in {"spec", "plan"}:
                 return "confirm_output"
             return "manual_handoff"
@@ -692,6 +702,7 @@ class GenericWorkflowStepExecutor(Phase):
         store = BlackboardStore(self.issue_dir)
         if not auto_continue and status_code.value in {
             PhaseStatusCode.READY_FOR_REVIEW.value,
+            PhaseStatusCode.CONFIRM_OUTPUT.value,
             PhaseStatusCode.NEED_CLARIFICATION.value,
             PhaseStatusCode.NEED_PERMISSION.value,
         }:
@@ -770,7 +781,8 @@ class GenericWorkflowStepExecutor(Phase):
         transitions = step_def.get("on", {})
         if not isinstance(transitions, dict):
             return None
-        target = transitions.get(status_code.value)
+        key = transition_map_key(status_code)
+        target = transitions.get(key)
         if target is None:
             target = transitions.get("default")
         return str(target) if target else None

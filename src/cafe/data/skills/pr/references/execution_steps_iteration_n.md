@@ -6,4 +6,4 @@
 [ ] Edit {current_pr_file} to update PR content based on new changes (NOT in your response)
 [ ] Do not query or wait for a remote GitHub branch/PR; host-side publish runs after this phase returns
 [ ] Update blackboard and next-step baton to hand off to the next workflow target
-[ ] Mark this checklist complete before returning CAFE_CONFIRMED
+[ ] Mark this checklist complete before returning confirmed

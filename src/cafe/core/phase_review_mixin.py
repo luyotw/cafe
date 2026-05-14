@@ -341,7 +341,7 @@ class PhaseReviewMixin:
                     data={
                         "iterations": self.iteration - 1,
                         "last_response": prev_data.get("response", ""),
-                        "status_code": "CAFE_NEED_CLARIFICATION",
+                        "status_code": "need_clarification",
                     },
                 )
 
@@ -394,7 +394,7 @@ class PhaseReviewMixin:
                     data={
                         "iterations": self.iteration - 1,
                         "last_response": prev_data.get("response", ""),
-                        "status_code": "CAFE_NEED_PERMISSION",
+                        "status_code": "need_permission",
                     },
                 )
 
@@ -405,7 +405,7 @@ class PhaseReviewMixin:
                 data={
                     "iterations": self.iteration - 1,
                     "last_response": prev_data.get("response", ""),
-                    "status_code": "CAFE_NEED_PERMISSION",
+                    "status_code": "need_permission",
                 },
             )
 

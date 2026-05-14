@@ -177,7 +177,7 @@ class TestRenderTable:
             end_time=datetime(2026, 1, 14, 10, 15, 0, tzinfo=timezone.utc),
             status=PhaseStatus.COMPLETED,
             iteration=1,
-            status_code="CAFE_CONFIRMED"
+            status_code="confirmed"
         )
         # Should render without crashing
         display.render_table([entry])
@@ -194,7 +194,7 @@ class TestRenderTable:
                 end_time=datetime(2026, 1, 14, 10, 15, 0, tzinfo=timezone.utc),
                 status=PhaseStatus.COMPLETED,
                 iteration=1,
-                status_code="CAFE_READY_FOR_REVIEW"
+                status_code="ready_for_review"
             ),
             TimelineEntry(
                 entry_type="iteration",
@@ -204,7 +204,7 @@ class TestRenderTable:
                 end_time=datetime(2026, 1, 14, 11, 10, 0, tzinfo=timezone.utc),
                 status=PhaseStatus.COMPLETED,
                 iteration=2,
-                status_code="CAFE_CONFIRMED"
+                status_code="confirmed"
             ),
         ]
         # Should render multiple entries
@@ -221,7 +221,7 @@ class TestRenderTable:
             end_time=None,  # In progress, no end_time
             status=PhaseStatus.IN_PROGRESS,
             iteration=1,
-            status_code="CAFE_NEED_CLARIFICATION"
+            status_code="need_clarification"
         )
         # Should display "N/A" without crashing
         display.render_table([entry])
@@ -238,7 +238,7 @@ class TestRenderTable:
                 end_time=datetime(2026, 1, 14, 10, 15, 0, tzinfo=timezone.utc),
                 status=PhaseStatus.COMPLETED,
                 iteration=1,
-                status_code="CAFE_CONFIRMED"
+                status_code="confirmed"
             ),
             TimelineEntry(
                 entry_type="iteration",
@@ -248,7 +248,7 @@ class TestRenderTable:
                 end_time=datetime(2026, 1, 14, 11, 20, 0, tzinfo=timezone.utc),
                 status=PhaseStatus.COMPLETED,
                 iteration=1,
-                status_code="CAFE_READY_FOR_REVIEW"
+                status_code="ready_for_review"
             ),
         ]
         # Should display different phases
@@ -269,7 +269,7 @@ class TestRenderTableWithTokenUsage:
             end_time=datetime(2026, 1, 31, 10, 15, 0, tzinfo=timezone.utc),
             status=PhaseStatus.COMPLETED,
             iteration=1,
-            status_code="CAFE_CONFIRMED",
+            status_code="confirmed",
             cli="gemini",
             model="gemini-2.5-flash",
             input_tokens=109260,
@@ -290,7 +290,7 @@ class TestRenderTableWithTokenUsage:
             end_time=datetime(2026, 1, 31, 10, 15, 0, tzinfo=timezone.utc),
             status=PhaseStatus.COMPLETED,
             iteration=1,
-            status_code="CAFE_CONFIRMED",
+            status_code="confirmed",
         )
         # Should render with "--" for missing fields
         display.render_table([entry])
@@ -307,7 +307,7 @@ class TestRenderTableWithTokenUsage:
                 end_time=datetime(2026, 1, 31, 10, 15, 0, tzinfo=timezone.utc),
                 status=PhaseStatus.COMPLETED,
                 iteration=1,
-                status_code="CAFE_CONFIRMED",
+                status_code="confirmed",
                 cli="gemini",
                 model="gemini-2.5-flash",
                 input_tokens=109260,
@@ -322,7 +322,7 @@ class TestRenderTableWithTokenUsage:
                 end_time=datetime(2026, 1, 31, 11, 10, 0, tzinfo=timezone.utc),
                 status=PhaseStatus.COMPLETED,
                 iteration=2,
-                status_code="CAFE_CONFIRMED",
+                status_code="confirmed",
                 # No token usage data
             ),
         ]
@@ -373,7 +373,7 @@ class TestRenderModelSummaryTable:
                 end_time=datetime(2026, 1, 31, 10, 15, 0, tzinfo=timezone.utc),
                 status=PhaseStatus.COMPLETED,
                 iteration=1,
-                status_code="CAFE_CONFIRMED",
+                status_code="confirmed",
                 cli="gemini",
                 model="gemini-2.5-flash",
                 input_tokens=109260,

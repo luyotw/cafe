@@ -57,8 +57,8 @@ class TestNoChangesNeededReasoningValidation:
         # Create context.json with NO_CHANGES_NEEDED response
         context_data = {
             "iteration": 1,
-            "response": "CAFE_NO_CHANGES_NEEDED\n\nThe reviewer is wrong.",
-            "status_code": "CAFE_NO_CHANGES_NEEDED",
+            "response": "no_changes_needed\n\nThe reviewer is wrong.",
+            "status_code": "no_changes_needed",
             "streaming_log": [],
             "prompt": "Test prompt"
         }
@@ -74,7 +74,7 @@ class TestNoChangesNeededReasoningValidation:
             # Agent should have written to output.md
             output_file.write_text("The reviewer's feedback is incorrect because...")
             return (
-                "CAFE_NO_CHANGES_NEEDED\n\n[reasoning written to output.md]",
+                "no_changes_needed\n\n[reasoning written to output.md]",
                 TokenUsage(),
                 [],
                 [],
@@ -126,8 +126,8 @@ class TestNoChangesNeededReasoningValidation:
         # Create context.json
         context_data = {
             "iteration": 1,
-            "response": "CAFE_NO_CHANGES_NEEDED",
-            "status_code": "CAFE_NO_CHANGES_NEEDED",
+            "response": "no_changes_needed",
+            "status_code": "no_changes_needed",
             "streaming_log": [],
             "prompt": "Test prompt"
         }
@@ -140,7 +140,7 @@ class TestNoChangesNeededReasoningValidation:
         # Mock agent to NOT create output.md
         phase.agent_manager.execute = MagicMock(
             return_value=(
-                "CAFE_NO_CHANGES_NEEDED",
+                "no_changes_needed",
                 TokenUsage(),
                 [],
                 [],
@@ -166,7 +166,7 @@ class TestNoChangesNeededReasoningValidation:
 
         # Should mention writing to {output_file}
         assert "{output_file}" in checklist_content
-        assert "NO_CHANGES_NEEDED" in checklist_content or "CAFE_NO_CHANGES_NEEDED" in checklist_content
+        assert "NO_CHANGES_NEEDED" in checklist_content or "no_changes_needed" in checklist_content
 
     def test_checklist_generator_resolves_output_file_placeholder(self):
         """Test that checklist generator properly resolves output_file placeholder"""
@@ -258,7 +258,7 @@ class TestConfirmedSkipReviewResumeFlag:
 
         assert result is not None
         assert result.data.get("skip_review") is True
-        assert result.data.get("status_code") == "CAFE_CONFIRMED_SKIP_REVIEW"
+        assert result.data.get("status_code") == "skip_review"
 
     def test_resume_with_confirmed_status_does_not_include_skip_review_flag(self, setup_develop_phase):
         """Test that resuming with CONFIRMED status does not include skip_review=True"""
@@ -318,7 +318,7 @@ class TestConfirmedSkipReviewSaveProgress:
         import json
         data = json.loads(status_file.read_text())
         assert data["status"] == PhaseStatus.COMPLETED.value
-        assert data["status_code"] == "CAFE_CONFIRMED_SKIP_REVIEW"
+        assert data["status_code"] == "skip_review"
 
     def test_save_progress_confirmed_status_saves_as_completed(self, setup_develop_phase):
         """Test that _save_progress(CONFIRMED) still saves status as COMPLETED"""

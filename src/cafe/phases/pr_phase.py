@@ -631,7 +631,7 @@ class PRPhase(Phase):
 
         # Only wait if status_code is NEEDS_CHANGES (not READY_FOR_REVIEW or CONFIRMED)
         status_code = pr_iteration_info.get("status_code")
-        if status_code != "CAFE_NEEDS_CHANGES":
+        if status_code != "needs_changes":
             return None
 
         # Latest iteration has NEEDS_CHANGES - check if develop has processed it
@@ -764,7 +764,7 @@ class PRPhase(Phase):
             status_code = pr_iteration_info.get("status_code")
 
             # If CONFIRMED, we're done - nothing more to do
-            if status_code == "CAFE_CONFIRMED":
+            if status_code == "confirmed":
                 console.print()
                 console.print(f"[green]✓ PR #{pr_number} feedback has been fully addressed[/green]")
                 console.print()
@@ -775,7 +775,7 @@ class PRPhase(Phase):
                 )
 
             # If READY_FOR_REVIEW, fetch comments from GitHub
-            if status_code == "CAFE_READY_FOR_REVIEW":
+            if status_code == "ready_for_review":
                 console.print()
                 console.print(f"[dim]Checking for new comments on PR #{pr_number}...[/dim]")
 
@@ -1345,7 +1345,7 @@ The system will verify checklist completion. If unchecked items remain, you will
             agent_name=self.dev_agent,
             prompt=prompt,
             user_input="",
-            valid_status_codes=[PhaseStatusCode.NEEDS_CHANGES, PhaseStatusCode.CONFIRMED],
+            valid_intents=[PhaseStatusCode.NEEDS_CHANGES, PhaseStatusCode.CONFIRMED],
             allowed_tools=allowed_tools,
         )
 
@@ -1434,29 +1434,29 @@ The system will verify checklist completion. If unchecked items remain, you will
             except ValueError:
                 user_input_display_confirm = str(user_input_file)
 
-            confirmation_prompt = f"""You returned CAFE_CONFIRMED for the PR comment organization task.
+            confirmation_prompt = f"""You returned confirmed for the PR comment organization task.
 
 IMPORTANT: This iteration's task is to organize PR review comments from {user_input_display_confirm} into a todo list in {output_display_confirm}.
 
-CAFE_CONFIRMED should ONLY be returned when:
+confirmed should ONLY be returned when:
 - All PR review comments have already been fully addressed/completed (mark them as [x] in the todo list), OR
 - All PR review comments are invalid/not applicable (no action needed)
 
-CAFE_NEEDS_CHANGES should be returned when:
+needs_changes should be returned when:
 - There are PR review comments that need to be addressed by the developer (create unchecked todo items - [ ])
 
 Please re-evaluate the PR comments and confirm:
-- If there are comments that require code changes or actions, return CAFE_NEEDS_CHANGES
-- If all comments are already addressed or not applicable, return CAFE_CONFIRMED
+- If there are comments that require code changes or actions, return needs_changes
+- If all comments are already addressed or not applicable, return confirmed
 
-Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no explanation."""
+Return ONLY the status code (confirmed or needs_changes) with no explanation."""
 
             # Re-execute agent with confirmation prompt
             confirmation_response, confirmation_status_code = self._execute_agent_iteration(
                 agent_name=self.dev_agent,
                 prompt=confirmation_prompt,
                 user_input="",
-                valid_status_codes=[PhaseStatusCode.NEEDS_CHANGES, PhaseStatusCode.CONFIRMED],
+                valid_intents=[PhaseStatusCode.NEEDS_CHANGES, PhaseStatusCode.CONFIRMED],
                 allowed_tools=allowed_tools,
             )
 
@@ -1749,7 +1749,7 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
             return PhaseResult(
                 status=PhaseStatus.COMPLETED,
                 message=f"Pull Request #{pr_number} updated successfully",
-                data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_READY_FOR_REVIEW"},
+                data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "ready_for_review"},
             )
         else:
             # Create new PR
@@ -1798,7 +1798,7 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
             return PhaseResult(
                 status=PhaseStatus.COMPLETED,
                 message=f"Pull Request #{pr_number} created successfully",
-                data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_READY_FOR_REVIEW"},
+                data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "ready_for_review"},
             )
 
     def _generate_pr_content(self) -> PhaseResult | None:
@@ -1964,14 +1964,14 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
         result, response = self._execute_and_handle_agent_response(
             agent_name=self.dev_agent,
             user_input="",  # No user input for PR generation
-            valid_status_codes=[PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_PERMISSION],
+            valid_intents=[PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_PERMISSION],
             allowed_tools=allowed_tools,
             complete_codes=[PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_PERMISSION],
             # Note: NEED_PERMISSION will be automatically moved to continue_codes by base class
         )
 
         # Check if we should return early (only for NEED_PERMISSION)
-        if result and result.data.get("status_code") == "CAFE_NEED_PERMISSION":
+        if result and result.data.get("status_code") == "need_permission":
             return result
 
         # Verify output file was created
@@ -2095,9 +2095,9 @@ The file should contain:
 
 Based on the following conditions, determine which status code to return:
 
-- CAFE_CONFIRMED: File exists and has complete content (both title and body)
+- confirmed: File exists and has complete content (both title and body)
 
-Please return only one status code (example: CAFE_CONFIRMED), with no other content."""
+Please return only one status code (example: confirmed), with no other content."""
 
     def _rebuild_checklist_for_iteration(self, iteration: int) -> None:
         """Rebuild checklist for current iteration using PR phase rules.

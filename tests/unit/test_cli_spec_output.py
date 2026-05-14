@@ -84,7 +84,7 @@ class TestSpecCommandOutputWithReadyForReview:
         """READY_FOR_REVIEW 狀態應提示使用者回到 workflow 主入口."""
         mock_execute_alias.return_value = {
             "iterations": 2,
-            "status_code": "CAFE_READY_FOR_REVIEW",
+            "status_code": "ready_for_review",
         }
 
         # Execute with interactive mode and user input
@@ -103,7 +103,7 @@ class TestSpecCommandOutputWithReadyForReview:
         """READY_FOR_REVIEW 狀態應顯示 spec 儲存位置."""
         mock_execute_alias.return_value = {
             "iterations": 1,
-            "status_code": "CAFE_READY_FOR_REVIEW",
+            "status_code": "ready_for_review",
             "output_file": ".cafe/issues/test-branch/spec/iteration_001/output.md",
         }
 
@@ -138,7 +138,7 @@ class TestSpecCommandOutputWithConfirmed:
         """CONFIRMED 狀態應提示使用者回到 workflow 主入口."""
         mock_execute_alias.return_value = {
             "iterations": 3,
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
         }
 
         # Execute
@@ -157,7 +157,7 @@ class TestSpecCommandOutputWithConfirmed:
         """CONFIRMED 狀態應顯示 iteration 次數."""
         mock_execute_alias.return_value = {
             "iterations": 5,
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
         }
 
         result = runner.invoke(app, ["spec", "--interactive", "--user-input", "test"])
@@ -190,7 +190,7 @@ class TestSpecCommandOutputWithNeedClarification:
         """NEED_CLARIFICATION 狀態應提示使用者回到 workflow 主入口."""
         mock_execute_alias.return_value = {
             "iterations": 1,
-            "status_code": "CAFE_NEED_CLARIFICATION",
+            "status_code": "need_clarification",
         }
 
         result = runner.invoke(app, ["spec", "--interactive", "--user-input", "test"])
@@ -209,12 +209,12 @@ class TestSpecCommandOutputComparison:
     ):
         """確認 READY_FOR_REVIEW and CONFIRMED 訊息確實不同."""
         # Test READY_FOR_REVIEW
-        mock_execute_alias.return_value = {"iterations": 1, "status_code": "CAFE_READY_FOR_REVIEW"}
+        mock_execute_alias.return_value = {"iterations": 1, "status_code": "ready_for_review"}
 
         result_ready = runner.invoke(app, ["spec", "--interactive", "--user-input", "test"])
 
         # Test CONFIRMED
-        mock_execute_alias.return_value = {"iterations": 1, "status_code": "CAFE_CONFIRMED"}
+        mock_execute_alias.return_value = {"iterations": 1, "status_code": "confirmed"}
 
         result_confirmed = runner.invoke(app, ["spec", "--interactive", "--user-input", "test"])
 
@@ -233,7 +233,7 @@ class TestSpecCommandLegacyNotice:
     ):
         mock_execute_alias.return_value = {
             "iterations": 1,
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
         }
 
         result = runner.invoke(app, ["spec", "--interactive", "--user-input", "test"])

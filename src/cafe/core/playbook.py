@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from cafe.core.status_codes import PLAYBOOK_INTENT_KEYS, PhaseStatusCode
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 
@@ -62,12 +63,42 @@ class StepConfig(BaseModel):
     input_artifacts: List[str] = Field(default_factory=list)
     output_artifact: Optional[str] = None
     allowed_tools: List[str] = Field(default_factory=list)
-    valid_status_codes: List[str] = Field(default_factory=list)
+    valid_intents: List[str] = Field(default_factory=list)
     max_iterations: Optional[Union[int, str]] = None
     allowed_goto: List[str] = Field(default_factory=list)
     hooks: StepHooks = Field(default_factory=StepHooks)
     auto_snapshot: bool = True
     on: Dict[str, str]
+
+    @field_validator("on")
+    @classmethod
+    def _validate_on_intents(cls, value: Dict[str, str]) -> Dict[str, str]:
+        for key in value:
+            if key == "default":
+                continue
+            if key.startswith("CAFE_"):
+                raise ValueError(f"Legacy CAFE_ transition key is not allowed in playbook on: {key!r}")
+            if key not in PLAYBOOK_INTENT_KEYS:
+                raise ValueError(
+                    f"Invalid playbook transition key {key!r}; "
+                    f"must be one of {sorted(PLAYBOOK_INTENT_KEYS)} or 'default'"
+                )
+        return value
+
+    @field_validator("valid_intents")
+    @classmethod
+    def _validate_valid_intents(cls, value: List[str]) -> List[str]:
+        for item in value:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError("valid_intents entries must be non-empty strings")
+            token = item.strip()
+            if token.startswith("CAFE_"):
+                raise ValueError(f"Legacy CAFE_ value is not allowed in valid_intents: {token!r}")
+            try:
+                PhaseStatusCode(token)
+            except ValueError as exc:
+                raise ValueError(f"Unknown step outcome token in valid_intents: {token!r}") from exc
+        return [item.strip() for item in value]
 
     @field_validator("skill")
     @classmethod

@@ -106,7 +106,7 @@ class TestLoadPhaseStatus:
                     "iteration": 1,
                     "timestamp": "2026-04-27T10:00:00+08:00",
                     "end_time": "2026-04-27T10:15:00+08:00",
-                    "status_code": "CAFE_CONFIRMED",
+                    "status_code": "confirmed",
                 }
             )
         )
@@ -155,7 +155,7 @@ class TestLoadPhaseStatus:
         assert result["status"] == "completed"
         assert result["timestamp"] == "2026-04-27T10:00:00+08:00"
         assert result["end_time"] == "2026-04-27T10:15:00+08:00"
-        assert result["status_code"] == "CAFE_CONFIRMED"
+        assert result["status_code"] == "confirmed"
 
     def test_load_phase_status_synthesizes_in_progress_from_user_baton(self, tmp_path, monkeypatch):
         """Test paused phases stay in-progress without a phase status file."""
@@ -171,7 +171,7 @@ class TestLoadPhaseStatus:
                 {
                     "iteration": 1,
                     "timestamp": "2026-04-27T09:00:00+08:00",
-                    "status_code": "CAFE_NEED_CLARIFICATION",
+                    "status_code": "need_clarification",
                 }
             )
         )
@@ -181,7 +181,7 @@ class TestLoadPhaseStatus:
             "to_owner": "user",
             "to_step": "user",
             "intent": "confirm_output",
-            "status_code": "CAFE_NEED_CLARIFICATION",
+            "status_code": "need_clarification",
             "created_at": "2026-04-27T09:05:00+08:00",
             "source": "workflow",
         }
@@ -207,7 +207,7 @@ class TestLoadPhaseStatus:
         assert result is not None
         assert result["status"] == "in_progress"
         assert result["timestamp"] == "2026-04-27T09:00:00+08:00"
-        assert result["status_code"] == "CAFE_NEED_CLARIFICATION"
+        assert result["status_code"] == "need_clarification"
         assert "end_time" not in result
 
     def test_load_phase_status_does_not_create_blackboard_files(self, tmp_path, monkeypatch):
@@ -224,7 +224,7 @@ class TestLoadPhaseStatus:
                     "iteration": 1,
                     "timestamp": "2026-04-27T10:00:00+08:00",
                     "end_time": "2026-04-27T10:15:00+08:00",
-                    "status_code": "CAFE_CONFIRMED",
+                    "status_code": "confirmed",
                 }
             )
         )
@@ -287,8 +287,8 @@ class TestLoadIterationStatuses:
         phase_dir = tmp_path / ".cafe/issues/test-issue/spec"
         (phase_dir / "iteration_001").mkdir(parents=True)
         (phase_dir / "iteration_002").mkdir(parents=True)
-        (phase_dir / "iteration_001/context.json").write_text('{"iteration": 1, "status_code": "CAFE_CONFIRMED", "timestamp": "2026-01-14T10:00:00+08:00"}')
-        (phase_dir / "iteration_002/context.json").write_text('{"iteration": 2, "status_code": "CAFE_CONFIRMED", "timestamp": "2026-01-14T11:00:00+08:00"}')
+        (phase_dir / "iteration_001/context.json").write_text('{"iteration": 1, "status_code": "confirmed", "timestamp": "2026-01-14T10:00:00+08:00"}')
+        (phase_dir / "iteration_002/context.json").write_text('{"iteration": 2, "status_code": "confirmed", "timestamp": "2026-01-14T11:00:00+08:00"}')
 
         result = service.load_iteration_statuses("test-issue", "spec")
         assert isinstance(result, list)
@@ -327,7 +327,7 @@ class TestLoadIterationStatuses:
         service = SummaryService()
         phase_dir = tmp_path / ".cafe/issues/test-issue/review"
         (phase_dir / "iteration_001").mkdir(parents=True)
-        context_data = {"iteration": 1, "status_code": "CAFE_NEED_CLARIFICATION", "timestamp": "2025-01-04T14:00:00Z"}
+        context_data = {"iteration": 1, "status_code": "need_clarification", "timestamp": "2025-01-04T14:00:00Z"}
         (phase_dir / "iteration_001/context.json").write_text(json.dumps(context_data))
 
         result = service.load_iteration_statuses("test-issue", "review")
@@ -383,7 +383,7 @@ class TestLoadIterationStatuses:
             context = {
                 "iteration": i,
                 "timestamp": f"2026-01-05T00:{40+i*5:02d}:00.000000",
-                "status_code": "CAFE_CONFIRMED" if i == 4 else "CAFE_NEEDS_CHANGES",
+                "status_code": "confirmed" if i == 4 else "needs_changes",
             }
             (phase_dir / f"iteration_{i:03d}/context.json").write_text(json.dumps(context))
 
@@ -392,7 +392,7 @@ class TestLoadIterationStatuses:
         assert len(result) == 4
         assert result[0]["iteration"] == 1
         assert result[0]["timestamp"] == "2026-01-05T00:45:00.000000"
-        assert result[3]["status_code"] == "CAFE_CONFIRMED"
+        assert result[3]["status_code"] == "confirmed"
 
 
 class TestLoadIterationContexts:
@@ -414,13 +414,13 @@ class TestLoadIterationContexts:
             "iteration": 1,
             "timestamp": "2026-01-14T10:00:00+08:00",
             "end_time": "2026-01-14T10:15:00+08:00",
-            "status_code": "CAFE_READY_FOR_REVIEW"
+            "status_code": "ready_for_review"
         }
         context2 = {
             "iteration": 2,
             "timestamp": "2026-01-14T10:30:00+08:00",
             "end_time": "2026-01-14T10:45:00+08:00",
-            "status_code": "CAFE_CONFIRMED"
+            "status_code": "confirmed"
         }
         (phase_dir / "iteration_001/context.json").write_text(json.dumps(context1))
         (phase_dir / "iteration_002/context.json").write_text(json.dumps(context2))
@@ -431,7 +431,7 @@ class TestLoadIterationContexts:
         assert result[0]["iteration"] == 1
         assert result[0]["timestamp"] == "2026-01-14T10:00:00+08:00"
         assert result[0]["end_time"] == "2026-01-14T10:15:00+08:00"
-        assert result[0]["status_code"] == "CAFE_READY_FOR_REVIEW"
+        assert result[0]["status_code"] == "ready_for_review"
 
     def test_load_iteration_statuses_handles_missing_end_time(self, tmp_path, monkeypatch):
         """Verify handling when end_time is missing"""
@@ -447,7 +447,7 @@ class TestLoadIterationContexts:
         context = {
             "iteration": 1,
             "timestamp": "2026-01-14T11:00:00+08:00",
-            "status_code": "CAFE_NEED_CLARIFICATION"
+            "status_code": "need_clarification"
         }
         (phase_dir / "iteration_001/context.json").write_text(json.dumps(context))
 
@@ -475,7 +475,7 @@ class TestLoadIterationContexts:
                 "iteration": i,
                 "timestamp": f"2026-01-14T{10+i}:00:00+08:00",
                 "end_time": f"2026-01-14T{10+i}:15:00+08:00",
-                "status_code": "CAFE_CONFIRMED"
+                "status_code": "confirmed"
             }
             (phase_dir / f"iteration_{i:03d}/context.json").write_text(json.dumps(context))
 
@@ -506,7 +506,7 @@ class TestLoadTokenUsageData:
             "iteration": 1,
             "timestamp": "2026-01-31T10:00:00+08:00",
             "end_time": "2026-01-31T10:15:00+08:00",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "cli": "gemini",
             "model": "gemini-2.5-flash",
             "stats": {
@@ -543,7 +543,7 @@ class TestLoadTokenUsageData:
         context = {
             "iteration": 1,
             "timestamp": "2026-01-31T11:00:00+08:00",
-            "status_code": "CAFE_CONFIRMED"
+            "status_code": "confirmed"
         }
         (phase_dir / "iteration_001/context.json").write_text(json.dumps(context))
 
@@ -568,7 +568,7 @@ class TestLoadTokenUsageData:
                 "iteration": 1,
                 "timestamp": "2026-01-31T10:00:00+08:00",
                 "end_time": "2026-01-31T10:15:00+08:00",
-                "status_code": "CAFE_CONFIRMED",
+                "status_code": "confirmed",
                 "cli": "gemini",
                 "model": "gemini-2.5-flash",
                 "stats": {
@@ -582,7 +582,7 @@ class TestLoadTokenUsageData:
                 "iteration": 2,
                 "timestamp": "2026-01-31T11:00:00+08:00",
                 "end_time": "2026-01-31T11:20:00+08:00",
-                "status_code": "CAFE_CONFIRMED",
+                "status_code": "confirmed",
                 "cli": "claude",
                 "model": "claude-3-5-sonnet",
                 "stats": {

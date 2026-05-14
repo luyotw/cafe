@@ -82,7 +82,7 @@ class TestPRPhaseGitHubMode:
         # Assert
         assert result.status == PhaseStatus.COMPLETED
         assert "created" in result.message.lower()
-        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
+        assert result.data.get("status_code") == "ready_for_review"
 
         # Verify iteration context.json was created with correct status_code
         iteration_dir = issue_dir / "pr" / "iteration_001"
@@ -90,7 +90,7 @@ class TestPRPhaseGitHubMode:
         assert context_file.exists()
         with open(context_file) as f:
             context = json.load(f)
-        assert context.get("status_code") == "CAFE_READY_FOR_REVIEW"
+        assert context.get("status_code") == "ready_for_review"
 
     # =========================================================================
     # Scenario B: Has new commits, PR exists -> Update PR
@@ -109,7 +109,7 @@ class TestPRPhaseGitHubMode:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "status_code": "CAFE_READY_FOR_REVIEW"
+            "status_code": "ready_for_review"
         }))
 
         # Setup mocks
@@ -136,7 +136,7 @@ class TestPRPhaseGitHubMode:
         # Assert
         assert result.status == PhaseStatus.COMPLETED
         assert "updated" in result.message.lower()
-        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
+        assert result.data.get("status_code") == "ready_for_review"
 
         # Verify new iteration_002 was created
         iteration_002 = issue_dir / "pr" / "iteration_002"
@@ -144,7 +144,7 @@ class TestPRPhaseGitHubMode:
         assert context_file.exists()
         with open(context_file) as f:
             context = json.load(f)
-        assert context.get("status_code") == "CAFE_READY_FOR_REVIEW"
+        assert context.get("status_code") == "ready_for_review"
 
     # =========================================================================
     # Scenario C: No new commits, no PR -> Return "nothing to do"
@@ -191,7 +191,7 @@ class TestPRPhaseGitHubMode:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "status_code": "CAFE_READY_FOR_REVIEW"
+            "status_code": "ready_for_review"
         }))
 
         # Setup mocks
@@ -212,7 +212,7 @@ class TestPRPhaseGitHubMode:
                     mock_organize.return_value = PhaseResult(
                         status=PhaseStatus.COMPLETED,
                         message="Organized comments",
-                        data={"status_code": "CAFE_NEEDS_CHANGES"}
+                        data={"status_code": "needs_changes"}
                     )
 
                     phase = PRPhase(
@@ -225,7 +225,7 @@ class TestPRPhaseGitHubMode:
 
         # Assert
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") in ["CAFE_NEEDS_CHANGES", "CAFE_CONFIRMED"]
+        assert result.data.get("status_code") in ["needs_changes", "confirmed"]
 
     def test_scenario_d_comment_fetch_failure_returns_failed(
         self, tmp_path, mock_dependencies, setup_issue_dir
@@ -242,7 +242,7 @@ class TestPRPhaseGitHubMode:
                     "iteration": 1,
                     "timestamp": "2026-01-27T10:00:00+08:00",
                     "end_time": "2026-01-27T10:05:00+08:00",
-                    "status_code": "CAFE_READY_FOR_REVIEW",
+                    "status_code": "ready_for_review",
                 }
             )
         )
@@ -289,7 +289,7 @@ class TestPRPhaseGitHubMode:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "status_code": "CAFE_CONFIRMED"
+            "status_code": "confirmed"
         }))
         (iteration_001 / "user_input.md").write_text("Some feedback")
 
@@ -333,7 +333,7 @@ class TestPRPhaseGitHubMode:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "status_code": "CAFE_NEEDS_CHANGES"
+            "status_code": "needs_changes"
         }))
         (iteration_001 / "user_input.md").write_text("Please fix this")
 
@@ -423,7 +423,7 @@ class TestPRPhaseStep0ResumeIncomplete:
                 mock_organize.return_value = PhaseResult(
                     status=PhaseStatus.COMPLETED,
                     message="Organized",
-                    data={"status_code": "CAFE_NEEDS_CHANGES"}
+                    data={"status_code": "needs_changes"}
                 )
                 with patch.object(PRPhase, "_save_progress") as mock_save_progress:
                     phase = PRPhase(
@@ -480,7 +480,7 @@ class TestPRPhaseStep0ResumeIncomplete:
         context_file = iteration_001 / "context.json"
         with open(context_file) as f:
             context = json.load(f)
-        assert context.get("status_code") == "CAFE_READY_FOR_REVIEW"
+        assert context.get("status_code") == "ready_for_review"
 
 
 class TestPRPhaseStep1WaitingForDevelop:
@@ -530,7 +530,7 @@ class TestPRPhaseStep1WaitingForDevelop:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "status_code": "CAFE_NEEDS_CHANGES"
+            "status_code": "needs_changes"
         }))
         # Note: No user_input.md needed - decision should be based on status_code
 
@@ -560,7 +560,7 @@ class TestPRPhaseStep1WaitingForDevelop:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "status_code": "CAFE_READY_FOR_REVIEW"
+            "status_code": "ready_for_review"
         }))
 
         with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
@@ -589,7 +589,7 @@ class TestPRPhaseStep1WaitingForDevelop:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "status_code": "CAFE_CONFIRMED"
+            "status_code": "confirmed"
         }))
 
         with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
@@ -652,7 +652,7 @@ class TestPRPhasePriorityNewCommits:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "status_code": "CAFE_READY_FOR_REVIEW"
+            "status_code": "ready_for_review"
         }))
 
         # Setup mocks - has new commits
@@ -678,7 +678,7 @@ class TestPRPhasePriorityNewCommits:
 
         # Assert - should update PR, not fetch comments
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
+        assert result.data.get("status_code") == "ready_for_review"
         mock_dependencies["github_ops"].update_pr.assert_called_once()
 
     def test_new_commits_override_confirmed(
@@ -695,7 +695,7 @@ class TestPRPhasePriorityNewCommits:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "status_code": "CAFE_CONFIRMED"
+            "status_code": "confirmed"
         }))
 
         # Setup mocks - has new commits
@@ -721,7 +721,7 @@ class TestPRPhasePriorityNewCommits:
 
         # Assert - should update PR
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
+        assert result.data.get("status_code") == "ready_for_review"
         mock_dependencies["github_ops"].update_pr.assert_called_once()
 
 
@@ -792,7 +792,7 @@ class TestPRPhaseAgentCalled:
         # Assert agent was called
         mock_generate.assert_called_once()
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
+        assert result.data.get("status_code") == "ready_for_review"
 
     def test_update_pr_calls_generate_pr_content(
         self, tmp_path, mock_dependencies, setup_issue_dir
@@ -808,7 +808,7 @@ class TestPRPhaseAgentCalled:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "status_code": "CAFE_READY_FOR_REVIEW"
+            "status_code": "ready_for_review"
         }))
         (iteration_001 / "output.md").write_text("# Old PR Title\n\nOld body")
 
@@ -838,7 +838,7 @@ class TestPRPhaseAgentCalled:
         # Assert agent was called for iteration 2
         mock_generate.assert_called_once()
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
+        assert result.data.get("status_code") == "ready_for_review"
         mock_dependencies["github_ops"].update_pr.assert_called_once()
 
         # Verify iteration_002 directory was created (agent writes to correct iteration)
@@ -859,7 +859,7 @@ class TestPRPhaseAgentCalled:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "status_code": "CAFE_READY_FOR_REVIEW"
+            "status_code": "ready_for_review"
         }))
         (iteration_001 / "output.md").write_text("# Old PR Title\n\nOld body")
 
@@ -1041,7 +1041,7 @@ class TestCreateOrUpdatePRRecordsLastSeenCommentIds:
         iteration_001.mkdir(parents=True)
         (iteration_001 / "context.json").write_text(json.dumps({
             "iteration": 1,
-            "status_code": "CAFE_READY_FOR_REVIEW",
+            "status_code": "ready_for_review",
             "last_seen_comment_ids": ["OLD1"]
         }))
 
@@ -1166,7 +1166,7 @@ class TestSavePRCommentsFiltersLastSeen:
         iter_001.mkdir(parents=True)
         (iter_001 / "context.json").write_text(json.dumps({
             "iteration": 1,
-            "status_code": "CAFE_READY_FOR_REVIEW",
+            "status_code": "ready_for_review",
             "last_seen_comment_ids": ["R1", "T1"]
         }))
 

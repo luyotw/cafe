@@ -36,7 +36,7 @@ class GenericPhaseExecution:
 class GenericPhase:
     """Build prompts from skill content and run lifecycle hooks."""
 
-    GOTO_PATTERN = re.compile(r"CAFE_GOTO\s*:\s*([a-zA-Z0-9_-]+)")
+    GOTO_PATTERN = re.compile(r"GOTO\s*:\s*([a-zA-Z0-9_-]+)")
     SCRIPT_HOOK_STAGES = {"before_execute", "after_execute"}
 
     def __init__(
@@ -146,9 +146,9 @@ class GenericPhase:
         self,
         *,
         response: str,
-        valid_status_codes: List[PhaseStatusCode],
+        valid_intents: List[PhaseStatusCode],
     ) -> Tuple[Optional[PhaseStatusCode], Optional[str]]:
-        status = StatusCodeParser.extract(response, valid_codes=valid_status_codes)
+        status = StatusCodeParser.extract(response, valid_codes=valid_intents)
         goto_target = self.extract_goto_target(response)
         return status, goto_target
 
@@ -360,13 +360,13 @@ class GenericPhase:
         if stage not in self.SCRIPT_HOOK_STAGES:
             raise ValueError(f"Script hooks are only supported in {sorted(self.SCRIPT_HOOK_STAGES)}")
 
-        script, args_template, schema, when_status_codes, timeout_seconds = self._parse_script_hook_declaration(
+        script, args_template, schema, when_intents, timeout_seconds = self._parse_script_hook_declaration(
             declaration
         )
 
-        if when_status_codes:
+        if when_intents:
             detected_status = self._detect_status_code(response=response or "", step_def=step_def)
-            if detected_status not in when_status_codes:
+            if detected_status not in when_intents:
                 return HookResult(
                     events=[
                         {
@@ -376,9 +376,9 @@ class GenericPhase:
                             "stage": stage,
                             "script": script,
                             "status": "skipped",
-                            "reason": "status_mismatch",
+                            "reason": "intent_mismatch",
                             "detected_status": detected_status,
-                            "when_status_codes": when_status_codes,
+                            "when_intents": when_intents,
                         }
                     ]
                 )
@@ -485,7 +485,7 @@ class GenericPhase:
     def _parse_script_hook_declaration(
         declaration: Dict[str, Any],
     ) -> tuple[str, Dict[str, Any], Optional[Dict[str, Any]], list[str], Optional[float]]:
-        allowed_fields = {"script", "args", "schema", "when_status_codes", "timeout_seconds"}
+        allowed_fields = {"script", "args", "schema", "when_intents", "timeout_seconds"}
         unknown = sorted(set(declaration.keys()) - allowed_fields)
         if unknown:
             raise ValueError(f"Script hook contains unsupported fields: {unknown}")
@@ -505,13 +505,13 @@ class GenericPhase:
         if schema is not None and not isinstance(schema, dict):
             raise ValueError("Script hook 'schema' must be an object")
 
-        when_status_codes_raw = declaration.get("when_status_codes", [])
-        if when_status_codes_raw is None:
-            when_status_codes_raw = []
-        if not isinstance(when_status_codes_raw, list) or not all(
-            isinstance(item, str) for item in when_status_codes_raw
+        when_intents_raw = declaration.get("when_intents", [])
+        if when_intents_raw is None:
+            when_intents_raw = []
+        if not isinstance(when_intents_raw, list) or not all(
+            isinstance(item, str) for item in when_intents_raw
         ):
-            raise ValueError("Script hook 'when_status_codes' must be a list of strings")
+            raise ValueError("Script hook 'when_intents' must be a list of strings")
 
         timeout_seconds_raw = declaration.get("timeout_seconds")
         timeout_seconds: Optional[float] = None
@@ -526,7 +526,7 @@ class GenericPhase:
             script,
             args,
             schema,
-            [item.strip() for item in when_status_codes_raw if item.strip()],
+            [item.strip() for item in when_intents_raw if item.strip()],
             timeout_seconds,
         )
 
@@ -627,7 +627,7 @@ class GenericPhase:
     def _detect_status_code(*, response: str, step_def: Dict[str, Any]) -> Optional[str]:
         valid = [
             PhaseStatusCode(code)
-            for code in step_def.get("valid_status_codes", [])
+            for code in step_def.get("valid_intents", [])
             if code in {item.value for item in PhaseStatusCode}
         ]
         status_code = StatusCodeParser.extract(response, valid_codes=valid or list(PhaseStatusCode))

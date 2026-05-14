@@ -1,4 +1,4 @@
-"""Tests for develop phase CAFE_NEED_CLARIFICATION handling with questions.xml."""
+"""Tests for develop phase need_clarification handling with questions.xml."""
 import json
 import pytest
 from pathlib import Path
@@ -62,10 +62,10 @@ def interactive_phase(tmp_path, mock_deps):
 
 
 class TestDevelopClarificationQuestionsXml:
-    """Tests that CAFE_NEED_CLARIFICATION requires questions.xml."""
+    """Tests that need_clarification requires questions.xml."""
 
     def test_need_clarification_without_questions_xml_returns_failed(self, phase, tmp_path, monkeypatch):
-        """CAFE_NEED_CLARIFICATION with no questions.xml should return FAILED."""
+        """need_clarification with no questions.xml should return FAILED."""
         monkeypatch.chdir(tmp_path)
         # questions_xml_path won't exist since no file is created
         with patch.object(phase, "_check_if_already_completed_with_review", return_value=None):
@@ -75,7 +75,7 @@ class TestDevelopClarificationQuestionsXml:
                         with patch.object(
                             phase,
                             "_execute_and_handle_agent_response",
-                            return_value=(None, "CAFE_NEED_CLARIFICATION"),
+                            return_value=(None, "need_clarification"),
                         ):
                             # _validate_and_retry_questions_xml does nothing (xml still doesn't exist)
                             with patch.object(phase, "_validate_and_retry_questions_xml", return_value=False):
@@ -86,7 +86,7 @@ class TestDevelopClarificationQuestionsXml:
         assert "questions.xml" in result.message
 
     def test_need_clarification_with_valid_questions_xml_returns_in_progress(self, phase, tmp_path, monkeypatch):
-        """CAFE_NEED_CLARIFICATION with valid questions.xml should return IN_PROGRESS."""
+        """need_clarification with valid questions.xml should return IN_PROGRESS."""
         monkeypatch.chdir(tmp_path)
         # Pre-create the questions.xml in the iteration directory
         issue_dir = phase.issue_dir
@@ -111,7 +111,7 @@ class TestDevelopClarificationQuestionsXml:
                         with patch.object(
                             phase,
                             "_execute_and_handle_agent_response",
-                            return_value=(None, "CAFE_NEED_CLARIFICATION"),
+                            return_value=(None, "need_clarification"),
                         ):
                             with patch.object(phase, "_validate_and_retry_questions_xml", return_value=True):
                                 with patch("cafe.utils.checklist_generator.generate_develop_checklist"):
@@ -132,7 +132,7 @@ class TestDevelopClarificationQuestionsXml:
                         with patch.object(
                             interactive_phase,
                             "_execute_and_handle_agent_response",
-                            return_value=(None, "CAFE_NEED_PERMISSION"),
+                            return_value=(None, "need_permission"),
                         ):
                             with patch("cafe.utils.checklist_generator.generate_develop_checklist"):
                                 result = interactive_phase.execute()
@@ -167,7 +167,7 @@ class TestDevelopClarificationQuestionsXml:
                         with patch.object(
                             interactive_phase,
                             "_execute_and_handle_agent_response",
-                            return_value=(None, "CAFE_NEED_CLARIFICATION"),
+                            return_value=(None, "need_clarification"),
                         ):
                             with patch.object(
                                 interactive_phase, "_validate_and_retry_questions_xml", return_value=True
@@ -271,7 +271,7 @@ class TestDevelopNeedPermissionFallback:
         with patch.object(
             phase,
             "_load_previous_iteration_data",
-            return_value={"iteration": 1, "status_code": "CAFE_NEED_PERMISSION", "response": "CAFE_NEED_PERMISSION"},
+            return_value={"iteration": 1, "status_code": "need_permission", "response": "need_permission"},
         ):
             result = phase._prepare_user_input_for_iteration()
 
@@ -287,7 +287,7 @@ class TestDevelopNeedPermissionFallback:
         with patch.object(
             phase,
             "_load_previous_iteration_data",
-            return_value={"iteration": 1, "response": "CAFE_NEED_PERMISSION"},
+            return_value={"iteration": 1, "response": "need_permission"},
         ):
             result = phase._prepare_user_input_for_iteration()
 
@@ -303,13 +303,13 @@ class TestDevelopNeedPermissionFallback:
         with patch.object(
             phase,
             "_load_previous_iteration_data",
-            return_value={"iteration": 1, "status_code": "CAFE_NEED_PERMISSION", "response": "CAFE_NEED_PERMISSION"},
+            return_value={"iteration": 1, "status_code": "need_permission", "response": "need_permission"},
         ):
             result = phase._prepare_user_input_for_iteration()
 
         assert isinstance(result, PhaseResult)
         assert result.status == PhaseStatus.FAILED
-        assert result.data.get("status_code") == "CAFE_NEED_PERMISSION"
+        assert result.data.get("status_code") == "need_permission"
 
     def test_prepare_user_input_uses_host_execution_failure_followup(self, phase, monkeypatch, tmp_path):
         """Should reuse failed host execution context instead of asking for permission again."""
@@ -336,7 +336,7 @@ class TestDevelopNeedPermissionFallback:
         with patch.object(
             phase,
             "_load_previous_iteration_data",
-            return_value={"iteration": 1, "status_code": "CAFE_NEED_PERMISSION", "response": "CAFE_NEED_PERMISSION"},
+            return_value={"iteration": 1, "status_code": "need_permission", "response": "need_permission"},
         ):
             result = phase._prepare_user_input_for_iteration()
 
@@ -359,7 +359,7 @@ class TestDevelopNeedPermissionFallback:
         with patch.object(
             phase,
             "_load_previous_iteration_data",
-            return_value={"iteration": 1, "status_code": "CAFE_NEED_PERMISSION", "response": "CAFE_NEED_PERMISSION"},
+            return_value={"iteration": 1, "status_code": "need_permission", "response": "need_permission"},
         ):
             approved_tools, user_input = phase._handle_previous_permission_denials()
 
@@ -381,7 +381,7 @@ class TestDevelopNeedPermissionFallback:
         with patch.object(
             phase,
             "_load_previous_iteration_data",
-            return_value={"iteration": 1, "response": "CAFE_NEED_PERMISSION"},
+            return_value={"iteration": 1, "response": "need_permission"},
         ):
             approved_tools, user_input = phase._handle_previous_permission_denials()
 
@@ -404,8 +404,8 @@ class TestCodexPermissionRules:
             "_load_previous_iteration_data",
             return_value={
                 "iteration": 1,
-                "status_code": "CAFE_NEED_PERMISSION",
-                "response": "CAFE_NEED_PERMISSION",
+                "status_code": "need_permission",
+                "response": "need_permission",
                 "cli": "codex",
                 "permission_denials": [
                     {
@@ -441,8 +441,8 @@ class TestCodexPermissionRules:
             "_load_previous_iteration_data",
             return_value={
                 "iteration": 1,
-                "status_code": "CAFE_NEED_PERMISSION",
-                "response": "CAFE_NEED_PERMISSION",
+                "status_code": "need_permission",
+                "response": "need_permission",
                 "cli": "codex",
                 "permission_denials": [
                     {
@@ -508,7 +508,7 @@ class TestCodexPermissionRules:
             with patch("cafe.utils.git_utils.get_git_toplevel", return_value=repo_root):
                 result = phase._handle_standard_status_codes(
                     status_code=PhaseStatusCode.CONFIRMED,
-                    response="CAFE_CONFIRMED",
+                    response="confirmed",
                     continue_codes=[],
                     complete_codes=[],
                 )

@@ -19,48 +19,48 @@ steps:
       default: brief_revise
     role: editor
     output_artifact: brief
-    valid_status_codes:
-      - CAFE_CONFIRMED
-      - CAFE_NEED_CLARIFICATION
-      - CAFE_READY_FOR_REVIEW
+    valid_intents:
+      - confirmed
+      - need_clarification
+      - ready_for_review
     "on":
-      CAFE_CONFIRMED: draft
-      CAFE_NEED_CLARIFICATION: brief
-      CAFE_READY_FOR_REVIEW: brief
+      await_agent: draft
+      need_clarification: brief
+      confirm_output: brief
 
   draft:
     skill: draft
     role: writer
     input_artifacts: [brief]
     output_artifact: manuscript
-    valid_status_codes:
-      - CAFE_CONFIRMED
-      - CAFE_NEED_CLARIFICATION
+    valid_intents:
+      - confirmed
+      - need_clarification
     "on":
-      CAFE_CONFIRMED: review
-      CAFE_NEED_CLARIFICATION: draft
+      await_agent: review
+      need_clarification: draft
 
   review:
     skill: editorial_review
     role: editor
     input_artifacts: [brief, manuscript]
     output_artifact: review_feedback
-    valid_status_codes:
-      - CAFE_CONFIRMED
-      - CAFE_NEEDS_CHANGES
+    valid_intents:
+      - confirmed
+      - needs_changes
     allowed_goto: [brief, draft]
     "on":
-      CAFE_CONFIRMED: publish
-      CAFE_NEEDS_CHANGES: draft
+      await_agent: publish
+      manual_handoff: draft
 
   publish:
     skill: publish
     role: writer
     input_artifacts: [brief, manuscript, review_feedback]
     output_artifact: published_piece
-    valid_status_codes:
-      - CAFE_CONFIRMED
+    valid_intents:
+      - confirmed
     "on":
-      CAFE_CONFIRMED: _done
+      await_agent: _done
 
 entry_point: brief

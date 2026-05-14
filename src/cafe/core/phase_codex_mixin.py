@@ -138,9 +138,9 @@ class PhaseCodexMixin:
         if not prev_data:
             return ([], "")
 
-        # Only handle permission denials if previous status was CAFE_NEED_PERMISSION
+        # Only handle permission denials if previous status was need_permission
         prev_status = self._context_status_code(prev_data) or ""
-        if prev_status != "CAFE_NEED_PERMISSION":
+        if prev_status != "need_permission":
             return ([], "")
 
         # Check if there are permission_denials

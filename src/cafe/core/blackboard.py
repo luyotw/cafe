@@ -43,7 +43,6 @@ class HandoffIntent(str, Enum):
     CONFIRM_OUTPUT = "confirm_output"
     NEED_CLARIFICATION = "need_clarification"
     NEED_PERMISSION = "need_permission"
-    CHAT_HANDOFF = "chat_handoff"
     MANUAL_HANDOFF = "manual_handoff"
     WORKFLOW_COMPLETE = "workflow_complete"
 
@@ -176,12 +175,15 @@ class HandoffContract:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "HandoffContract":
         try:
+            intent_raw = str(data["intent"])
+            if intent_raw == "chat_handoff":
+                intent_raw = HandoffIntent.MANUAL_HANDOFF.value
             return cls(
                 version=int(data["version"]),
                 from_step=str(data["from_step"]),
                 to_owner=HandoffOwner(str(data["to_owner"])),
                 to_step=str(data["to_step"]),
-                intent=HandoffIntent(str(data["intent"])),
+                intent=HandoffIntent(intent_raw),
                 status_code=str(data.get("status_code", "")),
                 created_at=str(data.get("created_at", _now_iso())),
                 source=str(data.get("source", "unknown")),

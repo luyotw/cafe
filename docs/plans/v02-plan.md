@@ -3,6 +3,8 @@
 本文件是 **v0.2 的 implementation plan / spec**。  
 版本定位、產品邊界、以及 `v0.3+` 的長期演進方向以 [docs/roadmap.md](/Users/YO_1/side_projects/cafe/docs/roadmap.md) 為準；本文件只定義 `v0.2` 要做什麼、怎麼做、以及如何驗收。
 
+> **備註（issue256 之後）：** 本檔為 v0.2 架構與驗收紀錄，內文嵌入的 YAML 範例可能仍含舊版 `CAFE_*` 控制字串。目前引擎與內建 playbook 已改為 **intent** 鍵（`on:` 轉移）與純文字 outcome token（如 `confirmed`、`ready_for_review`）；請以 `src/cafe/data/playbooks/` 現行檔案為準，勿將本檔內嵌範例當作現行操作介面規格。
+
 ## 核心需求
 
 1. **Skill 是核心抽象** — 每個工作流步驟就是一個 Skill（遵循 agentskills.io 規範），包含 SKILL.md + scripts/ + references/ + assets/

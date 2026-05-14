@@ -33,7 +33,7 @@ def test_runtime_blocks_pr_done_without_publish_receipt(tmp_path: Path) -> None:
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "on": {"CAFE_CONFIRMED": "_done"}},
+            "pr": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
         },
     }
 
@@ -60,7 +60,7 @@ def test_runtime_completes_pr_when_publish_receipt_exists(tmp_path: Path) -> Non
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "on": {"CAFE_CONFIRMED": "_done"}},
+            "pr": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
         },
     }
 
@@ -92,14 +92,14 @@ def test_runtime_delegates_non_pr_steps_to_legacy_runner(tmp_path: Path) -> None
             "spec": {
                 "skill": "spec_first",
                 "role": "pm",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             },
         },
     }
 
     def executor(step_name: str, step_def: dict, state: object):
-        return ("CAFE_CONFIRMED", {})
+        return ("confirmed", {})
 
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
@@ -110,7 +110,7 @@ def test_runtime_delegates_non_pr_steps_to_legacy_runner(tmp_path: Path) -> None
 
     assert result.completed is True
     assert result.final_step == "spec"
-    assert result.final_status_code == "CAFE_CONFIRMED"
+    assert result.final_status_code == "confirmed"
 
 
 def test_runtime_rejects_legacy_text_baton_in_core_path(tmp_path: Path) -> None:
@@ -136,14 +136,14 @@ def test_runtime_rejects_legacy_text_baton_in_core_path(tmp_path: Path) -> None:
             "spec": {
                 "skill": "spec_first",
                 "role": "pm",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             },
         },
     }
 
     def executor(step_name: str, step_def: dict, state: object):
-        return ("CAFE_CONFIRMED", {})
+        return ("confirmed", {})
 
     with pytest.raises(ValueError, match="Invalid baton contract payload"):
         runtime = BlackboardWorkflowRuntime(
@@ -162,20 +162,20 @@ def test_runtime_hands_off_to_pr_runtime_boundary(tmp_path: Path) -> None:
             "review": {
                 "skill": "spec_first",
                 "role": "reviewer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "pr"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "pr"},
             },
             "pr": {
                 "skill": "spec_first",
                 "role": "developer",
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "on": {"await_agent": "_done"},
             },
         },
     }
 
     def executor(step_name: str, step_def: dict, state: object):
         if step_name == "review":
-            return ("CAFE_CONFIRMED", {})
+            return ("confirmed", {})
         raise AssertionError("pr should not execute in the legacy portion")
 
     runtime = BlackboardWorkflowRuntime(
@@ -187,7 +187,7 @@ def test_runtime_hands_off_to_pr_runtime_boundary(tmp_path: Path) -> None:
 
     assert result.completed is False
     assert result.final_step == "review"
-    assert result.final_status_code == "CAFE_CONFIRMED"
+    assert result.final_status_code == "confirmed"
     blackboard = BlackboardStore(issue_dir).load_or_create("review")
     assert blackboard.current_step == "pr"
 
@@ -200,17 +200,17 @@ def test_runtime_single_step_executes_non_pr_locally(tmp_path: Path) -> None:
             "develop": {
                 "skill": "spec_first",
                 "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             },
         },
     }
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
         return StepExecutionResult(
-            response="CAFE_CONFIRMED",
+            response="confirmed",
             artifacts={"develop_result": "d1"},
-            status_code="CAFE_CONFIRMED",
+            status_code="confirmed",
         )
 
     runtime = BlackboardWorkflowRuntime(
@@ -222,7 +222,7 @@ def test_runtime_single_step_executes_non_pr_locally(tmp_path: Path) -> None:
 
     assert result.completed is True
     assert result.final_step == "develop"
-    assert result.final_status_code == "CAFE_CONFIRMED"
+    assert result.final_status_code == "confirmed"
     blackboard = BlackboardStore(issue_dir).load_or_create("develop")
     assert blackboard.current_step == "done"
     assert blackboard.handoff_contract is not None
@@ -236,7 +236,7 @@ def test_runtime_single_step_executes_pr_without_legacy_runner(tmp_path: Path) -
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "on": {"CAFE_CONFIRMED": "_done"}},
+            "pr": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
         },
     }
 
@@ -273,14 +273,14 @@ def test_runtime_single_step_legacy_transition_uses_single_step_labels(tmp_path:
             "spec": {
                 "skill": "spec_first",
                 "role": "pm",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "plan"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "plan"},
             },
             "plan": {
                 "skill": "spec_first",
                 "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             },
         },
     }
@@ -289,9 +289,9 @@ def test_runtime_single_step_legacy_transition_uses_single_step_labels(tmp_path:
         if step_name != "spec":
             raise AssertionError("single-step should only execute one step")
         return StepExecutionResult(
-            response="CAFE_CONFIRMED",
+            response="confirmed",
             artifacts={},
-            status_code="CAFE_CONFIRMED",
+            status_code="confirmed",
         )
 
     runtime = BlackboardWorkflowRuntime(
@@ -303,7 +303,7 @@ def test_runtime_single_step_legacy_transition_uses_single_step_labels(tmp_path:
 
     assert result.completed is False
     assert result.final_step == "spec"
-    assert result.final_status_code == "CAFE_CONFIRMED"
+    assert result.final_status_code == "confirmed"
     blackboard = BlackboardStore(issue_dir).load_or_create("spec")
     assert blackboard.current_step == "plan"
     transition_events = [e for e in blackboard.events if e.event_type == "transition"]
@@ -320,13 +320,13 @@ def test_runtime_single_step_baton_transition_uses_single_step_labels(tmp_path: 
             "pr": {
                 "skill": "spec_first",
                 "role": "developer",
-                "on": {"CAFE_CONFIRMED": "review"},
+                "on": {"await_agent": "review"},
             },
             "review": {
                 "skill": "spec_first",
                 "role": "reviewer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             },
         },
     }
@@ -360,17 +360,17 @@ def test_runtime_single_step_pause_does_not_emit_workflow_paused_event(tmp_path:
             "spec": {
                 "skill": "spec_first",
                 "role": "pm",
-                "valid_status_codes": ["CAFE_READY_FOR_REVIEW", "CAFE_CONFIRMED"],
-                "on": {"CAFE_READY_FOR_REVIEW": "spec", "CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["ready_for_review", "confirmed"],
+                "on": {"confirm_output": "spec", "await_agent": "_done"},
             },
         },
     }
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
         return StepExecutionResult(
-            response="CAFE_READY_FOR_REVIEW",
+            response="ready_for_review",
             artifacts={},
-            status_code="CAFE_READY_FOR_REVIEW",
+            status_code="ready_for_review",
             auto_continue=False,
         )
 
@@ -382,7 +382,7 @@ def test_runtime_single_step_pause_does_not_emit_workflow_paused_event(tmp_path:
     result = runtime.run(start_step="spec", single_step=True)
 
     assert result.completed is False
-    assert result.final_status_code == "CAFE_READY_FOR_REVIEW"
+    assert result.final_status_code == "ready_for_review"
     blackboard = BlackboardStore(issue_dir).load_or_create("spec")
     assert blackboard.current_step == "user"
     pause_events = [e for e in blackboard.events if e.event_type == "workflow_paused"]
@@ -397,14 +397,14 @@ def test_runtime_legacy_step_uses_default_transition_when_status_missing(tmp_pat
             "spec": {
                 "skill": "spec_first",
                 "role": "pm",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "valid_intents": ["confirmed"],
                 "on": {"default": "plan"},
             },
             "plan": {
                 "skill": "spec_first",
                 "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             },
         },
     }
@@ -414,7 +414,7 @@ def test_runtime_legacy_step_uses_default_transition_when_status_missing(tmp_pat
         calls.append(step_name)
         if step_name == "spec":
             return ("no explicit cafe code here", {})
-        return ("CAFE_CONFIRMED", {})
+        return ("confirmed", {})
 
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
@@ -425,7 +425,7 @@ def test_runtime_legacy_step_uses_default_transition_when_status_missing(tmp_pat
 
     assert result.completed is True
     assert result.final_step == "plan"
-    assert result.final_status_code == "CAFE_CONFIRMED"
+    assert result.final_status_code == "confirmed"
     assert calls == ["spec", "plan"]
 
 
@@ -437,13 +437,13 @@ def test_runtime_legacy_step_honors_review_confirmed_advance(tmp_path: Path) -> 
             "review": {
                 "skill": "spec_first",
                 "role": "reviewer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "review", "default": "pr"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "review", "default": "pr"},
             },
             "pr": {
                 "skill": "spec_first",
                 "role": "developer",
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "on": {"await_agent": "_done"},
             },
         },
     }
@@ -451,9 +451,9 @@ def test_runtime_legacy_step_honors_review_confirmed_advance(tmp_path: Path) -> 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
         if step_name == "review":
             return StepExecutionResult(
-                response="CAFE_CONFIRMED",
+                response="confirmed",
                 artifacts={},
-                status_code="CAFE_CONFIRMED",
+                status_code="confirmed",
                 events=[{"type": "review_confirmed_advance"}],
             )
         _write_baton(issue_dir, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete")
@@ -472,7 +472,7 @@ def test_runtime_legacy_step_honors_review_confirmed_advance(tmp_path: Path) -> 
 
     assert result.completed is False
     assert result.final_step == "review"
-    assert result.final_status_code == "CAFE_CONFIRMED"
+    assert result.final_status_code == "confirmed"
     blackboard = BlackboardStore(issue_dir).load_or_create("review")
     assert blackboard.current_step == "pr"
 
@@ -485,14 +485,14 @@ def test_runtime_resumes_from_blackboard_current_step(tmp_path: Path) -> None:
             "spec": {
                 "skill": "spec_first",
                 "role": "pm",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "plan"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "plan"},
             },
             "plan": {
                 "skill": "spec_first",
                 "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             },
         },
     }
@@ -501,9 +501,9 @@ def test_runtime_resumes_from_blackboard_current_step(tmp_path: Path) -> None:
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
         executed_steps.append(step_name)
         return StepExecutionResult(
-            response="CAFE_CONFIRMED",
+            response="confirmed",
             artifacts={},
-            status_code="CAFE_CONFIRMED",
+            status_code="confirmed",
         )
 
     runtime = BlackboardWorkflowRuntime(
@@ -518,7 +518,7 @@ def test_runtime_resumes_from_blackboard_current_step(tmp_path: Path) -> None:
         to_owner=HandoffOwner.AGENT,
         to_step="plan",
         intent=HandoffIntent.AWAIT_AGENT,
-        status_code="CAFE_CONFIRMED",
+        status_code="confirmed",
         source="test.resume",
     )
     result = runtime.run(max_transitions=5)
@@ -536,14 +536,14 @@ def test_runtime_records_done_handoff_for_non_pr_terminal_transition(tmp_path: P
             "review": {
                 "skill": "spec_first",
                 "role": "reviewer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "done"},
             },
         },
     }
 
     def executor(step_name: str, step_def: dict, state: object):
-        return ("CAFE_CONFIRMED", {})
+        return ("confirmed", {})
 
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
@@ -553,7 +553,7 @@ def test_runtime_records_done_handoff_for_non_pr_terminal_transition(tmp_path: P
     result = runtime.run(start_step="review")
 
     assert result.completed is True
-    assert result.final_status_code == "CAFE_CONFIRMED"
+    assert result.final_status_code == "confirmed"
     blackboard = BlackboardStore(issue_dir).load_or_create("review")
     assert blackboard.current_step == "done"
     assert blackboard.handoff_contract is not None
@@ -570,14 +570,14 @@ def test_runtime_pauses_for_non_pr_transition_to_user(tmp_path: Path) -> None:
             "review": {
                 "skill": "spec_first",
                 "role": "reviewer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "user"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "user"},
             },
         },
     }
 
     def executor(step_name: str, step_def: dict, state: object):
-        return ("CAFE_CONFIRMED", {})
+        return ("confirmed", {})
 
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
@@ -587,7 +587,7 @@ def test_runtime_pauses_for_non_pr_transition_to_user(tmp_path: Path) -> None:
     result = runtime.run(start_step="review")
 
     assert result.completed is False
-    assert result.final_status_code == "CAFE_CONFIRMED"
+    assert result.final_status_code == "confirmed"
     blackboard = BlackboardStore(issue_dir).load_or_create("review")
     assert blackboard.current_step == "user"
     assert blackboard.handoff_contract is not None
@@ -605,14 +605,14 @@ def test_runtime_records_status_code_invalid_event(tmp_path: Path) -> None:
             "spec": {
                 "skill": "spec_first",
                 "role": "pm",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             },
         },
     }
 
     def executor(step_name: str, step_def: dict, state: object):
-        return ("CAFE_READY_FOR_REVIEW", {})
+        return ("ready_for_review", {})
 
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
@@ -627,8 +627,8 @@ def test_runtime_records_status_code_invalid_event(tmp_path: Path) -> None:
     invalid_events = [e for e in blackboard.events if e.event_type == "status_code_invalid"]
     assert invalid_events
     latest = invalid_events[-1].data
-    assert latest["invalid_status_codes"] == ["CAFE_READY_FOR_REVIEW"]
-    assert latest["allowed_status_codes"] == ["CAFE_CONFIRMED"]
+    assert latest["invalid_intents"] == ["ready_for_review"]
+    assert latest["allowed_status_codes"] == ["confirmed"]
     assert latest["runtime"] == "legacy_until_boundary"
 
 
@@ -641,8 +641,8 @@ def test_runtime_prefers_step_baton_over_missing_status_text(tmp_path: Path) -> 
             "spec": {
                 "skill": "spec_first",
                 "role": "pm",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             },
         },
     }
@@ -687,14 +687,14 @@ def test_runtime_prefers_step_baton_over_invalid_status_text(tmp_path: Path) -> 
             "spec": {
                 "skill": "spec_first",
                 "role": "pm",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "plan"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "plan"},
             },
             "plan": {
                 "skill": "plan",
                 "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             },
         },
     }
@@ -708,11 +708,11 @@ def test_runtime_prefers_step_baton_over_invalid_status_text(tmp_path: Path) -> 
                 to_owner=HandoffOwner.AGENT,
                 to_step="plan",
                 intent=HandoffIntent.AWAIT_AGENT,
-                status_code="CAFE_CONFIRMED",
+                status_code="confirmed",
                 source="test.executor",
             )
-            return ("CAFE_READY_FOR_REVIEW", {})
-        return ("CAFE_CONFIRMED", {})
+            return ("ready_for_review", {})
+        return ("confirmed", {})
 
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
@@ -739,8 +739,8 @@ def test_runtime_status_code_missing_no_handoff_contract(tmp_path: Path) -> None
             "spec": {
                 "skill": "spec_first",
                 "role": "pm",
-                "valid_status_codes": ["CAFE_NEED_CLARIFICATION"],
-                "on": {"CAFE_NEED_CLARIFICATION": "spec"},
+                "valid_intents": ["need_clarification"],
+                "on": {"need_clarification": "spec"},
             },
         },
     }
@@ -774,17 +774,17 @@ def test_runtime_pauses_ready_for_review_with_confirm_output_intent(tmp_path: Pa
             "spec": {
                 "skill": "spec_first",
                 "role": "pm",
-                "valid_status_codes": ["CAFE_READY_FOR_REVIEW", "CAFE_CONFIRMED"],
-                "on": {"CAFE_READY_FOR_REVIEW": "spec", "CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["ready_for_review", "confirmed"],
+                "on": {"confirm_output": "spec", "await_agent": "_done"},
             },
         },
     }
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
         return StepExecutionResult(
-            response="CAFE_READY_FOR_REVIEW",
+            response="ready_for_review",
             artifacts={},
-            status_code="CAFE_READY_FOR_REVIEW",
+            status_code="ready_for_review",
             auto_continue=False,
         )
 
@@ -796,7 +796,7 @@ def test_runtime_pauses_ready_for_review_with_confirm_output_intent(tmp_path: Pa
     result = runtime.run(start_step="spec")
 
     assert result.completed is False
-    assert result.final_status_code == "CAFE_READY_FOR_REVIEW"
+    assert result.final_status_code == "ready_for_review"
     blackboard = BlackboardStore(issue_dir).load_or_create("spec")
     assert blackboard.current_step == "user"
     assert blackboard.handoff_contract is not None
@@ -812,10 +812,10 @@ def test_runtime_continues_when_auto_continue_is_true(tmp_path: Path) -> None:
             "spec": {
                 "skill": "spec_first",
                 "role": "pm",
-                "valid_status_codes": ["CAFE_NEED_CLARIFICATION", "CAFE_CONFIRMED"],
+                "valid_intents": ["need_clarification", "confirmed"],
                 "on": {
-                    "CAFE_NEED_CLARIFICATION": "spec",
-                    "CAFE_CONFIRMED": "_done",
+                    "need_clarification": "spec",
+                    "await_agent": "_done",
                 },
             },
         },
@@ -827,15 +827,15 @@ def test_runtime_continues_when_auto_continue_is_true(tmp_path: Path) -> None:
         call_count += 1
         if call_count == 1:
             return StepExecutionResult(
-                response="CAFE_NEED_CLARIFICATION",
+                response="need_clarification",
                 artifacts={},
-                status_code="CAFE_NEED_CLARIFICATION",
+                status_code="need_clarification",
                 auto_continue=True,
             )
         return StepExecutionResult(
-            response="CAFE_CONFIRMED",
+            response="confirmed",
             artifacts={},
-            status_code="CAFE_CONFIRMED",
+            status_code="confirmed",
         )
 
     runtime = BlackboardWorkflowRuntime(
@@ -861,15 +861,15 @@ def test_runtime_emits_expected_runtime_labels_per_path(tmp_path: Path) -> None:
             "review": {
                 "skill": "spec_first",
                 "role": "reviewer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "pr"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "pr"},
             },
-            "pr": {"skill": "spec_first", "role": "developer", "on": {"CAFE_CONFIRMED": "_done"}},
+            "pr": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
         },
     }
 
     def legacy_executor(step_name: str, step_def: dict, state: object):
-        return ("CAFE_CONFIRMED", {})
+        return ("confirmed", {})
 
     legacy_runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir_legacy,
@@ -900,7 +900,7 @@ def test_runtime_emits_expected_runtime_labels_per_path(tmp_path: Path) -> None:
     playbook_pr = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "on": {"CAFE_CONFIRMED": "_done"}},
+            "pr": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
         },
     }
 
@@ -934,17 +934,17 @@ def test_runtime_emits_expected_runtime_labels_per_path(tmp_path: Path) -> None:
             "develop": {
                 "skill": "spec_first",
                 "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             },
         },
     }
 
     def single_executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
         return StepExecutionResult(
-            response="CAFE_CONFIRMED",
+            response="confirmed",
             artifacts={},
-            status_code="CAFE_CONFIRMED",
+            status_code="confirmed",
         )
 
     single_runtime = BlackboardWorkflowRuntime(
@@ -990,15 +990,15 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
                 "skill": "develop",
                 "role": "developer",
                 "assignee_type": "agent",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "review"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "review"},
             },
             "review": {
                 "skill": "review",
                 "role": "reviewer",
                 "assignee_type": "agent",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             },
         },
     }
@@ -1015,10 +1015,10 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
                 to_owner=HandoffOwner.AGENT,
                 to_step="develop",
                 intent=HandoffIntent.AWAIT_AGENT,
-                status_code="CAFE_NEEDS_CHANGES",
+                status_code="needs_changes",
                 source="test",
             )
-            return StepExecutionResult(response="todos", artifacts={}, status_code="CAFE_NEEDS_CHANGES")
+            return StepExecutionResult(response="todos", artifacts={}, status_code="needs_changes")
         if step_name == "develop":
             store.update_handoff_contract(
                 state,
@@ -1026,10 +1026,10 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
                 to_owner=HandoffOwner.AGENT,
                 to_step="review",
                 intent=HandoffIntent.AWAIT_AGENT,
-                status_code="CAFE_CONFIRMED",
+                status_code="confirmed",
                 source="test",
             )
-            return StepExecutionResult(response="done", artifacts={}, status_code="CAFE_CONFIRMED")
+            return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
         if step_name == "review":
             store.update_handoff_contract(
                 state,
@@ -1037,10 +1037,10 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
                 to_owner=HandoffOwner.USER,
                 to_step="user",
                 intent=HandoffIntent.MANUAL_HANDOFF,
-                status_code="CAFE_CONFIRMED",
+                status_code="confirmed",
                 source="test",
             )
-            return StepExecutionResult(response="lgtm", artifacts={}, status_code="CAFE_CONFIRMED")
+            return StepExecutionResult(response="lgtm", artifacts={}, status_code="confirmed")
         raise AssertionError(f"unexpected step {step_name}")
 
     runtime = BlackboardWorkflowRuntime(
@@ -1071,8 +1071,8 @@ def test_runtime_normalizes_legacy_baton_written_by_pr_agent(tmp_path: Path) -> 
                 "skill": "develop",
                 "role": "developer",
                 "assignee_type": "agent",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             },
         },
     }
@@ -1083,7 +1083,7 @@ def test_runtime_normalizes_legacy_baton_written_by_pr_agent(tmp_path: Path) -> 
         calls.append(step_name)
         if step_name == "pr":
             (issue_dir / "next_step.txt").write_text("develop\n", encoding="utf-8")
-            return StepExecutionResult(response="todo", artifacts={}, status_code="CAFE_NEEDS_CHANGES")
+            return StepExecutionResult(response="todo", artifacts={}, status_code="needs_changes")
         if step_name == "develop":
             store = BlackboardStore(issue_dir)
             store.update_handoff_contract(
@@ -1092,10 +1092,10 @@ def test_runtime_normalizes_legacy_baton_written_by_pr_agent(tmp_path: Path) -> 
                 to_owner=HandoffOwner.DONE,
                 to_step="done",
                 intent=HandoffIntent.WORKFLOW_COMPLETE,
-                status_code="CAFE_CONFIRMED",
+                status_code="confirmed",
                 source="test",
             )
-            return StepExecutionResult(response="done", artifacts={}, status_code="CAFE_CONFIRMED")
+            return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
         raise AssertionError(f"unexpected step {step_name}")
 
     runtime = BlackboardWorkflowRuntime(

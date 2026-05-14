@@ -194,8 +194,8 @@ def test_build_prompt_contract_covers_shared_skills_files_context_and_gate(tmp_p
 def test_parse_response_extracts_status_and_goto(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     status, goto_target = phase.parse_response(
-        response="CAFE_CONFIRMED\nCAFE_GOTO:review",
-        valid_status_codes=[PhaseStatusCode.CONFIRMED],
+        response="confirmed\nGOTO:review",
+        valid_intents=[PhaseStatusCode.CONFIRMED],
     )
     assert status == PhaseStatusCode.CONFIRMED
     assert goto_target == "review"
@@ -274,9 +274,9 @@ def test_execute_short_circuits_when_before_execute_stops(tmp_path: Path) -> Non
         shared_skill_invocations=["/workflow-common"],
         step_def={
             "hooks": {"before_execute": ["StopHook"]},
-            "valid_status_codes": ["CAFE_NEED_CLARIFICATION"],
+            "valid_intents": ["need_clarification"],
         },
-        agent_executor=lambda prompt: calls.append(prompt) or "CAFE_CONFIRMED",
+        agent_executor=lambda prompt: calls.append(prompt) or "confirmed",
     )
 
     assert calls == []
@@ -291,7 +291,7 @@ def test_execute_runs_prepare_input_and_after_execute_retry(tmp_path: Path) -> N
         hook_registry={"PrepareHook": PrepareHook, "RetryHook": RetryHook},
     )
     prompts: list[str] = []
-    responses = iter(["CAFE_CONFIRMED", "CAFE_CONFIRMED"])
+    responses = iter(["confirmed", "confirmed"])
 
     result = phase.execute(
         skill_name="plan",
@@ -302,7 +302,7 @@ def test_execute_runs_prepare_input_and_after_execute_retry(tmp_path: Path) -> N
                 "prepare_input": ["PrepareHook"],
                 "after_execute": ["RetryHook"],
             },
-            "valid_status_codes": ["CAFE_CONFIRMED"],
+            "valid_intents": ["confirmed"],
         },
         agent_executor=lambda prompt: prompts.append(prompt) or next(responses),
     )
@@ -330,9 +330,9 @@ def test_execute_skips_publish_when_artifact_not_ready(tmp_path: Path) -> None:
                 "after_execute": ["NoArtifactHook"],
                 "publish_output": ["PublishHook"],
             },
-            "valid_status_codes": ["CAFE_CONFIRMED"],
+            "valid_intents": ["confirmed"],
         },
-        agent_executor=lambda prompt: "CAFE_CONFIRMED",
+        agent_executor=lambda prompt: "confirmed",
     )
 
     assert result.artifact_ready is False
@@ -354,10 +354,10 @@ def test_execute_applies_publish_output_status_override(tmp_path: Path) -> None:
             "hooks": {
                 "publish_output": ["PublishOverrideHook"],
             },
-            "valid_status_codes": ["CAFE_CONFIRMED", "CAFE_READY_FOR_REVIEW"],
+            "valid_intents": ["confirmed", "ready_for_review"],
         },
         output_file=tmp_path / "out.md",
-        agent_executor=lambda prompt: "CAFE_CONFIRMED",
+        agent_executor=lambda prompt: "confirmed",
     )
 
     assert result.status_code == PhaseStatusCode.READY_FOR_REVIEW
@@ -515,10 +515,10 @@ def test_execute_runs_script_hook_with_schema_and_interpolation(tmp_path: Path) 
                     }
                 ]
             },
-            "valid_status_codes": ["CAFE_CONFIRMED"],
+            "valid_intents": ["confirmed"],
         },
         output_file=output_file,
-        agent_executor=lambda prompt: "CAFE_CONFIRMED",
+        agent_executor=lambda prompt: "confirmed",
     )
 
     event = next(item for item in result.events if item.get("type") == "script_hook")
@@ -546,9 +546,9 @@ def test_execute_rejects_script_hook_path_traversal(tmp_path: Path) -> None:
                         }
                     ]
                 },
-                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "valid_intents": ["confirmed"],
             },
-            agent_executor=lambda prompt: "CAFE_CONFIRMED",
+            agent_executor=lambda prompt: "confirmed",
         )
 
 
@@ -581,9 +581,9 @@ def test_execute_rejects_script_hook_symlink_outside_scripts_dir(tmp_path: Path)
                         }
                     ]
                 },
-                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "valid_intents": ["confirmed"],
             },
-            agent_executor=lambda prompt: "CAFE_CONFIRMED",
+            agent_executor=lambda prompt: "confirmed",
         )
 
 
@@ -621,9 +621,9 @@ def test_execute_script_hook_validation_failure_stops_pipeline(tmp_path: Path) -
                     }
                 ]
             },
-            "valid_status_codes": ["CAFE_NEED_PERMISSION", "CAFE_CONFIRMED"],
+            "valid_intents": ["need_permission", "confirmed"],
         },
-        agent_executor=lambda prompt: "CAFE_CONFIRMED",
+        agent_executor=lambda prompt: "confirmed",
     )
 
     assert not marker.exists()
@@ -658,13 +658,13 @@ def test_execute_script_hook_failure_stops_pipeline(tmp_path: Path) -> None:
                     {
                         "script": "fail.sh",
                         "args": {},
-                        "when_status_codes": ["CAFE_CONFIRMED"],
+                        "when_intents": ["confirmed"],
                     }
                 ]
             },
-            "valid_status_codes": ["CAFE_CONFIRMED", "CAFE_NEED_PERMISSION"],
+            "valid_intents": ["confirmed", "need_permission"],
         },
-        agent_executor=lambda prompt: "CAFE_CONFIRMED",
+        agent_executor=lambda prompt: "confirmed",
     )
 
     assert result.status_code == PhaseStatusCode.NEED_PERMISSION
@@ -698,18 +698,18 @@ def test_execute_script_hook_can_skip_when_status_mismatch(tmp_path: Path) -> No
                     {
                         "script": "noop.sh",
                         "args": {},
-                        "when_status_codes": ["CAFE_CONFIRMED"],
+                        "when_intents": ["confirmed"],
                     }
                 ]
             },
-            "valid_status_codes": ["CAFE_READY_FOR_REVIEW", "CAFE_CONFIRMED"],
+            "valid_intents": ["ready_for_review", "confirmed"],
         },
-        agent_executor=lambda prompt: "CAFE_READY_FOR_REVIEW",
+        agent_executor=lambda prompt: "ready_for_review",
     )
 
     event = next(item for item in result.events if item.get("type") == "script_hook")
     assert event["status"] == "skipped"
-    assert event["reason"] == "status_mismatch"
+    assert event["reason"] == "intent_mismatch"
 
 
 def test_execute_script_hook_passes_timeout_to_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -743,9 +743,9 @@ def test_execute_script_hook_passes_timeout_to_subprocess(tmp_path: Path, monkey
                     }
                 ]
             },
-            "valid_status_codes": ["CAFE_CONFIRMED"],
+            "valid_intents": ["confirmed"],
         },
-        agent_executor=lambda prompt: "CAFE_CONFIRMED",
+        agent_executor=lambda prompt: "confirmed",
     )
 
     assert captured["timeout"] == 2.5
@@ -782,9 +782,9 @@ def test_execute_script_hook_timeout_stops_pipeline(tmp_path: Path, monkeypatch:
                     }
                 ]
             },
-            "valid_status_codes": ["CAFE_CONFIRMED", "CAFE_NEED_PERMISSION"],
+            "valid_intents": ["confirmed", "need_permission"],
         },
-        agent_executor=lambda prompt: "CAFE_CONFIRMED",
+        agent_executor=lambda prompt: "confirmed",
     )
 
     assert result.status_code == PhaseStatusCode.NEED_PERMISSION
@@ -826,9 +826,9 @@ def test_execute_script_hook_timeout_decodes_bytes_output(
                     }
                 ]
             },
-            "valid_status_codes": ["CAFE_CONFIRMED", "CAFE_NEED_PERMISSION"],
+            "valid_intents": ["confirmed", "need_permission"],
         },
-        agent_executor=lambda prompt: "CAFE_CONFIRMED",
+        agent_executor=lambda prompt: "confirmed",
     )
 
     assert result.status_code == PhaseStatusCode.NEED_PERMISSION
