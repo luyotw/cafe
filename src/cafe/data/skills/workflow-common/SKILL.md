@@ -60,3 +60,109 @@ Follow these in addition to **Shared Rules** whenever you are in **develop** or 
 - **User arbitration:** if you still disagree after the limit (or the issue is product-level), capture both sides in `questions.xml`, record whether the developer or reviewer requested arbitration in blackboard `events`, set `current_step` to `user`, and write the baton target `user`.
 - **Normal completion:** when develop work is done and review should run next, set the baton to `review`. When review approves the default playbook path, set the baton to `pr` unless your playbook says otherwise.
 - Avoid infinite loops on the same unresolved point without new information.
+
+## Baton Schema
+
+The baton contract (`next_step.txt`) is a JSON object with the following fields. Write only valid enum values — the runtime auto-corrects common mistakes but logs a `baton_auto_corrected` warning event every time it does so.
+
+### Valid `to_owner` values
+
+| Value | When to use |
+| --- | --- |
+| `agent` | Next target is an automated workflow step |
+| `user` | Pausing for human input (confirmation, clarification, permission) |
+| `done` | Workflow is complete; no further steps |
+
+### Valid `intent` values
+
+| Value | When to use |
+| --- | --- |
+| `await_agent` | Handing off to the next automated step |
+| `confirm_output` | Asking the user to approve a spec or plan artifact |
+| `need_clarification` | Asking the user a question before proceeding |
+| `need_permission` | Requesting a capability or resource the agent cannot self-authorize |
+| `manual_handoff` | Pausing for the user to take a manual action |
+| `workflow_complete` | Final step finished; workflow ends |
+
+### Example JSON for common transitions
+
+**Agent → next automated step (e.g. develop → review)**
+```json
+{
+  "version": 1,
+  "from_step": "develop",
+  "to_owner": "agent",
+  "to_step": "review",
+  "intent": "await_agent",
+  "status_code": "",
+  "created_at": "2026-05-14T10:00:00+08:00",
+  "source": "develop"
+}
+```
+
+**Agent → user for output confirmation (spec or plan)**
+```json
+{
+  "version": 1,
+  "from_step": "plan",
+  "to_owner": "user",
+  "to_step": "user",
+  "intent": "confirm_output",
+  "status_code": "",
+  "created_at": "2026-05-14T10:00:00+08:00",
+  "source": "plan"
+}
+```
+
+**Agent → user for clarification**
+```json
+{
+  "version": 1,
+  "from_step": "spec",
+  "to_owner": "user",
+  "to_step": "user",
+  "intent": "need_clarification",
+  "status_code": "",
+  "created_at": "2026-05-14T10:00:00+08:00",
+  "source": "spec"
+}
+```
+
+**Agent → user for permission**
+```json
+{
+  "version": 1,
+  "from_step": "develop",
+  "to_owner": "user",
+  "to_step": "user",
+  "intent": "need_permission",
+  "status_code": "",
+  "created_at": "2026-05-14T10:00:00+08:00",
+  "source": "develop"
+}
+```
+
+**Agent → done (workflow complete)**
+```json
+{
+  "version": 1,
+  "from_step": "pr",
+  "to_owner": "done",
+  "to_step": "done",
+  "intent": "workflow_complete",
+  "status_code": "confirmed",
+  "created_at": "2026-05-14T10:00:00+08:00",
+  "source": "pr"
+}
+```
+
+### Auto-correction rules
+
+The runtime normalizes these common mistakes before validation and logs a `baton_auto_corrected` warning event with the original and corrected values:
+
+| Field | Wrong value(s) | Corrected to | Condition |
+| --- | --- | --- | --- |
+| `to_owner` | `human`, `reviewer`, `developer` | `user` | always |
+| `to_owner` | any | `done` | when `to_step == "done"` |
+| `intent` | `complete`, `confirmed`, `done` | `workflow_complete` | when `to_step == "done"` |
+| `intent` | `confirmed` | `await_agent` | when `to_step` is a playbook step |

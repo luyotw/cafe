@@ -15,6 +15,54 @@ BLACKBOARD_SCHEMA_VERSION = 1
 NEXT_STEP_FILENAME = "next_step.txt"
 HANDOFF_CONTRACT_VERSION = 1
 
+# to_owner 值：常見 agent 誤用 → 正確值
+_TO_OWNER_ALIASES: Dict[str, str] = {
+    "human": "user",
+    "reviewer": "user",
+    "developer": "user",
+}
+
+# intent 值：to_step=="done" 時需修正的值
+_DONE_INTENT_ALIASES: frozenset = frozenset({"complete", "confirmed", "done"})
+
+
+def _normalize_baton_payload(payload: Dict[str, Any]) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """將常見 agent 誤用值正規化，回傳 (修正後 payload, corrections 清單)。
+
+    corrections 清單每筆格式：{"field": str, "original": str, "corrected": str}
+    無修正時回傳原 payload 的淺複製與空清單。
+    """
+    corrections: List[Dict[str, Any]] = []
+    result = dict(payload)
+
+    to_step = str(result.get("to_step", ""))
+    to_owner = str(result.get("to_owner", ""))
+    intent = str(result.get("intent", ""))
+
+    # 規則 1：to_owner 通用別名（human/reviewer/developer → user），在 done 規則之前套用
+    if to_step != "done" and to_owner in _TO_OWNER_ALIASES:
+        corrected_owner = _TO_OWNER_ALIASES[to_owner]
+        corrections.append({"field": "to_owner", "original": to_owner, "corrected": corrected_owner})
+        result["to_owner"] = corrected_owner
+
+    # 規則 2：to_step=="done" 時強制 to_owner="done"
+    if to_step == "done":
+        if to_owner != "done":
+            corrections.append({"field": "to_owner", "original": to_owner, "corrected": "done"})
+        result["to_owner"] = "done"
+
+        # 規則 3：to_step=="done" 時修正特定 intent 值
+        if intent in _DONE_INTENT_ALIASES:
+            corrections.append({"field": "intent", "original": intent, "corrected": "workflow_complete"})
+            result["intent"] = "workflow_complete"
+
+    # 規則 4：to_step 為 playbook step（非 user/done）且 intent=="confirmed" → await_agent
+    elif to_step not in {"user", "done"} and intent == "confirmed":
+        corrections.append({"field": "intent", "original": intent, "corrected": "await_agent"})
+        result["intent"] = "await_agent"
+
+    return result, corrections
+
 
 def _now_iso() -> str:
     return datetime.now().astimezone().isoformat()
@@ -405,6 +453,15 @@ class BlackboardStore:
             payload = json.loads(raw)
             if not isinstance(payload, dict):
                 raise ValueError("Baton payload must be a JSON object")
+            payload, corrections = _normalize_baton_payload(payload)
+            if corrections:
+                self.log_event(
+                    state,
+                    state.current_step,
+                    "baton_auto_corrected",
+                    f"baton auto-corrected {len(corrections)} field(s)",
+                    {"corrections": corrections},
+                )
             contract = HandoffContract.from_dict(payload)
         except (json.JSONDecodeError, ValueError) as exc:
             if not allow_legacy_text:
