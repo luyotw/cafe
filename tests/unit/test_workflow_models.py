@@ -12,7 +12,6 @@ from cafe.core.blackboard import (
     BlackboardStore,
     HandoffIntent,
     HandoffOwner,
-    _normalize_baton_payload,
 )
 from cafe.core.workflow_models import BatonRejected
 
@@ -46,7 +45,7 @@ class TestBatonRejected:
 
 
 # ---------------------------------------------------------------------------
-# _normalize_baton_payload 單元測試
+# BlackboardStore.load_handoff_contract 測試（reject-and-BatonRejected 行為）
 # ---------------------------------------------------------------------------
 
 def _base_payload(**overrides) -> dict:
@@ -65,108 +64,6 @@ def _base_payload(**overrides) -> dict:
     return base
 
 
-class TestNormalizeBatonPayload:
-    # --- Task 1: to_owner 通用映射 ---
-
-    def test_to_owner_human_normalized_to_user(self) -> None:
-        """to_owner='human' 應正規化為 'user'。"""
-        payload = _base_payload(to_owner="human", to_step="user")
-        normalized, corrections = _normalize_baton_payload(payload)
-        assert normalized["to_owner"] == "user"
-        assert len(corrections) == 1
-        assert corrections[0]["field"] == "to_owner"
-        assert corrections[0]["original"] == "human"
-        assert corrections[0]["corrected"] == "user"
-
-    def test_to_owner_reviewer_normalized_to_user(self) -> None:
-        """to_owner='reviewer' 應正規化為 'user'。"""
-        payload = _base_payload(to_owner="reviewer", to_step="user")
-        normalized, corrections = _normalize_baton_payload(payload)
-        assert normalized["to_owner"] == "user"
-        assert any(c["field"] == "to_owner" and c["corrected"] == "user" for c in corrections)
-
-    def test_to_owner_developer_normalized_to_user(self) -> None:
-        """to_owner='developer' 應正規化為 'user'。"""
-        payload = _base_payload(to_owner="developer", to_step="user")
-        normalized, corrections = _normalize_baton_payload(payload)
-        assert normalized["to_owner"] == "user"
-        assert any(c["field"] == "to_owner" and c["corrected"] == "user" for c in corrections)
-
-    # --- Task 2: to_step==done 修正 ---
-
-    def test_to_owner_forced_to_done_when_to_step_is_done(self) -> None:
-        """to_step='done' 時，to_owner 應強制改為 'done'。"""
-        payload = _base_payload(to_owner="agent", to_step="done", intent="workflow_complete")
-        normalized, corrections = _normalize_baton_payload(payload)
-        assert normalized["to_owner"] == "done"
-        assert any(c["field"] == "to_owner" and c["corrected"] == "done" for c in corrections)
-
-    def test_intent_complete_corrected_when_to_step_done(self) -> None:
-        """to_step='done' 且 intent='complete' 時，應修正為 'workflow_complete'。"""
-        payload = _base_payload(to_owner="done", to_step="done", intent="complete")
-        normalized, corrections = _normalize_baton_payload(payload)
-        assert normalized["intent"] == "workflow_complete"
-        assert any(c["field"] == "intent" and c["corrected"] == "workflow_complete" for c in corrections)
-
-    def test_intent_confirmed_corrected_when_to_step_done(self) -> None:
-        """to_step='done' 且 intent='confirmed' 時，應修正為 'workflow_complete'。"""
-        payload = _base_payload(to_owner="done", to_step="done", intent="confirmed")
-        normalized, corrections = _normalize_baton_payload(payload)
-        assert normalized["intent"] == "workflow_complete"
-
-    def test_intent_done_corrected_when_to_step_done(self) -> None:
-        """to_step='done' 且 intent='done' 時，應修正為 'workflow_complete'。"""
-        payload = _base_payload(to_owner="done", to_step="done", intent="done")
-        normalized, corrections = _normalize_baton_payload(payload)
-        assert normalized["intent"] == "workflow_complete"
-
-    def test_intent_other_not_corrected_when_to_step_done(self) -> None:
-        """to_step='done' 但 intent 為其他合法值時，不應被修改。"""
-        payload = _base_payload(to_owner="done", to_step="done", intent="manual_handoff")
-        normalized, corrections = _normalize_baton_payload(payload)
-        assert normalized["intent"] == "manual_handoff"
-        assert not any(c["field"] == "intent" for c in corrections)
-
-    # --- Task 3: playbook step intent 修正 ---
-
-    def test_intent_confirmed_corrected_to_await_agent_for_playbook_step(self) -> None:
-        """to_step 為 playbook step 且 intent='confirmed' 時，應修正為 'await_agent'。"""
-        payload = _base_payload(to_owner="agent", to_step="review", intent="confirmed")
-        normalized, corrections = _normalize_baton_payload(payload)
-        assert normalized["intent"] == "await_agent"
-        assert any(c["field"] == "intent" and c["corrected"] == "await_agent" for c in corrections)
-
-    def test_intent_confirmed_not_corrected_when_to_step_user(self) -> None:
-        """to_step='user' 時，intent='confirmed' 不應套用 playbook-step 規則。"""
-        payload = _base_payload(to_owner="user", to_step="user", intent="confirmed")
-        normalized, corrections = _normalize_baton_payload(payload)
-        # to_step='user' 不是 playbook step，不應被 playbook-step 規則修改
-        assert normalized["intent"] == "confirmed"
-        assert not any(c["field"] == "intent" and c["corrected"] == "await_agent" for c in corrections)
-
-    # --- Task 4: 有效 baton 不變動 ---
-
-    def test_valid_baton_passes_through_unchanged(self) -> None:
-        """合法 baton payload 不應被修改，correction 清單應為空。"""
-        payload = _base_payload(to_owner="agent", to_step="review", intent="await_agent")
-        normalized, corrections = _normalize_baton_payload(payload)
-        assert normalized == payload
-        assert corrections == []
-
-    def test_corrections_include_original_and_corrected_values(self) -> None:
-        """每筆 correction 必須同時包含 original 與 corrected 欄位。"""
-        payload = _base_payload(to_owner="human", to_step="user")
-        _, corrections = _normalize_baton_payload(payload)
-        for c in corrections:
-            assert "field" in c
-            assert "original" in c
-            assert "corrected" in c
-
-
-# ---------------------------------------------------------------------------
-# BlackboardStore.load_handoff_contract 整合測試（使用 tmp_path）
-# ---------------------------------------------------------------------------
-
 def _write_baton(issue_dir: Path, payload: dict) -> None:
     """將 payload 寫入 next_step.txt。"""
     (issue_dir / "next_step.txt").write_text(
@@ -174,26 +71,44 @@ def _write_baton(issue_dir: Path, payload: dict) -> None:
     )
 
 
-class TestLoadHandoffContractNormalization:
-    def test_auto_corrects_to_owner_human_and_logs_event(self, tmp_path: Path) -> None:
-        """load_handoff_contract 應自動修正 to_owner=human 並記錄 baton_auto_corrected 事件。"""
-        issue_dir = tmp_path / "issue-norm-1"
+class TestLoadHandoffContractBatonRejected:
+    def test_invalid_to_owner_raises_baton_rejected(self, tmp_path: Path) -> None:
+        """load_handoff_contract 遇到無效 to_owner 應拋出 BatonRejected。"""
+        issue_dir = tmp_path / "issue-reject-1"
         issue_dir.mkdir(parents=True)
         store = BlackboardStore(issue_dir)
         state = store.load_or_create("develop")
         _write_baton(issue_dir, _base_payload(to_owner="human", to_step="user", intent="need_clarification"))
 
-        contract = store.load_handoff_contract(state, allowed_steps=["develop", "review"])
+        with pytest.raises(BatonRejected) as exc_info:
+            store.load_handoff_contract(state, allowed_steps=["develop", "review"])
 
-        assert contract.to_owner == HandoffOwner.USER
-        auto_events = [e for e in state.events if e.event_type == "baton_auto_corrected"]
-        assert len(auto_events) == 1
-        corrections = auto_events[0].data.get("corrections", [])
-        assert any(c["field"] == "to_owner" and c["original"] == "human" and c["corrected"] == "user" for c in corrections)
+        exc = exc_info.value
+        assert exc.field == "to_owner"
+        assert exc.invalid_value == "human"
+        assert "agent" in exc.valid_values
+        assert "user" in exc.valid_values
+        assert "done" in exc.valid_values
 
-    def test_valid_baton_no_event_logged(self, tmp_path: Path) -> None:
-        """合法 baton 通過 load_handoff_contract 後不應有 baton_auto_corrected 事件。"""
-        issue_dir = tmp_path / "issue-norm-2"
+    def test_invalid_intent_raises_baton_rejected(self, tmp_path: Path) -> None:
+        """load_handoff_contract 遇到無效 intent 應拋出 BatonRejected。"""
+        issue_dir = tmp_path / "issue-reject-2"
+        issue_dir.mkdir(parents=True)
+        store = BlackboardStore(issue_dir)
+        state = store.load_or_create("develop")
+        _write_baton(issue_dir, _base_payload(to_owner="agent", to_step="review", intent="confirmed"))
+
+        with pytest.raises(BatonRejected) as exc_info:
+            store.load_handoff_contract(state, allowed_steps=["develop", "review"])
+
+        exc = exc_info.value
+        assert exc.field == "intent"
+        assert exc.invalid_value == "confirmed"
+        assert "await_agent" in exc.valid_values
+
+    def test_valid_baton_returns_contract_no_auto_corrected_event(self, tmp_path: Path) -> None:
+        """合法 baton 正常回傳 HandoffContract，不產生 baton_auto_corrected 事件。"""
+        issue_dir = tmp_path / "issue-reject-3"
         issue_dir.mkdir(parents=True)
         store = BlackboardStore(issue_dir)
         state = store.load_or_create("develop")
@@ -204,17 +119,29 @@ class TestLoadHandoffContractNormalization:
         assert contract.to_owner == HandoffOwner.AGENT
         assert not any(e.event_type == "baton_auto_corrected" for e in state.events)
 
-    def test_corrected_but_still_invalid_raises(self, tmp_path: Path) -> None:
-        """修正後仍不合法的 baton（to_step 不在 allowed_steps）應拋出 ValueError。"""
-        issue_dir = tmp_path / "issue-norm-3"
+    def test_allow_legacy_text_json_invalid_raises_baton_rejected(self, tmp_path: Path) -> None:
+        """JSON 解析成功但 enum 無效時，即使 allow_legacy_text=True 也拋 BatonRejected。"""
+        issue_dir = tmp_path / "issue-reject-4"
         issue_dir.mkdir(parents=True)
         store = BlackboardStore(issue_dir)
         state = store.load_or_create("develop")
-        # to_owner='human' 會被修正為 'user'，但 to_step='nonexistent' 不在 allowed_steps
-        _write_baton(issue_dir, _base_payload(to_owner="human", to_step="nonexistent", intent="await_agent"))
+        _write_baton(issue_dir, _base_payload(to_owner="human", to_step="user", intent="need_clarification"))
 
-        with pytest.raises(ValueError):
-            store.load_handoff_contract(state, allowed_steps=["develop", "review"])
+        with pytest.raises(BatonRejected):
+            store.load_handoff_contract(state, allowed_steps=["develop", "review"], allow_legacy_text=True)
+
+    def test_allow_legacy_text_non_json_falls_back_to_legacy_step(self, tmp_path: Path) -> None:
+        """JSON 解析失敗（非 enum 問題）且 allow_legacy_text=True 時走 legacy step 解析。"""
+        issue_dir = tmp_path / "issue-reject-5"
+        issue_dir.mkdir(parents=True)
+        store = BlackboardStore(issue_dir)
+        state = store.load_or_create("develop")
+        (issue_dir / "next_step.txt").write_text("review", encoding="utf-8")
+
+        contract = store.load_handoff_contract(state, allowed_steps=["develop", "review"], allow_legacy_text=True)
+
+        assert contract.to_step == "review"
+        assert contract.source == "legacy_text"
 
 
 def test_blackboard_load_or_create_persists_current_step_and_playbook(tmp_path: Path) -> None:
