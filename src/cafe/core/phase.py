@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from cafe.core.git import GitOperations
@@ -170,8 +173,8 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
         if phase_specific_data:
             context_data.update(phase_specific_data)
 
-        # Save as context.json file
-        context_file = iteration_dir / "context.json"
+        # Save as iteration.json file
+        context_file = iteration_dir / "iteration.json"
         with open(context_file, "w", encoding="utf-8") as f:
             json.dump(context_data, f, ensure_ascii=False, indent=2)
 
@@ -232,7 +235,7 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
         # Get iteration directory and context file
         iteration_dir = self._get_iteration_dir(self.iteration)
         iteration_dir.mkdir(parents=True, exist_ok=True)
-        context_file = iteration_dir / "context.json"
+        context_file = self._resolve_iteration_context_file(iteration_dir)
 
         # Read existing context data
         if context_file.exists():
@@ -302,12 +305,13 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
         # Save end_time for this iteration
         context_data["end_time"] = datetime.now().astimezone().isoformat()
 
-        # Save updated context.json file
+        # Save updated iteration.json file
+        context_file = iteration_dir / "iteration.json"
         with open(context_file, "w", encoding="utf-8") as f:
             json.dump(context_data, f, ensure_ascii=False, indent=2)
 
         # Note: streaming.jsonl is saved earlier in _execute_agent_iteration
-        # to preserve raw format before context.json processing
+        # to preserve raw format before iteration.json processing
 
         # Append one record to iterations.jsonl
         iteration_index_data = {
@@ -541,9 +545,9 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
             if key in {"CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_HOME", "COPILOT_HOME"}
         }
 
-        # 3. Save prompt to context.json (before executing agent)
+        # 3. Save prompt to iteration.json (before executing agent)
         iteration_dir = self._get_iteration_dir(self.iteration)
-        context_file = iteration_dir / "context.json"
+        context_file = self._resolve_iteration_context_file(iteration_dir)
         if context_file.exists():
             with open(context_file, "r", encoding="utf-8") as f:
                 context_data = json.load(f)
@@ -1052,7 +1056,10 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
         if not phase_dir.exists():
             return None
 
-        for context_file in reversed(sorted(phase_dir.glob("iteration_*/context.json"))):
+        for context_file in reversed(sorted(
+            [self._resolve_iteration_context_file(d) for d in phase_dir.glob("iteration_*") if d.is_dir()],
+            key=lambda p: p.parent.name,
+        )):
             try:
                 with open(context_file, "r", encoding="utf-8") as f:
                     context = json.load(f)
@@ -1135,6 +1142,27 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
         print("=" * 60)
         print()
 
+    def _resolve_iteration_context_file(self, iteration_dir: Path) -> Path:
+        """Return the iteration context file path, with backward-compatible fallback.
+
+        Prefers iteration.json; falls back to context.json (old name) with a
+        deprecation warning. Returns the iteration.json path even when neither
+        file exists (callers should check .exists() before reading).
+        """
+        new_path = iteration_dir / "iteration.json"
+        if new_path.exists():
+            return new_path
+
+        old_path = iteration_dir / "context.json"
+        if old_path.exists():
+            logger.warning(
+                "[deprecation] context.json found in %s; please rename to iteration.json",
+                iteration_dir,
+            )
+            return old_path
+
+        return new_path
+
     def _load_previous_iteration_data(self) -> Optional[dict]:
         """Load previous round iteration data (common method).
 
@@ -1150,7 +1178,7 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
             return None
 
         prev_iteration_dir = self._get_iteration_dir(self.iteration - 1)
-        prev_context_file = prev_iteration_dir / "context.json"
+        prev_context_file = self._resolve_iteration_context_file(prev_iteration_dir)
         if not prev_context_file.exists():
             return None
 
@@ -1171,7 +1199,7 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
             raise AttributeError("Phase must have 'phase_dir' attribute")
 
         current_iteration_dir = self._get_iteration_dir(self.iteration)
-        current_context_file = current_iteration_dir / "context.json"
+        current_context_file = self._resolve_iteration_context_file(current_iteration_dir)
         if not current_context_file.exists():
             return None
 
@@ -1202,14 +1230,14 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
                 # Return last iteration number
                 return iterations[-1].get("iteration", 0)
 
-        # Fallback: read from iteration_XXX/context.json
+        # Fallback: read from iteration_XXX/iteration.json (or context.json)
         iteration_dirs = sorted(phase_dir.glob("iteration_*"))
         if not iteration_dirs:
             return 0
 
         # Search from back to front for first complete iteration
         for iteration_dir in reversed(iteration_dirs):
-            context_file = iteration_dir / "context.json"
+            context_file = self._resolve_iteration_context_file(iteration_dir)
             if not context_file.exists():
                 continue
 
@@ -1411,9 +1439,9 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
                 if final_status_code is not None:
                     status_code = final_status_code
 
-                # Checklist validation passed - now we can save status_code to context.json
+                # Checklist validation passed - now we can save status_code to iteration.json
                 iteration_dir = self._get_iteration_dir(self.iteration)
-                context_file = iteration_dir / "context.json"
+                context_file = self._resolve_iteration_context_file(iteration_dir)
                 if context_file.exists():
                     with open(context_file, "r", encoding="utf-8") as f:
                         context_data = json.load(f)
@@ -1429,11 +1457,11 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
                 print(f"⚠️  Checklist validation failed after maximum retries")
                 # Continue with original response and status_code
         else:
-            # No checklist validation needed - save status_code to context.json directly
+            # No checklist validation needed - save status_code to iteration.json directly
             if status_code is None:
                 raise ValueError(f"Failed to extract status code from agent response in iteration {self.iteration}")
             iteration_dir = self._get_iteration_dir(self.iteration)
-            context_file = iteration_dir / "context.json"
+            context_file = self._resolve_iteration_context_file(iteration_dir)
             if context_file.exists():
                 with open(context_file, "r", encoding="utf-8") as f:
                     context_data = json.load(f)

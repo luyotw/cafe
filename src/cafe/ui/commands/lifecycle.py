@@ -1429,8 +1429,13 @@ def reset(
             iterations_file = phase_dir / "iterations.jsonl"
 
             if target_iteration > 0:
-                # Read target iteration's context.json to get status_code
-                target_context_file = phase_dir / f"iteration_{target_iteration:03d}" / "context.json"
+                # Read target iteration's iteration.json (with context.json fallback) to get status_code
+                _iter_dir = phase_dir / f"iteration_{target_iteration:03d}"
+                target_context_file = (
+                    _iter_dir / "iteration.json"
+                    if (_iter_dir / "iteration.json").exists()
+                    else _iter_dir / "context.json"
+                )
                 target_status_code = None
                 target_timestamp = None
                 target_end_time = None

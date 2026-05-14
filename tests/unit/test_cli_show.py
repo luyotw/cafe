@@ -22,7 +22,7 @@ class TestResolveIterationNumber:
         for i in [1, 2, 3]:
             iteration_dir = phase_dir / f"iteration_{i:03d}"
             iteration_dir.mkdir()
-            (iteration_dir / "context.json").write_text("{}")
+            (iteration_dir / "iteration.json").write_text("{}")
             (iteration_dir / "output.md").write_text(f"# Output {i}")
 
         # 測試正數迭代號碼
@@ -38,7 +38,7 @@ class TestResolveIterationNumber:
         for i in [1, 2, 3]:
             iteration_dir = phase_dir / f"iteration_{i:03d}"
             iteration_dir.mkdir()
-            (iteration_dir / "context.json").write_text("{}")
+            (iteration_dir / "iteration.json").write_text("{}")
             (iteration_dir / "output.md").write_text(f"# Output {i}")
 
         # 零應該返回最新的有該檔案的迭代號碼（3）
@@ -52,7 +52,7 @@ class TestResolveIterationNumber:
         for i in [1, 2, 3]:
             iteration_dir = phase_dir / f"iteration_{i:03d}"
             iteration_dir.mkdir()
-            (iteration_dir / "context.json").write_text("{}")
+            (iteration_dir / "iteration.json").write_text("{}")
             (iteration_dir / "output.md").write_text(f"# Output {i}")
 
         # -1 應該返回最新迭代的前一個（2）
@@ -68,7 +68,7 @@ class TestResolveIterationNumber:
         for i in [1, 2]:
             iteration_dir = phase_dir / f"iteration_{i:03d}"
             iteration_dir.mkdir()
-            (iteration_dir / "context.json").write_text("{}")
+            (iteration_dir / "iteration.json").write_text("{}")
             (iteration_dir / "output.md").write_text(f"# Output {i}")
 
         # 迭代號碼 5 不存在，應該拋出 ValueError
@@ -83,7 +83,7 @@ class TestResolveIterationNumber:
         for i in [1, 2]:
             iteration_dir = phase_dir / f"iteration_{i:03d}"
             iteration_dir.mkdir()
-            (iteration_dir / "context.json").write_text("{}")
+            (iteration_dir / "iteration.json").write_text("{}")
             (iteration_dir / "output.md").write_text(f"# Output {i}")
 
         # -5 超出範圍，應該拋出 ValueError
@@ -102,13 +102,13 @@ class TestResolveIterationNumber:
 
     def test_resolve_iteration_number_partial_files(self, tmp_path):
         """測試部分迭代有特定檔案的情況"""
-        # 準備測試資料：iteration 1-3 有 output.md，iteration 4 只有 context.json
+        # 準備測試資料：iteration 1-3 有 output.md，iteration 4 只有 iteration.json
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir(parents=True)
         for i in [1, 2, 3, 4]:
             iteration_dir = phase_dir / f"iteration_{i:03d}"
             iteration_dir.mkdir()
-            (iteration_dir / "context.json").write_text("{}")
+            (iteration_dir / "iteration.json").write_text("{}")
             if i <= 3:  # 只有 1-3 有 output.md
                 (iteration_dir / "output.md").write_text(f"# Output {i}")
 
@@ -128,7 +128,7 @@ class TestGetShowFilePath:
         phase_dir = tmp_path / "spec"
 
         # 測試各種內容類型
-        assert _get_show_file_path(phase_dir, 1, "context") == phase_dir / "iteration_001" / "context.json"
+        assert _get_show_file_path(phase_dir, 1, "context") == phase_dir / "iteration_001" / "iteration.json"
         assert _get_show_file_path(phase_dir, 2, "output") == phase_dir / "iteration_002" / "output.md"
         assert _get_show_file_path(phase_dir, 3, "streaming") == phase_dir / "iteration_003" / "streaming.jsonl"
         assert _get_show_file_path(phase_dir, 1, "error") == phase_dir / "iteration_001" / "error.json"
@@ -156,7 +156,7 @@ class TestShowCommand:
         # 建立迭代目錄和檔案
         iteration_dir = issues_dir / "iteration_001"
         iteration_dir.mkdir()
-        (iteration_dir / "context.json").write_text("{}")
+        (iteration_dir / "iteration.json").write_text("{}")
         (iteration_dir / "output.md").write_text("# Test Output")
 
         # Mock git operations 和 config
@@ -184,7 +184,7 @@ class TestShowCommand:
         # 建立迭代目錄和檔案
         iteration_dir = issues_dir / "iteration_001"
         iteration_dir.mkdir()
-        (iteration_dir / "context.json").write_text('{"test": "context"}')
+        (iteration_dir / "iteration.json").write_text('{"test": "context"}')
 
         # Mock git operations 和 config
         with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
@@ -228,7 +228,7 @@ steps:
 
         iteration_dir = issues_dir / "iteration_001"
         iteration_dir.mkdir()
-        (iteration_dir / "context.json").write_text("{}")
+        (iteration_dir / "iteration.json").write_text("{}")
         (iteration_dir / "output.md").write_text("# QA Output")
 
         with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
@@ -254,7 +254,7 @@ steps:
         for i in [1, 2]:
             iteration_dir = issues_dir / f"iteration_{i:03d}"
             iteration_dir.mkdir()
-            (iteration_dir / "context.json").write_text("{}")
+            (iteration_dir / "iteration.json").write_text("{}")
             (iteration_dir / "output.md").write_text(f"# Iteration {i}")
 
         # Mock git operations 和 config
@@ -283,7 +283,7 @@ steps:
         for i in [1, 2, 3]:
             iteration_dir = issues_dir / f"iteration_{i:03d}"
             iteration_dir.mkdir()
-            (iteration_dir / "context.json").write_text("{}")
+            (iteration_dir / "iteration.json").write_text("{}")
             (iteration_dir / "output.md").write_text(f"# Iteration {i}")
 
         # Mock git operations 和 config
@@ -311,7 +311,7 @@ steps:
         # 建立迭代目錄但不建立 output.md
         iteration_dir = issues_dir / "iteration_001"
         iteration_dir.mkdir()
-        (iteration_dir / "context.json").write_text("{}")
+        (iteration_dir / "iteration.json").write_text("{}")
 
         # Mock git operations 和 config
         with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
@@ -337,7 +337,7 @@ steps:
         # 建立一個迭代
         iteration_dir = issues_dir / "iteration_001"
         iteration_dir.mkdir()
-        (iteration_dir / "context.json").write_text("{}")
+        (iteration_dir / "iteration.json").write_text("{}")
 
         # Mock git operations 和 config
         with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
@@ -393,7 +393,7 @@ class TestShowCommandChecklist:
         # Create iteration with checklist
         iteration_dir = issues_dir / "iteration_001"
         iteration_dir.mkdir()
-        (iteration_dir / "context.json").write_text("{}")
+        (iteration_dir / "iteration.json").write_text("{}")
         checklist_file = iteration_dir / "checklist.md"
         checklist_file.write_text("""## Execution Steps Checklist
 
@@ -428,7 +428,7 @@ class TestShowCommandChecklist:
         # Create iteration with checklist
         iteration_dir = issues_dir / "iteration_001"
         iteration_dir.mkdir()
-        (iteration_dir / "context.json").write_text("{}")
+        (iteration_dir / "iteration.json").write_text("{}")
         checklist_file = iteration_dir / "checklist.md"
         checklist_file.write_text("""## Execution Steps Checklist
 
@@ -462,7 +462,7 @@ class TestShowCommandChecklist:
         for i in [1, 2]:
             iteration_dir = issues_dir / f"iteration_{i:03d}"
             iteration_dir.mkdir()
-            (iteration_dir / "context.json").write_text("{}")
+            (iteration_dir / "iteration.json").write_text("{}")
             checklist_file = iteration_dir / "checklist.md"
             checklist_file.write_text(f"## Checklist for iteration {i}")
 
@@ -491,7 +491,7 @@ class TestShowCommandChecklist:
         # Create iteration WITHOUT checklist
         iteration_dir = issues_dir / "iteration_001"
         iteration_dir.mkdir()
-        (iteration_dir / "context.json").write_text("{}")
+        (iteration_dir / "iteration.json").write_text("{}")
         # No checklist.md file
 
         # Mock git operations and config
@@ -532,7 +532,7 @@ class TestShowCommandUserInput:
         # Create iteration with user_input.md
         iteration_dir = issues_dir / "iteration_001"
         iteration_dir.mkdir()
-        (iteration_dir / "context.json").write_text("{}")
+        (iteration_dir / "iteration.json").write_text("{}")
         user_input_file = iteration_dir / "user_input.md"
         user_input_file.write_text("# Initial Requirements\n\nAdd login feature")
 
@@ -562,7 +562,7 @@ class TestShowCommandUserInput:
         # Create iteration with user_input.md
         iteration_dir = issues_dir / "iteration_001"
         iteration_dir.mkdir()
-        (iteration_dir / "context.json").write_text("{}")
+        (iteration_dir / "iteration.json").write_text("{}")
         user_input_file = iteration_dir / "user_input.md"
         user_input_file.write_text("Please add error handling")
 
@@ -592,7 +592,7 @@ class TestShowCommandUserInput:
         for i in [1, 2]:
             iteration_dir = issues_dir / f"iteration_{i:03d}"
             iteration_dir.mkdir()
-            (iteration_dir / "context.json").write_text("{}")
+            (iteration_dir / "iteration.json").write_text("{}")
             user_input_file = iteration_dir / "user_input.md"
             user_input_file.write_text(f"User input for iteration {i}")
 
@@ -621,7 +621,7 @@ class TestShowCommandUserInput:
         # Create iteration WITHOUT user_input.md
         iteration_dir = issues_dir / "iteration_001"
         iteration_dir.mkdir()
-        (iteration_dir / "context.json").write_text("{}")
+        (iteration_dir / "iteration.json").write_text("{}")
         # No user_input.md file
 
         # Mock git operations and config
@@ -663,7 +663,7 @@ class TestShowCommandQuestions:
         # Create iteration with questions.xml
         iteration_dir = issues_dir / "iteration_001"
         iteration_dir.mkdir()
-        (iteration_dir / "context.json").write_text("{}")
+        (iteration_dir / "iteration.json").write_text("{}")
         questions_file = iteration_dir / "questions.xml"
         questions_file.write_text("""<?xml version="1.0" encoding="UTF-8"?>
 <questions>
@@ -701,7 +701,7 @@ class TestShowCommandQuestions:
         for i in [1, 2]:
             iteration_dir = issues_dir / f"iteration_{i:03d}"
             iteration_dir.mkdir()
-            (iteration_dir / "context.json").write_text("{}")
+            (iteration_dir / "iteration.json").write_text("{}")
             questions_file = iteration_dir / "questions.xml"
             questions_file.write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
 <questions>
@@ -736,7 +736,7 @@ class TestShowCommandQuestions:
         # Create iteration WITHOUT questions.xml
         iteration_dir = issues_dir / "iteration_001"
         iteration_dir.mkdir()
-        (iteration_dir / "context.json").write_text("{}")
+        (iteration_dir / "iteration.json").write_text("{}")
         # No questions.xml file
 
         # Mock git operations and config

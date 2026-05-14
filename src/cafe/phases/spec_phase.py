@@ -153,9 +153,14 @@ class SpecPhase(Phase):
 
         # Load phase-specific data from last iteration
         if self.iteration > 0:
-            existing_iterations = sorted(self.phase_dir.glob("iteration_*/context.json"))
+            iter_dirs = sorted(d for d in self.phase_dir.glob("iteration_*") if d.is_dir())
+            existing_iterations = [
+                d for d in iter_dirs
+                if (d / "iteration.json").exists() or (d / "context.json").exists()
+            ]
             if existing_iterations:
-                last_context_file = existing_iterations[-1]
+                last_iter_dir = existing_iterations[-1]
+                last_context_file = self._resolve_iteration_context_file(last_iter_dir)
                 with open(last_context_file, "r", encoding="utf-8") as f:
                     last_data = json.load(f)
                 if "confirmed_requirements" in last_data:

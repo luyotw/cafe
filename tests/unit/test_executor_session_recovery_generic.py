@@ -205,7 +205,7 @@ class TestGenericSessionRecovery:
         assert "creating new session" not in captured.out.lower()
 
     def test_codex_session_recovery_preserves_cli_command_args(self):
-        """Codex stale session errors should still expose CLI args for context.json."""
+        """Codex stale session errors should still expose CLI args for iteration.json."""
         config = AgentConfig(
             name="TestAgent",
             cli=AgentCLI.CODEX,

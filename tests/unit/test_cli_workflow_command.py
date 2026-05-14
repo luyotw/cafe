@@ -914,7 +914,7 @@ def test_workflow_command_resumes_incomplete_iteration_before_user_phase(tmp_pat
         ),
         encoding="utf-8",
     )
-    (spec_iteration / "context.json").write_text(
+    (spec_iteration / "iteration.json").write_text(
         json.dumps(
             {
                 "iteration": 2,
@@ -932,7 +932,7 @@ def test_workflow_command_resumes_incomplete_iteration_before_user_phase(tmp_pat
             executed_steps.append(step_name)
             completed_iteration = issue_dir / "spec" / "iteration_003"
             completed_iteration.mkdir(parents=True, exist_ok=True)
-            (completed_iteration / "context.json").write_text(
+            (completed_iteration / "iteration.json").write_text(
                 json.dumps(
                     {
                         "iteration": 3,
@@ -1002,7 +1002,7 @@ def test_find_external_resume_step_returns_pr_when_new_pr_comments_exist(tmp_pat
 def test_find_external_resume_step_returns_none_when_last_seen_covers_all_comments(
     tmp_path: Path,
 ) -> None:
-    """P2: stale context.json processed fields must not be the only source; last-seen artifact excludes known IDs."""
+    """P2: stale iteration.json processed fields must not be the only source; last-seen artifact excludes known IDs."""
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-241"
     pr_dir = issue_dir / "pr"
     artifact = pr_dir / "artifacts" / "pr_last_seen_comments.json"

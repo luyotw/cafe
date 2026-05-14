@@ -27,7 +27,7 @@ def _write_iteration_context(
         payload["status_code"] = status_code
     if response is not None:
         payload["response"] = response
-    (iteration_dir / "context.json").write_text(json.dumps(payload), encoding="utf-8")
+    (iteration_dir / "iteration.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _make_review_phase(issue_dir: Path) -> ReviewPhase:

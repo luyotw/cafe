@@ -183,7 +183,7 @@ class ReviewPhase(Phase):
                 iteration_dirs = sorted(pr_dir.glob("iteration_*"))
                 # Search backwards for the latest iteration with a completed status_code
                 for iteration_dir_pr in reversed(iteration_dirs):
-                    context_file = iteration_dir_pr / "context.json"
+                    context_file = self._resolve_iteration_context_file(iteration_dir_pr)
                     if not context_file.exists():
                         continue
                     with open(context_file, "r", encoding="utf-8") as f:

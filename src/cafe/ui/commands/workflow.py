@@ -441,13 +441,23 @@ def workflow(
     try:
         def _predict_next_iteration(issue_root: Path, step_name: str) -> int:
             step_dir = issue_root / step_name
-            existing = sorted(step_dir.glob("iteration_*/context.json"))
+            iter_dirs = sorted(d for d in step_dir.glob("iteration_*") if d.is_dir())
+            existing = [
+                d for d in iter_dirs
+                if (d / "iteration.json").exists() or (d / "context.json").exists()
+            ]
             if not existing:
                 return 1
             count = len(existing)
             try:
                 import json as _json
-                last_data = _json.loads(existing[-1].read_text(encoding="utf-8"))
+                last_dir = existing[-1]
+                last_file = (
+                    last_dir / "iteration.json"
+                    if (last_dir / "iteration.json").exists()
+                    else last_dir / "context.json"
+                )
+                last_data = _json.loads(last_file.read_text(encoding="utf-8"))
                 if not last_data.get("status_code"):
                     return last_data.get("iteration", count)
             except Exception:

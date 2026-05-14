@@ -166,7 +166,7 @@ class DevelopPhase(Phase):
             return None
 
         for iteration_dir in reversed(sorted(review_dir.glob("iteration_*"))):
-            context_file = iteration_dir / "context.json"
+            context_file = self._resolve_iteration_context_file(iteration_dir)
             if not context_file.exists():
                 continue
             try:
@@ -266,7 +266,7 @@ class DevelopPhase(Phase):
             return None
 
         for iteration_dir in reversed(sorted(pr_dir.glob("iteration_*"))):
-            context_file = iteration_dir / "context.json"
+            context_file = self._resolve_iteration_context_file(iteration_dir)
             if not context_file.exists():
                 continue
             try:
@@ -1147,7 +1147,7 @@ Do NOT return any other status code until you have written your reasoning."""
                             merged_response = response + "\n\n[Reasoning Request]\n" + continuation_response
 
                             # Get streaming logs and prompt from context
-                            context_file = iteration_dir / "context.json"
+                            context_file = self._resolve_iteration_context_file(iteration_dir)
                             original_streaming_log = []
                             original_prompt = ""
                             if context_file.exists():

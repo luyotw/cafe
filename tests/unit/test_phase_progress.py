@@ -131,7 +131,7 @@ class TestAlreadyCompletedFallback:
         )
         iteration_dir = phase_dir / "iteration_001"
         iteration_dir.mkdir(parents=True)
-        (iteration_dir / "context.json").write_text(
+        (iteration_dir / "iteration.json").write_text(
             json.dumps(
                 {
                     "iteration": 1,

@@ -1099,7 +1099,11 @@ def load_pr_last_seen_comment_ids(pr_dir: Path) -> Set[str]:
 
     iteration_dirs = sorted(pr_dir.glob("iteration_*"))
     for iter_dir in reversed(iteration_dirs):
-        context_file = iter_dir / "context.json"
+        context_file = (
+            iter_dir / "iteration.json"
+            if (iter_dir / "iteration.json").exists()
+            else iter_dir / "context.json"
+        )
         if not context_file.exists():
             continue
         try:
@@ -1140,7 +1144,11 @@ def get_processed_comment_ids_from_history(phase_dir: "Path") -> set:
         if not item.is_dir() or not item.name.startswith("iteration_"):
             continue
 
-        context_file = item / "context.json"
+        context_file = (
+            item / "iteration.json"
+            if (item / "iteration.json").exists()
+            else item / "context.json"
+        )
         if not context_file.exists():
             continue
 

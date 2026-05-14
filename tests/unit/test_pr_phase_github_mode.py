@@ -84,9 +84,9 @@ class TestPRPhaseGitHubMode:
         assert "created" in result.message.lower()
         assert result.data.get("status_code") == "ready_for_review"
 
-        # Verify iteration context.json was created with correct status_code
+        # Verify iteration iteration.json was created with correct status_code
         iteration_dir = issue_dir / "pr" / "iteration_001"
-        context_file = iteration_dir / "context.json"
+        context_file = iteration_dir / "iteration.json"
         assert context_file.exists()
         with open(context_file) as f:
             context = json.load(f)
@@ -105,7 +105,7 @@ class TestPRPhaseGitHubMode:
         pr_dir = issue_dir / "pr"
         iteration_001 = pr_dir / "iteration_001"
         iteration_001.mkdir(parents=True)
-        (iteration_001 / "context.json").write_text(json.dumps({
+        (iteration_001 / "iteration.json").write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
@@ -140,7 +140,7 @@ class TestPRPhaseGitHubMode:
 
         # Verify new iteration_002 was created
         iteration_002 = issue_dir / "pr" / "iteration_002"
-        context_file = iteration_002 / "context.json"
+        context_file = iteration_002 / "iteration.json"
         assert context_file.exists()
         with open(context_file) as f:
             context = json.load(f)
@@ -187,7 +187,7 @@ class TestPRPhaseGitHubMode:
         pr_dir = issue_dir / "pr"
         iteration_001 = pr_dir / "iteration_001"
         iteration_001.mkdir(parents=True)
-        (iteration_001 / "context.json").write_text(json.dumps({
+        (iteration_001 / "iteration.json").write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
@@ -236,7 +236,7 @@ class TestPRPhaseGitHubMode:
         pr_dir = issue_dir / "pr"
         iteration_001 = pr_dir / "iteration_001"
         iteration_001.mkdir(parents=True)
-        (iteration_001 / "context.json").write_text(
+        (iteration_001 / "iteration.json").write_text(
             json.dumps(
                 {
                     "iteration": 1,
@@ -285,7 +285,7 @@ class TestPRPhaseGitHubMode:
         pr_dir = issue_dir / "pr"
         iteration_001 = pr_dir / "iteration_001"
         iteration_001.mkdir(parents=True)
-        (iteration_001 / "context.json").write_text(json.dumps({
+        (iteration_001 / "iteration.json").write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
@@ -329,7 +329,7 @@ class TestPRPhaseGitHubMode:
         pr_dir = issue_dir / "pr"
         iteration_001 = pr_dir / "iteration_001"
         iteration_001.mkdir(parents=True)
-        (iteration_001 / "context.json").write_text(json.dumps({
+        (iteration_001 / "iteration.json").write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
@@ -404,7 +404,7 @@ class TestPRPhaseStep0ResumeIncomplete:
         pr_dir = issue_dir / "pr"
         iteration_001 = pr_dir / "iteration_001"
         iteration_001.mkdir(parents=True)
-        (iteration_001 / "context.json").write_text(json.dumps({
+        (iteration_001 / "iteration.json").write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00"
             # No status_code - incomplete!
@@ -449,7 +449,7 @@ class TestPRPhaseStep0ResumeIncomplete:
         pr_dir = issue_dir / "pr"
         iteration_001 = pr_dir / "iteration_001"
         iteration_001.mkdir(parents=True)
-        (iteration_001 / "context.json").write_text(json.dumps({
+        (iteration_001 / "iteration.json").write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00"
             # No status_code - incomplete!
@@ -477,7 +477,7 @@ class TestPRPhaseStep0ResumeIncomplete:
                 result = phase._execute_github_mode()
 
         # Assert - should have completed the iteration
-        context_file = iteration_001 / "context.json"
+        context_file = iteration_001 / "iteration.json"
         with open(context_file) as f:
             context = json.load(f)
         assert context.get("status_code") == "ready_for_review"
@@ -526,7 +526,7 @@ class TestPRPhaseStep1WaitingForDevelop:
         pr_dir = issue_dir / "pr"
         iteration_001 = pr_dir / "iteration_001"
         iteration_001.mkdir(parents=True)
-        (iteration_001 / "context.json").write_text(json.dumps({
+        (iteration_001 / "iteration.json").write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
@@ -556,7 +556,7 @@ class TestPRPhaseStep1WaitingForDevelop:
         pr_dir = issue_dir / "pr"
         iteration_001 = pr_dir / "iteration_001"
         iteration_001.mkdir(parents=True)
-        (iteration_001 / "context.json").write_text(json.dumps({
+        (iteration_001 / "iteration.json").write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
@@ -585,7 +585,7 @@ class TestPRPhaseStep1WaitingForDevelop:
         pr_dir = issue_dir / "pr"
         iteration_001 = pr_dir / "iteration_001"
         iteration_001.mkdir(parents=True)
-        (iteration_001 / "context.json").write_text(json.dumps({
+        (iteration_001 / "iteration.json").write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
@@ -648,7 +648,7 @@ class TestPRPhasePriorityNewCommits:
         pr_dir = issue_dir / "pr"
         iteration_001 = pr_dir / "iteration_001"
         iteration_001.mkdir(parents=True)
-        (iteration_001 / "context.json").write_text(json.dumps({
+        (iteration_001 / "iteration.json").write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
@@ -691,7 +691,7 @@ class TestPRPhasePriorityNewCommits:
         pr_dir = issue_dir / "pr"
         iteration_001 = pr_dir / "iteration_001"
         iteration_001.mkdir(parents=True)
-        (iteration_001 / "context.json").write_text(json.dumps({
+        (iteration_001 / "iteration.json").write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
@@ -804,7 +804,7 @@ class TestPRPhaseAgentCalled:
         pr_dir = issue_dir / "pr"
         iteration_001 = pr_dir / "iteration_001"
         iteration_001.mkdir(parents=True)
-        (iteration_001 / "context.json").write_text(json.dumps({
+        (iteration_001 / "iteration.json").write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
@@ -855,7 +855,7 @@ class TestPRPhaseAgentCalled:
         pr_dir = issue_dir / "pr"
         iteration_001 = pr_dir / "iteration_001"
         iteration_001.mkdir(parents=True)
-        (iteration_001 / "context.json").write_text(json.dumps({
+        (iteration_001 / "iteration.json").write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
@@ -1039,7 +1039,7 @@ class TestCreateOrUpdatePRRecordsLastSeenCommentIds:
         pr_dir = issue_dir / "pr"
         iteration_001 = pr_dir / "iteration_001"
         iteration_001.mkdir(parents=True)
-        (iteration_001 / "context.json").write_text(json.dumps({
+        (iteration_001 / "iteration.json").write_text(json.dumps({
             "iteration": 1,
             "status_code": "ready_for_review",
             "last_seen_comment_ids": ["OLD1"]
@@ -1164,7 +1164,7 @@ class TestSavePRCommentsFiltersLastSeen:
         pr_dir = issue_dir / "pr"
         iter_001 = pr_dir / "iteration_001"
         iter_001.mkdir(parents=True)
-        (iter_001 / "context.json").write_text(json.dumps({
+        (iter_001 / "iteration.json").write_text(json.dumps({
             "iteration": 1,
             "status_code": "ready_for_review",
             "last_seen_comment_ids": ["R1", "T1"]
