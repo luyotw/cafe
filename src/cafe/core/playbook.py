@@ -206,6 +206,10 @@ def validate_playbook(
     warnings: List[str] = []
     steps = model.steps
 
+    entry = model.entry_point
+    if entry is not None and entry not in steps:
+        raise ValueError(f"entry_point {entry!r} is not a defined step")
+
     _report_structural_issue(
         playbook_id=model.playbook.id,
         filename=path.stem,
