@@ -360,6 +360,9 @@ def test_builtin_catalog_includes_hotfix_and_simple() -> None:
     assert "default" in playbooks
     assert "hotfix" in playbooks
     assert "simple" in playbooks
+    assert "editorial" in playbooks
+    assert "research" in playbooks
+    assert "incident" in playbooks
 
 
 def test_builtin_hotfix_and_simple_playbooks_load() -> None:

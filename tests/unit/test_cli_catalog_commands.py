@@ -20,6 +20,9 @@ def test_playbook_list_includes_builtin_entries(tmp_path: Path, monkeypatch) -> 
     assert "default" in result.stdout
     assert "hotfix" in result.stdout
     assert "simple" in result.stdout
+    assert "editorial" in result.stdout
+    assert "research" in result.stdout
+    assert "incident" in result.stdout
 
 
 def test_playbook_show_displays_custom_override(tmp_path: Path, monkeypatch) -> None:
