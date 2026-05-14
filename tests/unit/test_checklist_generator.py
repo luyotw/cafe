@@ -574,7 +574,7 @@ class TestSpecDodInstruction:
 
         The status code parser (extract_all) scans the entire agent response for
         CAFE_ prefixed codes. If the DoD instruction contains a literal status code
-        like CAFE_READY_FOR_REVIEW, and the agent also returns CAFE_NEED_CLARIFICATION,
+        like ready_for_review, and the agent also returns need_clarification,
         the parser finds two different codes and returns None, causing the phase to fail.
         """
         instruction = checklist_templates.SPEC_DOD_INSTRUCTION

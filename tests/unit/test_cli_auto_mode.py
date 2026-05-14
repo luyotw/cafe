@@ -68,12 +68,12 @@ class TestAutoModeVariableScope:
             mock_run.return_value = MagicMock(returncode=0)
             mock_execute_alias.side_effect = [
                 {
-                    "status_code": "CAFE_READY_FOR_REVIEW",
+                    "status_code": "ready_for_review",
                     "iterations": 1,
                     "output_file": str(prepared_issue / "spec" / "iteration_001" / "output.md"),
                 },
                 {
-                    "status_code": "CAFE_CONFIRMED",
+                    "status_code": "confirmed",
                     "iterations": 2,
                     "output_file": str(prepared_issue / "spec" / "iteration_001" / "output.md"),
                 },
@@ -130,7 +130,7 @@ class TestAutoModeConfigPreservation:
         (spec_iter_dir / "output.md").write_text("# Test Spec")
         with patch('cafe.ui.cli._execute_single_step_alias') as mock_execute_alias:
             mock_execute_alias.return_value = {
-                "status_code": "CAFE_CONFIRMED",
+                "status_code": "confirmed",
                 "iterations": 2,
                 "output_file": str(prepared_issue / "plan" / "iteration_002" / "output.md"),
             }
@@ -243,7 +243,7 @@ class TestReviewMaxIterationsConfig:
              patch('cafe.ui.cli.subprocess.run') as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             mock_execute_alias.return_value = {
-                "status_code": "CAFE_CONFIRMED",
+                "status_code": "confirmed",
                 "iterations": 1,
                 "output_file": str(prepared_issue / "review" / "iteration_001" / "output.md"),
             }
@@ -269,7 +269,7 @@ class TestReviewMaxIterationsConfig:
         (review_iter_dir / "output.md").write_text("# Test Review")
         with patch('cafe.ui.cli._execute_single_step_alias') as mock_execute_alias:
             mock_execute_alias.return_value = {
-                "status_code": "CAFE_NEEDS_CHANGES",
+                "status_code": "needs_changes",
                 "iterations": 1,
                 "output_file": str(review_iter_dir / "output.md"),
             }

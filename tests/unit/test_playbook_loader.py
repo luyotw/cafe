@@ -36,9 +36,9 @@ steps:
   spec:
     role: pm
     skill: spec_first
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: _done
+      await_agent: _done
 """,
     )
     _write_playbook(
@@ -50,9 +50,9 @@ steps:
   spec:
     role: developer
     skill: spec_first
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: _done
+      await_agent: _done
 """,
     )
     _write_playbook(
@@ -67,9 +67,9 @@ steps:
   spec:
     role: reviewer
     skill: spec_first
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: _done
+      await_agent: _done
 """,
     )
 
@@ -102,9 +102,9 @@ steps:
       1: spec_first
       default: spec_revise
     role: pm
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: _done
+      await_agent: _done
 """,
     )
 
@@ -144,7 +144,7 @@ steps:
     hooks:
       after_execute:
         - script: sync_github.sh
-          when_status_codes: [CAFE_CONFIRMED]
+          when_intents: [confirmed]
           args:
             phase: plan
             output: "{output_file}"
@@ -158,10 +158,10 @@ steps:
                 enum: [spec, plan]
               output:
                 type: string
-    valid_status_codes: [CAFE_READY_FOR_REVIEW, CAFE_CONFIRMED]
+    valid_intents: [ready_for_review, confirmed]
     on:
-      CAFE_READY_FOR_REVIEW: plan
-      CAFE_CONFIRMED: _done
+      confirm_output: plan
+      await_agent: _done
 """,
     )
 
@@ -196,9 +196,9 @@ steps:
     hooks:
       publish_output:
         - script: sync_pr.sh
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: _done
+      await_agent: _done
 """,
     )
 
@@ -223,9 +223,9 @@ steps:
   spec:
     role: pm
     skill: missing_skill
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: _done
+      await_agent: _done
 """,
     )
 
@@ -250,10 +250,10 @@ steps:
   develop:
     role: developer
     skill: develop
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     allowed_goto: [review]
     on:
-      CAFE_CONFIRMED: _done
+      await_agent: _done
 """,
     )
 
@@ -278,9 +278,9 @@ steps:
   review:
     role: reviewer
     skill: review
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: not_exist
+      await_agent: not_exist
 """,
     )
 
@@ -307,9 +307,9 @@ steps:
     role: developer
     skill: develop
     allowed_tools: [Bash, "Bash(git:*)"]
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: _done
+      await_agent: _done
 """,
     )
 
@@ -337,9 +337,9 @@ steps:
     role: developer
     skill: develop
     allowed_tools: [Bash, "Bash(git:*)"]
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: _done
+      await_agent: _done
 """,
     )
 
@@ -374,4 +374,4 @@ def test_builtin_hotfix_and_simple_playbooks_load() -> None:
 
     assert simple.entry_point == "spec"
     assert list(simple.steps.keys()) == ["spec", "develop", "pr"]
-    assert simple.steps["develop"].on["CAFE_CONFIRMED"] == "pr"
+    assert simple.steps["develop"].on["await_agent"] == "pr"

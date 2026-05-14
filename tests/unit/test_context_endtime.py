@@ -77,7 +77,7 @@ class TestContextJsonEndTime:
         # Call _update_iteration_history
         phase._update_iteration_history(
             phase_specific_data=phase_specific_data,
-            status_code=MagicMock(value="CAFE_CONFIRMED"),
+            status_code=MagicMock(value="confirmed"),
         )
 
         # Verify context.json contains end_time field
@@ -108,7 +108,7 @@ class TestContextJsonEndTime:
                 "response": "done without status",
                 "status_code": "stale",
             },
-            status_code=MagicMock(value="CAFE_CONFIRMED"),
+            status_code=MagicMock(value="confirmed"),
             persist_status=False,
         )
 

@@ -1,76 +1,96 @@
-"""Status codes for phase execution control."""
+"""Step outcome tokens for workflow execution (non-legacy vocabulary)."""
+
+from __future__ import annotations
 
 from enum import Enum
 from typing import List, Optional, Set
 
+# Keys allowed in playbook step ``on`` maps (plus ``default``).
+PLAYBOOK_INTENT_KEYS: frozenset[str] = frozenset(
+    {
+        "await_agent",
+        "confirm_output",
+        "need_clarification",
+        "need_permission",
+        "workflow_complete",
+        "manual_handoff",
+    }
+)
+
 
 class PhaseStatusCode(str, Enum):
-    """Status codes that agents can return to control workflow.
+    """Agent-declared step outcomes.
 
-    These codes are designed to be:
-    - Prefixed with CAFE_ to avoid false positives
-    - Simple English words
-    - Token-efficient
-    - Easy for agents to understand and return
+    Values are plain tokens (no ``CAFE_`` prefix). Some values collapse to
+    playbook ``on`` keys via :func:`transition_map_key`; others already match
+    a playbook intent key.
     """
 
-    NO_RESPONSE = "CAFE_NO_RESPONSE"
-    CONFIRMED = "CAFE_CONFIRMED"
-    NEED_CLARIFICATION = "CAFE_NEED_CLARIFICATION"
-    REJECTED = "CAFE_REJECTED"
-    READY_FOR_REVIEW = "CAFE_READY_FOR_REVIEW"
-    NEEDS_CHANGES = "CAFE_NEEDS_CHANGES"
-    NO_CHANGES_NEEDED = "CAFE_NO_CHANGES_NEEDED"
-    CONFIRMED_SKIP_REVIEW = "CAFE_CONFIRMED_SKIP_REVIEW"
-    NEED_PERMISSION = "CAFE_NEED_PERMISSION"
+    AWAIT_AGENT = "await_agent"
+    CONFIRM_OUTPUT = "confirm_output"
+    NEED_CLARIFICATION = "need_clarification"
+    NEED_PERMISSION = "need_permission"
+    WORKFLOW_COMPLETE = "workflow_complete"
+    MANUAL_HANDOFF = "manual_handoff"
+
+    CONFIRMED = "confirmed"
+    READY_FOR_REVIEW = "ready_for_review"
+    NEEDS_CHANGES = "needs_changes"
+    NO_CHANGES_NEEDED = "no_changes_needed"
+    CONFIRMED_SKIP_REVIEW = "skip_review"
+    REJECTED = "rejected"
+    NO_RESPONSE = "no_response"
+
+
+def transition_map_key(code: PhaseStatusCode) -> str:
+    """Map a phase outcome to a playbook ``on`` transition key."""
+    if code.value in PLAYBOOK_INTENT_KEYS:
+        return code.value
+    collapsed: dict[PhaseStatusCode, str] = {
+        PhaseStatusCode.CONFIRMED: "await_agent",
+        PhaseStatusCode.NO_CHANGES_NEEDED: "await_agent",
+        PhaseStatusCode.NO_RESPONSE: "await_agent",
+        PhaseStatusCode.READY_FOR_REVIEW: "confirm_output",
+        PhaseStatusCode.NEED_CLARIFICATION: "need_clarification",
+        PhaseStatusCode.NEED_PERMISSION: "need_permission",
+        PhaseStatusCode.NEEDS_CHANGES: "manual_handoff",
+        PhaseStatusCode.CONFIRMED_SKIP_REVIEW: "manual_handoff",
+        PhaseStatusCode.REJECTED: "manual_handoff",
+    }
+    return collapsed.get(code, "manual_handoff")
 
 
 class StatusCodeParser:
-    """Parser for extracting status codes from agent responses."""
-
-    STATUS_CODE_ALIASES = {
-        "CAFE_SPEC_READY": PhaseStatusCode.READY_FOR_REVIEW.value,
-        "CAFE_PLAN_READY": PhaseStatusCode.READY_FOR_REVIEW.value,
-        "CAFE_DEVELOP_DONE": PhaseStatusCode.CONFIRMED.value,
-        "CAFE_PR_READY": PhaseStatusCode.READY_FOR_REVIEW.value,
-    }
-
-    @classmethod
-    def _normalize_aliases(cls, response: str) -> str:
-        normalized = response
-        for alias, canonical in cls.STATUS_CODE_ALIASES.items():
-            normalized = normalized.replace(alias, canonical)
-        return normalized
+    """Parser for extracting step outcome tokens from agent responses."""
 
     @staticmethod
     def extract(response: str, valid_codes: Optional[List[PhaseStatusCode]] = None) -> Optional[PhaseStatusCode]:
         if not response:
             return None
-        response = StatusCodeParser._normalize_aliases(response.upper())
         all_codes = StatusCodeParser.extract_all(response, valid_codes)
         if len(all_codes) > 1:
             return None
 
-        first_line = response.strip().split("\n")[0].strip().upper()
-        try:
-            code = PhaseStatusCode(first_line)
-            if valid_codes is None or code in valid_codes:
-                return code
-        except ValueError:
-            pass
+        first_line = response.strip().split("\n")[0].strip()
+        lowered = first_line.lower()
+        allowed = {c.value.lower(): c for c in (valid_codes or list(PhaseStatusCode))}
+        if lowered in allowed:
+            return allowed[lowered]
 
-        for code in sorted(PhaseStatusCode, key=lambda item: len(item.value), reverse=True):
-            if code.value in first_line and (valid_codes is None or code in valid_codes):
+        for token, code in sorted(allowed.items(), key=lambda item: len(item[0]), reverse=True):
+            if token in lowered:
                 return code
 
         if valid_codes:
-            for code in valid_codes:
-                if code.value in response:
+            haystack = response.lower()
+            for code in sorted(valid_codes, key=lambda item: len(item.value), reverse=True):
+                if code.value.lower() in haystack:
                     return code
 
         for code in sorted(PhaseStatusCode, key=lambda item: len(item.value), reverse=True):
-            if code.value in response and (valid_codes is None or code in valid_codes):
-                return code
+            if code.value.lower() in response.lower():
+                if valid_codes is None or code in valid_codes:
+                    return code
         return None
 
     @staticmethod
@@ -79,25 +99,26 @@ class StatusCodeParser:
             return set()
 
         found_codes: Set[PhaseStatusCode] = set()
-        response_upper = StatusCodeParser._normalize_aliases(response.upper())
+        haystack = response.lower()
         codes_to_check = sorted(
             valid_codes if valid_codes else list(PhaseStatusCode),
             key=lambda item: len(item.value),
             reverse=True,
         )
         for code in codes_to_check:
-            if code.value in response_upper:
-                if any(found.value.startswith(code.value) for found in found_codes):
+            token = code.value.lower()
+            if token in haystack:
+                if any(found.value.startswith(token) for found in found_codes):
                     continue
                 found_codes = {
-                    found for found in found_codes if not code.value.startswith(found.value)
+                    found for found in found_codes if not token.startswith(found.value.lower())
                 }
                 found_codes.add(code)
         return found_codes
 
     @staticmethod
     def is_success(code: Optional[PhaseStatusCode]) -> bool:
-        return code in {PhaseStatusCode.CONFIRMED}
+        return code in {PhaseStatusCode.CONFIRMED, PhaseStatusCode.AWAIT_AGENT}
 
     @staticmethod
     def is_failure(code: Optional[PhaseStatusCode]) -> bool:
@@ -109,6 +130,7 @@ class StatusCodeParser:
             PhaseStatusCode.NEED_CLARIFICATION,
             PhaseStatusCode.NEEDS_CHANGES,
             PhaseStatusCode.NEED_PERMISSION,
+            PhaseStatusCode.MANUAL_HANDOFF,
         }
 
     @staticmethod
@@ -117,13 +139,14 @@ class StatusCodeParser:
             PhaseStatusCode.NEED_PERMISSION,
             PhaseStatusCode.NEED_CLARIFICATION,
             PhaseStatusCode.READY_FOR_REVIEW,
+            PhaseStatusCode.CONFIRM_OUTPUT,
         }
 
 
 def generate_status_code_prompt(valid_codes: List[PhaseStatusCode], descriptions: dict) -> str:
-    """Generate prompt text instructing agent to use status codes."""
+    """Generate prompt text instructing the agent which outcome token to return."""
     lines = [
-        "Please clearly indicate the status code on the first line of your response (must include CAFE_ prefix):",
+        "Return exactly one outcome token on the first line of your response (snake_case, no legacy prefixes):",
         "",
     ]
     for code in valid_codes:
@@ -133,7 +156,7 @@ def generate_status_code_prompt(valid_codes: List[PhaseStatusCode], descriptions
         [
             "",
             "**Response format:**",
-            "- Return ONLY the status code on the first line",
+            "- Return ONLY the token on the first line",
             "- Do NOT include any summary or explanation",
         ]
     )

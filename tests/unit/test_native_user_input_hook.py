@@ -75,7 +75,7 @@ def test_user_input_collector_confirms_ready_for_review_without_running_agent(tm
     prev_iter_dir = phase_dir / "iteration_002"
     prev_iter_dir.mkdir(parents=True, exist_ok=True)
     (prev_iter_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
-    _record_previous_step_status(tmp_path, "spec", "CAFE_READY_FOR_REVIEW")
+    _record_previous_step_status(tmp_path, "spec", "ready_for_review")
 
     phase = _FakePhase(phase_dir=phase_dir, iteration=3)
     phase._ask_user_for_review_decision = MagicMock(return_value="confirm")
@@ -113,7 +113,7 @@ def test_user_input_collector_plan_ready_for_review_skips_full_output_display_wh
     prev_iter_dir = phase_dir / "iteration_002"
     prev_iter_dir.mkdir(parents=True, exist_ok=True)
     (prev_iter_dir / "output.md").write_text("# Plan v2\n", encoding="utf-8")
-    _record_previous_step_status(tmp_path, "plan", "CAFE_READY_FOR_REVIEW")
+    _record_previous_step_status(tmp_path, "plan", "ready_for_review")
 
     phase = _FakePhase(phase_dir=phase_dir, iteration=3)
     phase._ask_user_for_review_decision = MagicMock(return_value="confirm")
@@ -141,7 +141,7 @@ def test_user_input_collector_plan_ready_for_review_falls_back_to_full_output_wi
     prev_iter_dir = phase_dir / "iteration_001"
     prev_iter_dir.mkdir(parents=True, exist_ok=True)
     (prev_iter_dir / "output.md").write_text("# Plan\n", encoding="utf-8")
-    _record_previous_step_status(tmp_path, "plan", "CAFE_READY_FOR_REVIEW")
+    _record_previous_step_status(tmp_path, "plan", "ready_for_review")
 
     phase = _FakePhase(phase_dir=phase_dir, iteration=2)
     phase._ask_user_for_review_decision = MagicMock(return_value="confirm")
@@ -170,7 +170,7 @@ def test_user_input_collector_loads_interactive_qa_for_need_clarification(tmp_pa
     prev_iter_dir = phase_dir / "iteration_001"
     prev_iter_dir.mkdir(parents=True, exist_ok=True)
     (prev_iter_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
-    _record_previous_step_status(tmp_path, "spec", "CAFE_NEED_CLARIFICATION")
+    _record_previous_step_status(tmp_path, "spec", "need_clarification")
     (prev_iter_dir / "questions.xml").write_text(
         """<?xml version="1.0" encoding="UTF-8"?>
 <questions>
@@ -210,7 +210,7 @@ def test_user_input_collector_reuses_existing_user_input_file_without_reasking(t
     prev_iter_dir.mkdir(parents=True, exist_ok=True)
     current_iter_dir.mkdir(parents=True, exist_ok=True)
     (prev_iter_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
-    _record_previous_step_status(tmp_path, "spec", "CAFE_NEED_CLARIFICATION")
+    _record_previous_step_status(tmp_path, "spec", "need_clarification")
     (current_iter_dir / "user_input.md").write_text(
         "Q1: Question?\nA1: Confirmed answer",
         encoding="utf-8",
@@ -380,12 +380,12 @@ def test_execute_step_skips_checklist_validation_when_confirmed_without_agent_ru
 
     result = executor.execute_step(
         "spec",
-        {"role": "pm", "output_artifact": "spec", "valid_status_codes": ["CAFE_CONFIRMED"]},
+        {"role": "pm", "output_artifact": "spec", "valid_intents": ["confirmed"]},
         MagicMock(artifacts={}),
     )
 
     assert isinstance(result, StepExecutionResult)
-    assert result.status_code == "CAFE_CONFIRMED"
+    assert result.status_code == "confirmed"
     executor._validate_and_retry_checklist_completion.assert_not_called()
 
 

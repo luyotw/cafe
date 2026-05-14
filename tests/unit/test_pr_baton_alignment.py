@@ -56,7 +56,7 @@ def test_align_pr_baton_updates_when_needs_changes_and_stale(tmp_path: Path) -> 
         playbook=playbook,
         blackboard_state=state,
         step_name="pr",
-        status_code="CAFE_NEEDS_CHANGES",
+        status_code="needs_changes",
     )
 
     loaded = BlackboardStore(issue_dir).load_or_create("pr", playbook_id="default")
@@ -97,7 +97,7 @@ def test_align_pr_baton_noop_when_status_not_needs_changes(tmp_path: Path) -> No
         playbook=playbook,
         blackboard_state=state,
         step_name="pr",
-        status_code="CAFE_CONFIRMED",
+        status_code="confirmed",
     )
 
     loaded = BlackboardStore(issue_dir).load_or_create("pr", playbook_id="default")

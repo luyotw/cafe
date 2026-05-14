@@ -260,7 +260,7 @@ class ReviewPhase(Phase):
             result, response = self._execute_and_handle_agent_response(
                 agent_name=self.review_agent,
                 user_input="",  # Review doesn't need user input
-                valid_status_codes=[
+                valid_intents=[
                     PhaseStatusCode.CONFIRMED,
                     PhaseStatusCode.NEEDS_CHANGES,
                 ],
@@ -503,10 +503,10 @@ git rebase --onto {self.base_branch} {self.base_branch} HEAD --exec '
 
 Based on the following conditions, determine which status code to return:
 
-- CAFE_CONFIRMED: Code review passed, no issues to fix
-- CAFE_NEEDS_CHANGES: Issues need to be fixed
+- confirmed: Code review passed, no issues to fix
+- needs_changes: Issues need to be fixed
 
-Please only return one status code (e.g., CAFE_CONFIRMED) without any other content."""
+Please only return one status code (e.g., confirmed) without any other content."""
 
     def _detect_written_output_files(self) -> List[Path]:
         """Check if review file was written before failure.

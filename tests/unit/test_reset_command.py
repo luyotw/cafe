@@ -246,10 +246,10 @@ class TestIterationRemovalAndStatusUpdate:
         status_data = {
             "phase": "spec",
             "status": "completed",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "timestamp": "2024-01-03T00:00:00+00:00",
             "iteration": 3,
-            "message": "Phase completed with CAFE_CONFIRMED",
+            "message": "Phase completed with confirmed",
             "end_time": "2024-01-03T00:00:00+00:00",
         }
         status_path.write_text(json.dumps(status_data))
@@ -283,7 +283,7 @@ class TestIterationRemovalAndStatusUpdate:
             "iteration": 3,
             "timestamp": "2024-01-03T10:00:00+00:00",
             "end_time": "2024-01-03T10:30:00+00:00",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
         }
         iter3_context.write_text(json.dumps(context_data))
 
@@ -298,7 +298,7 @@ class TestIterationRemovalAndStatusUpdate:
             "status_code": loaded_context.get("status_code"),
             "timestamp": target_timestamp,
             "iteration": 3,
-            "message": "Phase completed with CAFE_CONFIRMED",
+            "message": "Phase completed with confirmed",
             "end_time": target_end_time or target_timestamp,
         }
 
@@ -316,7 +316,7 @@ class TestIterationRemovalAndStatusUpdate:
         context_data = {
             "iteration": 3,
             "timestamp": "2024-01-03T10:00:00+00:00",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             # No end_time field
         }
         iter3_context.write_text(json.dumps(context_data))
@@ -332,7 +332,7 @@ class TestIterationRemovalAndStatusUpdate:
             "status_code": loaded_context.get("status_code"),
             "timestamp": target_timestamp,
             "iteration": 3,
-            "message": "Phase completed with CAFE_CONFIRMED",
+            "message": "Phase completed with confirmed",
             "end_time": target_end_time or target_timestamp,  # Fallback to timestamp
         }
 

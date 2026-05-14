@@ -48,7 +48,7 @@ class TestPRCommand:
     def test_pr_uses_workflow_alias(self, mock_git_cls, mock_execute_alias, temp_repo_dir):
         _mock_git(mock_git_cls)
         mock_execute_alias.return_value = {
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "iterations": 1,
             "output_file": ".cafe/issues/test-issue/pr/iteration_001/output.md",
         }

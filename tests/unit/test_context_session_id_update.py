@@ -32,7 +32,7 @@ class TestContextSessionIDUpdate:
             executor.config.session_id = "new-session-123"
 
             return (
-                "CAFE_READY_FOR_REVIEW",
+                "ready_for_review",
                 TokenUsage(),
                 [],  # permission_denials
                 ["--model", "claude-sonnet-4.5"],  # cli_command_args

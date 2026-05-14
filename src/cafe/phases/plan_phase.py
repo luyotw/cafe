@@ -291,7 +291,7 @@ class PlanPhase(Phase):
             result, response = self._execute_and_handle_agent_response(
                 agent_name=self.dev_agent,
                 user_input=current_user_input,
-                valid_status_codes=[
+                valid_intents=[
                     PhaseStatusCode.READY_FOR_REVIEW,
                     PhaseStatusCode.NEED_CLARIFICATION,
                     PhaseStatusCode.NEED_PERMISSION,
@@ -456,8 +456,8 @@ Analyze {spec_file_path} and plan implementation steps.
 {rewrite_guardrails}
 
 **Output Format:**
-- **CAFE_NEED_CLARIFICATION**: Append \"## Implementation Plan\" and \"## Questions to Confirm\" sections
-- **CAFE_READY_FOR_REVIEW**: Append complete implementation plan following template structure
+- **need_clarification**: Append \"## Implementation Plan\" and \"## Questions to Confirm\" sections
+- **ready_for_review**: Append complete implementation plan following template structure
 
 {status_code_prompt}
 """
@@ -497,8 +497,8 @@ Continue analyzing the latest version of {spec_file_path}.
 {rewrite_guardrails}
 
 **Output Format:**
-- **CAFE_NEED_CLARIFICATION**: Update relevant sections and list questions in \"## Questions to Confirm\"
-- **CAFE_READY_FOR_REVIEW**: Update sections to meet user's requirements
+- **need_clarification**: Update relevant sections and list questions in \"## Questions to Confirm\"
+- **ready_for_review**: Update sections to meet user's requirements
 
 {status_code_prompt}
 """
@@ -600,7 +600,7 @@ Continue analyzing the latest version of {spec_file_path}.
         prev_status = self._context_status_code(prev_data) or ""
 
         # Get user input based on previous round status
-        if prev_status == "CAFE_READY_FOR_REVIEW":
+        if prev_status == "ready_for_review":
             # Need user choice: confirm/modify
             if self.interactive:
                 # Display delta from previous iteration before asking for decision
@@ -629,7 +629,7 @@ Continue analyzing the latest version of {spec_file_path}.
                         data={
                             "iterations": self.iteration - 1,
                             "last_response": prev_data.get("response", ""),
-                            "status_code": "CAFE_READY_FOR_REVIEW",
+                            "status_code": "ready_for_review",
                         },
                     )
 
@@ -643,7 +643,7 @@ Continue analyzing the latest version of {spec_file_path}.
             
             return result_or_input
 
-        elif prev_status == "CAFE_NEED_CLARIFICATION":
+        elif prev_status == "need_clarification":
             return self._handle_need_clarification_input(prev_data, agent_display_name="Developer")
         else:
             return ""
@@ -716,10 +716,10 @@ Continue analyzing the latest version of {spec_file_path}.
 
 Based on the following conditions, determine which status code to return:
 
-- CAFE_READY_FOR_REVIEW: Implementation plan is complete, ready for user review
-- CAFE_NEED_CLARIFICATION: There are still questions that need confirmation with user
+- ready_for_review: Implementation plan is complete, ready for user review
+- need_clarification: There are still questions that need confirmation with user
 
-Please only return one status code (e.g., CAFE_READY_FOR_REVIEW) without any other content."""
+Please only return one status code (e.g., ready_for_review) without any other content."""
 
     def _detect_written_output_files(self) -> List[Path]:
         """Check if plan file was written before failure.

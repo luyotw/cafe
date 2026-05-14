@@ -127,8 +127,8 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
                 "role": "pm",
                 "output_artifact": "spec",
                 "allowed_tools": ["Read"],
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             }
         },
     }
@@ -140,14 +140,14 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
         issue_name="issue-1",
         playbook=playbook,
         generic_phase=_build_loader(tmp_path),
-        agent_manager=FakeAgentManager("CAFE_CONFIRMED"),
+        agent_manager=FakeAgentManager("confirmed"),
         git_ops=FakeGitOperations(),
         role_agent_map={"pm": "Roger"},
     )
 
     result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
-    assert result.response == "CAFE_CONFIRMED"
+    assert result.response == "confirmed"
     assert "spec" in result.artifacts
     iteration_dir = issue_dir / "spec" / "iteration_001"
     assert (iteration_dir / "context.json").exists()
@@ -161,7 +161,7 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert reloaded.handoff_contract.to_owner == HandoffOwner.DONE
     assert reloaded.handoff_contract.to_step == "done"
     assert reloaded.handoff_contract.intent == HandoffIntent.WORKFLOW_COMPLETE
-    assert reloaded.handoff_contract.status_code == "CAFE_CONFIRMED"
+    assert reloaded.handoff_contract.status_code == "confirmed"
     assert reloaded.handoff_contract.source == "workflow.status_transition_adapter"
 
 
@@ -177,8 +177,8 @@ def test_generic_workflow_step_writes_review_pause_contract(tmp_path: Path, monk
                 "role": "pm",
                 "output_artifact": "spec",
                 "allowed_tools": ["Read"],
-                "valid_status_codes": ["CAFE_READY_FOR_REVIEW", "CAFE_CONFIRMED"],
-                "on": {"CAFE_READY_FOR_REVIEW": "spec", "CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["ready_for_review", "confirmed"],
+                "on": {"confirm_output": "spec", "await_agent": "_done"},
             }
         },
     }
@@ -188,14 +188,14 @@ def test_generic_workflow_step_writes_review_pause_contract(tmp_path: Path, monk
         issue_name="issue-review-pause",
         playbook=playbook,
         generic_phase=_build_loader(tmp_path),
-        agent_manager=FakeAgentManager("CAFE_READY_FOR_REVIEW"),
+        agent_manager=FakeAgentManager("ready_for_review"),
         git_ops=FakeGitOperations(),
         role_agent_map={"pm": "Roger"},
     )
 
     result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
-    assert result.status_code == "CAFE_READY_FOR_REVIEW"
+    assert result.status_code == "ready_for_review"
     reloaded = BlackboardStore(issue_dir).load_or_create("spec")
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
@@ -216,13 +216,13 @@ def test_generic_workflow_step_does_not_retry_for_legacy_status_tokens(tmp_path:
                 "role": "pm",
                 "output_artifact": "spec",
                 "allowed_tools": ["Read"],
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             }
         },
     }
     state = BlackboardStore(issue_dir).load_or_create("spec")
-    agent_manager = FakeAgentManager(["CAFE_SPEC_READY", "CAFE_CONFIRMED"])
+    agent_manager = FakeAgentManager(["ready_for_review", "confirmed"])
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-status-retry",
@@ -245,7 +245,7 @@ def test_generic_workflow_step_executor_uses_iteration_specific_skill_mapping(tm
     phase_dir = issue_dir / "spec" / "iteration_001"
     phase_dir.mkdir(parents=True, exist_ok=True)
     (phase_dir / "context.json").write_text(
-        '{"iteration": 1, "response": "CAFE_CONFIRMED", "end_time": "2026-04-09T00:00:00+08:00"}',
+        '{"iteration": 1, "response": "confirmed", "end_time": "2026-04-09T00:00:00+08:00"}',
         encoding="utf-8",
     )
 
@@ -258,8 +258,8 @@ def test_generic_workflow_step_executor_uses_iteration_specific_skill_mapping(tm
                 "role": "pm",
                 "output_artifact": "spec",
                 "allowed_tools": ["Read"],
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             }
         },
     }
@@ -281,7 +281,7 @@ def test_generic_workflow_step_executor_uses_iteration_specific_skill_mapping(tm
         issue_name="issue-2",
         playbook=playbook,
         generic_phase=generic_phase,
-        agent_manager=FakeAgentManager("CAFE_CONFIRMED"),
+        agent_manager=FakeAgentManager("confirmed"),
         git_ops=FakeGitOperations(),
         role_agent_map={"pm": "Roger"},
     )
@@ -303,8 +303,8 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
                 "role": "reviewer",
                 "output_artifact": "review_feedback",
                 "allowed_tools": ["Read"],
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             }
         },
     }
@@ -324,7 +324,7 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
         issue_name="issue-review-skill",
         playbook=playbook,
         generic_phase=generic_phase,
-        agent_manager=FakeAgentManager("CAFE_CONFIRMED"),
+        agent_manager=FakeAgentManager("confirmed"),
         git_ops=FakeGitOperations(),
         role_agent_map={"reviewer": "Richard"},
     )
@@ -348,8 +348,8 @@ def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(tmp_pat
                 "role": "developer",
                 "output_artifact": "code",
                 "allowed_tools": ["Read"],
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             }
         },
     }
@@ -367,7 +367,7 @@ def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(tmp_pat
         state,
         "還要再實作 cafe skill rm，支援批次刪除、interactive 多選與 confirm。",
     )
-    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    agent_manager = FakeAgentManager("confirmed")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-handoff",
@@ -396,8 +396,8 @@ def test_generic_workflow_step_prompt_keeps_skill_invocations_only(tmp_path: Pat
                 "role": "developer",
                 "output_artifact": "pr",
                 "allowed_tools": ["Read"],
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             }
         },
     }
@@ -411,7 +411,7 @@ def test_generic_workflow_step_prompt_keeps_skill_invocations_only(tmp_path: Pat
     plan_file.write_text("# Plan\n", encoding="utf-8")
     store.set_artifact(state, "spec", str(spec_file))
     store.set_artifact(state, "plan", str(plan_file))
-    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    agent_manager = FakeAgentManager("confirmed")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-pr-skill-body",
@@ -445,8 +445,8 @@ def test_generic_workflow_step_pr_prompt_overrides_external_state_guardrail(tmp_
                 "role": "developer",
                 "output_artifact": "pr",
                 "allowed_tools": ["Read"],
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             }
         },
     }
@@ -461,7 +461,7 @@ def test_generic_workflow_step_pr_prompt_overrides_external_state_guardrail(tmp_
     store.set_artifact(state, "spec", str(spec_file))
     store.set_artifact(state, "plan", str(plan_file))
     store.set_handoff_summary(state, "原本的 pr script 有問題，我把 pr 砍掉了麻煩重發一次")
-    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    agent_manager = FakeAgentManager("confirmed")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-pr-guardrail",
@@ -492,8 +492,8 @@ def test_generic_workflow_step_writes_pr_publish_request_contract(tmp_path: Path
                 "role": "developer",
                 "output_artifact": "pr",
                 "allowed_tools": ["Read"],
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             }
         },
     }
@@ -509,7 +509,7 @@ def test_generic_workflow_step_writes_pr_publish_request_contract(tmp_path: Path
     issue_yaml.write_text("base_branch: v02\n", encoding="utf-8")
     store.set_artifact(state, "spec", str(spec_file))
     store.set_artifact(state, "plan", str(plan_file))
-    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    agent_manager = FakeAgentManager("confirmed")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-pr-contract",
@@ -550,11 +550,11 @@ def test_generic_workflow_step_collects_clarification_before_next_agent_run(
                 "role": "pm",
                 "output_artifact": "spec",
                 "allowed_tools": ["Read"],
-                "valid_status_codes": ["CAFE_NEED_CLARIFICATION", "CAFE_CONFIRMED"],
+                "valid_intents": ["need_clarification", "confirmed"],
                 "hooks": {"prepare_input": ["UserInputCollector"]},
                 "on": {
-                    "CAFE_NEED_CLARIFICATION": "spec",
-                    "CAFE_CONFIRMED": "_done",
+                    "need_clarification": "spec",
+                    "await_agent": "_done",
                 },
             }
         },
@@ -562,7 +562,7 @@ def test_generic_workflow_step_collects_clarification_before_next_agent_run(
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("spec")
     def _write_questions_xml(*, response: str, streaming_output_file: str | None, **_: object) -> None:
-        if response != "CAFE_NEED_CLARIFICATION" or not streaming_output_file:
+        if response != "need_clarification" or not streaming_output_file:
             return
         iteration_dir = Path(streaming_output_file).parent
         (iteration_dir / "questions.xml").write_text(
@@ -581,7 +581,7 @@ def test_generic_workflow_step_collects_clarification_before_next_agent_run(
         )
 
     agent_manager = FakeAgentManager(
-        ["CAFE_NEED_CLARIFICATION", "CAFE_CONFIRMED"],
+        ["need_clarification", "confirmed"],
         on_execute=_write_questions_xml,
     )
     executor = GenericWorkflowStepExecutor(
@@ -595,7 +595,7 @@ def test_generic_workflow_step_collects_clarification_before_next_agent_run(
     )
 
     first_result = executor.execute_step("spec", playbook["steps"]["spec"], state)
-    assert first_result.response == "CAFE_NEED_CLARIFICATION"
+    assert first_result.response == "need_clarification"
     assert first_result.auto_continue is False
 
     # Mirror the runtime which records a `step_completed` event after each step
@@ -613,7 +613,7 @@ def test_generic_workflow_step_collects_clarification_before_next_agent_run(
     ):
         second_result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
-    assert second_result.response == "CAFE_CONFIRMED"
+    assert second_result.response == "confirmed"
     assert any(
         "Current user input for this iteration:" in prompt and "A1: CLI only" in prompt
         for prompt in agent_manager.prompts
@@ -635,11 +635,11 @@ def test_initial_requirements_collection_does_not_auto_continue_clarification(
                 "role": "pm",
                 "output_artifact": "spec",
                 "allowed_tools": ["Read"],
-                "valid_status_codes": ["CAFE_NEED_CLARIFICATION", "CAFE_CONFIRMED"],
+                "valid_intents": ["need_clarification", "confirmed"],
                 "hooks": {"prepare_input": ["GitHubIssueFetcher"]},
                 "on": {
-                    "CAFE_NEED_CLARIFICATION": "spec",
-                    "CAFE_CONFIRMED": "_done",
+                    "need_clarification": "spec",
+                    "await_agent": "_done",
                 },
             }
         },
@@ -655,7 +655,7 @@ def test_initial_requirements_collection_does_not_auto_continue_clarification(
         issue_name="issue-initial-input",
         playbook=playbook,
         generic_phase=_build_loader(tmp_path),
-        agent_manager=FakeAgentManager("CAFE_NEED_CLARIFICATION"),
+        agent_manager=FakeAgentManager("need_clarification"),
         git_ops=FakeGitOperations(),
         role_agent_map={"pm": "Roger"},
         step_user_inputs={"spec": "Initial issue text"},
@@ -663,7 +663,7 @@ def test_initial_requirements_collection_does_not_auto_continue_clarification(
 
     result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
-    assert result.status_code == "CAFE_NEED_CLARIFICATION"
+    assert result.status_code == "need_clarification"
     assert result.auto_continue is False
     reloaded = BlackboardStore(issue_dir).load_or_create("spec")
     assert reloaded.handoff_contract is not None
@@ -685,8 +685,8 @@ def test_generic_workflow_step_records_script_hook_events_to_blackboard(tmp_path
                 "output_artifact": "code",
                 "allowed_tools": ["Read"],
                 "hooks": {"before_execute": ["ScriptHook"]},
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             }
         },
     }
@@ -734,14 +734,14 @@ def test_generic_workflow_step_records_script_hook_events_to_blackboard(tmp_path
         issue_name="issue-script-event",
         playbook=playbook,
         generic_phase=phase_with_hook,
-        agent_manager=FakeAgentManager("CAFE_CONFIRMED"),
+        agent_manager=FakeAgentManager("confirmed"),
         git_ops=FakeGitOperations(),
         role_agent_map={"developer": "David"},
     )
 
     result = executor.execute_step("develop", playbook["steps"]["develop"], state)
 
-    assert result.status_code == "CAFE_CONFIRMED"
+    assert result.status_code == "confirmed"
     reloaded = BlackboardStore(issue_dir).load_or_create("develop")
     script_event = next(item for item in reloaded.events if item.event_type == "script_hook")
     assert script_event.data["script"] == "demo.sh"
@@ -755,11 +755,11 @@ def test_generic_workflow_step_auto_continues_pause_statuses_in_interactive_mode
     spec_dir.mkdir(parents=True, exist_ok=True)
     (spec_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
     (spec_dir / "context.json").write_text(
-        '{"iteration":1,"status_code":"CAFE_CONFIRMED"}',
+        '{"iteration":1,"status_code":"confirmed"}',
         encoding="utf-8",
     )
     (issue_dir / "spec" / "status.json").write_text(
-        '{"phase":"spec","status":"completed","status_code":"CAFE_CONFIRMED","iteration":1}',
+        '{"phase":"spec","status":"completed","status_code":"confirmed","iteration":1}',
         encoding="utf-8",
     )
     playbook = {
@@ -771,8 +771,8 @@ def test_generic_workflow_step_auto_continues_pause_statuses_in_interactive_mode
                 "role": "developer",
                 "output_artifact": "plan",
                 "allowed_tools": ["Read"],
-                "valid_status_codes": ["CAFE_READY_FOR_REVIEW"],
-                "on": {"CAFE_READY_FOR_REVIEW": "plan"},
+                "valid_intents": ["ready_for_review"],
+                "on": {"confirm_output": "plan"},
             }
         },
     }
@@ -782,7 +782,7 @@ def test_generic_workflow_step_auto_continues_pause_statuses_in_interactive_mode
         issue_name="issue-review",
         playbook=playbook,
         generic_phase=_build_loader(tmp_path),
-        agent_manager=FakeAgentManager("CAFE_READY_FOR_REVIEW"),
+        agent_manager=FakeAgentManager("ready_for_review"),
         git_ops=FakeGitOperations(),
         role_agent_map={"developer": "David"},
         interactive=True,
@@ -790,7 +790,7 @@ def test_generic_workflow_step_auto_continues_pause_statuses_in_interactive_mode
 
     result = executor.execute_step("plan", playbook["steps"]["plan"], state)
 
-    assert result.response == "CAFE_READY_FOR_REVIEW"
+    assert result.response == "ready_for_review"
     assert result.auto_continue is True
 
 
@@ -806,8 +806,8 @@ def test_generic_workflow_step_keeps_missing_status_without_continue_prompt(tmp_
                 "role": "pm",
                 "output_artifact": "spec",
                 "allowed_tools": ["Read"],
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             }
         },
     }
@@ -818,7 +818,7 @@ def test_generic_workflow_step_keeps_missing_status_without_continue_prompt(tmp_
         issue_name="issue-no-status",
         playbook=playbook,
         generic_phase=_build_loader(tmp_path),
-        agent_manager=FakeAgentManager(["done without status", "CAFE_CONFIRMED"]),
+        agent_manager=FakeAgentManager(["done without status", "confirmed"]),
         git_ops=FakeGitOperations(),
         role_agent_map={"pm": "Roger"},
     )
@@ -844,8 +844,8 @@ def test_generic_workflow_step_does_not_recover_from_unchanged_output(tmp_path: 
                 "role": "developer",
                 "output_artifact": "code",
                 "allowed_tools": ["Read"],
-                "valid_status_codes": ["CAFE_CONFIRMED", "CAFE_NO_CHANGES_NEEDED"],
-                "on": {"CAFE_CONFIRMED": "review", "CAFE_NO_CHANGES_NEEDED": "review"},
+                "valid_intents": ["confirmed", "no_changes_needed"],
+                "on": {"await_agent": "review", "await_agent": "review"},
             }
         },
     }
@@ -891,13 +891,13 @@ def test_generic_workflow_step_restores_spec_runtime_allowed_tools(tmp_path: Pat
                 "role": "pm",
                 "output_artifact": "spec",
                 "allowed_tools": ["Read", "Grep", "Glob", "WebFetch", "WebSearch"],
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             }
         },
     }
     state = BlackboardStore(issue_dir).load_or_create("spec")
-    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    agent_manager = FakeAgentManager("confirmed")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-spec-tools",
@@ -934,8 +934,8 @@ def test_generic_workflow_step_restores_develop_runtime_allowed_tools(tmp_path: 
                 "role": "developer",
                 "output_artifact": "code",
                 "allowed_tools": ["Read", "Edit", "Write", "Grep", "Glob", "Bash", "WebFetch", "WebSearch"],
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             }
         },
     }
@@ -949,7 +949,7 @@ def test_generic_workflow_step_restores_develop_runtime_allowed_tools(tmp_path: 
     plan_file.write_text("# Plan\n", encoding="utf-8")
     store.set_artifact(state, "spec", str(spec_file))
     store.set_artifact(state, "plan", str(plan_file))
-    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    agent_manager = FakeAgentManager("confirmed")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-develop-tools",
@@ -986,8 +986,8 @@ def test_generic_workflow_step_restores_review_runtime_allowed_tools(tmp_path: P
                 "role": "reviewer",
                 "output_artifact": "review_feedback",
                 "allowed_tools": ["Read", "Grep", "Glob", "Bash(git:*)"],
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             }
         },
     }
@@ -1001,7 +1001,7 @@ def test_generic_workflow_step_restores_review_runtime_allowed_tools(tmp_path: P
     plan_file.write_text("# Plan\n", encoding="utf-8")
     store.set_artifact(state, "spec", str(spec_file))
     store.set_artifact(state, "plan", str(plan_file))
-    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    agent_manager = FakeAgentManager("confirmed")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-review-tools",
@@ -1043,8 +1043,8 @@ def test_generic_workflow_step_restores_pr_runtime_allowed_tools(tmp_path: Path,
                 "input_artifacts": ["spec", "plan", "review_feedback"],
                 "output_artifact": "pr_result",
                 "allowed_tools": ["Read", "Edit", "Write", "Grep", "Glob", "Bash", "WebFetch", "WebSearch"],
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             }
         },
     }
@@ -1062,7 +1062,7 @@ def test_generic_workflow_step_restores_pr_runtime_allowed_tools(tmp_path: Path,
     store.set_artifact(state, "spec", str(spec_file))
     store.set_artifact(state, "plan", str(plan_file))
     store.set_artifact(state, "review_feedback", str(review_file))
-    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    agent_manager = FakeAgentManager("confirmed")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-pr-tools",
@@ -1101,7 +1101,7 @@ def test_generic_workflow_step_pr_does_not_require_status_code(tmp_path: Path, m
                 "role": "developer",
                 "output_artifact": "pr_result",
                 "allowed_tools": ["Read"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "on": {"await_agent": "_done"},
             }
         },
     }
@@ -1158,8 +1158,8 @@ def test_generic_workflow_step_pr_does_not_parse_status_from_response(tmp_path: 
                 "role": "developer",
                 "output_artifact": "pr_result",
                 "allowed_tools": ["Read"],
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             }
         },
     }
@@ -1191,7 +1191,7 @@ def test_generic_workflow_step_pr_does_not_parse_status_from_response(tmp_path: 
 
     def fake_execute(*args, **kwargs):
         return GenericPhaseExecution(
-            response="CAFE_CONFIRMED",
+            response="confirmed",
             status_code=None,
             goto_target=None,
             context_updates={},
@@ -1202,7 +1202,7 @@ def test_generic_workflow_step_pr_does_not_parse_status_from_response(tmp_path: 
 
     result = executor.execute_step("pr", playbook["steps"]["pr"], state)
 
-    assert result.response == "CAFE_CONFIRMED"
+    assert result.response == "confirmed"
     assert result.status_code is None
     assert all(event.get("type") != "handoff_intent" for event in result.events)
 
@@ -1222,7 +1222,7 @@ def test_generic_workflow_step_pr_aligns_baton_when_execute_returns_needs_change
                 "role": "developer",
                 "output_artifact": "pr_result",
                 "allowed_tools": ["Read"],
-                "on": {"CAFE_NEEDS_CHANGES": "develop"},
+                "on": {"manual_handoff": "develop"},
             },
             "develop": {"skill": "develop", "role": "developer", "allowed_tools": ["Read"]},
         },
@@ -1272,7 +1272,7 @@ def test_generic_workflow_step_pr_aligns_baton_when_execute_returns_needs_change
 
     def fake_execute(*args, **kwargs):
         return GenericPhaseExecution(
-            response="CAFE_NEEDS_CHANGES",
+            response="needs_changes",
             status_code=PhaseStatusCode.NEEDS_CHANGES,
             goto_target=None,
             context_updates={},
@@ -1283,7 +1283,7 @@ def test_generic_workflow_step_pr_aligns_baton_when_execute_returns_needs_change
 
     result = executor.execute_step("pr", playbook["steps"]["pr"], state)
 
-    assert result.status_code == "CAFE_NEEDS_CHANGES"
+    assert result.status_code == "needs_changes"
     reloaded = BlackboardStore(issue_dir).load_or_create("pr")
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.to_step == "develop"
@@ -1303,7 +1303,7 @@ def test_generic_workflow_step_pr_prompt_uses_baton_wording(tmp_path: Path, monk
                 "role": "developer",
                 "output_artifact": "pr_result",
                 "allowed_tools": ["Read"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "on": {"await_agent": "_done"},
             }
         },
     }
@@ -1356,8 +1356,8 @@ def test_generic_workflow_step_applies_phase_specific_model_per_step(tmp_path: P
                 "role": "pm",
                 "output_artifact": "spec",
                 "allowed_tools": ["Read"],
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "plan"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "plan"},
             },
             "plan": {
                 "skill": "plan",
@@ -1365,8 +1365,8 @@ def test_generic_workflow_step_applies_phase_specific_model_per_step(tmp_path: P
                 "output_artifact": "plan",
                 "allowed_tools": ["Read"],
                 "input_artifacts": ["spec"],
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             },
         },
     }
@@ -1379,7 +1379,7 @@ def test_generic_workflow_step_applies_phase_specific_model_per_step(tmp_path: P
         checklist_file.write_text("- [x] completed\n", encoding="utf-8")
 
     agent_manager = FakeAgentManager(
-        ["CAFE_CONFIRMED", "CAFE_CONFIRMED"],
+        ["confirmed", "confirmed"],
         on_execute=_mark_checklist_complete,
     )
     executor = GenericWorkflowStepExecutor(
@@ -1420,8 +1420,8 @@ def test_generic_workflow_step_develop_confirmed(tmp_path: Path, monkeypatch) ->
                 "role": "developer",
                 "output_artifact": "code",
                 "allowed_tools": ["Read"],
-                "valid_status_codes": ["CAFE_CONFIRMED", "CAFE_NEED_CLARIFICATION"],
-                "on": {"CAFE_CONFIRMED": "review", "CAFE_NEED_CLARIFICATION": "develop"},
+                "valid_intents": ["confirmed", "need_clarification"],
+                "on": {"await_agent": "review", "need_clarification": "develop"},
             },
         },
     }
@@ -1447,7 +1447,7 @@ def test_generic_workflow_step_develop_confirmed(tmp_path: Path, monkeypatch) ->
         playbook=playbook,
         generic_phase=_build_loader(tmp_path),
         agent_manager=FakeAgentManager(
-            "CAFE_CONFIRMED",
+            "confirmed",
             on_execute=_mark_checklist_complete,
         ),
         git_ops=FakeGitOperations(),
@@ -1456,4 +1456,4 @@ def test_generic_workflow_step_develop_confirmed(tmp_path: Path, monkeypatch) ->
 
     result = executor.execute_step("develop", playbook["steps"]["develop"], state)
 
-    assert result.status_code == "CAFE_CONFIRMED"
+    assert result.status_code == "confirmed"

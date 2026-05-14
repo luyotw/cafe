@@ -25,7 +25,7 @@ def test_generate_plan_checklist_includes_xml_instruction_when_path_provided(tmp
     # Verify XML schema and file path are included
     assert str(questions_xml_file) in content
     assert "<questions>" in content
-    assert "CAFE_NEED_CLARIFICATION" in content
+    assert "need_clarification" in content
 
 
 def test_generate_plan_checklist_without_xml_file_omits_instruction(tmp_path):
@@ -46,7 +46,7 @@ def test_generate_plan_checklist_without_xml_file_omits_instruction(tmp_path):
     content = checklist_path.read_text()
 
     assert "<questions>" not in content
-    assert "CAFE_NEED_CLARIFICATION" not in content
+    assert "need_clarification" not in content
 
 
 def test_generate_plan_checklist_iteration_n_includes_xml_instruction(tmp_path):

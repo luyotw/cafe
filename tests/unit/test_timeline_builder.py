@@ -283,7 +283,7 @@ class TestTimelineEntryWithTokenUsage:
             end_time=datetime.now(timezone.utc),
             status=PhaseStatus.COMPLETED,
             iteration=1,
-            status_code="CAFE_CONFIRMED",
+            status_code="confirmed",
             cli="gemini",
             model="gemini-2.5-flash",
             input_tokens=109260,
@@ -344,7 +344,7 @@ class TestPopulateTokenUsageInIterations:
             "iteration": 1,
             "timestamp": "2026-01-31T10:00:00+08:00",
             "end_time": "2026-01-31T10:15:00+08:00",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "cli": "gemini",
             "model": "gemini-2.5-flash",
             "stats": {
@@ -371,7 +371,7 @@ class TestPopulateTokenUsageInIterations:
         iteration_status = {
             "iteration": 1,
             "timestamp": "2026-01-31T10:00:00+08:00",
-            "status_code": "CAFE_CONFIRMED"
+            "status_code": "confirmed"
         }
 
         entry = builder._create_iteration_entry("spec", iteration_status)
@@ -390,7 +390,7 @@ class TestPopulateTokenUsageInIterations:
         iteration_status = {
             "iteration": 1,
             "timestamp": "2026-01-31T10:00:00+08:00",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "cli": "claude",
             "model": "claude-3-5-sonnet",
             "stats": {
@@ -417,7 +417,7 @@ class TestPopulateTokenUsageInIterations:
             "iteration": 1,
             "timestamp": "2026-01-31T10:00:00+08:00",
             "end_time": "2026-01-31T10:15:00+08:00",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "cli": "claude",
             "model": "claude-3-5-sonnet",
             "stats": {
@@ -460,7 +460,7 @@ class TestPopulateTokenUsageInIterations:
                 "iteration": 1,
                 "timestamp": "2026-01-31T10:00:00+08:00",
                 "end_time": "2026-01-31T10:15:00+08:00",
-                "status_code": "CAFE_CONFIRMED",
+                "status_code": "confirmed",
                 "cli": "gemini",
                 "model": "gemini-2.5-flash",
                 "stats": {

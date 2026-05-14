@@ -37,7 +37,7 @@ def mock_dependencies():
         mock_agent_manager.get_agent.return_value = mock_agent_executor
         mock_setup_agents.return_value = mock_agent_manager
         
-        mock_execute_alias.return_value = {"status_code": "CAFE_CONFIRMED", "iterations": 1}
+        mock_execute_alias.return_value = {"status_code": "confirmed", "iterations": 1}
         
         yield {
             "setup_agents": mock_setup_agents,
@@ -154,8 +154,8 @@ def test_spec_command_shows_questions_before_next_iteration(tmp_path, monkeypatc
         mock_setup_agents.return_value = mock_agent_manager
 
         mock_execute_alias.side_effect = [
-            {"status_code": "CAFE_NEED_CLARIFICATION", "iterations": 1},
-            {"status_code": "CAFE_CONFIRMED", "iterations": 2},
+            {"status_code": "need_clarification", "iterations": 1},
+            {"status_code": "confirmed", "iterations": 2},
         ]
 
         result = runner.invoke(app, ["spec", "--interactive"])

@@ -53,7 +53,7 @@ class TestAppendIterationIndex:
         iteration_data = {
             "iteration": 1,
             "timestamp": "2025-12-27T10:00:00Z",
-            "status": "CAFE_READY_FOR_REVIEW",
+            "status": "ready_for_review",
             "has_error": False,
         }
 
@@ -71,7 +71,7 @@ class TestAppendIterationIndex:
         iteration_data = {
             "iteration": 1,
             "timestamp": "2025-12-27T10:00:00Z",
-            "status": "CAFE_READY_FOR_REVIEW",
+            "status": "ready_for_review",
             "has_error": False,
         }
 
@@ -96,7 +96,7 @@ class TestAppendIterationIndex:
             {
                 "iteration": 1,
                 "timestamp": "2025-12-27T10:00:00Z",
-                "status": "CAFE_NEED_CLARIFICATION",
+                "status": "need_clarification",
                 "has_error": False,
             }
         )
@@ -106,7 +106,7 @@ class TestAppendIterationIndex:
             {
                 "iteration": 2,
                 "timestamp": "2025-12-27T10:05:00Z",
-                "status": "CAFE_READY_FOR_REVIEW",
+                "status": "ready_for_review",
                 "has_error": False,
             }
         )
@@ -146,7 +146,7 @@ class TestLoadIterationCounter:
             json.dumps(
                 {
                     "iteration": 1,
-                    "response": "CAFE_CONFIRMED",
+                    "response": "confirmed",
                     "end_time": "2026-04-29T10:00:00+08:00",
                 }
             ),
@@ -182,8 +182,8 @@ class TestLoadIterationCounter:
         # 準備測試資料
         iterations_file = phase_dir / "iterations.jsonl"
         iterations_file.write_text(
-            '{"iteration":1,"timestamp":"2025-12-27T10:00:00Z","status":"CAFE_NEED_CLARIFICATION","has_error":false}\n'
-            '{"iteration":2,"timestamp":"2025-12-27T10:05:00Z","status":"CAFE_READY_FOR_REVIEW","has_error":false}\n'
+            '{"iteration":1,"timestamp":"2025-12-27T10:00:00Z","status":"need_clarification","has_error":false}\n'
+            '{"iteration":2,"timestamp":"2025-12-27T10:05:00Z","status":"ready_for_review","has_error":false}\n'
             '{"iteration":3,"timestamp":"2025-12-27T10:10:00Z","status":"CAFE_ERROR","has_error":true}\n'
         )
 
@@ -191,9 +191,9 @@ class TestLoadIterationCounter:
 
         assert len(result) == 3
         assert result[0]["iteration"] == 1
-        assert result[0]["status"] == "CAFE_NEED_CLARIFICATION"
+        assert result[0]["status"] == "need_clarification"
         assert result[1]["iteration"] == 2
-        assert result[1]["status"] == "CAFE_READY_FOR_REVIEW"
+        assert result[1]["status"] == "ready_for_review"
         assert result[2]["iteration"] == 3
         assert result[2]["has_error"] is True
 
@@ -412,7 +412,7 @@ class TestIterationIndexIncludesEndTime:
         iteration_data = {
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
-            "status": "CAFE_CONFIRMED",
+            "status": "confirmed",
             "has_error": False,
             "end_time": "2026-01-27T10:05:00+08:00"
         }
@@ -431,5 +431,5 @@ class TestIterationIndexIncludesEndTime:
         assert data["iteration"] == 1
         assert data["timestamp"] == "2026-01-27T10:00:00+08:00"
         assert data["end_time"] == "2026-01-27T10:05:00+08:00"
-        assert data["status"] == "CAFE_CONFIRMED"
+        assert data["status"] == "confirmed"
         assert data["has_error"] is False

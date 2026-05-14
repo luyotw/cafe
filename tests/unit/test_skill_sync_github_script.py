@@ -82,4 +82,4 @@ def test_default_playbook_migrates_plan_sync_to_script_hook() -> None:
     assert script_hook["script"] == "sync_github.sh"
     assert script_hook["args"]["phase"] == "plan"
     assert script_hook["args"]["output"] == "{output_file}"
-    assert script_hook["when_status_codes"] == ["CAFE_CONFIRMED"]
+    assert script_hook["when_intents"] == ["confirmed"]

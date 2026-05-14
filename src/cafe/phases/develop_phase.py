@@ -427,7 +427,7 @@ class DevelopPhase(Phase):
                     data={
                         "iterations": prev_data.get("iteration", self.iteration - 1),
                         "last_response": prev_data.get("response", ""),
-                        "status_code": "CAFE_NO_CHANGES_NEEDED",
+                        "status_code": "no_changes_needed",
                     },
                 )
 
@@ -591,7 +591,7 @@ class DevelopPhase(Phase):
         prev_status = self._context_status_code(prev_data) or ""
 
         # Handle pending NEED_PERMISSION from previous run
-        if prev_status == "CAFE_NEED_PERMISSION":
+        if prev_status == "need_permission":
             recovered_denials = []
             if self.iteration > 1:
                 recovered_denials = self._extract_codex_permission_denials_from_streaming_file(self.iteration - 1)
@@ -621,11 +621,11 @@ class DevelopPhase(Phase):
             # will be done in execute() method when constructing allowed_tools
 
         # Handle NEED_CLARIFICATION - use base class method
-        if prev_status == "CAFE_NEED_CLARIFICATION":
+        if prev_status == "need_clarification":
             return self._handle_need_clarification_input(prev_data, agent_display_name="Developer")
 
         # Handle NO_CHANGES_NEEDED - developer disputes reviewer's feedback
-        if prev_status == "CAFE_NO_CHANGES_NEEDED":
+        if prev_status == "await_agent":
             return self._handle_no_changes_needed_input(prev_data)
 
         # No special handling needed - clear user_input to avoid misuse
@@ -789,7 +789,7 @@ Steps for requesting clarification:
        </options>
      </question>
    </questions>
-3. Return CAFE_NEED_CLARIFICATION only, with no other content
+3. Return need_clarification only, with no other content
 """
 
         if has_review_feedback:
@@ -926,7 +926,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
             checklist_path = self._get_iteration_dir(self.iteration) / "checklist.md"
 
             # Check for develop clarification file from previous iteration
-            # (only exists if previous iteration returned CAFE_NEED_CLARIFICATION)
+            # (only exists if previous iteration returned need_clarification)
             develop_file = None
             if self.iteration > 1:
                 prev_iteration_dir = self.issue_dir / "develop" / f"iteration_{self.iteration - 1:03d}"
@@ -1055,7 +1055,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
             result, response = self._execute_and_handle_agent_response(
                 agent_name=self.dev_agent,
                 user_input=current_user_input,
-                valid_status_codes=[
+                valid_intents=[
                     PhaseStatusCode.CONFIRMED,
                     PhaseStatusCode.NEED_PERMISSION,
                     PhaseStatusCode.NEED_CLARIFICATION,
@@ -1107,7 +1107,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                         )
                 elif response_status == PhaseStatusCode.NO_CHANGES_NEEDED:
                     # Check if output.md exists and has content
-                    print(f"\n⚠️  Developer returned CAFE_NO_CHANGES_NEEDED, checking for reasoning in output.md...")
+                    print(f"\n⚠️  Developer returned no_changes_needed, checking for reasoning in output.md...")
 
                     iteration_dir = self._get_iteration_dir(self.iteration)
                     output_file = iteration_dir / "output.md"
@@ -1118,13 +1118,13 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                         # No reasoning provided, require agent to write it
                         print(f"⚠️  No reasoning found in output.md. Requesting agent to provide explanation...")
 
-                        continue_prompt = f"""Your response returned CAFE_NO_CHANGES_NEEDED.
+                        continue_prompt = f"""Your response returned no_changes_needed.
 
 You MUST provide your reasoning and explain why the reviewer's feedback is incorrect or unnecessary.
 
 Please:
 1. Write your detailed reasoning to {output_file}
-2. Return CAFE_NO_CHANGES_NEEDED again
+2. Return no_changes_needed again
 
 Do NOT return any other status code until you have written your reasoning."""
 
@@ -1230,7 +1230,7 @@ Do NOT return any other status code until you have written your reasoning."""
                     if not questions_xml_path.exists():
                         return PhaseResult(
                             status=PhaseStatus.FAILED,
-                            message=f"Developer returned CAFE_NEED_CLARIFICATION but did not write questions.xml in iteration {self.iteration}",
+                            message=f"Developer returned need_clarification but did not write questions.xml in iteration {self.iteration}",
                             data={
                                 "iterations": self.iteration,
                                 "last_response": response,
@@ -1286,15 +1286,15 @@ Do NOT return any other status code until you have written your reasoning."""
 
 Based on the following conditions, determine which status code to return:
 
-- CAFE_CONFIRMED: All tasks completed (all items checked in plan.md)
-- CAFE_NEED_PERMISSION: Need to request additional tool usage permissions
+- confirmed: All tasks completed (all items checked in plan.md)
+- need_permission: Need to request additional tool usage permissions
 
-Please return only one status code (example: CAFE_CONFIRMED), with no other content."""
+Please return only one status code (example: confirmed), with no other content."""
 
     def _detect_written_output_files(self) -> List[Path]:
         """Check if develop file was written before failure.
 
-        DevelopPhase uses iteration_XXX/output.md to record CAFE_NEED_CLARIFICATION questions.
+        DevelopPhase uses iteration_XXX/output.md to record need_clarification questions.
 
         Returns:
             List[Path]: Return list containing iteration_XXX/output.md if it exists, otherwise empty list

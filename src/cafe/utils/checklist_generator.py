@@ -277,7 +277,7 @@ def generate_develop_checklist(
         feedback_file_path: Path to feedback todo list file (from review or PR phase, for correction mode)
         basic_principles: Basic principles text in "- item" format (optional)
         output_file: Path to output file (for NO_CHANGES_NEEDED reasoning)
-        questions_xml_file: Path to questions.xml file for CAFE_NEED_CLARIFICATION
+        questions_xml_file: Path to questions.xml file for need_clarification
     """
     # Get agent file path
     agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
@@ -378,7 +378,7 @@ def generate_review_checklist(
         pr_todo_list_section = f"""
 ## PR Todo List Check
 [ ] Read {pr_todo_list_file_path} - this is the todo list from the PR phase
-[ ] Check that ALL todo items are marked as completed [x]. If any unchecked items [ ] remain, return CAFE_NEEDS_CHANGES
+[ ] Check that ALL todo items are marked as completed [x]. If any unchecked items [ ] remain, return needs_changes
 """
 
     # Get agent guidelines checklist

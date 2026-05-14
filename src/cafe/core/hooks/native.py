@@ -251,12 +251,12 @@ class UserInputCollector(NoOpHook):
             )
 
         previous_status = _get_previous_iteration_status(phase)
-        if previous_status not in {"CAFE_NEED_CLARIFICATION", "CAFE_READY_FOR_REVIEW"}:
+        if previous_status not in {"need_clarification", "ready_for_review"}:
             return HookResult()
 
-        # PR step uses CAFE_READY_FOR_REVIEW to loop back and check for new comments,
+        # PR step uses ready_for_review to loop back and check for new comments,
         # not to request user confirmation — skip the review prompt entirely.
-        if step_name == "pr" and previous_status == "CAFE_READY_FOR_REVIEW":
+        if step_name == "pr" and previous_status in {"ready_for_review", "confirm_output"}:
             return HookResult()
 
         prompt_role = {"pm": "pm", "reviewer": "reviewer"}.get(role, "developer")
@@ -264,7 +264,7 @@ class UserInputCollector(NoOpHook):
         # For spec/plan READY_FOR_REVIEW flow, delta view is sufficient and less noisy.
         if not (
             step_name in {"spec", "plan"}
-            and previous_status == "CAFE_READY_FOR_REVIEW"
+            and previous_status == "ready_for_review"
         ):
             self._display_previous_output(phase, step_name, previous_output_file)
 
@@ -285,7 +285,7 @@ class UserInputCollector(NoOpHook):
                     ],
                 )
 
-        if previous_status == "CAFE_READY_FOR_REVIEW":
+        if previous_status in {"confirm_output", "ready_for_review"}:
             delta_displayed = self._display_previous_iteration_delta(phase, previous_output_file)
             if not delta_displayed:
                 self._display_previous_output(phase, step_name, previous_output_file)

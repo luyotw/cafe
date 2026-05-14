@@ -107,8 +107,8 @@ class TestPRPhaseContextFields:
         (iter_dir / "context.json").write_text(json.dumps(agent_context))
 
         # Simulate the post-organize status_code update (new behavior: direct JSON update)
-        result_status = "CAFE_NEEDS_CHANGES"
-        result_data = {"pr_number": "42", "status_code": "CAFE_NEEDS_CHANGES"}
+        result_status = "needs_changes"
+        result_data = {"pr_number": "42", "status_code": "needs_changes"}
 
         context_file = iter_dir / "context.json"
         with open(context_file, "r", encoding="utf-8") as f:
@@ -129,7 +129,7 @@ class TestPRPhaseContextFields:
             )
 
         # status_code should be updated
-        assert context["status_code"] == "CAFE_NEEDS_CHANGES"
+        assert context["status_code"] == "needs_changes"
         # phase-specific data should be merged
         assert context["pr_number"] == "42"
 
@@ -181,7 +181,7 @@ class TestPRPhaseContextFields:
         prev_iter_dir.mkdir(parents=True)
         (prev_iter_dir / "context.json").write_text(json.dumps({
             "iteration": 1,
-            "status_code": "CAFE_READY_FOR_REVIEW",
+            "status_code": "ready_for_review",
         }))
         (prev_iter_dir / "output.md").write_text("# Title\n\nBody")
 
@@ -192,7 +192,7 @@ class TestPRPhaseContextFields:
             with patch.object(phase, "_organize_comments_to_todo_list", return_value=PhaseResult(
                 status=PhaseStatus.COMPLETED,
                 message="done",
-                data={"status_code": "CAFE_NEEDS_CHANGES"},
+                data={"status_code": "needs_changes"},
             )):
                 with patch.object(phase, "_save_progress"):
                     with patch.object(phase, "_update_iteration_history") as mock_update:
@@ -310,7 +310,7 @@ class TestPRPhaseContextFields:
             assert field in context, f"Field '{field}' missing from context.json"
 
         # status_code should be set
-        assert context["status_code"] == "CAFE_CONFIRMED"
+        assert context["status_code"] == "confirmed"
 
     def test_second_update_preserves_model_and_stats(
         self, tmp_path, mock_dependencies, setup_issue_dir
@@ -363,6 +363,6 @@ class TestPRPhaseContextFields:
         assert context["cli"] == "claude"
         assert context["prompt"] == "test prompt"
         # status_code should be updated from second call
-        assert context["status_code"] == "CAFE_READY_FOR_REVIEW"
+        assert context["status_code"] == "ready_for_review"
         # phase_specific_data from second call should be merged
         assert context["pr_number"] == "159"

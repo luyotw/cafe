@@ -51,7 +51,7 @@ class TestPlanPhaseWithStatusCodes:
         checklist_file.write_text("## Execution Steps Checklist\n\n[x] Step 1\n[x] Step 2\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成.", TokenUsage(), [], None, [], None)
+        agent_manager.execute.return_value = ("ready_for_review\n實作分析已完成.", TokenUsage(), [], None, [], None)
         agent_manager.preview_cli_command_args.return_value = ["--model", "copilot"]
 
         # Mock get_agent to return agent with config
@@ -82,7 +82,7 @@ class TestPlanPhaseWithStatusCodes:
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"  # non-interactive mode completes at READY_FOR_REVIEW
+        assert result.data.get("status_code") == "ready_for_review"  # non-interactive mode completes at READY_FOR_REVIEW
         assert result.data.get("iterations") == 1  # Only 1 iteration in non-interactive mode
 
     def test_need_clarification_continues_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch, mock_multiline_input) -> None:
@@ -99,7 +99,7 @@ class TestPlanPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         # After removing while loop, only executes once and returns IN_PROGRESS
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n請補充更多資訊.", TokenUsage(), [], None, [], None)
+        agent_manager.execute.return_value = ("need_clarification\n請補充更多資訊.", TokenUsage(), [], None, [], None)
         agent_manager.preview_cli_command_args.return_value = ["--model", "copilot"]
 
         # Mock get_agent to return agent with config
@@ -129,7 +129,7 @@ class TestPlanPhaseWithStatusCodes:
 
         # After removing while loop, NEED_CLARIFICATION returns COMPLETED (no automatic continuation)
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
+        assert result.data.get("status_code") == "need_clarification"
         assert result.data.get("iterations") == 1
         assert agent_manager.execute.call_count == 1
 
@@ -152,7 +152,7 @@ class TestPlanPhaseWithStatusCodes:
         checklist_file.write_text("## Execution Steps Checklist\n\n[x] Step 1\n[x] Step 2\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("分析結果：\nCAFE_READY_FOR_REVIEW\n實作分析已完成.", TokenUsage(), [], None, [], None)
+        agent_manager.execute.return_value = ("分析結果：\nready_for_review\n實作分析已完成.", TokenUsage(), [], None, [], None)
         agent_manager.preview_cli_command_args.return_value = ["--model", "copilot"]
 
         # Mock get_agent to return agent with config
@@ -183,7 +183,7 @@ class TestPlanPhaseWithStatusCodes:
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"  # non-interactive completes at READY_FOR_REVIEW
+        assert result.data.get("status_code") == "ready_for_review"  # non-interactive completes at READY_FOR_REVIEW
 
     def test_no_status_code_continues_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch, mock_multiline_input) -> None:
         """測試沒有狀態碼時繼續迭代"""
@@ -204,7 +204,7 @@ class TestPlanPhaseWithStatusCodes:
         # So when we extract status code from response in plan_phase.py, we get None.
         agent_manager.execute.side_effect = [
             ("這是一般回應, 沒有狀態碼.", TokenUsage(), [], None, [], None),
-            ("CAFE_NEED_CLARIFICATION\n請補充技術選型.", TokenUsage(), [], None, [], None),
+            ("need_clarification\n請補充技術選型.", TokenUsage(), [], None, [], None),
         ]
         agent_manager.preview_cli_command_args.return_value = ["--model", "claude"]
 
@@ -285,7 +285,7 @@ class TestPlanPhaseWithStatusCodes:
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"  # non-interactive completes at READY_FOR_REVIEW
+        assert result.data.get("status_code") == "ready_for_review"  # non-interactive completes at READY_FOR_REVIEW
 
     def test_permission_like_plaintext_response_maps_to_need_permission_without_retry(
         self, tmp_path: Path, mock_git_ops, monkeypatch
@@ -332,7 +332,7 @@ class TestPlanPhaseWithStatusCodes:
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_NEED_PERMISSION"
+        assert result.data.get("status_code") == "need_permission"
         assert agent_manager.execute.call_count == 1
 
     def test_structured_permission_denial_maps_to_need_permission_without_retry(
@@ -380,5 +380,5 @@ class TestPlanPhaseWithStatusCodes:
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_NEED_PERMISSION"
+        assert result.data.get("status_code") == "need_permission"
         assert agent_manager.execute.call_count == 1

@@ -172,7 +172,7 @@ def spec(
     auto: bool = typer.Option(
         False,
         "--auto",
-        help="Auto mode: automatically continue iterations until CAFE_CONFIRMED",
+        help="Auto mode: automatically continue iterations until confirmed",
     ),
     template: Optional[str] = typer.Option(
         None,
@@ -262,7 +262,7 @@ def spec(
             config_manager=config_manager,
             interactive=is_interactive,
             auto=auto,
-            continuation_statuses=["CAFE_NEED_CLARIFICATION", "CAFE_READY_FOR_REVIEW"],
+            continuation_statuses=["need_clarification", "ready_for_review"],
             role_agent_map_override={"pm": pm_agent} if pm_agent else None,
             user_input=current_input,
             show_prompt=show_prompt,
@@ -344,7 +344,7 @@ def plan(
     auto: bool = typer.Option(
         False,
         "--auto",
-        help="Auto mode: automatically continue iterations until CAFE_CONFIRMED",
+        help="Auto mode: automatically continue iterations until confirmed",
     ),
     sync_github: Optional[bool] = typer.Option(
         None,
@@ -427,7 +427,7 @@ def plan(
             config_manager=config_manager,
             interactive=is_interactive,
             auto=auto,
-            continuation_statuses=["CAFE_NEED_CLARIFICATION", "CAFE_READY_FOR_REVIEW"],
+            continuation_statuses=["need_clarification", "ready_for_review"],
             role_agent_map_override={"developer": dev_agent} if dev_agent else None,
             show_prompt=show_prompt,
             clarification_prompt="Additional planning details:",
@@ -584,9 +584,9 @@ def develop(
         console.print()
         resolved_next_step = _alias_next_step(alias_result)
         if not resolved_next_step:
-            if status_code == "CAFE_CONFIRMED_SKIP_REVIEW":
+            if status_code == "manual_handoff":
                 resolved_next_step = "pr"
-            elif status_code == "CAFE_CONFIRMED":
+            elif status_code == "await_agent":
                 resolved_next_step = "review"
 
         if resolved_next_step in {"review", "pr"}:
@@ -769,7 +769,11 @@ def review(
                 _execute_next_phase_auto("pr", issue_name)
             else:
                 console.print("[dim]Continue the workflow with:[/dim] [bold]cafe make[/bold]")
-        elif _alias_targets(alias_result, "develop") or status_code == "CAFE_NEEDS_CHANGES":
+        elif (
+            _alias_targets(alias_result, "develop")
+            or status_code == "manual_handoff"
+            or status_code == "needs_changes"
+        ):
             console.print(f"[bold yellow]📝 Code review completed with status: {status_code}[/bold yellow]")
             if alias_result.get("output_file"):
                 console.print(f"[dim]Review feedback saved to:[/dim] [dim]{alias_result['output_file']}[/dim]")
@@ -923,14 +927,14 @@ def pr(
         )
         status_code = _alias_status(alias_result)
         console.print()
-        if _alias_is_done(alias_result) or status_code == "CAFE_CONFIRMED":
+        if _alias_is_done(alias_result) or status_code in {"await_agent", "confirmed"}:
             console.print("[bold green]✅ PR content completed![/bold green]")
             console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
             if alias_result.get("output_file"):
                 console.print(f"Saved to: {alias_result['output_file']}")
             console.print()
             console.print("[dim]Next step:[/dim] [bold]Review and submit the PR[/bold]")
-        elif _alias_targets(alias_result, "develop") or status_code == "CAFE_NEEDS_CHANGES":
+        elif _alias_targets(alias_result, "develop") or status_code == "manual_handoff":
             console.print(f"[bold yellow]PR step completed with status: {status_code}[/bold yellow]")
             if alias_result.get("output_file"):
                 console.print(f"Saved to: {alias_result['output_file']}")

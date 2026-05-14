@@ -17,7 +17,7 @@ def _write_develop_iteration(
     iteration: int = 1,
     timestamp: str = "2026-01-27T10:00:00+08:00",
     end_time: str | None = None,
-    response: str = "CAFE_CONFIRMED",
+    response: str = "confirmed",
 ) -> None:
     develop_dir = issue_dir / "develop" / f"iteration_{iteration:03d}"
     develop_dir.mkdir(parents=True, exist_ok=True)
@@ -120,7 +120,7 @@ class TestPRPhaseIterationLogic:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "status_code": "CAFE_NEEDS_CHANGES"
+            "status_code": "needs_changes"
         }))
 
         # Create user_input.md
@@ -161,7 +161,7 @@ class TestPRPhaseIterationLogic:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "status_code": "CAFE_CONFIRMED"
+            "status_code": "confirmed"
         }))
 
         with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
@@ -195,7 +195,7 @@ class TestPRPhaseIterationLogic:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "response": "CAFE_READY_FOR_REVIEW"
+            "response": "ready_for_review"
         }))
 
         with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
@@ -209,7 +209,7 @@ class TestPRPhaseIterationLogic:
 
             assert result is not None
             assert result["iteration_number"] == 1
-            assert result["status_code"] == "CAFE_READY_FOR_REVIEW"
+            assert result["status_code"] == "ready_for_review"
 
     def test_should_start_new_iteration_no_iterations(self, tmp_path, mock_dependencies):
         """Test _should_start_new_iteration returns True when no iterations exist."""
@@ -453,7 +453,7 @@ class TestPRPhaseIterationLogic:
             iteration=1,
             timestamp="2026-01-27T10:00:00+08:00",
             end_time="2026-01-27T10:05:00+08:00",
-            response="CAFE_CONFIRMED",
+            response="confirmed",
         )
 
         with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
@@ -483,7 +483,7 @@ class TestPRPhaseIterationLogic:
             iteration=1,
             timestamp="2026-01-27T10:00:00+08:00",
             end_time="2026-01-27T10:05:00+08:00",
-            status_code="CAFE_CONFIRMED",
+            status_code="confirmed",
         )
 
         _write_develop_iteration(
@@ -503,7 +503,7 @@ class TestPRPhaseIterationLogic:
             result = phase._execute_local_review_mode()
 
             assert result.status == PhaseStatus.COMPLETED
-            assert result.data["status_code"] == "CAFE_CONFIRMED"
+            assert result.data["status_code"] == "confirmed"
             mock_dependencies["git_ops"].get_diff.assert_not_called()
 
     def test_execute_local_review_mode_needs_changes_points_back_to_make(
@@ -576,7 +576,7 @@ class TestPRPhaseIterationLogic:
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
-            "status_code": "CAFE_CONFIRMED"
+            "status_code": "confirmed"
         }))
 
         with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
@@ -608,7 +608,7 @@ class TestPRPhaseIterationLogic:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "response": "CAFE_CONFIRMED"
+            "response": "confirmed"
         }))
 
         with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
@@ -739,7 +739,7 @@ class TestPRPhaseIterationLogic:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "status_code": "CAFE_CONFIRMED"
+            "status_code": "confirmed"
         }))
 
         with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
@@ -773,7 +773,7 @@ class TestPRPhaseIterationLogic:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "status_code": "CAFE_NEEDS_CHANGES"
+            "status_code": "needs_changes"
         }))
 
         user_input_file = iteration_dir / "user_input.md"
@@ -813,7 +813,7 @@ class TestPRPhaseIterationLogic:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "status_code": "CAFE_NEEDS_CHANGES"
+            "status_code": "needs_changes"
         }))
 
         user_input_file = iteration_dir / "user_input.md"
@@ -907,7 +907,7 @@ class TestPhaseComparisonWithMissingEndTime:
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
-            "status_code": "CAFE_NEEDS_CHANGES"
+            "status_code": "needs_changes"
         }))
 
         user_input_file = iteration_dir / "user_input.md"
@@ -944,7 +944,7 @@ class TestPhaseComparisonWithMissingEndTime:
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
-            "status_code": "CAFE_NEEDS_CHANGES"
+            "status_code": "needs_changes"
         }))
 
         user_input_file = iteration_dir / "user_input.md"
@@ -988,7 +988,7 @@ class TestPhaseComparisonWithMissingEndTime:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "end_time": "2026-01-27T10:05:00+08:00",
-            "status_code": "CAFE_NEEDS_CHANGES"
+            "status_code": "needs_changes"
         }))
 
         user_input_file = iteration_dir / "user_input.md"
@@ -1053,7 +1053,7 @@ class TestPhaseComparisonWithMissingEndTime:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "status_code": None,
-            "response": "CAFE_NEEDS_CHANGES",
+            "response": "needs_changes",
             "cli": "claude",
             "session_id": "test-session",
         }))
@@ -1073,7 +1073,7 @@ class TestPhaseComparisonWithMissingEndTime:
             # (simulates agent processing PR comments and deciding changes are needed)
             with patch.object(phase, "_execute_agent_iteration") as mock_exec:
                 mock_exec.return_value = (
-                    "CAFE_NEEDS_CHANGES",
+                    "needs_changes",
                     PhaseStatusCode.NEEDS_CHANGES,
                 )
                 # Mock _merge_allowed_tools
@@ -1091,12 +1091,12 @@ class TestPhaseComparisonWithMissingEndTime:
 
             # Verify the method returned correctly
             assert result.status == PhaseStatus.COMPLETED
-            assert result.data["status_code"] == "CAFE_NEEDS_CHANGES"
+            assert result.data["status_code"] == "needs_changes"
 
             # THE ACTUAL BUG CHECK: verify status_code was persisted to context.json
             saved_context = json.loads(context_file.read_text())
-            assert saved_context["status_code"] == "CAFE_NEEDS_CHANGES", \
-                f"Bug: status_code in context.json is {saved_context.get('status_code')!r}, expected 'CAFE_NEEDS_CHANGES'"
+            assert saved_context["status_code"] == "needs_changes", \
+                f"Bug: status_code in context.json is {saved_context.get('status_code')!r}, expected 'needs_changes'"
 
     def test_organize_comments_retries_when_output_md_empty(self, tmp_path, mock_dependencies):
         """Test that _organize_comments_to_todo_list retries when output.md is missing todo list markers."""
@@ -1130,7 +1130,7 @@ class TestPhaseComparisonWithMissingEndTime:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "status_code": None,
-            "response": "CAFE_NEEDS_CHANGES",
+            "response": "needs_changes",
             "cli": "claude",
             "session_id": "test-session",
         }))
@@ -1143,7 +1143,7 @@ class TestPhaseComparisonWithMissingEndTime:
             retry_call_count += 1
             # On first retry, agent writes the todo list to output.md
             output_file.write_text("## Todo List\n- [ ] Fix the bug in line 5\n")
-            return ("CAFE_NEEDS_CHANGES", MagicMock(), [], [], [], None)
+            return ("needs_changes", MagicMock(), [], [], [], None)
 
         with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
             phase = PRPhase(
@@ -1158,7 +1158,7 @@ class TestPhaseComparisonWithMissingEndTime:
 
             with patch.object(phase, "_execute_agent_iteration") as mock_exec:
                 mock_exec.return_value = (
-                    "CAFE_NEEDS_CHANGES",
+                    "needs_changes",
                     PhaseStatusCode.NEEDS_CHANGES,
                 )
                 with patch.object(phase, "_merge_allowed_tools", return_value=["read", "edit"]):
@@ -1175,7 +1175,7 @@ class TestPhaseComparisonWithMissingEndTime:
 
             # Verify: should succeed after retry
             assert result.status == PhaseStatus.COMPLETED
-            assert result.data["status_code"] == "CAFE_NEEDS_CHANGES"
+            assert result.data["status_code"] == "needs_changes"
             # Verify agent_manager.execute was called (retry happened)
             assert retry_call_count == 1
 
@@ -1211,7 +1211,7 @@ class TestPhaseComparisonWithMissingEndTime:
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
             "status_code": None,
-            "response": "CAFE_NEEDS_CHANGES",
+            "response": "needs_changes",
             "cli": "claude",
             "session_id": "test-session",
         }))
@@ -1222,7 +1222,7 @@ class TestPhaseComparisonWithMissingEndTime:
             nonlocal retry_call_count
             retry_call_count += 1
             # Agent never fixes output.md - returns but doesn't write todo list
-            return ("CAFE_NEEDS_CHANGES", MagicMock(), [], [], [], None)
+            return ("needs_changes", MagicMock(), [], [], [], None)
 
         with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
             phase = PRPhase(
@@ -1237,7 +1237,7 @@ class TestPhaseComparisonWithMissingEndTime:
 
             with patch.object(phase, "_execute_agent_iteration") as mock_exec:
                 mock_exec.return_value = (
-                    "CAFE_NEEDS_CHANGES",
+                    "needs_changes",
                     PhaseStatusCode.NEEDS_CHANGES,
                 )
                 with patch.object(phase, "_merge_allowed_tools", return_value=["read", "edit"]):
@@ -1333,7 +1333,7 @@ class TestGetLastSeenCommentIds:
             json.dumps(
                 {
                     "iteration": 1,
-                    "status_code": "CAFE_READY_FOR_REVIEW",
+                    "status_code": "ready_for_review",
                     "last_seen_comment_ids": ["OLD_CONTEXT"],
                 }
             )
@@ -1365,7 +1365,7 @@ class TestGetLastSeenCommentIds:
         context_file = iter_dir / "context.json"
         context_file.write_text(json.dumps({
             "iteration": 1,
-            "status_code": "CAFE_READY_FOR_REVIEW",
+            "status_code": "ready_for_review",
             "last_seen_comment_ids": ["123456", "IC_kwDOQCpNoM111", "789012"]
         }))
 
@@ -1390,7 +1390,7 @@ class TestGetLastSeenCommentIds:
         iter_001.mkdir(parents=True)
         (iter_001 / "context.json").write_text(json.dumps({
             "iteration": 1,
-            "status_code": "CAFE_READY_FOR_REVIEW",
+            "status_code": "ready_for_review",
             "last_seen_comment_ids": ["R1", "T1"]
         }))
 
@@ -1399,7 +1399,7 @@ class TestGetLastSeenCommentIds:
         iter_002.mkdir(parents=True)
         (iter_002 / "context.json").write_text(json.dumps({
             "iteration": 2,
-            "status_code": "CAFE_NEEDS_CHANGES"
+            "status_code": "needs_changes"
             # last_seen_comment_ids 欄位不存在
         }))
 
@@ -1422,7 +1422,7 @@ class TestGetLastSeenCommentIds:
         iter_001.mkdir(parents=True)
         (iter_001 / "context.json").write_text(json.dumps({
             "iteration": 1,
-            "status_code": "CAFE_READY_FOR_REVIEW"
+            "status_code": "ready_for_review"
             # 沒有 last_seen_comment_ids（舊版本）
         }))
 

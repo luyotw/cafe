@@ -65,7 +65,7 @@ class TestConfirmedSyncInWorkflow:
         prev_context = {
             "user_input": "Initial requirements",
             "response": "Spec is ready",
-            "status_code": "CAFE_READY_FOR_REVIEW",
+            "status_code": "ready_for_review",
             "phase_specific_data": {"pm_agent": "Roger"}
         }
         (prev_iteration_dir / "context.json").write_text(json.dumps(prev_context))
@@ -103,7 +103,7 @@ class TestConfirmedSyncInWorkflow:
         prev_context = {
             "user_input": "Initial requirements",
             "response": "Spec is ready",
-            "status_code": "CAFE_READY_FOR_REVIEW",
+            "status_code": "ready_for_review",
             "phase_specific_data": {"pm_agent": "Roger"}
         }
         (prev_iteration_dir / "context.json").write_text(json.dumps(prev_context))

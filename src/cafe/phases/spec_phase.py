@@ -413,7 +413,7 @@ class SpecPhase(Phase):
             result, response = self._execute_and_handle_agent_response(
                 agent_name=self.pm_agent,
                 user_input=current_user_input,
-                valid_status_codes=[
+                valid_intents=[
                     PhaseStatusCode.READY_FOR_REVIEW,
                     PhaseStatusCode.NEED_CLARIFICATION,
                     PhaseStatusCode.NEED_PERMISSION,
@@ -443,7 +443,7 @@ class SpecPhase(Phase):
             # Save rigor setting to issue.yaml after each iteration
             self._save_issue_config()
 
-            # Validate questions.xml when agent returns CAFE_NEED_CLARIFICATION
+            # Validate questions.xml when agent returns need_clarification
             status_code = self._extract_status_code_from_response(response)
             if status_code == PhaseStatusCode.NEED_CLARIFICATION:
                 self._validate_and_retry_questions_xml(
@@ -554,7 +554,7 @@ class SpecPhase(Phase):
         prev_status = self._context_status_code(prev_data) or ""
 
         # Get user input based on previous round status
-        if prev_status == "CAFE_READY_FOR_REVIEW":
+        if prev_status == "ready_for_review":
             # Need user choice: confirm/modify
             if self.interactive:
                 # Display delta from previous iteration before asking for decision
@@ -583,7 +583,7 @@ class SpecPhase(Phase):
                         data={
                             "iterations": self.iteration - 1,
                             "last_response": prev_data.get("response", ""),
-                            "status_code": "CAFE_READY_FOR_REVIEW",
+                            "status_code": "ready_for_review",
                         },
                     )
 
@@ -597,7 +597,7 @@ class SpecPhase(Phase):
 
             return result_or_input
 
-        elif prev_status == "CAFE_NEED_CLARIFICATION":
+        elif prev_status == "need_clarification":
             return self._handle_need_clarification_input(prev_data, agent_display_name="PM")
         else:
             return ""
@@ -1161,7 +1161,7 @@ class SpecPhase(Phase):
         if not spec_path.is_absolute():
             spec_path = spec_path.resolve()
         
-        return f"""Please use Read tool to read {spec_path}  and analyze current status.\n\nBased on the following conditions, determine which status code to return:\n\n- CAFE_READY_FOR_REVIEW: Requirements specification completed, all necessary information clarified, no pending questions\n- CAFE_NEED_CLARIFICATION: Specification still has issues that need user confirmation, or unclear details\n\nPlease return only one status code (e.g., CAFE_READY_FOR_REVIEW), no other content."""
+        return f"""Please use Read tool to read {spec_path}  and analyze current status.\n\nBased on the following conditions, determine which status code to return:\n\n- ready_for_review: Requirements specification completed, all necessary information clarified, no pending questions\n- need_clarification: Specification still has issues that need user confirmation, or unclear details\n\nPlease return only one status code (e.g., ready_for_review), no other content."""
 
     def _detect_written_output_files(self) -> List[Path]:
         """Check if spec file was written before failure.

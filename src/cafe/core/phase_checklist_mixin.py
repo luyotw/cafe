@@ -24,7 +24,7 @@ class PhaseChecklistMixin:
         agent_name: str,
         prompt: str,
         user_input: str,
-        valid_status_codes: List[PhaseStatusCode],
+        valid_intents: List[PhaseStatusCode],
         allowed_tools: Optional[List[str]] = None,
         max_retries: int = 3,
     ) -> tuple[str, Optional[PhaseStatusCode], bool]:
@@ -37,7 +37,7 @@ class PhaseChecklistMixin:
             agent_name: Agent name
             prompt: Original prompt sent to agent
             user_input: User input for this iteration
-            valid_status_codes: Valid status codes for this phase
+            valid_intents: Valid status codes for this phase
             allowed_tools: Tools available to agent
             max_retries: Maximum number of retry attempts (default: 3)
 
@@ -85,7 +85,7 @@ class PhaseChecklistMixin:
                     response = context_data.get("response", "")
                     status_code = self._extract_status_code_from_response(
                         response,
-                        valid_codes=valid_status_codes,
+                        valid_codes=valid_intents,
                     )
                     return response, status_code, True
             return "", None, True
@@ -100,7 +100,7 @@ class PhaseChecklistMixin:
                     response = context_data.get("response", "")
                     status_code = self._extract_status_code_from_response(
                         response,
-                        valid_codes=valid_status_codes,
+                        valid_codes=valid_intents,
                     )
                     return response, status_code, True
             return "", None, True
@@ -140,7 +140,7 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
                 # Extract status code from retry response
                 retry_status_code = self._extract_status_code_from_response(
                     retry_response,
-                    valid_codes=valid_status_codes,
+                    valid_codes=valid_intents,
                 )
 
                 # Validate checklist again
@@ -210,7 +210,7 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
                 response = context_data.get("response", "")
                 status_code = self._extract_status_code_from_response(
                     response,
-                    valid_codes=valid_status_codes,
+                    valid_codes=valid_intents,
                 )
                 return response, status_code, False
 

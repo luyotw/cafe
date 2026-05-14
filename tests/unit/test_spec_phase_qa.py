@@ -311,7 +311,7 @@ class TestReviewDecisionDisplayCallback:
 
         with patch.object(spec_phase, "_display_current_spec"), \
              patch.object(spec_phase, "_display_iteration_delta") as mock_display_delta, \
-             patch.object(spec_phase, "_load_previous_iteration_data", return_value={"status_code": "CAFE_READY_FOR_REVIEW"}), \
+             patch.object(spec_phase, "_load_previous_iteration_data", return_value={"status_code": "ready_for_review"}), \
              patch.object(spec_phase, "_ask_user_for_review_decision", return_value="confirm") as mock_review_decision, \
              patch.object(spec_phase, "_process_review_decision", return_value="confirm"):
 
@@ -336,7 +336,7 @@ class TestReviewDecisionDisplayCallback:
              patch.object(
                  spec_phase,
                  "_load_previous_iteration_data",
-                 return_value={"response": "CAFE_READY_FOR_REVIEW"},
+                 return_value={"response": "ready_for_review"},
              ), \
              patch.object(spec_phase, "_ask_user_for_review_decision", return_value="confirm") as mock_review_decision, \
              patch.object(spec_phase, "_process_review_decision", return_value="confirm"):

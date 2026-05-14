@@ -188,7 +188,7 @@ class TestPRE2EMockCustomTitleAndBody:
         result = run_cafe_pr(
             tmp_path,
             issue_name,
-            mock_response="CAFE_CONFIRMED\n\n# Auto-generated title"
+            mock_response="confirmed\n\n# Auto-generated title"
         )
 
         output = result.stdout + result.stderr
@@ -291,7 +291,7 @@ class TestPRE2EMockExistingFiles:
         result = run_cafe_pr(
             tmp_path,
             issue_name,
-            mock_response="CAFE_CONFIRMED\n\n# New Generated Title",
+            mock_response="confirmed\n\n# New Generated Title",
             extra_args=["--update"]
         )
 

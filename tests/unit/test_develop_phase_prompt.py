@@ -14,7 +14,7 @@ def _write_review_iteration(
     issue_dir: Path,
     *,
     iteration: int = 1,
-    status_code: str = "CAFE_NEEDS_CHANGES",
+    status_code: str = "needs_changes",
     timestamp: str = "2026-01-07T11:39:41+08:00",
     end_time: str | None = None,
     output: str = "## Todo List\n\n- [ ] Review issue",
@@ -73,7 +73,7 @@ class TestDevelopPhasePromptGeneration:
         _write_review_iteration(
             issue_dir,
             iteration=1,
-            status_code="CAFE_NEEDS_CHANGES",
+            status_code="needs_changes",
             timestamp="2026-01-07T11:39:41+08:00",
             output="Please fix commit message format",
         )
@@ -130,7 +130,7 @@ class TestDevelopPhasePromptGeneration:
         _write_review_iteration(
             issue_dir,
             iteration=1,
-            status_code="CAFE_NEEDS_CHANGES",
+            status_code="needs_changes",
             end_time="2026-01-07T11:40:00+08:00",
             output="Please fix review issue from iteration context",
         )
@@ -191,7 +191,7 @@ class TestDevelopPhasePromptGeneration:
         pr_context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "status_code": "CAFE_NEEDS_CHANGES"
+            "status_code": "needs_changes"
         }))
 
         # Mock get_agent_file_path
@@ -237,7 +237,7 @@ class TestDevelopPhasePromptGeneration:
         _write_review_iteration(
             issue_dir,
             iteration=1,
-            status_code="CAFE_CONFIRMED",
+            status_code="confirmed",
             timestamp="2026-01-07T11:39:41+08:00",
             output="Looks good!",
         )
@@ -262,7 +262,7 @@ class TestDevelopPhasePromptGeneration:
         pr_context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "status_code": "CAFE_NEEDS_CHANGES"
+            "status_code": "needs_changes"
         }))
 
         # Mock get_agent_file_path
@@ -308,7 +308,7 @@ class TestDevelopPhasePromptGeneration:
         _write_review_iteration(
             issue_dir,
             iteration=1,
-            status_code="CAFE_NEEDS_CHANGES",
+            status_code="needs_changes",
             timestamp="2026-01-07T11:39:41+08:00",
             output="## Todo List\n\n- [ ] Fix issue",
         )
@@ -322,7 +322,7 @@ class TestDevelopPhasePromptGeneration:
         # Mock get_agent_file_path and generate_develop_checklist
         with patch('cafe.agents.manager.AgentManager.get_agent_file_path', return_value=str(agent_file)), \
              patch('cafe.utils.checklist_generator.generate_develop_checklist') as mock_gen_checklist, \
-             patch.object(DevelopPhase, '_execute_and_handle_agent_response', return_value=(None, "CAFE_CONFIRMED")):
+             patch.object(DevelopPhase, '_execute_and_handle_agent_response', return_value=(None, "confirmed")):
 
             # Create phase
             phase = DevelopPhase(
@@ -372,7 +372,7 @@ class TestDevelopPhasePromptGeneration:
         _write_review_iteration(
             issue_dir,
             iteration=1,
-            status_code="CAFE_NEEDS_CHANGES",
+            status_code="needs_changes",
             timestamp="2026-01-07T11:39:41+08:00",
             end_time="2026-01-07T11:40:00+08:00",
             output="## Todo List\n\n- [ ] Review issue",
@@ -390,7 +390,7 @@ class TestDevelopPhasePromptGeneration:
         pr_context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "status_code": "CAFE_NEEDS_CHANGES",
+            "status_code": "needs_changes",
             "end_time": "2026-01-07T11:50:00+08:00",
         }))
 
@@ -403,7 +403,7 @@ class TestDevelopPhasePromptGeneration:
         # Mock get_agent_file_path and generate_develop_checklist
         with patch('cafe.agents.manager.AgentManager.get_agent_file_path', return_value=str(agent_file)), \
              patch('cafe.utils.checklist_generator.generate_develop_checklist') as mock_gen_checklist, \
-             patch.object(DevelopPhase, '_execute_and_handle_agent_response', return_value=(None, "CAFE_CONFIRMED")):
+             patch.object(DevelopPhase, '_execute_and_handle_agent_response', return_value=(None, "confirmed")):
 
             # Create phase
             phase = DevelopPhase(
@@ -454,7 +454,7 @@ class TestDevelopPhasePromptGeneration:
         _write_review_iteration(
             issue_dir,
             iteration=1,
-            status_code="CAFE_NEEDS_CHANGES",
+            status_code="needs_changes",
             timestamp="2026-01-07T11:58:24+08:00",
             end_time="2026-01-07T11:58:24+08:00",
             output="## Todo List\n\n- [ ] Review issue",
@@ -472,13 +472,13 @@ class TestDevelopPhasePromptGeneration:
         pr_context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "status_code": "CAFE_NEEDS_CHANGES"
+            "status_code": "needs_changes"
         }))
 
         # Create PR status.json with older end_time
         pr_status_file = pr_dir / "status.json"
         pr_status_file.write_text(json.dumps({
-            "status_code": "CAFE_NEEDS_CHANGES",
+            "status_code": "needs_changes",
             "end_time": "2026-01-07T11:42:12+08:00"
         }))
 
@@ -491,7 +491,7 @@ class TestDevelopPhasePromptGeneration:
         # Mock get_agent_file_path and generate_develop_checklist
         with patch('cafe.agents.manager.AgentManager.get_agent_file_path', return_value=str(agent_file)), \
              patch('cafe.utils.checklist_generator.generate_develop_checklist') as mock_gen_checklist, \
-             patch.object(DevelopPhase, '_execute_and_handle_agent_response', return_value=(None, "CAFE_CONFIRMED")):
+             patch.object(DevelopPhase, '_execute_and_handle_agent_response', return_value=(None, "confirmed")):
 
             # Create phase
             phase = DevelopPhase(
@@ -541,7 +541,7 @@ class TestDevelopPhasePromptGeneration:
         _write_review_iteration(
             issue_dir,
             iteration=1,
-            status_code="CAFE_NEEDS_CHANGES",
+            status_code="needs_changes",
             timestamp="2026-01-07T11:39:41+08:00",
             output="## Todo List\n\n- [ ] Review issue",
         )
@@ -557,7 +557,7 @@ class TestDevelopPhasePromptGeneration:
         # Mock get_agent_file_path and generate_develop_checklist
         with patch('cafe.agents.manager.AgentManager.get_agent_file_path', return_value=str(agent_file)), \
              patch('cafe.utils.checklist_generator.generate_develop_checklist') as mock_gen_checklist, \
-             patch.object(DevelopPhase, '_execute_and_handle_agent_response', return_value=(None, "CAFE_CONFIRMED")):
+             patch.object(DevelopPhase, '_execute_and_handle_agent_response', return_value=(None, "confirmed")):
 
             # Create phase
             phase = DevelopPhase(
@@ -658,7 +658,7 @@ class TestReviewFeedbackDetectionByEndTime:
         _write_review_iteration(
             issue_dir,
             iteration=1,
-            status_code="CAFE_NEEDS_CHANGES",
+            status_code="needs_changes",
             timestamp="2026-01-07T10:00:00+08:00",
             end_time="2026-01-07T10:05:00+08:00",
         )
@@ -670,10 +670,10 @@ class TestReviewFeedbackDetectionByEndTime:
         develop_status_file.write_text(json.dumps({
             "phase": "develop",
             "status": "completed",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "timestamp": "2026-01-07T10:10:00+08:00",
             "iteration": 3,
-            "message": "Phase completed with CAFE_CONFIRMED",
+            "message": "Phase completed with confirmed",
             "end_time": "2026-01-07T10:15:00+08:00",
         }))
 
@@ -696,7 +696,7 @@ class TestReviewFeedbackDetectionByEndTime:
         _write_review_iteration(
             issue_dir,
             iteration=1,
-            status_code="CAFE_NEEDS_CHANGES",
+            status_code="needs_changes",
             timestamp="2026-01-07T10:20:00+08:00",
             end_time="2026-01-07T10:25:00+08:00",
         )
@@ -708,10 +708,10 @@ class TestReviewFeedbackDetectionByEndTime:
         develop_status_file.write_text(json.dumps({
             "phase": "develop",
             "status": "completed",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "timestamp": "2026-01-07T10:10:00+08:00",
             "iteration": 3,
-            "message": "Phase completed with CAFE_CONFIRMED",
+            "message": "Phase completed with confirmed",
             "end_time": "2026-01-07T10:15:00+08:00",
         }))
 
@@ -732,7 +732,7 @@ class TestReviewFeedbackDetectionByEndTime:
         _write_review_iteration(
             issue_dir,
             iteration=1,
-            status_code="CAFE_NEEDS_CHANGES",
+            status_code="needs_changes",
             timestamp="2026-01-07T10:20:00+08:00",
             end_time="2026-01-07T10:25:00+08:00",
         )
@@ -743,10 +743,10 @@ class TestReviewFeedbackDetectionByEndTime:
         develop_status_file.write_text(json.dumps({
             "phase": "develop",
             "status": "completed",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "timestamp": "2026-01-07T10:10:00+08:00",
             "iteration": 3,
-            "message": "Phase completed with CAFE_CONFIRMED",
+            "message": "Phase completed with confirmed",
             "end_time": "2026-01-07T10:15:00+08:00",
         }))
 
@@ -768,7 +768,7 @@ class TestReviewFeedbackDetectionByEndTime:
         _write_review_iteration(
             issue_dir,
             iteration=1,
-            status_code="CAFE_NEEDS_CHANGES",
+            status_code="needs_changes",
             timestamp="2026-01-07T10:20:00+08:00",
             end_time="2026-01-07T10:25:00+08:00",
         )
@@ -780,10 +780,10 @@ class TestReviewFeedbackDetectionByEndTime:
         develop_status_file.write_text(json.dumps({
             "phase": "develop",
             "status": "completed",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "timestamp": "2026-01-07T10:10:00+08:00",
             "iteration": 3,
-            "message": "Phase completed with CAFE_CONFIRMED",
+            "message": "Phase completed with confirmed",
         }))
 
         with patch('cafe.agents.manager.AgentManager.get_agent_file_path', return_value=str(setup["agent_file"])):
@@ -804,7 +804,7 @@ class TestReviewFeedbackDetectionByEndTime:
         _write_review_iteration(
             issue_dir,
             iteration=1,
-            status_code="CAFE_NEEDS_CHANGES",
+            status_code="needs_changes",
             timestamp="2026-01-07T10:20:00+08:00",
         )
 
@@ -815,10 +815,10 @@ class TestReviewFeedbackDetectionByEndTime:
         develop_status_file.write_text(json.dumps({
             "phase": "develop",
             "status": "completed",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "timestamp": "2026-01-07T10:10:00+08:00",
             "iteration": 3,
-            "message": "Phase completed with CAFE_CONFIRMED",
+            "message": "Phase completed with confirmed",
             "end_time": "2026-01-07T10:15:00+08:00",
         }))
 

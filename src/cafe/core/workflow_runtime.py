@@ -13,14 +13,15 @@ import re
 from typing import Any, Dict, Optional
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
+from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, transition_map_key
 from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult
 
 
 STATUS_TOKEN_PATTERN = re.compile(r"\bCAFE_[A-Z0-9_]+\b")
-GOTO_PATTERN = re.compile(r"CAFE_GOTO\s*:\s*([a-zA-Z0-9_-]+)")
+GOTO_PATTERN = re.compile(r"GOTO\s*:\s*([a-zA-Z0-9_-]+)")
 PAUSE_STATUS_CODES = {
     PhaseStatusCode.READY_FOR_REVIEW.value,
+    PhaseStatusCode.CONFIRM_OUTPUT.value,
     PhaseStatusCode.NEED_CLARIFICATION.value,
     PhaseStatusCode.NEED_PERMISSION.value,
 }
@@ -82,7 +83,10 @@ class BlackboardWorkflowRuntime:
 
     @staticmethod
     def _default_pause_intent(current_step: str, status_code: str) -> HandoffIntent:
-        if status_code == PhaseStatusCode.READY_FOR_REVIEW.value and current_step in {"spec", "plan"}:
+        if status_code in {
+            PhaseStatusCode.READY_FOR_REVIEW.value,
+            PhaseStatusCode.CONFIRM_OUTPUT.value,
+        } and current_step in {"spec", "plan"}:
             return HandoffIntent.CONFIRM_OUTPUT
         if status_code == PhaseStatusCode.NEED_CLARIFICATION.value:
             return HandoffIntent.NEED_CLARIFICATION
@@ -136,12 +140,19 @@ class BlackboardWorkflowRuntime:
                 },
             )
 
-        if status_code not in transitions:
+        transition_key = status_code
+        if status_code:
+            try:
+                transition_key = transition_map_key(PhaseStatusCode(status_code))
+            except ValueError:
+                transition_key = status_code
+        target = transitions.get(transition_key) if transition_key else None
+        if target is None:
             default_target = transitions.get("default")
             if default_target:
                 return str(default_target), "default"
             return None, "terminal"
-        return str(transitions[status_code]), "status"
+        return str(target), "status"
 
     @staticmethod
     def _extract_handoff_intent(execution_result: Any) -> Optional[HandoffIntent]:
@@ -248,8 +259,15 @@ class BlackboardWorkflowRuntime:
     @staticmethod
     def _extract_status_like_tokens(*, response: str, explicit_status_code: Optional[str]) -> set[str]:
         tokens = set(STATUS_TOKEN_PATTERN.findall(response or ""))
-        if explicit_status_code and explicit_status_code.startswith("CAFE_"):
+        haystack = f"{response or ''}\n{explicit_status_code or ''}"
+        if explicit_status_code:
             tokens.add(explicit_status_code)
+        for code in PhaseStatusCode:
+            token = code.value
+            if not token:
+                continue
+            if re.search(rf"(?<!\w){re.escape(token)}(?!\w)", haystack, flags=re.IGNORECASE):
+                tokens.add(token)
         return tokens
 
     def _resolve_review_confirmed_successor(self, current_step: str) -> Optional[str]:
@@ -258,7 +276,7 @@ class BlackboardWorkflowRuntime:
         if not isinstance(transitions, dict):
             return None
 
-        confirmed_target = transitions.get(PhaseStatusCode.CONFIRMED.value)
+        confirmed_target = transitions.get(transition_map_key(PhaseStatusCode.CONFIRMED))
         if confirmed_target and confirmed_target != current_step:
             return str(confirmed_target)
 
@@ -298,7 +316,7 @@ class BlackboardWorkflowRuntime:
     ) -> tuple[Optional[PhaseStatusCode], Optional[str], list[PhaseStatusCode]]:
         valid_codes = [
             PhaseStatusCode(code)
-            for code in step_def.get("valid_status_codes", [])
+            for code in step_def.get("valid_intents", [])
             if code in {item.value for item in PhaseStatusCode}
         ]
         goto_target = self._extract_goto_target(response)
@@ -789,7 +807,7 @@ class BlackboardWorkflowRuntime:
                 if goto_target:
                     handoff_next_step, handoff_transition_source = self._resolve_next_step(
                         current_step=current_step,
-                        response=f"{frame.response}\nCAFE_GOTO:{goto_target}",
+                        response=f"{frame.response}\nGOTO:{goto_target}",
                         status_code="",
                     )
                 if handoff_next_step is not None:
@@ -800,7 +818,7 @@ class BlackboardWorkflowRuntime:
                         response=frame.response,
                         explicit_status_code=frame.explicit_status_code,
                     )
-                    invalid_status_codes = sorted(
+                    invalid_intents = sorted(
                         token for token in status_like_tokens if token not in allowed_status_codes
                     )
                     default_next_step, _ = self._resolve_next_step(
@@ -809,10 +827,10 @@ class BlackboardWorkflowRuntime:
                         status_code="",
                     )
                     if default_next_step is not None:
-                        event_name = "status_code_invalid" if invalid_status_codes else "status_code_missing"
+                        event_name = "status_code_invalid" if invalid_intents else "status_code_missing"
                         event_data: Dict[str, Any] = {"step": current_step, "response": frame.response}
-                        if invalid_status_codes:
-                            event_data["invalid_status_codes"] = invalid_status_codes
+                        if invalid_intents:
+                            event_data["invalid_intents"] = invalid_intents
                             event_data["allowed_status_codes"] = sorted(allowed_status_codes)
                         event_data["default_transition"] = default_next_step
                         event_data["runtime"] = runtime_label
@@ -821,13 +839,13 @@ class BlackboardWorkflowRuntime:
                         handoff_transition_source = "default"
                         status_code = "NO_STATUS_CODE"
                         last_status_code = status_code
-                    elif invalid_status_codes:
+                    elif invalid_intents:
                         self.blackboard_store.record_event(
                             self.blackboard,
                             "status_code_invalid",
                             {
                                 "step": current_step,
-                                "invalid_status_codes": invalid_status_codes,
+                                "invalid_intents": invalid_intents,
                                 "allowed_status_codes": sorted(allowed_status_codes),
                                 "response": frame.response,
                                 "runtime": runtime_label,
@@ -943,7 +961,7 @@ class BlackboardWorkflowRuntime:
                 next_step, transition_source = self._resolve_next_step(
                     current_step=current_step,
                     response=(
-                        frame.response if goto_target is None else f"{frame.response}\nCAFE_GOTO:{goto_target}"
+                        frame.response if goto_target is None else f"{frame.response}\nGOTO:{goto_target}"
                     ),
                     status_code=status_code,
                 )

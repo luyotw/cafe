@@ -34,9 +34,9 @@ steps:
   develop:
     skill: develop
     role: developer
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: _done
+      await_agent: _done
 """.strip(),
         encoding="utf-8",
     )
@@ -67,9 +67,9 @@ steps:
     skill: develop
     role: developer
     allowed_tools: [Bash, "Bash(git:*)"]
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: _done
+      await_agent: _done
 """.strip(),
         encoding="utf-8",
     )
@@ -384,9 +384,9 @@ steps:
   qa:
     skill: review
     role: reviewer
-    valid_status_codes: [CAFE_CONFIRMED]
+    valid_intents: [confirmed]
     on:
-      CAFE_CONFIRMED: _done
+      await_agent: _done
 """.strip(),
         encoding="utf-8",
     )

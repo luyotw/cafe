@@ -58,14 +58,14 @@ class TestChecklistValidationPreservesStatusCode:
         # context.json has response WITH status code
         context = iteration_dir / "context.json"
         context.write_text(json.dumps({
-            "response": "Done.\n\nCAFE_NEED_CLARIFICATION",
+            "response": "Done.\n\nneed_clarification",
         }))
 
         response, status_code, passed = phase._validate_and_retry_checklist_completion(
             agent_name="Roger",
             prompt="test prompt",
             user_input="",
-            valid_status_codes=[PhaseStatusCode.READY_FOR_REVIEW, PhaseStatusCode.NEED_CLARIFICATION],
+            valid_intents=[PhaseStatusCode.READY_FOR_REVIEW, PhaseStatusCode.NEED_CLARIFICATION],
         )
 
         assert passed is True
@@ -93,7 +93,7 @@ class TestChecklistValidationPreservesStatusCode:
             agent_name="Roger",
             prompt="test prompt",
             user_input="",
-            valid_status_codes=[PhaseStatusCode.READY_FOR_REVIEW, PhaseStatusCode.NEED_CLARIFICATION],
+            valid_intents=[PhaseStatusCode.READY_FOR_REVIEW, PhaseStatusCode.NEED_CLARIFICATION],
         )
 
         assert passed is True

@@ -44,7 +44,7 @@ def test_get_phase_end_time_uses_iteration_context_without_status_file(tmp_path:
         "develop",
         iteration=1,
         end_time="2026-04-29T10:00:00+08:00",
-        response="CAFE_CONFIRMED",
+        response="confirmed",
     )
     phase = _make_review_phase(issue_dir)
 
@@ -58,14 +58,14 @@ def test_check_if_develop_is_newer_uses_iteration_context_without_status_file(tm
         "develop",
         iteration=1,
         end_time="2026-04-29T10:00:00+08:00",
-        response="CAFE_CONFIRMED",
+        response="confirmed",
     )
     _write_iteration_context(
         issue_dir,
         "review",
         iteration=1,
         end_time="2026-04-29T09:00:00+08:00",
-        response="CAFE_NEEDS_CHANGES",
+        response="needs_changes",
     )
     phase = _make_review_phase(issue_dir)
 
@@ -79,14 +79,14 @@ def test_check_if_develop_is_newer_returns_false_when_review_is_latest(tmp_path:
         "develop",
         iteration=1,
         end_time="2026-04-29T09:00:00+08:00",
-        response="CAFE_CONFIRMED",
+        response="confirmed",
     )
     _write_iteration_context(
         issue_dir,
         "review",
         iteration=1,
         end_time="2026-04-29T10:00:00+08:00",
-        response="CAFE_NEEDS_CHANGES",
+        response="needs_changes",
     )
     phase = _make_review_phase(issue_dir)
 
@@ -100,14 +100,14 @@ def test_execute_completed_review_points_back_to_make(tmp_path: Path, capsys) ->
         "develop",
         iteration=1,
         end_time="2026-04-29T09:00:00+08:00",
-        response="CAFE_CONFIRMED",
+        response="confirmed",
     )
     _write_iteration_context(
         issue_dir,
         "review",
         iteration=1,
         end_time="2026-04-29T10:00:00+08:00",
-        response="CAFE_CONFIRMED",
+        response="confirmed",
     )
     phase = _make_review_phase(issue_dir)
     phase.git_ops = MagicMock()
