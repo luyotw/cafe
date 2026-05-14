@@ -431,6 +431,13 @@ class GenericWorkflowStepExecutor(Phase):
 
         add("ls")
 
+        # Always allow editing blackboard and baton so agents can hand off
+        # without hitting permission denials (runtime also writes these, but
+        # belt-and-suspenders prevents the agent from wasting tokens asking
+        # for permission).
+        add(f"edit({self._display_path(self.issue_dir / 'blackboard.json')})")
+        add(f"edit({self._display_path(self.issue_dir / 'next_step.txt')})")
+
         if step_name in {"spec", "plan", "review", "pr"}:
             add(f"edit({self._display_path(output_file)})")
             add(f"edit({self._display_path(checklist_file)})")
