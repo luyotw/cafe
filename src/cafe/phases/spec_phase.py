@@ -829,38 +829,45 @@ class SpecPhase(Phase):
         if not backup_path.exists():
             backup_path.write_text(spec_path.read_text())
 
+    @staticmethod
+    def _response_leading_line_is_outcome_token(line: str) -> bool:
+        """Return True when ``line`` is only a legacy ``CAFE_*`` tag or a :class:`PhaseStatusCode` token."""
+        stripped = (line or "").strip()
+        if not stripped:
+            return False
+        if stripped.upper().startswith("CAFE_"):
+            return True
+        parts = stripped.split()
+        if len(parts) != 1:
+            return False
+        token = parts[0].lower()
+        return token in {c.value.lower() for c in PhaseStatusCode}
+
     def _ensure_spec_file_written(self, response: str) -> None:
         """Ensure spec file is written (for mock mode or when agent does not use write tool).
-        
+
         In mock mode, agent will not actually call write tool, so content needs to be extracted from response and written.
-        
+
         Args:
             response: Agent response content
         """
         import os
-        
+
         # Only process in mock mode
         if not os.getenv("CAFE_MOCK_AGENTS"):
             return
-            
-        # Extract content after status code
-        lines = response.strip().split("\n")
-        if not lines:
+
+        raw_lines = response.strip().split("\n")
+        if not raw_lines:
             return
-            
-        # Skip first line (status code) and empty lines
-        content_lines = []
-        skip_first = True
-        for line in lines:
-            if skip_first and line.startswith("CAFE_"):
-                continue
-            skip_first = False
-            content_lines.append(line)
-        
-        content = "\n".join(content_lines).strip()
+
+        if self._response_leading_line_is_outcome_token(raw_lines[0]):
+            raw_lines = raw_lines[1:]
+
+        content = "\n".join(raw_lines).strip()
         if not content:
             return
-            
+
         # Write to file
         spec_path = Path(self.spec_file)
         spec_path.parent.mkdir(parents=True, exist_ok=True)

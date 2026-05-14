@@ -347,3 +347,28 @@ class TestReviewDecisionDisplayCallback:
         mock_display_delta.assert_called_once()
         assert mock_review_decision.call_args.kwargs["display_callback"] is mock_display_delta
         assert mock_review_decision.call_args.kwargs["output_file"] == prev_spec_file
+
+
+class TestEnsureSpecFileWrittenMockMode:
+    """_ensure_spec_file_written：mock 模式下從 agent 回覆抽出 spec 內容。"""
+
+    def test_strips_plain_outcome_token_first_line(self, spec_phase, tmp_path, monkeypatch):
+        monkeypatch.setenv("CAFE_MOCK_AGENTS", "true")
+        out = tmp_path / "spec.md"
+        spec_phase.spec_file = str(out)
+        spec_phase._ensure_spec_file_written("ready_for_review\n\n# Title\n\nBody")
+        assert out.read_text(encoding="utf-8").startswith("# Title")
+
+    def test_strips_legacy_cafe_prefix_first_line(self, spec_phase, tmp_path, monkeypatch):
+        monkeypatch.setenv("CAFE_MOCK_AGENTS", "true")
+        out = tmp_path / "spec.md"
+        spec_phase.spec_file = str(out)
+        spec_phase._ensure_spec_file_written("CAFE_CONFIRMED\n\n# Spec\n")
+        assert out.read_text(encoding="utf-8").startswith("# Spec")
+
+    def test_keeps_heading_when_first_line_is_not_sole_outcome_token(self, spec_phase, tmp_path, monkeypatch):
+        monkeypatch.setenv("CAFE_MOCK_AGENTS", "true")
+        out = tmp_path / "spec.md"
+        spec_phase.spec_file = str(out)
+        spec_phase._ensure_spec_file_written("# Title\n\nBody\n")
+        assert out.read_text(encoding="utf-8").startswith("# Title")

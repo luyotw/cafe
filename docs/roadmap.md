@@ -71,7 +71,7 @@ CAFE 長期採 **repo-first** 的 definition model，但不預設最終所有流
 - `Skill + Playbook + Blackboard + Hook`
 - GenericPhase / PlaybookRunner
 - 動態 step orchestration
-- status code + `CAFE_GOTO`
+- baton（`next_step.txt` / `HandoffContract`）+ playbook `on:` **intent** 鍵（`await_agent`、`confirm_output` 等）；舊版文件中的 `CAFE_GOTO` / `CAFE_*` 敘述僅作歷史對照
 - 共享 artifacts / events / decisions
 - suspend / resume 基礎模型
 - 明確定義 `WorkflowInstance`
