@@ -245,6 +245,7 @@ class BlackboardState:
     artifacts: Dict[str, ArtifactEntry] = field(default_factory=dict)
     events: List[EventEntry] = field(default_factory=list)
     decisions: List[DecisionEntry] = field(default_factory=list)
+    capability_receipts: List[Dict[str, Any]] = field(default_factory=list)
     handoff_summary: str = ""
     handoff_contract: Optional[HandoffContract] = None
     updated_at: str = field(default_factory=_now_iso)
@@ -257,6 +258,7 @@ class BlackboardState:
             "artifacts": {name: entry.to_dict() for name, entry in self.artifacts.items()},
             "events": [entry.to_dict() for entry in self.events],
             "decisions": [entry.to_dict() for entry in self.decisions],
+            "capability_receipts": list(self.capability_receipts),
             "handoff_summary": self.handoff_summary,
             "handoff_contract": (
                 self.handoff_contract.to_dict() if self.handoff_contract is not None else None
@@ -282,6 +284,13 @@ class BlackboardState:
                         path=str(value),
                     )
 
+        raw_receipts = data.get("capability_receipts", [])
+        receipts: List[Dict[str, Any]] = []
+        if isinstance(raw_receipts, list):
+            for item in raw_receipts:
+                if isinstance(item, dict):
+                    receipts.append(dict(item))
+
         return cls(
             current_step=str(data.get("current_step", initial_step)),
             playbook_id=str(data.get("playbook_id", "default")),
@@ -289,6 +298,7 @@ class BlackboardState:
             artifacts=artifacts,
             events=[EventEntry.from_dict(entry) for entry in data.get("events", [])],
             decisions=[DecisionEntry.from_dict(entry) for entry in data.get("decisions", [])],
+            capability_receipts=receipts,
             handoff_summary=str(data.get("handoff_summary", "")),
             handoff_contract=(
                 HandoffContract.from_dict(dict(data["handoff_contract"]))
@@ -454,6 +464,11 @@ class BlackboardStore:
 
     def put_artifact(self, state: BlackboardState, entry: ArtifactEntry) -> None:
         state.artifacts[entry.name] = entry
+        self.save(state)
+
+    def append_capability_receipt(self, state: BlackboardState, receipt: Dict[str, Any]) -> None:
+        """Append one structured host capability receipt and persist the blackboard."""
+        state.capability_receipts.append(dict(receipt))
         self.save(state)
 
     def set_current_step(self, state: BlackboardState, step: str) -> None:

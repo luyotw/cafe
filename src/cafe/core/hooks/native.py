@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-import subprocess
+import uuid
 import webbrowser
 from pathlib import Path
 from typing import Any, Optional
 
+from datetime import datetime
 
-from cafe.core.blackboard import HandoffContract, HandoffIntent, HandoffOwner
+from cafe.core.blackboard import BlackboardState, HandoffContract, HandoffIntent, HandoffOwner
 from cafe.core.hooks import HookResult, NoOpHook
 from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
 from cafe.core.status_codes import PhaseStatusCode
@@ -642,6 +643,19 @@ class GitHubPRCreator(NoOpHook):
         )
 
     def _publish_output(self, **kwargs: Any) -> HookResult:
+        from cafe.core.blackboard import BlackboardStore
+        from cafe.core.capabilities import (
+            SCRIPT_EXIT_ERROR,
+            TIMEOUT_ERROR,
+            VALIDATION_ERROR,
+            CapabilityRegistryError,
+            CAPABILITY_PR_PUBLISH_ID,
+            capability_receipt_hook_event,
+            default_capability_definition_dirs,
+            load_capability_registry,
+            run_pr_publish_capability,
+        )
+
         phase = kwargs.get("phase")
         step_name = str(kwargs.get("step_name") or "")
         if phase is None:
@@ -661,36 +675,72 @@ class GitHubPRCreator(NoOpHook):
 
         repo_root = self._resolve_repo_root(phase)
         publish_request_file = kwargs.get("publish_request_file")
-        cmd = self._build_publish_command(
-            repo_root=repo_root,
-            output_file=output_file,
-            publish_request_file=publish_request_file if isinstance(publish_request_file, Path) else None,
-        )
+        blackboard_state = kwargs.get("blackboard_state")
+        issue_dir = getattr(phase, "issue_dir", None)
 
-        result = subprocess.run(
-            cmd,
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            details = (result.stderr or result.stdout or "").strip()
-            raise RuntimeError(f"PR sync script failed: {details}")
+        def persist_receipt(receipt: dict[str, Any]) -> None:
+            if isinstance(blackboard_state, BlackboardState) and isinstance(issue_dir, Path):
+                BlackboardStore(issue_dir).append_capability_receipt(blackboard_state, receipt)
 
-        payload = self._parse_sync_result(result.stdout)
-        pr_url = str(payload.get("pr_url") or "").strip()
-        pr_number = str(payload.get("pr_number") or "").strip()
-        action = str(payload.get("action") or "synced").strip()
-        events = [
-            {
-                "type": "pr_synced",
-                "url": pr_url,
-                "pr_number": pr_number,
-                "action": action,
-                "source": "skill_script",
+        try:
+            request = self._load_publish_request(
+                publish_request_file=publish_request_file if isinstance(publish_request_file, Path) else None,
+                repo_root=repo_root,
+            )
+        except RuntimeError:
+            receipt = {
+                "capability": CAPABILITY_PR_PUBLISH_ID,
+                "correlation_id": uuid.uuid4().hex[:20],
+                "success": False,
+                "category": VALIDATION_ERROR,
+                "code": "request_load_error",
+                "inputs": {},
+                "outputs": {},
+                "finished_at": datetime.now().astimezone().isoformat(),
             }
-        ]
+            persist_receipt(receipt)
+            return HookResult(events=[capability_receipt_hook_event(receipt)])
+
+        try:
+            registry = load_capability_registry(default_capability_definition_dirs(repo_root))
+        except CapabilityRegistryError:
+            receipt = {
+                "capability": CAPABILITY_PR_PUBLISH_ID,
+                "correlation_id": uuid.uuid4().hex[:20],
+                "success": False,
+                "category": VALIDATION_ERROR,
+                "code": "registry_load_error",
+                "inputs": dict(request.get("args") or {}),
+                "outputs": {},
+                "finished_at": datetime.now().astimezone().isoformat(),
+            }
+            persist_receipt(receipt)
+            return HookResult(events=[capability_receipt_hook_event(receipt)])
+
+        run = run_pr_publish_capability(
+            repo_root=repo_root,
+            registry=registry,
+            publish_request=request,
+            pr_markdown_file=output_file,
+        )
+        persist_receipt(run.receipt)
+
+        events: list[dict[str, Any]] = [capability_receipt_hook_event(run.receipt)]
+        if run.pr_synced_event is not None:
+            events.insert(0, run.pr_synced_event)
+
+        if not run.receipt.get("success"):
+            category = run.receipt.get("category")
+            if category == SCRIPT_EXIT_ERROR:
+                details = (run.receipt.get("outputs") or {}).get("stderr") or ""
+                raise RuntimeError(f"PR sync script failed: {details}")
+            if category == TIMEOUT_ERROR:
+                raise RuntimeError("PR sync timed out")
+            return HookResult(events=events)
+
+        pr_url = str((run.receipt.get("outputs") or {}).get("pr_url") or "").strip()
+        pr_number = str((run.receipt.get("outputs") or {}).get("pr_number") or "").strip()
+        action = str((run.receipt.get("outputs") or {}).get("action") or "synced").strip()
         return HookResult(
             context_updates={
                 key: value
@@ -754,42 +804,6 @@ class GitHubPRCreator(NoOpHook):
             return None
         return str(value).strip() if value else None
 
-    def _build_publish_command(
-        self,
-        *,
-        repo_root: Path,
-        output_file: Path,
-        publish_request_file: Optional[Path],
-    ) -> list[str]:
-        request = self._load_publish_request(
-            publish_request_file=publish_request_file,
-            repo_root=repo_root,
-        )
-        if str(request.get("capability") or "").strip() != "publish_pr":
-            raise RuntimeError("PR publish request has unsupported capability")
-
-        script_path = self._resolve_contract_script(
-            repo_root=repo_root,
-            script=str(request.get("script") or ""),
-        )
-        args = request.get("args")
-        if not isinstance(args, dict):
-            raise RuntimeError("PR publish request is missing args")
-
-        output_arg = self._resolve_contract_path(
-            repo_root=repo_root,
-            raw_path=str(args.get("output") or ""),
-            field_name="output",
-        )
-        if output_arg != output_file.resolve():
-            raise RuntimeError("PR publish request output does not match current PR artifact")
-
-        cmd = ["/bin/bash", str(script_path), "--output", str(output_arg)]
-        base_arg = str(args.get("base") or "").strip()
-        if base_arg:
-            cmd.extend(["--base", base_arg])
-        return cmd
-
     @staticmethod
     def _load_publish_request(
         *,
@@ -811,49 +825,6 @@ class GitHubPRCreator(NoOpHook):
         if permissions is not None and not isinstance(permissions, dict):
             raise RuntimeError("PR publish request permissions must be an object")
         return payload
-
-    def _resolve_contract_script(self, *, repo_root: Path, script: str) -> Path:
-        if not script.strip():
-            raise RuntimeError("PR publish request is missing script")
-        normalized_script = script.strip()
-        requested = self._resolve_contract_path(
-            repo_root=repo_root,
-            raw_path=normalized_script,
-            field_name="script",
-        )
-        trusted = self._resolve_sync_script(repo_root).resolve()
-        canonical = (repo_root / self.TRUSTED_PR_SCRIPT).resolve()
-        if requested not in {trusted, canonical} and normalized_script != self.TRUSTED_PR_SCRIPT:
-            raise RuntimeError("PR publish request references an untrusted script")
-        return trusted
-
-    @staticmethod
-    def _resolve_contract_path(
-        *,
-        repo_root: Path,
-        raw_path: str,
-        field_name: str,
-    ) -> Path:
-        if not raw_path.strip():
-            raise RuntimeError(f"PR publish request is missing {field_name}")
-        path = Path(raw_path)
-        if not path.is_absolute():
-            path = repo_root / path
-        return path.resolve()
-
-    @staticmethod
-    def _parse_sync_result(stdout: str) -> dict[str, Any]:
-        for line in reversed(stdout.splitlines()):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                parsed = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(parsed, dict):
-                return parsed
-        raise RuntimeError("PR sync script did not return JSON result")
 
 
 class PRCommentPoster(NoOpHook):

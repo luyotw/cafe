@@ -525,8 +525,7 @@ def test_generic_workflow_step_writes_pr_publish_request_contract(tmp_path: Path
     publish_request = json.loads(
         (issue_dir / "pr" / "iteration_001" / "publish_request.json").read_text(encoding="utf-8")
     )
-    assert publish_request["capability"] == "publish_pr"
-    assert publish_request["script"] == "src/cafe/data/skills/pr/scripts/sync_pr.sh"
+    assert publish_request["capability"] == "cafe.pr.publish"
     assert publish_request["args"] == {
         "output": ".cafe/issues/issue-pr-contract/pr/iteration_001/output.md",
         "base": "v02",

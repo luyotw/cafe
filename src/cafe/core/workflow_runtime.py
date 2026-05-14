@@ -82,6 +82,25 @@ class BlackboardWorkflowRuntime:
         return any(isinstance(event, dict) and event.get("type") == event_type for event in events)
 
     @staticmethod
+    def _pr_publish_receipt_satisfied(execution_result: Any) -> bool:
+        """True when PR publish left a host receipt or legacy ``pr_synced`` marker."""
+        if BlackboardWorkflowRuntime._has_event(execution_result, "pr_synced"):
+            return True
+        events = getattr(execution_result, "events", None)
+        if not isinstance(events, list):
+            return False
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") != "capability_receipt":
+                continue
+            if event.get("capability") != "cafe.pr.publish":
+                continue
+            if event.get("success") is True:
+                return True
+        return False
+
+    @staticmethod
     def _default_pause_intent(current_step: str, status_code: str) -> HandoffIntent:
         if status_code in {
             PhaseStatusCode.READY_FOR_REVIEW.value,
@@ -629,8 +648,8 @@ class BlackboardWorkflowRuntime:
                 )
 
             if next_step == "done":
-                if self._pr_step_requires_publish_receipt(current_step) and not self._has_event(
-                    frame.execution_result, "pr_synced"
+                if self._pr_step_requires_publish_receipt(current_step) and not self._pr_publish_receipt_satisfied(
+                    frame.execution_result
                 ):
                     self.blackboard_store.update_handoff_contract(
                         self.blackboard,

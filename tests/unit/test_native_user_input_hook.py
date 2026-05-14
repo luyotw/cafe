@@ -571,8 +571,7 @@ def test_github_pr_creator_publish_output_runs_sync_pr_script(tmp_path: Path) ->
     publish_request_file.write_text(
         json.dumps(
             {
-                "capability": "publish_pr",
-                "script": "src/cafe/data/skills/pr/scripts/sync_pr.sh",
+                "capability": "cafe.pr.publish",
                 "args": {
                     "output": ".cafe/issues/demo/pr/iteration_001/output.md",
                     "base": "develop",
@@ -599,7 +598,7 @@ def test_github_pr_creator_publish_output_runs_sync_pr_script(tmp_path: Path) ->
     completed.stderr = ""
 
     hook = GitHubPRCreator()
-    with patch("cafe.core.hooks.native.subprocess.run", return_value=completed) as mock_run:
+    with patch("cafe.core.capabilities.subprocess.run", return_value=completed) as mock_run:
         result = hook.run(
             stage="publish_output",
             phase=phase,
@@ -614,15 +613,16 @@ def test_github_pr_creator_publish_output_runs_sync_pr_script(tmp_path: Path) ->
     assert str(output_file) in cmd
     assert cmd[-2:] == ["--base", "develop"]
     assert result.context_updates["pr_url"] == "https://github.com/test/repo/pull/42"
-    assert result.events == [
-        {
-            "type": "pr_synced",
-            "url": "https://github.com/test/repo/pull/42",
-            "pr_number": "42",
-            "action": "created",
-            "source": "skill_script",
-        }
-    ]
+    assert result.events[0] == {
+        "type": "pr_synced",
+        "url": "https://github.com/test/repo/pull/42",
+        "pr_number": "42",
+        "action": "created",
+        "source": "capability",
+    }
+    assert result.events[1]["type"] == "capability_receipt"
+    assert result.events[1]["capability"] == "cafe.pr.publish"
+    assert result.events[1]["success"] is True
 
 
 def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_without_status_code(
@@ -638,8 +638,7 @@ def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_with
     publish_request_file.write_text(
         json.dumps(
             {
-                "capability": "publish_pr",
-                "script": "src/cafe/data/skills/pr/scripts/sync_pr.sh",
+                "capability": "cafe.pr.publish",
                 "args": {
                     "output": ".cafe/issues/demo/pr/iteration_001/output.md",
                     "base": "develop",
@@ -677,7 +676,7 @@ def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_with
     completed.stderr = ""
 
     hook = GitHubPRCreator()
-    with patch("cafe.core.hooks.native.subprocess.run", return_value=completed) as mock_run:
+    with patch("cafe.core.capabilities.subprocess.run", return_value=completed) as mock_run:
         result = hook.run(
             stage="publish_output",
             phase=phase,
@@ -689,15 +688,9 @@ def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_with
         )
 
     mock_run.assert_called_once()
-    assert result.events == [
-        {
-            "type": "pr_synced",
-            "url": "https://github.com/test/repo/pull/42",
-            "pr_number": "42",
-            "action": "created",
-            "source": "skill_script",
-        }
-    ]
+    assert result.events[0]["type"] == "pr_synced"
+    assert result.events[0]["source"] == "capability"
+    assert result.events[1]["type"] == "capability_receipt"
 
 
 def test_github_pr_creator_publish_output_runs_from_legacy_done_baton(
@@ -713,8 +706,7 @@ def test_github_pr_creator_publish_output_runs_from_legacy_done_baton(
     publish_request_file.write_text(
         json.dumps(
             {
-                "capability": "publish_pr",
-                "script": "src/cafe/data/skills/pr/scripts/sync_pr.sh",
+                "capability": "cafe.pr.publish",
                 "args": {
                     "output": ".cafe/issues/demo/pr/iteration_001/output.md",
                     "base": "develop",
@@ -738,7 +730,7 @@ def test_github_pr_creator_publish_output_runs_from_legacy_done_baton(
     completed.stderr = ""
 
     hook = GitHubPRCreator()
-    with patch("cafe.core.hooks.native.subprocess.run", return_value=completed) as mock_run:
+    with patch("cafe.core.capabilities.subprocess.run", return_value=completed) as mock_run:
         result = hook.run(
             stage="publish_output",
             phase=phase,
@@ -750,15 +742,9 @@ def test_github_pr_creator_publish_output_runs_from_legacy_done_baton(
         )
 
     mock_run.assert_called_once()
-    assert result.events == [
-        {
-            "type": "pr_synced",
-            "url": "https://github.com/test/repo/pull/42",
-            "pr_number": "42",
-            "action": "updated",
-            "source": "skill_script",
-        }
-    ]
+    assert result.events[0]["type"] == "pr_synced"
+    assert result.events[0]["action"] == "updated"
+    assert result.events[1]["type"] == "capability_receipt"
 
 
 def test_github_pr_creator_publish_output_skips_local_pr_mode(tmp_path: Path) -> None:
@@ -775,7 +761,7 @@ def test_github_pr_creator_publish_output_skips_local_pr_mode(tmp_path: Path) ->
     phase.git_ops = MagicMock()
 
     hook = GitHubPRCreator()
-    with patch("cafe.core.hooks.native.subprocess.run") as mock_run:
+    with patch("cafe.core.capabilities.subprocess.run") as mock_run:
         result = hook.run(
             stage="publish_output",
             phase=phase,
@@ -789,7 +775,8 @@ def test_github_pr_creator_publish_output_skips_local_pr_mode(tmp_path: Path) ->
     assert result.events == []
 
 
-def test_github_pr_creator_publish_output_rejects_untrusted_contract_script(tmp_path: Path) -> None:
+def test_github_pr_creator_publish_ignores_untrusted_script_field_in_request(tmp_path: Path) -> None:
+    """Registry-resolved script is used; agent-supplied script path must not change dispatch."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     phase_dir = issue_dir / "pr"
     output_file = phase_dir / "iteration_001" / "output.md"
@@ -799,7 +786,7 @@ def test_github_pr_creator_publish_output_rejects_untrusted_contract_script(tmp_
     publish_request_file.write_text(
         json.dumps(
             {
-                "capability": "publish_pr",
+                "capability": "cafe.pr.publish",
                 "script": "scripts/not-trusted.sh",
                 "args": {
                     "output": ".cafe/issues/demo/pr/iteration_001/output.md",
@@ -814,19 +801,27 @@ def test_github_pr_creator_publish_output_rejects_untrusted_contract_script(tmp_
     phase.git_ops = MagicMock()
     phase.git_ops.get_repo_root.return_value = tmp_path
 
-    hook = GitHubPRCreator()
-    with patch("cafe.core.hooks.native.subprocess.run") as mock_run:
-        with pytest.raises(RuntimeError, match="untrusted script"):
-            hook.run(
-                stage="publish_output",
-                phase=phase,
-                step_name="pr",
-                output_file=output_file,
-                publish_request_file=publish_request_file,
-                status_code=PhaseStatusCode.CONFIRMED,
-            )
+    completed = MagicMock()
+    completed.returncode = 0
+    completed.stdout = (
+        '{"action":"created","pr_number":"42",'
+        '"pr_url":"https://github.com/test/repo/pull/42"}\n'
+    )
+    completed.stderr = ""
 
-    mock_run.assert_not_called()
+    hook = GitHubPRCreator()
+    with patch("cafe.core.capabilities.subprocess.run", return_value=completed) as mock_run:
+        hook.run(
+            stage="publish_output",
+            phase=phase,
+            step_name="pr",
+            output_file=output_file,
+            publish_request_file=publish_request_file,
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+
+    cmd = mock_run.call_args.args[0]
+    assert cmd[1] == str(hook._resolve_sync_script(tmp_path))
 
 
 def test_pr_comment_poster_posts_todo_comment_only_when_confirmed_and_complete(tmp_path: Path) -> None:

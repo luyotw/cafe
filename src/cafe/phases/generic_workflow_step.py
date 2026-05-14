@@ -838,8 +838,7 @@ class GenericWorkflowStepExecutor(Phase):
         base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
         resolved_base = str(base_branch or self.git_ops.get_main_branch())
         return {
-            "capability": "publish_pr",
-            "script": "src/cafe/data/skills/pr/scripts/sync_pr.sh",
+            "capability": "cafe.pr.publish",
             "args": {
                 "output": self._repo_relative_path(output_file),
                 "base": resolved_base,
