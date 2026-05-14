@@ -29,7 +29,8 @@ class PlaybookRunResult:
 class StepInterrupted(Exception):
     """Raised when an in-flight step execution is interrupted (e.g. Ctrl-C or agent timeout)."""
 
-    def __init__(self, step: str, hop: int = 0) -> None:
+    def __init__(self, step: str, hop: int = 0, reason: str = "interrupted") -> None:
         self.step = step
         self.hop = hop
-        super().__init__(f"Step '{step}' interrupted at hop {hop}")
+        self.reason = reason
+        super().__init__(f"Step '{step}' {reason} at hop {hop}")

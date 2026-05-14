@@ -740,13 +740,19 @@ def workflow(
                 console.print(
                     f"[green]Workflow completed[/green] step={result.final_step} status={result.final_status_code} next={latest_blackboard.current_step}"
                 )
-            elif result.final_status_code == "INTERRUPTED":
+            elif result.final_status_code.startswith("INTERRUPTED"):
+                reason = result.final_status_code.split(":", 1)[1] if ":" in result.final_status_code else "interrupted"
                 console.print(
-                    f"[yellow]Workflow interrupted[/yellow] step={result.final_step}"
+                    f"[yellow]Workflow interrupted[/yellow] step={result.final_step} reason={reason}"
                 )
-                console.print(
-                    "[dim]Run 'cafe make' again to resume from this step.[/dim]"
-                )
+                if reason.startswith("agent_"):
+                    console.print(
+                        "[dim]Agent execution failed. Switch to a different CLI in your config, then run 'cafe make' again.[/dim]"
+                    )
+                else:
+                    console.print(
+                        "[dim]Run 'cafe make' again to resume from this step.[/dim]"
+                    )
                 return
             else:
                 console.print(

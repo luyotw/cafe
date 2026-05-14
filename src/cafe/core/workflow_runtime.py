@@ -392,9 +392,34 @@ class BlackboardWorkflowRuntime:
                     "visit": visit_count,
                     "hop": hop_count,
                     "runtime": runtime,
+                    "reason": "keyboard_interrupt",
                 },
             )
-            raise StepInterrupted(step=current_step, hop=hop_count)
+            raise StepInterrupted(step=current_step, hop=hop_count, reason="interrupted")
+        except BaseException as exc:
+            # Catch AgentExecutionError (rate_limit, cli_not_found) and any
+            # other executor failure so the workflow records a clean
+            # interrupted state instead of crashing.
+            from cafe.agents.executor import AgentExecutionError
+
+            reason = "agent_error"
+            detail = str(exc)
+            if isinstance(exc, AgentExecutionError) and getattr(exc, "error_type", None):
+                reason = f"agent_{exc.error_type}"
+                detail = exc.display_message or str(exc)
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "step_interrupted",
+                {
+                    "step": current_step,
+                    "visit": visit_count,
+                    "hop": hop_count,
+                    "runtime": runtime,
+                    "reason": reason,
+                    "detail": detail,
+                },
+            )
+            raise StepInterrupted(step=current_step, hop=hop_count, reason=reason)
         if validate_assignee_type:
             self._validate_assignee_type(current_step, step_def)
 
@@ -785,7 +810,7 @@ class BlackboardWorkflowRuntime:
                     visit_count=visit_count,
                     validate_assignee_type=True,
                 )
-            except StepInterrupted:
+            except StepInterrupted as si:
                 if pause_record_event:
                     self.blackboard_store.record_event(
                         self.blackboard,
@@ -793,13 +818,13 @@ class BlackboardWorkflowRuntime:
                         {
                             "step": current_step,
                             "status_code": "INTERRUPTED",
-                            "reason": "step_interrupted",
+                            "reason": si.reason,
                             "runtime": runtime_label,
                         },
                     )
                 return PlaybookRunResult(
                     final_step=current_step,
-                    final_status_code="INTERRUPTED",
+                    final_status_code=f"INTERRUPTED:{si.reason}",
                     completed=False,
                 )
             self._store_artifacts(frame.artifacts)

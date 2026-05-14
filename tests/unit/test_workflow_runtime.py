@@ -1183,7 +1183,7 @@ def test_runtime_handles_keyboard_interrupt(tmp_path: Path) -> None:
 
     # Should return INTERRUPTED result, not raise
     assert result.completed is False
-    assert result.final_status_code == "INTERRUPTED"
+    assert result.final_status_code.startswith("INTERRUPTED")
     assert result.final_step == "spec"
 
     # Verify event was recorded
@@ -1192,3 +1192,41 @@ def test_runtime_handles_keyboard_interrupt(tmp_path: Path) -> None:
     assert len(interrupted_events) == 1
     msg = json.loads(interrupted_events[0].message) if isinstance(interrupted_events[0].message, str) else interrupted_events[0].message
     assert msg["step"] == "spec"
+
+
+def test_runtime_handles_agent_execution_error(tmp_path: Path) -> None:
+    """AgentExecutionError (e.g. rate_limit) records step_interrupted event and returns INTERRUPTED result."""
+    from cafe.agents.executor import AgentExecutionError
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-agent-error"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "plan"}},
+            "plan": {"skill": "plan", "role": "developer", "on": {"await_agent": "_done"}},
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        if step_name == "spec":
+            raise AgentExecutionError("Rate limit exceeded", error_type="rate_limit")
+        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+
+    result = runtime.run(start_step="spec", max_transitions=5)
+
+    assert result.completed is False
+    assert "agent_rate_limit" in result.final_status_code
+    assert result.final_step == "spec"
+
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    interrupted_events = [e for e in bb.events if e.event_type == "step_interrupted"]
+    assert len(interrupted_events) == 1
+    msg = json.loads(interrupted_events[0].message) if isinstance(interrupted_events[0].message, str) else interrupted_events[0].message
+    assert msg["step"] == "spec"
+    assert msg["reason"] == "agent_rate_limit"
