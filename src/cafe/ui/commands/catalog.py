@@ -10,6 +10,7 @@ import yaml
 from rich.console import Console
 
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.playbooks.simulate import analyze_playbook, format_dot, format_text_report
 from cafe.skills.importer import SkillImportSummary, import_skills, preview_importable_skills
 from cafe.skills.loader import SkillLoader
 from cafe.skills.remover import SkillRemoveSummary, remove_skills
@@ -106,6 +107,31 @@ def playbook_validate(
     if loaded.warnings:
         for warning in loaded.warnings:
             console.print(f"[yellow]warning:[/yellow] {warning}")
+
+
+@playbook_app.command(name="simulate")
+def playbook_simulate(
+    name: str = typer.Argument(..., help="Playbook name"),
+    dot: bool = typer.Option(False, "--dot", help="Append a DOT graph of transitions after the summary"),
+) -> None:
+    """Statically trace playbook transitions (read-only; no agents, hooks, or shell helpers)."""
+    loader = _build_playbook_loader()
+    try:
+        loaded = loader.load_model(name, strict=False)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        result = analyze_playbook(loaded.model)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+    console.print(format_text_report(result))
+    if dot:
+        console.print("")
+        console.print(format_dot(result))
 
 
 # ---------------------------------------------------------------------------
