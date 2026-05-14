@@ -78,6 +78,9 @@ class FakeGitOperations:
     def get_main_branch(self) -> str:
         return "main"
 
+    def get_default_base_branch(self) -> str:
+        return "main"
+
     def get_commits_between(self, base: str, head: str) -> str:
         return "abc123 test commit"
 

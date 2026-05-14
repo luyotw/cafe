@@ -34,7 +34,7 @@ class ReviewPhase(Phase):
         plan_file: str,
         review_agent: str = "Richard",
         target_commit: Optional[str] = None,
-        base_branch: str = "main",
+        base_branch: Optional[str] = None,
         interactive: bool = True,
         pr_number: Optional[int] = None,
         force: bool = False,
@@ -82,7 +82,12 @@ class ReviewPhase(Phase):
         # Try to read base branch from issue config
         config_file = self.issue_dir / "issue.yaml"
         config_base_branch = self._get_issue_config_value(config_file, "base_branch")
-        self.base_branch = config_base_branch if config_base_branch else base_branch
+        if config_base_branch:
+            self.base_branch = config_base_branch
+        elif base_branch:
+            self.base_branch = base_branch
+        else:
+            self.base_branch = self.git_ops.get_default_base_branch()
 
         # Set up phase and history directories (needed for _check_if_already_completed)
         self.phase_dir = self.issue_dir / "review"

@@ -498,7 +498,7 @@ class GenericWorkflowStepExecutor(Phase):
 
         if self._resolve_skill_name(step_def, self.iteration) == "pr":
             base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
-            resolved_base = str(base_branch or self.git_ops.get_main_branch())
+            resolved_base = str(base_branch or self.git_ops.get_default_base_branch())
             context["base_branch"] = resolved_base
             context["commits"] = self._get_current_branch_commits(
                 self.git_ops,
@@ -586,7 +586,7 @@ class GenericWorkflowStepExecutor(Phase):
                 spec_file_path=spec_path,
                 plan_file_path=plan_path,
                 review_file_path=output_display,
-                base_branch=str(base_branch or self.git_ops.get_main_branch()),
+                base_branch=str(base_branch or self.git_ops.get_default_base_branch()),
                 checklist_file_path=checklist_file,
             )
             return
@@ -836,7 +836,7 @@ class GenericWorkflowStepExecutor(Phase):
 
     def _build_publish_request(self, *, output_file: Path) -> Dict[str, Any]:
         base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
-        resolved_base = str(base_branch or self.git_ops.get_main_branch())
+        resolved_base = str(base_branch or self.git_ops.get_default_base_branch())
         return {
             "capability": "cafe.pr.publish",
             "args": {
