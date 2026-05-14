@@ -458,7 +458,14 @@ class GenericWorkflowStepExecutor(Phase):
         output_file: Path,
     ) -> Dict[str, str]:
         role = str(step_def.get("role", "developer"))
-        role_dir = {"pm": "pm", "reviewer": "reviewer"}.get(role, "developer")
+        role_dir = {
+            "pm": "pm",
+            "reviewer": "reviewer",
+            "writer": "writer",
+            "editor": "editor",
+            "researcher": "researcher",
+            "ops": "ops",
+        }.get(role, "developer")
         context = {
             "agent_file": AgentManager.get_agent_file_path(agent_name, role_dir),
             "handoff_summary": getattr(blackboard_state, "handoff_summary", ""),

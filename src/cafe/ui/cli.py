@@ -20,6 +20,7 @@ from cafe.ui.commands import issues as issues_commands
 from cafe.ui.commands import templates as template_commands
 from cafe.ui.commands import catalog as catalog_commands
 from cafe.ui.commands import workflow as workflow_commands
+from cafe.ui.commands import audit as audit_commands
 from cafe.ui.cli_shared import (
     CONTENT_TYPE_FILE_MAP as _SHARED_CONTENT_TYPE_FILE_MAP,
     VALID_CONTENT_TYPES as _SHARED_VALID_CONTENT_TYPES,
@@ -954,6 +955,8 @@ app.command()(workflow_commands.make)
 app.command()(workflow_commands.show)
 app.command()(workflow_commands.summary)
 app.command()(workflow_commands.workflow)
+
+app.command(name="audit")(audit_commands.audit)
 
 
 # Backward-compatible module-level command aliases for tests and integrations.
