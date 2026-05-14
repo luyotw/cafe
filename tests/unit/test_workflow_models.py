@@ -14,6 +14,35 @@ from cafe.core.blackboard import (
     HandoffOwner,
     _normalize_baton_payload,
 )
+from cafe.core.workflow_models import BatonRejected
+
+
+# ---------------------------------------------------------------------------
+# BatonRejected 例外單元測試
+# ---------------------------------------------------------------------------
+
+class TestBatonRejected:
+    def test_attributes_set_correctly(self) -> None:
+        exc = BatonRejected(field="to_owner", invalid_value="human", valid_values=["agent", "user", "done"])
+        assert exc.field == "to_owner"
+        assert exc.invalid_value == "human"
+        assert exc.valid_values == ["agent", "user", "done"]
+
+    def test_valid_values_is_independent_copy(self) -> None:
+        source = ["agent", "user", "done"]
+        exc = BatonRejected(field="to_owner", invalid_value="human", valid_values=source)
+        source.append("extra")
+        assert "extra" not in exc.valid_values
+
+    def test_str_contains_field_and_invalid_value(self) -> None:
+        exc = BatonRejected(field="intent", invalid_value="bad_intent", valid_values=["await_agent"])
+        msg = str(exc)
+        assert "intent" in msg
+        assert "bad_intent" in msg
+
+    def test_is_exception_subclass(self) -> None:
+        exc = BatonRejected(field="to_owner", invalid_value="x", valid_values=[])
+        assert isinstance(exc, Exception)
 
 
 # ---------------------------------------------------------------------------
