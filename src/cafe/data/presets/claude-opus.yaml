@@ -1,0 +1,21 @@
+pm:
+  name: Roger
+  cli: claude
+  spec:
+    model: opus
+
+developer:
+  name: David
+  cli: claude
+  plan:
+    model: opus
+  develop:
+    model: opus
+  pr:
+    model: opus
+
+reviewer:
+  name: Richard
+  cli: claude
+  review:
+    model: opus

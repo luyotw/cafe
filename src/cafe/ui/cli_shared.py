@@ -31,6 +31,7 @@ from cafe.skills.loader import SkillLoader
 from cafe.ui.chat import launch_chat_session  # noqa: F401 — re-exported via cli for test-patch compat
 from cafe.ui.inquirer_prompts import prompt_confirm, prompt_list, prompt_multiline  # noqa: F401 — re-exported via cli for test-patch compat
 from cafe.utils.config import ConfigError, ConfigManager
+from cafe.utils.crew import CrewManager
 
 VALID_CONTENT_TYPES = [
     "context",
@@ -95,9 +96,20 @@ def _get_github_helpers():
 
 def check_agent_clis_available(config_manager: ConfigManager) -> List[str]:
     """Check if all configured agent CLIs are installed."""
-    pm_config = config_manager.get("agents.pm", {"name": "Roger", "cli": "copilot"})
-    dev_config = config_manager.get("agents.developer", {"name": "David", "cli": "copilot"})
-    reviewer_config = config_manager.get("agents.reviewer", {"name": "Richard", "cli": "copilot"})
+    try:
+        crew_data = CrewManager(cafe_dir=Path(config_manager.config_dir)).load()
+    except (AttributeError, TypeError):
+        crew_data = {}
+
+    def _role_cli(role: str, default_cli: str) -> str:
+        if crew_data and role in crew_data and isinstance(crew_data[role], dict):
+            return crew_data[role].get("cli", default_cli)
+        val = config_manager.get(f"agents.{role}", {})
+        return val.get("cli", default_cli) if isinstance(val, dict) else default_cli
+
+    pm_config = {"cli": _role_cli("pm", "copilot")}
+    dev_config = {"cli": _role_cli("developer", "copilot")}
+    reviewer_config = {"cli": _role_cli("reviewer", "copilot")}
 
     required_clis = [pm_config["cli"], dev_config["cli"], reviewer_config["cli"]]
 
@@ -113,13 +125,29 @@ def setup_agents(
     config_manager: ConfigManager,
     issue_name: Optional[str] = None,
     phase_name: Optional[str] = None,
+    cafe_dir: Optional[Path] = None,
 ) -> AgentManager:
-    """Setup agent manager with configured role agents."""
+    """Setup agent manager with configured role agents.
+
+    Reads from crew.yaml first; falls back to config.yaml agents: section for backward compat.
+    """
     agent_manager = AgentManager(issue_name=issue_name)
 
-    pm_config = config_manager.get("agents.pm", {"name": "Roger", "cli": "copilot"})
-    dev_config = config_manager.get("agents.developer", {"name": "David", "cli": "copilot"})
-    reviewer_config = config_manager.get("agents.reviewer", {"name": "Richard", "cli": "copilot"})
+    # Prefer crew.yaml; fall back to config.yaml agents: section
+    try:
+        _cafe_dir = Path(cafe_dir) if cafe_dir else Path(config_manager.config_dir)
+        crew_data = CrewManager(cafe_dir=_cafe_dir).load()
+    except (AttributeError, TypeError):
+        crew_data = {}
+
+    def _role_config(role: str, default_name: str) -> dict:
+        if crew_data and role in crew_data and isinstance(crew_data[role], dict):
+            return crew_data[role]
+        return config_manager.get(f"agents.{role}", {"name": default_name, "cli": "copilot"})
+
+    pm_config = _role_config("pm", "Roger")
+    dev_config = _role_config("developer", "David")
+    reviewer_config = _role_config("reviewer", "Richard")
 
     def resolve_model(config: dict, phase: Optional[str]) -> Optional[str]:
         model = None
@@ -397,10 +425,20 @@ def _resolve_selected_playbook(playbook_name: Optional[str]) -> str:
 
 def _build_workflow_role_agent_map(config_manager: ConfigManager, playbook_data: Dict[str, Any]) -> Dict[str, str]:
     """Resolve playbook roles to configured agent names."""
+    try:
+        crew_data = CrewManager(cafe_dir=Path(config_manager.config_dir)).load()
+    except (AttributeError, TypeError):
+        crew_data = {}
+
+    def _agent_name(role: str, default: str) -> str:
+        if crew_data and role in crew_data and isinstance(crew_data[role], dict):
+            return str(crew_data[role].get("name", default))
+        return str(config_manager.get(f"agents.{role}.name", default))
+
     mapping: Dict[str, str] = {
-        "pm": str(config_manager.get("agents.pm.name", "Roger")),
-        "developer": str(config_manager.get("agents.developer.name", "David")),
-        "reviewer": str(config_manager.get("agents.reviewer.name", "Richard")),
+        "pm": _agent_name("pm", "Roger"),
+        "developer": _agent_name("developer", "David"),
+        "reviewer": _agent_name("reviewer", "Richard"),
     }
     for role_name, role_def in playbook_data.get("roles", {}).items():
         if role_name in mapping:
@@ -426,10 +464,20 @@ def _build_workflow_step_executor(
     role_agent_map = _build_workflow_role_agent_map(config_manager, playbook_data)
     if role_agent_map_override:
         role_agent_map.update(role_agent_map_override)
+    try:
+        crew_data = CrewManager(cafe_dir=Path(config_manager.config_dir)).load()
+    except (AttributeError, TypeError):
+        crew_data = {}
+
+    def _role_cfg(role: str) -> dict:
+        if crew_data and role in crew_data and isinstance(crew_data[role], dict):
+            return crew_data[role]
+        return config_manager.get(f"agents.{role}", {})
+
     role_configs = {
-        "pm": config_manager.get("agents.pm", {}),
-        "developer": config_manager.get("agents.developer", {}),
-        "reviewer": config_manager.get("agents.reviewer", {}),
+        "pm": _role_cfg("pm"),
+        "developer": _role_cfg("developer"),
+        "reviewer": _role_cfg("reviewer"),
     }
     return GenericWorkflowStepExecutor(
         issue_dir=issue_dir,

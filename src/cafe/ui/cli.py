@@ -21,6 +21,7 @@ from cafe.ui.commands import templates as template_commands
 from cafe.ui.commands import catalog as catalog_commands
 from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.commands import audit as audit_commands
+from cafe.ui.commands import preset as preset_commands
 from cafe.ui.cli_shared import (
     CONTENT_TYPE_FILE_MAP as _SHARED_CONTENT_TYPE_FILE_MAP,
     VALID_CONTENT_TYPES as _SHARED_VALID_CONTENT_TYPES,
@@ -468,18 +469,19 @@ def init() -> None:
         # 4. Interactive configuration for three roles
         agents_config = _interactive_agent_setup(available_clis)
 
-        # 5. Build full config
-        config = {
-            "agents": agents_config,
+        # 5. Save crew.yaml and non-agent config separately
+        from cafe.utils.crew import CrewManager
+        crew_mgr = CrewManager(cafe_dir)
+        crew_mgr.save(agents_config)
+
+        settings_config = {
             "settings": {
                 "auto_update": True,
             },
         }
+        config_manager.save_config(settings_config)
 
-        # 6. Save configuration
-        config_manager.save_config(config)
-
-        # 7. Display success message
+        # 6. Display success message
         console.print("[bold green]Configuration saved successfully![/bold green]\n")
         _display_agent_summary(agents_config)
 
@@ -996,6 +998,9 @@ app.add_typer(agent_app, name="agent")
 # Playbook and skill management commands
 app.add_typer(catalog_commands.playbook_app, name="playbook")
 app.add_typer(catalog_commands.skill_app, name="skill")
+
+# Preset management commands
+app.add_typer(preset_commands.app, name="preset")
 
 
 def _print_agents(custom_only: bool = False) -> None:
