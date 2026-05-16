@@ -24,6 +24,7 @@ from cafe.ui.cli_shared import (
     get_show_file_path as _get_show_file_path,
     resolve_iteration_number as _resolve_iteration_number,
 )
+from cafe.agents.executor import AgentExecutionError
 from cafe.utils.config import ConfigError
 
 # Lazy access to GitOperations via cli for backward-compat test patching.
@@ -130,6 +131,11 @@ def make(
         "-t",
         help="Overall workflow timeout in seconds (0 = no timeout)",
     ),
+    fallback_preset: Optional[str] = typer.Option(
+        None,
+        "--fallback-preset",
+        help="Crew preset to switch to when primary CLI hits rate_limit or cli_not_found",
+    ),
 ) -> None:
     """🚀 Check environment and execute complete development workflow.
 
@@ -185,6 +191,8 @@ def make(
         cmd.extend(["--user-input", user_input])
     if auto_advance:
         cmd.append("--auto-advance")
+    if fallback_preset:
+        cmd.extend(["--fallback-preset", fallback_preset])
 
     # Execute the command
     timeout_sec = timeout if timeout > 0 else None
@@ -436,6 +444,11 @@ def workflow(
         "-u",
         help="Initial requirements to pass into the first spec step",
     ),
+    fallback_preset: Optional[str] = typer.Option(
+        None,
+        "--fallback-preset",
+        help="Crew preset to switch to when primary CLI hits rate_limit or cli_not_found",
+    ),
 ) -> None:
     """Run playbook workflow using the new generic runner."""
     try:
@@ -508,23 +521,62 @@ def workflow(
                 artifacts={str(output_key): str(output_path)},
                 status_code="confirmed",
             )
-        step_executor = None if dry_run else _build_workflow_step_executor(
-            config_manager=config_manager,
-            issue_dir=issue_dir,
-            issue_name=issue_name,
-            playbook_data=playbook_data,
-            generic_phase=generic_phase,
-            step_user_inputs={"spec": user_input} if user_input else None,
-            interactive=interactive,
-        )
+        # Mutable holder so wrapped_executor can swap executors on fallback
+        _executor_holder: Dict[str, Any] = {
+            "executor": None if dry_run else _build_workflow_step_executor(
+                config_manager=config_manager,
+                issue_dir=issue_dir,
+                issue_name=issue_name,
+                playbook_data=playbook_data,
+                generic_phase=generic_phase,
+                step_user_inputs={"spec": user_input} if user_input else None,
+                interactive=interactive,
+            ),
+            "fallback_applied": False,
+        }
+
+        def _apply_fallback_preset_and_rebuild() -> None:
+            """Apply fallback preset and rebuild the step executor in-place."""
+            from cafe.utils.preset import PresetManager, PresetNotFoundError
+            assert fallback_preset is not None
+            try:
+                PresetManager().apply(fallback_preset)
+                console.print(f"[yellow]⚡ Switched to fallback preset '{fallback_preset}' — remaining steps will use this crew.[/yellow]")
+            except PresetNotFoundError as e:
+                console.print(f"[red]Fallback preset error: {e}[/red]")
+                raise
+            _executor_holder["executor"] = _build_workflow_step_executor(
+                config_manager=config_manager,
+                issue_dir=issue_dir,
+                issue_name=issue_name,
+                playbook_data=playbook_data,
+                generic_phase=generic_phase,
+                step_user_inputs={"spec": user_input} if user_input else None,
+                interactive=interactive,
+            )
+            _executor_holder["fallback_applied"] = True
 
         def wrapped_executor(step_name: str, step_def: Dict, blackboard_state: object, extra_prompt: Optional[str] = None) -> Any:
             iteration = _predict_next_iteration(issue_dir, step_name)
             console.print(f"[dim]Executing[/dim] step={step_name} iteration={iteration:03d}")
             if dry_run:
                 return dry_executor(step_name, step_def, blackboard_state, extra_prompt=extra_prompt)
+            step_executor = _executor_holder["executor"]
             assert step_executor is not None
-            result = step_executor.execute_step(step_name, step_def, blackboard_state, extra_prompt=extra_prompt)
+            try:
+                result = step_executor.execute_step(step_name, step_def, blackboard_state, extra_prompt=extra_prompt)
+            except AgentExecutionError as exc:
+                if (
+                    fallback_preset
+                    and not _executor_holder["fallback_applied"]
+                    and getattr(exc, "error_type", None) in ("rate_limit", "cli_not_found")
+                ):
+                    _apply_fallback_preset_and_rebuild()
+                    result = _executor_holder["executor"].execute_step(
+                        step_name, step_def, blackboard_state, extra_prompt=extra_prompt
+                    )
+                else:
+                    raise
             if isinstance(result, StepExecutionResult):
                 for event in result.events:
                     if not isinstance(event, dict) or event.get("type") != "pr_synced":
