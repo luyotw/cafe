@@ -469,18 +469,19 @@ def init() -> None:
         # 4. Interactive configuration for three roles
         agents_config = _interactive_agent_setup(available_clis)
 
-        # 5. Build full config
-        config = {
-            "agents": agents_config,
+        # 5. Save crew.yaml and non-agent config separately
+        from cafe.utils.crew import CrewManager
+        crew_mgr = CrewManager(cafe_dir)
+        crew_mgr.save(agents_config)
+
+        settings_config = {
             "settings": {
                 "auto_update": True,
             },
         }
+        config_manager.save_config(settings_config)
 
-        # 6. Save configuration
-        config_manager.save_config(config)
-
-        # 7. Display success message
+        # 6. Display success message
         console.print("[bold green]Configuration saved successfully![/bold green]\n")
         _display_agent_summary(agents_config)
 

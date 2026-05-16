@@ -233,22 +233,30 @@ class TestInitCommandConfigSaving:
             _result = runner.invoke(app, ["init"])
 
         config_file = tmp_path / ".cafe" / "config.yaml"
+        crew_file = tmp_path / ".cafe" / "crew.yaml"
         assert config_file.exists()
+        assert crew_file.exists(), "crew.yaml should be created by cafe init"
 
         import yaml
         with open(config_file) as f:
             config = yaml.safe_load(f)
 
-        assert config["agents"]["pm"]["name"] == "Roger"
-        assert config["agents"]["pm"]["cli"] == "copilot"
-        assert config["agents"]["developer"]["name"] == "David"
-        assert config["agents"]["developer"]["cli"] == "claude"
-        assert config["agents"]["developer"]["plan"]["model"] == "sonnet"
-        assert "model" not in config["agents"]["pm"]
-        assert "model" not in config["agents"]["developer"]
-        assert "model" not in config["agents"]["reviewer"]
-        assert config["agents"]["reviewer"]["name"] == "Richard"
-        assert config["agents"]["reviewer"]["cli"] == "gemini"
+        # config.yaml should NOT have agents section (moved to crew.yaml)
+        assert "agents" not in config
+
+        with open(crew_file) as f:
+            crew = yaml.safe_load(f)
+
+        assert crew["pm"]["name"] == "Roger"
+        assert crew["pm"]["cli"] == "copilot"
+        assert crew["developer"]["name"] == "David"
+        assert crew["developer"]["cli"] == "claude"
+        assert crew["developer"]["plan"]["model"] == "sonnet"
+        assert "model" not in crew["pm"]
+        assert "model" not in crew["developer"]
+        assert "model" not in crew["reviewer"]
+        assert crew["reviewer"]["name"] == "Richard"
+        assert crew["reviewer"]["cli"] == "gemini"
 
     @patch("cafe.ui.cli.shutil.which")
     @patch("cafe.ui.cli.init_helpers.copy_data_directory")

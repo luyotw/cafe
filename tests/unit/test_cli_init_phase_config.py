@@ -11,7 +11,8 @@ runner = CliRunner()
 def mock_dependencies():
     with patch("cafe.ui.cli.check_available_clis", return_value=["copilot"]) as mock_check, \
          patch("cafe.ui.cli.list_available_agents") as mock_list_agents, \
-         patch("cafe.ui.cli.ConfigManager") as mock_config_manager_class:
+         patch("cafe.ui.cli.ConfigManager") as mock_config_manager_class, \
+         patch("cafe.utils.crew.CrewManager") as mock_crew_manager_class:
 
         mock_list_agents.return_value = [("AgentName", "Description", "path/to/file", "system")]
 
@@ -19,8 +20,12 @@ def mock_dependencies():
         mock_config_manager.config_file.exists.return_value = False
         mock_config_manager_class.return_value = mock_config_manager
 
+        mock_crew_manager = MagicMock()
+        mock_crew_manager_class.return_value = mock_crew_manager
+
         yield {
-            "config_manager": mock_config_manager
+            "config_manager": mock_config_manager,
+            "crew_manager": mock_crew_manager,
         }
 
 def test_init_prompts_for_phase_specific_models(mock_dependencies):
@@ -50,23 +55,27 @@ def test_init_prompts_for_phase_specific_models(mock_dependencies):
 
         assert result.exit_code == 0
 
-        # Verify config structure
-        mock_config = mock_dependencies["config_manager"].save_config.call_args[0][0]
+        # Verify crew.yaml (agents config saved via CrewManager)
+        crew_config = mock_dependencies["crew_manager"].save.call_args[0][0]
 
         # Verify developer config
-        dev_config = mock_config["agents"]["developer"]
+        dev_config = crew_config["developer"]
         assert "model" not in dev_config
         assert dev_config["plan"]["model"] == "plan-model"
         assert "develop" not in dev_config
         assert "pr" not in dev_config
 
         # Verify PM and Reviewer configs
-        pm_config = mock_config["agents"]["pm"]
-        reviewer_config = mock_config["agents"]["reviewer"]
+        pm_config = crew_config["pm"]
+        reviewer_config = crew_config["reviewer"]
         assert "model" not in pm_config
         assert "model" not in reviewer_config
         assert "spec" not in pm_config
         assert "review" not in reviewer_config
+
+        # Verify config.yaml has no agents section
+        saved_config = mock_dependencies["config_manager"].save_config.call_args[0][0]
+        assert "agents" not in saved_config
 
 def test_init_with_pm_reviewer_models_stores_only_phase_specific(mock_dependencies):
     """Test that all roles store only phase-specific models without role-level."""
@@ -94,20 +103,20 @@ def test_init_with_pm_reviewer_models_stores_only_phase_specific(mock_dependenci
 
         assert result.exit_code == 0
 
-        mock_config = mock_dependencies["config_manager"].save_config.call_args[0][0]
+        crew_config = mock_dependencies["crew_manager"].save.call_args[0][0]
 
         # Verify PM config
-        pm_config = mock_config["agents"]["pm"]
+        pm_config = crew_config["pm"]
         assert "model" not in pm_config
         assert pm_config["spec"]["model"] == "pm-model"
 
         # Verify Reviewer config
-        reviewer_config = mock_config["agents"]["reviewer"]
+        reviewer_config = crew_config["reviewer"]
         assert "model" not in reviewer_config
         assert reviewer_config["review"]["model"] == "reviewer-model"
 
         # Verify Developer config
-        dev_config = mock_config["agents"]["developer"]
+        dev_config = crew_config["developer"]
         assert "model" not in dev_config
         assert dev_config["plan"]["model"] == "dev-plan"
         assert dev_config["develop"]["model"] == "dev-develop"
