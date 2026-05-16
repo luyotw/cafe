@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -431,7 +431,8 @@ class TestUserHandoff:
 
         class FakeExecutor:
             def execute_step(
-                self, step_name: str, step_def: dict, blackboard_state: object
+                self, step_name: str, step_def: dict, blackboard_state: object,
+                extra_prompt: Optional[str] = None,
             ) -> StepExecutionResult:
                 nonlocal spec_calls
                 call_log.append(step_name)
@@ -507,7 +508,8 @@ class TestNextStepLifecycle:
 
         class FakeExecutor:
             def execute_step(
-                self, step_name: str, step_def: dict, blackboard_state: object
+                self, step_name: str, step_def: dict, blackboard_state: object,
+                extra_prompt: Optional[str] = None,
             ) -> tuple[str, dict[str, str]]:
                 return (
                     "confirmed",

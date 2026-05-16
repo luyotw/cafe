@@ -115,6 +115,7 @@ class GenericWorkflowStepExecutor(Phase):
         step_name: str,
         step_def: Dict[str, Any],
         blackboard_state: BlackboardState,
+        extra_prompt: Optional[str] = None,
     ) -> StepExecutionResult:
         self.phase_name = step_name
         self.phase_dir = self.issue_dir / step_name
@@ -185,6 +186,10 @@ class GenericWorkflowStepExecutor(Phase):
         def run_agent(prompt: str) -> str:
             last_prompt[:] = [prompt]
             resolved_user_input = self._resolve_iteration_user_input(step_name)
+            if extra_prompt:
+                resolved_user_input = (
+                    f"{extra_prompt}\n\n{resolved_user_input}" if resolved_user_input else extra_prompt
+                )
             response, _ = self._execute_agent_iteration(
                 agent_name=agent_name,
                 prompt=prompt,

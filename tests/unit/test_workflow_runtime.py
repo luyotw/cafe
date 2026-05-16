@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.core.workflow_models import StepExecutionResult, StepInterrupted
+from cafe.core.workflow_models import BatonRejected, StepExecutionResult, StepInterrupted
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 
 
@@ -1230,3 +1230,233 @@ def test_runtime_handles_agent_execution_error(tmp_path: Path) -> None:
     msg = json.loads(interrupted_events[0].message) if isinstance(interrupted_events[0].message, str) else interrupted_events[0].message
     assert msg["step"] == "spec"
     assert msg["reason"] == "agent_rate_limit"
+
+
+# ---------------------------------------------------------------------------
+# extra_prompt 傳遞測試
+# ---------------------------------------------------------------------------
+
+def _simple_playbook(step_name: str = "spec") -> dict:
+    return {
+        "playbook": {"id": "default"},
+        "steps": {
+            step_name: {
+                "skill": "spec_first",
+                "role": "pm",
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+
+def test_execute_one_iteration_forwards_extra_prompt_to_executor(tmp_path: Path) -> None:
+    """executor 被呼叫時應收到 extra_prompt kwarg（傳入值）。"""
+    issue_dir = tmp_path / ".cafe" / "issues" / "extra-prompt-1"
+    received_kwargs: list[dict] = []
+
+    def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
+        received_kwargs.append(kwargs)
+        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_simple_playbook(),
+        executor=executor,
+    )
+    runtime.run(start_step="spec", max_transitions=5)
+
+    assert len(received_kwargs) >= 1
+    assert received_kwargs[0].get("extra_prompt") is None
+
+
+def test_execute_one_iteration_no_extra_prompt_defaults_to_none(tmp_path: Path) -> None:
+    """extra_prompt 未傳入時 executor 收到 extra_prompt=None。"""
+    issue_dir = tmp_path / ".cafe" / "issues" / "extra-prompt-2"
+    received_extra_prompts: list = []
+
+    def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
+        received_extra_prompts.append(kwargs.get("extra_prompt"))
+        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_simple_playbook(),
+        executor=executor,
+    )
+    runtime.run(start_step="spec", max_transitions=5)
+
+    assert received_extra_prompts[0] is None
+
+
+# ---------------------------------------------------------------------------
+# reject-and-retry 機制測試
+# ---------------------------------------------------------------------------
+
+def _make_valid_baton_text(issue_dir: Path, *, from_step: str = "spec", to_step: str = "done", intent: str = "workflow_complete") -> None:
+    """寫入合法 baton 到 next_step.txt。"""
+    to_owner = "done" if to_step == "done" else ("user" if to_step == "user" else "agent")
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps({
+            "version": 1,
+            "from_step": from_step,
+            "to_owner": to_owner,
+            "to_step": to_step,
+            "intent": intent,
+            "status_code": "",
+            "created_at": "2026-05-14T10:00:00+08:00",
+            "source": "test",
+        }),
+        encoding="utf-8",
+    )
+
+
+def _make_invalid_baton_text(issue_dir: Path) -> None:
+    """寫入 to_owner='human'（無效）的 baton。"""
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps({
+            "version": 1,
+            "from_step": "spec",
+            "to_owner": "human",
+            "to_step": "user",
+            "intent": "need_clarification",
+            "status_code": "",
+            "created_at": "2026-05-14T10:00:00+08:00",
+            "source": "test",
+        }),
+        encoding="utf-8",
+    )
+
+
+def test_runtime_retries_once_on_baton_rejected_then_succeeds(tmp_path: Path) -> None:
+    """第 1 次寫出無效 baton，第 2 次（retry 1）寫出合法 baton → workflow 正常繼續，blackboard 有 1 筆 baton_rejected 事件。"""
+    issue_dir = tmp_path / ".cafe" / "issues" / "retry-1"
+    issue_dir.mkdir(parents=True)
+    call_count = [0]
+
+    def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
+        call_count[0] += 1
+        if call_count[0] == 1:
+            _make_invalid_baton_text(issue_dir)
+        else:
+            _make_valid_baton_text(issue_dir, from_step="spec", to_step="done", intent="workflow_complete")
+        return StepExecutionResult(response="done", artifacts={}, status_code="")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_simple_playbook(),
+        executor=executor,
+    )
+    result = runtime.run(start_step="spec", max_transitions=5)
+
+    assert result.completed is True
+    bb = BlackboardStore(issue_dir).load_or_create("spec")
+    rejected_events = [e for e in bb.events if e.event_type == "baton_rejected"]
+    assert len(rejected_events) == 1
+
+
+def test_runtime_retries_twice_on_baton_rejected_then_succeeds(tmp_path: Path) -> None:
+    """第 1、2 次無效，第 3 次（retry 2）合法 → workflow 繼續，blackboard 有 2 筆 baton_rejected 事件。"""
+    issue_dir = tmp_path / ".cafe" / "issues" / "retry-2"
+    issue_dir.mkdir(parents=True)
+    call_count = [0]
+
+    def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
+        call_count[0] += 1
+        if call_count[0] <= 2:
+            _make_invalid_baton_text(issue_dir)
+        else:
+            _make_valid_baton_text(issue_dir, from_step="spec", to_step="done", intent="workflow_complete")
+        return StepExecutionResult(response="done", artifacts={}, status_code="")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_simple_playbook(),
+        executor=executor,
+    )
+    result = runtime.run(start_step="spec", max_transitions=5)
+
+    assert result.completed is True
+    bb = BlackboardStore(issue_dir).load_or_create("spec")
+    rejected_events = [e for e in bb.events if e.event_type == "baton_rejected"]
+    assert len(rejected_events) == 2
+
+
+def test_runtime_crashes_after_three_baton_rejected(tmp_path: Path) -> None:
+    """原始 + 2 次 retry 共 3 次都無效 → RuntimeError。"""
+    issue_dir = tmp_path / ".cafe" / "issues" / "retry-3"
+    issue_dir.mkdir(parents=True)
+
+    def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
+        _make_invalid_baton_text(issue_dir)
+        return StepExecutionResult(response="done", artifacts={}, status_code="")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_simple_playbook(),
+        executor=executor,
+    )
+    with pytest.raises(RuntimeError):
+        runtime.run(start_step="spec", max_transitions=5)
+
+
+def test_runtime_baton_rejected_event_has_correct_fields(tmp_path: Path) -> None:
+    """baton_rejected 事件 data 必須含 field、invalid_value、valid_values、retry。"""
+    issue_dir = tmp_path / ".cafe" / "issues" / "retry-event"
+    issue_dir.mkdir(parents=True)
+    call_count = [0]
+
+    def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
+        call_count[0] += 1
+        if call_count[0] == 1:
+            _make_invalid_baton_text(issue_dir)
+        else:
+            _make_valid_baton_text(issue_dir, from_step="spec", to_step="done", intent="workflow_complete")
+        return StepExecutionResult(response="done", artifacts={}, status_code="")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_simple_playbook(),
+        executor=executor,
+    )
+    runtime.run(start_step="spec", max_transitions=5)
+
+    bb = BlackboardStore(issue_dir).load_or_create("spec")
+    rejected_events = [e for e in bb.events if e.event_type == "baton_rejected"]
+    assert len(rejected_events) == 1
+    data = rejected_events[0].data
+    assert "field" in data
+    assert "invalid_value" in data
+    assert "valid_values" in data
+    assert "retry" in data
+
+
+def test_runtime_retry_extra_prompt_contains_feedback(tmp_path: Path) -> None:
+    """重試時傳給 executor 的 extra_prompt 應包含欄位名、無效值、合法值清單。"""
+    issue_dir = tmp_path / ".cafe" / "issues" / "retry-prompt"
+    issue_dir.mkdir(parents=True)
+    call_count = [0]
+    captured_prompts: list = []
+
+    def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
+        call_count[0] += 1
+        captured_prompts.append(kwargs.get("extra_prompt"))
+        if call_count[0] == 1:
+            _make_invalid_baton_text(issue_dir)
+        else:
+            _make_valid_baton_text(issue_dir, from_step="spec", to_step="done", intent="workflow_complete")
+        return StepExecutionResult(response="done", artifacts={}, status_code="")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_simple_playbook(),
+        executor=executor,
+    )
+    runtime.run(start_step="spec", max_transitions=5)
+
+    assert len(captured_prompts) == 2
+    assert captured_prompts[0] is None
+    retry_prompt = captured_prompts[1]
+    assert retry_prompt is not None
+    assert "to_owner" in retry_prompt
+    assert "human" in retry_prompt
+    assert "agent" in retry_prompt

@@ -479,7 +479,7 @@ def workflow(
         interactive = (sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1") and not auto_advance
         generic_phase = GenericPhase(SkillLoader())
 
-        def dry_executor(step_name: str, step_def: Dict, blackboard_state: object) -> StepExecutionResult:
+        def dry_executor(step_name: str, step_def: Dict, blackboard_state: object, extra_prompt: Optional[str] = None) -> StepExecutionResult:
             output_key = step_def.get("output_artifact", step_name)
             output_path = issue_dir / step_name / "output.md"
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -518,13 +518,13 @@ def workflow(
             interactive=interactive,
         )
 
-        def wrapped_executor(step_name: str, step_def: Dict, blackboard_state: object) -> Any:
+        def wrapped_executor(step_name: str, step_def: Dict, blackboard_state: object, extra_prompt: Optional[str] = None) -> Any:
             iteration = _predict_next_iteration(issue_dir, step_name)
             console.print(f"[dim]Executing[/dim] step={step_name} iteration={iteration:03d}")
             if dry_run:
-                return dry_executor(step_name, step_def, blackboard_state)
+                return dry_executor(step_name, step_def, blackboard_state, extra_prompt=extra_prompt)
             assert step_executor is not None
-            result = step_executor.execute_step(step_name, step_def, blackboard_state)
+            result = step_executor.execute_step(step_name, step_def, blackboard_state, extra_prompt=extra_prompt)
             if isinstance(result, StepExecutionResult):
                 for event in result.events:
                     if not isinstance(event, dict) or event.get("type") != "pr_synced":

@@ -34,3 +34,20 @@ class StepInterrupted(Exception):
         self.hop = hop
         self.reason = reason
         super().__init__(f"Step '{step}' {reason} at hop {hop}")
+
+
+class BatonRejected(Exception):
+    """Raised when a baton payload contains an invalid enum value.
+
+    Carries enough detail for the runtime to build a feedback prompt so the
+    agent can correct the baton on retry.
+    """
+
+    def __init__(self, *, field: str, invalid_value: str, valid_values: list[str]) -> None:
+        self.field = field
+        self.invalid_value = invalid_value
+        self.valid_values = list(valid_values)
+        super().__init__(
+            f"Invalid baton field '{field}': got '{invalid_value}', "
+            f"valid values are {self.valid_values}"
+        )
