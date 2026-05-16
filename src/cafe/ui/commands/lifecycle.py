@@ -146,6 +146,11 @@ def prepare(
         "--post-pr-todo-list/--no-post-pr-todo-list",
         help="Post organized PR comments as todo list to PR (default: True when auto-create PR is enabled)",
     ),
+    preset: Optional[str] = typer.Option(
+        None,
+        "--preset",
+        help="Apply a named crew preset as .cafe/crew.yaml (e.g. --preset gemini-team)",
+    ),
 ) -> None:
     """Prepare issue environment (directory, config, git branch) before running spec phase.
 
@@ -186,6 +191,16 @@ def prepare(
             console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s) and {template_success} template(s)")
         if agent_failed > 0 or template_failed > 0:
             console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed + template_failed} file(s)")
+
+        # 1.2. Apply preset if specified
+        if preset:
+            from cafe.utils.preset import PresetManager, PresetNotFoundError
+            try:
+                PresetManager().apply(preset, cafe_dir=cafe_dir)
+                console.print(f"  [green]✓[/green] Applied preset '[cyan]{preset}[/cyan]' as crew.yaml")
+            except PresetNotFoundError as e:
+                console.print(f"[red]Error: {e}[/red]")
+                raise typer.Exit(1)
 
         # 2. Determine interactive mode and config prompt behavior
         # should_prompt_for_config: Should we show config prompts?
