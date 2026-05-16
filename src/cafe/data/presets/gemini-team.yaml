@@ -1,0 +1,21 @@
+pm:
+  name: Roger
+  cli: gemini
+  spec:
+    model: gemini-2.5-pro
+
+developer:
+  name: David
+  cli: gemini
+  plan:
+    model: gemini-2.5-pro
+  develop:
+    model: gemini-2.5-pro
+  pr:
+    model: gemini-2.5-pro
+
+reviewer:
+  name: Richard
+  cli: gemini
+  review:
+    model: gemini-2.5-pro
