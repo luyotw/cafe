@@ -110,3 +110,58 @@ class TestSetupAgentsPhaseAware:
         # Without phase_name, should use default model
         agent_manager = _setup_agents(config_manager)
         assert agent_manager.agents["David"].config.model == "claude-3-sonnet-20240229"
+
+
+class TestSetupAgentsCrewYaml:
+    """Test that setup_agents prefers crew.yaml over config.yaml agents section."""
+
+    def test_setup_agents_prefers_crew_yaml_over_config_agents(self, tmp_path: Path) -> None:
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+
+        # config.yaml with legacy agents section
+        config_yaml = cafe_dir / "config.yaml"
+        config_yaml.write_text(
+            "agents:\n  pm:\n    name: ConfigPM\n    cli: copilot\n"
+            "  developer:\n    name: ConfigDev\n    cli: copilot\n"
+            "  reviewer:\n    name: ConfigReviewer\n    cli: copilot\n"
+        )
+
+        # crew.yaml with different names
+        crew_yaml = cafe_dir / "crew.yaml"
+        crew_yaml.write_text(
+            "pm:\n  name: CrewPM\n  cli: claude\n"
+            "developer:\n  name: CrewDev\n  cli: claude\n"
+            "reviewer:\n  name: CrewReviewer\n  cli: claude\n"
+        )
+
+        config_manager = ConfigManager(str(cafe_dir))
+        config_manager.load_config()
+        from cafe.ui.cli_shared import setup_agents
+        agent_manager = setup_agents(config_manager)
+
+        assert "CrewPM" in agent_manager.agents
+        assert "CrewDev" in agent_manager.agents
+        assert "CrewReviewer" in agent_manager.agents
+        assert "ConfigPM" not in agent_manager.agents
+
+    def test_setup_agents_falls_back_to_config_agents_when_no_crew(self, tmp_path: Path) -> None:
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+
+        config_yaml = cafe_dir / "config.yaml"
+        config_yaml.write_text(
+            "agents:\n  pm:\n    name: LegacyPM\n    cli: copilot\n"
+            "  developer:\n    name: LegacyDev\n    cli: copilot\n"
+            "  reviewer:\n    name: LegacyReviewer\n    cli: copilot\n"
+        )
+        # no crew.yaml
+
+        config_manager = ConfigManager(str(cafe_dir))
+        config_manager.load_config()
+        from cafe.ui.cli_shared import setup_agents
+        agent_manager = setup_agents(config_manager)
+
+        assert "LegacyPM" in agent_manager.agents
+        assert "LegacyDev" in agent_manager.agents
+        assert "LegacyReviewer" in agent_manager.agents
