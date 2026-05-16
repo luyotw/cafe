@@ -61,16 +61,16 @@ Write a JSON object to `next_step.txt` with these fields:
 | `manual_handoff` | Explicitly routing to a non-default next step |
 | `workflow_complete` | Final step finished; workflow ends |
 
-### Auto-correction rules
+### Invalid baton values are rejected
 
-The runtime normalizes common mistakes before validation and logs a `baton_auto_corrected` warning event:
+If you write an invalid `to_owner` or `intent` value, the runtime will **reject** the baton and ask you to rewrite it with a correct value. You will be re-invoked with a feedback message telling you which field was wrong and what the valid values are. After 3 failed attempts the workflow will crash.
 
-| Field | Wrong value(s) | Corrected to | Condition |
-| --- | --- | --- | --- |
-| `to_owner` | `human`, `reviewer`, `developer` | `user` | always |
-| `to_owner` | any | `done` | when `to_step == "done"` |
-| `intent` | `complete`, `confirmed`, `done` | `workflow_complete` | when `to_step == "done"` |
-| `intent` | `confirmed` | `await_agent` | when `to_step` is a playbook step |
+**Common mistakes to avoid:**
+| Field | Wrong value | Correct value |
+| --- | --- | --- |
+| `to_owner` | `human`, `reviewer`, `developer` | `user` |
+| `intent` | `complete`, `done` | `workflow_complete` |
+| `intent` | `confirmed` | `await_agent` |
 
 ### Example batons for common transitions
 

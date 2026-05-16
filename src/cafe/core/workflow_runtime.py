@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, transition_map_key
-from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult, StepInterrupted
+from cafe.core.workflow_models import BatonRejected, PlaybookRunResult, StepExecutionResult, StepInterrupted
 
 
 STATUS_TOKEN_PATTERN = re.compile(r"\bCAFE_[A-Z0-9_]+\b")
@@ -369,6 +369,7 @@ class BlackboardWorkflowRuntime:
         hop_count: int,
         visit_count: int,
         validate_assignee_type: bool = False,
+        extra_prompt: Optional[str] = None,
     ) -> StepIterationFrame:
         self.blackboard_store.record_event(
             self.blackboard,
@@ -382,7 +383,10 @@ class BlackboardWorkflowRuntime:
         )
 
         try:
-            execution_result = self.executor(current_step, step_def, self.blackboard)
+            try:
+                execution_result = self.executor(current_step, step_def, self.blackboard, extra_prompt=extra_prompt)
+            except TypeError:
+                execution_result = self.executor(current_step, step_def, self.blackboard)
         except KeyboardInterrupt:
             self.blackboard_store.record_event(
                 self.blackboard,
@@ -801,35 +805,67 @@ class BlackboardWorkflowRuntime:
                 )
                 raise RuntimeError(f"Step '{current_step}' exceeded max_iterations={max_iterations}")
 
-            try:
-                frame = self._execute_one_iteration(
-                    current_step=current_step,
-                    step_def=step_def,
-                    runtime=runtime_label,
-                    hop_count=hop_count,
-                    visit_count=visit_count,
-                    validate_assignee_type=True,
-                )
-            except StepInterrupted as si:
-                if pause_record_event:
+            _baton_retry_extra_prompt: Optional[str] = None
+            for _baton_attempt in range(3):
+                try:
+                    frame = self._execute_one_iteration(
+                        current_step=current_step,
+                        step_def=step_def,
+                        runtime=runtime_label,
+                        hop_count=hop_count,
+                        visit_count=visit_count,
+                        validate_assignee_type=True,
+                        extra_prompt=_baton_retry_extra_prompt,
+                    )
+                except StepInterrupted as si:
+                    if pause_record_event:
+                        self.blackboard_store.record_event(
+                            self.blackboard,
+                            "workflow_paused",
+                            {
+                                "step": current_step,
+                                "status_code": "INTERRUPTED",
+                                "reason": si.reason,
+                                "runtime": runtime_label,
+                            },
+                        )
+                    return PlaybookRunResult(
+                        final_step=current_step,
+                        final_status_code=f"INTERRUPTED:{si.reason}",
+                        completed=False,
+                    )
+                self._store_artifacts(frame.artifacts)
+                try:
+                    post_contract = self._load_step_handoff_contract(current_step=current_step)
+                    break
+                except BatonRejected as br:
+                    retry_num = _baton_attempt + 1
                     self.blackboard_store.record_event(
                         self.blackboard,
-                        "workflow_paused",
+                        "baton_rejected",
                         {
                             "step": current_step,
-                            "status_code": "INTERRUPTED",
-                            "reason": si.reason,
+                            "field": br.field,
+                            "invalid_value": br.invalid_value,
+                            "valid_values": br.valid_values,
+                            "retry": retry_num,
                             "runtime": runtime_label,
                         },
                     )
-                return PlaybookRunResult(
-                    final_step=current_step,
-                    final_status_code=f"INTERRUPTED:{si.reason}",
-                    completed=False,
-                )
-            self._store_artifacts(frame.artifacts)
-
-            post_contract = self._load_step_handoff_contract(current_step=current_step)
+                    if retry_num >= 3:
+                        raise RuntimeError(
+                            f"Step '{current_step}' wrote invalid baton 3 times; "
+                            f"last error: field '{br.field}' got '{br.invalid_value}', "
+                            f"valid values are {br.valid_values}"
+                        ) from br
+                    _baton_retry_extra_prompt = (
+                        f"[BATON ERROR] Your baton was rejected because field '{br.field}' "
+                        f"has invalid value '{br.invalid_value}'. "
+                        f"Valid values are: {br.valid_values}. "
+                        f"Please rewrite next_step.txt with a correct baton."
+                    )
+            else:
+                post_contract = None
             if post_contract is not None and not (
                 post_contract.to_owner == HandoffOwner.AGENT and post_contract.to_step == current_step
             ):

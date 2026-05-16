@@ -77,7 +77,7 @@ def test_single_step_alias_updates_workflow_pointer_to_requested_step(tmp_path: 
         def __init__(self) -> None:
             self.agent_manager = MagicMock()
 
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
             return _result(status_code="no_changes_needed", step_name=step_name, step_def=step_def, artifacts={})
 
     with patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()):
@@ -115,7 +115,7 @@ def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None
     executed_steps: list[str] = []
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
             executed_steps.append(step_name)
             if step_name == "pr":
                 _handoff_to_step(
@@ -154,7 +154,7 @@ def test_workflow_command_passes_initial_user_input_to_spec_step(tmp_path: Path,
     monkeypatch.chdir(tmp_path)
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
     with (
@@ -189,7 +189,7 @@ def test_workflow_command_prints_pr_url_when_pr_step_reports_sync_event(tmp_path
     executed_steps: list[str] = []
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object):
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs):
             executed_steps.append(step_name)
             events = []
             if step_name == "pr":
@@ -240,7 +240,7 @@ def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, m
     next_step_file.write_text("plan\n", encoding="utf-8")
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
             executed_steps.append(step_name)
             if step_name == "pr":
                 _handoff_to_step(
@@ -297,7 +297,7 @@ def test_workflow_command_does_not_consume_chat_baton_with_uncommitted_changes(t
     next_step_file.write_text("develop\n", encoding="utf-8")
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
             executed_steps.append(step_name)
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
 
@@ -382,6 +382,7 @@ def test_workflow_command_start_step_rebuilds_stale_text_baton(tmp_path: Path, m
             step_name: str,
             step_def: dict,
             blackboard_state: object,
+            **kwargs,
         ) -> StepExecutionResult:
             return _result(
                 status_code="need_clarification",
@@ -434,6 +435,7 @@ def test_workflow_command_prints_guidance_for_invalid_runtime_baton(
             step_name: str,
             step_def: dict,
             blackboard_state: object,
+            **kwargs,
         ) -> StepExecutionResult:
             return _result(
                 status_code="need_clarification",
@@ -471,7 +473,7 @@ def test_workflow_command_prints_paused_when_human_input_is_needed(tmp_path: Pat
     monkeypatch.chdir(tmp_path)
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
             return _result(status_code="need_clarification", step_name=step_name, step_def=step_def, artifacts={})
 
     with (
@@ -506,7 +508,7 @@ def test_workflow_command_prints_recovery_guidance_for_pr_baton_pause(tmp_path: 
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
             return StepExecutionResult(response="no baton", artifacts={}, status_code=None)
 
     with (
@@ -546,7 +548,7 @@ def test_workflow_command_offers_recovery_menu_for_baton_pause_in_interactive_mo
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
             return StepExecutionResult(response="no baton", artifacts={}, status_code=None)
 
     with (
@@ -588,7 +590,7 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
             executed_steps.append(step_name)
             if step_name == "pr":
                 _handoff_to_step(
@@ -690,7 +692,7 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(tmp_path: Pa
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
             executed_steps.append(step_name)
             if step_name == "pr":
                 _handoff_to_step(
@@ -749,7 +751,7 @@ def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(tmp_
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
             assert step_name == "pr"
             _handoff_to_step(
                 issue_dir=issue_dir,
@@ -801,7 +803,7 @@ def test_workflow_command_noninteractive_stops_after_agent_handoff_to_user(tmp_p
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
             assert step_name == "pr"
             _handoff_to_step(
                 issue_dir=issue_dir,
@@ -853,7 +855,7 @@ def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkey
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
             executed_steps.append(step_name)
             if step_name == "pr":
                 _handoff_to_step(
@@ -928,7 +930,7 @@ def test_workflow_command_resumes_incomplete_iteration_before_user_phase(tmp_pat
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
             executed_steps.append(step_name)
             completed_iteration = issue_dir / "spec" / "iteration_003"
             completed_iteration.mkdir(parents=True, exist_ok=True)
@@ -1137,7 +1139,7 @@ def test_workflow_command_resumes_pr_when_external_feedback_arrives_while_done(t
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
             executed_steps.append(step_name)
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
 
@@ -1202,7 +1204,7 @@ steps:
         mock_git_cls.return_value = git
 
         executor = MagicMock()
-        def _execute(step_name: str, step_def: dict, blackboard_state: object) -> StepExecutionResult:
+        def _execute(step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
             executed_steps.append(step_name)
             if step_name == "spec":
                 _handoff_to_step(
@@ -1256,7 +1258,7 @@ steps:
         git.get_current_branch.return_value = "issue-202"
         mock_git_cls.return_value = git
         executor = MagicMock()
-        executor.execute_step.side_effect = lambda step_name, step_def, blackboard_state: (
+        executor.execute_step.side_effect = lambda step_name, step_def, blackboard_state, **kw: (
             executed_steps.append(step_name) or _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
         )
         mock_builder.return_value = executor
@@ -1281,7 +1283,7 @@ def test_workflow_command_runs_hotfix_playbook(tmp_path: Path, monkeypatch) -> N
         git.get_current_branch.return_value = "issue-203"
         mock_git_cls.return_value = git
         executor = MagicMock()
-        executor.execute_step.side_effect = lambda step_name, step_def, blackboard_state: (
+        executor.execute_step.side_effect = lambda step_name, step_def, blackboard_state, **kw: (
             executed_steps.append(step_name) or _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
         )
         mock_builder.return_value = executor
@@ -1328,7 +1330,7 @@ steps:
         git.get_current_branch.return_value = "issue-204"
         mock_git_cls.return_value = git
         executor = MagicMock()
-        executor.execute_step.side_effect = lambda step_name, step_def, blackboard_state: (
+        executor.execute_step.side_effect = lambda step_name, step_def, blackboard_state, **kwargs: (
             executed_steps.append(step_name) or _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
         )
         mock_builder.return_value = executor
