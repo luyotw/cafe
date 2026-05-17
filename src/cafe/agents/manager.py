@@ -280,43 +280,45 @@ class AgentManager:
             AgentExecutionError: Raised when all agents (primary + backups) fail
         """
         config = primary_executor.config
-        backup_clis = config.backup_clis
-        models_config = config.models_config
 
-        if not backup_clis:
-            # No backup agents configured, re-raise the original error
+        # Use clis chain when available; fall back to legacy backup_clis + models_config
+        chain = config.clis
+        if chain:
+            fallback_entries = chain[1:]
+        else:
+            # Legacy path: reconstruct minimal CliEntry list from backup_clis + models_config
+            from cafe.core.types import CliEntry
+            fallback_entries = []
+            for backup_cli in config.backup_clis:
+                phase_models = {}
+                if config.models_config:
+                    raw = config.models_config.get(backup_cli.value, {})
+                    phase_models = dict(raw) if isinstance(raw, dict) else {}
+                fallback_entries.append(CliEntry(cli=backup_cli, phase_models=phase_models))
+
+        if not fallback_entries:
+            # No fallback entries configured, re-raise the original error
             raise primary_error
 
         primary_cli_name = config.cli.value
         print(f"❌ {primary_cli_name} API rate limit reached, trying backup agent...")
 
-        # Track tried CLIs to avoid duplicates (primary CLI is included from the start)
+        # Track tried CLIs to avoid duplicates
         tried_clis = {config.cli}
         failed_agents: List[str] = [f"{primary_cli_name} ({primary_error})"]
 
-        for backup_cli in backup_clis:
-            # Skip CLIs already tried (e.g. backup_clis contains the same CLI as primary)
-            if backup_cli in tried_clis:
+        for entry in fallback_entries:
+            if entry.cli in tried_clis:
                 continue
-            tried_clis.add(backup_cli)
+            tried_clis.add(entry.cli)
 
-            # Look up the model for this backup CLI in the current phase
-            # e.g. models_config = {"gemini": {"develop": "gemini-2-flash-preview"}}
-            # If not configured or empty string, use None (CLI default model)
-            backup_model: Optional[str] = None
-            if phase_name and models_config:
-                backup_model = models_config.get(backup_cli.value, {}).get(phase_name) or None
+            backup_model = entry.resolve_model(phase_name)
+            print(f"Trying {entry.cli.value}...")
 
-            # Treat empty string as None
-            if backup_model == "":
-                backup_model = None
-
-            print(f"Trying {backup_cli.value}...")
-
-            # Create a new executor for the backup CLI (fresh session to avoid session contamination)
+            # Create a new executor for the fallback CLI (fresh session)
             backup_config = AgentConfig(
                 name=config.name,
-                cli=backup_cli,
+                cli=entry.cli,
                 model=backup_model,
             )
             backup_executor = AgentExecutor(backup_config)
@@ -325,19 +327,17 @@ class AgentManager:
                 agent_response = backup_executor.execute(
                     prompt, allowed_tools, allowed_directories, streaming_output_file
                 )
-                print(f"✅ Successfully completed with {backup_cli.value}")
+                print(f"✅ Successfully completed with {entry.cli.value}")
                 return agent_response
             except AgentExecutionError as backup_error:
                 if hasattr(backup_error, 'error_type') and backup_error.error_type in ("rate_limit", "cli_not_found"):
-                    # rate_limit or cli_not_found: record and continue to next backup
-                    failed_agents.append(f"{backup_cli.value} ({backup_error})")
-                    print(f"❌ {backup_cli.value} also hit rate limit, trying next agent...")
+                    failed_agents.append(f"{entry.cli.value} ({backup_error})")
+                    print(f"❌ {entry.cli.value} also hit rate limit, trying next agent...")
                     continue
                 else:
-                    # Other errors (e.g. invalid prompt format): re-raise immediately
                     raise
 
-        # All agents (primary + all backups) failed, compose error message
+        # All agents (primary + all fallbacks) failed, compose error message
         tried_list = ", ".join(failed_agents)
         raise AgentExecutionError(
             f"All agents failed. Tried: {tried_list}. "
