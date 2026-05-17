@@ -31,7 +31,7 @@ from cafe.skills.loader import SkillLoader
 from cafe.ui.chat import launch_chat_session  # noqa: F401 — re-exported via cli for test-patch compat
 from cafe.ui.inquirer_prompts import prompt_confirm, prompt_list, prompt_multiline  # noqa: F401 — re-exported via cli for test-patch compat
 from cafe.utils.config import ConfigError, ConfigManager
-from cafe.utils.crew import CrewManager
+from cafe.utils.crew import CrewManager, normalize_role_config
 
 VALID_CONTENT_TYPES = [
     "context",
@@ -149,70 +149,45 @@ def setup_agents(
     dev_config = _role_config("developer", "David")
     reviewer_config = _role_config("reviewer", "Richard")
 
-    def resolve_model(config: dict, phase: Optional[str]) -> Optional[str]:
-        model = None
-        if phase and phase in config:
-            phase_config = config[phase]
-            if isinstance(phase_config, dict):
-                model = phase_config.get("model")
-        if model is None:
-            model = config.get("model")
-        return model
+    def _build_agent_config(role_config: dict, default_name: str) -> AgentConfig:
+        chain = normalize_role_config(role_config)
 
-    def resolve_backup_clis(config: dict, primary_cli: AgentCLI) -> List[AgentCLI]:
-        backup_raw = config.get("backup", [])
-        seen = {primary_cli}
-        result = []
-        for cli_str in backup_raw:
-            try:
-                cli = AgentCLI(cli_str)
-            except ValueError:
-                continue
-            if cli not in seen:
-                seen.add(cli)
-                result.append(cli)
-        return result
+        # Seed models_config from raw models: dict for backward compat
+        # (manager._try_backup_agents reads it; callers may also inspect it)
+        raw_models = role_config.get("models", {}) or {}
+        models_config: Dict[str, Dict[str, str]] = {}
+        if isinstance(raw_models, dict):
+            for cli_name, phase_map in raw_models.items():
+                if isinstance(phase_map, dict):
+                    models_config[cli_name] = {k: str(v) for k, v in phase_map.items()}
 
-    def resolve_models_config(config: dict) -> Dict[str, Dict[str, str]]:
-        raw = config.get("models", {})
-        if not isinstance(raw, dict):
-            return {}
-        result: Dict[str, Dict[str, str]] = {}
-        for cli_name, phase_models in raw.items():
-            if isinstance(phase_models, dict):
-                result[cli_name] = {k: str(v) for k, v in phase_models.items()}
-        return result
+        if chain:
+            primary = chain[0]
+            cli = primary.cli
+            model = primary.resolve_model(phase_name)
+            backup_clis = [e.cli for e in chain[1:]]
+            # Merge chain entries into models_config (chain takes priority)
+            for entry in chain:
+                if entry.phase_models:
+                    models_config[entry.cli.value] = dict(entry.phase_models)
+        else:
+            # No valid CLI in role config; fall back to copilot with no model
+            cli = AgentCLI.COPILOT
+            model = None
+            backup_clis = []
 
-    pm_cli = AgentCLI(pm_config["cli"])
-    agent_manager.register_agent(
-        AgentConfig(
-            name=pm_config["name"],
-            cli=pm_cli,
-            model=resolve_model(pm_config, phase_name),
-            backup_clis=resolve_backup_clis(pm_config, pm_cli),
-            models_config=resolve_models_config(pm_config),
+        return AgentConfig(
+            name=role_config.get("name", default_name),
+            cli=cli,
+            model=model,
+            clis=chain,
+            backup_clis=backup_clis,
+            models_config=models_config,
         )
-    )
-    dev_cli = AgentCLI(dev_config["cli"])
-    agent_manager.register_agent(
-        AgentConfig(
-            name=dev_config["name"],
-            cli=dev_cli,
-            model=resolve_model(dev_config, phase_name),
-            backup_clis=resolve_backup_clis(dev_config, dev_cli),
-            models_config=resolve_models_config(dev_config),
-        )
-    )
-    reviewer_cli = AgentCLI(reviewer_config["cli"])
-    agent_manager.register_agent(
-        AgentConfig(
-            name=reviewer_config["name"],
-            cli=reviewer_cli,
-            model=resolve_model(reviewer_config, phase_name),
-            backup_clis=resolve_backup_clis(reviewer_config, reviewer_cli),
-            models_config=resolve_models_config(reviewer_config),
-        )
-    )
+
+    agent_manager.register_agent(_build_agent_config(pm_config, "Roger"))
+    agent_manager.register_agent(_build_agent_config(dev_config, "David"))
+    agent_manager.register_agent(_build_agent_config(reviewer_config, "Richard"))
 
     return agent_manager
 

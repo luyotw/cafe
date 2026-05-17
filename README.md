@@ -61,31 +61,47 @@ CAFE supports `git worktree`, enabling parallel development across multiple issu
 CAFE integrates with multiple CLI-based AI agents (e.g., Claude Code, Cursor CLI).
 Different agents and models can be assigned per role, allowing you to balance cost, performance, and reasoning depth.
 
-### Automatic Backup Agent Switching on Rate Limits
+### Automatic Fallback Agent Switching on Rate Limits
 
-When a primary agent hits an API rate limit, CAFE automatically switches to backup agents in configured order—without stopping the workflow. If the backup agent also hits a rate limit, CAFE continues to the next backup until one succeeds or all are exhausted.
+When a primary agent hits an API rate limit (or is not installed), CAFE automatically switches to the next CLI in the configured fallback chain—without stopping the workflow. Each entry in the chain can specify its own model and per-phase model overrides.
 
-You can configure backup agents and their per-phase models in `.cafe/config.yaml`:
+Configure per-role fallback chains in `.cafe/crew.yaml` using the `clis` list:
 
 ```yaml
-agents:
-  developer:
-    name: David
-    cli: claude                    # Primary CLI agent
-    backup:                        # Backup agents (tried in order on rate limit)
-      - gemini
-      - copilot
-    models:                        # Per-CLI, per-phase model configuration
-      claude:
-        plan: opus
-        develop: sonnet
-      gemini:
-        plan: gemini-2.5-pro-preview
-        develop: gemini-2-flash-preview
-      copilot: {}                  # Use CLI default model
+developer:
+  name: David
+  clis:
+    - cli: claude                  # Primary CLI
+      model: opus                  # Default model for this entry
+      plan: sonnet                 # Override model for the plan phase
+      develop: sonnet
+    - cli: gemini                  # First fallback
+      model: gemini-2.5-pro-preview
+    - cli: copilot                 # Second fallback (uses CLI default model)
 ```
 
-If all agents (primary + backups) are exhausted, the workflow stops with a clear error message listing which agents were tried. You can add more backup agents with `cafe config edit`.
+The old format is still fully supported and auto-normalized at runtime:
+
+```yaml
+# Backward-compatible format (auto-normalized to clis list)
+developer:
+  name: David
+  cli: claude
+  model: opus
+  backup:                          # Fallback CLIs (tried in order)
+    - gemini
+    - copilot
+  models:                          # Per-CLI, per-phase model configuration
+    claude:
+      plan: opus
+      develop: sonnet
+    gemini:
+      plan: gemini-2.5-pro-preview
+      develop: gemini-2-flash-preview
+    copilot: {}                    # Use CLI default model
+```
+
+If all entries in the chain are exhausted, the workflow stops with a clear error message listing every CLI that was tried. You can edit your crew with `cafe config edit`.
 
 ---
 
