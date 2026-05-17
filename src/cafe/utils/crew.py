@@ -64,22 +64,41 @@ def normalize_role_config(role: Dict[str, Any]) -> List[CliEntry]:
     except ValueError:
         return []
 
+    # Phase overrides from models: dict (per-CLI per-phase)
     models_raw = role.get("models", {}) or {}
     if not isinstance(models_raw, dict):
         models_raw = {}
 
-    def _phase_models_for(cli_value: str) -> Dict[str, str]:
+    def _phase_models_from_models_dict(cli_value: str) -> Dict[str, str]:
         raw = models_raw.get(cli_value, {}) or {}
         if not isinstance(raw, dict):
             return {}
         return {k: str(v) for k, v in raw.items() if isinstance(v, str)}
+
+    # Phase overrides from role-level phase keys: spec: {model: X}
+    # These apply to the primary CLI only (backward compat with existing preset format).
+    def _phase_models_from_role_keys() -> Dict[str, str]:
+        result: Dict[str, str] = {}
+        for key, val in role.items():
+            if key in _RESERVED_ROLE_KEYS:
+                continue
+            if isinstance(val, dict):
+                m = val.get("model")
+                if m and isinstance(m, str):
+                    result[key] = m
+        return result
+
+    primary_phase_models = {
+        **_phase_models_from_role_keys(),
+        **_phase_models_from_models_dict(primary_cli.value),
+    }
 
     seen_old: set = {primary_cli}
     chain: List[CliEntry] = [
         CliEntry(
             cli=primary_cli,
             model=role.get("model") or None,
-            phase_models=_phase_models_for(primary_cli.value),
+            phase_models=primary_phase_models,
         )
     ]
 
@@ -95,7 +114,7 @@ def normalize_role_config(role: Dict[str, Any]) -> List[CliEntry]:
             CliEntry(
                 cli=cli,
                 model=None,
-                phase_models=_phase_models_for(cli.value),
+                phase_models=_phase_models_from_models_dict(cli.value),
             )
         )
 

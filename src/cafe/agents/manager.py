@@ -63,12 +63,13 @@ class AgentManager:
         session_id = session_data.session_id if session_data else None
         # Note: Don't create session here - let executor handle it on first use
 
-        # Update config with session ID (may be None), preserve backup and models config
+        # Update config with session ID (may be None), preserve clis chain and legacy fields
         config_with_session = AgentConfig(
             name=config.name,
             cli=config.cli,
             session_id=session_id,
             model=config.model,
+            clis=config.clis,
             backup_clis=config.backup_clis,
             models_config=config.models_config,
         )
