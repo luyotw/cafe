@@ -56,37 +56,74 @@ class PermissionAction(str, Enum):
     SKIP = "s"
 
 
+class CliEntry(BaseModel):
+    """A single CLI entry in a role's fallback chain.
+
+    Each entry carries the CLI identifier, an optional default model, and optional
+    phase-level model overrides stored in phase_models (e.g. {"plan": "sonnet"}).
+    """
+
+    cli: AgentCLI
+    model: Optional[str] = None
+    phase_models: Dict[str, str] = Field(default_factory=dict)
+
+    def resolve_model(self, phase_name: Optional[str]) -> Optional[str]:
+        """Return the effective model for the given phase.
+
+        Priority: phase override → entry model → None (CLI default).
+        Empty-string values are treated as None.
+        """
+        if phase_name:
+            override = self.phase_models.get(phase_name)
+            if override is not None:
+                return override or None
+        return self.model or None
+
+
 class AgentConfig(BaseModel):
     """Configuration for an AI agent.
 
-    backup_clis and models_config support automatic backup agent switching.
-    When the primary CLI hits a rate limit, AgentManager tries each backup CLI in order.
+    Supports a clis list where each entry carries its own CLI, model, and
+    phase-level overrides.  The legacy backup_clis / models_config fields are
+    retained for internal backwards compatibility but new code should populate
+    clis instead (normalize_role_config produces this).
 
-    Example config.yaml::
+    Example crew.yaml (new format)::
 
-        agents:
-          developer:
-            name: David
-            cli: claude                    # Primary CLI
-            backup:                        # Backup CLIs (tried in order)
-              - gemini
-              - copilot
-            models:                        # Per-CLI per-phase model configuration
-              claude:
-                plan: opus
-                develop: sonnet
-              gemini:
-                plan: gemini-2.5-pro-preview
-                develop: gemini-2-flash-preview
-              copilot: {}                  # Use CLI default model
+        developer:
+          name: David
+          clis:
+            - cli: claude
+              model: opus
+              plan: sonnet
+            - cli: gemini
+              model: gemini-2.5-pro-preview
+            - cli: copilot
+
+    Example crew.yaml (old format — auto-normalized)::
+
+        developer:
+          name: David
+          cli: claude
+          model: opus
+          backup:
+            - gemini
+            - copilot
+          models:
+            claude:
+              plan: opus
+              develop: sonnet
+            gemini:
+              plan: gemini-2.5-pro-preview
     """
 
     name: str
     cli: AgentCLI
     session_id: Optional[str] = None
-    model: Optional[str] = None  # Optional model name for CLI (e.g., "sonnet", "opus")
-    backup_clis: List["AgentCLI"] = Field(default_factory=list)  # Ordered list of backup CLIs
-    models_config: Dict[str, Dict[str, str]] = Field(default_factory=dict)  # Per-CLI per-phase model configuration
+    model: Optional[str] = None
+    clis: List["CliEntry"] = Field(default_factory=list)
+    backup_clis: List["AgentCLI"] = Field(default_factory=list)
+    models_config: Dict[str, Dict[str, str]] = Field(default_factory=dict)
 
 
 class TokenUsage(BaseModel):
