@@ -1,6 +1,5 @@
 """Command-line interface for CAFE."""
 
-import copy
 import os
 import subprocess
 import sys
@@ -423,81 +422,106 @@ def _display_iteration_delta(
 
 
 
+_VALID_RIGOR_VALUES = ["low", "medium", "high"]
+_VALID_PLAYBOOK_VALUES = ["default", "tdd", "bugfix"]
+
+
 @app.command()
-def init() -> None:
+def init(
+    preset: Optional[str] = typer.Option(
+        None,
+        "--preset",
+        help="Preset name to apply directly (non-interactive).",
+    ),
+) -> None:
     """Initialize CAFE configuration for the project.
 
-    Creates .cafe/config.yaml and copies default agents and templates.
+    Creates .cafe/config.yaml and runs crew set-primary + setup flows.
+    Use --preset for non-interactive initialization.
     """
-    try:
-        config_manager = ConfigManager()
+    from cafe.ui.commands.crew import run_set_primary_interactive
+    from cafe.utils.preset import PresetManager, PresetNotFoundError
 
-        # 1. Check if config already exists
-        if config_manager.config_file.exists():
-            console.print("[yellow]⚠️  Configuration already exists.[/yellow]")
-            console.print(f"[dim]Current config: {config_manager.config_file}[/dim]")
-            console.print()
+    config_manager = ConfigManager()
+    cafe_dir = Path(".cafe")
 
-            # Ask user if they want to overwrite
-            overwrite = prompt_confirm(
-                message="Do you want to overwrite the existing configuration?",
-                default=False
-            )
-
-            if overwrite is None or not overwrite:
-                console.print("[yellow]Cancelled. To modify existing config, use `cafe config` commands.[/yellow]")
-                raise typer.Exit(0)
-
-            console.print("[yellow]⚠️  Proceeding to overwrite existing configuration...[/yellow]")
-            console.print()
-
-        # 2. Copy agents and templates directories to local .cafe
-        cafe_dir = Path(".cafe")
-        cafe_dir.mkdir(parents=True, exist_ok=True)
-        _ensure_default_content(cafe_dir)
+    # Check if config already exists (only prompt when not using --preset on fresh init)
+    if not preset and config_manager.config_file.exists():
+        console.print("[yellow]⚠️  Configuration already exists.[/yellow]")
+        console.print(f"[dim]Current config: {config_manager.config_file}[/dim]")
         console.print()
 
-        # 3. Check available CLIs
-        available_clis = check_available_clis()
-
-        if not available_clis:
-            console.print("[red]No supported AI agents found. Please install at least one agent before retrying.[/red]")
-            console.print("[yellow]Supported agents: claude, gemini, cursor-agent, codex, copilot[/yellow]")
-            raise typer.Exit(1)
-
-        console.print(f"[green]Found available AI agents: {', '.join(available_clis)}[/green]\n")
-
-        # 4. Interactive configuration for three roles
-        agents_config = _interactive_agent_setup(available_clis)
-
-        # 5. Save crew.yaml and non-agent config separately
-        from cafe.utils.crew import CrewManager
-        crew_mgr = CrewManager(cafe_dir)
-        crew_mgr.save(agents_config)
-
-        settings_config = {
-            "settings": {
-                "auto_update": True,
-            },
-        }
-        config_manager.save_config(settings_config)
-
-        # 6. Display success message
-        console.print("[bold green]Configuration saved successfully![/bold green]\n")
-        _display_agent_summary(agents_config)
-
-        console.print("\n[cyan]You can now use `cafe prepare` to start a new development task.[/cyan]")
-        console.print(
-            "[cyan]To modify settings, use `cafe config` commands. See `cafe config --help` for details.[/cyan]"
+        overwrite = prompt_confirm(
+            message="Do you want to overwrite the existing configuration?",
+            default=False,
         )
 
+        if overwrite is None or not overwrite:
+            console.print("[yellow]Cancelled. To modify existing config, use `cafe config` commands.[/yellow]")
+            raise typer.Exit(0)
+
+        console.print("[yellow]⚠️  Proceeding to overwrite existing configuration...[/yellow]")
+        console.print()
+
+    cafe_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_default_content(cafe_dir)
+
+    if preset:
+        manager = PresetManager()
+        try:
+            manager.apply(preset, cafe_dir=cafe_dir)
+        except PresetNotFoundError as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1)
+
+        config_manager.save_config({"settings": {"auto_update": True}})
+        console.print(f"[green]✓ Initialized with preset '[cyan]{preset}[/cyan]'.[/green]")
+        console.print("[cyan]You can now use `cafe prepare` to start a new development task.[/cyan]")
+        return
+
+    try:
+        run_set_primary_interactive(cafe_dir=cafe_dir)
     except KeyboardInterrupt:
         console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
         raise typer.Exit(1)
 
+    # Minimal config.yaml with defaults; setup can refine later
+    if not config_manager.config_file.exists():
+        config_manager.save_config({"settings": {"auto_update": True}})
 
-_VALID_RIGOR_VALUES = ["low", "medium", "high"]
-_VALID_PLAYBOOK_VALUES = ["default", "tdd", "bugfix"]
+    console.print()
+    console.print("[bold cyan]Now configure project settings:[/bold cyan]")
+
+    try:
+        existing_config = config_manager.load_config()
+        settings = existing_config.setdefault("settings", {})
+
+        new_auto_update = prompt_confirm(
+            "Enable auto-update?",
+            default=settings.get("auto_update", True),
+        )
+        new_playbook = prompt_list(
+            message="Select playbook:",
+            choices=_VALID_PLAYBOOK_VALUES,
+        )
+        new_rigor = prompt_list(
+            message="Select rigor level:",
+            choices=_VALID_RIGOR_VALUES,
+        )
+
+        settings["auto_update"] = new_auto_update
+        if new_playbook:
+            settings["playbook"] = new_playbook
+        if new_rigor:
+            settings["rigor"] = new_rigor
+
+        config_manager.save_config(existing_config)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Settings skipped. You can run `cafe setup` to configure later.[/yellow]")
+        raise typer.Exit(1)
+
+    console.print("\n[bold green]Initialization complete![/bold green]")
+    console.print("[cyan]You can now use `cafe prepare` to start a new development task.[/cyan]")
 
 
 @app.command()
@@ -597,298 +621,6 @@ def _get_version() -> str:
         except PackageNotFoundError:
             continue
     return "unknown"
-
-
-BACK_SENTINEL = "__BACK__"
-CUSTOM_MODEL_SENTINEL = "__CUSTOM__"
-KEEP_MODEL_SENTINEL = "__KEEP__"
-SAVE_SENTINEL = "save"
-ROLE_PHASES = {
-    "pm": ["spec"],
-    "developer": ["plan", "develop", "pr"],
-    "reviewer": ["review"],
-}
-
-
-def _has_complete_agent_setup(agents_config: dict) -> bool:
-    """Return True if role setup has minimum required fields for selective editing."""
-    required_roles = ["pm", "developer", "reviewer"]
-    if not isinstance(agents_config, dict):
-        return False
-
-    for role_key in required_roles:
-        role_config = agents_config.get(role_key)
-        if not isinstance(role_config, dict):
-            return False
-        if not role_config.get("cli") or not role_config.get("name"):
-            return False
-
-    return True
-
-
-def _interactive_agent_setup_selective(existing_agents_config: dict, available_clis: list) -> dict:
-    """Run selective agent configuration with explicit Save action."""
-    from InquirerPy.separator import Separator
-
-    role_choices = [
-        {"name": "PM", "value": "pm"},
-        {"name": "Developer", "value": "developer"},
-        {"name": "Reviewer", "value": "reviewer"},
-        Separator(),
-        {"name": "Save", "value": SAVE_SENTINEL},
-    ]
-
-    role_display_map = {
-        "pm": "PM",
-        "developer": "Developer",
-        "reviewer": "Reviewer",
-    }
-
-    staged_agents_config = copy.deepcopy(existing_agents_config)
-
-    while True:
-        selected_role = prompt_list(
-            message="Select role to update:",
-            choices=role_choices,
-        )
-
-        if selected_role == SAVE_SENTINEL:
-            return staged_agents_config
-
-        role_display = role_display_map.get(selected_role)
-        if not role_display:
-            console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
-            raise typer.Exit(1)
-
-        staged_agents_config[selected_role] = _interactive_role_setup(
-            role_key=selected_role,
-            role_display=role_display,
-            available_clis=available_clis,
-            existing_role_config=staged_agents_config.get(selected_role),
-            allow_back=True,
-        )
-        if staged_agents_config[selected_role] == BACK_SENTINEL:
-            staged_agents_config[selected_role] = copy.deepcopy(existing_agents_config.get(selected_role))
-            continue
-        console.print("")
-
-
-def _interactive_agent_setup(available_clis: list) -> dict:
-    """Run interactive agent configuration for all three roles.
-
-    Prompts user to select CLI, agent, and phase-specific models for each role.
-    Supports back navigation within each role's configuration steps.
-
-    Args:
-        available_clis: List of available CLI names
-
-    Returns:
-        Agents configuration dictionary
-
-    Raises:
-        typer.Exit: If user cancels or agents not found
-    """
-    agents_config = {}
-    roles = [("pm", "PM"), ("developer", "Developer"), ("reviewer", "Reviewer")]
-
-    for role_key, role_display in roles:
-        agents_config[role_key] = _interactive_role_setup(
-            role_key=role_key,
-            role_display=role_display,
-            available_clis=available_clis,
-        )
-        console.print("")
-
-    return agents_config
-
-
-def _interactive_role_setup(
-    role_key: str,
-    role_display: str,
-    available_clis: list,
-    existing_role_config: Optional[dict] = None,
-    allow_back: bool = False,
-) -> dict | str:
-    """Run interactive setup for a single role."""
-    from InquirerPy.separator import Separator
-
-    phase_recommendations = {
-        "spec": "high-speed / economical models",
-        "plan": "smarter models",
-        "develop": "smarter models",
-        "review": "flexible based on your needs",
-        "pr": "high-speed / economical models",
-    }
-
-    console.print(f"[bold cyan]Configuring {role_display} role:[/bold cyan]")
-
-    phases = ROLE_PHASES.get(role_key, [])
-
-    # Steps: 0=CLI, 1=agent, 2..N=phase models
-    step = 0
-    total_steps = 2 + len(phases)
-    selected_cli = None
-    selected_agent_name = None
-    phase_models = {}
-    if isinstance(existing_role_config, dict):
-        for phase in phases:
-            phase_config = existing_role_config.get(phase)
-            if isinstance(phase_config, dict):
-                model = phase_config.get("model")
-                if isinstance(model, str) and model.strip():
-                    phase_models[phase] = model.strip()
-
-    while step < total_steps:
-        if step == 0:
-            cli_choices = list(available_clis)
-            if allow_back:
-                cli_choices.extend([
-                    Separator(),
-                    {"name": "\u2190 Back", "value": BACK_SENTINEL},
-                ])
-
-            selected_cli = prompt_list(
-                message=f"Select CLI for {role_display}:",
-                choices=cli_choices,
-            )
-            if selected_cli == BACK_SENTINEL:
-                return BACK_SENTINEL
-            if not selected_cli:
-                console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
-                raise typer.Exit(1)
-            step += 1
-            continue
-
-        if step == 1:
-            agents = list_available_agents(role_key)
-
-            if not agents:
-                console.print(f"[red]Error: Agent files not found for {role_display} role.[/red]")
-                console.print(
-                    f"[yellow]Please ensure valid .md files exist in ~/.cafe/agents/{role_key}/ or src/cafe/data/agents/{role_key}/ directory.[/yellow]"
-                )
-                raise typer.Exit(1)
-
-            agent_choices = []
-            for name, desc, _, source_type in agents:
-                source_label = " (custom)" if source_type == "custom" else " (system default)"
-                agent_choices.append(f"{name}: {desc}{source_label}")
-
-            agent_choices.append(Separator())
-            agent_choices.append({"name": "\u2190 Back to CLI selection", "value": BACK_SENTINEL})
-
-            selected = prompt_list(
-                message=f"Select agent for {role_display}:",
-                choices=agent_choices,
-            )
-
-            if selected == BACK_SENTINEL:
-                step = 0
-                continue
-
-            if not selected:
-                console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
-                raise typer.Exit(1)
-
-            selected_agent_name = selected.split(":")[0].strip()
-            step += 1
-            continue
-
-        phase_idx = step - 2
-        phase = phases[phase_idx]
-        recommendation = phase_recommendations.get(phase, "")
-        recommendation_text = f" (recommended: {recommendation})" if recommendation else ""
-
-        model_choices = [
-            {"name": "Use default model", "value": ""},
-            {"name": "Keep current setting", "value": KEEP_MODEL_SENTINEL},
-            {"name": "Custom (type model name)", "value": CUSTOM_MODEL_SENTINEL},
-            Separator(),
-            {"name": "\u2190 Back", "value": BACK_SENTINEL},
-        ]
-
-        selected = prompt_list(
-            message=f"Model for {phase} phase{recommendation_text}:",
-            choices=model_choices,
-        )
-
-        if selected == BACK_SENTINEL:
-            step -= 1
-            continue
-
-        if selected == CUSTOM_MODEL_SENTINEL:
-            model_name = prompt_text(
-                message=f"Enter {selected_cli} model name for {phase} phase:",
-                default="",
-            )
-            if model_name and model_name.strip():
-                phase_models[phase] = model_name.strip()
-            else:
-                phase_models.pop(phase, None)
-        elif selected == KEEP_MODEL_SENTINEL:
-            # Preserve current phase override (or default) without changes.
-            pass
-        else:
-            # "Use default model" clears any existing phase-specific override.
-            phase_models.pop(phase, None)
-
-        step += 1
-
-    role_config = {
-        "name": selected_agent_name,
-        "cli": selected_cli,
-    }
-    for phase, model in phase_models.items():
-        role_config[phase] = {"model": model}
-
-    if not isinstance(existing_role_config, dict):
-        return role_config
-
-    # Preserve non-interactive role-level settings (for example backup/models)
-    # while replacing editable fields from the setup flow.
-    merged_role_config = copy.deepcopy(existing_role_config)
-    merged_role_config["name"] = role_config["name"]
-    merged_role_config["cli"] = role_config["cli"]
-
-    for phase in phases:
-        merged_role_config.pop(phase, None)
-    for phase, model_config in role_config.items():
-        if phase in phases:
-            merged_role_config[phase] = model_config
-
-    return merged_role_config
-
-
-def _display_agent_summary(agents_config: dict) -> None:
-    """Display a summary of agent configuration.
-
-    Args:
-        agents_config: Agents configuration dictionary
-    """
-    roles = [
-        ("pm", "PM"),
-        ("developer", "Developer"),
-        ("reviewer", "Reviewer"),
-    ]
-
-    for role_key, role_display in roles:
-        role_config = agents_config[role_key]
-        phases = ROLE_PHASES.get(role_key, [])
-
-        # Build phase models display
-        phase_models = []
-        for phase in phases:
-            if phase in role_config and "model" in role_config[phase]:
-                phase_models.append(f"{phase}={role_config[phase]['model']}")
-            else:
-                phase_models.append(f"{phase}=default")
-
-        models_display = ", ".join(phase_models) if phase_models else "default"
-
-        console.print(
-            f"- {role_display}: {role_config['cli']} "
-            f"(agent: {role_config['name']}, models: {models_display})"
-        )
 
 
 def _ensure_default_content(cafe_dir: Path) -> None:
