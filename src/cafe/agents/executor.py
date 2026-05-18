@@ -676,6 +676,7 @@ class AgentExecutor:
                     stderr_line and
                     ("already in use" in stderr_line.lower() or
                      "limit reached" in stderr_line.lower() or
+                     "hit your limit" in stderr_line.lower() or
                      ("error" in stderr_line.lower() and not is_tool_error))
                 )
 
@@ -971,10 +972,11 @@ class AgentExecutor:
             
             # If still non-zero, it's a real error
             if returncode != 0:
-                # Check if it's a rate limit error
-                is_rate_limit = stderr_output and self._is_rate_limit_error(stderr_output)
+                # Check if it's a rate limit error (in stderr or stdout)
+                combined_output = (stderr_output or "") + "\n".join(output_lines)
+                is_rate_limit = self._is_rate_limit_error(combined_output)
                 display_message = (
-                    self._format_rate_limit_display_message(cli_name, stderr_output)
+                    self._format_rate_limit_display_message(cli_name, stderr_output or combined_output)
                     if is_rate_limit else None
                 )
 
