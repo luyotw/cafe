@@ -148,6 +148,8 @@ class AgentResponse(BaseModel):
     cli_command_args: Optional[List[str]] = None  # CLI command arguments (excluding prompt)
     streaming_log: List[str] = Field(default_factory=list)  # Streaming fragment history
     model: Optional[str] = None  # Model name
+    cli: Optional[AgentCLI] = None  # Actual CLI that produced this response
+    session_id: Optional[str] = None  # Actual session id after execution, if any
 
 
 class PhaseResult(BaseModel):

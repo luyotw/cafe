@@ -1,4 +1,4 @@
-"""Codex-related mixin for Phase – permission denials, approved rules, host execution."""
+"""Sandbox-related Phase mixin – permission denials, allowed access, host execution."""
 
 from __future__ import annotations
 
@@ -14,14 +14,14 @@ if TYPE_CHECKING:
     from cafe.core.types import PermissionDenial
 
 
-class PhaseCodexMixin:
-    """Mixin with Codex permission-denial handling, rule persistence, and host-execution helpers."""
+class PhaseSandboxMixin:
+    """Shared helpers for phases that run agents inside restricted execution environments."""
 
-    def _extract_codex_permission_denials_from_streaming_file(
+    def _extract_sandbox_permission_denials_from_streaming_file(
         self,
         iteration: int,
     ) -> List["PermissionDenial"]:
-        """Recover Codex permission denials from a previous iteration's streaming.jsonl."""
+        """Recover sandbox permission denials from a previous iteration's streaming.jsonl."""
         from cafe.core.types import PermissionDenial
 
         iteration_dir = self._get_iteration_dir(iteration)
@@ -146,7 +146,7 @@ class PhaseCodexMixin:
         # Check if there are permission_denials
         permission_denials_data = prev_data.get("permission_denials", [])
         if not permission_denials_data and self.iteration > 1:
-            recovered_denials = self._extract_codex_permission_denials_from_streaming_file(self.iteration - 1)
+            recovered_denials = self._extract_sandbox_permission_denials_from_streaming_file(self.iteration - 1)
             permission_denials_data = [denial.model_dump() for denial in recovered_denials]
         if not permission_denials_data:
             return ([], "")
@@ -159,7 +159,8 @@ class PhaseCodexMixin:
         auto_execute_indices = [
             idx
             for idx, denial in enumerate(permission_denials)
-            if prev_cli == "codex" and self._is_auto_host_executable_codex_denial(denial)
+            if self._uses_host_execution_for_sandbox_denials(prev_cli)
+            and self._is_auto_host_executable_sandbox_denial(denial)
         ]
         manual_indices = [
             idx
@@ -170,11 +171,11 @@ class PhaseCodexMixin:
         # Collect approved indices
         approved_indices: List[int] = list(auto_execute_indices)
         host_execution_note = ""
-        is_codex_execution_flow = prev_cli == "codex"
-        request_label = "execution" if is_codex_execution_flow else "permission"
+        is_host_execution_flow = self._uses_host_execution_for_sandbox_denials(prev_cli)
+        request_label = "execution" if is_host_execution_flow else "permission"
         request_label_title = request_label.capitalize()
-        approve_label = "Execute" if is_codex_execution_flow else "Approve"
-        deny_label = "Skip" if is_codex_execution_flow else "Deny"
+        approve_label = "Execute" if is_host_execution_flow else "Approve"
+        deny_label = "Skip" if is_host_execution_flow else "Deny"
 
         if self.interactive:
             from cafe.ui.inquirer_prompts import prompt_list
@@ -191,7 +192,7 @@ class PhaseCodexMixin:
                 console.print()
 
             if not manual_indices:
-                host_execution_note = self._execute_approved_codex_commands(
+                host_execution_note = self._execute_approved_sandbox_commands_on_host(
                     permission_denials,
                     auto_execute_indices,
                 )
@@ -291,8 +292,8 @@ class PhaseCodexMixin:
                 if confirmation == "cancel":
                     return ([], "")
 
-            if prev_cli == "codex" and approved_indices:
-                host_execution_note = self._execute_approved_codex_commands(
+            if is_host_execution_flow and approved_indices:
+                host_execution_note = self._execute_approved_sandbox_commands_on_host(
                     permission_denials,
                     approved_indices,
                 )
@@ -305,7 +306,7 @@ class PhaseCodexMixin:
                     "Notes",
                     preamble=(
                         "If you skipped anything, say what the agent should do instead. Leave blank if none."
-                        if is_codex_execution_flow
+                        if is_host_execution_flow
                         else "If you denied anything, say what the agent should do instead. Leave blank if none."
                     ),
                 )
@@ -320,8 +321,8 @@ class PhaseCodexMixin:
 
             approved_indices = self.approved_denial_indices
             user_input = self.user_input
-            if prev_cli == "codex" and approved_indices:
-                host_execution_note = self._execute_approved_codex_commands(
+            if is_host_execution_flow and approved_indices:
+                host_execution_note = self._execute_approved_sandbox_commands_on_host(
                     permission_denials,
                     approved_indices,
                 )
@@ -334,7 +335,7 @@ class PhaseCodexMixin:
 
         # Convert approved indices to allowed_tools format
         approved_tools: List[str] = []
-        if is_codex_execution_flow:
+        if is_host_execution_flow:
             return (approved_tools, user_input)
 
         for idx in approved_indices:
@@ -344,12 +345,12 @@ class PhaseCodexMixin:
 
         return (approved_tools, user_input)
 
-    def _execute_approved_codex_commands(
+    def _execute_approved_sandbox_commands_on_host(
         self,
         permission_denials: List["PermissionDenial"],
         approved_indices: List[int],
     ) -> str:
-        """Execute approved Codex Bash commands on the host and return guidance for the agent."""
+        """Execute approved sandbox-blocked Bash commands on the host and return agent guidance."""
         from cafe.utils.git_utils import to_cwd_relative_path
 
         executed_records: List[dict] = []
@@ -422,8 +423,8 @@ class PhaseCodexMixin:
             )
         return "\n".join(lines)
 
-    def _is_auto_host_executable_codex_denial(self, denial: "PermissionDenial") -> bool:
-        """Return True when a denied Codex command is a safe git command we can run on host."""
+    def _is_auto_host_executable_sandbox_denial(self, denial: "PermissionDenial") -> bool:
+        """Return True when a denied command is a safe git command we can run on host."""
         if denial.tool_name != "Bash":
             return False
 
@@ -432,7 +433,7 @@ class PhaseCodexMixin:
             return False
 
         allowed_git_subcommands = {"add", "commit", "status", "diff", "show", "log"}
-        segments = self._split_command_for_codex_rules(command)
+        segments = self._split_command_for_sandbox_rules(command)
         if not segments:
             return False
 
@@ -442,6 +443,10 @@ class PhaseCodexMixin:
                 return False
 
         return True
+
+    def _uses_host_execution_for_sandbox_denials(self, cli: str) -> bool:
+        """Return True when denied Bash commands should be resolved by host execution."""
+        return cli == "codex"
 
     def _extract_git_subcommand(self, segment: List[str]) -> Optional[str]:
         """Extract the git subcommand from a parsed argv segment."""
@@ -461,8 +466,8 @@ class PhaseCodexMixin:
 
         return None
 
-    def _split_command_for_codex_rules(self, command: str) -> List[List[str]]:
-        """Split a safe shell command into argv segments for Codex prefix rules."""
+    def _split_command_for_sandbox_rules(self, command: str) -> List[List[str]]:
+        """Split a safe shell command into argv segments for approval rules."""
         unsupported_substrings = ["$(", "`", ">", "<"]
         if any(token in command for token in unsupported_substrings):
             return []
@@ -504,14 +509,14 @@ class PhaseCodexMixin:
 
         return filtered_segments
 
-    def _get_codex_rules_file(self) -> Path:
-        """Return the repo-local rules file used for temporary Codex approvals."""
+    def _get_sandbox_rules_file(self) -> Path:
+        """Return the repo-local rules file used for temporary sandbox approvals."""
         from cafe.utils.git_utils import get_git_toplevel
 
         git_toplevel = get_git_toplevel()
         return git_toplevel / "codex" / "rules" / "cafe-approved.rules"
 
-    def _ensure_codex_rules_excluded(self, rules_file: Path) -> None:
+    def _ensure_sandbox_rules_excluded(self, rules_file: Path) -> None:
         """Ensure the temporary rules file is ignored by local Git metadata."""
         from cafe.utils.git_utils import get_git_dir, get_git_toplevel
 
@@ -533,15 +538,15 @@ class PhaseCodexMixin:
         content += f"{ignore_path}\n"
         exclude_file.write_text(content, encoding="utf-8")
 
-    def _persist_codex_approved_rules(
+    def _persist_sandbox_approved_rules(
         self,
         permission_denials: List["PermissionDenial"],
         approved_indices: List[int],
     ) -> None:
-        """Persist repo-local Codex rules for approved Bash commands."""
-        rules_file = self._get_codex_rules_file()
+        """Persist repo-local sandbox approval rules for approved Bash commands."""
+        rules_file = self._get_sandbox_rules_file()
         rules_file.parent.mkdir(parents=True, exist_ok=True)
-        self._ensure_codex_rules_excluded(rules_file)
+        self._ensure_sandbox_rules_excluded(rules_file)
 
         blocks: List[str] = []
         for idx in approved_indices:
@@ -556,7 +561,7 @@ class PhaseCodexMixin:
             if not isinstance(command, str) or not command.strip():
                 continue
 
-            for segment in self._split_command_for_codex_rules(command):
+            for segment in self._split_command_for_sandbox_rules(command):
                 rule_segment = segment
                 if len(segment) >= 2 and segment[0] == "git":
                     if segment[1] == "add":
@@ -589,14 +594,14 @@ class PhaseCodexMixin:
         if existing.strip():
             parts.append(existing.rstrip())
         else:
-            parts.append("# Managed by cafe. Temporary Codex approval rules.")
+            parts.append("# Managed by cafe. Temporary sandbox approval rules.")
         parts.extend(new_blocks)
         rules_file.write_text("\n\n".join(parts) + "\n", encoding="utf-8")
 
-    def _cleanup_codex_approved_rules(self) -> None:
-        """Remove the temporary repo-local Codex approval rules file."""
+    def _cleanup_sandbox_approval_artifacts(self) -> None:
+        """Remove temporary repo-local sandbox approval artifacts."""
         try:
-            rules_file = self._get_codex_rules_file()
+            rules_file = self._get_sandbox_rules_file()
         except ValueError:
             return
 
@@ -605,8 +610,8 @@ class PhaseCodexMixin:
 
         rules_file.unlink()
         rules_dir = rules_file.parent
-        codex_dir = rules_dir.parent
+        sandbox_rules_root = rules_dir.parent
         if rules_dir.exists() and not any(rules_dir.iterdir()):
             rules_dir.rmdir()
-        if codex_dir.exists() and not any(codex_dir.iterdir()):
-            codex_dir.rmdir()
+        if sandbox_rules_root.exists() and not any(sandbox_rules_root.iterdir()):
+            sandbox_rules_root.rmdir()

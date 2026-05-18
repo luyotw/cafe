@@ -325,6 +325,7 @@ class BlackboardStore:
         playbook_id: str = "default",
         *,
         allow_legacy_text: bool = False,
+        tolerate_invalid_baton: bool = False,
     ) -> BlackboardState:
         if self.file_path.exists():
             raw = json.loads(self.file_path.read_text(encoding="utf-8"))
@@ -332,12 +333,20 @@ class BlackboardStore:
             if not getattr(state, "playbook_id", None):
                 state.playbook_id = playbook_id
                 self.save(state)
-            self.ensure_baton(state, allow_legacy_text=allow_legacy_text)
+            try:
+                self.ensure_baton(state, allow_legacy_text=allow_legacy_text)
+            except BatonRejected:
+                if not tolerate_invalid_baton:
+                    raise
             return state
 
         state = BlackboardState(current_step=initial_step, playbook_id=playbook_id)
         self.save(state)
-        self.ensure_baton(state, allow_legacy_text=allow_legacy_text)
+        try:
+            self.ensure_baton(state, allow_legacy_text=allow_legacy_text)
+        except BatonRejected:
+            if not tolerate_invalid_baton:
+                raise
         return state
 
     def save(self, state: BlackboardState) -> None:

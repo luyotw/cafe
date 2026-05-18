@@ -594,7 +594,7 @@ class DevelopPhase(Phase):
         if prev_status == "need_permission":
             recovered_denials = []
             if self.iteration > 1:
-                recovered_denials = self._extract_codex_permission_denials_from_streaming_file(self.iteration - 1)
+                recovered_denials = self._extract_sandbox_permission_denials_from_streaming_file(self.iteration - 1)
 
             # Check if has permission_denials
             if not prev_data.get("permission_denials") and not recovered_denials:

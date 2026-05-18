@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import inspect
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
     from cafe.core.git import GitOperations
 
 from cafe.core.phase_checklist_mixin import PhaseChecklistMixin
-from cafe.core.phase_codex_mixin import PhaseCodexMixin
+from cafe.core.phase_sandbox_mixin import PhaseSandboxMixin
 from cafe.core.phase_review_mixin import PhaseReviewMixin
 from cafe.core.phase_state_mixin import PhaseStateMixin
 
@@ -25,7 +26,7 @@ from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, TokenUsage
 
 
-class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMixin, ABC):
+class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklistMixin, ABC):
     """Abstract base class for all workflow phases.
 
     Each phase represents a step in the CAFE workflow (e.g., requirements clarification,
@@ -330,6 +331,40 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
             logger = logging.getLogger(__name__)
             logger.warning(f"Failed to append iteration index: {e}")
 
+    def _record_active_agent_cli(
+        self,
+        *,
+        agent_name: str,
+        agent_cli: Optional[str],
+        model: Optional[str],
+        phase_specific_data: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Remember the last successful CLI for chat handoff resolution."""
+        if not agent_cli:
+            return
+        issue_dir = getattr(self, "issue_dir", None)
+        if issue_dir is None:
+            return
+
+        active_file = Path(issue_dir) / "active_clis.json"
+        try:
+            if active_file.exists():
+                raw = json.loads(active_file.read_text(encoding="utf-8"))
+                data = raw if isinstance(raw, dict) else {}
+            else:
+                data = {}
+
+            extra = phase_specific_data or {}
+            data[agent_name] = {
+                "cli": agent_cli,
+                "model": model,
+                "step_name": extra.get("step_name"),
+                "updated_at": datetime.now().astimezone().isoformat(),
+            }
+            active_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:
+            logger.debug("failed to record active CLI for %s: %s", agent_name, exc)
+
     def _get_iteration_dir(self, iteration: int) -> Path:
         """Get iteration directory path.
 
@@ -592,18 +627,56 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
 
         # Track model separately (use latest value, don't accumulate)
         model: Optional[str] = None
+        execution_phase_name = None
+        if phase_specific_data:
+            raw_step_name = phase_specific_data.get("step_name")
+            if isinstance(raw_step_name, str):
+                execution_phase_name = raw_step_name
+        if execution_phase_name is None:
+            execution_phase_name = getattr(self, "phase_name", None)
 
         try:
+            execute_kwargs = {
+                "allowed_tools": allowed_tools,
+                "allowed_directories": allowed_directories,
+                "streaming_output_file": str(streaming_jsonl_file),
+            }
+            execute_signature = inspect.signature(self.agent_manager.execute)
+            if (
+                "phase_name" in execute_signature.parameters
+                or any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD
+                    for param in execute_signature.parameters.values()
+                )
+            ):
+                execute_kwargs["phase_name"] = execution_phase_name
+
             response, token_usage, permission_denials, cli_command_args, streaming_log, model = self.agent_manager.execute(
                 agent_name,
                 prompt,
-                allowed_tools=allowed_tools,
-                allowed_directories=allowed_directories,
-                streaming_output_file=str(streaming_jsonl_file),
+                **execute_kwargs,
             )
 
-            # Update session_id after execution (in case it was created during execution)
-            agent_session_id = agent_executor.config.session_id
+            actual_agent_cli = getattr(self.agent_manager, "get_last_cli", lambda: None)()
+            if (
+                actual_agent_cli is not None
+                and hasattr(actual_agent_cli, "value")
+                and isinstance(actual_agent_cli.value, str)
+            ):
+                agent_cli = actual_agent_cli.value
+
+            actual_session_id = getattr(self.agent_manager, "get_last_session_id", lambda: None)()
+            if isinstance(actual_session_id, str):
+                agent_session_id = actual_session_id
+            elif isinstance(agent_executor.config.session_id, str):
+                agent_session_id = agent_executor.config.session_id
+
+            self._record_active_agent_cli(
+                agent_name=agent_name,
+                agent_cli=agent_cli,
+                model=model,
+                phase_specific_data=phase_specific_data,
+            )
 
             # Accumulate token usage for this iteration
             accumulate_token_usage(cumulative_token_usage, token_usage)
@@ -620,7 +693,7 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
             is_critical_error = (
                 isinstance(e, AgentExecutionError) and 
                 hasattr(e, "error_type") and 
-                e.error_type in ("rate_limit", "cli_not_found")
+                e.error_type in ("rate_limit", "cli_not_found", "cli_unavailable", "model_not_found")
             )
             
             if is_critical_error:
@@ -1299,7 +1372,7 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
                 ) or ""
         for complete_code in complete_status_codes:
             if status_code_value == complete_code.value:
-                self._cleanup_codex_approved_rules()
+                self._cleanup_sandbox_approval_artifacts()
                 # Completed, return result
                 token_usage = self.agent_manager.get_total_token_usage()
                 return PhaseResult(
@@ -1526,7 +1599,7 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
         # Handle complete codes (e.g., CONFIRMED)
         # For CONFIRMED status, print token usage and return completed result
         if status_code == PhaseStatusCode.CONFIRMED:
-            self._cleanup_codex_approved_rules()
+            self._cleanup_sandbox_approval_artifacts()
             self._print_token_usage_summary()
 
             token_usage = self.agent_manager.get_total_token_usage()
@@ -1559,7 +1632,7 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
         # Both interactive and non-interactive: complete immediately
         # If user wants to continue, they can run the command again manually
         if status_code in complete_codes:
-            self._cleanup_codex_approved_rules()
+            self._cleanup_sandbox_approval_artifacts()
             self._print_token_usage_summary()
             token_usage = self.agent_manager.get_total_token_usage()
             result_data = {
@@ -1588,7 +1661,7 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
         # Handle continue codes (e.g., NEED_CLARIFICATION)
         # After removing while loops: complete immediately, user runs command again manually if needed
         if status_code in continue_codes:
-            self._cleanup_codex_approved_rules()
+            self._cleanup_sandbox_approval_artifacts()
             self._print_token_usage_summary()
             token_usage = self.agent_manager.get_total_token_usage()
             result_data = {
@@ -1632,4 +1705,3 @@ class Phase(PhaseStateMixin, PhaseCodexMixin, PhaseReviewMixin, PhaseChecklistMi
 
         # Unknown status code - continue
         return None
-
