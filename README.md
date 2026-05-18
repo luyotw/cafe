@@ -159,51 +159,111 @@ cafe --help
 
 > Please ensure you have installed the prerequisites from the [System Requirements](#system-requirements) section and at least one Agent CLI tool.
 
-1.  **Initialize CAFE settings**:
+1.  **Initialize CAFE**:
     ```bash
     cafe init
     ```
-    This command will guide you through selecting the Agent CLI tools and configuring the three roles (PM, Developer, Reviewer).
+    This guides you through crew setup (selecting a preset or customizing CLI/model per role) and project settings. For non-interactive init:
+    ```bash
+    cafe init --preset default
+    ```
 
 2.  **Start the development workflow**:
     ```bash
-    # Initialize the issue environment
     cafe prepare
     ```
-
     Switch to the worktree path if set, then:
     ```bash
-    # Start or continue the full automated workflow
     cafe make
     ```
 
-3.  **Finalize and sync back to original branch**:
-    You merge the PR manually on GitHub (or do nothing in local review mode), then:
-
+3.  **Finalize and sync back**:
     ```bash
     cafe close
     ```
-    This command updates the original branch, removes the feature branch and worktree, and backs up related environment files.
 
-5.  **Multiple CLI agents configuration**:
-    You can adjust the CLI agent settings at any time using the `cafe config` command set. For example:
+### Crew Configuration
 
-    ```bash
-    cafe config set agents.developer.cli gemini
-    cafe config set agents.developer.plan.model gemini-3-pro-preview
-    ```
+Crew configuration lives in `.cafe/crew.yaml` and defines which CLI agent each role uses, with per-role fallback chains and model settings.
 
-    To view the current configuration:
-    ```bash
-    cafe config
-    ```
+**View current crew:**
+```bash
+cafe crew list
+```
 
-    Or to edit the configuration file directly in your default editor:
-    ```bash
-    cafe config edit
-    ```
+**Set primary CLI for all roles (non-interactive):**
+```bash
+# Via preset
+cafe crew set-primary --preset claude-opus
 
-    > **Note**: In `worktree` mode, each worktree maintains an independent configuration, allowing for isolated agent settings per development task.
+# Or specify CLI + model + phase overrides directly
+cafe crew set-primary --cli codex --model gpt-5.5 \
+  --phase-model developer.plan=gpt-5.5 \
+  --phase-model developer.develop=gpt-5.3-codex
+```
+
+**Set primary CLI (interactive):**
+```bash
+cafe crew set-primary
+```
+Detects installed CLIs, offers matching presets, previews the resolved config, and applies your choice.
+
+**Configure fallback chains:**
+```bash
+# Interactive: per-role chain editor (add/remove/reorder entries)
+cafe crew set-fallback
+
+# Non-interactive: add a fallback entry
+cafe crew set-fallback --role developer --add codex,gpt-5.5
+
+# Non-interactive: remove a fallback entry
+cafe crew set-fallback --role developer --remove codex
+```
+
+When the primary CLI hits a rate limit or is not found, CAFE automatically tries the next CLI in the role's fallback chain.
+
+**crew.yaml schema:**
+```yaml
+developer:
+  name: David
+  clis:
+    - cli: claude            # Primary
+      model: opus            # Default model for this entry
+      plan: sonnet           # Phase override (plan phase uses sonnet)
+      develop: sonnet
+    - cli: codex             # First fallback
+      model: o4-mini
+    - cli: cursor-agent      # Second fallback
+```
+
+### Project Settings
+
+Project settings (playbook, rigor, auto-update) live in `.cafe/config.yaml` and are managed separately from crew config:
+
+```bash
+# Interactive
+cafe setup
+
+# Non-interactive
+cafe setup --playbook default --rigor high --auto-update
+```
+
+### Presets
+
+Built-in presets provide ready-made crew configurations:
+```bash
+cafe preset list            # List available presets
+cafe preset save my-team    # Save current crew as a reusable preset
+```
+
+### Multiple Worktrees
+
+In worktree mode, each worktree maintains independent configuration:
+```bash
+cafe prepare --worktree .cafe/worktrees/issue42
+cd .cafe/worktrees/issue42
+cafe make
+```
 
 ## Core Architecture
 
@@ -244,8 +304,13 @@ You can create and manage custom templates with the `cafe template` command set.
 CAFE provides additional commands for managing issues and viewing execution details:
 
 #### Project Setup
-- `cafe init` - Initialize CAFE configuration for the project
-- `cafe setup` - Reconfigure agent roles (CLI, agent, and model assignments) with back navigation support
+- `cafe init` - Initialize CAFE (crew + settings + default agents/templates). Use `--preset` for non-interactive init
+- `cafe setup` - Configure project settings (playbook, rigor, auto-update) in config.yaml
+- `cafe crew list` - Display resolved crew configuration (role → CLI chain → models)
+- `cafe crew set-primary` - Set primary CLI for all roles (interactive or `--preset`/`--cli`/`--phase-model` flags)
+- `cafe crew set-fallback` - Edit per-role fallback chains (interactive or `--role --add/--remove` flags)
+- `cafe preset list` - List available crew presets
+- `cafe preset save <name>` - Save current crew as a reusable preset
 
 #### Workflow Execution
 - `cafe prepare` - Prepare issue environment (creates worktree, initializes config and git branch)
