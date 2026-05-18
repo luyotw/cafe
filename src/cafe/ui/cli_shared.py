@@ -650,6 +650,215 @@ def _handle_user_phase(
         "pr": "Refresh PR output",
     }
     summary = getattr(blackboard, "handoff_summary", "").strip()
+
+    # Check if this is a review-confirmation handoff from spec/plan.
+    # When the handoff intent is confirm_output, show the output and
+    # offer Confirm / Request modification instead of the generic menu.
+    store = BlackboardStore(issue_dir)
+    contract = getattr(blackboard, "handoff_contract", None)
+    handoff_intent = getattr(contract, "intent", None) if contract else None
+    from_step = getattr(contract, "from_step", None) if contract else None
+
+    if handoff_intent == HandoffIntent.CONFIRM_OUTPUT and from_step in {"spec", "plan"}:
+        return _handle_review_confirmation(
+            issue_name=issue_name,
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+            store=store,
+            from_step=from_step,
+            phase_labels=phase_labels,
+            summary=summary,
+        )
+
+    # Default generic user-phase menu
+    return _handle_user_phase_generic(
+        issue_name=issue_name,
+        issue_dir=issue_dir,
+        playbook_data=playbook_data,
+        blackboard=blackboard,
+        phase_name=phase_name,
+        phase_labels=phase_labels,
+        summary=summary,
+    )
+
+
+def _handle_review_confirmation(
+    *,
+    issue_name: str,
+    issue_dir: Path,
+    playbook_data: Dict[str, Any],
+    blackboard,
+    store: BlackboardStore,
+    from_step: str,
+    phase_labels: Dict[str, str],
+    summary: str,
+) -> Optional[str]:
+    """Handle confirm_output handoff: display output and ask for confirmation."""
+    console.print(f"[yellow]Review requested[/yellow] step={from_step}")
+    if summary:
+        console.print(f"[dim]{summary}[/dim]")
+
+    # Display the output file
+    from_step_dir = issue_dir / from_step
+    output_files = sorted(from_step_dir.glob("iteration_*/output.md")) if from_step_dir.exists() else []
+    if output_files:
+        latest_output = output_files[-1]
+        # Show delta if there's a previous iteration
+        iteration_num = int(latest_output.parent.name.split("_")[1])
+        if iteration_num > 1:
+            prev_output = from_step_dir / f"iteration_{iteration_num - 1:03d}" / "output.md"
+            if prev_output.exists():
+                delta_display = DeltaDisplay()
+                delta_display.display_delta(latest_output, prev_output, console)
+            else:
+                _print_output_file(latest_output)
+        else:
+            _print_output_file(latest_output)
+
+    # Resolve the successor step for the confirmed phase
+    step_def = playbook_data.get("steps", {}).get(from_step, {})
+    transitions = step_def.get("on", {})
+    confirmed_target = transitions.get("await_agent") or transitions.get("confirmed")
+    # Fallback: first transition target that isn't self
+    if not confirmed_target:
+        for target in transitions.values():
+            if target != from_step:
+                confirmed_target = target
+                break
+
+    role_map = {"spec": "pm", "plan": "developer"}.get(from_step, "developer")
+    role_names = playbook_data.get("roles", {})
+    agent_name = role_names.get(role_map, {}).get("default_agent", role_map.capitalize())
+
+    from cafe.ui.inquirer_prompts import prompt_list, prompt_multiline
+
+    while True:
+        choices = [
+            {"name": "Confirm - Continue", "value": "confirm"},
+            {"name": "Request modification - Send feedback", "value": "modify"},
+            {"name": "Open chat with role", "value": "chat"},
+            {"name": "More options...", "value": "more"},
+        ]
+        action = prompt_list(
+            f"{from_step.capitalize()} is ready for review. Please select an option",
+            choices,
+            default=None,
+        )
+
+        if action == "confirm":
+            if confirmed_target and confirmed_target in playbook_data.get("steps", {}):
+                target_step = confirmed_target
+            else:
+                target_step = from_step
+            store.set_current_step(blackboard, target_step)
+            store.set_handoff_summary(blackboard, f"{from_step} confirmed by user")
+            store.update_handoff_contract(
+                blackboard,
+                from_step=from_step,
+                to_owner=HandoffOwner.AGENT,
+                to_step=target_step,
+                intent=HandoffIntent.AWAIT_AGENT,
+                status_code="confirmed",
+                source="user.review_confirmation",
+            )
+            store.record_event(
+                blackboard,
+                "review_confirmed",
+                {"step": from_step, "to_step": target_step},
+            )
+            console.print(f"[green]Confirmed[/green] {from_step} -> {target_step}")
+            return str(target_step)
+
+        if action == "modify":
+            feedback = prompt_multiline(
+                "What changes would you like to request?",
+                default="",
+            ).strip()
+            if not feedback:
+                feedback = "Please review and revise as needed."
+            store.set_current_step(blackboard, from_step)
+            store.set_handoff_summary(blackboard, f"User requested changes: {feedback}")
+            store.update_handoff_contract(
+                blackboard,
+                from_step=from_step,
+                to_owner=HandoffOwner.AGENT,
+                to_step=from_step,
+                intent=HandoffIntent.NEED_CLARIFICATION,
+                status_code="need_clarification",
+                source="user.review_modification",
+            )
+            # Write feedback as user_input for the next iteration
+            iteration_dirs = sorted(from_step_dir.glob("iteration_*")) if from_step_dir.exists() else []
+            next_iter = len(iteration_dirs) + 1
+            next_iter_dir = from_step_dir / f"iteration_{next_iter:03d}"
+            next_iter_dir.mkdir(parents=True, exist_ok=True)
+            (next_iter_dir / "user_input.md").write_text(feedback, encoding="utf-8")
+            store.record_event(
+                blackboard,
+                "review_modification_requested",
+                {"step": from_step, "feedback": feedback},
+            )
+            console.print(f"[yellow]Modification requested[/yellow] -> back to {from_step}")
+            return str(from_step)
+
+        if action == "chat":
+            from cafe.ui.cli import launch_chat_session as _lcs
+            _lcs(role_map, issue_name)
+            from cafe.ui.cli import _consume_pending_chat_handoff as _cpch
+            target_step = _cpch(
+                issue_dir=issue_dir,
+                playbook_data=playbook_data,
+                requested_start_step=None,
+            )
+            if target_step is not None:
+                store.set_handoff_summary(
+                    blackboard,
+                    f"chat handed workflow to {target_step}",
+                )
+                return target_step
+            # Chat didn't produce a handoff; re-display output and re-ask
+            if output_files:
+                _print_output_file(output_files[-1])
+            continue
+
+        if action == "more":
+            # Fall through to the generic user-phase menu
+            return _handle_user_phase_generic(
+                issue_name=issue_name,
+                issue_dir=issue_dir,
+                playbook_data=playbook_data,
+                blackboard=blackboard,
+                phase_name="user",
+                phase_labels=phase_labels,
+                summary=summary,
+            )
+
+    return None
+
+
+def _print_output_file(output_file: Path) -> None:
+    """Print the content of an output.md file to the console."""
+    if output_file.exists():
+        content = output_file.read_text(encoding="utf-8")
+        console.print()
+        console.print(f"[bold]{'=' * 60}[/bold]")
+        console.print(content)
+        console.print(f"[bold]{'=' * 60}[/bold]")
+        console.print()
+
+
+def _handle_user_phase_generic(
+    *,
+    issue_name: str,
+    issue_dir: Path,
+    playbook_data: Dict[str, Any],
+    blackboard,
+    phase_name: str,
+    phase_labels: Dict[str, str],
+    summary: str,
+) -> Optional[str]:
+    """Generic user-phase menu (original _handle_user_phase behavior)."""
     if phase_name == "done":
         console.print("[green]Workflow already completed[/green] step=done")
         console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
