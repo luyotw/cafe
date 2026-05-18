@@ -1,7 +1,7 @@
 """Configuration management for CAFE."""
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import subprocess
 import yaml
 import json
@@ -12,6 +12,17 @@ from cafe.core.types import AgentCLI
 
 class ConfigError(Exception):
     """Configuration error."""
+
+
+def validate_directories_exist(dirs: List[str], base_dir: Path) -> None:
+    """Verify each directory in dirs exists under base_dir.
+
+    Raises:
+        ConfigError: if any entry is missing or is not a directory, listing all missing names.
+    """
+    missing = [d for d in dirs if not (base_dir / d).is_dir()]
+    if missing:
+        raise ConfigError(f"Allowed directories not found: {', '.join(missing)}")
 
     pass
 
@@ -253,6 +264,17 @@ class ConfigManager:
             else:
                 return default
 
+        return value
+
+    def get_allowed_directories(self) -> List[str]:
+        """Return the project-level allowed_directories list from config.
+
+        Returns an empty list when the key is absent or not a list, so callers
+        never need to guard against None or unexpected types.
+        """
+        value = self.get("allowed_directories", [])
+        if not isinstance(value, list):
+            return []
         return value
 
     def set(self, key: str, value: Any) -> None:

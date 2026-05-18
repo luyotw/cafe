@@ -453,3 +453,82 @@ class TestConfigUnicodeHandling:
         for agent_type in ["developer", "pm", "reviewer"]:
             assert original_config["agents"][agent_type]["name"] == loaded_once["agents"][agent_type]["name"]
             assert original_config["agents"][agent_type]["name"] == loaded_twice["agents"][agent_type]["name"]
+
+
+class TestGetAllowedDirectories:
+    """Test ConfigManager.get_allowed_directories()."""
+
+    def test_get_allowed_directories_returns_list_from_config(self, tmp_path: Path) -> None:
+        """config.yaml 含 allowed_directories 時應回傳對應 list。"""
+        config_dir = tmp_path / ".cafe"
+        config_dir.mkdir()
+        (config_dir / "config.yaml").write_text(
+            "agents: {}\nallowed_directories:\n  - src\n  - tests\n"
+        )
+        manager = ConfigManager(config_dir=str(config_dir))
+        manager.load_config()
+        assert manager.get_allowed_directories() == ["src", "tests"]
+
+    def test_get_allowed_directories_returns_empty_when_missing(self, tmp_path: Path) -> None:
+        """config.yaml 未含 allowed_directories 時應回傳空 list。"""
+        config_dir = tmp_path / ".cafe"
+        config_dir.mkdir()
+        (config_dir / "config.yaml").write_text("agents: {}\n")
+        manager = ConfigManager(config_dir=str(config_dir))
+        manager.load_config()
+        assert manager.get_allowed_directories() == []
+
+    def test_get_allowed_directories_returns_empty_when_invalid_type(self, tmp_path: Path) -> None:
+        """allowed_directories 為 null 或非 list 時應回傳空 list，不拋例外。"""
+        config_dir = tmp_path / ".cafe"
+        config_dir.mkdir()
+        (config_dir / "config.yaml").write_text("agents: {}\nallowed_directories: null\n")
+        manager = ConfigManager(config_dir=str(config_dir))
+        manager.load_config()
+        assert manager.get_allowed_directories() == []
+
+        (config_dir / "config.yaml").write_text("agents: {}\nallowed_directories: src\n")
+        manager2 = ConfigManager(config_dir=str(config_dir))
+        manager2.load_config()
+        assert manager2.get_allowed_directories() == []
+
+
+class TestValidateDirectoriesExist:
+    """Test validate_directories_exist()."""
+
+    def test_validate_directories_exist_passes_when_all_exist(self, tmp_path: Path) -> None:
+        """全部目錄存在時不拋例外。"""
+        from cafe.utils.config import validate_directories_exist
+        (tmp_path / "src").mkdir()
+        (tmp_path / "tests").mkdir()
+        validate_directories_exist(["src", "tests"], tmp_path)  # must not raise
+
+    def test_validate_directories_exist_raises_when_missing(self, tmp_path: Path) -> None:
+        """有目錄不存在時拋 ConfigError，訊息含缺失名稱。"""
+        from cafe.utils.config import validate_directories_exist
+        (tmp_path / "src").mkdir()
+        with pytest.raises(ConfigError) as exc_info:
+            validate_directories_exist(["src", "nope"], tmp_path)
+        assert "nope" in str(exc_info.value)
+
+    def test_validate_directories_exist_lists_all_missing(self, tmp_path: Path) -> None:
+        """多個目錄不存在時，例外訊息同時含所有缺失項目。"""
+        from cafe.utils.config import validate_directories_exist
+        with pytest.raises(ConfigError) as exc_info:
+            validate_directories_exist(["alpha", "beta"], tmp_path)
+        msg = str(exc_info.value)
+        assert "alpha" in msg
+        assert "beta" in msg
+
+    def test_validate_directories_exist_treats_file_as_missing(self, tmp_path: Path) -> None:
+        """路徑存在但為檔案（非目錄）時視為缺失。"""
+        from cafe.utils.config import validate_directories_exist
+        (tmp_path / "notadir").write_text("content")
+        with pytest.raises(ConfigError) as exc_info:
+            validate_directories_exist(["notadir"], tmp_path)
+        assert "notadir" in str(exc_info.value)
+
+    def test_validate_directories_exist_noop_for_empty_list(self, tmp_path: Path) -> None:
+        """空 list 時不拋例外。"""
+        from cafe.utils.config import validate_directories_exist
+        validate_directories_exist([], tmp_path)  # must not raise
