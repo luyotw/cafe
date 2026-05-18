@@ -268,26 +268,14 @@ class GenericWorkflowStepExecutor(Phase):
             for event in execution.events
             if isinstance(event, dict)
         )
-        # READY_FOR_REVIEW / CONFIRM_OUTPUT always auto-continues:
-        # - Interactive: stays in the agent loop so UserInputCollector can
-        #   prompt the user for confirmation on the next iteration.
-        # - Non-interactive: auto-confirms and advances to the successor step.
-        if (
-            require_status_code
-            and status_code in {PhaseStatusCode.READY_FOR_REVIEW, PhaseStatusCode.CONFIRM_OUTPUT}
-        ):
-            auto_continue = True
+        # READY_FOR_REVIEW / CONFIRM_OUTPUT / NEED_CLARIFICATION always
+        # hand off to the user step.  In interactive mode the user sees
+        # output and confirm/modify options via _handle_user_phase.  In
+        # non-interactive mode the workflow stops and the caller provides
+        # input via --user-input.
+        # auto_continue stays False → handoff to user.
 
-        # In non-interactive mode, READY_FOR_REVIEW / CONFIRM_OUTPUT should
-        # transition as if CONFIRMED so the workflow advances instead of
-        # looping back to the same step (confirm_output → self in playbook).
         effective_status = status_code
-        if (
-            auto_continue
-            and not self.interactive
-            and status_code in {PhaseStatusCode.READY_FOR_REVIEW, PhaseStatusCode.CONFIRM_OUTPUT}
-        ):
-            effective_status = PhaseStatusCode.CONFIRMED
 
         events = [
             event
@@ -697,8 +685,6 @@ class GenericWorkflowStepExecutor(Phase):
         """
         event_type = event.get("type")
         if event_type == "review_modification_requested":
-            return True
-        if event_type == "auto_confirmed":
             return True
         if event_type != "user_input_collected":
             return False

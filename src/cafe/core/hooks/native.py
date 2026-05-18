@@ -262,19 +262,9 @@ class UserInputCollector(NoOpHook):
             return HookResult()
 
         # Non-interactive mode: cannot call InquirerPy prompts.
-        # Auto-confirm ready_for_review so the workflow can advance.
-        # need_clarification does NOT auto-answer — the workflow stops at
-        # the user step and the caller provides input via --user-input.
+        # Return empty result — the workflow stops at the user step and the
+        # caller provides input via --user-input on resume.
         if not getattr(phase, "interactive", False):
-            if previous_status == "ready_for_review":
-                return HookResult(
-                    continue_pipeline=False,
-                    override_status_code=PhaseStatusCode.CONFIRMED,
-                    events=[
-                        {"type": "review_confirmed", "step": step_name},
-                        {"type": "auto_confirmed", "step": step_name, "reason": "non-interactive"},
-                    ],
-                )
             return HookResult()
 
         prompt_role = {"pm": "pm", "reviewer": "reviewer"}.get(role, "developer")

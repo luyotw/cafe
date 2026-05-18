@@ -257,14 +257,13 @@ def test_generic_workflow_step_writes_review_pause_contract(tmp_path: Path, monk
 
     result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
-    # Interactive: READY_FOR_REVIEW auto-continues to let UserInputCollector
-    # prompt on the next iteration; the baton points back to spec (agent loop).
+    # Interactive: READY_FOR_REVIEW hands off to user step for confirmation
     assert result.status_code == "ready_for_review"
-    assert result.auto_continue is True
+    assert result.auto_continue is False
     reloaded = BlackboardStore(issue_dir).load_or_create("spec")
     assert reloaded.handoff_contract is not None
-    assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
-    assert reloaded.handoff_contract.to_step == "spec"
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
+    assert reloaded.handoff_contract.to_step == "user"
 
 
 def test_generic_workflow_step_auto_confirms_review_in_non_interactive(tmp_path: Path, monkeypatch) -> None:
@@ -304,13 +303,13 @@ def test_generic_workflow_step_auto_confirms_review_in_non_interactive(tmp_path:
 
     result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
-    # Non-interactive: READY_FOR_REVIEW is treated as CONFIRMED
-    assert result.status_code == "confirmed"
-    assert result.auto_continue is True
+    # Non-interactive: READY_FOR_REVIEW hands off to user step
+    assert result.status_code == "ready_for_review"
+    assert result.auto_continue is False
     reloaded = BlackboardStore(issue_dir).load_or_create("spec")
     assert reloaded.handoff_contract is not None
-    assert reloaded.handoff_contract.to_step == "plan"
-    assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
+    assert reloaded.handoff_contract.to_step == "user"
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
 
 
 def test_generic_workflow_step_does_not_retry_for_legacy_status_tokens(tmp_path: Path, monkeypatch) -> None:
@@ -900,7 +899,7 @@ def test_generic_workflow_step_auto_continues_pause_statuses_in_interactive_mode
     result = executor.execute_step("plan", playbook["steps"]["plan"], state)
 
     assert result.response == "ready_for_review"
-    assert result.auto_continue is True
+    assert result.auto_continue is False
 
 
 def test_generic_workflow_step_keeps_missing_status_without_continue_prompt(tmp_path: Path, monkeypatch) -> None:
