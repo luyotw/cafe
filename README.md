@@ -248,6 +248,18 @@ cafe setup
 cafe setup --playbook default --rigor high --auto-update
 ```
 
+You can also grant every workflow agent access to additional project directories:
+
+```yaml
+# .cafe/config.yaml
+allowed_directories:
+  - src
+  - tests
+```
+
+For a one-off run, append directories with `cafe make --add-dir scripts --add-dir docs`.
+Configured and CLI-provided directories must exist before the workflow starts.
+
 ### Presets
 
 Built-in presets provide ready-made crew configurations:

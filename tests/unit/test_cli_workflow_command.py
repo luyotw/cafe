@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.ui.cli import app, _execute_single_step_alias, _find_external_resume_step
+from cafe.ui.cli_shared import _build_workflow_step_executor
 from cafe.utils.config import ConfigManager
 
 
@@ -182,6 +183,64 @@ def test_workflow_command_passes_initial_user_input_to_spec_step(tmp_path: Path,
     assert mock_builder.call_args.kwargs["step_user_inputs"] == {
         "spec": "As a user, I want a smoke-test workflow."
     }
+
+
+def test_build_workflow_step_executor_passes_allowed_directories(tmp_path: Path, monkeypatch) -> None:
+    """Builder should read config dirs and preserve CLI-provided dirs on the executor."""
+    monkeypatch.chdir(tmp_path)
+    cafe_dir = tmp_path / ".cafe"
+    cafe_dir.mkdir()
+    config_manager = ConfigManager(str(cafe_dir))
+    config_manager._config = {
+        "agents": {
+            "pm": {"name": "Roger", "cli": "claude"},
+            "developer": {"name": "David", "cli": "claude"},
+            "reviewer": {"name": "Richard", "cli": "claude"},
+        },
+        "allowed_directories": ["src"],
+    }
+
+    with (
+        patch("cafe.ui.cli_shared.setup_agents", return_value=MagicMock()),
+        patch("cafe.ui.cli_shared._get_git_operations_cls", return_value=MagicMock),
+    ):
+        executor = _build_workflow_step_executor(
+            config_manager=config_manager,
+            issue_dir=tmp_path / ".cafe" / "issues" / "issue-dirs",
+            issue_name="issue-dirs",
+            playbook_data={"playbook": {"id": "default"}, "roles": {}, "steps": {}},
+            generic_phase=MagicMock(),
+            extra_allowed_directories=["docs"],
+        )
+
+    assert executor._config_allowed_directories == ["src"]
+    assert executor._extra_allowed_directories == ["docs"]
+
+
+def test_workflow_accepts_add_dir_and_passes_through(tmp_path: Path, monkeypatch) -> None:
+    """workflow --add-dir should validate the directory and pass it to the builder."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "src").mkdir()
+
+    class FakeExecutor:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()) as mock_builder,
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-add-dir"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "default", "--execute", "--single-step", "--add-dir", "src"],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert mock_builder.call_args.kwargs["extra_allowed_directories"] == ["src"]
 
 
 def test_workflow_command_prints_pr_url_when_pr_step_reports_sync_event(tmp_path: Path, monkeypatch) -> None:

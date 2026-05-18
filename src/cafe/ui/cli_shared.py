@@ -434,6 +434,7 @@ def _build_workflow_step_executor(
     role_agent_map_override: Optional[Dict[str, str]] = None,
     step_user_inputs: Optional[Dict[str, str]] = None,
     interactive: bool = False,
+    extra_allowed_directories: Optional[List[str]] = None,
 ) -> GenericWorkflowStepExecutor:
     """Create the GenericPhase-backed executor for workflow steps."""
     role_agent_map = _build_workflow_role_agent_map(config_manager, playbook_data)
@@ -465,6 +466,8 @@ def _build_workflow_step_executor(
         role_configs=role_configs,
         step_user_inputs=step_user_inputs,
         interactive=interactive,
+        config_allowed_directories=config_manager.get_allowed_directories(),
+        extra_allowed_directories=extra_allowed_directories,
     )
 
 

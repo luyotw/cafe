@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import typer
 from rich.console import Console
@@ -24,7 +24,7 @@ from cafe.ui.cli_shared import (
     resolve_iteration_number as _resolve_iteration_number,
 )
 from cafe.agents.executor import AgentExecutionError
-from cafe.utils.config import ConfigError
+from cafe.utils.config import ConfigError, validate_directories_exist
 
 # Lazy access to GitOperations via cli for backward-compat test patching.
 def _get_GitOperations():
@@ -99,6 +99,16 @@ def _resolve_selected_playbook(*a, **kw):
 console = Console()
 
 
+def _validate_allowed_directories(config_manager: Any, add_dir: List[str]) -> None:
+    """Validate config.yaml and CLI-provided allowed directories."""
+    configured = config_manager.get_allowed_directories()
+    if not isinstance(configured, list):
+        configured = []
+    cli_dirs = add_dir if isinstance(add_dir, list) else []
+    requested = list(dict.fromkeys([*configured, *cli_dirs]))
+    validate_directories_exist(requested, Path.cwd())
+
+
 def set_runtime(runtime_globals: Dict[str, Any]) -> None:
     """No-op retained for backward compatibility.
 
@@ -130,6 +140,11 @@ def make(
         "--fallback-preset",
         help="Crew preset to switch to when primary CLI hits rate_limit or cli_not_found",
     ),
+    add_dir: List[str] = typer.Option(
+        [],
+        "--add-dir",
+        help="Additional allowed directories (can be specified multiple times)",
+    ),
 ) -> None:
     """🚀 Check environment and execute complete development workflow.
 
@@ -147,6 +162,7 @@ def make(
         cafe make --user-input "As a user, I want to export CSV reports."
     """
     # Load configuration
+    add_dir_values = add_dir if isinstance(add_dir, list) else []
     config_manager = _get_ConfigManager()(Path(config_file).parent)
     config_manager.load_config()
 
@@ -173,6 +189,12 @@ def make(
         )
         raise typer.Exit(1)
 
+    try:
+        _validate_allowed_directories(config_manager, add_dir_values)
+    except ConfigError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
     # All CLIs available, execute cafe workflow --execute
     console.print("[green]✓ All agent CLI tools are installed[/green]")
     console.print()
@@ -185,6 +207,8 @@ def make(
         cmd.extend(["--user-input", user_input])
     if fallback_preset:
         cmd.extend(["--fallback-preset", fallback_preset])
+    for directory in add_dir_values:
+        cmd.extend(["--add-dir", directory])
 
     # Execute the command
     timeout_sec = timeout if timeout > 0 else None
@@ -440,6 +464,11 @@ def workflow(
         "--fallback-preset",
         help="Crew preset to switch to when primary CLI hits rate_limit or cli_not_found",
     ),
+    add_dir: List[str] = typer.Option(
+        [],
+        "--add-dir",
+        help="Additional allowed directories (can be specified multiple times)",
+    ),
 ) -> None:
     """Run playbook workflow using the new generic runner."""
     try:
@@ -477,6 +506,12 @@ def workflow(
             config_manager.load_config()
         except ConfigError:
             config_manager._config = config_manager.get_default_config()
+        add_dir_values = add_dir if isinstance(add_dir, list) else []
+        try:
+            _validate_allowed_directories(config_manager, add_dir_values)
+        except ConfigError as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1)
 
         playbook_loader = PlaybookLoader()
         playbook_data = playbook_loader.load(selected_playbook)
@@ -522,6 +557,7 @@ def workflow(
                 generic_phase=generic_phase,
                 step_user_inputs={"spec": user_input} if user_input else None,
                 interactive=interactive,
+                extra_allowed_directories=add_dir_values,
             ),
             "fallback_applied": False,
         }
@@ -544,6 +580,7 @@ def workflow(
                 generic_phase=generic_phase,
                 step_user_inputs={"spec": user_input} if user_input else None,
                 interactive=interactive,
+                extra_allowed_directories=add_dir_values,
             )
             _executor_holder["fallback_applied"] = True
 
