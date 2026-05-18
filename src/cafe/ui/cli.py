@@ -22,6 +22,7 @@ from cafe.ui.commands import catalog as catalog_commands
 from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.commands import audit as audit_commands
 from cafe.ui.commands import preset as preset_commands
+from cafe.ui.commands import crew as crew_commands
 from cafe.ui.cli_shared import (
     CONTENT_TYPE_FILE_MAP as _SHARED_CONTENT_TYPE_FILE_MAP,
     VALID_CONTENT_TYPES as _SHARED_VALID_CONTENT_TYPES,
@@ -1001,6 +1002,9 @@ app.add_typer(catalog_commands.skill_app, name="skill")
 
 # Preset management commands
 app.add_typer(preset_commands.app, name="preset")
+
+# Crew management commands
+app.add_typer(crew_commands.crew_app, name="crew")
 
 
 def _print_agents(custom_only: bool = False) -> None:
