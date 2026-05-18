@@ -67,7 +67,8 @@ def _update_role_clis(crew_data: Dict[str, Any], role: str, clis: List[Dict[str,
         crew_data[role] = {}
         role_cfg = crew_data[role]
     # Remove old-format keys if present
-    for old_key in ("cli", "model", "backup", "models"):
+    _OLD_ROLE_KEYS = {"cli", "model", "backup", "models", "spec", "plan", "develop", "review", "pr"}
+    for old_key in _OLD_ROLE_KEYS:
         role_cfg.pop(old_key, None)
     role_cfg["clis"] = clis
 
@@ -229,11 +230,29 @@ def set_primary(
         "--preset",
         help="Preset name to apply directly (non-interactive).",
     ),
+    cli: Optional[str] = typer.Option(
+        None,
+        "--cli",
+        help="Primary CLI for all roles (non-interactive, applies to every role).",
+    ),
+    model: Optional[str] = typer.Option(
+        None,
+        "--model",
+        help="Default model for all roles (used with --cli).",
+    ),
+    phase_model: Optional[List[str]] = typer.Option(
+        None,
+        "--phase-model",
+        help="Phase model override as role.phase=model (e.g. developer.plan=opus). Repeatable.",
+    ),
 ) -> None:
-    """Set the primary CLI for all roles via preset selection.
+    """Set the primary CLI for all roles via preset selection or per-role flags.
 
-    Without --preset runs an interactive flow to detect installed CLIs,
+    Without flags runs an interactive flow to detect installed CLIs,
     preview matching presets, and apply the selection.
+
+    Use --cli to set a single CLI for all roles (non-interactive).
+    Use --preset to apply a named preset (non-interactive).
     """
     cafe_dir = Path(".cafe")
 
@@ -245,6 +264,52 @@ def set_primary(
         except PresetNotFoundError as e:
             console.print(f"[red]Error: {e}[/red]")
             raise typer.Exit(1)
+        return
+
+    if cli:
+        from cafe.core.types import AgentCLI
+
+        try:
+            AgentCLI(cli)
+        except ValueError:
+            valid = [c.value for c in AgentCLI]
+            console.print(f"[red]Error: '{cli}' is not a supported CLI. Valid: {valid}[/red]")
+            raise typer.Exit(1)
+
+        # Parse phase model overrides: role.phase=model
+        phase_overrides: Dict[str, Dict[str, str]] = {}
+        if phase_model:
+            for spec in phase_model:
+                if "=" not in spec:
+                    console.print(f"[red]Error: --phase-model must be role.phase=model, got '{spec}'[/red]")
+                    raise typer.Exit(1)
+                key, _, val = spec.partition("=")
+                if "." not in key:
+                    console.print(f"[red]Error: --phase-model key must be role.phase, got '{key}'[/red]")
+                    raise typer.Exit(1)
+                role_key, _, phase_key = key.partition(".")
+                if role_key not in _ROLES:
+                    console.print(f"[red]Error: Unknown role '{role_key}'. Valid: {_ROLES}[/red]")
+                    raise typer.Exit(1)
+                phase_overrides.setdefault(role_key, {})[phase_key] = val
+
+        crew_data = _load_crew_data(cafe_dir)
+        for role in _ROLES:
+            existing_clis = _get_role_chain_as_clis(crew_data, role)
+            existing_fallback = existing_clis[1:] if len(existing_clis) > 1 else []
+
+            new_primary: Dict[str, Any] = {"cli": cli}
+            if model:
+                new_primary["model"] = model
+            # Merge phase model overrides for this role
+            if role in phase_overrides:
+                new_primary.update(phase_overrides[role])
+
+            new_clis = [new_primary] + existing_fallback
+            _update_role_clis(crew_data, role, new_clis)
+
+        _save_crew_data(crew_data, cafe_dir)
+        console.print(f"[green]✓ Set primary CLI to '[cyan]{cli}[/cyan]' for all roles in {cafe_dir}/crew.yaml[/green]")
         return
 
     try:

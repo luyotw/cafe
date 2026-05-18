@@ -145,3 +145,149 @@ class TestCrewSetPrimaryInteractive:
             result = runner.invoke(app, ["crew", "set-primary"])
 
         assert result.exit_code == 0
+
+
+class TestCrewSetPrimaryCliFlags:
+    """Tests for `cafe crew set-primary --cli` non-interactive mode."""
+
+    def test_cli_flag_sets_primary_for_all_roles(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--cli codex sets codex as primary for pm, developer, reviewer."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        crew_file = cafe_dir / "crew.yaml"
+        crew_file.write_text(yaml.dump({
+            "pm": {"name": "Roger", "cli": "claude", "model": "sonnet",
+                   "spec": {"model": "sonnet"}},
+        }))
+
+        result = runner.invoke(app, ["crew", "set-primary", "--cli", "codex", "--model", "gpt-5.5"])
+
+        assert result.exit_code == 0
+        assert "codex" in result.stdout
+
+        crew_data = yaml.safe_load(crew_file.read_text())
+        for role in ["pm", "developer", "reviewer"]:
+            assert role in crew_data
+            clis = crew_data[role]["clis"]
+            assert clis[0]["cli"] == "codex"
+            assert clis[0]["model"] == "gpt-5.5"
+
+    def test_cli_flag_removes_old_format_keys(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--cli cleans up old-format keys (cli, model, spec, plan, etc.)."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        crew_file = cafe_dir / "crew.yaml"
+        crew_file.write_text(yaml.dump({
+            "developer": {"name": "Nick", "cli": "claude", "model": "sonnet",
+                          "plan": {"model": "opus"}, "develop": {"model": "sonnet"}},
+        }))
+
+        result = runner.invoke(app, ["crew", "set-primary", "--cli", "codex"])
+
+        assert result.exit_code == 0
+        crew_data = yaml.safe_load(crew_file.read_text())
+        dev = crew_data["developer"]
+        assert "cli" not in dev
+        assert "model" not in dev
+        assert "plan" not in dev
+        assert "develop" not in dev
+        assert dev["clis"][0]["cli"] == "codex"
+
+    def test_cli_flag_preserves_existing_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--cli keeps existing fallback entries when changing primary."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        crew_file = cafe_dir / "crew.yaml"
+        crew_data = {
+            "developer": {
+                "name": "Nick",
+                "clis": [
+                    {"cli": "claude", "model": "sonnet"},
+                    {"cli": "codex", "model": "o4-mini"},
+                ],
+            },
+        }
+        crew_file.write_text(yaml.dump(crew_data, default_flow_style=False))
+
+        result = runner.invoke(app, ["crew", "set-primary", "--cli", "gemini", "--model", "2.5-pro"])
+
+        assert result.exit_code == 0
+        updated = yaml.safe_load(crew_file.read_text())
+        clis = updated["developer"]["clis"]
+        assert clis[0]["cli"] == "gemini"
+        assert clis[0]["model"] == "2.5-pro"
+        assert clis[1]["cli"] == "codex"
+        assert clis[1]["model"] == "o4-mini"
+
+    def test_phase_model_overrides(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--phase-model developer.plan=opus adds phase override to clis entry."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, [
+            "crew", "set-primary", "--cli", "codex", "--model", "gpt-5.5",
+            "--phase-model", "developer.plan=gpt-5.5",
+            "--phase-model", "developer.develop=gpt-5.3-codex",
+        ])
+
+        assert result.exit_code == 0
+        crew_data = yaml.safe_load((cafe_dir / "crew.yaml").read_text())
+        dev_primary = crew_data["developer"]["clis"][0]
+        assert dev_primary["plan"] == "gpt-5.5"
+        assert dev_primary["develop"] == "gpt-5.3-codex"
+
+    def test_invalid_cli_exits_with_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--cli with unsupported CLI name exits 1."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["crew", "set-primary", "--cli", "nonexistent"])
+
+        assert result.exit_code == 1
+        assert "not a supported CLI" in result.stdout
+
+    def test_invalid_phase_model_format_exits_with_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--phase-model without = or without role.phase exits 1."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, [
+            "crew", "set-primary", "--cli", "codex", "--phase-model", "badformat",
+        ])
+
+        assert result.exit_code == 1
+
+    def test_invalid_phase_model_role_exits_with_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--phase-model with unknown role exits 1."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, [
+            "crew", "set-primary", "--cli", "codex", "--phase-model", "unknown.plan=opus",
+        ])
+
+        assert result.exit_code == 1
