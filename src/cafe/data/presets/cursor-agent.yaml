@@ -1,0 +1,21 @@
+pm:
+  name: Roger
+  cli: cursor-agent
+  spec:
+    model: auto
+
+developer:
+  name: David
+  cli: cursor-agent
+  plan:
+    model: auto
+  develop:
+    model: auto
+  pr:
+    model: auto
+
+reviewer:
+  name: Richard
+  cli: cursor-agent
+  review:
+    model: auto

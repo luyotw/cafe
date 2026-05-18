@@ -18,4 +18,4 @@ reviewer:
   name: Richard
   cli: claude
   review:
-    model: sonnet
+    model: opus

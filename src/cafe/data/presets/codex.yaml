@@ -1,0 +1,22 @@
+pm:
+  name: Roger
+  cli: codex
+  spec:
+    model: gpt-5.5
+
+developer:
+  name: David
+  cli: codex
+  plan:
+    model: gpt-5.5
+  develop:
+    model: gpt-5.3-codex
+  pr:
+    model: gpt-5.4-mini
+
+reviewer:
+  name: Richard
+  cli: codex
+  review:
+    model: gpt-5.5
+
