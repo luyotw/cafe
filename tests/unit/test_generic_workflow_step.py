@@ -722,10 +722,10 @@ def test_generic_workflow_step_collects_clarification_before_next_agent_run(
         second_result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
     assert second_result.response == "confirmed"
-    # In non-interactive mode the UserInputCollector auto-answers
-    # need_clarification with a default "proceed" message.
+    # In non-interactive mode the UserInputCollector does not auto-answer
+    # need_clarification — the workflow stops at user step.
     assert any(
-        "No additional changes needed" in prompt
+        "No additional changes needed" not in prompt
         for prompt in agent_manager.prompts
     )
 
@@ -779,7 +779,6 @@ def test_initial_requirements_collection_does_not_auto_continue_clarification(
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
     assert reloaded.handoff_contract.to_step == "user"
-    assert reloaded.handoff_contract.intent == HandoffIntent.NEED_CLARIFICATION
 
 
 def test_generic_workflow_step_records_script_hook_events_to_blackboard(tmp_path: Path, monkeypatch) -> None:

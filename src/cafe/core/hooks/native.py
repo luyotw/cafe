@@ -262,8 +262,9 @@ class UserInputCollector(NoOpHook):
             return HookResult()
 
         # Non-interactive mode: cannot call InquirerPy prompts.
-        # Auto-confirm ready_for_review and auto-advance need_clarification
-        # with a default response so the workflow does not hang.
+        # Auto-confirm ready_for_review so the workflow can advance.
+        # need_clarification does NOT auto-answer — the workflow stops at
+        # the user step and the caller provides input via --user-input.
         if not getattr(phase, "interactive", False):
             if previous_status == "ready_for_review":
                 return HookResult(
@@ -274,19 +275,7 @@ class UserInputCollector(NoOpHook):
                         {"type": "auto_confirmed", "step": step_name, "reason": "non-interactive"},
                     ],
                 )
-            # need_clarification: provide a generic "proceed" answer
-            auto_answer = "No additional changes needed. Proceed as proposed."
-            phase.step_user_inputs[step_name] = auto_answer
-            return HookResult(
-                context_updates={"user_input": auto_answer},
-                events=[
-                    {
-                        "type": "user_input_collected",
-                        "step": step_name,
-                        "source": "non_interactive_default",
-                    }
-                ],
-            )
+            return HookResult()
 
         prompt_role = {"pm": "pm", "reviewer": "reviewer"}.get(role, "developer")
         previous_output_file = self._get_previous_output_file(phase, step_name)

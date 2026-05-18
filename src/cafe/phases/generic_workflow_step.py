@@ -278,12 +278,6 @@ class GenericWorkflowStepExecutor(Phase):
         ):
             auto_continue = True
 
-        # In interactive mode, NEED_CLARIFICATION auto-continues because the
-        # UserInputCollector hook on the next iteration will prompt the user
-        # and feed the answer into the agent.
-        if require_status_code and self.interactive and status_code == PhaseStatusCode.NEED_CLARIFICATION:
-            auto_continue = True
-
         # In non-interactive mode, READY_FOR_REVIEW / CONFIRM_OUTPUT should
         # transition as if CONFIRMED so the workflow advances instead of
         # looping back to the same step (confirm_output → self in playbook).
@@ -708,7 +702,7 @@ class GenericWorkflowStepExecutor(Phase):
             return True
         if event_type != "user_input_collected":
             return False
-        return event.get("source") in {"questions_xml", "prompt", "user_input_file", "non_interactive_default"}
+        return event.get("source") in {"questions_xml", "prompt", "user_input_file"}
 
     @staticmethod
     def _step_requires_status_code(step_name: str) -> bool:
