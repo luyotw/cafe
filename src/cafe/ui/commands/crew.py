@@ -10,6 +10,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
+from cafe.ui.inquirer_prompts import prompt_confirm, prompt_list, prompt_text
 from cafe.utils.crew import CrewManager, normalize_role_config
 from cafe.utils.preset import PresetManager, PresetNotFoundError
 
@@ -161,7 +162,6 @@ def _render_preset_preview(preset_data: Dict[str, Any]) -> str:
 def run_set_primary_interactive(cafe_dir: Path = Path(".cafe")) -> None:
     """Interactive flow: detect CLIs, pick preset, preview, confirm, apply."""
     from cafe.ui.init_helpers import check_available_clis
-    from cafe.ui.inquirer_prompts import prompt_confirm, prompt_list
 
     available_clis = check_available_clis()
     if not available_clis:
@@ -261,7 +261,6 @@ def set_primary(
 def run_set_fallback_interactive(role: str, cafe_dir: Path = Path(".cafe")) -> None:
     """Interactive editor for the fallback chain of one role."""
     from cafe.ui.init_helpers import check_available_clis
-    from cafe.ui.inquirer_prompts import prompt_confirm, prompt_list, prompt_text
 
     crew_data = _load_crew_data(cafe_dir)
     clis = _get_role_chain_as_clis(crew_data, role)
@@ -429,7 +428,6 @@ def set_fallback(
 
     # Interactive mode
     if not role:
-        from cafe.ui.inquirer_prompts import prompt_list
         role = prompt_list(
             message="Select role to edit:",
             choices=_ROLES,
