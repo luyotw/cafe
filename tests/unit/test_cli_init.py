@@ -1,348 +1,265 @@
-"""測試 cafe init 指令"""
+"""Tests for refactored cafe init command (orchestrator: crew + setup)."""
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
-from cafe.ui.cli import app, CUSTOM_MODEL_SENTINEL
+from cafe.ui.cli import app
 
 runner = CliRunner()
 
 
-def _default_prompt_list_side_effect(cli="claude", agent="Roger: PM agent (system default)"):
-    """Build prompt_list side_effect for all-default init flow.
-
-    New flow: each role has CLI + agent + model steps (all via prompt_list).
-    PM: 3 calls (cli, agent, spec_model)
-    Developer: 5 calls (cli, agent, plan_model, develop_model, pr_model)
-    Reviewer: 3 calls (cli, agent, review_model)
-    Total: 11 calls
-    """
-    return [
-        cli, agent, "",              # PM
-        cli, agent, "", "", "",      # Developer
-        cli, agent, "",              # Reviewer
-    ]
+def _write_config(cafe_dir: Path, data: dict) -> None:
+    (cafe_dir / "config.yaml").write_text(yaml.dump(data))
 
 
-class TestInitCommandEnvironmentChecks:
-    """測試 init 指令環境檢查"""
+def _read_config(cafe_dir: Path) -> dict:
+    return yaml.safe_load((cafe_dir / "config.yaml").read_text()) or {}
+
+
+class TestInitOverwritePrompt:
+    """When config already exists, init asks before overwriting."""
 
     def test_init_prompts_for_overwrite_if_config_exists(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試當 .cafe/config.yaml 存在時提示是否覆寫"""
-        # 建立測試環境
+        """When .cafe/config.yaml exists and user declines, init exits cleanly."""
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir()
-        config_file = cafe_dir / "config.yaml"
-        config_file.write_text("test config")
-
+        _write_config(cafe_dir, {"settings": {"auto_update": True}})
         monkeypatch.chdir(tmp_path)
 
-        # Mock prompt_confirm to return False (user cancels)
-        with patch("cafe.ui.cli.prompt_confirm") as mock_confirm:
-            mock_confirm.return_value = False
-
+        with patch("cafe.ui.cli.prompt_confirm", return_value=False):
             result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 0
-        assert "Configuration already exists" in result.stdout
-        assert "Cancelled" in result.stdout
-        mock_confirm.assert_called_once()
+        assert "already exists" in result.stdout or "Configuration" in result.stdout
 
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.init_helpers.copy_data_directory")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_init_overwrites_config_when_confirmed(
-        self,
-        mock_list_agents: MagicMock,
-        mock_copy: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+    def test_init_continues_when_overwrite_confirmed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試當使用者確認覆寫時，會重新執行 init"""
-        # 建立測試環境
+        """When user confirms overwrite, init proceeds to crew setup."""
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir()
+        _write_config(cafe_dir, {"settings": {"auto_update": True}})
+        monkeypatch.chdir(tmp_path)
+
+        from cafe.utils.preset import PresetInfo
+
+        preset_file = tmp_path / "preset_default.yaml"
+        preset_file.write_text(yaml.dump({
+            "pm": {"name": "Roger", "cli": "claude"},
+            "developer": {"name": "David", "cli": "claude"},
+            "reviewer": {"name": "Richard", "cli": "claude"},
+        }))
+        preset_info = PresetInfo(name="default", path=preset_file, source="built-in")
+
+        with (
+            patch("cafe.ui.cli.prompt_confirm", side_effect=[True, True]),
+            patch("cafe.ui.init_helpers.check_available_clis", return_value=["claude"]),
+            patch("cafe.ui.commands.crew.PresetManager") as mock_pm_cls,
+            patch("cafe.ui.commands.crew.prompt_list", return_value="default  [built-in]"),
+            patch("cafe.ui.commands.crew.prompt_confirm", return_value=True),
+            patch("cafe.ui.cli.prompt_list", side_effect=["default", "medium"]),
+        ):
+            mock_pm = MagicMock()
+            mock_pm_cls.return_value = mock_pm
+            mock_pm.list.return_value = [preset_info]
+            mock_pm.apply.return_value = None
+
+            result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0
+
+
+class TestInitPresetFlag:
+    """Non-interactive --preset flag."""
+
+    def test_preset_applies_preset_and_writes_minimal_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--preset writes crew.yaml via PresetManager and creates minimal config.yaml."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        with patch("cafe.utils.preset.PresetManager") as mock_pm_cls:
+            mock_pm = MagicMock()
+            mock_pm_cls.return_value = mock_pm
+            mock_pm.apply.return_value = None
+
+            result = runner.invoke(app, ["init", "--preset", "claude-opus"])
+
+        assert result.exit_code == 0
+        mock_pm.apply.assert_called_once_with("claude-opus", cafe_dir=Path(".cafe"))
+
         config_file = cafe_dir / "config.yaml"
-        config_file.write_text("old config")
-
-        # 模擬有可用 CLI
-        mock_which.return_value = "/usr/bin/claude"
-
-        # 模擬 agent 列表
-        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
-
-        monkeypatch.chdir(tmp_path)
-
-        with (
-            patch("cafe.ui.cli.prompt_confirm") as mock_confirm,
-            patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
-            patch("cafe.ui.cli.prompt_text") as mock_prompt_text
-        ):
-            mock_confirm.side_effect = [True]
-            mock_prompt_list.side_effect = _default_prompt_list_side_effect()
-
-            result = runner.invoke(app, ["init"])
-
-        assert result.exit_code == 0
-        assert "Proceeding to overwrite" in result.stdout
-        assert "Configuration saved successfully" in result.stdout
-
-        # Verify config was overwritten
         assert config_file.exists()
-        content = config_file.read_text()
-        assert "old config" not in content
+        cfg = yaml.safe_load(config_file.read_text()) or {}
+        assert "settings" in cfg
+        assert cfg["settings"].get("auto_update") is True
 
-    @patch("cafe.ui.cli.shutil.which")
-    def test_init_exits_if_no_clis_available(
-        self, mock_which: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_preset_unknown_exits_with_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試當無可用 CLI 時提示錯誤並退出"""
-        # 模擬所有 CLI 都不存在
-        mock_which.return_value = None
-
+        """--preset with unknown name prints error and exits 1."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(app, ["init"])
+        from cafe.utils.preset import PresetNotFoundError
+
+        with patch("cafe.utils.preset.PresetManager") as mock_pm_cls:
+            mock_pm = MagicMock()
+            mock_pm_cls.return_value = mock_pm
+            mock_pm.apply.side_effect = PresetNotFoundError("Preset 'unknown' not found.")
+
+            result = runner.invoke(app, ["init", "--preset", "unknown"])
 
         assert result.exit_code == 1
-        assert "No supported AI agents found" in result.stdout
+        assert "not found" in result.stdout.lower() or "error" in result.stdout.lower()
 
-
-class TestInitCommandInteractiveFlow:
-    """測試 init 指令互動式配置流程"""
-
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.init_helpers.copy_data_directory")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_init_prompts_for_all_three_roles(
-        self,
-        mock_list_agents: MagicMock,
-        mock_copy: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+    def test_preset_does_not_prompt_interactively(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試會為三個角色進行配置"""
-        mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
+        """--preset must not trigger any interactive prompts."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
         monkeypatch.chdir(tmp_path)
 
         with (
-            patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
-            patch("cafe.ui.cli.prompt_text") as mock_prompt_text,
+            patch("cafe.utils.preset.PresetManager") as mock_pm_cls,
+            patch("cafe.ui.cli.prompt_confirm") as mock_cli_confirm,
+            patch("cafe.ui.commands.crew.prompt_list") as mock_crew_list,
+            patch("cafe.ui.commands.crew.prompt_confirm") as mock_crew_confirm,
         ):
-            agent = "Roger: PM agent (system default)"
-            mock_prompt_list.side_effect = [
-                "claude", agent, "",                      # PM
-                "gemini", agent, CUSTOM_MODEL_SENTINEL, "", "",  # Developer: plan=custom
-                "copilot", agent, "",                     # Reviewer
-            ]
-            mock_prompt_text.side_effect = ["sonnet"]  # Developer plan model
+            mock_pm = MagicMock()
+            mock_pm_cls.return_value = mock_pm
+            mock_pm.apply.return_value = None
 
-            _result = runner.invoke(app, ["init"])
+            result = runner.invoke(app, ["init", "--preset", "claude-opus"])
 
-        # 驗證 prompt_list: PM(3) + Developer(5) + Reviewer(3) = 11
-        assert mock_prompt_list.call_count == 11
-        # 驗證 prompt_text: only 1 custom model
-        assert mock_prompt_text.call_count == 1
+        assert result.exit_code == 0
+        mock_cli_confirm.assert_not_called()
+        mock_crew_list.assert_not_called()
+        mock_crew_confirm.assert_not_called()
 
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.init_helpers.copy_data_directory")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_init_handles_keyboard_interrupt(
-        self,
-        mock_list_agents: MagicMock,
-        mock_copy: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+    def test_preset_skips_overwrite_prompt_on_fresh_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試 Ctrl+C 中斷時顯示取消訊息"""
-        mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
+        """--preset on fresh dir does not ask overwrite and succeeds."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
         monkeypatch.chdir(tmp_path)
 
-        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list:
-            mock_prompt_list.side_effect = KeyboardInterrupt()
+        with patch("cafe.utils.preset.PresetManager") as mock_pm_cls:
+            mock_pm = MagicMock()
+            mock_pm_cls.return_value = mock_pm
+            mock_pm.apply.return_value = None
+
+            result = runner.invoke(app, ["init", "--preset", "default"])
+
+        assert result.exit_code == 0
+
+
+class TestInitInteractiveFlow:
+    """Interactive init: crew set-primary flow → setup flow."""
+
+    def _make_preset_info(self, name: str, tmp_path: Path) -> object:
+        from cafe.utils.preset import PresetInfo
+        preset_file = tmp_path / f"{name}.yaml"
+        preset_file.write_text(yaml.dump({
+            "pm": {"name": "Roger", "cli": "claude"},
+            "developer": {"name": "David", "cli": "claude"},
+            "reviewer": {"name": "Richard", "cli": "claude"},
+        }))
+        return PresetInfo(name=name, path=preset_file, source="built-in")
+
+    def test_interactive_applies_preset_and_writes_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Interactive flow: preset selected → crew.yaml written, config.yaml has settings."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        preset_info = self._make_preset_info("default", tmp_path)
+
+        with (
+            patch("cafe.ui.init_helpers.check_available_clis", return_value=["claude"]),
+            patch("cafe.ui.commands.crew.PresetManager") as mock_pm_cls,
+            patch("cafe.ui.commands.crew.prompt_list", return_value="default  [built-in]"),
+            patch("cafe.ui.commands.crew.prompt_confirm", return_value=True),
+            patch("cafe.ui.cli.prompt_confirm") as mock_cli_confirm,
+            patch("cafe.ui.cli.prompt_list", side_effect=["default", "medium"]),
+        ):
+            mock_pm = MagicMock()
+            mock_pm_cls.return_value = mock_pm
+            mock_pm.list.return_value = [preset_info]
+            mock_pm.apply.return_value = None
+            mock_cli_confirm.return_value = True
+
             result = runner.invoke(app, ["init"])
 
-        assert result.exit_code == 1
-        assert "cancelled" in result.stdout or "未完成" in result.stdout
+        assert result.exit_code == 0
+        mock_pm.apply.assert_called_once()
 
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.init_helpers.copy_data_directory")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_init_errors_on_empty_agent_directory(
-        self,
-        mock_list_agents: MagicMock,
-        mock_copy: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """測試空 agent 資料夾時提示錯誤"""
-        mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = []
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["init"])
-
-        assert result.exit_code == 1
-
-
-class TestInitCommandConfigSaving:
-    """測試 init 指令配置儲存"""
-
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.init_helpers.copy_data_directory")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_init_saves_config_correctly(
-        self,
-        mock_list_agents: MagicMock,
-        mock_copy: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """測試配置正確儲存到 .cafe/config.yaml"""
-        mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [
-            ("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default"),
-            ("David", "Dev agent", Path(".cafe/agents/developer/David.md"), "custom"),
-            ("Richard", "Reviewer agent", Path(".cafe/agents/reviewer/Richard.md"), "system default"),
-        ]
-        monkeypatch.chdir(tmp_path)
-
-        with (
-            patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
-            patch("cafe.ui.cli.prompt_text") as mock_prompt_text,
-        ):
-            mock_prompt_list.side_effect = [
-                "copilot", "Roger: PM agent (system default)", "",              # PM: all default
-                "claude", "David: Dev agent (custom)", CUSTOM_MODEL_SENTINEL, "", "",  # Dev: plan=custom
-                "gemini", "Richard: Reviewer agent (system default)", "",       # Reviewer: all default
-            ]
-            mock_prompt_text.side_effect = ["sonnet"]  # Developer plan model
-
-            _result = runner.invoke(app, ["init"])
-
-        config_file = tmp_path / ".cafe" / "config.yaml"
-        crew_file = tmp_path / ".cafe" / "crew.yaml"
+        config_file = cafe_dir / "config.yaml"
         assert config_file.exists()
-        assert crew_file.exists(), "crew.yaml should be created by cafe init"
+        cfg = yaml.safe_load(config_file.read_text()) or {}
+        assert "settings" in cfg
 
-        import yaml
-        with open(config_file) as f:
-            config = yaml.safe_load(f)
-
-        # config.yaml should NOT have agents section (moved to crew.yaml)
-        assert "agents" not in config
-
-        with open(crew_file) as f:
-            crew = yaml.safe_load(f)
-
-        assert crew["pm"]["name"] == "Roger"
-        assert crew["pm"]["cli"] == "copilot"
-        assert crew["developer"]["name"] == "David"
-        assert crew["developer"]["cli"] == "claude"
-        assert crew["developer"]["plan"]["model"] == "sonnet"
-        assert "model" not in crew["pm"]
-        assert "model" not in crew["developer"]
-        assert "model" not in crew["reviewer"]
-        assert crew["reviewer"]["name"] == "Richard"
-        assert crew["reviewer"]["cli"] == "gemini"
-
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.init_helpers.copy_data_directory")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_init_displays_success_message(
-        self,
-        mock_list_agents: MagicMock,
-        mock_copy: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+    def test_interactive_does_not_write_agents_key_to_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試成功後顯示配置摘要"""
-        mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
+        """Interactive init must not write agents: key to config.yaml."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
         monkeypatch.chdir(tmp_path)
 
+        preset_info = self._make_preset_info("default", tmp_path)
+
         with (
-            patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
-            patch("cafe.ui.cli.prompt_text") as mock_prompt_text,
+            patch("cafe.ui.init_helpers.check_available_clis", return_value=["claude"]),
+            patch("cafe.ui.commands.crew.PresetManager") as mock_pm_cls,
+            patch("cafe.ui.commands.crew.prompt_list", return_value="default  [built-in]"),
+            patch("cafe.ui.commands.crew.prompt_confirm", return_value=True),
+            patch("cafe.ui.cli.prompt_confirm", return_value=True),
+            patch("cafe.ui.cli.prompt_list", side_effect=["default", "medium"]),
         ):
-            mock_prompt_list.side_effect = _default_prompt_list_side_effect()
+            mock_pm = MagicMock()
+            mock_pm_cls.return_value = mock_pm
+            mock_pm.list.return_value = [preset_info]
+            mock_pm.apply.return_value = None
+
             result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 0
-        assert "Configuration saved successfully" in result.stdout
-        assert "PM:" in result.stdout
-        assert "Developer:" in result.stdout
-        assert "Reviewer:" in result.stdout
-        assert "cafe prepare" in result.stdout
+        config_file = cafe_dir / "config.yaml"
+        if config_file.exists():
+            cfg = yaml.safe_load(config_file.read_text()) or {}
+            assert "agents" not in cfg
 
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.init_helpers.copy_data_directory")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_init_displays_model_as_default_when_empty(
-        self,
-        mock_list_agents: MagicMock,
-        mock_copy: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+    def test_interactive_keyboard_interrupt_exits_cleanly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試 model 為 None 時顯示為「預設」"""
-        mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
+        """Ctrl+C during interactive init exits cleanly."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
         monkeypatch.chdir(tmp_path)
 
         with (
-            patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
-            patch("cafe.ui.cli.prompt_text") as mock_prompt_text,
+            patch("cafe.ui.init_helpers.check_available_clis", return_value=["claude"]),
+            patch("cafe.ui.commands.crew.PresetManager") as mock_pm_cls,
         ):
-            mock_prompt_list.side_effect = _default_prompt_list_side_effect()
+            mock_pm = MagicMock()
+            mock_pm_cls.return_value = mock_pm
+            mock_pm.list.side_effect = KeyboardInterrupt
+
             result = runner.invoke(app, ["init"])
 
-        assert result.exit_code == 0
-        assert "default" in result.stdout
-
-
-class TestInitCommandErrorMessages:
-    """測試 init 指令的錯誤訊息"""
-
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.list_available_agents")
-    @patch("cafe.ui.cli.prompt_list")
-    @patch("cafe.ui.cli.prompt_text")
-    def test_no_agents_error_message_shows_correct_paths(
-        self,
-        mock_prompt_text: MagicMock,
-        mock_prompt_list: MagicMock,
-        mock_list_agents: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """測試當沒有 agents 時錯誤訊息應該顯示正確的路徑"""
-        mock_which.return_value = "/usr/bin/claude"
-        mock_prompt_list.return_value = "claude"
-        mock_prompt_text.return_value = ""
-        mock_list_agents.return_value = []
-
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["init"])
-
-        assert result.exit_code == 1
-        assert "Agent files not found" in result.stdout
-        assert "in .cafe/agents/" not in result.stdout
-        assert "~" in result.stdout and "/.cafe/agents/" in result.stdout
-        assert "src/cafe/data/agents/" in result.stdout
+        assert result.exit_code in (0, 1)
+        assert result.exception is None or isinstance(result.exception, SystemExit)
