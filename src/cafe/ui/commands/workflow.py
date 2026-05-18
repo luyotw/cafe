@@ -138,7 +138,7 @@ def make(
     fallback_preset: Optional[str] = typer.Option(
         None,
         "--fallback-preset",
-        help="Crew preset to switch to when primary CLI hits rate_limit or cli_not_found",
+        help="Crew preset to switch to when primary CLI is rate-limited, missing, unavailable, or has a bad model",
     ),
     add_dir: List[str] = typer.Option(
         [],
@@ -462,7 +462,7 @@ def workflow(
     fallback_preset: Optional[str] = typer.Option(
         None,
         "--fallback-preset",
-        help="Crew preset to switch to when primary CLI hits rate_limit or cli_not_found",
+        help="Crew preset to switch to when primary CLI is rate-limited, missing, unavailable, or has a bad model",
     ),
     add_dir: List[str] = typer.Option(
         [],
@@ -597,7 +597,7 @@ def workflow(
                 if (
                     fallback_preset
                     and not _executor_holder["fallback_applied"]
-                    and getattr(exc, "error_type", None) in ("rate_limit", "cli_not_found")
+                    and getattr(exc, "error_type", None) in ("rate_limit", "cli_not_found", "cli_unavailable", "model_not_found")
                 ):
                     _apply_fallback_preset_and_rebuild()
                     result = _executor_holder["executor"].execute_step(
@@ -786,9 +786,15 @@ def workflow(
                 console.print(
                     f"[yellow]Workflow interrupted[/yellow] step={result.final_step} reason={reason}"
                 )
+                if result.detail:
+                    console.print(f"[red]{result.detail.rstrip()}[/red]")
                 if reason.startswith("agent_"):
                     console.print(
                         "[dim]Agent execution failed. Switch to a different CLI in your config, then run 'cafe make' again.[/dim]"
+                    )
+                elif reason == "publish_error":
+                    console.print(
+                        "[dim]PR publish failed after the agent completed. Fix the publish error, then run 'cafe make' again.[/dim]"
                     )
                 else:
                     console.print(

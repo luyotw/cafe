@@ -3,11 +3,11 @@
 import json
 import os
 import subprocess
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from cafe.agents.executor import AgentExecutor, AgentExecutionError
 from cafe.core.session import SessionManager
-from cafe.core.types import AgentConfig, AgentResponse, PermissionDenial, TokenUsage
+from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, PermissionDenial, TokenUsage
 
 
 class AgentNotFoundError(Exception):
@@ -22,6 +22,7 @@ class AgentManager:
     # Agent directory constants
     CAFE_DIR = ".cafe"
     AGENTS_DIR = "agents"
+    FALLBACKABLE_ERROR_TYPES = ("rate_limit", "cli_not_found", "cli_unavailable", "model_not_found")
 
     def __init__(self, session_manager: Optional[SessionManager] = None, issue_name: Optional[str] = None) -> None:
         """Initialize agent manager.
@@ -36,6 +37,8 @@ class AgentManager:
         self.current_agent_name: Optional[str] = None
         self._total_token_usage = TokenUsage()
         self._last_model: Optional[str] = None  # Track latest model used
+        self._last_cli: Optional[AgentCLI] = None
+        self._last_session_id: Optional[str] = None
         self.show_prompt = False  # CLI can set this to True to show prompts
         self._use_mock = os.getenv("CAFE_MOCK_AGENTS", "").lower() in ("true", "1", "yes")
 
@@ -169,7 +172,7 @@ class AgentManager:
                     executor.config.session_id = None
 
                     # Loop will retry (with no session ID, a new one will be created)
-                elif hasattr(e, 'error_type') and e.error_type in ("rate_limit", "cli_not_found"):
+                elif hasattr(e, 'error_type') and e.error_type in self.FALLBACKABLE_ERROR_TYPES:
                     # Try backup agents
                     agent_response = self._try_backup_agents(
                         primary_error=e,
@@ -192,11 +195,18 @@ class AgentManager:
         cli_command_args = agent_response.cli_command_args
         streaming_log = agent_response.streaming_log
         model = agent_response.model
+        actual_cli = agent_response.cli or executor.config.cli
+        actual_session_id = agent_response.session_id
+        if model is None and actual_cli == executor.config.cli:
+            model = executor.config.model
+
+        self._last_cli = actual_cli
+        self._last_session_id = actual_session_id
 
         # Save session ID if it was created during execution
-        if executor.config.session_id:
+        if actual_session_id:
             self.session_manager.save_session(
-                agent_name, executor.config.cli, executor.config.session_id, self.issue_name
+                agent_name, actual_cli, actual_session_id, self.issue_name
             )
 
         # Accumulate token usage
@@ -257,7 +267,7 @@ class AgentManager:
         Backup retry flow:
         1. If no backup CLIs are configured, re-raise the original error immediately
         2. Try each backup CLI in backup_clis in order
-        3. If a backup CLI also hits rate_limit or cli_not_found, continue to the next
+        3. If a backup CLI also hits a fallbackable runtime error, continue to the next
         4. If a backup CLI raises any other error, re-raise it immediately (do not continue)
         5. If all backups fail, raise an error listing all attempted CLIs
 
@@ -301,7 +311,8 @@ class AgentManager:
             raise primary_error
 
         primary_cli_name = config.cli.value
-        print(f"❌ {primary_cli_name} API rate limit reached, trying backup agent...")
+        print(f"❌ {primary_cli_name} failed ({self._fallback_reason(primary_error)}), trying backup agent...")
+        self._print_fallback_error_detail(primary_error)
 
         # Track tried CLIs to avoid duplicates
         tried_clis = {config.cli}
@@ -327,12 +338,19 @@ class AgentManager:
                 agent_response = backup_executor.execute(
                     prompt, allowed_tools, allowed_directories, streaming_output_file
                 )
+                if agent_response.cli is None:
+                    agent_response.cli = entry.cli
+                if agent_response.session_id is None:
+                    agent_response.session_id = backup_executor.config.session_id
+                if agent_response.model is None:
+                    agent_response.model = backup_model
                 print(f"✅ Successfully completed with {entry.cli.value}")
                 return agent_response
             except AgentExecutionError as backup_error:
-                if hasattr(backup_error, 'error_type') and backup_error.error_type in ("rate_limit", "cli_not_found"):
+                if hasattr(backup_error, 'error_type') and backup_error.error_type in self.FALLBACKABLE_ERROR_TYPES:
                     failed_agents.append(f"{entry.cli.value} ({backup_error})")
-                    print(f"❌ {entry.cli.value} also hit rate limit, trying next agent...")
+                    print(f"❌ {entry.cli.value} failed ({self._fallback_reason(backup_error)}), trying next agent...")
+                    self._print_fallback_error_detail(backup_error)
                     continue
                 else:
                     raise
@@ -341,9 +359,32 @@ class AgentManager:
         tried_list = ", ".join(failed_agents)
         raise AgentExecutionError(
             f"All agents failed. Tried: {tried_list}. "
-            f"Please wait for rate limits to reset or add more backup agents.",
-            error_type="rate_limit",
+            f"Please wait for transient failures to clear or add more backup agents.",
+            error_type=getattr(primary_error, "error_type", None) or "agent_unavailable",
         )
+
+    @staticmethod
+    def _fallback_reason(error: AgentExecutionError) -> str:
+        error_type = getattr(error, "error_type", None)
+        if error_type == "rate_limit":
+            return "rate limit"
+        if error_type == "cli_not_found":
+            return "CLI not found"
+        if error_type == "cli_unavailable":
+            return "CLI unavailable"
+        if error_type == "model_not_found":
+            return "model unavailable"
+        return str(error)
+
+    @staticmethod
+    def _print_fallback_error_detail(error: AgentExecutionError) -> None:
+        detail = str(error).strip()
+        if not detail:
+            return
+
+        print("   Original error:")
+        for line in detail.splitlines():
+            print(f"   {line}")
 
     def execute_current(self, prompt: str) -> str:
         """Execute prompt with current agent.
@@ -409,6 +450,14 @@ class AgentManager:
             Last model name, or None if no model has been used yet
         """
         return self._last_model
+
+    def get_last_cli(self) -> Optional[AgentCLI]:
+        """Get the actual CLI that produced the last response."""
+        return self._last_cli
+
+    def get_last_session_id(self) -> Optional[str]:
+        """Get the actual session id from the last response, if any."""
+        return self._last_session_id
 
     def delete_session(self, agent_name: str) -> None:
         """Delete session for an agent.

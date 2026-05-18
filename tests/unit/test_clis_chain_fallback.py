@@ -20,6 +20,14 @@ def _cli_not_found() -> AgentExecutionError:
     return AgentExecutionError("cli not found", error_type="cli_not_found")
 
 
+def _cli_unavailable() -> AgentExecutionError:
+    return AgentExecutionError("subscription disabled", error_type="cli_unavailable")
+
+
+def _model_not_found() -> AgentExecutionError:
+    return AgentExecutionError("bad model", error_type="model_not_found")
+
+
 def _make_manager(clis: list) -> AgentManager:
     manager = AgentManager()
     config = AgentConfig(
@@ -64,6 +72,7 @@ class TestClisChainFallbackBasic:
 
         assert response == "gemini response"
         assert call_count == 2
+        assert manager.get_last_cli() == AgentCLI.GEMINI
 
     def test_three_entry_chain_first_two_fail(self) -> None:
         """Primary and first fallback fail, second fallback succeeds."""
@@ -145,6 +154,81 @@ class TestClisChainFallbackBasic:
             response, *_ = manager.execute("David", "prompt")
 
         assert response == "gemini ok"
+
+    def test_cli_unavailable_also_triggers_fallback(self) -> None:
+        """Account or org-policy CLI unavailability should try the next configured CLI."""
+        manager = _make_manager([
+            CliEntry(cli=AgentCLI.CLAUDE),
+            CliEntry(cli=AgentCLI.CODEX),
+        ])
+        call_count = 0
+
+        def side_effect(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise _cli_unavailable()
+            return _ok("codex ok")
+
+        with patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect):
+            response, *_ = manager.execute("David", "prompt")
+
+        assert response == "codex ok"
+        assert call_count == 2
+
+    def test_model_not_found_also_triggers_fallback(self) -> None:
+        """Bad model configuration on one CLI should try the next configured CLI."""
+        manager = _make_manager([
+            CliEntry(cli=AgentCLI.CLAUDE, model="bad-claude-model"),
+            CliEntry(cli=AgentCLI.CODEX, model="gpt-5.3-codex"),
+        ])
+        call_count = 0
+
+        def side_effect(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise _model_not_found()
+            return _ok("codex ok")
+
+        with patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect):
+            response, *_ = manager.execute("David", "prompt")
+
+        assert response == "codex ok"
+        assert call_count == 2
+
+    def test_fallback_prints_original_error_details(self, capsys) -> None:
+        """Fallback logging should include the raw CLI error immediately."""
+        manager = _make_manager([
+            CliEntry(cli=AgentCLI.CLAUDE),
+            CliEntry(cli=AgentCLI.CODEX),
+            CliEntry(cli=AgentCLI.CURSOR),
+        ])
+        call_count = 0
+
+        def side_effect(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise AgentExecutionError(
+                    "Claude execution failed: oauth_org_not_allowed",
+                    error_type="cli_unavailable",
+                )
+            if call_count == 2:
+                raise AgentExecutionError(
+                    "Codex execution failed: You've hit your usage limit. Try again at May 26th, 2026 1:20 AM.",
+                    error_type="rate_limit",
+                )
+            return _ok("cursor ok")
+
+        with patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect):
+            response, *_ = manager.execute("David", "prompt")
+
+        captured = capsys.readouterr().out
+        assert response == "cursor ok"
+        assert "Original error:" in captured
+        assert "Claude execution failed: oauth_org_not_allowed" in captured
+        assert "Codex execution failed: You've hit your usage limit" in captured
 
 
 class TestClisChainModelResolution:
