@@ -13,12 +13,12 @@ class TestPresetManagerList:
         manager = PresetManager()
         presets = manager.list()
         names = {p.name for p in presets}
-        assert "default" in names
-        assert "claude-opus" in names
-        assert "gemini-team" in names
+        assert "claude" in names
+        assert "codex" in names
+        assert "gemini" in names
         built_in = [p for p in presets if p.source == "built-in"]
         built_in_names = {p.name for p in built_in}
-        assert {"default", "claude-opus", "gemini-team"}.issubset(built_in_names)
+        assert {"claude", "codex", "gemini"}.issubset(built_in_names)
 
     def test_list_includes_global_presets(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         global_presets = tmp_path / ".cafe" / "presets"
@@ -77,7 +77,7 @@ class TestPresetManagerApply:
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir()
         manager = PresetManager()
-        manager.apply("default", cafe_dir=cafe_dir)
+        manager.apply("claude", cafe_dir=cafe_dir)
         crew_yaml = cafe_dir / "crew.yaml"
         assert crew_yaml.exists()
         import yaml
@@ -93,7 +93,7 @@ class TestPresetManagerApply:
         crew_yaml = cafe_dir / "crew.yaml"
         crew_yaml.write_text("# old content\n")
         manager = PresetManager()
-        manager.apply("default", cafe_dir=cafe_dir)
+        manager.apply("claude", cafe_dir=cafe_dir)
         data = crew_yaml.read_text()
         assert "old content" not in data
 

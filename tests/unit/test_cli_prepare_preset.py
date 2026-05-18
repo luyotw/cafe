@@ -54,7 +54,7 @@ class TestPreparePreset:
                     "test-issue",
                     "--no-interactive",
                     "--input-method", "manual",
-                    "--preset", "default",
+                    "--preset", "claude",
                 ],
             )
 

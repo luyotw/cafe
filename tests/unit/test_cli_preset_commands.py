@@ -18,9 +18,9 @@ class TestPresetList:
         (tmp_path / ".cafe").mkdir()
         result = runner.invoke(app, ["preset", "list"])
         assert result.exit_code == 0
-        assert "default" in result.output
-        assert "claude-opus" in result.output
-        assert "gemini-team" in result.output
+        assert "claude" in result.output
+        assert "codex" in result.output
+        assert "gemini" in result.output
         assert "built-in" in result.output
 
     def test_preset_list_includes_project_presets(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
