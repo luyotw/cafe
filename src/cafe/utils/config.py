@@ -18,13 +18,25 @@ def validate_directories_exist(dirs: List[str], base_dir: Path) -> None:
     """Verify each directory in dirs exists under base_dir.
 
     Raises:
-        ConfigError: if any entry is missing or is not a directory, listing all missing names.
+        ConfigError: if any entry is outside base_dir, missing, or not a directory.
     """
-    missing = [d for d in dirs if not (base_dir / d).is_dir()]
-    if missing:
-        raise ConfigError(f"Allowed directories not found: {', '.join(missing)}")
-
-    pass
+    base_dir = base_dir.resolve()
+    invalid = []
+    for directory in dirs:
+        directory_path = Path(directory)
+        resolved = (base_dir / directory_path).resolve()
+        if (
+            directory_path.is_absolute()
+            or ".." in directory_path.parts
+            or not resolved.is_relative_to(base_dir)
+            or not resolved.is_dir()
+        ):
+            invalid.append(directory)
+    if invalid:
+        raise ConfigError(
+            "Allowed directories must be existing relative directories under "
+            f"{base_dir}: {', '.join(invalid)}"
+        )
 
 
 def get_global_cafe_dir() -> Path:

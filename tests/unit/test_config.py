@@ -528,6 +528,23 @@ class TestValidateDirectoriesExist:
             validate_directories_exist(["notadir"], tmp_path)
         assert "notadir" in str(exc_info.value)
 
+    def test_validate_directories_exist_rejects_absolute_path(self, tmp_path: Path) -> None:
+        """絕對路徑即使存在也應拒絕，避免授權 worktree 外部目錄。"""
+        from cafe.utils.config import validate_directories_exist
+        outside = tmp_path.parent
+        with pytest.raises(ConfigError) as exc_info:
+            validate_directories_exist([str(outside)], tmp_path)
+        assert str(outside) in str(exc_info.value)
+
+    def test_validate_directories_exist_rejects_parent_traversal(self, tmp_path: Path) -> None:
+        """含有 .. 的路徑即使解析後存在也應拒絕。"""
+        from cafe.utils.config import validate_directories_exist
+        sibling = tmp_path.parent / "sibling"
+        sibling.mkdir(exist_ok=True)
+        with pytest.raises(ConfigError) as exc_info:
+            validate_directories_exist(["../sibling"], tmp_path)
+        assert "../sibling" in str(exc_info.value)
+
     def test_validate_directories_exist_noop_for_empty_list(self, tmp_path: Path) -> None:
         """空 list 時不拋例外。"""
         from cafe.utils.config import validate_directories_exist
