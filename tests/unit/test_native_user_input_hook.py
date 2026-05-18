@@ -393,7 +393,8 @@ def test_pr_link_opener_opens_current_pr_url_when_confirmed() -> None:
     hook = PRLinkOpener()
 
     with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops, \
-         patch("cafe.core.hooks.native.webbrowser.open") as mock_open:
+         patch("cafe.core.hooks.native.webbrowser.open") as mock_open, \
+         patch("cafe.core.hooks.native.sys.stdin.isatty", return_value=True):
         mock_github_ops.return_value.get_current_pr_url.return_value = "https://github.com/test/repo/pull/123"
 
         result = hook.run(stage="publish_output", status_code=PhaseStatusCode.CONFIRMED)
@@ -402,6 +403,22 @@ def test_pr_link_opener_opens_current_pr_url_when_confirmed() -> None:
     assert result.events == [
         {"type": "pr_synced", "url": "https://github.com/test/repo/pull/123"},
         {"type": "pr_link_opened", "url": "https://github.com/test/repo/pull/123"},
+    ]
+
+
+def test_pr_link_opener_skips_browser_in_non_interactive() -> None:
+    hook = PRLinkOpener()
+
+    with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops, \
+         patch("cafe.core.hooks.native.webbrowser.open") as mock_open, \
+         patch("cafe.core.hooks.native.sys.stdin.isatty", return_value=False):
+        mock_github_ops.return_value.get_current_pr_url.return_value = "https://github.com/test/repo/pull/123"
+
+        result = hook.run(stage="publish_output", status_code=PhaseStatusCode.CONFIRMED)
+
+    mock_open.assert_not_called()
+    assert result.events == [
+        {"type": "pr_synced", "url": "https://github.com/test/repo/pull/123"},
     ]
 
 
@@ -422,7 +439,8 @@ def test_pr_link_opener_returns_pr_synced_even_when_browser_open_fails() -> None
     hook = PRLinkOpener()
 
     with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops, \
-         patch("cafe.core.hooks.native.webbrowser.open", side_effect=Exception("blocked")) as mock_open:
+         patch("cafe.core.hooks.native.webbrowser.open", side_effect=Exception("blocked")) as mock_open, \
+         patch("cafe.core.hooks.native.sys.stdin.isatty", return_value=True):
         mock_github_ops.return_value.get_current_pr_url.return_value = "https://github.com/test/repo/pull/123"
 
         result = hook.run(stage="publish_output", status_code=PhaseStatusCode.CONFIRMED)

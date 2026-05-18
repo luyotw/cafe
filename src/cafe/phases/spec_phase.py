@@ -278,9 +278,7 @@ class SpecPhase(Phase):
                             # User input provided
                             user_story = self.user_input.strip()
                         else:
-                            # Try reading from stdin
-                            import sys
-                            user_story = sys.stdin.read().strip()
+                            user_story = ""
 
                         # Remove END marker if present
                         if user_story.upper().endswith("END"):

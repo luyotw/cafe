@@ -329,9 +329,14 @@ class GenericWorkflowStepExecutor(Phase):
         )
 
     def _resolve_iteration_user_input(self, step_name: str) -> str:
-        """Resolve user_input sent to agent for this step iteration."""
+        """Resolve user_input sent to agent for this step iteration.
+
+        Consumes the entry from ``step_user_inputs`` after first use so it
+        is not replayed on subsequent iterations or handoff cycles.
+        """
         if step_name in self.step_user_inputs:
-            return self.step_user_inputs[step_name]
+            value = self.step_user_inputs.pop(step_name)
+            return value
         if step_name == "plan" and self.iteration == 1:
             return ""
         return "workflow execute"
@@ -679,9 +684,11 @@ class GenericWorkflowStepExecutor(Phase):
         event_type = event.get("type")
         if event_type == "review_modification_requested":
             return True
+        if event_type == "auto_confirmed":
+            return True
         if event_type != "user_input_collected":
             return False
-        return event.get("source") in {"questions_xml", "prompt", "user_input_file"}
+        return event.get("source") in {"questions_xml", "prompt", "user_input_file", "non_interactive_default"}
 
     @staticmethod
     def _step_requires_status_code(step_name: str) -> bool:

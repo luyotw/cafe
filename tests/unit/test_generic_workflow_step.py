@@ -674,8 +674,10 @@ def test_generic_workflow_step_collects_clarification_before_next_agent_run(
         second_result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
     assert second_result.response == "confirmed"
+    # In non-interactive mode the UserInputCollector auto-answers
+    # need_clarification with a default "proceed" message.
     assert any(
-        "Current user input for this iteration:" in prompt and "A1: CLI only" in prompt
+        "No additional changes needed" in prompt
         for prompt in agent_manager.prompts
     )
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import uuid
 import webbrowser
 from pathlib import Path
@@ -224,7 +225,7 @@ class UserInputCollector(NoOpHook):
         # Restore plan phase iteration-1 initial user input (development guide).
         if step_name == "plan" and getattr(phase, "iteration", 0) == 1:
             if step_name not in phase.step_user_inputs:
-                if getattr(phase, "interactive", True):
+                if getattr(phase, "interactive", False):
                     development_guide_prompt = (
                         "Please enter development guide (can be left empty)\n"
                         "Suggested content:\n"
@@ -259,6 +260,33 @@ class UserInputCollector(NoOpHook):
         # not to request user confirmation — skip the review prompt entirely.
         if step_name == "pr" and previous_status in {"ready_for_review", "confirm_output"}:
             return HookResult()
+
+        # Non-interactive mode: cannot call InquirerPy prompts.
+        # Auto-confirm ready_for_review and auto-advance need_clarification
+        # with a default response so the workflow does not hang.
+        if not getattr(phase, "interactive", False):
+            if previous_status == "ready_for_review":
+                return HookResult(
+                    continue_pipeline=False,
+                    override_status_code=PhaseStatusCode.CONFIRMED,
+                    events=[
+                        {"type": "review_confirmed", "step": step_name},
+                        {"type": "auto_confirmed", "step": step_name, "reason": "non-interactive"},
+                    ],
+                )
+            # need_clarification: provide a generic "proceed" answer
+            auto_answer = "No additional changes needed. Proceed as proposed."
+            phase.step_user_inputs[step_name] = auto_answer
+            return HookResult(
+                context_updates={"user_input": auto_answer},
+                events=[
+                    {
+                        "type": "user_input_collected",
+                        "step": step_name,
+                        "source": "non_interactive_default",
+                    }
+                ],
+            )
 
         prompt_role = {"pm": "pm", "reviewer": "reviewer"}.get(role, "developer")
         previous_output_file = self._get_previous_output_file(phase, step_name)
@@ -422,13 +450,26 @@ class GitHubIssueFetcher(NoOpHook):
         input_method, issue_id = self._load_input_config(config_file)
 
         if input_method is None:
+            if not getattr(phase, "interactive", False):
+                return HookResult(
+                    context_updates={"user_input": ""},
+                    events=[
+                        {
+                            "type": "user_input_collected",
+                            "step": step_name,
+                            "source": "non_interactive_no_input",
+                        }
+                    ],
+                )
             input_method, issue_id = self._prompt_input_method()
             self._save_input_config(config_file, input_method, issue_id)
 
         if input_method == "github" and issue_id is not None:
             content = self._fetch_github_issue(issue_id)
-        else:
+        elif getattr(phase, "interactive", False):
             content = self._prompt_manual_input()
+        else:
+            content = ""
 
         output_file.parent.mkdir(parents=True, exist_ok=True)
         output_file.write_text(
@@ -1052,10 +1093,11 @@ class PRLinkOpener(NoOpHook):
 
         events = [{"type": "pr_synced", "url": pr_url}]
 
-        try:
-            webbrowser.open(pr_url)
-        except Exception:
-            return HookResult(events=events)
+        if sys.stdin.isatty():
+            try:
+                webbrowser.open(pr_url)
+            except Exception:
+                return HookResult(events=events)
+            events.append({"type": "pr_link_opened", "url": pr_url})
 
-        events.append({"type": "pr_link_opened", "url": pr_url})
         return HookResult(events=events)

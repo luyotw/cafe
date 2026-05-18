@@ -690,6 +690,9 @@ def workflow(
                         console.print(
                             f"[dim]Resuming[/dim] {from_step} with --user-input"
                         )
+                        # Consume user_input so it is not replayed on
+                        # subsequent user handoffs for different steps.
+                        user_input = None
                         pending_start_step = from_step
                         continue
                     console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
