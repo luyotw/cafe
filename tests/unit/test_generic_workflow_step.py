@@ -252,17 +252,65 @@ def test_generic_workflow_step_writes_review_pause_contract(tmp_path: Path, monk
         agent_manager=FakeAgentManager("ready_for_review"),
         git_ops=FakeGitOperations(),
         role_agent_map={"pm": "Roger"},
+        interactive=True,
     )
 
     result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
+    # Interactive: READY_FOR_REVIEW auto-continues to let UserInputCollector
+    # prompt on the next iteration; the baton points back to spec (agent loop).
     assert result.status_code == "ready_for_review"
+    assert result.auto_continue is True
     reloaded = BlackboardStore(issue_dir).load_or_create("spec")
     assert reloaded.handoff_contract is not None
-    assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
-    assert reloaded.handoff_contract.to_step == "user"
-    assert reloaded.handoff_contract.intent == HandoffIntent.CONFIRM_OUTPUT
-    assert reloaded.handoff_contract.source == "workflow.status_transition_adapter"
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
+    assert reloaded.handoff_contract.to_step == "spec"
+
+
+def test_generic_workflow_step_auto_confirms_review_in_non_interactive(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-auto-confirm"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}, "developer": {"default_agent": "David"}},
+        "steps": {
+            "spec": {
+                "skill": {"1": "spec_first", "default": "spec_first"},
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["ready_for_review", "confirmed"],
+                "on": {"confirm_output": "spec", "await_agent": "plan"},
+            },
+            "plan": {
+                "skill": "plan",
+                "role": "developer",
+                "output_artifact": "plan",
+                "on": {"await_agent": "develop"},
+            },
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-auto-confirm",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("ready_for_review"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+        interactive=False,
+    )
+
+    result = executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    # Non-interactive: READY_FOR_REVIEW is treated as CONFIRMED
+    assert result.status_code == "confirmed"
+    assert result.auto_continue is True
+    reloaded = BlackboardStore(issue_dir).load_or_create("spec")
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.to_step == "plan"
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
 
 
 def test_generic_workflow_step_does_not_retry_for_legacy_status_tokens(tmp_path: Path, monkeypatch) -> None:

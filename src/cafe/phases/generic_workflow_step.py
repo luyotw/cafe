@@ -268,12 +268,32 @@ class GenericWorkflowStepExecutor(Phase):
             for event in execution.events
             if isinstance(event, dict)
         )
-        if require_status_code and self.interactive and status_code in {
-            PhaseStatusCode.NEED_CLARIFICATION,
-            PhaseStatusCode.READY_FOR_REVIEW,
-            PhaseStatusCode.CONFIRM_OUTPUT,
-        }:
+        # READY_FOR_REVIEW / CONFIRM_OUTPUT always auto-continues:
+        # - Interactive: stays in the agent loop so UserInputCollector can
+        #   prompt the user for confirmation on the next iteration.
+        # - Non-interactive: auto-confirms and advances to the successor step.
+        if (
+            require_status_code
+            and status_code in {PhaseStatusCode.READY_FOR_REVIEW, PhaseStatusCode.CONFIRM_OUTPUT}
+        ):
             auto_continue = True
+
+        # In interactive mode, NEED_CLARIFICATION auto-continues because the
+        # UserInputCollector hook on the next iteration will prompt the user
+        # and feed the answer into the agent.
+        if require_status_code and self.interactive and status_code == PhaseStatusCode.NEED_CLARIFICATION:
+            auto_continue = True
+
+        # In non-interactive mode, READY_FOR_REVIEW / CONFIRM_OUTPUT should
+        # transition as if CONFIRMED so the workflow advances instead of
+        # looping back to the same step (confirm_output → self in playbook).
+        effective_status = status_code
+        if (
+            auto_continue
+            and not self.interactive
+            and status_code in {PhaseStatusCode.READY_FOR_REVIEW, PhaseStatusCode.CONFIRM_OUTPUT}
+        ):
+            effective_status = PhaseStatusCode.CONFIRMED
 
         events = [
             event
@@ -288,8 +308,8 @@ class GenericWorkflowStepExecutor(Phase):
             payload.setdefault("step", step_name)
             store.record_event(blackboard_state, "script_hook", payload)
 
-        if require_status_code and status_code is not None:
-            handoff_intent = self._resolve_handoff_intent(step_name, status_code)
+        if require_status_code and effective_status is not None:
+            handoff_intent = self._resolve_handoff_intent(step_name, effective_status)
             if handoff_intent is not None:
                 events.append(
                     {
@@ -309,7 +329,7 @@ class GenericWorkflowStepExecutor(Phase):
                     step_name=step_name,
                     step_def=step_def,
                     response=response,
-                    status_code=status_code,
+                    status_code=effective_status,
                     auto_continue=auto_continue,
                 )
             align_pr_baton_after_execution(
@@ -317,13 +337,13 @@ class GenericWorkflowStepExecutor(Phase):
                 playbook=self.playbook,
                 blackboard_state=blackboard_state,
                 step_name=step_name,
-                status_code=status_code.value,
+                status_code=effective_status.value,
             )
 
         return StepExecutionResult(
             response=response,
             artifacts=artifacts,
-            status_code=status_code.value if status_code is not None else None,
+            status_code=effective_status.value if effective_status is not None else None,
             auto_continue=auto_continue,
             events=events,
         )
