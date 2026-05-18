@@ -496,67 +496,88 @@ def init() -> None:
         raise typer.Exit(1)
 
 
+_VALID_RIGOR_VALUES = ["low", "medium", "high"]
+_VALID_PLAYBOOK_VALUES = ["default", "tdd", "bugfix"]
+
+
 @app.command()
-def setup() -> None:
-    """Reconfigure agent roles (CLI, agent, and model assignments).
+def setup(
+    playbook: Optional[str] = typer.Option(
+        None,
+        "--playbook",
+        help="Set the playbook (default, tdd, bugfix).",
+    ),
+    rigor: Optional[str] = typer.Option(
+        None,
+        "--rigor",
+        help="Set rigor level (low, medium, high).",
+    ),
+    auto_update: Optional[bool] = typer.Option(
+        None,
+        "--auto-update/--no-auto-update",
+        help="Enable or disable automatic updates.",
+    ),
+) -> None:
+    """Configure project settings (playbook, rigor, auto-update).
 
-    Re-runs the interactive agent configuration from `cafe init` without
-    reinitializing the project. Existing non-agent settings are preserved.
-
+    Without flags runs an interactive flow. Use flags for non-interactive updates.
     Requires `cafe init` to have been run first.
     """
-    try:
-        config_manager = ConfigManager()
+    config_manager = ConfigManager()
 
-        # Check that .cafe is initialized
-        if not config_manager.config_file.exists():
-            console.print("[red]Configuration not found. Please run `cafe init` first.[/red]")
+    if not config_manager.config_file.exists():
+        console.print("[red]Configuration not found. Please run `cafe init` first.[/red]")
+        raise typer.Exit(1)
+
+    non_interactive = playbook is not None or rigor is not None or auto_update is not None
+
+    if non_interactive:
+        if rigor is not None and rigor not in _VALID_RIGOR_VALUES:
+            console.print(f"[red]Error: --rigor must be one of {_VALID_RIGOR_VALUES}.[/red]")
             raise typer.Exit(1)
 
-        # Load existing config
         existing_config = config_manager.load_config()
+        settings = existing_config.setdefault("settings", {})
 
-        # Check available CLIs
-        available_clis = check_available_clis()
+        if playbook is not None:
+            settings["playbook"] = playbook
+        if rigor is not None:
+            settings["rigor"] = rigor
+        if auto_update is not None:
+            settings["auto_update"] = auto_update
 
-        if not available_clis:
-            console.print("[red]No supported AI agents found. Please install at least one agent before retrying.[/red]")
-            console.print("[yellow]Supported agents: claude, gemini, cursor-agent, codex, copilot[/yellow]")
-            raise typer.Exit(1)
-
-        console.print(f"[green]Found available AI agents: {', '.join(available_clis)}[/green]\n")
-
-        existing_agents = existing_config.get("agents", {})
-
-        # Display current agent configuration
-        if _has_complete_agent_setup(existing_agents):
-            console.print("[bold]Current agent configuration:[/bold]")
-            _display_agent_summary(existing_agents)
-            console.print()
-        elif "agents" in existing_config:
-            console.print("[yellow]Current agent configuration is incomplete.[/yellow]\n")
-
-        # Use selective role editing only when existing setup is complete.
-        # Otherwise fall back to the original full setup flow.
-        if _has_complete_agent_setup(existing_agents):
-            agents_config = _interactive_agent_setup_selective(existing_agents, available_clis)
-        else:
-            console.print("[yellow]Incomplete agent configuration detected. Starting full setup flow.[/yellow]\n")
-            agents_config = _interactive_agent_setup(available_clis)
-
-        # Merge: update agents section, preserve everything else
-        existing_config["agents"] = agents_config
         config_manager.save_config(existing_config)
+        console.print("[green]✓ Settings updated.[/green]")
+        return
 
-        console.print("[bold green]Agent configuration updated successfully![/bold green]\n")
-        _display_agent_summary(agents_config)
+    try:
+        existing_config = config_manager.load_config()
+        settings = existing_config.setdefault("settings", {})
 
-        console.print(
-            "\n[cyan]To modify individual settings, use `cafe config` commands. See `cafe config --help` for details.[/cyan]"
+        new_auto_update = prompt_confirm(
+            "Enable auto-update?",
+            default=settings.get("auto_update", True),
+        )
+        new_playbook = prompt_list(
+            message="Select playbook:",
+            choices=_VALID_PLAYBOOK_VALUES,
+        )
+        new_rigor = prompt_list(
+            message="Select rigor level:",
+            choices=_VALID_RIGOR_VALUES,
         )
 
+        settings["auto_update"] = new_auto_update
+        if new_playbook:
+            settings["playbook"] = new_playbook
+        if new_rigor:
+            settings["rigor"] = new_rigor
+
+        config_manager.save_config(existing_config)
+        console.print("[green]✓ Settings updated.[/green]")
+
     except KeyboardInterrupt:
-        console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
+        console.print("\n[yellow]Cancelled.[/yellow]")
         raise typer.Exit(1)
 
 
