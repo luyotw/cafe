@@ -296,7 +296,18 @@ def set_primary(
         crew_data = _load_crew_data(cafe_dir)
         for role in _ROLES:
             existing_clis = _get_role_chain_as_clis(crew_data, role)
-            existing_fallback = existing_clis[1:] if len(existing_clis) > 1 else []
+
+            # Build new fallback: old primary becomes fallback #1,
+            # old fallback entries follow, deduplicated against new primary.
+            old_entries = existing_clis  # includes old primary at [0]
+            seen_clis = {cli}
+            new_fallback: List[Dict[str, Any]] = []
+            for entry in old_entries:
+                entry_cli = entry.get("cli", "")
+                if entry_cli in seen_clis:
+                    continue
+                seen_clis.add(entry_cli)
+                new_fallback.append(entry)
 
             new_primary: Dict[str, Any] = {"cli": cli}
             if model:
@@ -305,7 +316,7 @@ def set_primary(
             if role in phase_overrides:
                 new_primary.update(phase_overrides[role])
 
-            new_clis = [new_primary] + existing_fallback
+            new_clis = [new_primary] + new_fallback
             _update_role_clis(crew_data, role, new_clis)
 
         _save_crew_data(crew_data, cafe_dir)

@@ -228,8 +228,11 @@ class TestCrewSetPrimaryCliFlags:
         clis = updated["developer"]["clis"]
         assert clis[0]["cli"] == "gemini"
         assert clis[0]["model"] == "2.5-pro"
-        assert clis[1]["cli"] == "codex"
-        assert clis[1]["model"] == "o4-mini"
+        # Old primary (claude) is demoted to fallback #1, old fallback (codex) follows
+        assert clis[1]["cli"] == "claude"
+        assert clis[1]["model"] == "sonnet"
+        assert clis[2]["cli"] == "codex"
+        assert clis[2]["model"] == "o4-mini"
 
     def test_phase_model_overrides(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -459,6 +459,7 @@ class AgentExecutor:
     RATE_LIMIT_PATTERNS = {
         "claude": [
             "limit reached",
+            "hit your limit",
         ],
         "gemini": [
             "exhausted your capacity",
