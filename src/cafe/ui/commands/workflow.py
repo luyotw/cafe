@@ -117,7 +117,7 @@ def make(
         None,
         "--user-input",
         "-u",
-        help="Initial requirements to pass into the first spec step",
+        help="Requirements for the spec step, or answer to write when resuming from a user handoff",
     ),
     timeout: int = typer.Option(
         0,
@@ -433,7 +433,7 @@ def workflow(
         None,
         "--user-input",
         "-u",
-        help="Initial requirements to pass into the first spec step",
+        help="Requirements for the spec step, or answer to write when resuming from a user handoff",
     ),
     fallback_preset: Optional[str] = typer.Option(
         None,
@@ -660,6 +660,38 @@ def workflow(
                     return
                 # active_step in {"user", "done"} (done only reaches here in interactive mode)
                 if not interactive:
+                    if user_input and user_input.strip():
+                        step_keys = list(playbook_data.get("steps", {}).keys())
+                        contract = BlackboardStore(issue_dir).load_handoff_contract(
+                            blackboard,
+                            allowed_steps=step_keys,
+                        )
+                        from_step = getattr(contract, "from_step", None) or blackboard.current_step
+                        store = BlackboardStore(issue_dir)
+                        from_step_dir = issue_dir / from_step
+                        iteration_dirs = sorted(from_step_dir.glob("iteration_*")) if from_step_dir.exists() else []
+                        next_iteration_num = len(iteration_dirs) + 1
+                        next_iteration_dir = from_step_dir / f"iteration_{next_iteration_num:03d}"
+                        next_iteration_dir.mkdir(parents=True, exist_ok=True)
+                        (next_iteration_dir / "user_input.md").write_text(user_input, encoding="utf-8")
+                        store.set_current_step(blackboard, from_step)
+                        store.set_handoff_summary(
+                            blackboard,
+                            f"User input provided via --user-input, resuming {from_step}",
+                        )
+                        store.update_handoff_contract(
+                            blackboard,
+                            from_step=from_step,
+                            to_owner=HandoffOwner.AGENT,
+                            to_step=from_step,
+                            intent=HandoffIntent.AWAIT_AGENT,
+                            source="workflow.user_input_flag",
+                        )
+                        console.print(
+                            f"[dim]Resuming[/dim] {from_step} with --user-input"
+                        )
+                        pending_start_step = from_step
+                        continue
                     console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
                     return
                 user_selected_step = _handle_user_phase(
@@ -700,6 +732,9 @@ def workflow(
                 pending_start_step = "user"
                 continue
             if not interactive and not dry_run and not single_step and latest_blackboard.current_step == "user":
+                if user_input and user_input.strip():
+                    pending_start_step = "user"
+                    continue
                 console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
                 return
             if result.completed:
