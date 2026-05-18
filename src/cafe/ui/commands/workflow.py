@@ -12,7 +12,6 @@ import typer
 from rich.console import Console
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
 from cafe.core.types import CriticalPhaseError
 from cafe.core.workflow_models import StepExecutionResult, StepInterrupted
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -120,11 +119,6 @@ def make(
         "-u",
         help="Initial requirements to pass into the first spec step",
     ),
-    auto_advance: bool = typer.Option(
-        False,
-        "--auto-advance",
-        help="Auto-confirm user handoffs and advance without interactive prompts",
-    ),
     timeout: int = typer.Option(
         0,
         "--timeout",
@@ -189,8 +183,6 @@ def make(
     cmd = [sys.executable, "-m", "cafe.ui.cli", "workflow", "--execute"]
     if user_input:
         cmd.extend(["--user-input", user_input])
-    if auto_advance:
-        cmd.append("--auto-advance")
     if fallback_preset:
         cmd.extend(["--fallback-preset", fallback_preset])
 
@@ -436,7 +428,6 @@ def workflow(
     issue: Optional[str] = typer.Option(None, "--issue", help="Issue directory name"),
     start_step: Optional[str] = typer.Option(None, "--start-step", help="Start execution from a specific step"),
     single_step: bool = typer.Option(False, "--single-step", help="Run only one playbook step"),
-    auto_advance: bool = typer.Option(False, "--auto-advance", help="Auto-confirm user handoffs and advance without interactive prompts"),
     dry_run: bool = typer.Option(True, "--dry-run/--execute", help="Run with built-in dry executor"),
     user_input: Optional[str] = typer.Option(
         None,
@@ -489,7 +480,7 @@ def workflow(
 
         playbook_loader = PlaybookLoader()
         playbook_data = playbook_loader.load(selected_playbook)
-        interactive = (sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1") and not auto_advance
+        interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
         generic_phase = GenericPhase(SkillLoader())
 
         def dry_executor(step_name: str, step_def: Dict, blackboard_state: object, extra_prompt: Optional[str] = None) -> StepExecutionResult:
@@ -669,92 +660,8 @@ def workflow(
                     return
                 # active_step in {"user", "done"} (done only reaches here in interactive mode)
                 if not interactive:
-                    if auto_advance:
-                        # Smart auto-advance: read the handoff contract to
-                        # understand why we paused at user, then either answer
-                        # pending questions or confirm the output, and resume
-                        # the originating step so it can process the input.
-                        step_keys = list(playbook_data.get("steps", {}).keys())
-                        contract = BlackboardStore(issue_dir).load_handoff_contract(
-                            blackboard,
-                            allowed_steps=step_keys,
-                        )
-                        from_step = getattr(contract, "from_step", None) or blackboard.current_step
-                        handoff_intent = getattr(contract, "intent", None)
-                        intent_value = handoff_intent.value if handoff_intent else ""
-
-                        store = BlackboardStore(issue_dir)
-
-                        # Determine the originating step's latest iteration
-                        # directory so we can locate questions.xml.
-                        from_step_dir = issue_dir / from_step
-                        iteration_dirs = sorted(from_step_dir.glob("iteration_*")) if from_step_dir.exists() else []
-                        latest_iteration = iteration_dirs[-1] if iteration_dirs else None
-
-                        # Build auto-answer text from questions.xml if present.
-                        auto_answer = ""
-                        if latest_iteration is not None:
-                            questions_xml_path = latest_iteration / "questions.xml"
-                            if questions_xml_path.exists() and validate_questions_xml(questions_xml_path):
-                                questions = parse_questions_xml(questions_xml_path)
-                                answer_lines = []
-                                for q in questions:
-                                    if q.multi_select:
-                                        # Select all options for checkbox questions.
-                                        selected = q.options
-                                        answer_lines.append(f"Q: {q.title}")
-                                        answer_lines.append(f"A: {'; '.join(selected)}")
-                                    else:
-                                        # Select first option for single-select questions.
-                                        selected = q.options[0] if q.options else "(auto-confirmed)"
-                                        answer_lines.append(f"Q: {q.title}")
-                                        answer_lines.append(f"A: {selected}")
-                                auto_answer = "\n".join(answer_lines)
-
-                        # If no questions.xml, generate a generic confirmation.
-                        if not auto_answer:
-                            if intent_value == "confirm_output":
-                                auto_answer = "Confirmed. Proceed to the next step."
-                            elif intent_value == "need_clarification":
-                                auto_answer = "No additional clarification needed. Proceed as proposed."
-                            else:
-                                auto_answer = "Auto-confirmed. Proceed."
-
-                        # Write the auto-answer into the next iteration's
-                        # user_input.md so the UserInputCollector hook can
-                        # pick it up when the step re-executes.
-                        next_iteration_num = len(iteration_dirs) + 1
-                        next_iteration_dir = from_step_dir / f"iteration_{next_iteration_num:03d}"
-                        next_iteration_dir.mkdir(parents=True, exist_ok=True)
-                        user_input_file = next_iteration_dir / "user_input.md"
-                        user_input_file.write_text(auto_answer, encoding="utf-8")
-
-                        # Hand the baton back to the originating step so it
-                        # can run its next iteration with the auto-answer.
-                        store.set_current_step(blackboard, from_step)
-                        store.set_handoff_summary(
-                            blackboard,
-                            f"Auto-advanced: answered user handoff from {from_step} (intent={intent_value})",
-                        )
-                        store.update_handoff_contract(
-                            blackboard,
-                            from_step=from_step,
-                            to_owner=HandoffOwner.AGENT,
-                            to_step=from_step,
-                            intent=HandoffIntent.AWAIT_AGENT,
-                            source="workflow.auto_advance",
-                        )
-                        store.record_event(
-                            blackboard,
-                            "auto_advance",
-                            {"from_phase": from_step, "intent": intent_value, "auto_answered": True},
-                        )
-                        console.print(f"[dim]Auto-advancing[/dim] user handoff from {from_step} (intent={intent_value}) → re-run {from_step} with auto-answer")
-                        pending_start_step = from_step
-                        continue
-                    else:
-                        console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
-                        return
+                    console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
+                    return
                 user_selected_step = _handle_user_phase(
                     issue_name=issue_name,
                     issue_dir=issue_dir,
@@ -793,9 +700,6 @@ def workflow(
                 pending_start_step = "user"
                 continue
             if not interactive and not dry_run and not single_step and latest_blackboard.current_step == "user":
-                if auto_advance:
-                    pending_start_step = "user"
-                    continue
                 console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
                 return
             if result.completed:

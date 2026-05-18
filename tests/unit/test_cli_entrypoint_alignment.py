@@ -72,11 +72,11 @@ def test_build_repo_entrypoint_mismatch_message_reports_external_install(tmp_pat
 
 def test_reexec_command_preserves_cli_args(monkeypatch, tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
-    monkeypatch.setattr(cli.sys, "argv", ["cafe", "make", "--auto-advance"])
+    monkeypatch.setattr(cli.sys, "argv", ["cafe", "make", "--user-input", "hello"])
 
     command = _build_repo_entrypoint_reexec_command(repo_root)
 
-    assert command[1:] == ["-m", "cafe.ui.cli", "make", "--auto-advance"]
+    assert command[1:] == ["-m", "cafe.ui.cli", "make", "--user-input", "hello"]
 
 
 def test_reexec_env_prefers_checkout_src(monkeypatch, tmp_path: Path) -> None:
