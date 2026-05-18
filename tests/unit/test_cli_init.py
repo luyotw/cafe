@@ -205,7 +205,12 @@ class TestInitInteractiveFlow:
             result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 0
-        mock_pm.apply.assert_called_once()
+
+        crew_file = cafe_dir / "crew.yaml"
+        assert crew_file.exists()
+        crew = yaml.safe_load(crew_file.read_text()) or {}
+        for role in ["pm", "developer", "reviewer"]:
+            assert crew[role]["clis"][0]["cli"] == "claude"
 
         config_file = cafe_dir / "config.yaml"
         assert config_file.exists()

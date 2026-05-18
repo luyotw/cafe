@@ -75,7 +75,7 @@ class TestCrewSetPrimaryInteractive:
     def test_interactive_applies_confirmed_preset(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """User selects preset, confirms → crew.yaml gets the preset content."""
+        """User selects preset, confirms → preset primary applied to crew.yaml."""
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir()
         monkeypatch.chdir(tmp_path)
@@ -91,17 +91,60 @@ class TestCrewSetPrimaryInteractive:
             mock_pm = MagicMock()
             mock_pm_cls.return_value = mock_pm
             mock_pm.list.return_value = [preset_info]
-            mock_pm.apply.return_value = None
 
             result = runner.invoke(app, ["crew", "set-primary"])
 
         assert result.exit_code == 0
-        mock_pm.apply.assert_called_once_with("default", cafe_dir=Path(".cafe"))
+        crew = yaml.safe_load((cafe_dir / "crew.yaml").read_text())
+        for role in ["pm", "developer", "reviewer"]:
+            assert crew[role]["clis"][0]["cli"] == "claude"
+
+    def test_interactive_preserves_existing_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Interactive preset apply preserves user's existing fallback entries."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        (cafe_dir / "crew.yaml").write_text(yaml.dump({
+            "developer": {
+                "name": "Nick",
+                "clis": [
+                    {"cli": "codex", "model": "gpt-5.5"},
+                    {"cli": "gemini", "model": "2.5-pro", "plan": "2.5-pro"},
+                ],
+            },
+        }))
+
+        preset_info = self._make_preset_info("default", tmp_path, cli="claude")
+
+        with (
+            patch("cafe.ui.commands.crew.PresetManager") as mock_pm_cls,
+            patch("cafe.ui.init_helpers.check_available_clis", return_value=["claude"]),
+            patch("cafe.ui.commands.crew.prompt_list", return_value="default  [built-in]"),
+            patch("cafe.ui.commands.crew.prompt_confirm", return_value=True),
+        ):
+            mock_pm = MagicMock()
+            mock_pm_cls.return_value = mock_pm
+            mock_pm.list.return_value = [preset_info]
+
+            result = runner.invoke(app, ["crew", "set-primary"])
+
+        assert result.exit_code == 0
+        crew = yaml.safe_load((cafe_dir / "crew.yaml").read_text())
+        clis = crew["developer"]["clis"]
+        assert clis[0]["cli"] == "claude"
+        cli_names = [e["cli"] for e in clis]
+        assert "codex" in cli_names
+        assert "gemini" in cli_names
+        gemini_entry = next(e for e in clis if e["cli"] == "gemini")
+        assert gemini_entry.get("plan") == "2.5-pro"
 
     def test_interactive_loops_back_when_not_confirmed(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """User rejects first time, confirms second time → apply called once."""
+        """User rejects first time, confirms second time → crew.yaml updated once."""
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir()
         monkeypatch.chdir(tmp_path)
@@ -119,12 +162,12 @@ class TestCrewSetPrimaryInteractive:
             mock_pm = MagicMock()
             mock_pm_cls.return_value = mock_pm
             mock_pm.list.return_value = [preset_info]
-            mock_pm.apply.return_value = None
 
             result = runner.invoke(app, ["crew", "set-primary"])
 
         assert result.exit_code == 0
-        assert mock_pm.apply.call_count == 1
+        crew = yaml.safe_load((cafe_dir / "crew.yaml").read_text())
+        assert crew["developer"]["clis"][0]["cli"] == "claude"
 
     def test_interactive_keyboard_interrupt_exits_cleanly(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -233,6 +276,37 @@ class TestCrewSetPrimaryCliFlags:
         assert clis[1]["model"] == "sonnet"
         assert clis[2]["cli"] == "codex"
         assert clis[2]["model"] == "o4-mini"
+
+    def test_cli_flag_preserves_phase_models_on_matching_entry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--cli on a CLI already in the chain preserves its existing phase models."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        crew_file = cafe_dir / "crew.yaml"
+        crew_data = {
+            "developer": {
+                "name": "Nick",
+                "clis": [
+                    {"cli": "claude", "model": "sonnet"},
+                    {"cli": "codex", "model": "gpt-5.5",
+                     "plan": "gpt-5.5", "develop": "gpt-5.3-codex"},
+                ],
+            },
+        }
+        crew_file.write_text(yaml.dump(crew_data, default_flow_style=False))
+
+        result = runner.invoke(app, ["crew", "set-primary", "--cli", "codex"])
+
+        assert result.exit_code == 0
+        updated = yaml.safe_load(crew_file.read_text())
+        primary = updated["developer"]["clis"][0]
+        assert primary["cli"] == "codex"
+        assert primary["model"] == "gpt-5.5"
+        assert primary["plan"] == "gpt-5.5"
+        assert primary["develop"] == "gpt-5.3-codex"
 
     def test_phase_model_overrides(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

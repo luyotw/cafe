@@ -160,6 +160,53 @@ def _render_preset_preview(preset_data: Dict[str, Any]) -> str:
     return "\n".join(lines) if lines else "  (empty)"
 
 
+def _apply_preset_preserving_fallback(
+    preset_data: Dict[str, Any], cafe_dir: Path = Path(".cafe")
+) -> None:
+    """Apply a preset's primary CLI per role while preserving existing fallback chain.
+
+    For each role, takes the preset's primary entry (first in chain) as the new
+    primary and keeps existing fallback entries that don't duplicate the new primary.
+    Preserves top-level role keys like ``name`` from the preset.
+    """
+    crew_data = _load_crew_data(cafe_dir)
+
+    for role in _ROLES:
+        preset_role_cfg = preset_data.get(role)
+        if not isinstance(preset_role_cfg, dict):
+            continue
+
+        preset_chain = _get_role_chain_as_clis(preset_data, role)
+        if not preset_chain:
+            continue
+        new_primary = preset_chain[0]
+        new_primary_cli = new_primary.get("cli", "")
+
+        existing_clis = _get_role_chain_as_clis(crew_data, role)
+        seen_clis = {new_primary_cli}
+        new_fallback: List[Dict[str, Any]] = []
+        for entry in existing_clis:
+            entry_cli = entry.get("cli", "")
+            if entry_cli in seen_clis:
+                continue
+            seen_clis.add(entry_cli)
+            new_fallback.append(entry)
+
+        # Preserve role-level metadata (e.g. name) from preset, then update clis.
+        if role not in crew_data or not isinstance(crew_data.get(role), dict):
+            crew_data[role] = {}
+        for key, val in preset_role_cfg.items():
+            if key in {"cli", "model", "backup", "models", "clis"}:
+                continue
+            if isinstance(val, dict):
+                continue  # skip old-format phase dicts (already encoded into primary)
+            crew_data[role][key] = val
+
+        _update_role_clis(crew_data, role, [new_primary] + new_fallback)
+
+    _save_crew_data(crew_data, cafe_dir)
+
+
 def run_set_primary_interactive(cafe_dir: Path = Path(".cafe")) -> None:
     """Interactive flow: detect CLIs, pick preset, preview, confirm, apply."""
     from cafe.ui.init_helpers import check_available_clis
@@ -217,7 +264,7 @@ def run_set_primary_interactive(cafe_dir: Path = Path(".cafe")) -> None:
 
         confirmed = prompt_confirm("Apply this preset to crew.yaml?", default=True)
         if confirmed:
-            manager.apply(selected_info.name, cafe_dir=cafe_dir)
+            _apply_preset_preserving_fallback(preset_data, cafe_dir=cafe_dir)
             console.print(f"[green]✓ Applied preset '[cyan]{selected_info.name}[/cyan]' to {cafe_dir}/crew.yaml[/green]")
             return
         # Loop back to selection
@@ -297,19 +344,23 @@ def set_primary(
         for role in _ROLES:
             existing_clis = _get_role_chain_as_clis(crew_data, role)
 
-            # Build new fallback: old primary becomes fallback #1,
-            # old fallback entries follow, deduplicated against new primary.
-            old_entries = existing_clis  # includes old primary at [0]
-            seen_clis = {cli}
+            # If new cli already exists in the chain, use its entry as the base
+            # for new_primary so phase models survive promotion.
+            base_for_new_primary: Dict[str, Any] = {}
             new_fallback: List[Dict[str, Any]] = []
-            for entry in old_entries:
+            seen_clis = {cli}
+            for entry in existing_clis:
                 entry_cli = entry.get("cli", "")
+                if entry_cli == cli:
+                    base_for_new_primary = dict(entry)
+                    continue
                 if entry_cli in seen_clis:
                     continue
                 seen_clis.add(entry_cli)
                 new_fallback.append(entry)
 
-            new_primary: Dict[str, Any] = {"cli": cli}
+            new_primary: Dict[str, Any] = dict(base_for_new_primary)
+            new_primary["cli"] = cli
             if model:
                 new_primary["model"] = model
             # Merge phase model overrides for this role
@@ -378,6 +429,20 @@ def run_set_fallback_interactive(role: str, cafe_dir: Path = Path(".cafe")) -> N
             new_entry: Dict[str, Any] = {"cli": chosen_cli}
             if model_input and model_input.strip():
                 new_entry["model"] = model_input.strip()
+            phase_input = prompt_text(
+                message="Phase models (format: phase=model,phase=model; blank to skip):",
+                default="",
+            )
+            if phase_input and phase_input.strip():
+                for spec in phase_input.split(","):
+                    spec = spec.strip()
+                    if not spec or "=" not in spec:
+                        continue
+                    phase_key, _, phase_val = spec.partition("=")
+                    phase_key = phase_key.strip()
+                    phase_val = phase_val.strip()
+                    if phase_key and phase_val:
+                        new_entry[phase_key] = phase_val
             clis.append(new_entry)
 
         elif action == "Remove entry":
@@ -437,6 +502,11 @@ def set_fallback(
         "--remove",
         help="Remove entry by CLI name.",
     ),
+    phase_model: Optional[List[str]] = typer.Option(
+        None,
+        "--phase-model",
+        help="Phase model override for added entry: phase=model (e.g. plan=opus). Repeatable.",
+    ),
 ) -> None:
     """Edit the fallback chain for a specific role.
 
@@ -482,9 +552,26 @@ def set_fallback(
                 console.print(f"[red]Error: '{new_cli}' is already in the {role} chain.[/red]")
                 raise typer.Exit(1)
 
+            # Parse phase model overrides for this entry: phase=model
+            phase_overrides: Dict[str, str] = {}
+            if phase_model:
+                err = "[red]Error: --phase-model must be phase=model, got '{}'[/red]"
+                for spec in phase_model:
+                    if "=" not in spec:
+                        console.print(err.format(spec))
+                        raise typer.Exit(1)
+                    phase_key, _, phase_val = spec.partition("=")
+                    phase_key = phase_key.strip()
+                    phase_val = phase_val.strip()
+                    if not phase_key or not phase_val:
+                        console.print(err.format(spec))
+                        raise typer.Exit(1)
+                    phase_overrides[phase_key] = phase_val
+
             entry: Dict[str, Any] = {"cli": new_cli}
             if new_model:
                 entry["model"] = new_model
+            entry.update(phase_overrides)
             clis.append(entry)
             _update_role_clis(crew_data, role, clis)
             _save_crew_data(crew_data, cafe_dir)

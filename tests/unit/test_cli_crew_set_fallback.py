@@ -70,6 +70,45 @@ class TestCrewSetFallbackNonInteractive:
         clis = crew["pm"]["clis"]
         assert any(e["cli"] == "gemini" for e in clis)
 
+    def test_add_cli_with_phase_models(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--add codex,gpt-5.5 --phase-model plan=gpt-5.5 adds phase models to entry."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        _write_crew(cafe_dir, _CREW_NEW)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, [
+            "crew", "set-fallback", "--role", "developer",
+            "--add", "codex,gpt-5.5",
+            "--phase-model", "plan=gpt-5.5",
+            "--phase-model", "develop=gpt-5.3-codex",
+        ])
+
+        assert result.exit_code == 0
+        crew = _read_crew(cafe_dir)
+        codex_entry = next(e for e in crew["developer"]["clis"] if e["cli"] == "codex")
+        assert codex_entry["model"] == "gpt-5.5"
+        assert codex_entry["plan"] == "gpt-5.5"
+        assert codex_entry["develop"] == "gpt-5.3-codex"
+
+    def test_add_with_invalid_phase_model_format_exits_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--phase-model without = exits 1."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        _write_crew(cafe_dir, _CREW_NEW)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, [
+            "crew", "set-fallback", "--role", "developer",
+            "--add", "codex", "--phase-model", "badformat",
+        ])
+
+        assert result.exit_code == 1
+
     def test_remove_cli(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
