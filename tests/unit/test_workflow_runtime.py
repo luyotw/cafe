@@ -121,6 +121,40 @@ def test_runtime_completes_pr_when_capability_receipt_success_exists(tmp_path: P
     assert result.final_status_code == "BATON_WORKFLOW_COMPLETE"
 
 
+def test_runtime_reports_pr_publish_failures_as_publish_error(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-pr-publish-error"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "pr": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        raise RuntimeError(
+            "PR sync script failed: Error: cannot sync PR with uncommitted changes.\n"
+            "Commit or stash changes first, then run cafe make again."
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="pr")
+
+    assert result.completed is False
+    assert result.final_step == "pr"
+    assert result.final_status_code == "INTERRUPTED:publish_error"
+    assert result.detail is not None
+    assert "cannot sync PR with uncommitted changes" in result.detail
+
+    blackboard = BlackboardStore(issue_dir).load_or_create("pr")
+    event = blackboard.events[-2]
+    assert event.event_type == "step_interrupted"
+    assert event.data["reason"] == "publish_error"
+
+
 def test_runtime_delegates_non_pr_steps_to_legacy_runner(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-spec"
     playbook = {
@@ -148,6 +182,58 @@ def test_runtime_delegates_non_pr_steps_to_legacy_runner(tmp_path: Path) -> None
     assert result.completed is True
     assert result.final_step == "spec"
     assert result.final_status_code == "confirmed"
+
+
+def test_runtime_retries_stale_invalid_baton_from_startup(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "stale-invalid-baton"
+    issue_dir.mkdir(parents=True)
+    _write_baton(
+        issue_dir,
+        from_step="spec",
+        to_owner="user",
+        to_step="user",
+        intent="await_user_qa",
+    )
+    playbook = {
+        "playbook": {"id": "default"},
+        "entry_point": "spec",
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "on": {"need_clarification": "spec", "await_agent": "_done"},
+            },
+        },
+    }
+    prompts: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object, *, extra_prompt: str | None = None) -> StepExecutionResult:
+        prompts.append(extra_prompt or "")
+        _write_baton(
+            issue_dir,
+            from_step="spec",
+            to_owner="user",
+            to_step="user",
+            intent="need_clarification",
+        )
+        payload = json.loads((issue_dir / "next_step.txt").read_text(encoding="utf-8"))
+        payload["status_code"] = "need_clarification"
+        (issue_dir / "next_step.txt").write_text(json.dumps(payload), encoding="utf-8")
+        return StepExecutionResult(response="", artifacts={})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run()
+
+    assert result.completed is False
+    assert result.final_step == "spec"
+    assert result.final_status_code == "need_clarification"
+    assert prompts
+    assert "await_user_qa" in prompts[0]
+    assert "need_clarification" in prompts[0]
 
 
 def test_runtime_rejects_legacy_text_baton_in_core_path(tmp_path: Path) -> None:

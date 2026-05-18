@@ -1,13 +1,16 @@
 """Tests for the reusable chat launcher module."""
 
+import json
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.types import AgentCLI
 from cafe.ui.chat import (
+    _load_latest_role_iteration_cli,
     _prepare_chat_environment,
     _prepare_chat_handoff_state,
     get_chat_next_step_path,
@@ -103,6 +106,48 @@ class TestLaunchChatSession:
 
         assert mock_run.call_args.args[0] == ["copilot", "--resume", "sess-xyz"]
         assert "env" in mock_run.call_args.kwargs
+
+    @patch("cafe.ui.chat.subprocess.run")
+    @patch("cafe.ui.chat.ConfigManager")
+    @patch("cafe.ui.chat.AgentManager")
+    def test_chat_uses_last_successful_active_cli(
+        self,
+        mock_agent_manager_cls,
+        mock_config_manager_cls,
+        mock_run,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Chat reuses the role's last successful fallback CLI."""
+        monkeypatch.chdir(tmp_path)
+        issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
+        issue_dir.mkdir(parents=True)
+        (issue_dir / "active_clis.json").write_text(
+            json.dumps({"David": {"cli": "codex", "model": "gpt-5.3-codex"}}),
+            encoding="utf-8",
+        )
+
+        mock_config = MagicMock()
+        mock_config.get.return_value = {
+            "name": "David",
+            "clis": [
+                {"cli": "claude", "develop": "sonnet"},
+                {"cli": "codex", "develop": "gpt-5.3-codex"},
+            ],
+        }
+        mock_config_manager_cls.return_value = mock_config
+
+        agent_manager = self._make_agent_manager("David", "codex", session_id=None, model="gpt-5.3-codex")
+        mock_agent_manager_cls.return_value = agent_manager
+        mock_run.return_value = MagicMock(returncode=0)
+
+        result = launch_chat_session("developer", "issue123")
+
+        assert result == 0
+        assert mock_run.call_args.args[0] == ["codex", "--model", "gpt-5.3-codex"]
+        registered_config = agent_manager.register_agent.call_args.args[0]
+        assert registered_config.cli == AgentCLI.CODEX
+        assert registered_config.model == "gpt-5.3-codex"
 
     @patch("cafe.ui.chat.subprocess.run")
     @patch("cafe.ui.chat.ConfigManager")
@@ -297,6 +342,41 @@ def test_prepare_chat_environment_installs_chat_skills_only() -> None:
     ]
 
 
+def test_latest_role_iteration_cli_infers_codex_for_legacy_fallback_metadata(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps(
+            {
+                "cli": "claude",
+                "response": "confirmed",
+                "end_time": "2026-05-19T10:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (iteration_dir / "streaming.jsonl").write_text(
+        json.dumps({"type": "thread.started", "thread_id": "thread-123"}) + "\n",
+        encoding="utf-8",
+    )
+
+    result = _load_latest_role_iteration_cli(
+        issue_dir,
+        role="developer",
+        role_config={
+            "name": "David",
+            "clis": [
+                {"cli": "claude"},
+                {"cli": "codex", "develop": "gpt-5.3-codex"},
+            ],
+        },
+    )
+
+    assert result == ("codex", "gpt-5.3-codex")
+
+
 def test_launch_chat_session_prepares_chat_handoff_directory(
     tmp_path,
     monkeypatch,
@@ -344,6 +424,34 @@ def test_prepare_chat_handoff_state_creates_blackboard_and_clears_stale_baton(tm
     assert playbook_id == "default"
     assert (issue_dir / "blackboard.json").exists()
     assert next_step_path.exists()
+
+
+def test_prepare_chat_handoff_state_preserves_user_clarification_baton(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.NEED_CLARIFICATION,
+        status_code="need_clarification",
+        source="workflow.pause",
+    )
+
+    current_step, valid_steps, playbook_id = _prepare_chat_handoff_state(issue_dir)
+
+    assert current_step == "user"
+    assert "spec" in valid_steps
+    assert playbook_id == "default"
+    reloaded = store.load_or_create("user", playbook_id="default")
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.from_step == "spec"
+    assert reloaded.handoff_contract.intent == HandoffIntent.NEED_CLARIFICATION
+    assert reloaded.handoff_contract.source == "workflow.pause"
 
 
 def test_launch_chat_session_warns_when_baton_missing(
