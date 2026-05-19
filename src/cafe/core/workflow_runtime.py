@@ -65,7 +65,11 @@ class BlackboardWorkflowRuntime:
         self.start_step = str(playbook.get("entry_point") or next(iter(self.steps.keys())))
 
         self.blackboard_store = BlackboardStore(issue_dir)
-        self.blackboard = self.blackboard_store.load_or_create(self.start_step, playbook_id=self.playbook_id)
+        self.blackboard = self.blackboard_store.load_or_create(
+            self.start_step,
+            playbook_id=self.playbook_id,
+            tolerate_invalid_baton=True,
+        )
 
     @staticmethod
     def _extract_goto_target(response: str) -> Optional[str]:
