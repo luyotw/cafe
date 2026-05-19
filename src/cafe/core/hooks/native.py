@@ -1070,13 +1070,11 @@ class PRLinkOpener(NoOpHook):
         except Exception:
             return HookResult()
 
-        events = [{"type": "pr_synced", "url": pr_url}]
-
         if sys.stdin.isatty():
             try:
                 webbrowser.open(pr_url)
             except Exception:
-                return HookResult(events=events)
-            events.append({"type": "pr_link_opened", "url": pr_url})
+                return HookResult()
+            return HookResult(events=[{"type": "pr_link_opened", "url": pr_url}])
 
-        return HookResult(events=events)
+        return HookResult()

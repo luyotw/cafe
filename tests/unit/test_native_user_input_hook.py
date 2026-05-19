@@ -401,7 +401,6 @@ def test_pr_link_opener_opens_current_pr_url_when_confirmed() -> None:
 
     mock_open.assert_called_once_with("https://github.com/test/repo/pull/123")
     assert result.events == [
-        {"type": "pr_synced", "url": "https://github.com/test/repo/pull/123"},
         {"type": "pr_link_opened", "url": "https://github.com/test/repo/pull/123"},
     ]
 
@@ -417,9 +416,7 @@ def test_pr_link_opener_skips_browser_in_non_interactive() -> None:
         result = hook.run(stage="publish_output", status_code=PhaseStatusCode.CONFIRMED)
 
     mock_open.assert_not_called()
-    assert result.events == [
-        {"type": "pr_synced", "url": "https://github.com/test/repo/pull/123"},
-    ]
+    assert result.events == []
 
 
 def test_pr_link_opener_noops_when_pr_url_unavailable() -> None:
@@ -435,7 +432,7 @@ def test_pr_link_opener_noops_when_pr_url_unavailable() -> None:
     assert result.events == []
 
 
-def test_pr_link_opener_returns_pr_synced_even_when_browser_open_fails() -> None:
+def test_pr_link_opener_noops_when_browser_open_fails() -> None:
     hook = PRLinkOpener()
 
     with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops, \
@@ -446,7 +443,7 @@ def test_pr_link_opener_returns_pr_synced_even_when_browser_open_fails() -> None
         result = hook.run(stage="publish_output", status_code=PhaseStatusCode.CONFIRMED)
 
     mock_open.assert_called_once_with("https://github.com/test/repo/pull/123")
-    assert result.events == [{"type": "pr_synced", "url": "https://github.com/test/repo/pull/123"}]
+    assert result.events == []
 
 
 def test_local_pr_reviewer_displays_diff_and_confirms_local_mode(tmp_path: Path) -> None:
