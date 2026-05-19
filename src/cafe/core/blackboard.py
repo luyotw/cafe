@@ -362,14 +362,21 @@ class BlackboardStore:
         state: BlackboardState,
         *,
         allow_legacy_text: bool = False,
-    ) -> HandoffContract:
+    ) -> Optional[HandoffContract]:
         """Ensure a persistent baton file exists for this issue."""
         if self.next_step_path.exists():
-            contract = self.load_handoff_contract(
-                state,
-                allowed_steps=[],
-                allow_legacy_text=allow_legacy_text,
-            )
+            try:
+                contract = self.load_handoff_contract(
+                    state,
+                    allowed_steps=[],
+                    allow_legacy_text=allow_legacy_text,
+                )
+            except BatonRejected:
+                # Keep the invalid baton on disk so the workflow runtime can
+                # feed the exact schema error back to the responsible agent.
+                state.handoff_contract = None
+                self.save(state)
+                return None
             state.handoff_contract = contract
             self.save(state)
             return contract

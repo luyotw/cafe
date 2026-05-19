@@ -62,6 +62,7 @@ class FakeAgentManager:
         allowed_tools=None,
         allowed_directories=None,
         streaming_output_file=None,
+        phase_name=None,
     ):
         self.prompts.append(prompt)
         self.allowed_tools_calls.append(list(allowed_tools) if allowed_tools is not None else None)

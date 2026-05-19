@@ -59,7 +59,7 @@ class TestWorkflowFallbackPresetLogic:
                 if (
                     fallback_preset
                     and not fallback_applied[0]
-                    and getattr(exc, "error_type", None) in ("rate_limit", "cli_not_found")
+                    and getattr(exc, "error_type", None) in ("rate_limit", "cli_not_found", "cli_unavailable")
                 ):
                     fake_apply(fallback_preset)
                     fallback_applied[0] = True
@@ -87,7 +87,7 @@ class TestWorkflowFallbackPresetLogic:
                 if (
                     fallback_preset
                     and not fallback_applied[0]
-                    and getattr(exc, "error_type", None) in ("rate_limit", "cli_not_found")
+                    and getattr(exc, "error_type", None) in ("rate_limit", "cli_not_found", "cli_unavailable")
                 ):
                     fallback_applied[0] = True
                     return mock_executor.execute_step(step_name, {}, None)
@@ -115,7 +115,7 @@ class TestWorkflowFallbackPresetLogic:
                 if (
                     fallback_preset
                     and not fallback_applied[0]
-                    and getattr(exc, "error_type", None) in ("rate_limit", "cli_not_found")
+                    and getattr(exc, "error_type", None) in ("rate_limit", "cli_not_found", "cli_unavailable")
                 ):
                     applied.append(fallback_preset)
                     fallback_applied[0] = True
@@ -123,5 +123,34 @@ class TestWorkflowFallbackPresetLogic:
                 raise
 
         result = wrapped_execute("spec")
+        assert result.status_code == "confirmed"
+        assert "fallback-crew" in applied
+
+    def test_workflow_switches_crew_on_cli_unavailable(self) -> None:
+        """When the primary CLI is unavailable due to account/org policy, fallback preset applies."""
+        cli_error = AgentExecutionError("subscription disabled", error_type="cli_unavailable")
+        success_result = StepExecutionResult(response="ok", artifacts={}, status_code="confirmed")
+        mock_executor = MagicMock()
+        mock_executor.execute_step.side_effect = [cli_error, success_result]
+
+        applied: list = []
+        fallback_preset = "fallback-crew"
+        fallback_applied = [False]
+
+        def wrapped_execute(step_name: str) -> StepExecutionResult:
+            try:
+                return mock_executor.execute_step(step_name, {}, None)
+            except AgentExecutionError as exc:
+                if (
+                    fallback_preset
+                    and not fallback_applied[0]
+                    and getattr(exc, "error_type", None) in ("rate_limit", "cli_not_found", "cli_unavailable")
+                ):
+                    applied.append(fallback_preset)
+                    fallback_applied[0] = True
+                    return mock_executor.execute_step(step_name, {}, None)
+                raise
+
+        result = wrapped_execute("review")
         assert result.status_code == "confirmed"
         assert "fallback-crew" in applied

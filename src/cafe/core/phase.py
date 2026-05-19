@@ -326,9 +326,6 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         try:
             self._append_iteration_index(iteration_index_data)
         except Exception as e:
-            # Log error but don't interrupt flow
-            import logging
-            logger = logging.getLogger(__name__)
             logger.warning(f"Failed to append iteration index: {e}")
 
     def _record_active_agent_cli(
@@ -665,10 +662,14 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             ):
                 agent_cli = actual_agent_cli.value
 
-            actual_session_id = getattr(self.agent_manager, "get_last_session_id", lambda: None)()
-            if isinstance(actual_session_id, str):
-                agent_session_id = actual_session_id
-            elif isinstance(agent_executor.config.session_id, str):
+            last_session_getter = getattr(self.agent_manager, "get_last_session_id", None)
+            has_valid_last_session = False
+            if callable(last_session_getter):
+                actual_session_id = last_session_getter()
+                if isinstance(actual_session_id, str) or actual_session_id is None:
+                    agent_session_id = actual_session_id
+                    has_valid_last_session = True
+            if not has_valid_last_session:
                 agent_session_id = agent_executor.config.session_id
 
             self._record_active_agent_cli(

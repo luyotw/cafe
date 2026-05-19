@@ -606,6 +606,36 @@ class TestChatBaton:
 
         assert result is None
 
+    def test_chat_baton_invalid_enum_left_for_runtime_recovery(self, tmp_path: Path) -> None:
+        """Invalid structured baton enum should not crash chat handoff consumption."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "issue-baton-invalid-enum"
+        issue_dir.mkdir(parents=True, exist_ok=True)
+        next_step_path = issue_dir / "next_step.txt"
+        next_step_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "from_step": "spec",
+                    "to_owner": "user",
+                    "to_step": "spec",
+                    "intent": "await_user_qa",
+                    "status_code": "need_user_input",
+                    "created_at": "2026-05-18T17:10:00+08:00",
+                    "source": "spec.questions_sent",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = _consume_pending_chat_handoff(
+            issue_dir=issue_dir,
+            playbook_data=self._make_playbook_data(),
+            requested_start_step=None,
+        )
+
+        assert result is None
+        assert "await_user_qa" in next_step_path.read_text(encoding="utf-8")
+
     def test_chat_baton_empty_raises_error(self, tmp_path: Path) -> None:
         """空的 next_step.txt 應拋出 ValueError。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-baton-2"
