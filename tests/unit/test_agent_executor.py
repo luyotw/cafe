@@ -143,6 +143,134 @@ class TestAgentExecutorErrorHandling:
         assert "TerminalQuotaError" not in display_message
         assert "classifyGoogleError" not in display_message
 
+    def test_claude_disabled_subscription_is_cli_unavailable(self) -> None:
+        """Claude org policy failures should be fallbackable instead of generic execution errors."""
+        config = AgentConfig(name="Richard", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            "Your organization has disabled Claude subscription access for Claude Code · "
+            "Use an Anthropic API key instead, or ask your admin to enable access\n",
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 1
+
+        with patch("subprocess.Popen", return_value=mock_process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor.execute("Test prompt")
+
+        assert exc_info.value.error_type == "cli_unavailable"
+        assert "subscription access is disabled" in (exc_info.value.display_message or "")
+
+    def test_claude_auth_failed_stream_json_is_cli_unavailable(self) -> None:
+        """Claude auth failures can arrive as stream-json assistant/result events."""
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"system","subtype":"init","session_id":"abc","model":"haiku"}\n',
+            '{"type":"assistant","message":{"content":[{"type":"text","text":"Failed to authenticate. API Error: 403 The socket connection was closed unexpectedly."}]},"error":"authentication_failed"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 1
+        mock_process.terminate.return_value = None
+
+        with patch("subprocess.Popen", return_value=mock_process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor.execute("Test prompt")
+
+        assert exc_info.value.error_type == "cli_unavailable"
+        assert "authentication failed" in (exc_info.value.display_message or "")
+
+    def test_cursor_usage_limit_stdout_is_rate_limit(self) -> None:
+        """Cursor usage-limit notices can arrive as non-JSON stdout with a zero exit code."""
+        config = AgentConfig(name="Richard", cli=AgentCLI.CURSOR)
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"system","subtype":"init","session_id":"abc","model":"Auto"}\n',
+            'S: You\'ve hit your usage limit Get Cursor Pro for more Agent usage, unlimited Tab, and more.\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+        mock_process.terminate.return_value = None
+
+        with patch("subprocess.Popen", return_value=mock_process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor.execute("Test prompt")
+
+        assert exc_info.value.error_type == "rate_limit"
+        assert "API rate limit reached" in (exc_info.value.display_message or "")
+
+    @pytest.mark.parametrize(
+        ("cli", "message"),
+        [
+            (AgentCLI.CLAUDE, "Error: invalid model cafe-nonexistent-model-xyz"),
+            (AgentCLI.GEMINI, "ModelNotFoundError: Requested entity was not found."),
+            (AgentCLI.CURSOR, "Cannot use this model: cafe-nonexistent-model-xyz."),
+            (
+                AgentCLI.CODEX,
+                "The 'cafe-nonexistent-model-xyz' model is not supported when using Codex with a ChatGPT account.",
+            ),
+            (AgentCLI.COPILOT, 'Error: Model "cafe-nonexistent-model-xyz" from --model flag is not available.'),
+        ],
+    )
+    def test_invalid_model_errors_are_classified_as_model_not_found(self, cli: AgentCLI, message: str) -> None:
+        """Known bad-model errors from all supported CLIs should be fallbackable."""
+        config = AgentConfig(name="Richard", cli=cli, model="cafe-nonexistent-model-xyz")
+        executor = AgentExecutor(config)
+
+        error_type, display_message = executor._classify_execution_error(cli.value.capitalize(), message)
+
+        assert error_type == "model_not_found"
+        assert "cafe-nonexistent-model-xyz" in (display_message or "")
+
+    def test_stream_json_error_event_is_model_not_found(self) -> None:
+        """Codex/Gemini-style JSON error events should be classified before parsing as success."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX, model="cafe-nonexistent-model-xyz")
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"thread.started","thread_id":"abc"}\n',
+            '{"type":"error","message":"The cafe-nonexistent-model-xyz model is not supported when using Codex with a ChatGPT account."}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = "Reading additional input from stdin...\n"
+        mock_process.wait.return_value = 1
+        mock_process.terminate.return_value = None
+
+        with patch("subprocess.Popen", return_value=mock_process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor.execute("Test prompt")
+
+        assert exc_info.value.error_type == "model_not_found"
+        assert "not available or not supported" in (exc_info.value.display_message or "")
+
+    def test_non_stream_invalid_model_stderr_is_model_not_found(self) -> None:
+        """Copilot-style stderr model errors should be classified after non-zero exit."""
+        config = AgentConfig(name="Roger", cli=AgentCLI.COPILOT, model="cafe-nonexistent-model-xyz")
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = ["", ""]
+        mock_process.stderr.read.return_value = (
+            'Error: Model "cafe-nonexistent-model-xyz" from --model flag is not available.\n'
+        )
+        mock_process.wait.return_value = 1
+
+        with patch("subprocess.Popen", return_value=mock_process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor.execute("Test prompt")
+
+        assert exc_info.value.error_type == "model_not_found"
+
 
 class TestCodexPermissionExtraction:
     """Test Codex-specific permission denial extraction."""

@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.workflow_models import StepExecutionResult
-from cafe.ui.cli import app, _execute_single_step_alias, _find_external_resume_step
+from cafe.ui.cli import app, _execute_single_step_alias, _find_external_resume_step, _handle_user_phase
 from cafe.utils.config import ConfigManager
 
 
@@ -830,6 +830,91 @@ def test_workflow_command_noninteractive_stops_after_agent_handoff_to_user(tmp_p
     assert "Executing step=pr iteration=001" in result.stdout
     assert "Workflow is waiting for user input" in result.stdout
     assert mock_external_resume.call_count == 0
+
+
+def test_user_phase_need_clarification_collects_questions_and_resumes_step(tmp_path: Path, capsys) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-clarification"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    spec_iter_dir = issue_dir / "spec" / "iteration_001"
+    spec_iter_dir.mkdir(parents=True)
+    (spec_iter_dir / "output.md").write_text("# Spec Draft\n\nNeeds confirmation.", encoding="utf-8")
+    (spec_iter_dir / "questions.xml").write_text(
+        """<?xml version="1.0" encoding="UTF-8"?>
+<questions>
+  <question id="1">
+    <title>Confirm scope?</title>
+    <options>
+      <option>All roles</option>
+      <option>Developer only</option>
+    </options>
+  </question>
+</questions>
+""",
+        encoding="utf-8",
+    )
+    playbook_data = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "role": "pm",
+                "on": {"need_clarification": "spec", "await_agent": "plan"},
+            },
+            "plan": {"role": "developer", "on": {}},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.NEED_CLARIFICATION,
+        status_code="need_clarification",
+        source="test",
+    )
+
+    def fake_interactive_qa(questions, **kwargs):
+        assert questions[0].title == "Confirm scope?"
+        (spec_iter_dir / "output.md").write_text("# Updated Spec Draft\n\nUpdated after chat.", encoding="utf-8")
+        (spec_iter_dir / "questions.xml").write_text(
+            """<?xml version="1.0" encoding="UTF-8"?>
+<questions>
+  <question id="2">
+    <title>Updated scope?</title>
+    <options>
+      <option>All roles</option>
+    </options>
+  </question>
+</questions>
+""",
+            encoding="utf-8",
+        )
+        refreshed = kwargs["after_chat"]()
+        assert refreshed[0].title == "Updated scope?"
+        return "Q1: Updated scope?\nA1: All roles"
+
+    with patch("cafe.ui.interactive_qa.interactive_qa_flow", side_effect=fake_interactive_qa):
+        result = _handle_user_phase(
+            issue_name="issue-clarification",
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+        )
+
+    assert result == "spec"
+    output = capsys.readouterr().out
+    assert "# Spec Draft" in output
+    assert "# Updated Spec Draft" in output
+    next_input = issue_dir / "spec" / "iteration_002" / "user_input.md"
+    assert next_input.read_text(encoding="utf-8") == "Q1: Updated scope?\nA1: All roles"
+    reloaded = store.load_or_create("spec", playbook_id="default")
+    assert reloaded.current_step == "spec"
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
+    assert reloaded.handoff_contract.to_step == "spec"
 
 
 def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkeypatch) -> None:

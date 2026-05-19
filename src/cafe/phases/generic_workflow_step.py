@@ -91,6 +91,8 @@ class GenericWorkflowStepExecutor(Phase):
         role_configs: Optional[Dict[str, Dict[str, Any]]] = None,
         step_user_inputs: Optional[Dict[str, str]] = None,
         interactive: bool = False,
+        config_allowed_directories: Optional[List[str]] = None,
+        extra_allowed_directories: Optional[List[str]] = None,
     ) -> None:
         self.interactive = interactive
         self.issue_dir = issue_dir
@@ -106,6 +108,13 @@ class GenericWorkflowStepExecutor(Phase):
         self.phase_dir = issue_dir
         self.iteration = 0
         self._current_output_file: Optional[Path] = None
+        self._config_allowed_directories: List[str] = list(config_allowed_directories or [])
+        self._extra_allowed_directories: List[str] = list(extra_allowed_directories or [])
+
+    def _get_allowed_directories(self) -> List[str]:
+        base = super()._get_allowed_directories()
+        merged = list(dict.fromkeys(base + self._config_allowed_directories + self._extra_allowed_directories))
+        return merged
 
     def execute(self) -> Any:
         raise NotImplementedError("GenericWorkflowStepExecutor only supports execute_step()")

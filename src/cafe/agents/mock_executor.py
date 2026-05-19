@@ -65,7 +65,9 @@ class MockAgentExecutor:
         return AgentResponse(
             response=self._response,
             token_usage=self._token_usage,
-            permission_denials=[]
+            permission_denials=[],
+            cli=self.config.cli,
+            session_id=self.config.session_id,
         )
 
     def preview_cli_command_args(

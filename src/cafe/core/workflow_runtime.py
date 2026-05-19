@@ -113,6 +113,17 @@ class BlackboardWorkflowRuntime:
             return HandoffIntent.NEED_PERMISSION
         return HandoffIntent.MANUAL_HANDOFF
 
+    @staticmethod
+    def _baton_rejected_prompt(br: BatonRejected) -> str:
+        return (
+            f"[BATON ERROR] Your baton was rejected because field '{br.field}' "
+            f"has invalid value '{br.invalid_value}'. "
+            f"Valid values are: {br.valid_values}. "
+            "Please rewrite next_step.txt with a correct baton. "
+            "If you are asking the user a question, use to_owner='user', "
+            "to_step='user', and intent='need_clarification'."
+        )
+
     def _validate_agent_baton(self, *, current_step: str) -> None:
         contract = self.blackboard_store.load_handoff_contract(
             self.blackboard,
@@ -411,6 +422,11 @@ class BlackboardWorkflowRuntime:
             if isinstance(exc, AgentExecutionError) and getattr(exc, "error_type", None):
                 reason = f"agent_{exc.error_type}"
                 detail = exc.display_message or str(exc)
+            elif detail.startswith("PR sync script failed:"):
+                reason = "publish_error"
+            elif detail.startswith("PR sync timed out"):
+                reason = "publish_error"
+            print(f"⚠️  Step execution failed ({reason}): {detail}")
             self.blackboard_store.record_event(
                 self.blackboard,
                 "step_interrupted",
@@ -423,7 +439,7 @@ class BlackboardWorkflowRuntime:
                     "detail": detail,
                 },
             )
-            raise StepInterrupted(step=current_step, hop=hop_count, reason=reason)
+            raise StepInterrupted(step=current_step, hop=hop_count, reason=reason, detail=detail)
         if validate_assignee_type:
             self._validate_assignee_type(current_step, step_def)
 
@@ -648,16 +664,52 @@ class BlackboardWorkflowRuntime:
 
         for hop_count in range(1, max_transitions + 1):
             step_def = self.steps[current_step]
-            self._validate_agent_baton(current_step=current_step)
+            _baton_retry_extra_prompt: Optional[str] = None
+            try:
+                self._validate_agent_baton(current_step=current_step)
+            except BatonRejected as br:
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "baton_rejected",
+                    {
+                        "step": current_step,
+                        "field": br.field,
+                        "invalid_value": br.invalid_value,
+                        "valid_values": br.valid_values,
+                        "retry": 0,
+                        "runtime": runtime_label,
+                        "phase": "pre_step_validation",
+                    },
+                )
+                _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
             step_visits[current_step] += 1
             visit_count = step_visits[current_step]
-            frame = self._execute_one_iteration(
-                current_step=current_step,
-                step_def=step_def,
-                runtime=runtime_label,
-                hop_count=hop_count,
-                visit_count=visit_count,
-            )
+            try:
+                frame = self._execute_one_iteration(
+                    current_step=current_step,
+                    step_def=step_def,
+                    runtime=runtime_label,
+                    hop_count=hop_count,
+                    visit_count=visit_count,
+                    extra_prompt=_baton_retry_extra_prompt,
+                )
+            except StepInterrupted as si:
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "workflow_paused",
+                    {
+                        "step": current_step,
+                        "status_code": "INTERRUPTED",
+                        "reason": si.reason,
+                        "runtime": runtime_label,
+                    },
+                )
+                return PlaybookRunResult(
+                    final_step=current_step,
+                    final_status_code=f"INTERRUPTED:{si.reason}",
+                    completed=False,
+                    detail=si.detail,
+                )
             self._store_artifacts(frame.artifacts)
 
             status_code = self._status_from_contract(current_step, frame.execution_result)
@@ -788,7 +840,24 @@ class BlackboardWorkflowRuntime:
                 return self._run_baton_driven_pr(current_step=current_step, max_transitions=max_transitions - hop_count + 1)
 
             step_def = self.steps[current_step]
-            self._validate_agent_baton(current_step=current_step)
+            _baton_retry_extra_prompt: Optional[str] = None
+            try:
+                self._validate_agent_baton(current_step=current_step)
+            except BatonRejected as br:
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "baton_rejected",
+                    {
+                        "step": current_step,
+                        "field": br.field,
+                        "invalid_value": br.invalid_value,
+                        "valid_values": br.valid_values,
+                        "retry": 0,
+                        "runtime": runtime_label,
+                        "phase": "pre_step_validation",
+                    },
+                )
+                _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
             step_visits[current_step] += 1
             visit_count = step_visits[current_step]
             max_iterations = self._resolve_step_iteration_limit(step_def)
@@ -805,7 +874,6 @@ class BlackboardWorkflowRuntime:
                 )
                 raise RuntimeError(f"Step '{current_step}' exceeded max_iterations={max_iterations}")
 
-            _baton_retry_extra_prompt: Optional[str] = None
             for _baton_attempt in range(3):
                 try:
                     frame = self._execute_one_iteration(
@@ -833,6 +901,7 @@ class BlackboardWorkflowRuntime:
                         final_step=current_step,
                         final_status_code=f"INTERRUPTED:{si.reason}",
                         completed=False,
+                        detail=si.detail,
                     )
                 self._store_artifacts(frame.artifacts)
                 try:
@@ -858,12 +927,7 @@ class BlackboardWorkflowRuntime:
                             f"last error: field '{br.field}' got '{br.invalid_value}', "
                             f"valid values are {br.valid_values}"
                         ) from br
-                    _baton_retry_extra_prompt = (
-                        f"[BATON ERROR] Your baton was rejected because field '{br.field}' "
-                        f"has invalid value '{br.invalid_value}'. "
-                        f"Valid values are: {br.valid_values}. "
-                        f"Please rewrite next_step.txt with a correct baton."
-                    )
+                    _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
             else:
                 post_contract = None
             if post_contract is not None and not (

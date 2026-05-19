@@ -366,7 +366,7 @@ class TestDevelopNeedPermissionFallback:
         assert approved_tools == []
         assert user_input == ""
 
-        recovered = phase._extract_codex_permission_denials_from_streaming_file(1)
+        recovered = phase._extract_sandbox_permission_denials_from_streaming_file(1)
         assert len(recovered) == 1
         assert recovered[0].tool_name == "Bash"
         assert recovered[0].tool_input["command"] == 'git add src/cafe/ui/cli.py && git commit -m "msg"'
@@ -418,7 +418,7 @@ class TestCodexPermissionRules:
             },
         ):
             with patch("cafe.ui.inquirer_prompts.prompt_list") as mock_prompt_list:
-                with patch("cafe.core.phase_codex_mixin.subprocess.run") as mock_run:
+                with patch("cafe.core.phase_sandbox_mixin.subprocess.run") as mock_run:
                     mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
                     approved_tools, user_input = interactive_phase._handle_previous_permission_denials()
 
@@ -455,7 +455,7 @@ class TestCodexPermissionRules:
             },
         ):
             with patch("cafe.ui.inquirer_prompts.prompt_list", side_effect=["approve", "confirm"]):
-                with patch("cafe.core.phase_codex_mixin.subprocess.run") as mock_run:
+                with patch("cafe.core.phase_sandbox_mixin.subprocess.run") as mock_run:
                     mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
                     approved_tools, user_input = interactive_phase._handle_previous_permission_denials()
 
@@ -486,7 +486,7 @@ class TestCodexPermissionRules:
         monkeypatch.chdir(repo_root)
 
         with patch("cafe.utils.git_utils.get_git_toplevel", return_value=repo_root):
-            phase._cleanup_codex_approved_rules()
+            phase._cleanup_sandbox_approval_artifacts()
 
         assert not rules_file.exists()
         assert other_file.exists()
@@ -526,7 +526,7 @@ class TestCodexPermissionRules:
             'git commit -m "fix: preserve role-level setup fields in selective edit flow"'
         )
 
-        segments = phase._split_command_for_codex_rules(command)
+        segments = phase._split_command_for_sandbox_rules(command)
 
         assert segments == [
             [
@@ -564,13 +564,13 @@ class TestCodexPermissionRules:
         )
 
         with patch("cafe.utils.git_utils.get_git_toplevel", return_value=repo_root):
-            phase._persist_codex_approved_rules([denial], [0])
+            phase._persist_sandbox_approved_rules([denial], [0])
 
         rules_text = (repo_root / "codex" / "rules" / "cafe-approved.rules").read_text(encoding="utf-8")
         assert 'pattern = ["git", "add"]' in rules_text
         assert 'pattern = ["git", "commit", "-m"]' in rules_text
 
-    def test_execute_approved_codex_commands_returns_agent_note(self, phase):
+    def test_execute_approved_sandbox_commands_on_host_returns_agent_note(self, phase):
         from cafe.core.types import PermissionDenial
 
         denial = PermissionDenial(
@@ -578,9 +578,9 @@ class TestCodexPermissionRules:
             tool_input={"command": 'git commit -m "msg"'},
         )
 
-        with patch("cafe.core.phase_codex_mixin.subprocess.run") as mock_run:
+        with patch("cafe.core.phase_sandbox_mixin.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            note = phase._execute_approved_codex_commands([denial], [0])
+            note = phase._execute_approved_sandbox_commands_on_host([denial], [0])
 
         host_execution_file = phase._get_iteration_dir(phase.iteration) / "host_execution.json"
         assert "attempted by the host environment" in note
@@ -591,7 +591,7 @@ class TestCodexPermissionRules:
         assert content[0]["ok"] is True
         mock_run.assert_called_once()
 
-    def test_execute_approved_codex_commands_records_failures_without_raising(self, phase):
+    def test_execute_approved_sandbox_commands_on_host_records_failures_without_raising(self, phase):
         from cafe.core.types import PermissionDenial
 
         denial = PermissionDenial(
@@ -599,13 +599,13 @@ class TestCodexPermissionRules:
             tool_input={"command": 'git commit -m "msg"'},
         )
 
-        with patch("cafe.core.phase_codex_mixin.subprocess.run") as mock_run:
+        with patch("cafe.core.phase_sandbox_mixin.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="",
                 stderr="nothing to commit, working tree clean\n",
                 returncode=1,
             )
-            note = phase._execute_approved_codex_commands([denial], [0])
+            note = phase._execute_approved_sandbox_commands_on_host([denial], [0])
 
         host_execution_file = phase._get_iteration_dir(phase.iteration) / "host_execution.json"
         content = json.loads(host_execution_file.read_text(encoding="utf-8"))
@@ -629,6 +629,6 @@ class TestCodexPermissionRules:
             tool_input={"command": 'git -C /tmp/worktree commit -m "msg"'},
         )
 
-        assert phase._is_auto_host_executable_codex_denial(safe_denial) is True
-        assert phase._is_auto_host_executable_codex_denial(safe_with_cwd_denial) is True
-        assert phase._is_auto_host_executable_codex_denial(unsafe_denial) is False
+        assert phase._is_auto_host_executable_sandbox_denial(safe_denial) is True
+        assert phase._is_auto_host_executable_sandbox_denial(safe_with_cwd_denial) is True
+        assert phase._is_auto_host_executable_sandbox_denial(unsafe_denial) is False

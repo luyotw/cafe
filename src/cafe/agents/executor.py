@@ -287,6 +287,8 @@ class AgentExecutor:
 
             # Add CLI command args to response
             agent_response.cli_command_args = cmd[1:]
+            agent_response.cli = self.config.cli
+            agent_response.session_id = self.config.session_id
 
             # Accumulate token usage
             self._total_token_usage.input_tokens += agent_response.token_usage.input_tokens
@@ -341,7 +343,9 @@ class AgentExecutor:
         return AgentResponse(
             response=response,
             token_usage=token_usage,
-            permission_denials=permission_denials
+            permission_denials=permission_denials,
+            cli=self.config.cli,
+            session_id=self.config.session_id,
         )
 
     def get_total_token_usage(self) -> TokenUsage:
@@ -477,6 +481,7 @@ class AgentExecutor:
             "rate limit",
             "status 429",
             "you've hit your usage limit",
+            "get cursor pro for more agent usage",
         ],
         "codex": [
             "rate limit",
@@ -484,6 +489,135 @@ class AgentExecutor:
             "quota exceeded",
         ],
     }
+
+    CLI_UNAVAILABLE_PATTERNS = {
+        "claude": [
+            "disabled claude subscription access",
+            "use an anthropic api key instead",
+            "failed to authenticate",
+            "authentication_failed",
+            "api error: 403",
+            "socket connection was closed unexpectedly",
+        ],
+    }
+
+    MODEL_NOT_FOUND_PATTERNS = {
+        "claude": [
+            "invalid model",
+            "unknown model",
+            "model not found",
+            "model is not available",
+            "model is not supported",
+            "no such model",
+        ],
+        "gemini": [
+            "modelnotfounderror",
+            "requested entity was not found",
+        ],
+        "cursor-agent": [
+            "cannot use this model",
+        ],
+        "codex": [
+            "model is not supported",
+            "not supported when using codex",
+        ],
+        "copilot": [
+            "from --model flag is not available",
+            "model is not available",
+        ],
+    }
+
+    def _is_cli_unavailable_error(self, error_text: str) -> bool:
+        """Check if the CLI cannot run because of account, auth, or org policy state."""
+        error_lower = error_text.lower()
+        cli_patterns = self.CLI_UNAVAILABLE_PATTERNS.get(self.config.cli.value, [])
+        return any(pattern in error_lower for pattern in cli_patterns)
+
+    def _format_cli_unavailable_display_message(self, cli_name: str, error_text: str) -> str:
+        """Return a concise message for CLI account/policy unavailability."""
+        error_lower = error_text.lower()
+        if "disabled claude subscription access" in error_lower:
+            return f"{cli_name} CLI unavailable: subscription access is disabled by the organization."
+        if "failed to authenticate" in error_lower or "authentication_failed" in error_lower:
+            return f"{cli_name} CLI unavailable: authentication failed."
+        return f"{cli_name} CLI unavailable."
+
+    def _classify_execution_error(self, cli_name: str, error_text: str) -> tuple[Optional[str], Optional[str]]:
+        """Classify CLI execution errors into workflow-level retry categories."""
+        if self._is_rate_limit_error(error_text):
+            return "rate_limit", self._format_rate_limit_display_message(cli_name, error_text)
+        if self._is_cli_unavailable_error(error_text):
+            return "cli_unavailable", self._format_cli_unavailable_display_message(cli_name, error_text)
+        if self._is_model_not_found_error(error_text):
+            return "model_not_found", self._format_model_not_found_display_message(cli_name, error_text)
+        return None, None
+
+    def _is_model_not_found_error(self, error_text: str) -> bool:
+        """Check if error message indicates the configured model is invalid or unavailable."""
+        error_lower = error_text.lower()
+        cli_patterns = self.MODEL_NOT_FOUND_PATTERNS.get(self.config.cli.value, [])
+        if any(pattern in error_lower for pattern in cli_patterns):
+            return True
+
+        generic_model_error_patterns = [
+            "invalid model",
+            "unknown model",
+            "model not found",
+            "model_not_found",
+            "no such model",
+            "unrecognized model",
+        ]
+        if any(pattern in error_lower for pattern in generic_model_error_patterns):
+            return True
+
+        model_context = "model" in error_lower
+        unavailable_or_unsupported = (
+            "not available" in error_lower
+            or "not supported" in error_lower
+            or "does not exist" in error_lower
+        )
+        return model_context and unavailable_or_unsupported
+
+    def _format_model_not_found_display_message(self, cli_name: str, error_text: str) -> str:
+        """Return a concise message for bad model configuration errors."""
+        model = self.config.model
+        if model:
+            return f"{cli_name} model '{model}' is not available or not supported."
+        return f"{cli_name} configured model is not available or not supported."
+
+    def _extract_stream_json_error_text(self, data: dict) -> str:
+        """Extract known error text from a stream-json event."""
+        parts: List[str] = []
+
+        error = data.get("error")
+        if isinstance(error, str):
+            parts.append(error)
+        elif isinstance(error, dict):
+            for key in ("message", "type", "code"):
+                value = error.get(key)
+                if isinstance(value, str):
+                    parts.append(value)
+
+        message = data.get("message")
+        if isinstance(message, str):
+            parts.append(message)
+        elif isinstance(message, dict):
+            content = message.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and isinstance(block.get("text"), str):
+                        parts.append(block["text"])
+            elif isinstance(content, str):
+                parts.append(content)
+
+        result = data.get("result")
+        if isinstance(result, str):
+            parts.append(result)
+
+        if data.get("status") == "error":
+            parts.append(json.dumps(data, ensure_ascii=False))
+
+        return "\n".join(parts)
 
     def _is_rate_limit_error(self, error_text: str) -> bool:
         """Check if error message indicates a rate limit error.
@@ -686,21 +820,14 @@ class AgentExecutor:
                     remaining_stderr = process.stderr.read()
                     full_stderr = stderr_line + remaining_stderr
 
-                    # Check if it's a rate limit error
-                    is_rate_limit = self._is_rate_limit_error(full_stderr)
-                    display_message = (
-                        self._format_rate_limit_display_message(cli_name, full_stderr)
-                        if is_rate_limit else None
-                    )
+                    error_type, display_message = self._classify_execution_error(cli_name, full_stderr)
 
                     # Attach actual CLI arguments to error object for history recording
                     err = AgentExecutionError(
                         f"{cli_name} execution failed: {full_stderr}",
+                        error_type=error_type,
                         display_message=display_message,
                     )
-                    # Set error_type for rate limit errors
-                    if is_rate_limit:
-                        err.error_type = "rate_limit"
                     # Exclude executable itself (e.g. 'gemini' / 'claude')
                     err.cli_command_args = cmd[1:]
                     raise err
@@ -790,6 +917,22 @@ class AgentExecutor:
 
                             # Always collect the line for response_parser (e.g., Gemini needs last line)
                             output_lines.append(line)
+
+                            json_error_text = self._extract_stream_json_error_text(data)
+                            if json_error_text:
+                                error_type, display_message = self._classify_execution_error(
+                                    cli_name,
+                                    json_error_text,
+                                )
+                                if error_type:
+                                    process.terminate()
+                                    err = AgentExecutionError(
+                                        f"{cli_name} execution failed: {json_error_text}",
+                                        error_type=error_type,
+                                        display_message=display_message,
+                                    )
+                                    err.cli_command_args = cmd[1:]
+                                    raise err
 
                             # Check for error field (e.g., "invalid_request" for prompt too long)
                             if "error" in data and data.get("error") == "invalid_request":
@@ -890,6 +1033,17 @@ class AgentExecutor:
                                     )
 
                         except json.JSONDecodeError:
+                            error_type, display_message = self._classify_execution_error(cli_name, line)
+                            if error_type:
+                                process.terminate()
+                                err = AgentExecutionError(
+                                    f"{cli_name} execution failed: {line.strip()}",
+                                    error_type=error_type,
+                                    display_message=display_message,
+                                )
+                                err.cli_command_args = cmd[1:]
+                                raise err
+
                             # Non-JSON line, just print it
                             print(line, end='')
                             output_lines.append(line)
@@ -972,21 +1126,17 @@ class AgentExecutor:
             
             # If still non-zero, it's a real error
             if returncode != 0:
-                # Check if it's a rate limit error (in stderr or stdout)
                 combined_output = (stderr_output or "") + "\n".join(output_lines)
-                is_rate_limit = self._is_rate_limit_error(combined_output)
-                display_message = (
-                    self._format_rate_limit_display_message(cli_name, stderr_output or combined_output)
-                    if is_rate_limit else None
+                error_type, display_message = self._classify_execution_error(
+                    cli_name,
+                    combined_output,
                 )
 
                 err = AgentExecutionError(
                     f"{cli_name} execution failed with code {returncode}: {stderr_output}",
+                    error_type=error_type,
                     display_message=display_message,
                 )
-                # Set error_type for rate limit errors
-                if is_rate_limit:
-                    err.error_type = "rate_limit"
                 # Attach actual CLI arguments for Phase to write to iteration history on error
                 err.cli_command_args = cmd[1:]
                 raise err
@@ -1086,4 +1236,6 @@ class AgentExecutor:
             permission_denials=permission_denials,
             streaming_log=final_streaming_log,
             model=model,
+            cli=self.config.cli,
+            session_id=self.config.session_id,
         )

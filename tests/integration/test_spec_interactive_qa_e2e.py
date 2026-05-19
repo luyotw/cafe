@@ -330,3 +330,41 @@ class TestInteractiveQaFlowIntegration:
         assert "A1: Return error code and log message" in result
         assert "Q2: Should it support concurrent access?" in result
         assert "A2: No, single-threaded only" in result
+
+    def test_chat_refreshes_questions_before_continuing(self):
+        """Chat return should allow caller to reload updated questions."""
+        questions = [
+            Question(id="1", title="Old question?", options=["Old answer"]),
+        ]
+        refreshed_questions = [
+            Question(id="2", title="Updated question?", options=["Updated answer"]),
+        ]
+        after_chat = MagicMock(return_value=refreshed_questions)
+
+        with (
+            patch("cafe.ui.interactive_qa.inquirer") as mock_inquirer,
+            patch("cafe.ui.interactive_qa.launch_chat_session") as mock_chat,
+        ):
+            mock_select = MagicMock()
+            mock_select.execute = MagicMock(
+                side_effect=[
+                    "chat",
+                    "Updated answer",
+                    "Confirm and continue",
+                ]
+            )
+            mock_inquirer.select.return_value = mock_select
+
+            result = interactive_qa_flow(
+                questions,
+                role="pm",
+                issue_name="issue-1",
+                agent_name="Roger",
+                after_chat=after_chat,
+            )
+
+        mock_chat.assert_called_once_with("pm", "issue-1")
+        after_chat.assert_called_once()
+        assert "Q1: Updated question?" in result
+        assert "A1: Updated answer" in result
+        assert "Old question?" not in result

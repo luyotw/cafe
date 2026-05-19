@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 
 @dataclass
@@ -24,16 +24,27 @@ class PlaybookRunResult:
     final_step: str
     final_status_code: str
     completed: bool
+    detail: Optional[str] = None
 
 
 class StepInterrupted(Exception):
     """Raised when an in-flight step execution is interrupted (e.g. Ctrl-C or agent timeout)."""
 
-    def __init__(self, step: str, hop: int = 0, reason: str = "interrupted") -> None:
+    def __init__(
+        self,
+        step: str,
+        hop: int = 0,
+        reason: str = "interrupted",
+        detail: Optional[str] = None,
+    ) -> None:
         self.step = step
         self.hop = hop
         self.reason = reason
-        super().__init__(f"Step '{step}' {reason} at hop {hop}")
+        self.detail = detail
+        message = f"Step '{step}' {reason} at hop {hop}"
+        if detail:
+            message = f"{message}: {detail}"
+        super().__init__(message)
 
 
 class BatonRejected(Exception):

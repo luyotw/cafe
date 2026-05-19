@@ -22,6 +22,7 @@ from rich.console import Console
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.types import AgentCLI, AgentConfig
+from cafe.core.workflow_models import BatonRejected
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
@@ -434,6 +435,7 @@ def _build_workflow_step_executor(
     role_agent_map_override: Optional[Dict[str, str]] = None,
     step_user_inputs: Optional[Dict[str, str]] = None,
     interactive: bool = False,
+    extra_allowed_directories: Optional[List[str]] = None,
 ) -> GenericWorkflowStepExecutor:
     """Create the GenericPhase-backed executor for workflow steps."""
     role_agent_map = _build_workflow_role_agent_map(config_manager, playbook_data)
@@ -465,6 +467,7 @@ def _build_workflow_step_executor(
         role_configs=role_configs,
         step_user_inputs=step_user_inputs,
         interactive=interactive,
+        extra_allowed_directories=extra_allowed_directories,
     )
 
 
@@ -484,16 +487,21 @@ def _consume_pending_chat_handoff(
     if not store.next_step_path.exists():
         return None
 
-    blackboard = store.load_or_create(
-        str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
-        playbook_id=str(playbook_data["playbook"]["id"]),
-        allow_legacy_text=True,
-    )
-    contract = store.load_handoff_contract(
-        blackboard,
-        allowed_steps=list(playbook_data["steps"].keys()),
-        allow_legacy_text=True,
-    )
+    try:
+        blackboard = store.load_or_create(
+            str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
+            playbook_id=str(playbook_data["playbook"]["id"]),
+            allow_legacy_text=True,
+        )
+        contract = store.load_handoff_contract(
+            blackboard,
+            allowed_steps=list(playbook_data["steps"].keys()),
+            allow_legacy_text=True,
+        )
+    except BatonRejected:
+        # Leave invalid structured batons for the workflow runtime; it can
+        # feed the schema error back to the step agent and ask for a rewrite.
+        return None
 
     # `next_step.txt` is now persistent from workflow initialization onward.
     # Ignore the bootstrap/persistent baton itself; only consume a chat-authored
@@ -671,6 +679,17 @@ def _handle_user_phase(
             summary=summary,
         )
 
+    if handoff_intent == HandoffIntent.NEED_CLARIFICATION and from_step in {"spec", "plan"}:
+        return _handle_clarification_handoff(
+            issue_name=issue_name,
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+            store=store,
+            from_step=from_step,
+            summary=summary,
+        )
+
     # Default generic user-phase menu
     return _handle_user_phase_generic(
         issue_name=issue_name,
@@ -681,6 +700,107 @@ def _handle_user_phase(
         phase_labels=phase_labels,
         summary=summary,
     )
+
+
+def _handle_clarification_handoff(
+    *,
+    issue_name: str,
+    issue_dir: Path,
+    playbook_data: Dict[str, Any],
+    blackboard,
+    store: BlackboardStore,
+    from_step: str,
+    summary: str,
+) -> Optional[str]:
+    """Handle need_clarification handoff by collecting answers and resuming."""
+    console.print(f"[yellow]Clarification requested[/yellow] step={from_step}")
+    if summary:
+        console.print(f"[dim]{summary}[/dim]")
+
+    from_step_dir = issue_dir / from_step
+    iteration_dirs: List[Path] = []
+    latest_iter_dir: Optional[Path] = None
+
+    def _refresh_iteration_state() -> Optional[Path]:
+        nonlocal iteration_dirs, latest_iter_dir
+        iteration_dirs = sorted(from_step_dir.glob("iteration_*")) if from_step_dir.exists() else []
+        latest_iter_dir = iteration_dirs[-1] if iteration_dirs else None
+        return latest_iter_dir
+
+    def _display_latest_output() -> None:
+        current_iter_dir = _refresh_iteration_state()
+        if current_iter_dir is not None:
+            _print_output_file(current_iter_dir / "output.md")
+
+    def _reload_after_chat():
+        _display_latest_output()
+        current_iter_dir = latest_iter_dir
+        current_questions_file = current_iter_dir / "questions.xml" if current_iter_dir is not None else None
+        if current_questions_file is None or not current_questions_file.exists():
+            return None
+        from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
+
+        if not validate_questions_xml(current_questions_file):
+            return None
+        return parse_questions_xml(current_questions_file)
+
+    _display_latest_output()
+
+    user_input = ""
+    questions_file = latest_iter_dir / "questions.xml" if latest_iter_dir is not None else None
+    if questions_file is not None and questions_file.exists():
+        from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
+        from cafe.ui.interactive_qa import interactive_qa_flow
+
+        if validate_questions_xml(questions_file):
+            step_def = playbook_data.get("steps", {}).get(from_step, {})
+            role = str(step_def.get("role", "developer"))
+            prompt_role = {"pm": "pm", "reviewer": "reviewer"}.get(role, "developer")
+            role_names = playbook_data.get("roles", {})
+            agent_name = role_names.get(role, {}).get("default_agent", role)
+            user_input = interactive_qa_flow(
+                parse_questions_xml(questions_file),
+                role=prompt_role,
+                issue_name=issue_name,
+                agent_name=agent_name,
+                after_chat=_reload_after_chat,
+            )
+
+    if not user_input:
+        from cafe.ui.inquirer_prompts import prompt_multiline
+
+        user_input = prompt_multiline(
+            f"Answer the pending clarification for {from_step}",
+            default="",
+        ).strip()
+
+    if not user_input:
+        console.print("[dim]No answer provided; workflow remains paused.[/dim]")
+        return None
+
+    next_iter = len(iteration_dirs) + 1
+    next_iter_dir = from_step_dir / f"iteration_{next_iter:03d}"
+    next_iter_dir.mkdir(parents=True, exist_ok=True)
+    (next_iter_dir / "user_input.md").write_text(user_input, encoding="utf-8")
+
+    store.set_current_step(blackboard, from_step)
+    store.set_handoff_summary(blackboard, f"User answered clarification for {from_step}")
+    store.update_handoff_contract(
+        blackboard,
+        from_step=from_step,
+        to_owner=HandoffOwner.AGENT,
+        to_step=from_step,
+        intent=HandoffIntent.AWAIT_AGENT,
+        status_code="",
+        source="user.clarification_answers",
+    )
+    store.record_event(
+        blackboard,
+        "clarification_answered",
+        {"step": from_step, "source": "questions_xml" if questions_file and questions_file.exists() else "prompt"},
+    )
+    console.print(f"[green]Clarification answered[/green] -> back to {from_step}")
+    return from_step
 
 
 def _handle_review_confirmation(

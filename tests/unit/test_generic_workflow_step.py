@@ -28,6 +28,7 @@ class FakeAgentManager:
             self._responses = iter([response])
         self.prompts: list[str] = []
         self.allowed_tools_calls: list[list[str] | None] = []
+        self.allowed_directories_calls: list[list[str] | None] = []
         self.preview_calls: list[list[str] | None] = []
         self.agent = SimpleNamespace(
             config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="session-1", model=None)
@@ -61,9 +62,13 @@ class FakeAgentManager:
         allowed_tools=None,
         allowed_directories=None,
         streaming_output_file=None,
+        phase_name=None,
     ):
         self.prompts.append(prompt)
         self.allowed_tools_calls.append(list(allowed_tools) if allowed_tools is not None else None)
+        self.allowed_directories_calls.append(
+            list(allowed_directories) if allowed_directories is not None else None
+        )
         response = next(self._responses)
         if self.on_execute is not None:
             self.on_execute(
@@ -1565,3 +1570,149 @@ def test_generic_workflow_step_develop_confirmed(tmp_path: Path, monkeypatch) ->
     result = executor.execute_step("develop", playbook["steps"]["develop"], state)
 
     assert result.status_code == "confirmed"
+
+
+# ---------------------------------------------------------------------------
+# Tests for _get_allowed_directories merging (Task 3)
+# ---------------------------------------------------------------------------
+
+def _make_minimal_executor(tmp_path, **kwargs):
+    """Build a GenericWorkflowStepExecutor with minimal config for dir-merge tests."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-dirs"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {},
+        "steps": {},
+    }
+    return GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-dirs",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("ok"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={},
+        **kwargs,
+    )
+
+
+def test_get_allowed_directories_returns_defaults_when_no_extras(tmp_path: Path) -> None:
+    """未傳 config/flag dirs 時行為與既有相同，包含 .cafe。"""
+    executor = _make_minimal_executor(tmp_path)
+    dirs = executor._get_allowed_directories()
+    assert ".cafe" in dirs
+
+
+def test_get_allowed_directories_merges_defaults_and_config_and_flag(tmp_path: Path) -> None:
+    """三來源（base、config、flag）都出現在結果中，無重複。"""
+    executor = _make_minimal_executor(
+        tmp_path,
+        config_allowed_directories=["src"],
+        extra_allowed_directories=["scripts"],
+    )
+    dirs = executor._get_allowed_directories()
+    assert ".cafe" in dirs
+    assert "src" in dirs
+    assert "scripts" in dirs
+    assert len(dirs) == len(set(dirs))
+
+
+def test_get_allowed_directories_dedupes_overlap(tmp_path: Path) -> None:
+    """config 與 flag 同時含相同路徑時，結果只出現一次。"""
+    executor = _make_minimal_executor(
+        tmp_path,
+        config_allowed_directories=["src"],
+        extra_allowed_directories=["src"],
+    )
+    dirs = executor._get_allowed_directories()
+    assert dirs.count("src") == 1
+
+
+def test_get_allowed_directories_preserves_order(tmp_path: Path) -> None:
+    """合併後順序：base → config → flag（保序去重）。"""
+    executor = _make_minimal_executor(
+        tmp_path,
+        config_allowed_directories=["alpha"],
+        extra_allowed_directories=["beta"],
+    )
+    dirs = executor._get_allowed_directories()
+    base_end = dirs.index(".cafe")
+    alpha_idx = dirs.index("alpha")
+    beta_idx = dirs.index("beta")
+    assert base_end < alpha_idx < beta_idx
+
+
+def test_workflow_passes_config_allowed_directories_to_agent(tmp_path: Path, monkeypatch) -> None:
+    """Executor should pass merged config and CLI dirs into agent_manager.execute."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-agent-dirs"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": {"1": "spec_first", "default": "spec_first"},
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+    agent_manager = FakeAgentManager("confirmed")
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-agent-dirs",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+        config_allowed_directories=["src"],
+        extra_allowed_directories=["tests"],
+    )
+
+    executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    assert agent_manager.allowed_directories_calls[-1] == [".cafe", "src", "tests"]
+
+
+def test_workflow_legacy_behavior_unchanged_when_no_config(tmp_path: Path, monkeypatch) -> None:
+    """Without config/CLI dirs, agent execution should receive the base .cafe dir."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-agent-base-dirs"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": {"1": "spec_first", "default": "spec_first"},
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+    agent_manager = FakeAgentManager("confirmed")
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-agent-base-dirs",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+
+    executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    assert agent_manager.allowed_directories_calls[-1] == [".cafe"]

@@ -5,7 +5,7 @@ with support for back navigation, free-text input, answer modification,
 and checkbox (multi-select) questions.
 """
 
-from typing import Optional
+from typing import Callable, Optional
 
 from InquirerPy import inquirer
 from InquirerPy.separator import Separator
@@ -17,6 +17,7 @@ from cafe.ui.inquirer_prompts import prompt_multiline
 # Sentinel values for special choices
 OTHER_SENTINEL = "__OTHER__"
 BACK_SENTINEL = "__BACK__"
+CHAT_REFRESH_SENTINEL = "__CHAT_REFRESH__"
 
 # Display text for empty checkbox selection
 NONE_SELECTED = "(none selected)"
@@ -27,6 +28,7 @@ def interactive_qa_flow(
     role: Optional[str] = None,
     issue_name: Optional[str] = None,
     agent_name: Optional[str] = None,
+    after_chat: Optional[Callable[[], list[Question] | None]] = None,
 ) -> str:
     """Run interactive Q&A flow and return formatted answers.
 
@@ -50,6 +52,7 @@ def interactive_qa_flow(
     Returns:
         Formatted Q&A string for passing to agent as user_input
     """
+    questions = list(questions)
     total = len(questions)
     answers: dict[int, str] = {}
     idx = 0
@@ -62,13 +65,22 @@ def interactive_qa_flow(
         if q.multi_select:
             answer = _ask_checkbox(
                 q, idx, total, previous_answer,
-                role=role, issue_name=issue_name, agent_name=agent_name,
+                role=role, issue_name=issue_name, agent_name=agent_name, after_chat=after_chat,
             )
         else:
             answer = _ask_select(
                 q, idx, total, previous_answer,
-                role=role, issue_name=issue_name, agent_name=agent_name,
+                role=role, issue_name=issue_name, agent_name=agent_name, after_chat=after_chat,
             )
+
+        if answer == CHAT_REFRESH_SENTINEL:
+            refreshed = after_chat() if after_chat else None
+            if refreshed:
+                questions = list(refreshed)
+                total = len(questions)
+                answers = {}
+                idx = 0
+            continue
 
         if answer == BACK_SENTINEL:
             idx -= 1
@@ -91,6 +103,11 @@ def interactive_qa_flow(
 
         if action == "chat":
             launch_chat_session(role, issue_name)
+            refreshed = after_chat() if after_chat else None
+            if refreshed:
+                questions = list(refreshed)
+                total = len(questions)
+                answers = {}
             continue
 
         if action == "Confirm and continue":
@@ -114,14 +131,22 @@ def interactive_qa_flow(
         if q.multi_select:
             answer = _ask_checkbox(
                 q, modify_idx, total, previous_answer, force_no_back=True,
-                role=role, issue_name=issue_name, agent_name=agent_name,
+                role=role, issue_name=issue_name, agent_name=agent_name, after_chat=after_chat,
             )
         else:
             answer = _ask_select(
                 q, modify_idx, total, previous_answer,
                 force_no_back=True,
-                role=role, issue_name=issue_name, agent_name=agent_name,
+                role=role, issue_name=issue_name, agent_name=agent_name, after_chat=after_chat,
             )
+
+        if answer == CHAT_REFRESH_SENTINEL:
+            refreshed = after_chat() if after_chat else None
+            if refreshed:
+                questions = list(refreshed)
+                total = len(questions)
+                answers = {}
+            continue
 
         answers[modify_idx] = answer
 
@@ -137,6 +162,7 @@ def _ask_select(
     role: Optional[str] = None,
     issue_name: Optional[str] = None,
     agent_name: Optional[str] = None,
+    after_chat: Optional[Callable[[], list[Question] | None]] = None,
 ) -> str:
     """Ask a single-select question.
 
@@ -158,6 +184,8 @@ def _ask_select(
 
         if answer == "chat":
             launch_chat_session(role, issue_name)
+            if after_chat:
+                return CHAT_REFRESH_SENTINEL
             continue
 
         if answer == BACK_SENTINEL:
@@ -178,6 +206,7 @@ def _ask_checkbox(
     role: Optional[str] = None,
     issue_name: Optional[str] = None,
     agent_name: Optional[str] = None,
+    after_chat: Optional[Callable[[], list[Question] | None]] = None,
 ) -> str:
     """Ask a multi-select (checkbox) question.
 
@@ -227,8 +256,11 @@ def _ask_checkbox(
         # Show follow-up action prompt for Back/Chat navigation
         action = _ask_checkbox_action(
             idx, total, result_items, force_no_back,
-            role=role, issue_name=issue_name, agent_name=agent_name,
+            role=role, issue_name=issue_name, agent_name=agent_name, after_chat=after_chat,
         )
+
+        if action == CHAT_REFRESH_SENTINEL:
+            return CHAT_REFRESH_SENTINEL
 
         if action == BACK_SENTINEL:
             return BACK_SENTINEL
@@ -251,6 +283,7 @@ def _ask_checkbox_action(
     role: Optional[str] = None,
     issue_name: Optional[str] = None,
     agent_name: Optional[str] = None,
+    after_chat: Optional[Callable[[], list[Question] | None]] = None,
 ) -> str:
     """Show a follow-up action prompt after checkbox selection.
 
@@ -274,6 +307,8 @@ def _ask_checkbox_action(
 
     if action == "chat":
         launch_chat_session(role, issue_name)
+        if after_chat:
+            return CHAT_REFRESH_SENTINEL
         return "redo"
 
     return action
