@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import inspect
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
@@ -632,13 +633,25 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             execution_phase_name = getattr(self, "phase_name", None)
 
         try:
+            execute_kwargs = {
+                "allowed_tools": allowed_tools,
+                "allowed_directories": allowed_directories,
+                "streaming_output_file": str(streaming_jsonl_file),
+            }
+            execute_signature = inspect.signature(self.agent_manager.execute)
+            if (
+                "phase_name" in execute_signature.parameters
+                or any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD
+                    for param in execute_signature.parameters.values()
+                )
+            ):
+                execute_kwargs["phase_name"] = execution_phase_name
+
             response, token_usage, permission_denials, cli_command_args, streaming_log, model = self.agent_manager.execute(
                 agent_name,
                 prompt,
-                allowed_tools=allowed_tools,
-                allowed_directories=allowed_directories,
-                streaming_output_file=str(streaming_jsonl_file),
-                phase_name=execution_phase_name,
+                **execute_kwargs,
             )
 
             actual_agent_cli = getattr(self.agent_manager, "get_last_cli", lambda: None)()

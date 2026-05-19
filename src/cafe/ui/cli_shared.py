@@ -467,6 +467,7 @@ def _build_workflow_step_executor(
         role_configs=role_configs,
         step_user_inputs=step_user_inputs,
         interactive=interactive,
+        config_allowed_directories=config_manager.get_allowed_directories(),
         extra_allowed_directories=extra_allowed_directories,
     )
 
