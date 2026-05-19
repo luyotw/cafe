@@ -447,6 +447,35 @@ def _reset_baton_for_explicit_start_step(
     )
 
 
+def _print_workflow_event_display(event: Any) -> None:
+    """Render generic user-facing event display without coupling to event type."""
+    if not isinstance(event, dict):
+        return
+
+    display = event.get("display")
+    style = None
+    lines: List[str] = []
+    if isinstance(display, str):
+        lines = display.splitlines()
+    elif isinstance(display, dict):
+        raw_style = display.get("style")
+        style = raw_style if isinstance(raw_style, str) and raw_style else None
+        raw_lines = display.get("lines")
+        if isinstance(raw_lines, list):
+            lines = [str(line) for line in raw_lines]
+        else:
+            raw_message = display.get("message")
+            if isinstance(raw_message, str):
+                lines = raw_message.splitlines()
+
+    raw_message = event.get("display_message")
+    if not lines and isinstance(raw_message, str):
+        lines = raw_message.splitlines()
+
+    for index, line in enumerate(lines):
+        console.print(line, style=style if index == 0 else None)
+
+
 def workflow(
     playbook: Optional[str] = typer.Option(None, "--playbook", help="Playbook name"),
     issue: Optional[str] = typer.Option(None, "--issue", help="Issue directory name"),
@@ -540,7 +569,16 @@ def workflow(
                 return StepExecutionResult(
                     response="dry run",
                     artifacts={str(output_key): str(output_path)},
-                    events=[{"type": "pr_synced", "url": "https://example.com/dry-run-pr"}],
+                    events=[
+                        {
+                            "type": "pr_synced",
+                            "url": "https://example.com/dry-run-pr",
+                            "display": {
+                                "style": "green",
+                                "lines": ["PR synced", "  URL: https://example.com/dry-run-pr"],
+                            },
+                        }
+                    ],
                 )
             return StepExecutionResult(
                 response="dry-run",
@@ -607,12 +645,7 @@ def workflow(
                     raise
             if isinstance(result, StepExecutionResult):
                 for event in result.events:
-                    if not isinstance(event, dict) or event.get("type") != "pr_synced":
-                        continue
-                    pr_url = str(event.get("url", "")).strip()
-                    if pr_url:
-                        console.print(f"[green]PR synced[/green]")
-                        console.print(f"  URL: {pr_url}")
+                    _print_workflow_event_display(event)
             return result
 
         pending_start_step = start_step
