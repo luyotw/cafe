@@ -226,7 +226,11 @@ class HandoffContract:
                 f"Unsupported baton contract version {self.version}; expected {HANDOFF_CONTRACT_VERSION}"
             )
         if self.to_step not in allowed_targets:
-            raise ValueError(f"Baton contract step '{self.to_step}' is not valid in this playbook")
+            raise BatonRejected(
+                field="to_step",
+                invalid_value=self.to_step,
+                valid_values=sorted(allowed_targets),
+            )
 
         if self.to_owner == HandoffOwner.AGENT and self.to_step in {"user", "done"}:
             raise ValueError("Baton owner mismatch: agent owner cannot target user/done")

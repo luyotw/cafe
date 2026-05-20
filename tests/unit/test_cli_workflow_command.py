@@ -394,7 +394,8 @@ def test_workflow_command_rejects_invalid_chat_baton_step(tmp_path: Path, monkey
         result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
 
     assert result.exit_code == 1
-    assert "Baton contract step 'qa' is not valid" in result.stdout
+    assert "Workflow baton file is not a valid handoff contract" in result.stdout
+    assert "Invalid baton contract payload" in result.stdout
 
 
 def test_workflow_command_rejects_malformed_baton_json(tmp_path: Path, monkeypatch) -> None:
@@ -412,7 +413,8 @@ def test_workflow_command_rejects_malformed_baton_json(tmp_path: Path, monkeypat
         result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
 
     assert result.exit_code == 1
-    assert "Baton contract step '{not-json' is not valid" in result.stdout
+    assert "Workflow baton file is not a valid handoff contract" in result.stdout
+    assert "Invalid baton contract payload" in result.stdout
 
 
 def test_workflow_command_start_step_rebuilds_stale_text_baton(tmp_path: Path, monkeypatch) -> None:
@@ -580,11 +582,9 @@ def test_workflow_command_prints_recovery_guidance_for_pr_baton_pause(tmp_path: 
 
         result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
 
-    assert result.exit_code == 0
-    assert "Workflow paused" in result.stdout
-    assert "status=NO_BATON_TRANSITION" in result.stdout
-    assert "Open chat with role `developer`" in result.stdout
-    assert "Do not wait for remote PR existence." in result.stdout
+    assert result.exit_code == 1
+    assert "wrote invalid baton 3 times" in result.stdout
+    assert "field 'to_step' got 'pr'" in result.stdout
 
 
 def test_workflow_command_offers_recovery_menu_for_baton_pause_in_interactive_mode(tmp_path: Path, monkeypatch) -> None:
@@ -621,9 +621,10 @@ def test_workflow_command_offers_recovery_menu_for_baton_pause_in_interactive_mo
 
         result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
 
-    assert result.exit_code == 0
-    assert mock_prompt_list.called
-    assert "Workflow paused" in result.stdout
+    assert result.exit_code == 1
+    assert not mock_prompt_list.called
+    assert "wrote invalid baton 3 times" in result.stdout
+    assert "field 'to_step' got 'pr'" in result.stdout
 
 
 def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypatch) -> None:

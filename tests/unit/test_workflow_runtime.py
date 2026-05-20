@@ -1413,6 +1413,17 @@ def _make_invalid_baton_text(issue_dir: Path) -> None:
     )
 
 
+def _make_invalid_target_baton_text(issue_dir: Path, *, from_step: str = "spec", to_step: str = "release") -> None:
+    """Write a baton whose target step does not exist in the playbook."""
+    _write_baton(
+        issue_dir,
+        from_step=from_step,
+        to_owner="agent",
+        to_step=to_step,
+        intent="await_agent",
+    )
+
+
 def test_runtime_retries_once_on_baton_rejected_then_succeeds(tmp_path: Path) -> None:
     """第 1 次寫出無效 baton，第 2 次（retry 1）寫出合法 baton → workflow 正常繼續，blackboard 有 1 筆 baton_rejected 事件。"""
     issue_dir = tmp_path / ".cafe" / "issues" / "retry-1"
@@ -1465,6 +1476,120 @@ def test_runtime_retries_twice_on_baton_rejected_then_succeeds(tmp_path: Path) -
     bb = BlackboardStore(issue_dir).load_or_create("spec")
     rejected_events = [e for e in bb.events if e.event_type == "baton_rejected"]
     assert len(rejected_events) == 2
+
+
+def test_runtime_retries_invalid_target_step_then_succeeds(tmp_path: Path) -> None:
+    """If an agent writes to_step outside the playbook, retry with baton feedback."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "retry-invalid-target"
+    issue_dir.mkdir(parents=True)
+    captured_prompts: list[str | None] = []
+    call_count = [0]
+
+    def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
+        call_count[0] += 1
+        captured_prompts.append(kwargs.get("extra_prompt"))
+        if call_count[0] == 1:
+            _make_invalid_target_baton_text(issue_dir, from_step="spec", to_step="release")
+        else:
+            _make_valid_baton_text(issue_dir, from_step="spec", to_step="done", intent="workflow_complete")
+        return StepExecutionResult(response="done", artifacts={}, status_code="")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_simple_playbook(),
+        executor=executor,
+    )
+    result = runtime.run(start_step="spec", max_transitions=5)
+
+    assert result.completed is True
+    assert len(captured_prompts) == 2
+    assert captured_prompts[0] is None
+    assert "to_step" in (captured_prompts[1] or "")
+    assert "release" in (captured_prompts[1] or "")
+    bb = BlackboardStore(issue_dir).load_or_create("spec")
+    rejected_events = [e for e in bb.events if e.event_type == "baton_rejected"]
+    assert len(rejected_events) == 1
+    assert rejected_events[0].data["field"] == "to_step"
+    assert rejected_events[0].data["invalid_value"] == "release"
+
+
+def test_runtime_retries_same_phase_baton_then_succeeds(tmp_path: Path) -> None:
+    """If an agent points the baton back to the same phase, retry with baton feedback."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "retry-same-phase"
+    issue_dir.mkdir(parents=True)
+    captured_prompts: list[str | None] = []
+    call_count = [0]
+
+    def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
+        call_count[0] += 1
+        captured_prompts.append(kwargs.get("extra_prompt"))
+        if call_count[0] == 1:
+            _write_baton(issue_dir, from_step="spec", to_owner="agent", to_step="spec", intent="await_agent")
+        else:
+            _make_valid_baton_text(issue_dir, from_step="spec", to_step="done", intent="workflow_complete")
+        return StepExecutionResult(response="done", artifacts={}, status_code="")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_simple_playbook(),
+        executor=executor,
+    )
+    result = runtime.run(start_step="spec", max_transitions=5)
+
+    assert result.completed is True
+    assert len(captured_prompts) == 2
+    assert captured_prompts[0] is None
+    assert "cannot point back to the same phase" in (captured_prompts[1] or "")
+    bb = BlackboardStore(issue_dir).load_or_create("spec")
+    rejected_events = [e for e in bb.events if e.event_type == "baton_rejected"]
+    assert len(rejected_events) == 1
+    assert rejected_events[0].data["field"] == "to_step"
+    assert rejected_events[0].data["invalid_value"] == "spec"
+
+
+def test_runtime_retries_same_phase_baton_for_pr_then_succeeds(tmp_path: Path) -> None:
+    """Baton-driven PR steps should also retry same-phase handoffs instead of pausing."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "retry-pr-same-phase"
+    issue_dir.mkdir(parents=True)
+    captured_prompts: list[str | None] = []
+    call_count = [0]
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "pr": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
+        call_count[0] += 1
+        captured_prompts.append(kwargs.get("extra_prompt"))
+        if call_count[0] == 1:
+            _write_baton(issue_dir, from_step="pr", to_owner="agent", to_step="pr", intent="await_agent")
+            return StepExecutionResult(response="stale", artifacts={"pr_result": "p1"})
+        _write_baton(issue_dir, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete")
+        return StepExecutionResult(
+            response="done",
+            artifacts={"pr_result": "p1"},
+            events=[{"type": "pr_synced", "url": "https://github.com/test/repo/pull/277"}],
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="pr", max_transitions=5)
+
+    assert result.completed is True
+    assert len(captured_prompts) == 2
+    assert captured_prompts[0] is None
+    assert "cannot point back to the same phase" in (captured_prompts[1] or "")
+    bb = BlackboardStore(issue_dir).load_or_create("pr")
+    rejected_events = [e for e in bb.events if e.event_type == "baton_rejected"]
+    assert len(rejected_events) == 1
+    assert rejected_events[0].data["field"] == "to_step"
+    assert rejected_events[0].data["invalid_value"] == "pr"
 
 
 def test_runtime_crashes_after_three_baton_rejected(tmp_path: Path) -> None:

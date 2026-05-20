@@ -119,13 +119,24 @@ class BlackboardWorkflowRuntime:
 
     @staticmethod
     def _baton_rejected_prompt(br: BatonRejected) -> str:
-        return (
+        message = (
             f"[BATON ERROR] Your baton was rejected because field '{br.field}' "
             f"has invalid value '{br.invalid_value}'. "
             f"Valid values are: {br.valid_values}. "
             "Please rewrite next_step.txt with a correct baton. "
             "If you are asking the user a question, use to_owner='user', "
             "to_step='user', and intent='need_clarification'."
+        )
+        if br.field == "to_step":
+            message += " The baton must target a valid next step and cannot point back to the same phase."
+        return message
+
+    def _same_step_baton_rejected(self, *, current_step: str) -> BatonRejected:
+        valid_targets = sorted((set(self.steps.keys()) | {"user", "done"}) - {current_step})
+        return BatonRejected(
+            field="to_step",
+            invalid_value=current_step,
+            valid_values=valid_targets,
         )
 
     def _validate_agent_baton(self, *, current_step: str) -> None:
@@ -688,35 +699,71 @@ class BlackboardWorkflowRuntime:
                 _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
             step_visits[current_step] += 1
             visit_count = step_visits[current_step]
-            try:
-                frame = self._execute_one_iteration(
-                    current_step=current_step,
-                    step_def=step_def,
-                    runtime=runtime_label,
-                    hop_count=hop_count,
-                    visit_count=visit_count,
-                    extra_prompt=_baton_retry_extra_prompt,
-                )
-            except StepInterrupted as si:
-                self.blackboard_store.record_event(
-                    self.blackboard,
-                    "workflow_paused",
-                    {
-                        "step": current_step,
-                        "status_code": "INTERRUPTED",
-                        "reason": si.reason,
-                        "runtime": runtime_label,
-                    },
-                )
-                return PlaybookRunResult(
-                    final_step=current_step,
-                    final_status_code=f"INTERRUPTED:{si.reason}",
-                    completed=False,
-                    detail=si.detail,
-                )
-            self._store_artifacts(frame.artifacts)
-
-            status_code = self._status_from_contract(current_step, frame.execution_result)
+            for _baton_attempt in range(3):
+                try:
+                    frame = self._execute_one_iteration(
+                        current_step=current_step,
+                        step_def=step_def,
+                        runtime=runtime_label,
+                        hop_count=hop_count,
+                        visit_count=visit_count,
+                        extra_prompt=_baton_retry_extra_prompt,
+                    )
+                except StepInterrupted as si:
+                    self.blackboard_store.record_event(
+                        self.blackboard,
+                        "workflow_paused",
+                        {
+                            "step": current_step,
+                            "status_code": "INTERRUPTED",
+                            "reason": si.reason,
+                            "runtime": runtime_label,
+                        },
+                    )
+                    return PlaybookRunResult(
+                        final_step=current_step,
+                        final_status_code=f"INTERRUPTED:{si.reason}",
+                        completed=False,
+                        detail=si.detail,
+                    )
+                self._store_artifacts(frame.artifacts)
+                try:
+                    contract = self._load_agent_written_handoff_contract(current_step=current_step)
+                    if contract.to_owner == HandoffOwner.AGENT and contract.to_step == current_step:
+                        explicit_status_code = getattr(frame.execution_result, "status_code", None)
+                        if not explicit_status_code:
+                            raise self._same_step_baton_rejected(current_step=current_step)
+                        status_code = str(explicit_status_code)
+                    else:
+                        status_code = (
+                            contract.status_code
+                            or str(getattr(frame.execution_result, "status_code", "") or "")
+                            or f"BATON_{contract.intent.value.upper()}"
+                        )
+                    break
+                except BatonRejected as br:
+                    retry_num = _baton_attempt + 1
+                    self.blackboard_store.record_event(
+                        self.blackboard,
+                        "baton_rejected",
+                        {
+                            "step": current_step,
+                            "field": br.field,
+                            "invalid_value": br.invalid_value,
+                            "valid_values": br.valid_values,
+                            "retry": retry_num,
+                            "runtime": runtime_label,
+                        },
+                    )
+                    if retry_num >= 3:
+                        raise RuntimeError(
+                            f"Step '{current_step}' wrote invalid baton 3 times; "
+                            f"last error: field '{br.field}' got '{br.invalid_value}', "
+                            f"valid values are {br.valid_values}"
+                        ) from br
+                    _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
+            else:
+                raise RuntimeError(f"Step '{current_step}' did not produce a valid baton")
             last_status_code = status_code
             self._record_step_completion(
                 event_type=completion_event_type,
@@ -726,8 +773,6 @@ class BlackboardWorkflowRuntime:
                 visit_count=visit_count,
                 hop_count=hop_count,
             )
-
-            contract = self._load_agent_written_handoff_contract(current_step=current_step)
             next_step = contract.to_step
 
             if contract.to_owner == HandoffOwner.AGENT and next_step == current_step:
@@ -910,6 +955,30 @@ class BlackboardWorkflowRuntime:
                 self._store_artifacts(frame.artifacts)
                 try:
                     post_contract = self._load_step_handoff_contract(current_step=current_step)
+                    if (
+                        post_contract is not None
+                        and post_contract.to_owner == HandoffOwner.AGENT
+                        and post_contract.to_step == current_step
+                        and post_contract.source not in {"bootstrap", "workflow.start_step_override"}
+                    ):
+                        status_code_obj, goto_target, valid_codes = self._parse_legacy_status(
+                            step_def=step_def,
+                            response=frame.response,
+                            explicit_status_code=frame.explicit_status_code,
+                        )
+                        allowed_status_codes = {
+                            code.value for code in (valid_codes or list(PhaseStatusCode))
+                        }
+                        status_like_tokens = self._extract_status_like_tokens(
+                            response=frame.response,
+                            explicit_status_code=frame.explicit_status_code,
+                        )
+                        invalid_intents = {
+                            token for token in status_like_tokens if token not in allowed_status_codes
+                        }
+                        has_default_transition = bool(step_def.get("on", {}).get("default"))
+                        if status_code_obj is None and not goto_target and not invalid_intents and not has_default_transition:
+                            raise self._same_step_baton_rejected(current_step=current_step)
                     break
                 except BatonRejected as br:
                     retry_num = _baton_attempt + 1

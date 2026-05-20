@@ -511,6 +511,8 @@ class TestNextStepLifecycle:
                 self, step_name: str, step_def: dict, blackboard_state: object,
                 extra_prompt: Optional[str] = None,
             ) -> tuple[str, dict[str, str]]:
+                if step_name == "pr":
+                    _write_pr_done_baton(issue_dir)
                 return (
                     "confirmed",
                     {str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
@@ -659,12 +661,13 @@ class TestChatBaton:
 
         playbook_data = self._make_playbook_data()
 
-        with pytest.raises(ValueError, match="no_such_step"):
-            _consume_pending_chat_handoff(
-                issue_dir=issue_dir,
-                playbook_data=playbook_data,
-                requested_start_step=None,
-            )
+        result = _consume_pending_chat_handoff(
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            requested_start_step=None,
+        )
+
+        assert result is None
 
     def test_chat_baton_not_consumed_with_uncommitted_changes(self, tmp_path: Path, capsys) -> None:
         """有未 commit 變更時，baton 不應被消費。"""
