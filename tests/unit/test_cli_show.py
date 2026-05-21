@@ -1,5 +1,6 @@
 """Tests for cafe show command."""
 
+import json
 import pytest
 from pathlib import Path
 from typer.testing import CliRunner
@@ -242,6 +243,63 @@ steps:
 
             assert result.exit_code == 0
             assert "QA Output" in result.stdout
+
+    def test_show_status_synthesizes_when_status_file_missing(self, tmp_path):
+        """status view falls back to synthesized workflow state."""
+        cafe_dir = tmp_path / ".cafe"
+        issue_dir = cafe_dir / "issues" / "test-issue"
+        phase_dir = issue_dir / "develop"
+        iteration_dir = phase_dir / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+        (iteration_dir / "iteration.json").write_text(
+            json.dumps(
+                {
+                    "iteration": 1,
+                    "timestamp": "2026-04-27T10:00:00+08:00",
+                    "end_time": "2026-04-27T10:05:00+08:00",
+                    "status_code": "confirmed",
+                }
+            ),
+            encoding="utf-8",
+        )
+        baton = {
+            "version": 1,
+            "from_step": "develop",
+            "to_owner": "agent",
+            "to_step": "review",
+            "intent": "await_agent",
+            "status_code": "confirmed",
+            "created_at": "2026-04-27T10:05:00+08:00",
+            "source": "test",
+        }
+        (issue_dir / "blackboard.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "current_step": "review",
+                    "playbook_id": "default",
+                    "artifacts": {},
+                    "events": [],
+                    "decisions": [],
+                    "handoff_contract": baton,
+                }
+            ),
+            encoding="utf-8",
+        )
+        (issue_dir / "next_step.txt").write_text(json.dumps(baton), encoding="utf-8")
+
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
+             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+
+            mock_git = mock_git_cls.return_value
+            mock_git.get_current_branch.return_value = "test-issue"
+
+            result = runner.invoke(app, ["show", "develop", "status"])
+
+            assert result.exit_code == 0
+            assert "confirmed" in result.stdout
+            assert "completed" in result.stdout
 
     def test_show_command_with_iteration(self, tmp_path):
         """測試指定迭代號碼"""

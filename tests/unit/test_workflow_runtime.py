@@ -10,7 +10,15 @@ from cafe.core.workflow_models import BatonRejected, StepExecutionResult, StepIn
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 
 
-def _write_baton(issue_dir: Path, *, from_step: str, to_owner: str, to_step: str, intent: str) -> None:
+def _write_baton(
+    issue_dir: Path,
+    *,
+    from_step: str,
+    to_owner: str,
+    to_step: str,
+    intent: str,
+    status_code: str = "",
+) -> None:
     (issue_dir / "next_step.txt").write_text(
         json.dumps(
             {
@@ -19,13 +27,34 @@ def _write_baton(issue_dir: Path, *, from_step: str, to_owner: str, to_step: str
                 "to_owner": to_owner,
                 "to_step": to_step,
                 "intent": intent,
-                "status_code": "",
+                "status_code": status_code,
                 "created_at": "2026-04-26T23:00:00+08:00",
                 "source": "test",
             }
         ),
         encoding="utf-8",
     )
+
+
+def _write_iteration_evidence(
+    issue_dir: Path,
+    step: str,
+    *,
+    output: str = "# done\n",
+    checklist: str = "- [x] done\n",
+    questions: str | None = None,
+) -> Path:
+    iteration_dir = issue_dir / step / "iteration_001"
+    iteration_dir.mkdir(parents=True, exist_ok=True)
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps({"iteration": 1, "timestamp": "2026-04-26T23:00:00+08:00"}),
+        encoding="utf-8",
+    )
+    (iteration_dir / "output.md").write_text(output, encoding="utf-8")
+    (iteration_dir / "checklist.md").write_text(checklist, encoding="utf-8")
+    if questions is not None:
+        (iteration_dir / "questions.xml").write_text(questions, encoding="utf-8")
+    return iteration_dir
 
 
 def test_runtime_blocks_pr_done_without_publish_receipt(tmp_path: Path) -> None:
@@ -1388,6 +1417,165 @@ def test_runtime_handles_agent_execution_error(tmp_path: Path) -> None:
     msg = json.loads(interrupted_events[0].message) if isinstance(interrupted_events[0].message, str) else interrupted_events[0].message
     assert msg["step"] == "spec"
     assert msg["reason"] == "agent_rate_limit"
+
+
+def test_runtime_reconciles_agent_error_after_valid_handoff(tmp_path: Path) -> None:
+    """Agent failure after a complete on-disk handoff records a reconciled transition."""
+    from cafe.agents.executor import AgentExecutionError
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-reconcile-agent-error"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "plan"}},
+            "plan": {"skill": "plan", "role": "developer", "on": {"await_agent": "_done"}},
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        if step_name == "spec":
+            _write_baton(
+                issue_dir,
+                from_step="spec",
+                to_owner="agent",
+                to_step="plan",
+                intent="await_agent",
+                status_code="confirmed",
+            )
+            _write_iteration_evidence(issue_dir, "spec")
+            raise AgentExecutionError("Connection stalled", error_type="connection_stalled")
+        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+
+    result = runtime.run(start_step="spec", max_transitions=5)
+
+    assert result.completed is False
+    assert result.final_step == "spec"
+    assert result.final_status_code == "confirmed"
+
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    assert bb.current_step == "plan"
+    assert [e.event_type for e in bb.events].count("step_reconciled") == 1
+    reconciled_event = next(e for e in bb.events if e.event_type == "step_reconciled")
+    assert reconciled_event.data["to_step"] == "plan"
+    assert reconciled_event.data["validated_evidence"] == ["baton", "output", "checklist"]
+    assert not any(
+        e.event_type == "workflow_paused" and e.data.get("status_code") == "INTERRUPTED"
+        for e in bb.events
+    )
+
+    iteration_data = json.loads((issue_dir / "spec" / "iteration_001" / "iteration.json").read_text())
+    assert iteration_data["status_code"] == "confirmed"
+    assert iteration_data["end_time"]
+
+
+def test_runtime_preserves_interrupted_when_reconciliation_evidence_incomplete(tmp_path: Path) -> None:
+    """Incomplete persisted evidence should not be inferred as a completed handoff."""
+    from cafe.agents.executor import AgentExecutionError
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-reconcile-incomplete"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "plan"}},
+            "plan": {"skill": "plan", "role": "developer", "on": {"await_agent": "_done"}},
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        _write_baton(
+            issue_dir,
+            from_step="spec",
+            to_owner="agent",
+            to_step="plan",
+            intent="await_agent",
+            status_code="confirmed",
+        )
+        _write_iteration_evidence(issue_dir, "spec", checklist="- [ ] unfinished\n")
+        raise AgentExecutionError("Connection stalled", error_type="connection_stalled")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+
+    result = runtime.run(start_step="spec", max_transitions=5)
+
+    assert result.completed is False
+    assert result.final_status_code == "INTERRUPTED:agent_connection_stalled"
+
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    assert bb.current_step == "spec"
+    failed_event = next(e for e in bb.events if e.event_type == "step_reconciliation_failed")
+    assert "checklist_complete" in failed_event.data["missing_evidence"]
+    assert any(
+        e.event_type == "workflow_paused" and e.data.get("status_code") == "INTERRUPTED"
+        for e in bb.events
+    )
+
+
+def test_runtime_resume_reconciliation_is_idempotent(tmp_path: Path) -> None:
+    """Resume-time reconciliation repairs an interrupted handoff once."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-reconcile-resume"
+    issue_dir.mkdir(parents=True)
+    _write_baton(
+        issue_dir,
+        from_step="spec",
+        to_owner="agent",
+        to_step="plan",
+        intent="await_agent",
+        status_code="confirmed",
+    )
+    _write_iteration_evidence(issue_dir, "spec")
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "current_step": "spec",
+                "playbook_id": "default",
+                "artifacts": {},
+                "events": [
+                    {
+                        "timestamp": "2026-04-26T23:00:00+08:00",
+                        "step": "spec",
+                        "event_type": "step_interrupted",
+                        "message": "{}",
+                        "data": {"step": "spec", "reason": "agent_connection_stalled"},
+                    }
+                ],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "plan"}},
+            "plan": {"skill": "plan", "role": "developer", "on": {"await_agent": "_done"}},
+        },
+    }
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args, **_kwargs: StepExecutionResult(response="confirmed", artifacts={}, status_code="confirmed"),
+    )
+
+    first = runtime._try_resume_reconcile_interrupted_handoff(runtime_label="legacy_until_boundary")
+    second = runtime._try_resume_reconcile_interrupted_handoff(runtime_label="legacy_until_boundary")
+
+    assert first is not None
+    assert second is None
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    assert bb.current_step == "plan"
+    assert [e.event_type for e in bb.events].count("step_reconciled") == 1
 
 
 # ---------------------------------------------------------------------------
