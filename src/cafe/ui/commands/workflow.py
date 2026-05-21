@@ -98,6 +98,30 @@ def _resolve_selected_playbook(*a, **kw):
 
 console = Console()
 
+_USER_INPUT_HELP = (
+    "Initial workflow input, or answer to write when resuming from a user handoff"
+)
+
+
+def _normalize_cli_user_input(user_input: Any) -> Optional[str]:
+    """Return stripped CLI user input, or None when unset or invoked outside Typer."""
+    if not isinstance(user_input, str):
+        return None
+    stripped = user_input.strip()
+    return stripped if stripped else None
+
+
+def _build_initial_step_user_inputs(
+    playbook_data: Dict[str, Any],
+    user_input: Optional[str],
+) -> Optional[Dict[str, str]]:
+    """Map cold-start --user-input to the playbook entry point step."""
+    normalized = _normalize_cli_user_input(user_input)
+    if not normalized:
+        return None
+    entry_point = playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))
+    return {str(entry_point): normalized}
+
 
 def _validate_allowed_directories(config_manager: Any, add_dir: List[str]) -> None:
     """Validate config.yaml and CLI-provided allowed directories."""
@@ -127,7 +151,7 @@ def make(
         None,
         "--user-input",
         "-u",
-        help="Requirements for the spec step, or answer to write when resuming from a user handoff",
+        help=_USER_INPUT_HELP,
     ),
     timeout: int = typer.Option(
         0,
@@ -486,7 +510,7 @@ def workflow(
         None,
         "--user-input",
         "-u",
-        help="Requirements for the spec step, or answer to write when resuming from a user handoff",
+        help=_USER_INPUT_HELP,
     ),
     fallback_preset: Optional[str] = typer.Option(
         None,
@@ -500,6 +524,7 @@ def workflow(
     ),
 ) -> None:
     """Run playbook workflow using the new generic runner."""
+    user_input = _normalize_cli_user_input(user_input)
     try:
         def _predict_next_iteration(issue_root: Path, step_name: str) -> int:
             step_dir = issue_root / step_name
@@ -585,6 +610,19 @@ def workflow(
                 artifacts={str(output_key): str(output_path)},
                 status_code="confirmed",
             )
+        entry_point = str(
+            playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))
+        )
+        resume_blackboard = BlackboardStore(issue_dir).load_or_create(
+            entry_point,
+            playbook_id=str(playbook_data["playbook"]["id"]),
+            allow_legacy_text=True,
+        )
+        if user_input and resume_blackboard.current_step in {"user", "done"}:
+            initial_step_user_inputs = None
+        else:
+            initial_step_user_inputs = _build_initial_step_user_inputs(playbook_data, user_input)
+
         # Mutable holder so wrapped_executor can swap executors on fallback
         _executor_holder: Dict[str, Any] = {
             "executor": None if dry_run else _build_workflow_step_executor(
@@ -593,7 +631,7 @@ def workflow(
                 issue_name=issue_name,
                 playbook_data=playbook_data,
                 generic_phase=generic_phase,
-                step_user_inputs={"spec": user_input} if user_input else None,
+                step_user_inputs=initial_step_user_inputs,
                 interactive=interactive,
                 extra_allowed_directories=add_dir_values,
             ),
@@ -616,7 +654,7 @@ def workflow(
                 issue_name=issue_name,
                 playbook_data=playbook_data,
                 generic_phase=generic_phase,
-                step_user_inputs={"spec": user_input} if user_input else None,
+                step_user_inputs=initial_step_user_inputs,
                 interactive=interactive,
                 extra_allowed_directories=add_dir_values,
             )
