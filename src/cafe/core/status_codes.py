@@ -60,6 +60,14 @@ def transition_map_key(code: PhaseStatusCode) -> str:
     return collapsed.get(code, "manual_handoff")
 
 
+def step_on_declares(step_def: dict, intent_key: str) -> bool:
+    """Return whether the playbook step ``on`` map includes *intent_key*."""
+    on_map = step_def.get("on")
+    if not isinstance(on_map, dict):
+        return False
+    return intent_key in on_map
+
+
 class StatusCodeParser:
     """Parser for extracting step outcome tokens from agent responses."""
 
