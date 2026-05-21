@@ -371,6 +371,10 @@ def run_pr_publish_capability(
         "pr_number": pr_number,
         "action": action,
         "source": "capability",
+        "display": {
+            "style": "green",
+            "lines": ["PR synced", f"  URL: {pr_url}"],
+        },
     }
     return PrPublishRun(receipt=receipt, pr_synced_event=pr_synced, error_message=None)
 

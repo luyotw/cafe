@@ -634,6 +634,10 @@ def test_github_pr_creator_publish_output_runs_sync_pr_script(tmp_path: Path) ->
         "pr_number": "42",
         "action": "created",
         "source": "capability",
+        "display": {
+            "style": "green",
+            "lines": ["PR synced", "  URL: https://github.com/test/repo/pull/42"],
+        },
     }
     assert result.events[1]["type"] == "capability_receipt"
     assert result.events[1]["capability"] == "cafe.pr.publish"

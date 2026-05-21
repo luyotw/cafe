@@ -243,7 +243,7 @@ def test_workflow_accepts_add_dir_and_passes_through(tmp_path: Path, monkeypatch
     assert mock_builder.call_args.kwargs["extra_allowed_directories"] == ["src"]
 
 
-def test_workflow_command_prints_pr_url_when_pr_step_reports_sync_event(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_command_prints_generic_event_display(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     executed_steps: list[str] = []
 
@@ -252,7 +252,18 @@ def test_workflow_command_prints_pr_url_when_pr_step_reports_sync_event(tmp_path
             executed_steps.append(step_name)
             events = []
             if step_name == "pr":
-                events = [{"type": "pr_synced", "url": "https://github.com/test/repo/pull/238"}]
+                events = [
+                    {
+                        "type": "custom_display_event",
+                        "display": {
+                            "style": "green",
+                            "lines": [
+                                "PR synced",
+                                "  URL: https://github.com/test/repo/pull/238",
+                            ],
+                        },
+                    }
+                ]
             return StepExecutionResult(
                 response="confirmed",
                 artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
@@ -274,6 +285,52 @@ def test_workflow_command_prints_pr_url_when_pr_step_reports_sync_event(tmp_path
     assert "PR synced" in result.stdout
     assert "https://github.com/test/repo/pull/238" in result.stdout
     assert executed_steps == ["spec", "plan", "develop", "review", "pr"]
+
+
+def test_workflow_command_does_not_duplicate_pr_url_without_display(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    class FakeExecutor:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs):
+            events = []
+            if step_name == "pr":
+                events = [
+                    {
+                        "type": "pr_synced",
+                        "url": "https://github.com/test/repo/pull/277",
+                        "display": {
+                            "style": "green",
+                            "lines": [
+                                "PR synced",
+                                "  URL: https://github.com/test/repo/pull/277",
+                            ],
+                        },
+                    },
+                    {
+                        "type": "pr_link_opened",
+                        "url": "https://github.com/test/repo/pull/277",
+                    },
+                ]
+            return StepExecutionResult(
+                response="confirmed",
+                artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+                status_code="confirmed",
+                events=events,
+            )
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-277"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+
+    assert result.exit_code == 0
+    assert result.stdout.count("PR synced") == 1
+    assert result.stdout.count("https://github.com/test/repo/pull/277") == 1
 
 
 def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, monkeypatch) -> None:
