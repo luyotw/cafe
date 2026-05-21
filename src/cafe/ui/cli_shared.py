@@ -643,6 +643,41 @@ def _find_external_resume_step(
     return None
 
 
+def _resolve_step_handoff_label(playbook_data: Dict[str, Any], step_name: str) -> str:
+    """Return the user-facing handoff label for a playbook step."""
+    step_def = playbook_data.get("steps", {}).get(step_name, {})
+    if isinstance(step_def, dict):
+        label = step_def.get("handoff_label")
+        if isinstance(label, str) and label.strip():
+            return label.strip()
+    return f"Continue {step_name}"
+
+
+def _resolve_step_chat_role(playbook_data: Dict[str, Any], step_name: str) -> str:
+    """Return the role that should handle chat for a playbook step."""
+    step_def = playbook_data.get("steps", {}).get(step_name, {})
+    roles = playbook_data.get("roles", {})
+    if isinstance(step_def, dict):
+        chat_role = step_def.get("chat_role")
+        if isinstance(chat_role, str) and chat_role.strip():
+            return chat_role.strip()
+        role = step_def.get("role")
+        if isinstance(role, str) and role.strip():
+            return role.strip()
+    if isinstance(roles, dict) and roles:
+        return str(next(iter(roles.keys())))
+    return "developer"
+
+
+def _resolve_role_agent_name(playbook_data: Dict[str, Any], role: str) -> str:
+    role_def = playbook_data.get("roles", {}).get(role, {})
+    if isinstance(role_def, dict):
+        default_agent = role_def.get("default_agent")
+        if isinstance(default_agent, str) and default_agent.strip():
+            return default_agent.strip()
+    return role
+
+
 def _handle_user_phase(
     *,
     issue_name: str,
@@ -651,13 +686,6 @@ def _handle_user_phase(
     blackboard,
     phase_name: str = "user",
 ) -> Optional[str]:
-    phase_labels = {
-        "spec": "Update requirements spec",
-        "plan": "Revise implementation plan",
-        "develop": "Continue implementation",
-        "review": "Run review again",
-        "pr": "Refresh PR output",
-    }
     summary = getattr(blackboard, "handoff_summary", "").strip()
 
     # Check if this is a review-confirmation handoff from spec/plan.
@@ -668,7 +696,7 @@ def _handle_user_phase(
     handoff_intent = getattr(contract, "intent", None) if contract else None
     from_step = getattr(contract, "from_step", None) if contract else None
 
-    if handoff_intent == HandoffIntent.CONFIRM_OUTPUT and from_step in {"spec", "plan"}:
+    if handoff_intent == HandoffIntent.CONFIRM_OUTPUT and from_step in playbook_data.get("steps", {}):
         return _handle_review_confirmation(
             issue_name=issue_name,
             issue_dir=issue_dir,
@@ -676,11 +704,10 @@ def _handle_user_phase(
             blackboard=blackboard,
             store=store,
             from_step=from_step,
-            phase_labels=phase_labels,
             summary=summary,
         )
 
-    if handoff_intent == HandoffIntent.NEED_CLARIFICATION and from_step in {"spec", "plan"}:
+    if handoff_intent == HandoffIntent.NEED_CLARIFICATION and from_step in playbook_data.get("steps", {}):
         return _handle_clarification_handoff(
             issue_name=issue_name,
             issue_dir=issue_dir,
@@ -698,7 +725,6 @@ def _handle_user_phase(
         playbook_data=playbook_data,
         blackboard=blackboard,
         phase_name=phase_name,
-        phase_labels=phase_labels,
         summary=summary,
     )
 
@@ -754,11 +780,8 @@ def _handle_clarification_handoff(
         from cafe.ui.interactive_qa import interactive_qa_flow
 
         if validate_questions_xml(questions_file):
-            step_def = playbook_data.get("steps", {}).get(from_step, {})
-            role = str(step_def.get("role", "developer"))
-            prompt_role = {"pm": "pm", "reviewer": "reviewer"}.get(role, "developer")
-            role_names = playbook_data.get("roles", {})
-            agent_name = role_names.get(role, {}).get("default_agent", role)
+            prompt_role = _resolve_step_chat_role(playbook_data, from_step)
+            agent_name = _resolve_role_agent_name(playbook_data, prompt_role)
             user_input = interactive_qa_flow(
                 parse_questions_xml(questions_file),
                 role=prompt_role,
@@ -812,7 +835,6 @@ def _handle_review_confirmation(
     blackboard,
     store: BlackboardStore,
     from_step: str,
-    phase_labels: Dict[str, str],
     summary: str,
 ) -> Optional[str]:
     """Handle confirm_output handoff: display output and ask for confirmation."""
@@ -848,9 +870,7 @@ def _handle_review_confirmation(
                 confirmed_target = target
                 break
 
-    role_map = {"spec": "pm", "plan": "developer"}.get(from_step, "developer")
-    role_names = playbook_data.get("roles", {})
-    agent_name = role_names.get(role_map, {}).get("default_agent", role_map.capitalize())
+    role_map = _resolve_step_chat_role(playbook_data, from_step)
 
     from cafe.ui.inquirer_prompts import prompt_list, prompt_multiline
 
@@ -951,7 +971,6 @@ def _handle_review_confirmation(
                 playbook_data=playbook_data,
                 blackboard=blackboard,
                 phase_name="user",
-                phase_labels=phase_labels,
                 summary=summary,
             )
 
@@ -976,7 +995,6 @@ def _handle_user_phase_generic(
     playbook_data: Dict[str, Any],
     blackboard,
     phase_name: str,
-    phase_labels: Dict[str, str],
     summary: str,
 ) -> Optional[str]:
     """Generic user-phase menu (original _handle_user_phase behavior)."""
@@ -1011,11 +1029,11 @@ def _handle_user_phase_generic(
 
         step_names = list(playbook_data["steps"].keys())
         step_labels = [
-            f"{phase_labels.get(step_name, step_name)} ({step_name})"
+            f"{_resolve_step_handoff_label(playbook_data, step_name)} ({step_name})"
             for step_name in step_names
         ]
         default_step = str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys())))
-        default_label = f"{phase_labels.get(default_step, default_step)} ({default_step})"
+        default_label = f"{_resolve_step_handoff_label(playbook_data, default_step)} ({default_step})"
         from cafe.ui.cli import prompt_list as _pl2
         selected_label = _pl2(
             "Which phase should continue next?",

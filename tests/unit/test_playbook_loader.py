@@ -125,6 +125,76 @@ steps:
     }
 
 
+def test_load_supports_step_handoff_label_and_chat_role(tmp_path: Path) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "brief_first")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "editorial",
+        """
+playbook:
+  id: editorial
+roles:
+  editor:
+    description: editor
+  writer:
+    description: writer
+steps:
+  brief:
+    skill: brief_first
+    role: editor
+    handoff_label: Refine editorial brief
+    chat_role: writer
+    valid_intents: [confirmed]
+    on:
+      await_agent: _done
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+    result = loader.load_model("editorial")
+
+    assert result.model.steps["brief"].handoff_label == "Refine editorial brief"
+    assert result.model.steps["brief"].chat_role == "writer"
+
+
+def test_load_rejects_unknown_step_chat_role(tmp_path: Path) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "brief_first")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "editorial",
+        """
+playbook:
+  id: editorial
+roles:
+  editor:
+    description: editor
+steps:
+  brief:
+    skill: brief_first
+    role: editor
+    chat_role: writer
+    valid_intents: [confirmed]
+    on:
+      await_agent: _done
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="unknown chat_role"):
+        loader.load_model("editorial")
+
+
 def test_load_supports_dictionary_script_hook_declarations(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
     _write_skill(builtin_root / "skills", "plan")
@@ -378,3 +448,17 @@ def test_builtin_hotfix_and_simple_playbooks_load() -> None:
     assert simple.entry_point == "spec"
     assert list(simple.steps.keys()) == ["spec", "develop", "pr"]
     assert simple.steps["develop"].on["await_agent"] == "pr"
+
+
+def test_builtin_non_software_playbooks_define_non_default_handoff_metadata() -> None:
+    loader = PlaybookLoader()
+
+    research = loader.load_model("research").model
+    editorial = loader.load_model("editorial").model
+
+    assert research.steps["question"].handoff_label == "Refine research question"
+    assert research.steps["question"].chat_role == "researcher"
+    assert editorial.steps["draft"].handoff_label == "Continue manuscript draft"
+    assert editorial.steps["draft"].chat_role == "writer"
+    assert "implementation" not in (research.steps["question"].handoff_label or "").lower()
+    assert "requirements" not in (editorial.steps["draft"].handoff_label or "").lower()

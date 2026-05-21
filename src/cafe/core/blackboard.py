@@ -237,8 +237,8 @@ class HandoffContract:
         if self.to_owner in {HandoffOwner.USER, HandoffOwner.DONE} and self.to_step not in {"user", "done"}:
             raise ValueError("Baton owner mismatch: user/done owner must target user or done")
 
-        if self.intent == HandoffIntent.CONFIRM_OUTPUT and self.from_step not in {"spec", "plan"}:
-            raise ValueError("intent=confirm_output is only valid when from_step is spec or plan")
+        if self.intent == HandoffIntent.CONFIRM_OUTPUT and self.from_step not in allowed_steps:
+            raise ValueError("intent=confirm_output is only valid when from_step is a playbook step")
 
 
 @dataclass

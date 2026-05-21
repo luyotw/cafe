@@ -406,6 +406,52 @@ def test_launch_chat_session_prepares_chat_handoff_directory(
     assert get_chat_next_step_path(tmp_path / ".cafe" / "issues" / "issue123").parent.exists()
 
 
+def test_launch_chat_session_uses_playbook_role_defaults(
+    tmp_path,
+    monkeypatch,
+    mock_chat_environment,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "research-1"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "blackboard.json").write_text(
+        '{"schema_version":1,"playbook_id":"research","current_step":"question","artifacts":{},"events":[],"decisions":[]}',
+        encoding="utf-8",
+    )
+
+    with (
+        patch("cafe.ui.chat.subprocess.run", return_value=MagicMock(returncode=0)) as mock_run,
+        patch("cafe.ui.chat.ConfigManager") as mock_config_manager_cls,
+        patch("cafe.ui.chat.AgentManager") as mock_agent_manager_cls,
+        patch("cafe.ui.chat.PlaybookLoader") as mock_loader_cls,
+    ):
+        mock_config = MagicMock()
+        mock_config.config_dir = str(tmp_path / ".cafe")
+        mock_config.get.return_value = None
+        mock_config_manager_cls.return_value = mock_config
+        mock_loader_cls.return_value.load.return_value = {
+            "playbook": {"id": "research"},
+            "roles": {"researcher": {"default_agent": "Morgan", "default_cli": "claude"}},
+            "steps": {"question": {"role": "researcher"}},
+        }
+
+        agent_manager = MagicMock()
+        executor = MagicMock()
+        executor.config = MagicMock(session_id=None, model=None)
+        executor._get_cli_strategy.return_value.build_environment.return_value = dict(os.environ)
+        agent_manager.get_agent.return_value = executor
+        agent_manager.session_manager = MagicMock()
+        mock_agent_manager_cls.return_value = agent_manager
+
+        result = launch_chat_session("researcher", "research-1")
+
+    assert result == 0
+    assert mock_run.call_args.args[0] == ["claude"]
+    registered_config = agent_manager.register_agent.call_args.args[0]
+    assert registered_config.name == "Morgan"
+    assert registered_config.cli == AgentCLI.CLAUDE
+
+
 def test_prepare_chat_handoff_state_creates_blackboard_and_clears_stale_baton(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue123"

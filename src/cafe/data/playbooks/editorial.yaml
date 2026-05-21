@@ -19,6 +19,8 @@ steps:
       "1": brief_first
       default: brief_revise
     role: editor
+    handoff_label: "Revise editorial brief"
+    chat_role: editor
     assignee_type: agent
     output_artifact: brief
     valid_intents:
@@ -35,6 +37,8 @@ steps:
     type: skill
     skill: draft
     role: writer
+    handoff_label: "Continue manuscript draft"
+    chat_role: writer
     assignee_type: agent
     input_artifacts: [brief]
     output_artifact: manuscript
@@ -50,6 +54,8 @@ steps:
     type: skill
     skill: editorial_review
     role: editor
+    handoff_label: "Run editorial review"
+    chat_role: editor
     assignee_type: agent
     input_artifacts: [brief, manuscript]
     output_artifact: review_feedback
@@ -66,6 +72,8 @@ steps:
     type: skill
     skill: publish
     role: writer
+    handoff_label: "Prepare publication output"
+    chat_role: writer
     assignee_type: agent
     input_artifacts: [brief, manuscript, review_feedback]
     output_artifact: published_piece
