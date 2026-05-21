@@ -18,6 +18,7 @@ def _write_baton(
     to_step: str,
     intent: str,
     status_code: str = "",
+    source: str = "test",
 ) -> None:
     (issue_dir / "next_step.txt").write_text(
         json.dumps(
@@ -29,7 +30,7 @@ def _write_baton(
                 "intent": intent,
                 "status_code": status_code,
                 "created_at": "2026-04-26T23:00:00+08:00",
-                "source": "test",
+                "source": source,
             }
         ),
         encoding="utf-8",
@@ -1576,6 +1577,74 @@ def test_runtime_resume_reconciliation_is_idempotent(tmp_path: Path) -> None:
     bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
     assert bb.current_step == "plan"
     assert [e.event_type for e in bb.events].count("step_reconciled") == 1
+
+
+def test_runtime_reconciles_after_consumed_handoff_start_step(tmp_path: Path) -> None:
+    """Normal workflow resume repairs a consumed downstream baton before running target."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-reconcile-consumed"
+    issue_dir.mkdir(parents=True)
+    _write_baton(
+        issue_dir,
+        from_step="spec",
+        to_owner="agent",
+        to_step="plan",
+        intent="await_agent",
+        status_code="confirmed",
+        source="workflow.consume_handoff",
+    )
+    _write_iteration_evidence(issue_dir, "spec")
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "current_step": "plan",
+                "playbook_id": "default",
+                "artifacts": {},
+                "events": [
+                    {
+                        "timestamp": "2026-04-26T23:00:00+08:00",
+                        "step": "spec",
+                        "event_type": "step_interrupted",
+                        "message": "{}",
+                        "data": {"step": "spec", "reason": "agent_connection_stalled"},
+                    }
+                ],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "plan"}},
+            "plan": {"skill": "plan", "role": "developer", "on": {"confirmed": "_done"}},
+        },
+    }
+    executed_steps: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        executed_steps.append(step_name)
+        return StepExecutionResult(response="confirmed", artifacts={}, status_code="confirmed")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+
+    result = runtime.run(start_step="plan", max_transitions=1)
+
+    assert executed_steps == ["plan"]
+    assert result.final_step == "plan"
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    assert [e.event_type for e in bb.events].count("step_reconciled") == 1
+    reconciled_event = next(e for e in bb.events if e.event_type == "step_reconciled")
+    assert reconciled_event.data["step"] == "spec"
+    assert reconciled_event.data["to_step"] == "plan"
+    iteration_data = json.loads((issue_dir / "spec" / "iteration_001" / "iteration.json").read_text())
+    assert iteration_data["status_code"] == "confirmed"
+    assert iteration_data["end_time"]
 
 
 # ---------------------------------------------------------------------------

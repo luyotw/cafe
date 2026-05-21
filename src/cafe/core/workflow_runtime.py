@@ -974,6 +974,18 @@ class BlackboardWorkflowRuntime:
             reason=reason,
         )
 
+    def _should_attempt_resume_reconciliation(self, *, start_step: Optional[str]) -> bool:
+        if start_step is None:
+            return True
+        try:
+            contract = self.blackboard_store.load_handoff_contract(
+                self.blackboard,
+                allowed_steps=list(self.steps.keys()),
+            )
+        except Exception:
+            return False
+        return contract.source == "workflow.consume_handoff" and contract.to_step == start_step
+
     def _run_baton_driven_pr(
         self,
         *,
@@ -1664,7 +1676,7 @@ class BlackboardWorkflowRuntime:
                 )
             return self._run_single_step(current_step=current_step)
 
-        if start_step is None:
+        if self._should_attempt_resume_reconciliation(start_step=start_step):
             reconciled = self._try_resume_reconcile_interrupted_handoff(
                 runtime_label="resume_reconciliation",
             )
