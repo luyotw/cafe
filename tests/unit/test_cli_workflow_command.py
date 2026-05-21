@@ -850,6 +850,51 @@ def test_confirm_output_chat_uses_playbook_chat_role(tmp_path: Path, monkeypatch
     mock_chat.assert_called_once_with("writer", "editorial-1")
 
 
+def test_brief_confirm_output_routes_to_review_confirmation(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "editorial-confirm"
+    (issue_dir / "brief" / "iteration_001").mkdir(parents=True, exist_ok=True)
+    (issue_dir / "brief" / "iteration_001" / "output.md").write_text("# Brief\n", encoding="utf-8")
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="editorial")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="brief",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.CONFIRM_OUTPUT,
+        status_code="ready_for_review",
+        source="test",
+    )
+    playbook_data = {
+        "playbook": {"id": "editorial"},
+        "entry_point": "brief",
+        "roles": {"editor": {"default_agent": "Roger"}},
+        "steps": {
+            "brief": {
+                "role": "editor",
+                "on": {"confirm_output": "brief", "await_agent": "draft"},
+            },
+            "draft": {"role": "writer", "on": {"await_agent": "_done"}},
+        },
+    }
+
+    with patch(
+        "cafe.ui.cli_shared._handle_review_confirmation",
+        return_value="draft",
+    ) as mock_confirm:
+        result = _handle_user_phase(
+            issue_name="editorial-confirm",
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+        )
+
+    assert result == "draft"
+    mock_confirm.assert_called_once()
+
+
 def test_workflow_command_user_owner_can_complete_workflow(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CAFE_FORCE_INTERACTIVE", "1")
@@ -1131,6 +1176,69 @@ def test_user_phase_need_clarification_collects_questions_and_resumes_step(tmp_p
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
     assert reloaded.handoff_contract.to_step == "spec"
+
+
+def test_user_phase_question_need_clarification_resumes_question_step(tmp_path: Path, capsys) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-research-clarify"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    question_iter_dir = issue_dir / "question" / "iteration_001"
+    question_iter_dir.mkdir(parents=True)
+    (question_iter_dir / "output.md").write_text("# Research question\n", encoding="utf-8")
+    (question_iter_dir / "questions.xml").write_text(
+        """<?xml version="1.0" encoding="UTF-8"?>
+<questions>
+  <question id="1">
+    <title>Primary source?</title>
+    <options>
+      <option>Academic papers</option>
+      <option>Industry reports</option>
+    </options>
+  </question>
+</questions>
+""",
+        encoding="utf-8",
+    )
+    playbook_data = {
+        "playbook": {"id": "research"},
+        "roles": {"researcher": {"default_agent": "Morgan"}},
+        "steps": {
+            "question": {
+                "role": "researcher",
+                "on": {"need_clarification": "question", "await_agent": "collect"},
+            },
+            "collect": {"role": "researcher", "on": {}},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="research")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="question",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.NEED_CLARIFICATION,
+        status_code="need_clarification",
+        source="test",
+    )
+
+    with patch(
+        "cafe.ui.interactive_qa.interactive_qa_flow",
+        return_value="Q1: Primary source?\nA1: Academic papers",
+    ):
+        result = _handle_user_phase(
+            issue_name="issue-research-clarify",
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+        )
+
+    assert result == "question"
+    next_input = issue_dir / "question" / "iteration_002" / "user_input.md"
+    assert next_input.read_text(encoding="utf-8") == "Q1: Primary source?\nA1: Academic papers"
+    reloaded = store.load_or_create("question", playbook_id="research")
+    assert reloaded.current_step == "question"
+    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
 
 
 def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkeypatch) -> None:

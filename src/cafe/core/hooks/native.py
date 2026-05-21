@@ -14,7 +14,7 @@ from datetime import datetime
 from cafe.core.blackboard import BlackboardState, HandoffContract, HandoffIntent, HandoffOwner
 from cafe.core.hooks import HookResult, NoOpHook
 from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
-from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.status_codes import PhaseStatusCode, step_on_declares
 from cafe.skills.loader import SkillLoader
 from cafe.ui.interactive_qa import interactive_qa_flow
 from cafe.ui.inquirer_prompts import prompt_multiline
@@ -219,8 +219,9 @@ class UserInputCollector(NoOpHook):
             return HookResult()
 
         step_name = str(kwargs.get("step_name") or kwargs["step_def"].get("name") or "")
+        step_def = kwargs["step_def"]
         agent_name = str(kwargs.get("agent_name") or "")
-        role = str(kwargs["step_def"].get("role", "developer"))
+        role = str(step_def.get("role", "developer"))
 
         # Restore plan phase iteration-1 initial user input (development guide).
         if step_name == "plan" and getattr(phase, "iteration", 0) == 1:
@@ -269,9 +270,9 @@ class UserInputCollector(NoOpHook):
 
         prompt_role = {"pm": "pm", "reviewer": "reviewer"}.get(role, "developer")
         previous_output_file = self._get_previous_output_file(phase, step_name)
-        # For spec/plan READY_FOR_REVIEW flow, delta view is sufficient and less noisy.
+        # Steps that declare confirm_output use delta view on READY_FOR_REVIEW (less noisy).
         if not (
-            step_name in {"spec", "plan"}
+            step_on_declares(step_def, "confirm_output")
             and previous_status == "ready_for_review"
         ):
             self._display_previous_output(phase, step_name, previous_output_file)

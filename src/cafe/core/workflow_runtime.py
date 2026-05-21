@@ -13,7 +13,12 @@ import re
 from typing import Any, Dict, Optional
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, transition_map_key
+from cafe.core.status_codes import (
+    PhaseStatusCode,
+    StatusCodeParser,
+    step_on_declares,
+    transition_map_key,
+)
 from cafe.core.workflow_models import BatonRejected, PlaybookRunResult, StepExecutionResult, StepInterrupted
 
 
@@ -104,12 +109,12 @@ class BlackboardWorkflowRuntime:
                 return True
         return False
 
-    @staticmethod
-    def _default_pause_intent(current_step: str, status_code: str) -> HandoffIntent:
+    def _default_pause_intent(self, current_step: str, status_code: str) -> HandoffIntent:
+        step_def = self.steps.get(current_step, {})
         if status_code in {
             PhaseStatusCode.READY_FOR_REVIEW.value,
             PhaseStatusCode.CONFIRM_OUTPUT.value,
-        } and current_step in {"spec", "plan"}:
+        } and step_on_declares(step_def, "confirm_output"):
             return HandoffIntent.CONFIRM_OUTPUT
         if status_code == PhaseStatusCode.NEED_CLARIFICATION.value:
             return HandoffIntent.NEED_CLARIFICATION

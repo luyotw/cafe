@@ -269,6 +269,122 @@ def test_generic_workflow_step_writes_review_pause_contract(tmp_path: Path, monk
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
     assert reloaded.handoff_contract.to_step == "user"
+    assert reloaded.handoff_contract.intent == HandoffIntent.CONFIRM_OUTPUT
+
+
+def test_generic_workflow_step_brief_ready_for_review_writes_confirm_output_contract(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-brief-confirm"
+    playbook = {
+        "playbook": {"id": "editorial"},
+        "roles": {"editor": {"default_agent": "Roger"}},
+        "steps": {
+            "brief": {
+                "skill": "spec_first",
+                "role": "editor",
+                "output_artifact": "brief",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["ready_for_review", "confirmed"],
+                "on": {"confirm_output": "brief", "await_agent": "draft"},
+            }
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("brief")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-brief-confirm",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("ready_for_review"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"editor": "Roger"},
+        interactive=True,
+    )
+
+    result = executor.execute_step("brief", playbook["steps"]["brief"], state)
+
+    assert result.status_code == "ready_for_review"
+    reloaded = BlackboardStore(issue_dir).load_or_create("brief")
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.intent == HandoffIntent.CONFIRM_OUTPUT
+    assert reloaded.handoff_contract.to_step == "user"
+
+
+def test_generic_workflow_step_question_need_clarification_writes_clarification_contract(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-question-clarify"
+    playbook = {
+        "playbook": {"id": "research"},
+        "roles": {"researcher": {"default_agent": "Morgan"}},
+        "steps": {
+            "question": {
+                "skill": "spec_first",
+                "role": "researcher",
+                "output_artifact": "research_question_brief",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["need_clarification", "confirmed"],
+                "on": {"need_clarification": "question", "await_agent": "collect"},
+            }
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("question")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-question-clarify",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("need_clarification"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"researcher": "Morgan"},
+        interactive=True,
+    )
+
+    result = executor.execute_step("question", playbook["steps"]["question"], state)
+
+    assert result.status_code == "need_clarification"
+    reloaded = BlackboardStore(issue_dir).load_or_create("question")
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.intent == HandoffIntent.NEED_CLARIFICATION
+    assert reloaded.handoff_contract.to_step == "user"
+
+
+def test_generic_workflow_step_question_step_allows_questions_xml_edit(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-question-tools"
+    playbook = {
+        "playbook": {"id": "research"},
+        "roles": {"researcher": {"default_agent": "Morgan"}},
+        "steps": {
+            "question": {
+                "skill": "spec_first",
+                "role": "researcher",
+                "output_artifact": "research_question_brief",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["need_clarification", "confirmed"],
+                "on": {"need_clarification": "question", "await_agent": "collect"},
+            }
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("question")
+    agent_manager = FakeAgentManager("confirmed")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-question-tools",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"researcher": "Morgan"},
+    )
+
+    executor.execute_step("question", playbook["steps"]["question"], state)
+
+    allowed_tools = agent_manager.allowed_tools_calls[0] or []
+    assert "edit(./.cafe/issues/issue-question-tools/question/iteration_001/questions.xml)" in allowed_tools
 
 
 def test_generic_workflow_step_auto_confirms_review_in_non_interactive(tmp_path: Path, monkeypatch) -> None:
@@ -1005,7 +1121,7 @@ def test_generic_workflow_step_restores_spec_runtime_allowed_tools(tmp_path: Pat
                 "output_artifact": "spec",
                 "allowed_tools": ["Read", "Grep", "Glob", "WebFetch", "WebSearch"],
                 "valid_intents": ["confirmed"],
-                "on": {"await_agent": "_done"},
+                "on": {"await_agent": "_done", "need_clarification": "spec"},
             }
         },
     }

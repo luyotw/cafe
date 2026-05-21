@@ -927,6 +927,78 @@ def test_runtime_pauses_ready_for_review_with_confirm_output_intent(tmp_path: Pa
     assert blackboard.handoff_contract.intent == HandoffIntent.CONFIRM_OUTPUT
 
 
+def test_runtime_pauses_brief_ready_for_review_with_confirm_output_intent(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "brief-confirm-pause"
+    playbook = {
+        "playbook": {"id": "editorial"},
+        "steps": {
+            "brief": {
+                "skill": "brief_first",
+                "role": "editor",
+                "valid_intents": ["ready_for_review", "confirmed"],
+                "on": {"confirm_output": "brief", "await_agent": "draft"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="brief")
+
+    assert result.completed is False
+    assert result.final_status_code == "ready_for_review"
+    blackboard = BlackboardStore(issue_dir).load_or_create("brief")
+    assert blackboard.current_step == "user"
+    assert blackboard.handoff_contract is not None
+    assert blackboard.handoff_contract.intent == HandoffIntent.CONFIRM_OUTPUT
+
+
+def test_runtime_ready_for_review_without_confirm_output_uses_manual_handoff(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "develop-review-no-confirm"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "valid_intents": ["ready_for_review", "confirmed"],
+                "on": {"await_agent": "review", "manual_handoff": "develop"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="develop")
+
+    assert result.completed is False
+    blackboard = BlackboardStore(issue_dir).load_or_create("develop")
+    assert blackboard.handoff_contract is not None
+    assert blackboard.handoff_contract.intent == HandoffIntent.MANUAL_HANDOFF
+
+
 def test_runtime_continues_when_auto_continue_is_true(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "auto-continue"
     playbook = {
