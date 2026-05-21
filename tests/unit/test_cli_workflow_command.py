@@ -694,6 +694,105 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
     assert handoff_event["data"]["note"] == "Please continue implementation with the new handoff context."
 
 
+def test_user_phase_uses_playbook_handoff_labels_and_generic_fallback(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "research-1"
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="research")
+    store.set_current_step(blackboard, "user")
+    playbook_data = {
+        "playbook": {"id": "research"},
+        "entry_point": "question",
+        "roles": {"researcher": {"default_agent": "Morgan"}},
+        "steps": {
+            "question": {
+                "role": "researcher",
+                "handoff_label": "Refine research question",
+                "on": {"await_agent": "collect"},
+            },
+            "collect": {"role": "researcher", "on": {"await_agent": "done"}},
+        },
+    }
+    prompts: list[tuple[str, list[str]]] = []
+
+    def prompt_side_effect(message, choices, **kwargs):
+        prompts.append((message, choices))
+        if message == "Select next action":
+            return "Leave a handoff note and continue the workflow"
+        if message == "Which phase should continue next?":
+            return "Continue collect (collect)"
+        return choices[0]
+
+    with (
+        patch("cafe.ui.cli.prompt_list", side_effect=prompt_side_effect),
+        patch("cafe.ui.cli.prompt_multiline", return_value="Continue custom workflow."),
+        patch("cafe.ui.cli.prompt_confirm", return_value=True),
+    ):
+        result = _handle_user_phase(
+            issue_name="research-1",
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+        )
+
+    assert result == "collect"
+    step_prompt = next(choices for message, choices in prompts if message == "Which phase should continue next?")
+    assert "Refine research question (question)" in step_prompt
+    assert "Continue collect (collect)" in step_prompt
+    assert all("implementation" not in choice.lower() for choice in step_prompt)
+
+
+def test_confirm_output_chat_uses_playbook_chat_role(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "editorial-1"
+    (issue_dir / "brief" / "iteration_001").mkdir(parents=True, exist_ok=True)
+    (issue_dir / "brief" / "iteration_001" / "output.md").write_text("# Brief\n", encoding="utf-8")
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="editorial")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="brief",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.CONFIRM_OUTPUT,
+        status_code="ready_for_review",
+        source="test",
+    )
+    playbook_data = {
+        "playbook": {"id": "editorial"},
+        "entry_point": "brief",
+        "roles": {
+            "editor": {"default_agent": "Roger"},
+            "writer": {"default_agent": "David"},
+        },
+        "steps": {
+            "brief": {
+                "role": "editor",
+                "chat_role": "writer",
+                "on": {"await_agent": "draft", "confirm_output": "brief"},
+            },
+            "draft": {"role": "writer", "on": {"await_agent": "_done"}},
+        },
+    }
+
+    with (
+        patch("cafe.ui.cli.launch_chat_session") as mock_chat,
+        patch("cafe.ui.cli._consume_pending_chat_handoff", return_value="draft"),
+        patch("cafe.ui.cli_shared._print_output_file"),
+        patch("cafe.ui.inquirer_prompts.prompt_list", return_value="chat"),
+    ):
+        result = _handle_user_phase(
+            issue_name="editorial-1",
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+        )
+
+    assert result == "draft"
+    mock_chat.assert_called_once_with("writer", "editorial-1")
+
+
 def test_workflow_command_user_owner_can_complete_workflow(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CAFE_FORCE_INTERACTIVE", "1")

@@ -7,6 +7,7 @@ context-aware menu to guide users through common workflows.
 
 import subprocess
 import sys
+import json
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,8 +15,10 @@ from typing import Any, Dict, List, Optional
 from rich.console import Console
 
 from cafe.core.git import GitOperations
+from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui.inquirer_prompts import prompt_list, prompt_text
 from cafe.utils.config import ConfigManager
+from cafe.utils.crew import CrewManager
 from cafe.utils.git_utils import is_branch_initialized
 
 
@@ -311,7 +314,7 @@ class InteractiveMenu:
     def _get_available_agents(self) -> List[Dict[str, str]]:
         """Get all configured agents.
 
-        Returns all agents (pm, developer, reviewer) that have been configured,
+        Returns all playbook roles that have a configured or default agent,
         regardless of the current workflow phase.
 
         Returns:
@@ -320,13 +323,71 @@ class InteractiveMenu:
         agents: List[Dict[str, str]] = []
         try:
             config_manager = ConfigManager()
-            for role in ("pm", "developer", "reviewer"):
-                name = config_manager.get(f"agents.{role}.name")
+            role_names = self._get_playbook_role_names()
+            role_defaults = self._get_playbook_role_defaults(role_names)
+            crew_data = self._load_crew_data(config_manager)
+            for role in role_names:
+                name = None
+                if role in crew_data and isinstance(crew_data[role], dict):
+                    raw_name = crew_data[role].get("name")
+                    name = str(raw_name) if raw_name else None
+                if not name:
+                    name = config_manager.get(f"agents.{role}.name")
+                if not name:
+                    name = role_defaults.get(role)
                 if name:
                     agents.append({"role": role, "name": name})
         except Exception:
             pass
         return agents
+
+    def _get_playbook_role_names(self) -> List[str]:
+        issue_name = self._detector.get_current_issue_name()
+        playbook_id = "default"
+        if issue_name:
+            blackboard_file = Path(".cafe") / "issues" / issue_name / "blackboard.json"
+            try:
+                data = json.loads(blackboard_file.read_text(encoding="utf-8"))
+                playbook_id = str(data.get("playbook_id") or "default")
+            except Exception:
+                playbook_id = "default"
+
+        try:
+            playbook = PlaybookLoader(project_root=Path.cwd()).load(playbook_id)
+            roles = playbook.get("roles", {})
+            if isinstance(roles, dict) and roles:
+                return [str(role) for role in roles.keys()]
+        except Exception:
+            pass
+        return ["pm", "developer", "reviewer"]
+
+    def _get_playbook_role_defaults(self, role_names: List[str]) -> Dict[str, str]:
+        defaults: Dict[str, str] = {}
+        issue_name = self._detector.get_current_issue_name()
+        playbook_id = "default"
+        if issue_name:
+            try:
+                data = json.loads((Path(".cafe") / "issues" / issue_name / "blackboard.json").read_text(encoding="utf-8"))
+                playbook_id = str(data.get("playbook_id") or "default")
+            except Exception:
+                playbook_id = "default"
+        try:
+            playbook = PlaybookLoader(project_root=Path.cwd()).load(playbook_id)
+            roles = playbook.get("roles", {})
+            for role in role_names:
+                role_def = roles.get(role, {}) if isinstance(roles, dict) else {}
+                if isinstance(role_def, dict) and role_def.get("default_agent"):
+                    defaults[role] = str(role_def["default_agent"])
+        except Exception:
+            pass
+        return defaults
+
+    @staticmethod
+    def _load_crew_data(config_manager: ConfigManager) -> Dict[str, Any]:
+        try:
+            return CrewManager(cafe_dir=Path(config_manager.config_dir)).load()
+        except Exception:
+            return {}
 
     def _handle_chat(self) -> None:
         """Prompt user to select an agent role then launch cafe chat."""

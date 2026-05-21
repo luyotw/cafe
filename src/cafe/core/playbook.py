@@ -68,6 +68,8 @@ class StepConfig(BaseModel):
     allowed_goto: List[str] = Field(default_factory=list)
     hooks: StepHooks = Field(default_factory=StepHooks)
     auto_snapshot: bool = True
+    handoff_label: Optional[str] = None
+    chat_role: Optional[str] = None
     on: Dict[str, str]
 
     @field_validator("on")
@@ -220,6 +222,7 @@ def validate_playbook(
 
     for step_name, step in steps.items():
         _validate_step_role(step_name, step, model.roles)
+        _validate_step_chat_role(step_name, step, model.roles)
         _validate_step_skills(step_name, step, skill_loader)
         _validate_script_hook_stages(step_name, step.hooks)
         _validate_targets(step_name, step.allowed_goto, steps, "allowed_goto")
@@ -255,6 +258,11 @@ def _report_structural_issue(
 def _validate_step_role(step_name: str, step: StepConfig, roles: Dict[str, PlaybookRole]) -> None:
     if roles and step.role not in roles:
         raise ValueError(f"Step '{step_name}' references unknown role '{step.role}'")
+
+
+def _validate_step_chat_role(step_name: str, step: StepConfig, roles: Dict[str, PlaybookRole]) -> None:
+    if roles and step.chat_role and step.chat_role not in roles:
+        raise ValueError(f"Step '{step_name}' references unknown chat_role '{step.chat_role}'")
 
 
 def _validate_step_skills(step_name: str, step: StepConfig, skill_loader: SkillLoader) -> None:

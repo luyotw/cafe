@@ -552,6 +552,41 @@ class TestChatWithAgent:
         assert "developer" in roles
         assert "reviewer" in roles
 
+    def test_get_available_agents_uses_custom_playbook_roles(self, tmp_path, monkeypatch):
+        """測試 custom playbook 角色會出現在 chat role picker"""
+        monkeypatch.chdir(tmp_path)
+        issue_dir = tmp_path / ".cafe" / "issues" / "research-issue"
+        issue_dir.mkdir(parents=True)
+        (issue_dir / "blackboard.json").write_text(
+            '{"schema_version":1,"playbook_id":"research","current_step":"question","artifacts":{},"events":[],"decisions":[]}',
+            encoding="utf-8",
+        )
+
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.get_current_issue_name.return_value = "research-issue"
+
+        mock_config = MagicMock()
+        mock_config.config_dir = str(tmp_path / ".cafe")
+        mock_config.get.return_value = None
+
+        menu = InteractiveMenu(state_detector=detector)
+
+        with (
+            patch("cafe.ui.menu.ConfigManager") as mock_config_cls,
+            patch("cafe.ui.menu.CrewManager") as mock_crew_cls,
+            patch("cafe.ui.menu.PlaybookLoader") as mock_loader_cls,
+        ):
+            mock_config_cls.return_value = mock_config
+            mock_crew_cls.return_value.load.return_value = {}
+            mock_loader_cls.return_value.load.return_value = {
+                "roles": {
+                    "researcher": {"default_agent": "Morgan"},
+                },
+            }
+            agents = menu._get_available_agents()
+
+        assert agents == [{"role": "researcher", "name": "Morgan"}]
+
     def test_get_available_agents_returns_all_in_develop_phase(self, tmp_path, monkeypatch):
         """測試 develop 階段時仍回傳所有已設定的 agents"""
         monkeypatch.chdir(tmp_path)

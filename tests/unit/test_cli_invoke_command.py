@@ -83,6 +83,33 @@ class TestChatCommand:
                         assert result.exit_code == 0
                         mock_launch.assert_called_once_with(role, "issue36")
 
+    def test_chat_accepts_custom_playbook_role(self, tmp_path: Path, mock_initialized_branch, config_with_agents):
+        """測試 active issue playbook 定義的自訂 role 可開啟 chat"""
+        issue_dir = tmp_path / ".cafe" / "issues" / "issue36"
+        (issue_dir / "blackboard.json").write_text(
+            '{"schema_version":1,"playbook_id":"research","current_step":"question","artifacts":{},"events":[],"decisions":[]}',
+            encoding="utf-8",
+        )
+
+        with (
+            patch("cafe.ui.cli.GitOperations") as mock_git_class,
+            patch("cafe.ui.cli.is_branch_initialized", return_value=True),
+            patch("cafe.ui.cli.PlaybookLoader") as mock_loader_cls,
+            patch("cafe.ui.cli.launch_chat_session", return_value=0) as mock_launch,
+        ):
+            mock_git = mock_git_class.return_value
+            mock_git.is_valid_branch.return_value = True
+            mock_git.get_current_branch.return_value = "issue36"
+            mock_loader_cls.return_value.load.return_value = {
+                "roles": {"researcher": {"default_agent": "Morgan"}},
+                "steps": {"question": {"role": "researcher"}},
+            }
+
+            result = runner.invoke(app, ["chat", "researcher"])
+
+        assert result.exit_code == 0
+        mock_launch.assert_called_once_with("researcher", "issue36")
+
     def test_chat_gets_issue_from_current_branch(self, tmp_path: Path, mock_initialized_branch, config_with_agents):
         """測試從當前分支取得 issue name"""
         with patch("cafe.ui.cli.GitOperations") as mock_git_class:

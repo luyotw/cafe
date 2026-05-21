@@ -44,6 +44,7 @@ from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler as _CompatPermissionHandler
 from cafe.core.types import CriticalPhaseError as _CompatCriticalPhaseError
 from cafe.core.workflow_models import StepExecutionResult as _CompatStepExecutionResult
+from cafe.playbooks.loader import PlaybookLoader
 from cafe.templates.manager import TemplateManager
 from cafe.ui import init_helpers as _compat_init_helpers
 from cafe.ui.chat import get_chat_next_step_path as _compat_get_chat_next_step_path, launch_chat_session
@@ -1179,15 +1180,28 @@ def chat_with_agent(
         cafe chat reviewer
     """
     # 1. Validate role parameter
-    valid_roles = ["pm", "developer", "reviewer"]
+    issue_name = _get_and_validate_branch(ctx, "chat")
+    valid_roles = _load_issue_playbook_roles(issue_name)
     if role not in valid_roles:
         console.print(f"[red]Error: Invalid role '{role}'. Must be one of: {', '.join(valid_roles)}[/red]")
         raise typer.Exit(1)
 
-    # 2. Get current branch as issue name
-    issue_name = _get_and_validate_branch(ctx, "chat")
-
     raise typer.Exit(launch_chat_session(role, issue_name))
+
+
+def _load_issue_playbook_roles(issue_name: str) -> list[str]:
+    roles = ["pm", "developer", "reviewer"]
+    try:
+        playbook_name = _resolve_issue_playbook_name(issue_name)
+        playbook_data = PlaybookLoader(project_root=Path.cwd()).load(playbook_name)
+        playbook_roles = playbook_data.get("roles", {})
+        if isinstance(playbook_roles, dict) and playbook_roles:
+            for role in playbook_roles:
+                if role not in roles:
+                    roles.append(str(role))
+    except Exception:
+        pass
+    return roles
 
 
 def main() -> Optional[int]:

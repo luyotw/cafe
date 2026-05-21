@@ -13,6 +13,8 @@ steps:
     type: skill
     skill: research_question
     role: researcher
+    handoff_label: "Refine research question"
+    chat_role: researcher
     assignee_type: agent
     output_artifact: research_question_brief
     valid_intents:
@@ -27,6 +29,8 @@ steps:
     type: skill
     skill: research_collect
     role: researcher
+    handoff_label: "Continue evidence collection"
+    chat_role: researcher
     assignee_type: agent
     input_artifacts: [research_question_brief]
     output_artifact: research_notes
@@ -43,6 +47,8 @@ steps:
     type: skill
     skill: research_synthesize
     role: researcher
+    handoff_label: "Revise research synthesis"
+    chat_role: researcher
     assignee_type: agent
     input_artifacts: [research_question_brief, research_notes]
     output_artifact: research_synthesis
@@ -59,6 +65,8 @@ steps:
     type: skill
     skill: research_report
     role: researcher
+    handoff_label: "Update research report"
+    chat_role: researcher
     assignee_type: agent
     input_artifacts: [research_question_brief, research_notes, research_synthesis]
     output_artifact: research_report_doc

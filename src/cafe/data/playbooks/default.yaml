@@ -23,6 +23,8 @@ steps:
       "1": spec_first
       default: spec_revise
     role: pm
+    handoff_label: "Update requirements spec"
+    chat_role: pm
     assignee_type: agent
     input_artifacts: []
     output_artifact: spec
@@ -40,6 +42,8 @@ steps:
     type: skill
     skill: plan
     role: developer
+    handoff_label: "Revise implementation plan"
+    chat_role: developer
     assignee_type: agent
     input_artifacts: [spec]
     output_artifact: plan
@@ -72,6 +76,8 @@ steps:
     type: skill
     skill: develop
     role: developer
+    handoff_label: "Continue implementation"
+    chat_role: developer
     assignee_type: agent
     input_artifacts: [spec, plan]
     output_artifact: code
@@ -89,6 +95,8 @@ steps:
     type: skill
     skill: review
     role: reviewer
+    handoff_label: "Run review again"
+    chat_role: reviewer
     assignee_type: agent
     input_artifacts: [spec, plan, code]
     output_artifact: review_feedback
@@ -107,6 +115,8 @@ steps:
     type: skill
     skill: pr
     role: developer
+    handoff_label: "Refresh PR output"
+    chat_role: developer
     assignee_type: agent
     input_artifacts: [spec, code, review_feedback]
     output_artifact: pr_result

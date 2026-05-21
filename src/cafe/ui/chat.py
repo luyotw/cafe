@@ -60,7 +60,7 @@ def get_chat_next_step_path(issue_dir: Path) -> Path:
     return issue_dir / "next_step.txt"
 
 
-def _load_chat_role_config(config_manager: ConfigManager, role: str) -> Optional[dict]:
+def _load_chat_role_config(config_manager: ConfigManager, role: str, issue_dir: Optional[Path] = None) -> Optional[dict]:
     """Load role config from crew.yaml first, then config.yaml."""
     try:
         cafe_dir = Path(getattr(config_manager, "config_dir"))
@@ -72,7 +72,34 @@ def _load_chat_role_config(config_manager: ConfigManager, role: str) -> Optional
         pass
 
     role_config = config_manager.get(f"agents.{role}", None)
-    return role_config if isinstance(role_config, dict) else None
+    if isinstance(role_config, dict):
+        return role_config
+
+    if issue_dir is not None:
+        playbook_role_config = _load_playbook_role_config(issue_dir, role)
+        if playbook_role_config is not None:
+            return playbook_role_config
+    return None
+
+
+def _load_playbook_role_config(issue_dir: Path, role: str) -> Optional[dict]:
+    try:
+        _, _, playbook_id = _load_chat_workflow_context(issue_dir)
+        playbook = PlaybookLoader(project_root=Path.cwd()).load(playbook_id)
+    except Exception:
+        return None
+
+    role_def = playbook.get("roles", {}).get(role, {})
+    if not isinstance(role_def, dict):
+        return None
+
+    agent_name = role_def.get("default_agent")
+    cli = role_def.get("default_cli")
+    if not isinstance(agent_name, str) or not agent_name.strip():
+        return None
+    if not isinstance(cli, str) or not cli.strip():
+        return None
+    return {"name": agent_name.strip(), "cli": cli.strip()}
 
 
 def _configured_cli_values(role_config: dict) -> set[str]:
@@ -362,7 +389,7 @@ def launch_chat_session(role: str, issue_name: str) -> int:
 
     # Load configuration
     config_manager = ConfigManager()
-    agent_config = _load_chat_role_config(config_manager, role)
+    agent_config = _load_chat_role_config(config_manager, role, issue_dir=issue_dir)
 
     if agent_config is None:
         print(f"\n⚠️  No agent configured for role '{role}'. Skipping chat.\n")
