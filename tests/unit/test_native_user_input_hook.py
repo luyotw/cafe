@@ -88,7 +88,7 @@ def test_user_input_collector_confirms_ready_for_review_without_running_agent(tm
             stage="prepare_input",
             phase=phase,
             step_name="spec",
-            step_def={"role": "pm"},
+            step_def={"role": "pm", "on": {"confirm_output": "spec"}},
             agent_name="Roger",
         )
 
@@ -102,6 +102,38 @@ def test_user_input_collector_confirms_ready_for_review_without_running_agent(tm
     mock_display_delta.assert_called_once()
     phase._ask_user_for_review_decision.assert_called_once()
     phase._process_review_decision.assert_called_once()
+
+
+def test_user_input_collector_brief_ready_for_review_uses_delta_when_confirm_output_declared(
+    tmp_path: Path,
+) -> None:
+    phase_dir = tmp_path / "brief"
+    prev_prev_iter_dir = phase_dir / "iteration_001"
+    prev_prev_iter_dir.mkdir(parents=True, exist_ok=True)
+    (prev_prev_iter_dir / "output.md").write_text("# Brief v1\n", encoding="utf-8")
+
+    prev_iter_dir = phase_dir / "iteration_002"
+    prev_iter_dir.mkdir(parents=True, exist_ok=True)
+    (prev_iter_dir / "output.md").write_text("# Brief v2\n", encoding="utf-8")
+    _record_previous_step_status(tmp_path, "brief", "ready_for_review")
+
+    phase = _FakePhase(phase_dir=phase_dir, iteration=3)
+    phase._ask_user_for_review_decision = MagicMock(return_value="confirm")
+    phase._process_review_decision = MagicMock()
+
+    hook = UserInputCollector()
+    with patch.object(hook, "_display_previous_output") as mock_display_output, \
+         patch.object(hook, "_display_previous_iteration_delta") as mock_display_delta:
+        hook.run(
+            stage="prepare_input",
+            phase=phase,
+            step_name="brief",
+            step_def={"role": "editor", "on": {"confirm_output": "brief"}},
+            agent_name="Roger",
+        )
+
+    mock_display_output.assert_not_called()
+    mock_display_delta.assert_called_once()
 
 
 def test_user_input_collector_plan_ready_for_review_skips_full_output_display_when_delta_available(tmp_path: Path) -> None:
@@ -126,7 +158,7 @@ def test_user_input_collector_plan_ready_for_review_skips_full_output_display_wh
             stage="prepare_input",
             phase=phase,
             step_name="plan",
-            step_def={"role": "developer"},
+            step_def={"role": "developer", "on": {"confirm_output": "plan"}},
             agent_name="David",
         )
 
@@ -155,7 +187,7 @@ def test_user_input_collector_plan_ready_for_review_falls_back_to_full_output_wi
             stage="prepare_input",
             phase=phase,
             step_name="plan",
-            step_def={"role": "developer"},
+            step_def={"role": "developer", "on": {"confirm_output": "plan"}},
             agent_name="David",
         )
 

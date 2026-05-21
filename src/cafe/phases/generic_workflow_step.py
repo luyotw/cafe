@@ -17,7 +17,12 @@ from cafe.core.blackboard import (
 )
 from cafe.core.git import GitOperations
 from cafe.core.phase import Phase
-from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, transition_map_key
+from cafe.core.status_codes import (
+    PhaseStatusCode,
+    StatusCodeParser,
+    step_on_declares,
+    transition_map_key,
+)
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.phases.generic_phase import GenericPhase
 from cafe.utils.checklist_generator import (
@@ -300,7 +305,7 @@ class GenericWorkflowStepExecutor(Phase):
             store.record_event(blackboard_state, "script_hook", payload)
 
         if require_status_code and effective_status is not None:
-            handoff_intent = self._resolve_handoff_intent(step_name, effective_status)
+            handoff_intent = self._resolve_handoff_intent(step_def, effective_status)
             if handoff_intent is not None:
                 events.append(
                     {
@@ -467,7 +472,7 @@ class GenericWorkflowStepExecutor(Phase):
             add(f"edit({self._display_path(output_file)})")
             add(f"edit({self._display_path(checklist_file)})")
 
-        if step_name in {"spec", "plan"}:
+        if step_on_declares(step_def, "need_clarification"):
             add(f"edit({self._display_path(questions_xml_file)})")
 
         if step_name == "review":
@@ -704,13 +709,12 @@ class GenericWorkflowStepExecutor(Phase):
         return step_name != "pr"
 
     @staticmethod
-    def _resolve_handoff_intent(step_name: str, status_code: PhaseStatusCode) -> Optional[str]:
-        if status_code == PhaseStatusCode.READY_FOR_REVIEW:
-            if step_name in {"spec", "plan"}:
-                return "confirm_output"
-            return "manual_handoff"
-        if status_code == PhaseStatusCode.CONFIRM_OUTPUT:
-            if step_name in {"spec", "plan"}:
+    def _resolve_handoff_intent(step_def: Dict[str, Any], status_code: PhaseStatusCode) -> Optional[str]:
+        if status_code in {
+            PhaseStatusCode.READY_FOR_REVIEW,
+            PhaseStatusCode.CONFIRM_OUTPUT,
+        }:
+            if step_on_declares(step_def, "confirm_output"):
                 return "confirm_output"
             return "manual_handoff"
         if status_code == PhaseStatusCode.NEED_CLARIFICATION:
@@ -767,7 +771,7 @@ class GenericWorkflowStepExecutor(Phase):
             PhaseStatusCode.NEED_CLARIFICATION.value,
             PhaseStatusCode.NEED_PERMISSION.value,
         }:
-            raw_intent = self._resolve_handoff_intent(step_name, status_code) or "manual_handoff"
+            raw_intent = self._resolve_handoff_intent(step_def, status_code) or "manual_handoff"
             store.update_handoff_contract(
                 blackboard_state,
                 from_step=step_name,
