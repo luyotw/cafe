@@ -6,6 +6,7 @@ from unittest.mock import patch, MagicMock
 
 from typer.testing import CliRunner
 
+from cafe.agents.executor import AgentExecutionError
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.ui.cli import app, _execute_single_step_alias, _find_external_resume_step, _handle_user_phase
@@ -183,6 +184,245 @@ def test_workflow_command_passes_initial_user_input_to_spec_step(tmp_path: Path,
     assert mock_builder.call_args.kwargs["step_user_inputs"] == {
         "spec": "As a user, I want a smoke-test workflow."
     }
+
+
+def test_workflow_command_passes_initial_user_input_to_question_step(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    class FakeExecutor:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()) as mock_builder,
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-research-input"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "research",
+                "--execute",
+                "--user-input",
+                "What is the market size for EV batteries?",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert mock_builder.call_args.kwargs["step_user_inputs"] == {
+        "question": "What is the market size for EV batteries?"
+    }
+
+
+def test_workflow_command_passes_initial_user_input_to_brief_step(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    class FakeExecutor:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()) as mock_builder,
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-editorial-input"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "editorial",
+                "--execute",
+                "--user-input",
+                "Write a blog post about playbook-driven workflows.",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert mock_builder.call_args.kwargs["step_user_inputs"] == {
+        "brief": "Write a blog post about playbook-driven workflows."
+    }
+
+
+def test_workflow_fallback_rebuild_passes_entry_point_user_input(tmp_path: Path, monkeypatch) -> None:
+    """Fallback executor rebuild should keep entry-point keyed step_user_inputs."""
+    monkeypatch.chdir(tmp_path)
+    cafe_dir = tmp_path / ".cafe"
+    cafe_dir.mkdir()
+    presets_dir = cafe_dir / "presets"
+    presets_dir.mkdir()
+    (presets_dir / "fallback-crew.yaml").write_text(
+        "pm:\n  name: Roger\n  cli: gemini\n",
+        encoding="utf-8",
+    )
+
+    user_text = "Hotfix the login timeout regression."
+    builder_calls: list[dict[str, str] | None] = []
+    execute_calls = {"count": 0}
+
+    class FakeExecutor:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+            execute_calls["count"] += 1
+            if execute_calls["count"] == 1:
+                raise AgentExecutionError("rate limit", error_type="rate_limit")
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    def fake_builder(**kwargs):
+        builder_calls.append(kwargs.get("step_user_inputs"))
+        return FakeExecutor()
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", side_effect=fake_builder),
+        patch("cafe.utils.preset.PresetManager.apply"),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-hotfix-fallback"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "hotfix",
+                "--execute",
+                "--user-input",
+                user_text,
+                "--fallback-preset",
+                "fallback-crew",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert builder_calls == [{"develop": user_text}, {"develop": user_text}]
+
+
+def test_workflow_command_resume_user_input_targets_handoff_from_step(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-plan"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="plan",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.NEED_CLARIFICATION,
+        status_code="need_clarification",
+        source="test",
+    )
+
+    class FakeExecutor:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()) as mock_builder,
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-resume-plan"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "default",
+                "--execute",
+                "--single-step",
+                "--user-input",
+                "Clarification: include CSV export in scope.",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert mock_builder.call_args.kwargs["step_user_inputs"] is None
+    resume_input = issue_dir / "plan" / "iteration_001" / "user_input.md"
+    assert resume_input.read_text(encoding="utf-8") == "Clarification: include CSV export in scope."
+    reloaded = store.load_or_create("spec", playbook_id="default")
+    assert "resuming plan" in (reloaded.handoff_summary or "").lower()
+    assert reloaded.current_step == "develop"
+
+
+def test_workflow_command_resume_confirm_output_keeps_await_agent_intent(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-confirm"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.CONFIRM_OUTPUT,
+        status_code="ready_for_review",
+        source="test",
+    )
+
+    class FakeExecutor:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-resume-confirm"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "default",
+                "--execute",
+                "--user-input",
+                "Approved with minor wording tweaks.",
+            ],
+        )
+
+    assert result.exit_code == 0
+    resume_input = issue_dir / "spec" / "iteration_001" / "user_input.md"
+    assert resume_input.read_text(encoding="utf-8") == "Approved with minor wording tweaks."
+    reloaded = store.load_or_create("spec", playbook_id="default")
+    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
+
+
+def test_workflow_help_describes_user_input_without_spec_only_wording() -> None:
+    result = runner.invoke(app, ["workflow", "--help"])
+    assert result.exit_code == 0
+    help_text = result.stdout.lower()
+    assert "spec step" not in help_text
+    assert "initial workflow input" in help_text
+    assert "resuming from a user" in help_text
+    assert "handoff" in help_text
+
+
+def test_make_help_describes_user_input_without_spec_only_wording() -> None:
+    result = runner.invoke(app, ["make", "--help"])
+    assert result.exit_code == 0
+    help_text = result.stdout.lower()
+    assert "spec step" not in help_text
+    assert "initial workflow input" in help_text
+    assert "resuming from a user" in help_text
+    assert "handoff" in help_text
 
 
 def test_build_workflow_step_executor_passes_allowed_directories(tmp_path: Path, monkeypatch) -> None:
