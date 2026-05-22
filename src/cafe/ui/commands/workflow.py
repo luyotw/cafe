@@ -328,6 +328,13 @@ def show(
 
         # Check if file exists
         if not file_path.exists():
+            if content_type == "status":
+                from cafe.services.summary_service import SummaryService
+
+                status = SummaryService(issues_root=cafe_dir / "issues").load_phase_status(issue_name, phase_name)
+                if status:
+                    console.print_json(data=status)
+                    return
             # Special error message for user_input content type
             if content_type == "user_input":
                 console.print("[red]No user input markdown file found for this iteration.[/red]")

@@ -7,12 +7,15 @@ primary source of truth for step transitions.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
+import json
 from pathlib import Path
 import re
 from typing import Any, Dict, Optional
 
-from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.blackboard import BlackboardStore, HandoffContract, HandoffIntent, HandoffOwner
+from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import (
     PhaseStatusCode,
     StatusCodeParser,
@@ -20,6 +23,7 @@ from cafe.core.status_codes import (
     transition_map_key,
 )
 from cafe.core.workflow_models import BatonRejected, PlaybookRunResult, StepExecutionResult, StepInterrupted
+from cafe.utils.checklist_validator import validate_checklist
 
 
 STATUS_TOKEN_PATTERN = re.compile(r"\bCAFE_[A-Z0-9_]+\b")
@@ -46,6 +50,16 @@ class PostContractResult:
     status_code: str
     next_step: Optional[str] = None
     terminal_result: Optional[PlaybookRunResult] = None
+
+
+@dataclass
+class HandoffReconciliationResult:
+    reconciled: bool
+    status_code: str = ""
+    contract: Optional[HandoffContract] = None
+    iteration_dir: Optional[Path] = None
+    missing_evidence: list[str] = field(default_factory=list)
+    validated_evidence: list[str] = field(default_factory=list)
 
 
 class BlackboardWorkflowRuntime:
@@ -667,6 +681,311 @@ class BlackboardWorkflowRuntime:
         )
         return PostContractResult(status_code=resolved_status_code, next_step=next_step)
 
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now().astimezone().isoformat()
+
+    def _latest_iteration_dir(self, current_step: str) -> Optional[Path]:
+        step_dir = self.issue_dir / current_step
+        if not step_dir.exists():
+            return None
+        iteration_dirs = sorted(path for path in step_dir.glob("iteration_*") if path.is_dir())
+        return iteration_dirs[-1] if iteration_dirs else None
+
+    @staticmethod
+    def _questions_required_for_reconciliation(contract: HandoffContract, status_code: str) -> bool:
+        return (
+            contract.intent == HandoffIntent.NEED_CLARIFICATION
+            or contract.status_code == PhaseStatusCode.NEED_CLARIFICATION.value
+            or status_code == PhaseStatusCode.NEED_CLARIFICATION.value
+        )
+
+    def _pr_publish_receipt_recorded(self) -> bool:
+        for receipt in getattr(self.blackboard, "capability_receipts", []):
+            if (
+                isinstance(receipt, dict)
+                and receipt.get("capability") == "cafe.pr.publish"
+                and receipt.get("success") is True
+            ):
+                return True
+        for event in getattr(self.blackboard, "events", []):
+            data = getattr(event, "data", {})
+            if getattr(event, "event_type", "") == "pr_synced":
+                return True
+            if (
+                getattr(event, "event_type", "") == "capability_receipt"
+                and isinstance(data, dict)
+                and data.get("capability") == "cafe.pr.publish"
+                and data.get("success") is True
+            ):
+                return True
+        return False
+
+    def _validate_reconciled_handoff(self, *, current_step: str) -> HandoffReconciliationResult:
+        missing: list[str] = []
+        validated: list[str] = []
+        contract: Optional[HandoffContract] = None
+
+        try:
+            contract = self.blackboard_store.load_handoff_contract(
+                self.blackboard,
+                allowed_steps=list(self.steps.keys()),
+            )
+        except Exception:
+            missing.append("baton_valid")
+
+        status_code = ""
+        if contract is not None:
+            status_code = contract.status_code or f"BATON_{contract.intent.value.upper()}"
+            if contract.from_step != current_step:
+                missing.append("baton_from_step")
+
+            downstream = False
+            if contract.to_owner == HandoffOwner.AGENT:
+                downstream = contract.to_step in self.steps and contract.to_step != current_step
+            elif contract.to_owner == HandoffOwner.USER:
+                downstream = contract.to_step == "user"
+            elif contract.to_owner == HandoffOwner.DONE:
+                downstream = contract.to_step == "done"
+
+            if not downstream:
+                missing.append("baton_downstream")
+            else:
+                validated.append("baton")
+
+            if (
+                current_step == "pr"
+                and contract.to_owner == HandoffOwner.DONE
+                and self._pr_step_requires_publish_receipt(current_step)
+                and not self._pr_publish_receipt_recorded()
+            ):
+                missing.append("capability_receipt")
+
+        iteration_dir = self._latest_iteration_dir(current_step)
+        if iteration_dir is None:
+            missing.append("iteration_dir")
+        else:
+            output_path = iteration_dir / "output.md"
+            if not output_path.exists() or not output_path.read_text(encoding="utf-8").strip():
+                missing.append("output_non_empty")
+            else:
+                validated.append("output")
+
+            checklist_path = iteration_dir / "checklist.md"
+            try:
+                checklist_result = validate_checklist(checklist_path)
+                if checklist_result.is_complete:
+                    validated.append("checklist")
+                else:
+                    missing.append("checklist_complete")
+            except FileNotFoundError:
+                missing.append("checklist_complete")
+
+            if contract is not None and self._questions_required_for_reconciliation(contract, status_code):
+                questions_path = iteration_dir / "questions.xml"
+                if validate_questions_xml(questions_path):
+                    validated.append("questions")
+                else:
+                    missing.append("questions_valid")
+
+        return HandoffReconciliationResult(
+            reconciled=not missing,
+            status_code=status_code,
+            contract=contract,
+            iteration_dir=iteration_dir,
+            missing_evidence=missing,
+            validated_evidence=validated,
+        )
+
+    def _reconciliation_event_exists(
+        self,
+        *,
+        current_step: str,
+        status_code: str,
+        contract: HandoffContract,
+    ) -> bool:
+        for event in self.blackboard.events:
+            if event.event_type != "step_reconciled":
+                continue
+            data = event.data
+            if (
+                data.get("step") == current_step
+                and data.get("status_code") == status_code
+                and data.get("to_owner") == contract.to_owner.value
+                and data.get("to_step") == contract.to_step
+            ):
+                return True
+        return False
+
+    def _record_reconciliation_failed(
+        self,
+        *,
+        current_step: str,
+        runtime: str,
+        missing_evidence: list[str],
+    ) -> None:
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "step_reconciliation_failed",
+            {
+                "step": current_step,
+                "runtime": runtime,
+                "reason": "incomplete_handoff",
+                "missing_evidence": list(missing_evidence),
+            },
+        )
+
+    def _patch_reconciled_iteration_metadata(self, result: HandoffReconciliationResult) -> None:
+        if result.iteration_dir is None:
+            return
+        iteration_file = result.iteration_dir / "iteration.json"
+        if not iteration_file.exists():
+            return
+        try:
+            data = json.loads(iteration_file.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        changed = False
+        if not data.get("status_code"):
+            data["status_code"] = result.status_code
+            changed = True
+        if not data.get("end_time"):
+            data["end_time"] = self._now_iso()
+            changed = True
+        if changed:
+            iteration_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _apply_reconciled_handoff(
+        self,
+        *,
+        current_step: str,
+        runtime: str,
+        result: HandoffReconciliationResult,
+    ) -> PlaybookRunResult:
+        if result.contract is None:
+            raise RuntimeError("Cannot apply reconciliation without a valid handoff contract")
+
+        contract = result.contract
+        status_code = result.status_code
+        self._patch_reconciled_iteration_metadata(result)
+
+        if not self._reconciliation_event_exists(
+            current_step=current_step,
+            status_code=status_code,
+            contract=contract,
+        ):
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "step_reconciled",
+                {
+                    "step": current_step,
+                    "status_code": status_code,
+                    "to_owner": contract.to_owner.value,
+                    "to_step": contract.to_step,
+                    "runtime": runtime,
+                    "reason": "post_interrupt_completed_handoff",
+                    "validated_evidence": list(result.validated_evidence),
+                },
+            )
+
+        if contract.to_owner == HandoffOwner.USER:
+            return self._emit_pause(
+                current_step=current_step,
+                status_code=status_code,
+                runtime=runtime,
+                reason="reconciled_handoff",
+                update_contract=False,
+            )
+
+        if contract.to_owner == HandoffOwner.DONE:
+            return self._emit_complete(
+                current_step=current_step,
+                status_code=status_code,
+                next_step=contract.to_step,
+                runtime=runtime,
+                reason="reconciled_handoff",
+                update_contract=False,
+            )
+
+        self._emit_transition(
+            current_step=current_step,
+            next_step=contract.to_step,
+            status_code=status_code,
+            source="reconciled_baton",
+            runtime=runtime,
+            update_contract=False,
+        )
+        return PlaybookRunResult(
+            final_step=current_step,
+            final_status_code=status_code,
+            completed=False,
+        )
+
+    def _try_reconcile_interrupted_step(
+        self,
+        *,
+        current_step: str,
+        runtime: str,
+        reason: str,
+    ) -> Optional[PlaybookRunResult]:
+        if reason in {"interrupted", "keyboard_interrupt", "publish_error"}:
+            return None
+
+        result = self._validate_reconciled_handoff(current_step=current_step)
+        if not result.reconciled:
+            self._record_reconciliation_failed(
+                current_step=current_step,
+                runtime=runtime,
+                missing_evidence=result.missing_evidence,
+            )
+            return None
+
+        return self._apply_reconciled_handoff(
+            current_step=current_step,
+            runtime=runtime,
+            result=result,
+        )
+
+    def _latest_unreconciled_interrupted_step(self) -> Optional[tuple[str, str]]:
+        for event in reversed(self.blackboard.events):
+            if event.event_type == "step_reconciled":
+                return None
+            if event.event_type != "step_interrupted":
+                continue
+            step = str(event.data.get("step", event.step))
+            reason = str(event.data.get("reason", "interrupted"))
+            if reason in {"interrupted", "keyboard_interrupt", "publish_error"}:
+                return None
+            return step, reason
+        return None
+
+    def _try_resume_reconcile_interrupted_handoff(
+        self,
+        *,
+        runtime_label: str,
+    ) -> Optional[PlaybookRunResult]:
+        interrupted = self._latest_unreconciled_interrupted_step()
+        if interrupted is None:
+            return None
+        step, reason = interrupted
+        return self._try_reconcile_interrupted_step(
+            current_step=step,
+            runtime=runtime_label,
+            reason=reason,
+        )
+
+    def _should_attempt_resume_reconciliation(self, *, start_step: Optional[str]) -> bool:
+        if start_step is None:
+            return True
+        try:
+            contract = self.blackboard_store.load_handoff_contract(
+                self.blackboard,
+                allowed_steps=list(self.steps.keys()),
+            )
+        except Exception:
+            return False
+        return contract.source == "workflow.consume_handoff" and contract.to_step == start_step
+
     def _run_baton_driven_pr(
         self,
         *,
@@ -715,6 +1034,13 @@ class BlackboardWorkflowRuntime:
                         extra_prompt=_baton_retry_extra_prompt,
                     )
                 except StepInterrupted as si:
+                    reconciled = self._try_reconcile_interrupted_step(
+                        current_step=current_step,
+                        runtime=runtime_label,
+                        reason=si.reason,
+                    )
+                    if reconciled is not None:
+                        return reconciled
                     self.blackboard_store.record_event(
                         self.blackboard,
                         "workflow_paused",
@@ -940,6 +1266,13 @@ class BlackboardWorkflowRuntime:
                         extra_prompt=_baton_retry_extra_prompt,
                     )
                 except StepInterrupted as si:
+                    reconciled = self._try_reconcile_interrupted_step(
+                        current_step=current_step,
+                        runtime=runtime_label,
+                        reason=si.reason,
+                    )
+                    if reconciled is not None:
+                        return reconciled
                     if pause_record_event:
                         self.blackboard_store.record_event(
                             self.blackboard,
@@ -1342,6 +1675,13 @@ class BlackboardWorkflowRuntime:
                     source="workflow.start_step_override",
                 )
             return self._run_single_step(current_step=current_step)
+
+        if self._should_attempt_resume_reconciliation(start_step=start_step):
+            reconciled = self._try_resume_reconcile_interrupted_handoff(
+                runtime_label="resume_reconciliation",
+            )
+            if reconciled is not None and self.blackboard.current_step not in self.steps:
+                return reconciled
 
         current_step = start_step or self.blackboard.current_step
         if current_step not in self.steps:

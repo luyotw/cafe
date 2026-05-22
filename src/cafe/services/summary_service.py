@@ -13,13 +13,15 @@ from cafe.core.types import PhaseStatus
 class SummaryService:
     """Service for building workflow summary timeline data."""
 
-    def __init__(self, git_ops: Optional[GitOperations] = None):
+    def __init__(self, git_ops: Optional[GitOperations] = None, issues_root: Optional[Path] = None):
         """Initialize summary service.
 
         Args:
             git_ops: GitOperations instance for git context detection
+            issues_root: Root directory containing issue workflow data
         """
         self.git_ops = git_ops or GitOperations()
+        self.issues_root = issues_root or Path(".cafe/issues")
         self._load_errors: List[Dict[str, str]] = []
 
     def get_current_issue(self) -> str:
@@ -49,7 +51,7 @@ class SummaryService:
         Returns:
             Dictionary containing phase status information, or None if no phase data exists
         """
-        status_file = Path(".cafe/issues") / issue_name / phase_name / "status.json"
+        status_file = self.issues_root / issue_name / phase_name / "status.json"
 
         if status_file.exists():
             try:
@@ -75,7 +77,7 @@ class SummaryService:
             List of iteration context dictionaries with timestamp (start_time),
             end_time, status_code, cli, model, and stats, ordered by iteration number
         """
-        phase_dir = Path(".cafe/issues") / issue_name / phase_name
+        phase_dir = self.issues_root / issue_name / phase_name
 
         if not phase_dir.exists():
             return []
@@ -130,7 +132,7 @@ class SummaryService:
 
     def _load_workflow_state(self, issue_name: str) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
         """Load the current workflow pointer and baton contract if available."""
-        issue_dir = Path(".cafe/issues") / issue_name
+        issue_dir = self.issues_root / issue_name
         blackboard_file = issue_dir / "blackboard.json"
         next_step_file = issue_dir / "next_step.txt"
 
