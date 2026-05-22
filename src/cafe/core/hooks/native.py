@@ -423,7 +423,7 @@ class UserInputCollector(NoOpHook):
         agent_name: str,
     ) -> HookResult:
         if not getattr(phase, "interactive", False):
-            choice = str(getattr(phase, "user_input", "") or "").strip()
+            choice = self._load_no_changes_non_interactive_input(phase)
             phase.user_input = ""
             if not choice:
                 return HookResult(
@@ -433,7 +433,7 @@ class UserInputCollector(NoOpHook):
         else:
             choice = self._ask_develop_no_changes_decision(phase, agent_name)
 
-        if choice.strip().lower() == "confirm":
+        if choice.strip().lower() in {"confirm", "confirmed", "c", "agree"}:
             return HookResult(
                 continue_pipeline=False,
                 override_status_code=PhaseStatusCode.MANUAL_HANDOFF,
@@ -445,6 +445,29 @@ class UserInputCollector(NoOpHook):
             context_updates={"user_input": choice},
             events=[{"type": "no_changes_user_feedback", "step": step_name}],
         )
+
+    @staticmethod
+    def _load_no_changes_non_interactive_input(phase: Any) -> str:
+        current_input_file: Optional[Path] = None
+        get_iteration_dir = getattr(phase, "_get_iteration_dir", None)
+        if callable(get_iteration_dir):
+            current_input_file = get_iteration_dir(phase.iteration) / "user_input.md"
+        else:
+            phase_dir = getattr(phase, "phase_dir", None)
+            iteration = getattr(phase, "iteration", None)
+            if phase_dir is not None and iteration is not None:
+                current_input_file = (
+                    Path(phase_dir)
+                    / f"iteration_{int(iteration):03d}"
+                    / "user_input.md"
+                )
+
+        if current_input_file and current_input_file.exists():
+            file_input = current_input_file.read_text(encoding="utf-8").strip()
+            if file_input:
+                return file_input
+
+        return str(getattr(phase, "user_input", "") or "").strip()
 
 
 class NoChangesNeededHandler(NoOpHook):
