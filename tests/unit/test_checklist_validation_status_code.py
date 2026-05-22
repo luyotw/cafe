@@ -11,27 +11,29 @@ from unittest.mock import MagicMock
 import pytest
 
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.phases.spec_phase import SpecPhase
+from cafe.phases.plan_phase import PlanPhase
 
 
 @pytest.fixture
 def phase(tmp_path):
-    """Create a SpecPhase instance for testing."""
+    """Create a PlanPhase instance for testing."""
     mock_agent_manager = MagicMock()
     mock_git_ops = MagicMock()
     mock_git_ops.get_current_branch.return_value = "test-branch"
 
-    phase = SpecPhase(
+    spec_file = tmp_path / "spec.md"
+    spec_file.write_text("# Test Spec")
+    phase = PlanPhase(
         agent_manager=mock_agent_manager,
         permission_handler=MagicMock(),
         git_ops=mock_git_ops,
-        pm_agent="Roger",
-        interactive=False,
+        spec_file=str(spec_file),
         issue_name="test-issue",
+        interactive=False,
         user_input="test requirements",
     )
 
-    phase.phase_dir = tmp_path / "spec"
+    phase.phase_dir = tmp_path / "plan"
     phase.phase_dir.mkdir(parents=True, exist_ok=True)
     phase.iteration = 1
     return phase

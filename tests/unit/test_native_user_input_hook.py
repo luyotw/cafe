@@ -235,6 +235,64 @@ def test_user_input_collector_loads_interactive_qa_for_need_clarification(tmp_pa
     mock_qa.assert_called_once()
 
 
+def test_user_input_collector_falls_back_to_prompt_when_no_questions_xml(tmp_path: Path) -> None:
+    phase_dir = tmp_path / "spec"
+    prev_iter_dir = phase_dir / "iteration_001"
+    prev_iter_dir.mkdir(parents=True, exist_ok=True)
+    (prev_iter_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
+    _record_previous_step_status(tmp_path, "spec", "need_clarification")
+
+    phase = _FakePhase(phase_dir=phase_dir, iteration=2)
+    hook = UserInputCollector()
+
+    with patch.object(hook, "_display_previous_output"), \
+         patch("cafe.core.hooks.native.interactive_qa_flow") as mock_qa, \
+         patch("cafe.core.hooks.native.prompt_multiline", return_value="manual clarification") as mock_prompt:
+        result = hook.run(
+            stage="prepare_input",
+            phase=phase,
+            step_name="spec",
+            step_def={"role": "pm"},
+            agent_name="Roger",
+        )
+
+    assert result.context_updates["user_input"] == "manual clarification"
+    assert result.events == [{"type": "user_input_collected", "step": "spec", "source": "prompt"}]
+    mock_qa.assert_not_called()
+    mock_prompt.assert_called_once()
+
+
+def test_user_input_collector_falls_back_to_prompt_when_questions_xml_invalid(tmp_path: Path) -> None:
+    phase_dir = tmp_path / "spec"
+    prev_iter_dir = phase_dir / "iteration_001"
+    prev_iter_dir.mkdir(parents=True, exist_ok=True)
+    (prev_iter_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
+    (prev_iter_dir / "questions.xml").write_text(
+        "<questions><question id='1'><title>No options</title></question></questions>",
+        encoding="utf-8",
+    )
+    _record_previous_step_status(tmp_path, "spec", "need_clarification")
+
+    phase = _FakePhase(phase_dir=phase_dir, iteration=2)
+    hook = UserInputCollector()
+
+    with patch.object(hook, "_display_previous_output"), \
+         patch("cafe.core.hooks.native.interactive_qa_flow") as mock_qa, \
+         patch("cafe.core.hooks.native.prompt_multiline", return_value="fallback answer") as mock_prompt:
+        result = hook.run(
+            stage="prepare_input",
+            phase=phase,
+            step_name="spec",
+            step_def={"role": "pm"},
+            agent_name="Roger",
+        )
+
+    assert result.context_updates["user_input"] == "fallback answer"
+    assert result.events[0]["source"] == "questions_xml"
+    mock_qa.assert_not_called()
+    mock_prompt.assert_called_once()
+
+
 def test_user_input_collector_reuses_existing_user_input_file_without_reasking(tmp_path: Path) -> None:
     phase_dir = tmp_path / "spec"
     prev_iter_dir = phase_dir / "iteration_001"

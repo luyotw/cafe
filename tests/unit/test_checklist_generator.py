@@ -520,6 +520,15 @@ class TestSpecChecklistXmlInstructions:
         assert "native language" in rules_section.lower()
 
 
+class TestSpecChecklistImagesInstruction:
+    """Spec checklist template includes images guidance (runtime/skill contract)."""
+
+    def test_spec_iteration_1_checklist_mentions_spec_images_directory(self) -> None:
+        content = checklist_templates.SPEC_EXECUTION_STEPS_ITERATION_1
+        assert "spec/images/" in content
+        assert "UI/UX" in content or "visual context" in content
+
+
 class TestSpecDodInstruction:
     """Tests for DoD instruction constant in checklist_templates."""
 
