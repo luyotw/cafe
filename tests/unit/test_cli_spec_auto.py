@@ -72,7 +72,7 @@ class TestSpecAutoMode:
                  patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
                  patch("cafe.ui.cli.AgentManager") as mock_agent_cls, \
                  patch("cafe.ui.cli.PermissionHandler") as mock_perm_cls, \
-                 patch("cafe.ui.cli.SpecPhase") as mock_phase_cls:
+                 patch("cafe.ui.cli._execute_single_step_alias") as mock_phase_cls:
                 
                 # Setup mocks
                 mock_git = MagicMock()
@@ -148,7 +148,7 @@ class TestSpecAutoMode:
              patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
              patch("cafe.ui.cli.AgentManager") as mock_agent_cls, \
              patch("cafe.ui.cli.PermissionHandler") as mock_perm_cls, \
-             patch("cafe.ui.cli.SpecPhase") as mock_phase_cls, \
+             patch("cafe.ui.cli._execute_single_step_alias") as mock_phase_cls, \
              patch("sys.stdin.isatty", return_value=True):
             
             # Setup mocks
@@ -212,7 +212,7 @@ class TestSpecAutoMode:
              patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
              patch("cafe.ui.cli.AgentManager") as mock_agent_cls, \
              patch("cafe.ui.cli.PermissionHandler") as mock_perm_cls, \
-             patch("cafe.ui.cli.SpecPhase") as mock_phase_cls, \
+             patch("cafe.ui.cli._execute_single_step_alias") as mock_phase_cls, \
              patch("sys.stdin.isatty", return_value=True):
             
             # Setup mocks
@@ -275,7 +275,7 @@ class TestSpecAutoMode:
              patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
              patch("cafe.ui.cli.AgentManager") as mock_agent_cls, \
              patch("cafe.ui.cli.PermissionHandler") as mock_perm_cls, \
-             patch("cafe.ui.cli.SpecPhase") as mock_phase_cls:
+             patch("cafe.ui.cli._execute_single_step_alias") as mock_phase_cls:
             
             # Setup mocks
             mock_git = MagicMock()

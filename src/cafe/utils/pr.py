@@ -1,4 +1,4 @@
-"""PR title/body parsing helpers extracted from legacy PRPhase."""
+"""PR title/body parsing helpers for workflow PR publish paths."""
 
 
 def parse_pr_title(content: str) -> str:

@@ -239,6 +239,59 @@ class TestSpecCommandLegacyNotice:
         result = runner.invoke(app, ["spec", "--interactive", "--user-input", "test"])
 
         assert result.exit_code == 0
-        assert "Legacy phase command:" in result.stdout
-        assert "cafe spec" in result.stdout
+        output = result.stdout.replace("\n", "")
+        assert "Legacy workflow alias:" in output
+        assert "cafe spec" in output
+        assert "cafe workflow" in output
+        assert "--start-step spec" in output
         assert "cafe make --user-input" in result.stdout
+        assert "being retired" not in result.stdout
+
+    @pytest.mark.parametrize(
+        "command,step,preferred_fragment,invoke_args",
+        [
+            ("plan", "plan", "cafe make", ["plan", "--no-interactive", "--template", "default"]),
+            ("develop", "develop", "cafe make", ["develop", "--no-interactive"]),
+        ],
+    )
+    def test_hidden_step_commands_share_alias_notice(
+        self,
+        runner,
+        mock_git_ops,
+        mock_execute_alias,
+        mock_agent_manager,
+        mock_permission_handler,
+        setup_test_env,
+        command,
+        step,
+        preferred_fragment,
+        invoke_args,
+    ):
+        def _fake_latest_versioned_file(phase_name: str, issue_name: str) -> Path:
+            return Path(f".cafe/issues/{issue_name}/{phase_name}/iteration_001/output.md")
+
+        mock_execute_alias.return_value = {
+            "iterations": 1,
+            "status_code": "confirmed",
+            "next_step": "review",
+        }
+
+        with patch(
+            "cafe.ui.commands.phases_legacy._get_latest_versioned_file",
+            side_effect=_fake_latest_versioned_file,
+        ), patch("cafe.ui.cli.is_branch_initialized", return_value=True), patch(
+            "cafe.ui.cli.select_template", return_value="default"
+        ), patch("cafe.templates.manager.TemplateManager"), patch(
+            "cafe.ui.cli._run_iterative_alias_step",
+            return_value={"iterations": 1, "status_code": "confirmed"},
+        ):
+            result = runner.invoke(app, invoke_args)
+
+        assert result.exit_code == 0
+        output = result.stdout.replace("\n", "")
+        assert "Legacy workflow alias:" in output
+        assert f"cafe {command}" in output
+        assert "cafe workflow" in output
+        assert f"--start-step {step}" in output
+        assert preferred_fragment in result.stdout
+        assert "being retired" not in result.stdout

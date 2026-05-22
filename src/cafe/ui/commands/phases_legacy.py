@@ -1,4 +1,10 @@
-"""Legacy phase command wrappers extracted from cli.py."""
+"""Hidden legacy workflow-step CLI aliases (Option A, issue #294).
+
+Product decision: keep ``cafe spec|plan|develop|review|pr`` as thin documented aliases.
+Each command delegates to ``BlackboardWorkflowRuntime`` + ``GenericPhase`` — the same path as
+``cafe workflow --start-step <step> --execute``. Primary entrypoints are ``cafe make`` and
+``cafe workflow``; these hidden commands exist for scripted backward compatibility only.
+"""
 
 from __future__ import annotations
 
@@ -185,11 +191,11 @@ def spec(
         help="Sync spec to GitHub issue when confirmed (default: auto-detect based on issue_id)",
     ),
 ) -> None:
-    """Legacy wrapper for the specification step.
+    """Hidden alias for the specification workflow step.
 
-    Prefer `cafe make --user-input ...` or
-    `cafe workflow --start-step spec --execute --user-input ...`.
-    Use `cafe edit spec` to open the latest spec artifact.
+    Equivalent to ``cafe workflow --start-step spec --execute`` (same runtime as this command).
+    Prefer ``cafe make --user-input ...`` or the workflow form above for new scripts.
+    Use ``cafe edit spec`` to open the latest spec artifact.
 
     \b
     Examples:
@@ -352,13 +358,14 @@ def plan(
         help="Sync plan to GitHub issue when confirmed (default: auto-detect based on issue_id)",
     ),
 ) -> None:
-    """Legacy wrapper for the planning step.
+    """Hidden alias for the planning workflow step.
 
-    Prefer `cafe make` to continue the workflow.
-    Use `cafe edit plan` to edit the latest plan artifact.
+    Equivalent to ``cafe workflow --start-step plan --execute`` (same runtime as this command).
+    Prefer ``cafe make`` for new scripts. Use ``cafe edit plan`` to edit the latest plan artifact.
 
     \b
     Examples:
+        cafe workflow --start-step plan --execute
         cafe make --user-input "Draft the implementation approach"
         cafe make
         cafe edit plan
@@ -523,12 +530,14 @@ def develop(
         help="Auto mode: continue iterations automatically within the legacy wrapper",
     ),
 ) -> None:
-    """Legacy wrapper for the development step.
+    """Hidden alias for the develop workflow step.
 
-    Prefer `cafe make` to continue the workflow.
+    Equivalent to ``cafe workflow --start-step develop --execute`` (same runtime as this command).
+    Prefer ``cafe make`` for new scripts.
 
     \b
     Examples:
+        cafe workflow --start-step develop --execute
         cafe make
         cafe make --user-input "Please be careful"
         cafe edit develop
@@ -681,12 +690,14 @@ def review(
         help="Force re-execution even if review already completed",
     ),
 ) -> None:
-    """Legacy wrapper for the review step.
+    """Hidden alias for the review workflow step.
 
-    Prefer `cafe make` to continue the workflow.
+    Equivalent to ``cafe workflow --start-step review --execute`` (same runtime as this command).
+    Prefer ``cafe make`` for new scripts.
 
     \b
     Examples:
+        cafe workflow --start-step review --execute
         cafe make
         cafe edit review
     """
@@ -864,12 +875,14 @@ def pr(
         help="Post organized todo list as PR comment (default: auto-detect from config)",
     ),
 ) -> None:
-    """Legacy wrapper for the PR step.
+    """Hidden alias for the PR workflow step.
 
-    Prefer `cafe make` to continue the workflow.
+    Equivalent to ``cafe workflow --start-step pr --execute`` (same runtime as this command).
+    Prefer ``cafe make`` for new scripts.
 
     \b
     Examples:
+        cafe workflow --start-step pr --execute
         cafe make
         cafe edit pr
     """
