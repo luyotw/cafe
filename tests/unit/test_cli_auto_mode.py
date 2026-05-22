@@ -91,32 +91,6 @@ class TestAutoModeVariableScope:
                 assert "--auto" in args
 
 class TestAutoModeConfigPreservation:
-    def test_spec_phase_preserves_issue_config(self, temp_repo_dir, mock_git_ops, prepared_issue):
-        """測試 spec phase 不會覆寫 issue config 中的其他欄位"""
-        config_file = prepared_issue / "issue.yaml"
-        with open(config_file, 'r') as f:
-            config_data = yaml.safe_load(f)
-        config_data["worktree_path"] = "/some/worktree/path"
-        with open(config_file, 'w') as f:
-            yaml.dump(config_data, f)
-        from cafe.phases.spec_phase import SpecPhase
-        from cafe.agents.manager import AgentManager
-        from cafe.core.permission import PermissionHandler
-        phase = SpecPhase(
-            agent_manager=MagicMock(spec=AgentManager),
-            permission_handler=MagicMock(spec=PermissionHandler),
-            git_ops=mock_git_ops,
-        )
-        phase._save_issue_config()
-        with open(config_file, 'r') as f:
-            final_config = yaml.safe_load(f)
-        assert "worktree_path" in final_config
-        assert final_config["worktree_path"] == "/some/worktree/path"
-        assert final_config["base_branch"] == "main"
-        assert final_config["feature_branch"] == "test-issue"
-        assert final_config["auto"]["max_review_iterations"] == 5
-        assert final_config["spec"]["rigor"] == "medium"
-
     def test_plan_command_preserves_issue_config(self, temp_repo_dir, mock_git_ops, prepared_issue, force_interactive):
         """測試 plan command 不會覆寫 issue config"""
         config_file = prepared_issue / "issue.yaml"

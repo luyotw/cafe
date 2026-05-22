@@ -943,7 +943,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             Path to status.json in {phase_dir}/status.json
 
         For different phases:
-            - SpecPhase: .cafe/issues/myissue/spec/status.json
+            - GenericPhase (spec step): .cafe/issues/myissue/spec/iteration_001/iteration.json
             - PlanPhase: .cafe/issues/myissue/plan/status.json
             - DevelopPhase: .cafe/issues/myissue/develop/status.json
         """
