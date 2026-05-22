@@ -630,6 +630,178 @@ def test_runtime_legacy_step_honors_review_confirmed_advance(tmp_path: Path) -> 
     assert blackboard.current_step == "pr"
 
 
+def test_runtime_review_confirmed_routes_to_pr_without_legacy_class(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "review-confirmed"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "review": {
+                "skill": "review",
+                "role": "reviewer",
+                "valid_intents": ["confirmed", "needs_changes"],
+                "on": {
+                    "await_agent": "pr",
+                    "manual_handoff": "develop",
+                    "need_clarification": "review",
+                },
+            },
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "on": {"await_agent": "review"},
+            },
+            "pr": {
+                "skill": "pr",
+                "role": "developer",
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        assert step_name == "review"
+        return StepExecutionResult(
+            response="confirmed",
+            artifacts={"review_feedback": "review-output.md"},
+            status_code="confirmed",
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="review")
+
+    assert result.completed is False
+    assert result.final_step == "review"
+    assert result.final_status_code == "confirmed"
+    blackboard = BlackboardStore(issue_dir).load_or_create("review")
+    assert blackboard.current_step == "pr"
+    assert blackboard.handoff_contract is not None
+    assert blackboard.handoff_contract.to_owner == HandoffOwner.AGENT
+    assert blackboard.handoff_contract.to_step == "pr"
+    assert blackboard.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
+    assert blackboard.artifacts["review_feedback"].path == "review-output.md"
+
+
+def test_runtime_review_needs_changes_routes_to_develop_without_legacy_class(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "review-needs-changes"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "review": {
+                "skill": "review",
+                "role": "reviewer",
+                "valid_intents": ["confirmed", "needs_changes"],
+                "on": {
+                    "await_agent": "pr",
+                    "manual_handoff": "develop",
+                    "need_clarification": "review",
+                },
+            },
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "on": {"await_agent": "review"},
+            },
+            "pr": {
+                "skill": "pr",
+                "role": "developer",
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        assert step_name == "review"
+        return StepExecutionResult(
+            response="needs_changes",
+            artifacts={"review_feedback": "review-output.md"},
+            status_code="needs_changes",
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="review", single_step=True)
+
+    assert result.completed is False
+    assert result.final_step == "review"
+    assert result.final_status_code == "needs_changes"
+    blackboard = BlackboardStore(issue_dir).load_or_create("review")
+    assert blackboard.current_step == "develop"
+    assert blackboard.handoff_contract is not None
+    assert blackboard.handoff_contract.to_owner == HandoffOwner.AGENT
+    assert blackboard.handoff_contract.to_step == "develop"
+    assert blackboard.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
+    assert blackboard.artifacts["review_feedback"].path == "review-output.md"
+
+
+def test_runtime_review_preserves_agent_written_downstream_baton(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "review-agent-baton"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "review": {
+                "skill": "review",
+                "role": "reviewer",
+                "valid_intents": ["confirmed", "needs_changes"],
+                "on": {
+                    "await_agent": "pr",
+                    "manual_handoff": "develop",
+                    "need_clarification": "review",
+                },
+            },
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "on": {"await_agent": "review"},
+            },
+            "pr": {
+                "skill": "pr",
+                "role": "developer",
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        assert step_name == "review"
+        _write_baton(
+            issue_dir,
+            from_step="review",
+            to_owner="agent",
+            to_step="develop",
+            intent="await_agent",
+            status_code="needs_changes",
+            source="review.agent",
+        )
+        return StepExecutionResult(
+            response="confirmed",
+            artifacts={"review_feedback": "review-output.md"},
+            status_code="confirmed",
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="review", single_step=True)
+
+    assert result.completed is False
+    assert result.final_step == "review"
+    assert result.final_status_code == "needs_changes"
+    blackboard = BlackboardStore(issue_dir).load_or_create("review")
+    assert blackboard.current_step == "develop"
+    assert blackboard.handoff_contract is not None
+    assert blackboard.handoff_contract.to_step == "develop"
+    assert blackboard.handoff_contract.source == "review.agent"
+
+
 def test_runtime_resumes_from_blackboard_current_step(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-resume"
     playbook = {

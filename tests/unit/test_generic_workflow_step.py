@@ -548,21 +548,41 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
     store.set_artifact(state, "spec", str(spec_file))
     store.set_artifact(state, "plan", str(plan_file))
     generic_phase = _build_loader(tmp_path)
+    agent_manager = FakeAgentManager("confirmed")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-review-skill",
         playbook=playbook,
         generic_phase=generic_phase,
-        agent_manager=FakeAgentManager("confirmed"),
+        agent_manager=agent_manager,
         git_ops=FakeGitOperations(),
         role_agent_map={"reviewer": "Richard"},
     )
 
-    executor.execute_step("review", playbook["steps"]["review"], state)
+    result = executor.execute_step("review", playbook["steps"]["review"], state)
 
     assert (tmp_path / "home" / ".codex" / "skills" / "cafe-workflow-common" / "SKILL.md").exists()
     assert (tmp_path / "home" / ".codex" / "skills" / "cafe-github_sync" / "SKILL.md").exists()
     assert (tmp_path / "home" / ".codex" / "skills" / "cafe-review" / "SKILL.md").exists()
+    iteration_dir = issue_dir / "review" / "iteration_001"
+    output_file = iteration_dir / "output.md"
+    checklist_file = iteration_dir / "checklist.md"
+    assert result.artifacts["review_feedback"] == str(output_file)
+    assert output_file.exists()
+    assert checklist_file.exists()
+
+    allowed_tools = agent_manager.allowed_tools_calls[0] or []
+    assert "edit(./.cafe/issues/issue-review-skill/review/iteration_001/output.md)" in allowed_tools
+    assert "edit(./.cafe/issues/issue-review-skill/review/iteration_001/checklist.md)" in allowed_tools
+    assert "edit(./.cafe/issues/issue-review-skill/blackboard.json)" in allowed_tools
+    assert "edit(./.cafe/issues/issue-review-skill/next_step.txt)" in allowed_tools
+
+    prompt = agent_manager.prompts[-1]
+    assert "Phase skill: $cafe-review" in prompt
+    assert f"output_file={output_file}" in prompt
+    assert f"checklist_file={checklist_file}" in prompt
+    assert "blackboard_file=./.cafe/issues/issue-review-skill/blackboard.json" in prompt
+    assert "next_step_file=./.cafe/issues/issue-review-skill/next_step.txt" in prompt
 
 
 def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(tmp_path: Path, monkeypatch) -> None:
