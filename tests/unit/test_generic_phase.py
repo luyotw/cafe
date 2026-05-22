@@ -35,6 +35,21 @@ def _setup_loader(tmp_path: Path) -> SkillLoader:
     return loader
 
 
+def test_build_prompt_references_skill_invocation_not_embedded_body(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+    prompt = phase.build_prompt(
+        skill_name="plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
+        context={"handoff_summary": "Resume plan"},
+        output_file=tmp_path / "out.md",
+        checklist_file=tmp_path / "checklist.md",
+    )
+    assert "Phase skill: /plan" in prompt
+    assert "Shared skills:" in prompt
+    assert "Custom project plan skill" not in prompt
+
+
 def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     prompt = phase.build_prompt(

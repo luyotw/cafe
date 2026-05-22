@@ -2172,3 +2172,41 @@ def test_runtime_retry_extra_prompt_contains_feedback(tmp_path: Path) -> None:
     assert "to_owner" in retry_prompt
     assert "human" in retry_prompt
     assert "agent" in retry_prompt
+
+
+def test_runtime_plan_need_permission_pauses_at_user(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "plan-need-permission"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "plan": {
+                "skill": "plan",
+                "role": "developer",
+                "valid_intents": ["need_permission", "confirmed"],
+                "on": {"need_permission": "plan", "await_agent": "develop"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="need_permission",
+            artifacts={},
+            status_code="need_permission",
+            auto_continue=False,
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="plan")
+
+    assert result.completed is False
+    assert result.final_status_code == "need_permission"
+    blackboard = BlackboardStore(issue_dir).load_or_create("plan")
+    assert blackboard.current_step == "user"
+    assert blackboard.handoff_contract is not None
+    assert blackboard.handoff_contract.to_owner == HandoffOwner.USER
+    assert blackboard.handoff_contract.intent == HandoffIntent.NEED_PERMISSION

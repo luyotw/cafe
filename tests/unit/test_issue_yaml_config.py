@@ -1,4 +1,4 @@
-"""Phase-agnostic tests for issue.yaml spec.sync_github configuration."""
+"""Phase-agnostic tests for issue.yaml spec.sync_github and plan.sync_github configuration."""
 
 from pathlib import Path
 
@@ -123,3 +123,57 @@ class TestSaveSpecSyncGithub:
         assert config["feature_branch"] == "test-issue"
         assert config["spec"]["sync_github"] is True
         assert config["spec"]["issue_id"] == 123
+
+
+def _load_plan_sync_github(issue_dir: Path, cli_value: bool | None = None) -> bool:
+    """Mirror legacy plan-phase sync_github resolution without PlanPhase."""
+    config_data = _read_issue_config(issue_dir / "issue.yaml")
+    plan_config = config_data.get("plan", {}) if config_data else {}
+    spec_config = config_data.get("spec", {}) if config_data else {}
+    config_value = bool(plan_config["sync_github"]) if "sync_github" in plan_config else None
+    has_issue_id = bool(spec_config.get("issue_id"))
+    return resolve_sync_github_config(
+        cli_value=cli_value,
+        config_value=config_value,
+        has_issue_id=has_issue_id,
+    )
+
+
+class TestLoadPlanSyncGithub:
+    def test_load_sync_github_true_from_config(self, tmp_path: Path) -> None:
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+        (issue_dir / "issue.yaml").write_text(
+            "plan:\n  template: auto\n  sync_github: true\n",
+            encoding="utf-8",
+        )
+        assert _load_plan_sync_github(issue_dir) is True
+
+    def test_load_sync_github_false_from_config(self, tmp_path: Path) -> None:
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+        (issue_dir / "issue.yaml").write_text(
+            "plan:\n  template: auto\n  sync_github: false\n",
+            encoding="utf-8",
+        )
+        assert _load_plan_sync_github(issue_dir) is False
+
+    def test_default_sync_github_true_when_issue_id_in_spec_config(self, tmp_path: Path) -> None:
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+        (issue_dir / "issue.yaml").write_text(
+            "spec:\n  issue_id: 123\nplan:\n  template: auto\n",
+            encoding="utf-8",
+        )
+        assert _load_plan_sync_github(issue_dir) is True
+
+    def test_default_sync_github_false_when_no_issue_id(self, tmp_path: Path) -> None:
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+        (issue_dir / "issue.yaml").write_text("plan:\n  template: auto\n", encoding="utf-8")
+        assert _load_plan_sync_github(issue_dir) is False
+
+    def test_no_config_file_defaults_to_false(self, tmp_path: Path) -> None:
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+        assert _load_plan_sync_github(issue_dir) is False

@@ -1852,3 +1852,85 @@ def test_workflow_legacy_behavior_unchanged_when_no_config(tmp_path: Path, monke
     executor.execute_step("spec", playbook["steps"]["spec"], state)
 
     assert agent_manager.allowed_directories_calls[-1] == [".cafe"]
+
+
+def _plan_step_playbook() -> dict:
+    return {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "plan": {
+                "skill": "plan",
+                "role": "developer",
+                "output_artifact": "plan",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["ready_for_review", "need_clarification", "confirmed"],
+                "on": {
+                    "confirm_output": "plan",
+                    "need_clarification": "plan",
+                    "await_agent": "develop",
+                },
+            },
+        },
+    }
+
+
+def _write_plan_prereq_artifacts(issue_dir: Path) -> None:
+    spec_dir = issue_dir / "spec" / "iteration_001"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    (spec_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
+    (spec_dir / "iteration.json").write_text('{"iteration": 1}', encoding="utf-8")
+
+
+def test_plan_non_interactive_ready_for_review_hands_off_to_user(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-plan-noninteractive-review"
+    _write_plan_prereq_artifacts(issue_dir)
+    playbook = _plan_step_playbook()
+    state = BlackboardStore(issue_dir).load_or_create("plan")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-plan-noninteractive-review",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("ready_for_review"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+        interactive=False,
+    )
+
+    result = executor.execute_step("plan", playbook["steps"]["plan"], state)
+
+    assert result.status_code == "ready_for_review"
+    assert result.auto_continue is False
+    reloaded = BlackboardStore(issue_dir).load_or_create("plan")
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
+    assert reloaded.handoff_contract.to_step == "user"
+
+
+def test_plan_non_interactive_need_clarification_hands_off_to_user(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-plan-noninteractive-clarify"
+    _write_plan_prereq_artifacts(issue_dir)
+    playbook = _plan_step_playbook()
+    state = BlackboardStore(issue_dir).load_or_create("plan")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-plan-noninteractive-clarify",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("need_clarification"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+        interactive=False,
+    )
+
+    result = executor.execute_step("plan", playbook["steps"]["plan"], state)
+
+    assert result.status_code == "need_clarification"
+    assert result.auto_continue is False
+    reloaded = BlackboardStore(issue_dir).load_or_create("plan")
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
+    assert reloaded.handoff_contract.intent == HandoffIntent.NEED_CLARIFICATION

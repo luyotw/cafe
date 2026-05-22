@@ -943,8 +943,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             Path to status.json in {phase_dir}/status.json
 
         For different phases:
-            - GenericPhase (spec step): .cafe/issues/myissue/spec/iteration_001/iteration.json
-            - PlanPhase: .cafe/issues/myissue/plan/status.json
+            - GenericPhase (spec/plan steps): .cafe/issues/myissue/{step}/iteration_001/iteration.json
             - DevelopPhase: .cafe/issues/myissue/develop/status.json
         """
         if not hasattr(self, "phase_dir"):
