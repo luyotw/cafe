@@ -942,9 +942,9 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         Returns:
             Path to status.json in {phase_dir}/status.json
 
-        For workflow steps:
-            - GenericPhase: .cafe/issues/myissue/{step}/iteration_001/iteration.json
-            - Legacy phase classes may still use {phase_dir}/status.json (being retired)
+        For workflow steps, GenericPhase uses
+        ``.cafe/issues/{issue}/{step}/iteration_N/iteration.json``. This path covers
+        legacy ``{phase_dir}/status.json`` layouts still read by some helpers.
         """
         if not hasattr(self, "phase_dir"):
             raise AttributeError("Phase must have 'phase_dir' attribute")
