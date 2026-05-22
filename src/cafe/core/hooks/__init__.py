@@ -70,6 +70,7 @@ from cafe.core.hooks.native import (
     GitHubIssueFetcher,
     GitHubPRCreator,
     LocalPRReviewer,
+    NoChangesNeededHandler,
     PRCommentPoster,
     PRLinkOpener,
     UserInputCollector,
@@ -81,6 +82,7 @@ BUILTIN_HOOKS = {
     for hook in [
         GitHubIssueFetcher,
         UserInputCollector,
+        NoChangesNeededHandler,
         InteractiveQAHandler,
         PermissionRetryHandler,
         NewChangesGate,

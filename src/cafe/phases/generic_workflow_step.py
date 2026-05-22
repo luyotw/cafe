@@ -721,6 +721,8 @@ class GenericWorkflowStepExecutor(Phase):
             return "need_clarification"
         if status_code == PhaseStatusCode.NEED_PERMISSION:
             return "need_permission"
+        if status_code == PhaseStatusCode.NO_CHANGES_NEEDED:
+            return "no_changes_needed"
         return None
 
     def _agent_wrote_baton(self, step_name: str) -> bool:
@@ -770,6 +772,7 @@ class GenericWorkflowStepExecutor(Phase):
             PhaseStatusCode.CONFIRM_OUTPUT.value,
             PhaseStatusCode.NEED_CLARIFICATION.value,
             PhaseStatusCode.NEED_PERMISSION.value,
+            PhaseStatusCode.NO_CHANGES_NEEDED.value,
         }:
             raw_intent = self._resolve_handoff_intent(step_def, status_code) or "manual_handoff"
             store.update_handoff_contract(

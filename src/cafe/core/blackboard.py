@@ -45,6 +45,7 @@ class HandoffIntent(str, Enum):
     CONFIRM_OUTPUT = "confirm_output"
     NEED_CLARIFICATION = "need_clarification"
     NEED_PERMISSION = "need_permission"
+    NO_CHANGES_NEEDED = "no_changes_needed"
     MANUAL_HANDOFF = "manual_handoff"
     WORKFLOW_COMPLETE = "workflow_complete"
 

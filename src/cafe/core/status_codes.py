@@ -12,6 +12,7 @@ PLAYBOOK_INTENT_KEYS: frozenset[str] = frozenset(
         "confirm_output",
         "need_clarification",
         "need_permission",
+        "no_changes_needed",
         "workflow_complete",
         "manual_handoff",
     }
@@ -48,7 +49,7 @@ def transition_map_key(code: PhaseStatusCode) -> str:
         return code.value
     collapsed: dict[PhaseStatusCode, str] = {
         PhaseStatusCode.CONFIRMED: "await_agent",
-        PhaseStatusCode.NO_CHANGES_NEEDED: "await_agent",
+        PhaseStatusCode.NO_CHANGES_NEEDED: "no_changes_needed",
         PhaseStatusCode.NO_RESPONSE: "await_agent",
         PhaseStatusCode.READY_FOR_REVIEW: "confirm_output",
         PhaseStatusCode.NEED_CLARIFICATION: "need_clarification",

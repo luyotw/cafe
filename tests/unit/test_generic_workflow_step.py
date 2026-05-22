@@ -1934,3 +1934,54 @@ def test_plan_non_interactive_need_clarification_hands_off_to_user(tmp_path: Pat
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
     assert reloaded.handoff_contract.intent == HandoffIntent.NEED_CLARIFICATION
+
+
+def test_develop_checklist_prefers_review_feedback_over_pr_result(tmp_path: Path, monkeypatch) -> None:
+    """Develop correction checklist uses review_feedback when both artifacts exist."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-develop-feedback"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "output_artifact": "code",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    review_file = issue_dir / "review" / "iteration_001" / "output.md"
+    pr_file = issue_dir / "pr" / "iteration_001" / "output.md"
+    for path in (spec_file, plan_file, review_file, pr_file):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# {path.parent.parent.name}\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+    store.set_artifact(state, "review_feedback", str(review_file))
+    store.set_artifact(state, "pr_result", str(pr_file))
+
+    with patch("cafe.phases.generic_workflow_step.generate_develop_checklist") as mock_gen:
+        executor = GenericWorkflowStepExecutor(
+            issue_dir=issue_dir,
+            issue_name="issue-develop-feedback",
+            playbook=playbook,
+            generic_phase=_build_loader(tmp_path),
+            agent_manager=FakeAgentManager("confirmed"),
+            git_ops=FakeGitOperations(),
+            role_agent_map={"developer": "David"},
+        )
+        executor.execute_step("develop", playbook["steps"]["develop"], state)
+
+    mock_gen.assert_called_once()
+    call_kwargs = mock_gen.call_args.kwargs
+    assert call_kwargs["correction_mode"] is True
+    assert "review" in call_kwargs["feedback_file_path"]
+    assert "pr" not in call_kwargs["feedback_file_path"]

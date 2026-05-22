@@ -84,12 +84,13 @@ steps:
     allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
     hooks:
       prepare_input: [UserInputCollector]
-      after_execute: [PermissionRetryHandler]
+      after_execute: [NoChangesNeededHandler, PermissionRetryHandler]
     "on":
       await_agent: review
       manual_handoff: pr
       need_clarification: develop
       need_permission: develop
+      no_changes_needed: develop
 
   review:
     type: skill
