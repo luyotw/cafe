@@ -718,6 +718,16 @@ def _handle_user_phase(
             summary=summary,
         )
 
+    if handoff_intent == HandoffIntent.NO_CHANGES_NEEDED and from_step == "develop":
+        return _handle_develop_no_changes_needed_handoff(
+            issue_dir=issue_dir,
+            blackboard=blackboard,
+            store=store,
+            from_step=from_step,
+            summary=summary,
+            playbook_data=playbook_data,
+        )
+
     # Default generic user-phase menu
     return _handle_user_phase_generic(
         issue_name=issue_name,
@@ -727,6 +737,46 @@ def _handle_user_phase(
         phase_name=phase_name,
         summary=summary,
     )
+
+
+def _handle_develop_no_changes_needed_handoff(
+    *,
+    issue_dir: Path,
+    blackboard,
+    store: BlackboardStore,
+    from_step: str,
+    summary: str,
+    playbook_data: Dict[str, Any],
+) -> Optional[str]:
+    """Route develop no_changes_needed pauses back to develop's input collector."""
+    if from_step not in playbook_data.get("steps", {}):
+        return None
+
+    console.print(f"[yellow]No changes confirmation requested[/yellow] step={from_step}")
+    if summary:
+        console.print(f"[dim]{summary}[/dim]")
+
+    # The migrated agree/disagree/chat flow lives in UserInputCollector for the
+    # next develop iteration.  Resume develop directly so users do not have to
+    # manually pick it from the generic user menu first.
+    store.set_current_step(blackboard, from_step)
+    store.set_handoff_summary(blackboard, f"Resuming {from_step} to resolve no_changes_needed")
+    store.update_handoff_contract(
+        blackboard,
+        from_step=from_step,
+        to_owner=HandoffOwner.AGENT,
+        to_step=from_step,
+        intent=HandoffIntent.AWAIT_AGENT,
+        status_code="",
+        source="user.no_changes_needed_resume",
+    )
+    store.record_event(
+        blackboard,
+        "no_changes_needed_resume",
+        {"step": from_step, "issue_dir": str(issue_dir)},
+    )
+    console.print(f"[green]Resuming[/green] {from_step}")
+    return from_step
 
 
 def _handle_clarification_handoff(

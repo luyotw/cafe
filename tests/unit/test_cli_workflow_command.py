@@ -1135,6 +1135,67 @@ def test_brief_confirm_output_routes_to_review_confirmation(tmp_path: Path, monk
     mock_confirm.assert_called_once()
 
 
+def test_user_phase_no_changes_needed_resumes_develop_without_generic_menu(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-no-changes"
+    (issue_dir / "develop" / "iteration_001").mkdir(parents=True, exist_ok=True)
+    (issue_dir / "develop" / "iteration_001" / "output.md").write_text(
+        "No implementation changes are needed because the current code already "
+        "satisfies the review.",
+        encoding="utf-8",
+    )
+    playbook_data = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "develop": {
+                "role": "developer",
+                "on": {
+                    "await_agent": "review",
+                    "manual_handoff": "pr",
+                    "no_changes_needed": "develop",
+                },
+            },
+            "review": {"role": "reviewer", "on": {}},
+            "pr": {"role": "developer", "on": {}},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="develop",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.NO_CHANGES_NEEDED,
+        status_code="no_changes_needed",
+        source="test",
+    )
+
+    with patch("cafe.ui.cli_shared._handle_user_phase_generic") as mock_generic:
+        result = _handle_user_phase(
+            issue_name="issue-no-changes",
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+        )
+
+    assert result == "develop"
+    mock_generic.assert_not_called()
+    reloaded = store.load_or_create("develop", playbook_id="default")
+    assert reloaded.current_step == "develop"
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
+    assert reloaded.handoff_contract.to_step == "develop"
+    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
+    assert any(
+        event.event_type == "no_changes_needed_resume"
+        for event in reloaded.events
+    )
+
+
 def test_workflow_command_user_owner_can_complete_workflow(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CAFE_FORCE_INTERACTIVE", "1")
