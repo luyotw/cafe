@@ -254,6 +254,13 @@ class UserInputCollector(NoOpHook):
             )
 
         previous_status = _get_previous_iteration_status(phase)
+        if previous_status == "no_changes_needed" and step_name == "develop":
+            return self._handle_develop_no_changes_user_input(
+                phase=phase,
+                step_name=step_name,
+                agent_name=agent_name,
+            )
+
         if previous_status not in {"need_clarification", "ready_for_review"}:
             return HookResult()
 
@@ -368,6 +375,131 @@ class UserInputCollector(NoOpHook):
                     "source": "questions_xml" if questions_xml_path.exists() else "prompt",
                 }
             ],
+        )
+
+    @staticmethod
+    def _ask_develop_no_changes_decision(phase: Any, agent_name: str) -> str:
+        """Ask whether the user agrees with the developer's no-changes-needed decision."""
+        from InquirerPy.separator import Separator
+
+        from cafe.ui.chat import launch_chat_session
+        from cafe.ui.inquirer_prompts import prompt_list, prompt_multiline
+
+        print(f"\n{'=' * 60}")
+        print(f"Developer ({agent_name}) believes no changes are needed.")
+        print(f"{'=' * 60}\n")
+
+        develop_dir = phase.issue_dir / "develop"
+        develop_file = develop_dir / f"iteration_{phase.iteration - 1:03d}" / "output.md"
+        if develop_file.exists():
+            print(f"Developer's response: {develop_file}\n")
+            print(develop_file.read_text(encoding="utf-8"))
+            print(f"\n{'=' * 60}\n")
+
+        while True:
+            choices = [
+                {"name": "Agree - Skip review and proceed to PR", "value": "c"},
+                {"name": "Disagree - Provide feedback for developer", "value": "m"},
+                Separator(),
+                {"name": f"Chat with {agent_name}", "value": "chat"},
+            ]
+            choice = prompt_list("Do you agree with the developer?", choices, default=None)
+            if choice == "chat":
+                launch_chat_session("developer", phase.issue_name)
+                continue
+            if choice == "c":
+                return "confirm"
+            feedback = prompt_multiline("Please provide feedback for the developer")
+            if feedback.strip():
+                print("\n✅ Received your feedback...\n")
+                return feedback
+            print("\n⚠️  No feedback entered, please try again.")
+
+    def _handle_develop_no_changes_user_input(
+        self,
+        *,
+        phase: Any,
+        step_name: str,
+        agent_name: str,
+    ) -> HookResult:
+        if not getattr(phase, "interactive", False):
+            choice = str(getattr(phase, "user_input", "") or "").strip()
+            phase.user_input = ""
+            if not choice:
+                return HookResult(
+                    continue_pipeline=False,
+                    events=[{"type": "no_changes_missing_user_input", "step": step_name}],
+                )
+        else:
+            choice = self._ask_develop_no_changes_decision(phase, agent_name)
+
+        if choice.strip().lower() == "confirm":
+            return HookResult(
+                continue_pipeline=False,
+                override_status_code=PhaseStatusCode.MANUAL_HANDOFF,
+                events=[{"type": "no_changes_user_confirmed", "step": step_name}],
+            )
+
+        phase.step_user_inputs[step_name] = choice
+        return HookResult(
+            context_updates={"user_input": choice},
+            events=[{"type": "no_changes_user_feedback", "step": step_name}],
+        )
+
+
+class NoChangesNeededHandler(NoOpHook):
+    """Require reasoning in output.md when the agent returns no_changes_needed."""
+
+    name = "NoChangesNeededHandler"
+
+    def run(self, **kwargs: Any) -> HookResult:
+        stage = kwargs.get("stage")
+        if stage != "after_execute":
+            return HookResult()
+
+        step_name = str(kwargs.get("step_name") or "")
+        if step_name != "develop":
+            return HookResult()
+
+        response = str(kwargs.get("response") or "")
+        from cafe.core.status_codes import StatusCodeParser
+
+        status = StatusCodeParser.extract(
+            response,
+            valid_codes=[PhaseStatusCode.NO_CHANGES_NEEDED],
+        )
+        if status != PhaseStatusCode.NO_CHANGES_NEEDED:
+            return HookResult()
+
+        context = kwargs.get("context") or {}
+        output_display = str(context.get("output_file") or "")
+        if not output_display:
+            return HookResult()
+
+        output_file = Path(output_display)
+        if not output_file.is_absolute():
+            output_file = Path.cwd() / output_file
+
+        has_reasoning = output_file.exists() and output_file.stat().st_size > 0
+        if not has_reasoning:
+            continuation = (
+                "Your response returned no_changes_needed.\n\n"
+                "You MUST provide your reasoning and explain why the reviewer's "
+                "feedback is incorrect or unnecessary.\n\n"
+                f"Please:\n1. Write your detailed reasoning to {output_display}\n"
+                "2. Return no_changes_needed again\n\n"
+                "Do NOT return any other status code until you have written your reasoning."
+            )
+            return HookResult(
+                retry_requested=True,
+                context_updates={"continuation_prompt": continuation},
+                events=[{"type": "no_changes_reasoning_required", "step": step_name}],
+            )
+
+        return HookResult(
+            continue_pipeline=False,
+            override_status_code=PhaseStatusCode.NO_CHANGES_NEEDED,
+            events=[{"type": "no_changes_awaiting_user", "step": step_name}],
         )
 
 

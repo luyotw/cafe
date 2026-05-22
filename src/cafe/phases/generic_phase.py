@@ -243,6 +243,9 @@ class GenericPhase:
                 checklist_file=checklist_file,
                 questions_xml_file=questions_xml_file,
             )
+            continuation = runtime_context.get("continuation_prompt")
+            if continuation:
+                prompt = f"{prompt}\n\n{continuation}"
             response = agent_executor(prompt)
 
             after = self._run_hook_stage(

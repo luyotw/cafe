@@ -70,3 +70,33 @@ Production plan already runs via `BlackboardWorkflowRuntime` + `GenericPhase` + 
 | `test_plan_phase_status_codes.py` permission_denials → need_permission without agent retry | Generic workflow plan step maps status via `StatusCodeParser` on agent text at step boundary; structured `permission_denials` from agent execute are not re-mapped when `require_status_code=False` during the agent callback. Agents should return `need_permission` or write a baton; runtime pause covered in `test_runtime_plan_need_permission_pauses_at_user` |
 | `test_plan_phase_status_codes.py` plaintext permission markers without token | `PhaseStateMixin._infer_human_input_status_from_response` retained for legacy phase classes (`test_phase_state_mixin.py`); not invoked on generic workflow plan executor path |
 | `test_plan_phase_status_codes.py` `test_no_status_code_continues_iteration` (interactive retry loop) | PlanPhase multi-iteration status recovery removed with class; generic workflow is single-pass per step with baton-first handoff |
+
+## Issue 292 — Retire DevelopPhase
+
+GitHub: issue #292
+
+Production develop already runs via `BlackboardWorkflowRuntime` + `GenericPhase` + skills. Legacy `DevelopPhase` and its test files are deleted after contracts move to the layers below.
+
+### Re-homed contracts
+
+| Source | Behavior | New location |
+| --- | --- | --- |
+| `test_develop_phase_prompt.py` | Correction checklist `feedback_file_path` | `tests/unit/test_checklist_generator.py`, `tests/unit/test_generic_workflow_step.py` |
+| `test_develop_clarification.py` | `need_clarification` + questions.xml | `tests/unit/test_phase_review_mixin.py`, `tests/integration/test_develop_clarification_runtime.py` |
+| `test_develop_clarification.py` | `questions_xml_file` in checklist | `tests/unit/test_generic_workflow_step.py` |
+| `test_develop_no_changes_needed.py` | Reasoning gate + user decision | `tests/unit/test_no_changes_needed_handler.py`, `tests/unit/test_native_user_input_hook.py` |
+| `test_develop_phase_no_changes_chat.py` | Agree/disagree/chat UI | `tests/unit/test_no_changes_needed_handler.py` |
+| `test_develop_no_changes_needed.py` | Checklist `output_file` / `no_changes_needed` | `tests/unit/test_checklist_generator.py` |
+| `test_context_session_id_update.py` | develop `iteration.json` session_id | `tests/unit/test_context_session_id_update.py` (`GenericWorkflowStepExecutor`) |
+| `test_checklist_validation_status_code.py` | develop checklist gate | `tests/unit/test_checklist_validation_status_code.py` |
+| `test_workflow_e2e.py` | develop self-loop / handoff | `tests/integration/test_workflow_e2e.py`, `tests/integration/test_develop_clarification_runtime.py` |
+
+### Removed-by-design
+
+| Behavior | Rationale |
+| --- | --- |
+| `DevelopPhase._generate_prompt` inline PR comment blocks | PR/review via checklist `feedback_file_path`; `GenericPhase.build_prompt` uses skill invocations |
+| Review vs develop `end_time` via `develop/status.json` | Blackboard artifacts + `correction_mode`; no legacy status.json timing |
+| `CONFIRMED_SKIP_REVIEW` + `skip_review` resume | Legacy status.json; user agree routes via `manual_handoff: pr` on default playbook |
+| `DevelopPhase._prepare_user_input` permission/Codex recovery | `PermissionRetryHandler` is NoOp on default playbook |
+| `DevelopPhase._check_if_already_completed_with_review` early return | Per-iteration blackboard + review→develop `manual_handoff` |

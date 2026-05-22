@@ -381,6 +381,14 @@ class TestBasicPrinciples:
         content = checklist_path.read_text()
         assert "Pick a most suitable plan template" in content
 
+    def test_develop_checklist_mentions_no_changes_needed_token(self, tmp_path):
+        """Develop correction checklist documents no_changes_needed and output_file."""
+        from cafe.utils import checklist_templates
+
+        content = checklist_templates.DEVELOP_EXECUTION_STEPS_CORRECTION
+        assert "{output_file}" in content
+        assert "no_changes_needed" in content
+
     def test_develop_checklist_with_basic_principles(self, tmp_path):
         """Test develop checklist includes basic principles when provided."""
         checklist_path = tmp_path / "checklist.md"

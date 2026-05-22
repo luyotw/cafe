@@ -587,7 +587,7 @@ class TestChatWithAgent:
 
         assert agents == [{"role": "researcher", "name": "Morgan"}]
 
-    def test_get_available_agents_returns_all_in_develop_phase(self, tmp_path, monkeypatch):
+    def test_get_available_agents_returns_all_for_developer_role(self, tmp_path, monkeypatch):
         """測試 develop 階段時仍回傳所有已設定的 agents"""
         monkeypatch.chdir(tmp_path)
         issue_dir = tmp_path / ".cafe" / "issues" / "my-issue"
