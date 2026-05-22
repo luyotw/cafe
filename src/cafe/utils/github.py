@@ -3,6 +3,7 @@
 import json
 import re
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Set
 from pydantic import BaseModel
@@ -1065,34 +1066,121 @@ def get_all_pr_comments(pr_number: int, exclude_ids: Optional[Set[str]] = None) 
     return list(comments_by_id.values())
 
 
+def pr_last_seen_comments_artifact_file(pr_dir: Path) -> Path:
+    """Return artifact path used to persist previously seen PR comment IDs."""
+    return pr_dir / "artifacts" / "pr_last_seen_comments.json"
+
+
+def persist_last_seen_comment_ids(pr_dir: Path, comment_ids: list[str]) -> None:
+    """Persist the latest seen PR comment IDs to a runtime artifact file."""
+    artifact_file = pr_last_seen_comments_artifact_file(pr_dir)
+    artifact_file.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "last_seen_comment_ids": [str(comment_id) for comment_id in comment_ids],
+        "updated_at": datetime.now().astimezone().isoformat(),
+    }
+    artifact_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_last_seen_comment_ids_from_artifact(pr_dir: Path) -> Optional[Set[str]]:
+    """Load seen PR comment IDs from the artifact file only."""
+    artifact_file = pr_last_seen_comments_artifact_file(pr_dir)
+    if not artifact_file.exists():
+        return None
+    try:
+        payload = json.loads(artifact_file.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            raw_ids = payload.get("last_seen_comment_ids", [])
+        elif isinstance(payload, list):
+            raw_ids = payload
+        else:
+            raw_ids = []
+        if not isinstance(raw_ids, list):
+            return set()
+        return {str(item) for item in raw_ids}
+    except (json.JSONDecodeError, OSError, TypeError):
+        return set()
+
+
+def build_todo_list_comment(todo_content: str, user_input_path: str) -> str:
+    """Build PR comment body with todo list and user_input.md reference."""
+    return f"""> 📋 Original review comments: `{user_input_path}`
+
+{todo_content}"""
+
+
+def post_pr_todo_list(
+    *,
+    issue_dir: Path,
+    pr_number: str,
+    github_ops: "GitHubOps",
+    post_todo_list: bool = True,
+) -> None:
+    """Post the PR todo list as a PR comment when all items are checked."""
+    if not post_todo_list:
+        return
+
+    pr_dir = issue_dir / "pr"
+    if not pr_dir.exists():
+        return
+
+    from cafe.utils.checklist_validator import validate_checklist
+    from cafe.utils.git_utils import to_cwd_relative_path
+
+    iteration_dirs = sorted(pr_dir.glob("iteration_*"), reverse=True)
+    for iteration_dir in iteration_dirs:
+        user_input_file = iteration_dir / "user_input.md"
+        output_file = iteration_dir / "output.md"
+        if not user_input_file.exists() or not output_file.exists():
+            continue
+        output_content = output_file.read_text(encoding="utf-8")
+        if not output_content.strip():
+            continue
+        is_todo_list = (
+            "## Todo List" in output_content
+            or "## Todo" in output_content
+            or "- [ ]" in output_content
+            or "- [x]" in output_content
+        )
+        if not is_todo_list:
+            continue
+        try:
+            result = validate_checklist(output_file)
+        except FileNotFoundError:
+            return
+        if not result.is_complete:
+            return
+        try:
+            todo_content = output_file.read_text(encoding="utf-8")
+            try:
+                user_input_display = to_cwd_relative_path(user_input_file)
+            except ValueError:
+                user_input_display = str(user_input_file)
+            comment_body = build_todo_list_comment(todo_content, user_input_display)
+            github_ops.add_pr_comment(pr_number, comment_body)
+        except Exception as e:
+            from rich.console import Console
+
+            Console().print(
+                f"[yellow]⚠️  Warning: Failed to post PR todo list as PR comment: {e}[/yellow]"
+            )
+        return
+
+
 def load_pr_last_seen_comment_ids(pr_dir: Path) -> Set[str]:
     """Comment IDs already synced for PR resume / external-feedback detection.
 
-    Matches :meth:`cafe.phases.pr_phase.PRPhase._get_last_seen_comment_ids` without
-    constructing ``PRPhase``: primary source is
-    ``<pr_dir>/artifacts/pr_last_seen_comments.json`` (written by
-    ``_persist_last_seen_comment_ids``); legacy fallback scans
+    Primary source is ``<pr_dir>/artifacts/pr_last_seen_comments.json`` (written by
+    :func:`persist_last_seen_comment_ids`); legacy fallback scans
     ``<pr_dir>/iteration_*/context.json`` for ``last_seen_comment_ids``.
 
     ``get_processed_comment_ids_from_history`` (``pr_comments_processed`` /
     ``pr_comments_skipped``) is not used here: those fields are not populated in
     normal runs, so relying on them caused false external resumes.
     """
-    artifact_file = pr_dir / "artifacts" / "pr_last_seen_comments.json"
-    if artifact_file.exists():
-        try:
-            payload = json.loads(artifact_file.read_text(encoding="utf-8"))
-            if isinstance(payload, dict):
-                raw_ids = payload.get("last_seen_comment_ids", [])
-            elif isinstance(payload, list):
-                raw_ids = payload
-            else:
-                raw_ids = []
-            if not isinstance(raw_ids, list):
-                return set()
-            return {str(item) for item in raw_ids}
-        except (json.JSONDecodeError, OSError, TypeError):
-            return set()
+    artifact_ids = load_last_seen_comment_ids_from_artifact(pr_dir)
+    if artifact_ids is not None:
+        return artifact_ids
 
     if not pr_dir.exists():
         return set()
