@@ -1123,3 +1123,118 @@ def test_load_pr_last_seen_comment_ids_legacy_context(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert load_pr_last_seen_comment_ids(pr_dir) == {"x"}
+
+
+def test_persist_last_seen_comment_ids_round_trip(tmp_path: Path) -> None:
+    from cafe.utils.github import (
+        load_last_seen_comment_ids_from_artifact,
+        load_pr_last_seen_comment_ids,
+        persist_last_seen_comment_ids,
+    )
+
+    pr_dir = tmp_path / "pr"
+    persist_last_seen_comment_ids(pr_dir, ["1", "2"])
+    assert load_last_seen_comment_ids_from_artifact(pr_dir) == {"1", "2"}
+    assert load_pr_last_seen_comment_ids(pr_dir) == {"1", "2"}
+
+
+def test_load_last_seen_comment_ids_from_artifact_missing_returns_none(tmp_path: Path) -> None:
+    from cafe.utils.github import load_last_seen_comment_ids_from_artifact
+
+    assert load_last_seen_comment_ids_from_artifact(tmp_path / "pr") is None
+
+
+class TestPostPrTodoList:
+    def _setup_todo_iteration(self, issue_dir: Path, todo_content: str) -> None:
+        pr_dir = issue_dir / "pr" / "iteration_001"
+        pr_dir.mkdir(parents=True, exist_ok=True)
+        (pr_dir / "user_input.md").write_text("reviewer comment", encoding="utf-8")
+        (pr_dir / "output.md").write_text(todo_content, encoding="utf-8")
+
+    def test_all_items_checked_calls_add_pr_comment(self, tmp_path: Path) -> None:
+        from cafe.utils.github import GitHubOps, post_pr_todo_list
+
+        issue_dir = tmp_path / ".cafe" / "issues" / "test"
+        self._setup_todo_iteration(
+            issue_dir, "## Todo List\n\n- [x] Fix bug\n- [x] Add test\n"
+        )
+        github_ops = MagicMock(spec=GitHubOps)
+        post_pr_todo_list(
+            issue_dir=issue_dir,
+            pr_number="42",
+            github_ops=github_ops,
+            post_todo_list=True,
+        )
+        github_ops.add_pr_comment.assert_called_once()
+        assert "Fix bug" in github_ops.add_pr_comment.call_args[0][1]
+
+    def test_unchecked_item_skips_comment(self, tmp_path: Path) -> None:
+        from cafe.utils.github import GitHubOps, post_pr_todo_list
+
+        issue_dir = tmp_path / ".cafe" / "issues" / "test"
+        self._setup_todo_iteration(
+            issue_dir, "## Todo List\n\n- [x] Done\n- [ ] Not done\n"
+        )
+        github_ops = MagicMock(spec=GitHubOps)
+        post_pr_todo_list(
+            issue_dir=issue_dir,
+            pr_number="42",
+            github_ops=github_ops,
+            post_todo_list=True,
+        )
+        github_ops.add_pr_comment.assert_not_called()
+
+    def test_post_todo_list_false_skips(self, tmp_path: Path) -> None:
+        from cafe.utils.github import GitHubOps, post_pr_todo_list
+
+        issue_dir = tmp_path / ".cafe" / "issues" / "test"
+        self._setup_todo_iteration(issue_dir, "## Todo List\n\n- [x] Done\n")
+        github_ops = MagicMock(spec=GitHubOps)
+        post_pr_todo_list(
+            issue_dir=issue_dir,
+            pr_number="42",
+            github_ops=github_ops,
+            post_todo_list=False,
+        )
+        github_ops.add_pr_comment.assert_not_called()
+
+    def test_picks_latest_iteration_with_user_input(self, tmp_path: Path) -> None:
+        from cafe.utils.github import GitHubOps, post_pr_todo_list
+
+        issue_dir = tmp_path / ".cafe" / "issues" / "test"
+        pr_base = issue_dir / "pr"
+        old = pr_base / "iteration_001"
+        old.mkdir(parents=True)
+        (old / "user_input.md").write_text("old", encoding="utf-8")
+        (old / "output.md").write_text("## Todo List\n\n- [ ] Old\n", encoding="utf-8")
+        latest = pr_base / "iteration_003"
+        latest.mkdir(parents=True)
+        (latest / "user_input.md").write_text("new", encoding="utf-8")
+        (latest / "output.md").write_text("## Todo List\n\n- [x] New done\n", encoding="utf-8")
+        github_ops = MagicMock(spec=GitHubOps)
+        post_pr_todo_list(
+            issue_dir=issue_dir,
+            pr_number="42",
+            github_ops=github_ops,
+            post_todo_list=True,
+        )
+        assert "New done" in github_ops.add_pr_comment.call_args[0][1]
+
+    def test_skips_non_todo_output(self, tmp_path: Path) -> None:
+        from cafe.utils.github import GitHubOps, post_pr_todo_list
+
+        issue_dir = tmp_path / ".cafe" / "issues" / "test"
+        pr_dir = issue_dir / "pr" / "iteration_001"
+        pr_dir.mkdir(parents=True)
+        (pr_dir / "user_input.md").write_text("comments", encoding="utf-8")
+        (pr_dir / "output.md").write_text(
+            "# Fix login\n\n## Summary\nBody only.", encoding="utf-8"
+        )
+        github_ops = MagicMock(spec=GitHubOps)
+        post_pr_todo_list(
+            issue_dir=issue_dir,
+            pr_number="42",
+            github_ops=github_ops,
+            post_todo_list=True,
+        )
+        github_ops.add_pr_comment.assert_not_called()

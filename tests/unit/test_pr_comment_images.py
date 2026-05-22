@@ -4,7 +4,6 @@ import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 from cafe.utils.github import GitHubOps, PRComment
-from cafe.phases.pr_phase import PRPhase
 
 
 class TestPRCommentImageExtraction:

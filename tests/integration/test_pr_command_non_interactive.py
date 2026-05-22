@@ -1,367 +1,126 @@
-"""Integration tests for 'cafe pr --no-interactive' command.
+"""Integration tests for PR publish path (utilities + sync_pr.sh, no PRPhase)."""
 
-使用 mock git and gh CLI 測試完整 PR command flow.
-"""
+from __future__ import annotations
 
+import json
 import os
-import pytest
+import stat
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from cafe.agents.manager import AgentManager
-from cafe.core.permission import PermissionHandler
-from cafe.core.git import GitOperations
-from cafe.core.types import AgentConfig, AgentCLI, PhaseStatus
-from cafe.phases.pr_phase import PRPhase
-from cafe.utils.github import GitHubOps
+import pytest
+from typer.testing import CliRunner
+
+from cafe.ui.cli import app
+from cafe.utils.pr import parse_pr_body, parse_pr_title
+
+SCRIPT_PATH = Path("src/cafe/data/skills/pr/scripts/sync_pr.sh")
+runner = CliRunner()
 
 
-@pytest.fixture
-def mock_github_ops():
-    """Mock GitHubOps"""
-    github_ops = MagicMock(spec=GitHubOps)
-    github_ops.get_pr_for_branch.return_value = None  # Assume no existing PR by default
-    github_ops.create_pr.return_value = "https://github.com/user/repo/pull/123"
-    return github_ops
+def _write_executable(path: Path, content: str) -> None:
+    path.write_text(content)
+    path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
-@pytest.fixture
-def temp_pr_dir(tmp_path):
-    """創建臨時 PR 目錄結構"""
-    # 創建完整目錄結構: {tmp_path}/.cafe/issues/test-issue/
-    issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+def _setup_fake_bin(tmp_path: Path, *, create_body: str) -> Path:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    gh_log = tmp_path / "gh.log"
+    _write_executable(
+        fake_bin / "git",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "rev-parse" ]]; then echo "test-issue"; exit 0; fi
+if [[ "$1" == "status" && "$2" == "--porcelain" ]]; then exit 0; fi
+if [[ "$1" == "push" ]]; then exit 0; fi
+exit 1
+""",
+    )
+    _write_executable(
+        fake_bin / "gh",
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "{gh_log}"
+if [[ "$1" == "pr" && "$2" == "view" ]]; then
+  exit 1
+fi
+if [[ "$1" == "pr" && "$2" == "create" ]]; then
+  echo "https://github.com/example/repo/pull/99"
+  exit 0
+fi
+exit 1
+""",
+    )
+    return fake_bin
 
-    # 創建 spec 目錄 with iteration structure
-    spec_dir = issue_dir / "spec"
+
+def test_parse_pr_title_and_body_from_output_md(tmp_path: Path) -> None:
+    output = tmp_path / "output.md"
+    output.write_text(
+        "# Custom PR Title\n\n## Summary\nLine one\n\n- item\n",
+        encoding="utf-8",
+    )
+    content = output.read_text(encoding="utf-8")
+    assert parse_pr_title(content) == "Custom PR Title"
+    assert "Line one" in parse_pr_body(content)
+    assert "- item" in parse_pr_body(content)
+
+
+def test_sync_pr_create_uses_parsed_title_and_body(tmp_path: Path) -> None:
+    fake_bin = _setup_fake_bin(tmp_path, create_body="")
+    output_file = tmp_path / "output.md"
+    output_file.write_text("# Draft Feature\n\n## Summary\nShip it\n", encoding="utf-8")
+    gh_log = tmp_path / "gh.log"
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT_PATH), "--output", str(output_file), "--base", "main"],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert '"action":"created"' in result.stdout
+    log_lines = gh_log.read_text().splitlines()
+    assert any("pr create --title Draft Feature" in line for line in log_lines)
+    assert any("pr create" in line and "Draft Feature" in line for line in log_lines)
+
+
+def test_cafe_pr_no_interactive_routes_through_runtime_alias(tmp_path: Path, monkeypatch) -> None:
+    """Legacy cafe pr delegates to workflow runtime alias (not PRPhase)."""
+    monkeypatch.chdir(tmp_path)
+    from tests.conftest import create_minimal_config
+
+    create_minimal_config(tmp_path)
+    issue_name = "test-issue"
+    issue_dir = tmp_path / ".cafe" / "issues" / issue_name
+    spec_dir = issue_dir / "spec" / "iteration_001"
+    plan_dir = issue_dir / "plan" / "iteration_001"
     spec_dir.mkdir(parents=True)
-    iteration_spec_dir = spec_dir / "iteration_001"
-    iteration_spec_dir.mkdir(parents=True)
-    spec_file = iteration_spec_dir / "output.md"
-    spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格.")
-
-    # 創建 plan 目錄and plan.md
-    plan_dir = issue_dir / "plan"
     plan_dir.mkdir(parents=True)
-    plan_file = plan_dir / "plan.md"
-    plan_file.write_text("""# 實作計畫
-
-## 任務清單
-- [x] 實作功能 A
-- [x] 實作功能 B
-- [x] 撰寫測試
-
-## 開發指南
-已按照以上任務清單完成實作.
-""")
-
-    return issue_dir
-
-
-@pytest.fixture
-def mock_git_ops():
-    """Mock GitOperations"""
-    git_ops = MagicMock(spec=GitOperations)
-    git_ops.get_main_branch.return_value = "main"
-    git_ops.get_default_base_branch.return_value = "main"
-    git_ops.get_commits_between.return_value = """commit1: Add feature A
-commit2: Add feature B
-commit3: Add tests"""
-    return git_ops
-
-
-class TestPRCommandNonInteractiveBasics:
-    """測試 PR --no-interactive 基本功能"""
-
-    def test_draft_pr_creation(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path):
-        """測試創建 draft PR"""
-        # Arrange
-        spec_file = str(temp_pr_dir / "spec" / "iteration_001" / "output.md")
-
-        # Override mock to return specific PR URL
-        mock_github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
-
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-
-            agent_manager = AgentManager()
-            agent_manager.register_agent(
-                AgentConfig(name="David", cli=AgentCLI.CLAUDE)
-            )
-
-            permission_handler = PermissionHandler()
-
-            # Act
-            phase = PRPhase(
-                    agent_manager=agent_manager,
-                    permission_handler=permission_handler,
-                    git_ops=mock_git_ops,
-                    github_ops=mock_github_ops,
-                    spec_file=spec_file,
-                        issue_name="test-issue",
-                    draft=True,
-                    interactive=False,
-                    custom_title="Test PR Title",
-                    custom_body="Test PR Body",
-                )
-
-            result = phase.execute()
-
-            # Assert
-            assert result.status == PhaseStatus.COMPLETED
-            assert result.data["pr_number"] == "1"
-            assert result.data["branch"] == "test-issue"
-
-            # 驗證 git push 被呼叫
-            mock_git_ops.push.assert_called_once_with("test-issue", set_upstream=True, force=False)
-
-            # 驗證 github_ops.create_pr 被呼叫, 並包含 draft flag
-            mock_github_ops.create_pr.assert_called_once()
-            call_kwargs = mock_github_ops.create_pr.call_args[1]
-            assert call_kwargs["draft"] == True
-        finally:
-            os.chdir(original_cwd)
-
-    def test_non_draft_pr_creation(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path):
-        """測試創建非 draft PR"""
-        # Arrange
-        spec_file = str(temp_pr_dir / "spec" / "iteration_001" / "output.md")
-
-        # Override mock to return specific PR URL
-        mock_github_ops.create_pr.return_value = "https://github.com/user/repo/pull/2"
-
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-
-            agent_manager = AgentManager()
-            agent_manager.register_agent(
-                AgentConfig(name="David", cli=AgentCLI.CLAUDE)
-            )
-
-            permission_handler = PermissionHandler()
-
-            # Act
-            phase = PRPhase(
-                    agent_manager=agent_manager,
-                    permission_handler=permission_handler,
-                    git_ops=mock_git_ops,
-                    github_ops=mock_github_ops,
-                    spec_file=spec_file,
-                        issue_name="test-issue",
-                    draft=False,
-                    interactive=False,
-                    custom_title="Test PR Title",
-                    custom_body="Test PR Body",
-                )
-
-            result = phase.execute()
-
-            # Assert
-            assert result.status == PhaseStatus.COMPLETED
-            assert result.data["pr_number"] == "2"
-
-            # 驗證 github_ops.create_pr 被呼叫, 不包含 draft flag
-            mock_github_ops.create_pr.assert_called_once()
-            call_kwargs = mock_github_ops.create_pr.call_args[1]
-            assert call_kwargs["draft"] == False
-        finally:
-            os.chdir(original_cwd)
-
-
-class TestPRCommandCustomTitleAndBody:
-    """測試自訂 title and body"""
-
-    def test_custom_title_and_body(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path):
-        """測試使用自訂 title and body 創建 PR"""
-        # Arrange
-        spec_file = str(temp_pr_dir / "spec" / "iteration_001" / "output.md")
-        custom_title = "Custom PR Title"
-        custom_body = "Custom PR body\nWith multiple lines"
-
-        # Override mock to return specific PR URL
-        mock_github_ops.create_pr.return_value = "https://github.com/user/repo/pull/3"
-
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-
-            agent_manager = AgentManager()
-            agent_manager.register_agent(
-                AgentConfig(name="David", cli=AgentCLI.CLAUDE)
-            )
-
-            permission_handler = PermissionHandler()
-
-            # Act
-            phase = PRPhase(
-                    agent_manager=agent_manager,
-                    permission_handler=permission_handler,
-                    git_ops=mock_git_ops,
-                    github_ops=mock_github_ops,
-                    spec_file=spec_file,
-                        issue_name="test-issue",
-                    draft=True,
-                    custom_title=custom_title,
-                    custom_body=custom_body,
-                    interactive=False,
-                )
-
-            result = phase.execute()
-
-            # Assert
-            assert result.status == PhaseStatus.COMPLETED
-            assert result.data["pr_number"] == "3"
-
-            # 驗證 github_ops.create_pr 使用自訂 title and body
-            mock_github_ops.create_pr.assert_called_once()
-            call_kwargs = mock_github_ops.create_pr.call_args[1]
-            assert call_kwargs["title"] == custom_title
-            assert call_kwargs["body"] == custom_body
-            assert call_kwargs["draft"] == True
-        finally:
-            os.chdir(original_cwd)
-
-    def test_auto_generate_title_and_body(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path, monkeypatch):
-        """測試自動產生 title and body"""
-        # Arrange
-        spec_file = str(temp_pr_dir / "spec" / "iteration_001" / "output.md")
-
-        # Enable mock agent mode
-        monkeypatch.setenv("CAFE_MOCK_AGENTS", "true")
-        monkeypatch.setenv("CAFE_MOCK_RESPONSE", "confirmed\n\nPR content generated")
-
-        # Override mock to return specific PR URL
-        mock_github_ops.create_pr.return_value = "https://github.com/user/repo/pull/4"
-
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-
-            agent_manager = AgentManager()
-            agent_manager.register_agent(
-                AgentConfig(name="David", cli=AgentCLI.CLAUDE)
-            )
-
-            permission_handler = PermissionHandler()
-
-            # Create output.md file in iteration_001 (mock agent won't write it)
-            pr_dir = temp_pr_dir / "pr"
-            iteration_dir = pr_dir / "iteration_001"
-            iteration_dir.mkdir(parents=True, exist_ok=True)
-            (iteration_dir / "output.md").write_text("# 測試功能需求\n\n## Summary\n\nTest summary\n\n## Changes\n\n- commit1\n- commit2")
-
-            # Act
-            phase = PRPhase(
-                agent_manager=agent_manager,
-                permission_handler=permission_handler,
-                git_ops=mock_git_ops,
-                github_ops=mock_github_ops,
-                spec_file=spec_file,
-                issue_name="test-issue",
-                draft=True,
-                custom_title=None,  # Auto-generate
-                custom_body=None,   # Auto-generate
-                interactive=False,
-            )
-
-            result = phase.execute()
-
-            # Assert
-            assert result.status == PhaseStatus.COMPLETED
-            assert result.data["pr_number"] == "4"
-
-            # 驗證 github_ops.create_pr 被調用
-            mock_github_ops.create_pr.assert_called_once()
-            call_kwargs = mock_github_ops.create_pr.call_args[1]
-            assert "測試功能需求" in call_kwargs["title"]
-            assert "commit1" in call_kwargs["body"]
-        finally:
-            os.chdir(original_cwd)
-
-
-class TestPRCommandErrorHandling:
-    """測試錯誤處理"""
-
-    def test_missing_spec_file_fails(self, tmp_path, mock_git_ops, mock_github_ops):
-        """測試缺少 spec 檔案時失敗"""
-        # Arrange
-        spec_file = str(tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md")
-
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-
-            agent_manager = AgentManager()
-            agent_manager.register_agent(
-                AgentConfig(name="David", cli=AgentCLI.CLAUDE)
-            )
-
-            permission_handler = PermissionHandler()
-
-            # Act
-            phase = PRPhase(
-                agent_manager=agent_manager,
-                permission_handler=permission_handler,
-                git_ops=mock_git_ops,
-                github_ops=mock_github_ops,
-                spec_file=spec_file,  # 不存在檔案
-                issue_name="test-issue",
-                draft=True,
-                interactive=False,
-            )
-
-            result = phase.execute()
-
-            # Assert
-            assert result.status == PhaseStatus.FAILED
-            assert "not found" in result.message.lower()
-        finally:
-            os.chdir(original_cwd)
-
-    def test_gh_pr_create_fails(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path):
-        """測試 gh pr create 失敗時返回失敗"""
-        # Arrange
-        spec_file = str(temp_pr_dir / "spec" / "iteration_001" / "output.md")
-
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-
-            agent_manager = AgentManager()
-            agent_manager.register_agent(
-                AgentConfig(name="David", cli=AgentCLI.CLAUDE)
-            )
-
-            permission_handler = PermissionHandler()
-
-            # Mock github_ops.create_pr to raise an exception
-            mock_github_ops.create_pr.side_effect = RuntimeError("PR creation failed")
-
-            phase = PRPhase(
-                agent_manager=agent_manager,
-                permission_handler=permission_handler,
-                git_ops=mock_git_ops,
-                github_ops=mock_github_ops,
-                spec_file=spec_file,
-                issue_name="test-issue",
-                draft=True,
-                interactive=False,
-            )
-
-            # Mock subprocess to prevent actual agent execution
-            with patch("subprocess.Popen") as mock_popen, \
-                 patch("sys.platform", "win32"):
-                mock_process = MagicMock()
-                mock_process.stdout.readline.side_effect = ['{"content": "PR Title\\n\\nPR Body"}\n', '']
-                mock_process.stderr.read.return_value = ""
-                mock_process.wait.return_value = 0
-                mock_popen.return_value = mock_process
-
-                result = phase.execute()
-
-            # Assert
-            assert result.status == PhaseStatus.FAILED
-            assert "failed" in result.message.lower()
-        finally:
-            os.chdir(original_cwd)
+    (spec_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
+    (plan_dir / "output.md").write_text("# Plan\n", encoding="utf-8")
+
+    alias_result = {
+        "status_code": "confirmed",
+        "iterations": 1,
+        "output_file": str(issue_dir / "pr" / "iteration_001" / "output.md"),
+        "completed": True,
+    }
+
+    with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
+        git = MagicMock()
+        git.is_valid_branch.return_value = True
+        git.get_current_branch.return_value = issue_name
+        mock_git_cls.return_value = git
+        with patch("cafe.ui.commands.phases_legacy._execute_single_step_alias", return_value=alias_result):
+            result = runner.invoke(app, ["pr", "--no-interactive"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert "PR content completed" in result.stdout

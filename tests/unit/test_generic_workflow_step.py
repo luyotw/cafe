@@ -1985,3 +1985,60 @@ def test_develop_checklist_prefers_review_feedback_over_pr_result(tmp_path: Path
     assert call_kwargs["correction_mode"] is True
     assert "review" in call_kwargs["feedback_file_path"]
     assert "pr" not in call_kwargs["feedback_file_path"]
+
+
+def test_update_iteration_history_preserves_model_and_stats_on_second_call(
+    tmp_path: Path,
+) -> None:
+    """Second _update_iteration_history without model/token_usage must not erase prior fields."""
+    import json
+
+    from cafe.core.phase import Phase
+    from cafe.core.status_codes import PhaseStatusCode
+    from cafe.core.types import TokenUsage
+
+    class ConcretePhase(Phase):
+        def __init__(self, phase_dir: Path) -> None:
+            super().__init__()
+            self.phase_dir = phase_dir
+            self.iteration = 1
+
+        def execute(self):
+            pass
+
+    phase_dir = tmp_path / "pr"
+    phase_dir.mkdir()
+    phase = ConcretePhase(phase_dir)
+    iter_dir = phase._get_iteration_dir(1)
+    iter_dir.mkdir(parents=True, exist_ok=True)
+
+    with patch.object(phase, "_append_iteration_index"):
+        phase._update_iteration_history(
+            phase_specific_data={"response": "agent output", "permission_denials": [], "streaming_log": []},
+            prompt="test prompt",
+            agent_cli="claude",
+            model="claude-haiku-4-5-20251001",
+            token_usage=TokenUsage(
+                input_tokens=100,
+                output_tokens=50,
+                duration_ms=5000,
+                duration_api_ms=4800,
+            ),
+        )
+        phase._update_iteration_history(
+            phase_specific_data={
+                "pr_number": "159",
+                "pr_url": "https://example.com/pr/159",
+                "branch": "issue158",
+            },
+            status_code=PhaseStatusCode.READY_FOR_REVIEW,
+        )
+
+    context = json.loads((iter_dir / "iteration.json").read_text(encoding="utf-8"))
+    assert context["model"] == "claude-haiku-4-5-20251001"
+    assert context["stats"]["input_tokens"] == 100
+    assert context["stats"]["output_tokens"] == 50
+    assert context["cli"] == "claude"
+    assert context["prompt"] == "test prompt"
+    assert context["status_code"] == "ready_for_review"
+    assert context["pr_number"] == "159"
