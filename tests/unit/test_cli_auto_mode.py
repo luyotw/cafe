@@ -147,7 +147,7 @@ class TestAutoModeErrorHandling:
         from cafe.core.types import CriticalPhaseError
         with patch('cafe.ui.cli._execute_single_step_alias') as mock_execute_alias:
             mock_execute_alias.side_effect = CriticalPhaseError(
-                message="Something critical", error_type="rate_limit", phase_name="SpecPhase"
+                message="Something critical", error_type="rate_limit", phase_name="spec"
             )
             from typer.testing import CliRunner
             runner = CliRunner()
