@@ -131,3 +131,28 @@ Production PR already runs via `BlackboardWorkflowRuntime` + `GenericPhase` + sk
 | `test_pr_phase_output_todo_only.py` output.md empty guard | Todo contract in `post_pr_todo_list` tests; init is runtime-owned |
 | `test_pr_phase_prepare_content.py` / `test_pr_phase_generate_content.py` | Legacy agent orchestration; production uses workflow executor |
 | `PRPhase.execute()` draft/custom title integration | Legacy `cafe pr` routes to runtime alias; publish uses `sync_pr.sh` + `parse_pr_*` |
+
+## Issue 294 — Phase retirement cleanup
+
+GitHub: issue #294 (closes umbrella #288)
+
+Baseline (develop iteration 001): `pytest tests/unit tests/integration -q` → 1980 passed, 5 skipped, 1 xfailed.
+
+**Product decision:** Option A — retain hidden `cafe spec|plan|develop|review|pr` as thin documented aliases equivalent to `cafe workflow --start-step <step> --execute` (via `BlackboardWorkflowRuntime` + `GenericPhase`). Primary entrypoints remain `cafe make` and `cafe workflow`.
+
+Pre-flight `src/` grep targets: `src/cafe/utils/pr.py` (PRPhase docstring), `src/cafe/ui/cli_shared.py` + `src/cafe/core/phase.py` (“being retired” copy).
+
+### Re-homed / updated contracts
+
+| Area | Behavior | Notes |
+| --- | --- | --- |
+| Legacy CLI notice | Alias wording + workflow start-step equivalence | `cli_shared._print_legacy_phase_command_notice`, `tests/unit/test_cli_spec_output.py` |
+| Module docs | Option A recorded on `phases_legacy.py` | Per-command docstrings cite `cafe workflow --start-step` |
+| Contributor docs | Source-of-truth boundary | `CONTRIBUTING.md`, `docs/roadmap.md` |
+
+### Removed-by-design
+
+| Behavior | Rationale |
+| --- | --- |
+| Option B (delete `phases_legacy.py`) | Spec iteration 002 confirmed Option A for scripted backward compatibility |
+| Per-phase Python classes | Already removed in #289–#293; this issue scrubs cosmetic names only |
