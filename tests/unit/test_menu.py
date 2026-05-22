@@ -616,7 +616,7 @@ class TestChatWithAgent:
         assert "developer" in roles
         assert "reviewer" in roles
 
-    def test_get_available_agents_returns_all_in_review_phase(self, tmp_path, monkeypatch):
+    def test_get_available_agents_returns_all_in_review_step(self, tmp_path, monkeypatch):
         """測試 review 階段時仍回傳所有已設定的 agents"""
         monkeypatch.chdir(tmp_path)
         issue_dir = tmp_path / ".cafe" / "issues" / "my-issue"
