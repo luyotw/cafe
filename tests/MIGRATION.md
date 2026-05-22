@@ -100,3 +100,34 @@ Production develop already runs via `BlackboardWorkflowRuntime` + `GenericPhase`
 | `CONFIRMED_SKIP_REVIEW` + `skip_review` resume | Legacy status.json; user agree routes via `manual_handoff: pr` on default playbook |
 | `DevelopPhase._prepare_user_input` permission/Codex recovery | `PermissionRetryHandler` is NoOp on default playbook |
 | `DevelopPhase._check_if_already_completed_with_review` early return | Per-iteration blackboard + review→develop `manual_handoff` |
+
+## Issue 293 — Retire PRPhase
+
+GitHub: issue #293
+
+Production PR already runs via `BlackboardWorkflowRuntime` + `GenericPhase` + skills. Legacy `PRPhase` and PR-bound test files are deleted after contracts move to the layers below.
+
+### Re-homed contracts
+
+| Source | Behavior | New location |
+| --- | --- | --- |
+| `test_pr_phase_parsing.py` | `parse_pr_title`, `parse_pr_body` | `tests/unit/test_pr_parsing.py`, `src/cafe/utils/pr.py` |
+| `test_pr_phase_post_todo_comment.py` | `post_pr_todo_list`, todo-list gates | `tests/unit/test_github_pr_comments.py` (`TestPostPrTodoList`) |
+| `test_pr_phase_issue_comment.py` | `issue_id` top-level vs `spec.issue_id`, coercion | `tests/unit/test_issue_config.py`, `src/cafe/utils/issue_config.py` |
+| `test_pr_phase_context.py` | Iteration field preservation on second update | `tests/unit/test_generic_workflow_step.py` (`test_update_iteration_history_preserves_model_and_stats_on_second_call`) |
+| `test_pr_comment_images.py` | `GitHubOps.extract_image_urls` | Unchanged (scrubbed unused `PRPhase` import) |
+| `test_pr_phase_github_mode.py` | `last_seen_comment_ids` artifact I/O | `tests/unit/test_github_pr_comments.py` (`persist` / `load` round-trip); runtime PR flow in `test_workflow_runtime.py`, `test_generic_workflow_step.py` |
+| `test_pr_command_non_interactive.py` | Title/body parse + gh create | `tests/integration/test_pr_command_non_interactive.py` (utils + `sync_pr.sh` + runtime alias) |
+| `test_pr_e2e_with_mock.py` | PR step completion + capability receipt | `tests/integration/test_pr_e2e_with_mock.py` (`BlackboardWorkflowRuntime`) |
+
+### Removed-by-design
+
+| Behavior | Rationale |
+| --- | --- |
+| `PRPhase._get_status_analysis_prompt()` | Prompt lives in skill/playbook YAML; no Python unit target |
+| `PRPhase._organize_comments_to_todo_list()` output.md init | Runtime output file setup + skill checklist |
+| `PRPhase._prepare_pr_content()` / `_generate_pr_content()` orchestration | Replaced by `GenericPhase` + `sync_pr.sh` / publish hook |
+| `test_pr_phase_iteration_logic.py` iteration orchestration helpers | Covered by runtime/blackboard tests; comment IDs in `test_github_pr_comments.py` |
+| `test_pr_phase_output_todo_only.py` output.md empty guard | Todo contract in `post_pr_todo_list` tests; init is runtime-owned |
+| `test_pr_phase_prepare_content.py` / `test_pr_phase_generate_content.py` | Legacy agent orchestration; production uses workflow executor |
+| `PRPhase.execute()` draft/custom title integration | Legacy `cafe pr` routes to runtime alias; publish uses `sync_pr.sh` + `parse_pr_*` |
