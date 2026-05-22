@@ -2,13 +2,45 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.core.types import TokenUsage
-from cafe.phases.plan_phase import PlanPhase
+from cafe.core.types import AgentCLI, TokenUsage
+from cafe.phases.generic_phase import GenericPhase
+from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
+from cafe.skills.loader import SkillLoader
+from cafe.skills.native_bridge import NativeSkillBridge
+
+
+def _build_loader(tmp_path: Path) -> GenericPhase:
+    skill_root = tmp_path / "builtin" / "skills"
+    for name, body in {
+        "plan": "Write plan to: {output_file}\n",
+        "workflow-common": "Read blackboard first.\n",
+    }.items():
+        skill_dir = skill_root / name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: desc\n---\n\n{body}",
+            encoding="utf-8",
+        )
+    loader = SkillLoader(
+        project_root=tmp_path,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    loader.discover()
+    return GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(
+            loader,
+            project_root=tmp_path,
+            home_dir=tmp_path / "home",
+        ),
+    )
 
 
 class TestContextSessionIDUpdate:
@@ -17,10 +49,9 @@ class TestContextSessionIDUpdate:
     @pytest.fixture
     def mock_agent_manager(self):
         manager = MagicMock()
-        executor = MagicMock()
-        executor.config.session_id = None
-        executor.config.cli.value = "copilot"
-
+        executor = SimpleNamespace(
+            config=SimpleNamespace(cli=AgentCLI.COPILOT, session_id=None, model=None)
+        )
         manager.get_agent.return_value = executor
         manager.preview_cli_command_args = MagicMock(return_value=["--model", "claude-sonnet-4.5"])
         manager.preview_cli_environment = MagicMock(return_value={"CODEX_HOME": "/tmp/.codex"})
@@ -37,13 +68,11 @@ class TestContextSessionIDUpdate:
             )
 
         manager.execute = mock_execute
-        return manager, executor
+        return manager
 
     def test_context_json_captures_created_session_id(
         self, tmp_path: Path, mock_agent_manager
     ) -> None:
-        manager, _executor = mock_agent_manager
-
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
         spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -54,21 +83,38 @@ class TestContextSessionIDUpdate:
 
         git_ops = MagicMock()
         git_ops.get_current_branch.return_value = "test-issue"
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_default_base_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = ""
 
-        phase = PlanPhase(
+        playbook = {
+            "playbook": {"id": "default"},
+            "roles": {"developer": {"default_agent": "David"}},
+            "steps": {
+                "plan": {
+                    "skill": "plan",
+                    "role": "developer",
+                    "output_artifact": "plan",
+                    "on": {"await_agent": "develop"},
+                }
+            },
+        }
+
+        executor = GenericWorkflowStepExecutor(
+            issue_dir=issue_dir,
             issue_name="test-issue",
-            agent_manager=manager,
-            permission_handler=MagicMock(),
+            playbook=playbook,
+            generic_phase=_build_loader(tmp_path),
+            agent_manager=mock_agent_manager,
             git_ops=git_ops,
-            spec_file=str(spec_file),
+            role_agent_map={"developer": "David"},
             interactive=False,
         )
-        phase.phase_dir = plan_dir
-        phase.issue_dir = issue_dir
-        phase.iteration = 1
-        phase.plan_file = str(plan_dir / "iteration_001" / "output.md")
+        executor.phase_dir = plan_dir
+        executor.issue_dir = issue_dir
+        executor.iteration = 1
 
-        phase._execute_agent_iteration(
+        executor._execute_agent_iteration(
             agent_name="David",
             prompt="Draft a plan",
             user_input="",
