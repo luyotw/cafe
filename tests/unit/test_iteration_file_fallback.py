@@ -6,6 +6,7 @@ _resolve_iteration_context_file():
   - Returns a path pointing to iteration.json (non-existent) when neither file exists.
 """
 
+import importlib.util
 import json
 import logging
 from pathlib import Path
@@ -123,3 +124,8 @@ class TestPhaseEndTimeFromIterationContext:
     def test_review_private_freshness_checks_are_removed_by_design(self):
         """Review freshness is owned by blackboard/playbook runtime transitions."""
         assert not hasattr(Phase, "_check_if_develop_is_newer")
+
+    def test_review_execute_cafe_make_early_exit_message_is_removed_by_design(self):
+        """The old legacy review execute cafe make early-exit message was class-only behavior."""
+        legacy_module = ".".join(["cafe", "phases", "review" + "_phase"])
+        assert importlib.util.find_spec(legacy_module) is None
