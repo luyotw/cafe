@@ -1402,10 +1402,17 @@ def _reject_unsupported_phase_options(phase_name: str, unsupported_options: Dict
     raise typer.Exit(1)
 
 
-def _print_legacy_phase_command_notice(*, phase_name: str, preferred_command: str) -> None:
-    """Show migration guidance for legacy phase aliases."""
+def _print_legacy_phase_command_notice(
+    *,
+    phase_name: str,
+    preferred_command: str,
+    workflow_step: str | None = None,
+) -> None:
+    """Show alias guidance for hidden legacy workflow step commands."""
+    step = workflow_step or phase_name.split()[0]
     console.print(
-        f"[yellow]Legacy phase command:[/yellow] [bold]cafe {phase_name}[/bold] is being retired."
+        f"[yellow]Legacy workflow alias:[/yellow] [bold]cafe {phase_name}[/bold] runs the same "
+        f"runtime path as [bold]cafe workflow --start-step {step} --execute[/bold]."
     )
     console.print(
         f"[dim]Preferred entrypoint:[/dim] [bold]{preferred_command}[/bold]"
