@@ -147,7 +147,7 @@ Pre-flight `src/` grep targets: `src/cafe/utils/pr.py` (PRPhase docstring), `src
 | Area | Behavior | Notes |
 | --- | --- | --- |
 | Legacy CLI notice | Alias wording + workflow start-step equivalence | `cli_shared._print_legacy_phase_command_notice`, `tests/unit/test_cli_spec_output.py` |
-| Module docs | Option A recorded on `phases_legacy.py` | Per-command docstrings cite `cafe workflow --start-step` |
+| Module docs | Option A recorded on `phases_legacy.py` | Per-command docstrings cite `cafe workflow --start-step`; notice must not say "being retired" |
 | Contributor docs | Source-of-truth boundary | `CONTRIBUTING.md`, `docs/roadmap.md` |
 
 ### Removed-by-design
