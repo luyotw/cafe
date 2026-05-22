@@ -140,7 +140,9 @@ Baseline (develop iteration 001): `pytest tests/unit tests/integration -q` → 1
 
 **Product decision:** Option A — retain hidden `cafe spec|plan|develop|review|pr` as thin documented aliases equivalent to `cafe workflow --start-step <step> --execute` (via `BlackboardWorkflowRuntime` + `GenericPhase`). Primary entrypoints remain `cafe make` and `cafe workflow`.
 
-Pre-flight `src/` grep targets: `src/cafe/utils/pr.py` (PRPhase docstring), `src/cafe/ui/cli_shared.py` + `src/cafe/core/phase.py` (“being retired” copy).
+Pre-flight `src/` grep (before cleanup): `src/cafe/utils/pr.py`, `src/cafe/ui/cli_shared.py`, `src/cafe/core/phase.py`.
+
+Final verification: `rg 'SpecPhase|PlanPhase|DevelopPhase|ReviewPhase|PRPhase' src/` → **zero** lines; guardrail `tests/unit/test_no_deleted_phase_names_in_src.py`.
 
 ### Re-homed / updated contracts
 
@@ -148,7 +150,8 @@ Pre-flight `src/` grep targets: `src/cafe/utils/pr.py` (PRPhase docstring), `src
 | --- | --- | --- |
 | Legacy CLI notice | Alias wording + workflow start-step equivalence | `cli_shared._print_legacy_phase_command_notice`, `tests/unit/test_cli_spec_output.py` |
 | Module docs | Option A recorded on `phases_legacy.py` | Per-command docstrings cite `cafe workflow --start-step`; notice must not say "being retired" |
-| Contributor docs | Source-of-truth boundary | `CONTRIBUTING.md`, `docs/roadmap.md` |
+| Contributor docs | Source-of-truth boundary | `CONTRIBUTING.md` **Workflow behavior**, `docs/roadmap.md` v0.2 completion criteria |
+| PR parsing utils | `parse_pr_title` / `parse_pr_body` | `src/cafe/utils/pr.py` (generic module docstring) |
 
 ### Removed-by-design
 
@@ -156,3 +159,4 @@ Pre-flight `src/` grep targets: `src/cafe/utils/pr.py` (PRPhase docstring), `src
 | --- | --- |
 | Option B (delete `phases_legacy.py`) | Spec iteration 002 confirmed Option A for scripted backward compatibility |
 | Per-phase Python classes | Already removed in #289–#293; this issue scrubs cosmetic names only |
+| “being retired” legacy CLI copy | Replaced with explicit alias-to-workflow messaging |

@@ -71,6 +71,18 @@ cafe audit
 
 This command checks that all builtin skills and playbooks are internally consistent (agent files exist, placeholder conventions are met, hooks are registered and executable, and baton intents are valid). It exits non-zero if any check fails. Run it again after fixing any reported gaps to confirm they are resolved.
 
+## Workflow behavior
+
+Default development flow (spec → plan → develop → review → pr) is driven by **playbook YAML**, **skills**, and the **workflow runtime** (`BlackboardWorkflowRuntime`, `GenericPhase`). Do not add logic to removed per-phase Python classes (`SpecPhase`, `PlanPhase`, etc.).
+
+| Change type | Where it belongs |
+| --- | --- |
+| Step transitions, baton intents, hooks | Playbook YAML under `playbooks/` |
+| Agent instructions, checklists, phase prompts | Skills (`SKILL.md` and related files) |
+| Orchestration, blackboard, execution | Runtime code under `src/cafe/core/` and `src/cafe/phases/` |
+
+Primary CLI entrypoints: `cafe make` and `cafe workflow`. Hidden `cafe spec` / `plan` / `develop` / `review` / `pr` commands are documented aliases for `cafe workflow --start-step <step> --execute`.
+
 ## Coding Style
 
 *   This project follows the [PEP 8](https://www.python.org/dev/peps/pep-0008/) style guide.
