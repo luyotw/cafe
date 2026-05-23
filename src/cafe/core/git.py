@@ -1,8 +1,18 @@
 """Git operations for CAFE."""
 
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
+
+
+@dataclass(frozen=True)
+class BranchHealth:
+    """Result of checking whether the current Git branch context is safe for issue detection."""
+
+    is_healthy: bool
+    branch_name: Optional[str] = None
+    reason: Optional[str] = None  # detached_head | in_progress | git_error
 
 
 class GitError(Exception):
@@ -62,6 +72,42 @@ class GitOperations:
         """
         current_branch = self.get_current_branch()
         return bool(current_branch)
+
+    def _git_dir_path(self) -> Path:
+        """Resolve the repository .git directory (handles worktrees)."""
+        git_dir = Path(self.run_git("rev-parse", "--git-dir"))
+        if not git_dir.is_absolute():
+            git_dir = (self.repo_path / git_dir).resolve()
+        return git_dir
+
+    def has_in_progress_operation(self) -> bool:
+        """Return True when rebase, merge, cherry-pick, revert, or bisect is in progress."""
+        git_dir = self._git_dir_path()
+        markers = (
+            "rebase-merge",
+            "rebase-apply",
+            "MERGE_HEAD",
+            "CHERRY_PICK_HEAD",
+            "REVERT_HEAD",
+            "BISECT_LOG",
+        )
+        return any((git_dir / name).exists() for name in markers)
+
+    def get_branch_health(self) -> BranchHealth:
+        """Check whether branch-based issue detection is safe to use."""
+        try:
+            branch = self.get_current_branch()
+        except GitError:
+            return BranchHealth(is_healthy=False, reason="git_error")
+        if not branch:
+            return BranchHealth(is_healthy=False, reason="detached_head")
+        if self.has_in_progress_operation():
+            return BranchHealth(
+                is_healthy=False,
+                branch_name=branch,
+                reason="in_progress",
+            )
+        return BranchHealth(is_healthy=True, branch_name=branch)
 
     def create_branch(self, branch_name: str) -> None:
         """Create and checkout a new branch.
