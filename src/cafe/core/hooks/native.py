@@ -269,21 +269,6 @@ class UserInputCollector(NoOpHook):
         if step_name == "pr" and previous_status in {"ready_for_review", "confirm_output"}:
             return HookResult()
 
-        # Non-interactive mode: cannot call InquirerPy prompts.
-        # Return empty result — the workflow stops at the user step and the
-        # caller provides input via --user-input on resume.
-        if not getattr(phase, "interactive", False):
-            return HookResult()
-
-        prompt_role = {"pm": "pm", "reviewer": "reviewer"}.get(role, "developer")
-        previous_output_file = self._get_previous_output_file(phase, step_name)
-        # Steps that declare confirm_output use delta view on READY_FOR_REVIEW (less noisy).
-        if not (
-            step_on_declares(step_def, "confirm_output")
-            and previous_status == "ready_for_review"
-        ):
-            self._display_previous_output(phase, step_name, previous_output_file)
-
         current_iter_dir = phase._get_iteration_dir(phase.iteration)
         current_user_input_file = current_iter_dir / "user_input.md"
         if current_user_input_file.exists():
@@ -300,6 +285,21 @@ class UserInputCollector(NoOpHook):
                         }
                     ],
                 )
+
+        # Non-interactive mode: cannot call InquirerPy prompts.
+        # Return empty result — the workflow stops at the user step and the
+        # caller provides input via --user-input on resume.
+        if not getattr(phase, "interactive", False):
+            return HookResult()
+
+        prompt_role = {"pm": "pm", "reviewer": "reviewer"}.get(role, "developer")
+        previous_output_file = self._get_previous_output_file(phase, step_name)
+        # Steps that declare confirm_output use delta view on READY_FOR_REVIEW (less noisy).
+        if not (
+            step_on_declares(step_def, "confirm_output")
+            and previous_status == "ready_for_review"
+        ):
+            self._display_previous_output(phase, step_name, previous_output_file)
 
         if previous_status in {"confirm_output", "ready_for_review"}:
             delta_displayed = self._display_previous_iteration_delta(phase, previous_output_file)

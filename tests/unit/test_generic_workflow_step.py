@@ -2211,3 +2211,241 @@ def test_no_changes_needed_interactive_always_pauses_regardless_of_playbook(
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
     assert reloaded.handoff_contract.to_step == "user"
+
+
+def _minimal_spec_executor(
+    tmp_path: Path,
+    *,
+    agent_manager: FakeAgentManager,
+) -> GenericWorkflowStepExecutor:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "output_artifact": "spec",
+                "valid_intents": ["confirmed"],
+            }
+        },
+    }
+    return GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-resume-input",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+
+
+def test_resolve_iteration_user_input_first_start_unchanged(tmp_path: Path) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input" / "spec"
+    executor.iteration = 1
+    executor._step_agent_name = "Roger"
+    executor.step_user_inputs["spec"] = "Cold-start requirements"
+
+    assert executor._resolve_iteration_user_input("spec") == "Cold-start requirements"
+
+
+def test_resolve_iteration_user_input_same_cli_session_returns_continue(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input"
+    spec_dir = issue_dir / "spec"
+    prev_iter = spec_dir / "iteration_001"
+    prev_iter.mkdir(parents=True)
+    (prev_iter / "iteration.json").write_text(
+        json.dumps(
+            {
+                "cli": "codex",
+                "session_id": "session-1",
+                "end_time": "2026-05-23T00:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = spec_dir
+    executor.iteration = 2
+    executor._step_agent_name = "Roger"
+    executor.step_user_inputs["spec"] = "Please apply the feedback"
+
+    assert executor._resolve_iteration_user_input("spec") == "continue"
+
+
+def test_resolve_iteration_user_input_different_session_returns_full_candidate(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input"
+    spec_dir = issue_dir / "spec"
+    prev_iter = spec_dir / "iteration_001"
+    prev_iter.mkdir(parents=True)
+    (prev_iter / "iteration.json").write_text(
+        json.dumps(
+            {
+                "cli": "codex",
+                "session_id": "old-session",
+                "end_time": "2026-05-23T00:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manager = FakeAgentManager("confirmed")
+    manager.agent.config.session_id = "new-session"
+
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    executor.phase_dir = spec_dir
+    executor.iteration = 2
+    executor._step_agent_name = "Roger"
+    candidate = "Clarification answer"
+    executor.step_user_inputs["spec"] = candidate
+
+    assert executor._resolve_iteration_user_input("spec") == candidate
+
+
+def test_resolve_iteration_user_input_loads_prewritten_user_input_file(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input"
+    spec_dir = issue_dir / "spec"
+    current_iter = spec_dir / "iteration_002"
+    current_iter.mkdir(parents=True)
+    (current_iter / "user_input.md").write_text("Answer from workflow --user-input", encoding="utf-8")
+    prev_iter = spec_dir / "iteration_001"
+    prev_iter.mkdir(parents=True)
+    (prev_iter / "iteration.json").write_text(
+        json.dumps(
+            {
+                "cli": "codex",
+                "session_id": "old-session",
+                "end_time": "2026-05-23T00:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manager = FakeAgentManager("confirmed")
+    manager.agent.config.session_id = "new-session"
+
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    executor.phase_dir = spec_dir
+    executor.iteration = 2
+    executor._step_agent_name = "Roger"
+
+    assert (
+        executor._resolve_iteration_user_input("spec")
+        == "Answer from workflow --user-input"
+    )
+
+
+def test_resolve_iteration_user_input_interrupted_iteration_reuse(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input"
+    spec_dir = issue_dir / "spec"
+    current_iter = spec_dir / "iteration_001"
+    current_iter.mkdir(parents=True)
+    (current_iter / "iteration.json").write_text(
+        json.dumps({"cli": "codex", "session_id": "session-1"}),
+        encoding="utf-8",
+    )
+
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = spec_dir
+    executor.iteration = 1
+    executor._step_agent_name = "Roger"
+
+    assert executor._resolve_iteration_user_input("spec") == "continue"
+
+
+def test_apply_resume_to_runtime_context_replaces_full_input_with_continue(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input"
+    spec_dir = issue_dir / "spec"
+    prev_iter = spec_dir / "iteration_001"
+    prev_iter.mkdir(parents=True)
+    (prev_iter / "iteration.json").write_text(
+        json.dumps(
+            {
+                "cli": "codex",
+                "session_id": "session-1",
+                "end_time": "2026-05-23T00:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = spec_dir
+    executor.iteration = 2
+    executor._step_agent_name = "Roger"
+
+    updated = executor._apply_resume_to_runtime_context(
+        {"user_input": "Long clarification that should not be replayed"},
+        "spec",
+    )
+
+    assert updated["user_input"] == "continue"
+    assert executor._get_resolved_iteration_user_input("spec") == "continue"
+
+
+def test_execute_step_same_session_resume_uses_continue_in_prompt_and_user_input_md(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-exec"
+    spec_dir = issue_dir / "spec"
+    prev_iter = spec_dir / "iteration_001"
+    prev_iter.mkdir(parents=True)
+    (prev_iter / "iteration.json").write_text(
+        json.dumps(
+            {
+                "cli": "codex",
+                "session_id": "session-1",
+                "end_time": "2026-05-23T00:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (spec_dir / "iteration_002").mkdir(parents=True)
+    (spec_dir / "iteration_002" / "user_input.md").write_text(
+        "Long clarification that should not appear in prompt",
+        encoding="utf-8",
+    )
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": {"1": "spec_first", "default": "spec_first"},
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    manager = FakeAgentManager("confirmed")
+    manager.agent.config.session_id = "session-1"
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-resume-exec",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    assert manager.prompts
+    prompt = manager.prompts[0]
+    assert "Long clarification that should not appear in prompt" not in prompt
+    assert "Current user input for this iteration:" in prompt
+    assert "continue" in prompt
+    user_input_file = spec_dir / "iteration_002" / "user_input.md"
+    assert user_input_file.read_text(encoding="utf-8") == "continue"

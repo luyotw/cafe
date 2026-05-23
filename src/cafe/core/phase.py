@@ -156,12 +156,10 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         iteration_dir = self._get_iteration_dir(self.iteration)
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save user_input to dedicated markdown file
-        # Don't overwrite existing non-empty user_input.md (e.g., from PR phase)
+        # Persist the exact user_input sent to the agent for this iteration.
         user_input_file = iteration_dir / "user_input.md"
-        if not user_input_file.exists() or user_input_file.stat().st_size == 0:
-            with open(user_input_file, "w", encoding="utf-8") as f:
-                f.write(user_input)
+        with open(user_input_file, "w", encoding="utf-8") as f:
+            f.write(user_input)
 
         # Create initial context data (user_input is stored in user_input.md,
         # no longer duplicated into context.json)
