@@ -2211,3 +2211,114 @@ def test_no_changes_needed_interactive_always_pauses_regardless_of_playbook(
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
     assert reloaded.handoff_contract.to_step == "user"
+
+
+def _minimal_spec_executor(
+    tmp_path: Path,
+    *,
+    agent_manager: FakeAgentManager,
+) -> GenericWorkflowStepExecutor:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "output_artifact": "spec",
+                "valid_intents": ["confirmed"],
+            }
+        },
+    }
+    return GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-resume-input",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+
+
+def test_resolve_iteration_user_input_first_start_unchanged(tmp_path: Path) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input" / "spec"
+    executor.iteration = 1
+    executor._step_agent_name = "Roger"
+    executor.step_user_inputs["spec"] = "Cold-start requirements"
+
+    assert executor._resolve_iteration_user_input("spec") == "Cold-start requirements"
+
+
+def test_resolve_iteration_user_input_same_cli_session_returns_continue(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input"
+    spec_dir = issue_dir / "spec"
+    prev_iter = spec_dir / "iteration_001"
+    prev_iter.mkdir(parents=True)
+    (prev_iter / "iteration.json").write_text(
+        json.dumps(
+            {
+                "cli": "codex",
+                "session_id": "session-1",
+                "end_time": "2026-05-23T00:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = spec_dir
+    executor.iteration = 2
+    executor._step_agent_name = "Roger"
+    executor.step_user_inputs["spec"] = "Please apply the feedback"
+
+    assert executor._resolve_iteration_user_input("spec") == "continue"
+
+
+def test_resolve_iteration_user_input_different_session_returns_full_candidate(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input"
+    spec_dir = issue_dir / "spec"
+    prev_iter = spec_dir / "iteration_001"
+    prev_iter.mkdir(parents=True)
+    (prev_iter / "iteration.json").write_text(
+        json.dumps(
+            {
+                "cli": "codex",
+                "session_id": "old-session",
+                "end_time": "2026-05-23T00:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manager = FakeAgentManager("confirmed")
+    manager.agent.config.session_id = "new-session"
+
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    executor.phase_dir = spec_dir
+    executor.iteration = 2
+    executor._step_agent_name = "Roger"
+    candidate = "Clarification answer"
+    executor.step_user_inputs["spec"] = candidate
+
+    assert executor._resolve_iteration_user_input("spec") == candidate
+
+
+def test_resolve_iteration_user_input_interrupted_iteration_reuse(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input"
+    spec_dir = issue_dir / "spec"
+    current_iter = spec_dir / "iteration_001"
+    current_iter.mkdir(parents=True)
+    (current_iter / "iteration.json").write_text(
+        json.dumps({"cli": "codex", "session_id": "session-1"}),
+        encoding="utf-8",
+    )
+
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = spec_dir
+    executor.iteration = 1
+    executor._step_agent_name = "Roger"
+
+    assert executor._resolve_iteration_user_input("spec") == "continue"

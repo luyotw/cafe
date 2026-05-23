@@ -25,6 +25,12 @@ from cafe.core.status_codes import (
 )
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.phases.generic_phase import GenericPhase
+from cafe.core.resume_user_input import (
+    is_resume_iteration,
+    load_prior_run_context,
+    prior_cli_and_session,
+    resolve_resume_user_input,
+)
 from cafe.utils.checklist_generator import (
     generate_develop_checklist,
     generate_plan_checklist,
@@ -157,6 +163,7 @@ class GenericWorkflowStepExecutor(Phase):
         skill_name = self._resolve_skill_name(step_def, self.iteration)
         valid_intents = self._resolve_valid_intents(step_def)
         agent_name = self._resolve_agent_name(step_def)
+        self._step_agent_name = agent_name
         self._apply_step_agent_model(step_name=step_name, step_def=step_def, agent_name=agent_name)
         agent_cli = self.agent_manager.get_agent(agent_name).config.cli
         shared_skill_invocations = self.generic_phase.prepare_skills(
@@ -351,11 +358,45 @@ class GenericWorkflowStepExecutor(Phase):
         is not replayed on subsequent iterations or handoff cycles.
         """
         if step_name in self.step_user_inputs:
-            value = self.step_user_inputs.pop(step_name)
-            return value
-        if step_name == "plan" and self.iteration == 1:
-            return ""
-        return "workflow execute"
+            candidate = self.step_user_inputs.pop(step_name)
+        elif step_name == "plan" and self.iteration == 1:
+            candidate = ""
+        else:
+            candidate = "workflow execute"
+
+        agent_name = getattr(self, "_step_agent_name", None)
+        if not agent_name or not hasattr(self, "agent_manager"):
+            return candidate
+
+        previous_data = self._load_previous_iteration_data()
+        current_data = self._load_current_iteration_data()
+        if not is_resume_iteration(
+            iteration=self.iteration,
+            previous_iteration_data=previous_data,
+            current_iteration_data=current_data,
+        ):
+            return candidate
+
+        prior_context = load_prior_run_context(
+            iteration=self.iteration,
+            previous_iteration_data=previous_data,
+            current_iteration_data=current_data,
+        )
+        prior_cli, prior_session_id = prior_cli_and_session(prior_context)
+
+        config = self.agent_manager.get_agent(agent_name).config
+        current_cli = config.cli.value if hasattr(config.cli, "value") else str(config.cli)
+        current_session_id = (
+            config.session_id if isinstance(config.session_id, str) else None
+        )
+
+        return resolve_resume_user_input(
+            candidate=candidate,
+            prior_cli=prior_cli,
+            prior_session_id=prior_session_id,
+            current_cli=current_cli,
+            current_session_id=current_session_id,
+        )
 
     def _detect_written_output_files(self) -> List[Path]:
         if self._current_output_file and self._current_output_file.exists():
