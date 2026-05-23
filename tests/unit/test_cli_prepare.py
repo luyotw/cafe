@@ -86,6 +86,9 @@ class TestPrepareCommand:
         mock_git_ops.branch_exists.assert_called_once_with("test-issue")
         mock_git_ops.create_branch.assert_called_once_with("test-issue")
 
+        marker = (temp_repo_dir / ".cafe" / "active_issue").read_text(encoding="utf-8").strip()
+        assert marker == "test-issue"
+
     @patch("cafe.ui.phase_prompts.prompt_confirm")
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
@@ -589,6 +592,21 @@ class TestPrepareCommandWorktree:
             config_data = yaml.safe_load(f)
             # Non-interactive mode should not have pr config
             assert "pr" not in config_data
+
+    def test_prepare_worktree_overwrites_copied_active_issue_marker(self, temp_repo_dir, mock_git_ops):
+        """Worktree prepare overwrites a copied stale active_issue marker."""
+        worktree_path = temp_repo_dir / ".cafe" / "worktrees" / "new-issue"
+        worktree_cafe = worktree_path / ".cafe"
+        worktree_cafe.mkdir(parents=True)
+        (worktree_cafe / "active_issue").write_text("old-issue\n", encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            ["prepare", "new-issue", "--worktree", str(worktree_path)],
+        )
+
+        assert result.exit_code == 0
+        assert (worktree_cafe / "active_issue").read_text(encoding="utf-8").strip() == "new-issue"
 
     def test_prepare_worktree_creates_issue_yaml_in_repo_root(self, temp_repo_dir, mock_git_ops):
         """測試 worktree 模式下，在 repo root 也創建 issue.yaml 供 cafe ls 讀取"""

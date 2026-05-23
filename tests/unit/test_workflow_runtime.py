@@ -887,6 +887,67 @@ def test_runtime_records_done_handoff_for_non_pr_terminal_transition(tmp_path: P
     assert blackboard.events[-1].event_type == "workflow_completed"
 
 
+def test_emit_complete_clears_matching_active_issue_marker(tmp_path: Path) -> None:
+    cafe_dir = tmp_path / ".cafe"
+    issue_dir = cafe_dir / "issues" / "done-issue"
+    issue_dir.mkdir(parents=True)
+    (cafe_dir / "active_issue").write_text("done-issue\n", encoding="utf-8")
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "review": {
+                "skill": "spec_first",
+                "role": "reviewer",
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object):
+        return ("confirmed", {})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="review")
+
+    assert result.completed is True
+    assert not (cafe_dir / "active_issue").exists()
+
+
+def test_emit_complete_does_not_clear_non_matching_active_issue_marker(tmp_path: Path) -> None:
+    cafe_dir = tmp_path / ".cafe"
+    issue_dir = cafe_dir / "issues" / "done-issue"
+    issue_dir.mkdir(parents=True)
+    (cafe_dir / "active_issue").write_text("other-issue\n", encoding="utf-8")
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "review": {
+                "skill": "spec_first",
+                "role": "reviewer",
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object):
+        return ("confirmed", {})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    runtime.run(start_step="review")
+
+    assert (cafe_dir / "active_issue").read_text(encoding="utf-8").strip() == "other-issue"
+
+
 def test_runtime_pauses_for_non_pr_transition_to_user(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "user-transition"
     playbook = {

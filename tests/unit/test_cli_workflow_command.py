@@ -2,12 +2,14 @@
 
 import json
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from cafe.agents.executor import AgentExecutionError
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.git import BranchHealth
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.ui.cli import app, _execute_single_step_alias, _find_external_resume_step, _handle_user_phase
 from cafe.ui.cli_shared import _build_workflow_step_executor
@@ -2048,3 +2050,76 @@ steps:
         result = runner.invoke(app, ["workflow", "--execute"])
         assert result.exit_code == 0
         assert executed_steps == ["develop", "pr"]
+
+
+def test_workflow_execute_syncs_active_issue_on_healthy_branch(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    cafe_dir = tmp_path / ".cafe"
+    issue_dir = cafe_dir / "issues" / "issue-sync"
+    issue_dir.mkdir(parents=True)
+    (cafe_dir / "active_issue").write_text("stale\n", encoding="utf-8")
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor") as mock_builder,
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-sync"
+        mock_git_cls.return_value = git
+        executor = MagicMock()
+        executor.execute_step.return_value = _result(
+            status_code="confirmed",
+            step_name="spec",
+            step_def={"output_artifact": "spec"},
+        )
+        mock_builder.return_value = executor
+
+        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute", "--single-step"])
+
+    assert result.exit_code == 0
+    assert (cafe_dir / "active_issue").read_text(encoding="utf-8").strip() == "issue-sync"
+
+
+def test_workflow_execute_recovers_from_unhealthy_git_via_marker(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    cafe_dir = tmp_path / ".cafe"
+    issue_dir = cafe_dir / "issues" / "saved-issue"
+    issue_dir.mkdir(parents=True)
+    (cafe_dir / "active_issue").write_text("saved-issue\n", encoding="utf-8")
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor") as mock_builder,
+    ):
+        git = MagicMock()
+        git.get_branch_health.return_value = BranchHealth(is_healthy=False, reason="detached_head")
+        mock_git_cls.return_value = git
+        executor = MagicMock()
+        executor.execute_step.return_value = _result(
+            status_code="confirmed",
+            step_name="spec",
+            step_def={"output_artifact": "spec"},
+        )
+        mock_builder.return_value = executor
+
+        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute", "--single-step"])
+
+    assert result.exit_code == 0
+    assert (cafe_dir / "active_issue").read_text(encoding="utf-8").strip() == "saved-issue"
+
+
+def test_workflow_execute_invalid_marker_exits_with_guidance(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    cafe_dir = tmp_path / ".cafe"
+    (cafe_dir / "issues").mkdir(parents=True)
+    (cafe_dir / "active_issue").write_text("missing-issue\n", encoding="utf-8")
+
+    with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
+        git = MagicMock()
+        git.get_branch_health.return_value = BranchHealth(is_healthy=False, reason="git_error")
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+
+    assert result.exit_code == 1
+    assert "missing-issue" in result.stdout

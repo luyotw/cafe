@@ -3,8 +3,11 @@
 import sys
 import shutil
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
 import pytest
+
+from cafe.core.git import BranchHealth
 
 
 def _ensure_src_on_path() -> None:
@@ -36,6 +39,37 @@ def create_minimal_config(base_dir: Path) -> None:
 
     # 複製檔案內容
     config_file.write_text(fixture_file.read_text())
+
+
+@pytest.fixture(autouse=True)
+def _wire_git_branch_health_for_mock_git(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configure MagicMock GitOperations for active issue resolution in workflow tests."""
+    from cafe.ui.commands import workflow as workflow_mod
+
+    original_resolve = workflow_mod.resolve_active_issue
+
+    def _resolve_with_mock_health(
+        *,
+        cafe_dir: Path,
+        git_ops: object,
+        explicit_issue: str | None = None,
+    ):
+        if explicit_issue is None and isinstance(git_ops, MagicMock):
+            if not isinstance(git_ops.get_branch_health.return_value, BranchHealth):
+                branch = git_ops.get_current_branch()
+                if isinstance(branch, str) and branch:
+                    git_ops.get_branch_health.return_value = BranchHealth(
+                        is_healthy=True,
+                        branch_name=branch,
+                    )
+                    (cafe_dir / "issues" / branch).mkdir(parents=True, exist_ok=True)
+        return original_resolve(
+            cafe_dir=cafe_dir,
+            git_ops=git_ops,
+            explicit_issue=explicit_issue,
+        )
+
+    monkeypatch.setattr(workflow_mod, "resolve_active_issue", _resolve_with_mock_health)
 
 
 @pytest.fixture(autouse=True, scope="function")
