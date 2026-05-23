@@ -770,7 +770,7 @@ class GenericWorkflowStepExecutor(Phase):
 
         if status_code == PhaseStatusCode.NO_CHANGES_NEEDED:
             if self.interactive:
-                # 互動模式：一律暫停，讓 UserInputCollector 顯示 agree/disagree/chat 提示
+                # Interactive: always pause so UserInputCollector can show agree/disagree/chat.
                 store.update_handoff_contract(
                     blackboard_state,
                     from_step=step_name,
@@ -781,7 +781,7 @@ class GenericWorkflowStepExecutor(Phase):
                     source="workflow.status_transition_adapter",
                 )
             else:
-                # 非互動模式：依 playbook on.no_changes_needed 路由
+                # Non-interactive: follow playbook on.no_changes_needed routing.
                 target = step_def.get("on", {}).get("no_changes_needed")
                 if target and target != "user" and target in self.playbook.get("steps", {}):
                     store.update_handoff_contract(
@@ -794,7 +794,7 @@ class GenericWorkflowStepExecutor(Phase):
                         source="workflow.status_transition_adapter",
                     )
                 else:
-                    # 映射缺失或指向 user：向後相容，暫停
+                    # Missing mapping or user target: backward-compatible pause.
                     store.update_handoff_contract(
                         blackboard_state,
                         from_step=step_name,
