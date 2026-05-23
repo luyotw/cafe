@@ -229,6 +229,10 @@ class GenericPhase:
                 published=False,
             )
 
+        transform_runtime_context = hook_kwargs.get("transform_runtime_context")
+        if callable(transform_runtime_context):
+            runtime_context = transform_runtime_context(runtime_context)
+
         response = ""
         status_code: Optional[PhaseStatusCode] = None
         goto_target: Optional[str] = None

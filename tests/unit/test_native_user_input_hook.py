@@ -293,6 +293,35 @@ def test_user_input_collector_falls_back_to_prompt_when_questions_xml_invalid(tm
     mock_prompt.assert_called_once()
 
 
+def test_user_input_collector_noninteractive_reads_existing_user_input_file(tmp_path: Path) -> None:
+    phase_dir = tmp_path / "spec"
+    prev_iter_dir = phase_dir / "iteration_001"
+    current_iter_dir = phase_dir / "iteration_002"
+    prev_iter_dir.mkdir(parents=True, exist_ok=True)
+    current_iter_dir.mkdir(parents=True, exist_ok=True)
+    (prev_iter_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
+    _record_previous_step_status(tmp_path, "spec", "need_clarification")
+    (current_iter_dir / "user_input.md").write_text(
+        "Resume answer from workflow",
+        encoding="utf-8",
+    )
+
+    phase = _FakePhase(phase_dir=phase_dir, iteration=2)
+    phase.interactive = False
+    hook = UserInputCollector()
+
+    result = hook.run(
+        stage="prepare_input",
+        phase=phase,
+        step_name="spec",
+        step_def={"role": "pm"},
+        agent_name="Roger",
+    )
+
+    assert result.context_updates["user_input"] == "Resume answer from workflow"
+    assert result.events[0]["source"] == "user_input_file"
+
+
 def test_user_input_collector_reuses_existing_user_input_file_without_reasking(tmp_path: Path) -> None:
     phase_dir = tmp_path / "spec"
     prev_iter_dir = phase_dir / "iteration_001"
@@ -324,7 +353,7 @@ def test_user_input_collector_reuses_existing_user_input_file_without_reasking(t
     assert result.context_updates["user_input"] == "Q1: Question?\nA1: Confirmed answer"
     assert result.events == [{"type": "user_input_collected", "step": "spec", "source": "user_input_file"}]
     assert phase.step_user_inputs["spec"] == "Q1: Question?\nA1: Confirmed answer"
-    mock_display_output.assert_called_once()
+    mock_display_output.assert_not_called()
     mock_qa.assert_not_called()
 
 

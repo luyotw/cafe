@@ -119,6 +119,7 @@ class GenericWorkflowStepExecutor(Phase):
         self.phase_dir = issue_dir
         self.iteration = 0
         self._current_output_file: Optional[Path] = None
+        self._resolved_iteration_user_input: Optional[str] = None
         self._config_allowed_directories: List[str] = list(config_allowed_directories or [])
         self._extra_allowed_directories: List[str] = list(extra_allowed_directories or [])
 
@@ -142,6 +143,7 @@ class GenericWorkflowStepExecutor(Phase):
         self.phase_dir.mkdir(parents=True, exist_ok=True)
 
         self.iteration = self._get_next_iteration_number(step_name, self.phase_dir)
+        self._resolved_iteration_user_input = None
         iteration_dir = self._get_iteration_dir(self.iteration)
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
@@ -206,7 +208,7 @@ class GenericWorkflowStepExecutor(Phase):
 
         def run_agent(prompt: str) -> str:
             last_prompt[:] = [prompt]
-            resolved_user_input = self._resolve_iteration_user_input(step_name)
+            resolved_user_input = self._get_resolved_iteration_user_input(step_name)
             if extra_prompt:
                 resolved_user_input = (
                     f"{extra_prompt}\n\n{resolved_user_input}" if resolved_user_input else extra_prompt
@@ -242,6 +244,12 @@ class GenericWorkflowStepExecutor(Phase):
                 "questions_xml_file": questions_xml_file,
                 "publish_request_file": publish_request_file if step_name == "pr" else None,
                 "blackboard_state": blackboard_state,
+                "transform_runtime_context": (
+                    lambda runtime_context: self._apply_resume_to_runtime_context(
+                        runtime_context,
+                        step_name,
+                    )
+                ),
             },
         )
 
@@ -260,7 +268,7 @@ class GenericWorkflowStepExecutor(Phase):
             and status_code is not None
             and self._should_validate_checklist(status_code)
         ):
-            resolved_user_input = self._resolve_iteration_user_input(step_name)
+            resolved_user_input = self._get_resolved_iteration_user_input(step_name)
             response, validated_status, validation_passed = self._validate_and_retry_checklist_completion(
                 agent_name=agent_name,
                 prompt=last_prompt[0] if last_prompt else "",
@@ -351,19 +359,23 @@ class GenericWorkflowStepExecutor(Phase):
             events=events,
         )
 
-    def _resolve_iteration_user_input(self, step_name: str) -> str:
-        """Resolve user_input sent to agent for this step iteration.
-
-        Consumes the entry from ``step_user_inputs`` after first use so it
-        is not replayed on subsequent iterations or handoff cycles.
-        """
+    def _load_iteration_user_input_candidate(self, step_name: str) -> str:
+        """Load raw user input before resume-token optimization."""
         if step_name in self.step_user_inputs:
-            candidate = self.step_user_inputs.pop(step_name)
-        elif step_name == "plan" and self.iteration == 1:
-            candidate = ""
-        else:
-            candidate = "workflow execute"
+            return self.step_user_inputs.pop(step_name)
 
+        iteration_dir = self._get_iteration_dir(self.iteration)
+        user_input_file = iteration_dir / "user_input.md"
+        if user_input_file.exists():
+            content = user_input_file.read_text(encoding="utf-8")
+            if content.strip():
+                return content
+
+        if step_name == "plan" and self.iteration == 1:
+            return ""
+        return "workflow execute"
+
+    def _apply_resume_user_input_to_candidate(self, step_name: str, candidate: str) -> str:
         agent_name = getattr(self, "_step_agent_name", None)
         if not agent_name or not hasattr(self, "agent_manager"):
             return candidate
@@ -397,6 +409,41 @@ class GenericWorkflowStepExecutor(Phase):
             current_cli=current_cli,
             current_session_id=current_session_id,
         )
+
+    def _resolve_iteration_user_input(self, step_name: str) -> str:
+        """Resolve user_input sent to agent for this step iteration."""
+        candidate = self._load_iteration_user_input_candidate(step_name)
+        return self._apply_resume_user_input_to_candidate(step_name, candidate)
+
+    def _get_resolved_iteration_user_input(self, step_name: str) -> str:
+        cached = self._resolved_iteration_user_input
+        if cached is not None:
+            return cached
+        resolved = self._resolve_iteration_user_input(step_name)
+        self._resolved_iteration_user_input = resolved
+        return resolved
+
+    def _apply_resume_to_runtime_context(
+        self,
+        runtime_context: Dict[str, str],
+        step_name: str,
+    ) -> Dict[str, str]:
+        """Apply resume user-input rules to prompt runtime context."""
+        updated = dict(runtime_context)
+        if step_name in self.step_user_inputs:
+            candidate = self.step_user_inputs.pop(step_name)
+        elif updated.get("user_input"):
+            candidate = updated["user_input"]
+        else:
+            candidate = self._load_iteration_user_input_candidate(step_name)
+
+        resolved = self._apply_resume_user_input_to_candidate(step_name, candidate)
+        self._resolved_iteration_user_input = resolved
+        if resolved:
+            updated["user_input"] = resolved
+        else:
+            updated.pop("user_input", None)
+        return updated
 
     def _detect_written_output_files(self) -> List[Path]:
         if self._current_output_file and self._current_output_file.exists():
