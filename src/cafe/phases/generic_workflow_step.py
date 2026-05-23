@@ -767,12 +767,50 @@ class GenericWorkflowStepExecutor(Phase):
             return
 
         store = BlackboardStore(self.issue_dir)
+
+        if status_code == PhaseStatusCode.NO_CHANGES_NEEDED:
+            if self.interactive:
+                # Interactive: always pause so UserInputCollector can show agree/disagree/chat.
+                store.update_handoff_contract(
+                    blackboard_state,
+                    from_step=step_name,
+                    to_owner=HandoffOwner.USER,
+                    to_step="user",
+                    intent=HandoffIntent.NO_CHANGES_NEEDED,
+                    status_code=status_code.value,
+                    source="workflow.status_transition_adapter",
+                )
+            else:
+                # Non-interactive: follow playbook on.no_changes_needed routing.
+                target = step_def.get("on", {}).get("no_changes_needed")
+                if target and target != "user" and target in self.playbook.get("steps", {}):
+                    store.update_handoff_contract(
+                        blackboard_state,
+                        from_step=step_name,
+                        to_owner=HandoffOwner.AGENT,
+                        to_step=target,
+                        intent=HandoffIntent.AWAIT_AGENT,
+                        status_code=status_code.value,
+                        source="workflow.status_transition_adapter",
+                    )
+                else:
+                    # Missing mapping or user target: backward-compatible pause.
+                    store.update_handoff_contract(
+                        blackboard_state,
+                        from_step=step_name,
+                        to_owner=HandoffOwner.USER,
+                        to_step="user",
+                        intent=HandoffIntent.NO_CHANGES_NEEDED,
+                        status_code=status_code.value,
+                        source="workflow.status_transition_adapter",
+                    )
+            return
+
         if not auto_continue and status_code.value in {
             PhaseStatusCode.READY_FOR_REVIEW.value,
             PhaseStatusCode.CONFIRM_OUTPUT.value,
             PhaseStatusCode.NEED_CLARIFICATION.value,
             PhaseStatusCode.NEED_PERMISSION.value,
-            PhaseStatusCode.NO_CHANGES_NEEDED.value,
         }:
             raw_intent = self._resolve_handoff_intent(step_def, status_code) or "manual_handoff"
             store.update_handoff_contract(

@@ -188,3 +188,39 @@ def test_user_input_collector_chat_then_confirm(
 
     mock_chat.assert_called_once_with("developer", "demo")
     assert result.override_status_code == PhaseStatusCode.MANUAL_HANDOFF
+
+
+def test_user_input_collector_non_interactive_pauses_when_no_user_input_file_present(
+    tmp_path: Path,
+) -> None:
+    """非互動模式且 playbook 路由到 user（或缺少映射）時，hook 作為第二道防線繼續暫停。
+
+    此測試記錄了 UserInputCollector 的「second-line guard」角色：
+    當 _write_status_transition_handoff 已決定暫停（to_owner=USER），
+    workflow 重回 develop 時，hook 在 prepare_input 仍確保 user_input.md
+    為空時不會繼續執行，避免無輸入的空跑。
+    """
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "develop"
+    prev_iter = phase_dir / "iteration_001"
+    prev_iter.mkdir(parents=True, exist_ok=True)
+    (prev_iter / "output.md").write_text("reasoning", encoding="utf-8")
+
+    # 目前 iteration 沒有 user_input.md（模擬 playbook 指向 user 後重回 develop 的場景）
+    current_iter = phase_dir / "iteration_002"
+    current_iter.mkdir(parents=True, exist_ok=True)
+
+    _record_no_changes_event(issue_dir)
+
+    phase = _FakeDevelopStep(issue_dir, iteration=2, interactive=False)
+    collector = UserInputCollector()
+    result = collector.run(
+        stage="prepare_input",
+        phase=phase,
+        step_name="develop",
+        step_def={"role": "developer", "name": "develop"},
+        agent_name="David",
+    )
+
+    assert result.continue_pipeline is False
+    assert any(e.get("type") == "no_changes_missing_user_input" for e in result.events)

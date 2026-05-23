@@ -90,7 +90,7 @@ steps:
       manual_handoff: pr
       need_clarification: develop
       need_permission: develop
-      no_changes_needed: develop
+      no_changes_needed: review
 
   review:
     type: skill

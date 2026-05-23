@@ -83,3 +83,12 @@ def test_default_playbook_migrates_plan_sync_to_script_hook() -> None:
     assert script_hook["args"]["phase"] == "plan"
     assert script_hook["args"]["output"] == "{output_file}"
     assert script_hook["when_intents"] == ["confirmed"]
+
+
+def test_default_playbook_no_changes_needed_routes_to_review() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    playbook_path = project_root / "src/cafe/data/playbooks/default.yaml"
+    data = yaml.safe_load(playbook_path.read_text(encoding="utf-8"))
+
+    develop_on = data["steps"]["develop"]["on"]
+    assert develop_on["no_changes_needed"] == "review"

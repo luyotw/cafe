@@ -2042,3 +2042,172 @@ def test_update_iteration_history_preserves_model_and_stats_on_second_call(
     assert context["prompt"] == "test prompt"
     assert context["status_code"] == "ready_for_review"
     assert context["pr_number"] == "159"
+
+
+# ---------------------------------------------------------------------------
+# Tests for no_changes_needed playbook-driven routing (Issue #301)
+# ---------------------------------------------------------------------------
+
+def _develop_step_playbook_with_no_changes_target(no_changes_target: str | None) -> dict:
+    """Build a minimal develop-step playbook with configurable no_changes_needed routing."""
+    on_map: dict = {"await_agent": "review", "manual_handoff": "pr"}
+    if no_changes_target is not None:
+        on_map["no_changes_needed"] = no_changes_target
+    return {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "output_artifact": "code",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["no_changes_needed", "confirmed"],
+                "on": on_map,
+            },
+            "review": {
+                "skill": "review",
+                "role": "developer",
+                "output_artifact": "review_feedback",
+                "allowed_tools": ["Read"],
+                "on": {"await_agent": "_done"},
+            },
+            "pr": {
+                "skill": "pr",
+                "role": "developer",
+                "output_artifact": "pr_result",
+                "allowed_tools": ["Read"],
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+
+def _write_develop_prereq_artifacts(issue_dir: Path) -> None:
+    for phase in ("spec", "plan"):
+        phase_dir = issue_dir / phase / "iteration_001"
+        phase_dir.mkdir(parents=True, exist_ok=True)
+        (phase_dir / "output.md").write_text(f"# {phase.title()}\n", encoding="utf-8")
+        (phase_dir / "iteration.json").write_text('{"iteration": 1}', encoding="utf-8")
+
+
+def test_no_changes_needed_non_interactive_auto_routes_to_playbook_target(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """非互動模式且 playbook 映射為 agent step 時，直接寫 AGENT handoff 自動繼續。"""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-ncn-noninteractive-auto"
+    _write_develop_prereq_artifacts(issue_dir)
+    playbook = _develop_step_playbook_with_no_changes_target("review")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-ncn-noninteractive-auto",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("no_changes_needed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+        interactive=False,
+    )
+
+    result = executor.execute_step("develop", playbook["steps"]["develop"], state)
+
+    assert result.status_code == "no_changes_needed"
+    reloaded = BlackboardStore(issue_dir).load_or_create("develop")
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
+    assert reloaded.handoff_contract.to_step == "review"
+    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
+
+
+def test_no_changes_needed_non_interactive_pauses_when_playbook_target_is_user(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """非互動模式且 playbook 映射為 user 時，寫 USER handoff 暫停。"""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-ncn-noninteractive-user"
+    _write_develop_prereq_artifacts(issue_dir)
+    playbook = _develop_step_playbook_with_no_changes_target("user")
+    state = BlackboardStore(issue_dir).load_or_create("develop")
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-ncn-noninteractive-user",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("no_changes_needed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+        interactive=False,
+    )
+
+    result = executor.execute_step("develop", playbook["steps"]["develop"], state)
+
+    assert result.status_code == "no_changes_needed"
+    reloaded = BlackboardStore(issue_dir).load_or_create("develop")
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
+    assert reloaded.handoff_contract.to_step == "user"
+
+
+def test_no_changes_needed_non_interactive_pauses_when_mapping_absent(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """非互動模式且 playbook 無 no_changes_needed 映射時，保持向後相容並暫停。"""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-ncn-noninteractive-absent"
+    _write_develop_prereq_artifacts(issue_dir)
+    playbook = _develop_step_playbook_with_no_changes_target(None)
+    state = BlackboardStore(issue_dir).load_or_create("develop")
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-ncn-noninteractive-absent",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("no_changes_needed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+        interactive=False,
+    )
+
+    result = executor.execute_step("develop", playbook["steps"]["develop"], state)
+
+    assert result.status_code == "no_changes_needed"
+    reloaded = BlackboardStore(issue_dir).load_or_create("develop")
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
+    assert reloaded.handoff_contract.to_step == "user"
+
+
+def test_no_changes_needed_interactive_always_pauses_regardless_of_playbook(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """互動模式時，無論 playbook 映射為何，一律暫停等待使用者的 agree/disagree 決策。"""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-ncn-interactive-pause"
+    _write_develop_prereq_artifacts(issue_dir)
+    playbook = _develop_step_playbook_with_no_changes_target("review")
+    state = BlackboardStore(issue_dir).load_or_create("develop")
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-ncn-interactive-pause",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("no_changes_needed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+        interactive=True,
+    )
+
+    result = executor.execute_step("develop", playbook["steps"]["develop"], state)
+
+    assert result.status_code == "no_changes_needed"
+    reloaded = BlackboardStore(issue_dir).load_or_create("develop")
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
+    assert reloaded.handoff_contract.to_step == "user"
