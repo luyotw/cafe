@@ -10,6 +10,8 @@ from typing import Any, List, Optional
 import typer
 import yaml
 
+from cafe.core.active_issue import clear_marker_if_matches, write_marker
+
 VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
 
 console: Any = None
@@ -653,6 +655,11 @@ def prepare(
         console.print(f"[green]✓ Issue config saved to {relative_config_path}[/green]")
         console.print()
 
+        if use_worktree:
+            write_marker(worktree_cafe_dir, issue_name)
+        else:
+            write_marker(cafe_dir, issue_name)
+
         # 12. Display success message
         console.print()
         console.print(f"[green]✓ Successfully prepared issue: {issue_name}[/green]")
@@ -912,6 +919,8 @@ def close() -> None:
                 )
                 # Continue with worktree removal even if sync fails
 
+            clear_marker_if_matches(worktree_abs / ".cafe", issue_name)
+
             # Step 5: Remove worktree
             try:
                 console.print(f"[dim]Removing worktree: {worktree_path}[/dim]")
@@ -1038,6 +1047,8 @@ def close() -> None:
         except Exception as e:
             console.print(f"[yellow]⚠️  Failed to archive issue data: {e}[/yellow]")
             console.print(f"[yellow]   Issue data remains at: .cafe/issues/{issue_name}/[/yellow]")
+
+        clear_marker_if_matches(Path(".cafe"), issue_name)
 
         # 7. Display success message
         console.print()

@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 from typing import Any, Dict, Optional
 
+from cafe.core.active_issue import clear_marker_if_matches
 from cafe.core.blackboard import BlackboardStore, HandoffContract, HandoffIntent, HandoffOwner
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import (
@@ -588,6 +589,8 @@ class BlackboardWorkflowRuntime:
                 status_code=status_code,
                 source=contract_source,
             )
+        cafe_dir = self.issue_dir.parent.parent
+        clear_marker_if_matches(cafe_dir, self.issue_dir.name)
         return PlaybookRunResult(
             final_step=current_step,
             final_status_code=status_code,

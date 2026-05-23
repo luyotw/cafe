@@ -12,6 +12,7 @@ import typer
 from rich.console import Console
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.issue_resolution import ActiveIssueResolutionError, resolve_active_issue
 from cafe.core.types import CriticalPhaseError
 from cafe.core.workflow_models import StepExecutionResult, StepInterrupted
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -559,8 +560,19 @@ def workflow(
             return count + 1
 
         git = _get_GitOperations()()
-        issue_name = issue or git.get_current_branch()
-        issue_dir = Path(".cafe/issues") / issue_name
+        cafe_dir = Path(".cafe")
+        try:
+            resolved = resolve_active_issue(
+                cafe_dir=cafe_dir,
+                git_ops=git,
+                explicit_issue=issue,
+            )
+        except ActiveIssueResolutionError as exc:
+            console.print(f"[red]Error: {exc.message}[/red]")
+            console.print(f"[dim]{exc.guidance}[/dim]")
+            raise typer.Exit(1)
+        issue_name = resolved.issue_name
+        issue_dir = cafe_dir / "issues" / issue_name
         selected_playbook = _resolve_selected_playbook(playbook)
         config_manager = _get_ConfigManager()(".cafe")
         try:
