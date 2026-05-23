@@ -919,8 +919,6 @@ def close() -> None:
                 )
                 # Continue with worktree removal even if sync fails
 
-            clear_marker_if_matches(worktree_abs / ".cafe", issue_name)
-
             # Step 5: Remove worktree
             try:
                 console.print(f"[dim]Removing worktree: {worktree_path}[/dim]")
@@ -935,6 +933,8 @@ def close() -> None:
                 console.print(f"  3. cafe rm {issue_name}")
                 console.print()
                 raise typer.Exit(1)
+
+            clear_marker_if_matches(worktree_abs / ".cafe", issue_name)
 
             # Step 6: Delete feature branch
             try:

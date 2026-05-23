@@ -379,6 +379,28 @@ class TestCloseCommandWorktree:
         assert "git branch -D test-worktree-issue" in result.stdout
         assert "cafe rm test-worktree-issue" in result.stdout
 
+    def test_close_worktree_remove_failure_preserves_active_issue_marker(
+        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_worktree_config
+    ):
+        """Worktree marker must remain when remove_worktree fails."""
+        (temp_repo_dir / ".git").mkdir()
+        worktree_path = temp_repo_dir / "worktrees" / "test-worktree-issue"
+        worktree_cafe = worktree_path / ".cafe"
+        worktree_cafe.mkdir(parents=True)
+        marker = worktree_cafe / "active_issue"
+        marker.write_text("test-worktree-issue\n", encoding="utf-8")
+        worktree_issue = worktree_cafe / "issues" / "test-worktree-issue"
+        worktree_issue.mkdir(parents=True)
+
+        mock_git_ops.get_current_branch.return_value = "test-worktree-issue"
+        mock_git_ops.remove_worktree.side_effect = GitError("failed to remove worktree")
+
+        result = runner.invoke(app, ["close"])
+
+        assert result.exit_code == 1
+        assert marker.exists()
+        assert marker.read_text(encoding="utf-8").strip() == "test-worktree-issue"
+
     def test_close_clears_matching_active_issue_marker(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config
     ):
