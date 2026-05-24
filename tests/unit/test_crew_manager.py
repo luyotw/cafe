@@ -82,6 +82,63 @@ class TestCrewManagerLoad:
         assert data["pm"]["name"] == "CrewPM"
 
 
+class TestCrewManagerMigrateLegacyAgents:
+    """Test one-shot migration from config.yaml agents: to crew.yaml."""
+
+    def test_legacy_only_creates_crew_and_removes_agents(self, tmp_path: Path) -> None:
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        config_yaml = cafe_dir / "config.yaml"
+        config_yaml.write_text(
+            "auto:\n  max_review_iterations: 3\n"
+            "agents:\n"
+            "  pm:\n    name: Roger\n    cli: copilot\n"
+            "  developer:\n    name: David\n    cli: copilot\n"
+        )
+        manager = CrewManager(cafe_dir=cafe_dir)
+        assert manager.migrate_legacy_agents_from_config() is True
+
+        crew_data = yaml.safe_load((cafe_dir / "crew.yaml").read_text())
+        assert crew_data["pm"]["name"] == "Roger"
+        assert crew_data["developer"]["name"] == "David"
+
+        config_data = yaml.safe_load(config_yaml.read_text())
+        assert "agents" not in config_data
+        assert config_data["auto"]["max_review_iterations"] == 3
+
+    def test_legacy_plus_existing_crew_preserves_crew_and_merges_missing(
+        self, tmp_path: Path
+    ) -> None:
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        (cafe_dir / "crew.yaml").write_text("pm:\n  name: CrewPM\n  cli: claude\n")
+        config_yaml = cafe_dir / "config.yaml"
+        config_yaml.write_text(
+            "agents:\n"
+            "  pm:\n    name: ConfigPM\n    cli: copilot\n"
+            "  developer:\n    name: David\n    cli: copilot\n"
+        )
+        manager = CrewManager(cafe_dir=cafe_dir)
+        assert manager.migrate_legacy_agents_from_config() is True
+
+        crew_data = yaml.safe_load((cafe_dir / "crew.yaml").read_text())
+        assert crew_data["pm"]["name"] == "CrewPM"
+        assert crew_data["developer"]["name"] == "David"
+
+        config_data = yaml.safe_load(config_yaml.read_text())
+        assert "agents" not in config_data
+
+    def test_no_legacy_is_noop(self, tmp_path: Path) -> None:
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        config_yaml = cafe_dir / "config.yaml"
+        config_yaml.write_text("auto:\n  max_review_iterations: 5\n")
+        manager = CrewManager(cafe_dir=cafe_dir)
+        assert manager.migrate_legacy_agents_from_config() is False
+        assert not (cafe_dir / "crew.yaml").exists()
+        assert yaml.safe_load(config_yaml.read_text()) == {"auto": {"max_review_iterations": 5}}
+
+
 class TestCrewManagerSave:
     """Test CrewManager.save()."""
 
