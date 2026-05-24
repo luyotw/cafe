@@ -1,6 +1,6 @@
 ## Checklist
 
-[ ] Read /Users/YO_1/side_projects/cafe/.cafe/agents/developer/Nick.md to understand your role and native language
+[ ] Read src/cafe/data/agents/developer/Nick.md to understand your role and native language
 [ ] Read .cafe/issues/test/pr/iteration_001/output.md to review previous PR content
 [ ] Review unpushed commits to identify new changes
 [ ] Edit .cafe/issues/test/pr/iteration_002/output.md to update PR content based on new changes (NOT in your response)

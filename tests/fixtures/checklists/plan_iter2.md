@@ -1,6 +1,6 @@
 ## Checklist
 
-[ ] Read /Users/YO_1/side_projects/cafe/.cafe/agents/developer/Nick.md to understand your role and native language
+[ ] Read src/cafe/data/agents/developer/Nick.md to understand your role and native language
 [ ] Read .cafe/issues/test/plan/iteration_001/output.md to review previous plan
 [ ] Review user's feedback (provided below)
 [ ] Integrate feedback and update the plan, DO NOT hint the existence of the previous iterations

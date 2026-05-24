@@ -1,6 +1,6 @@
 ## Checklist
 
-[ ] Read /Users/YO_1/side_projects/cafe/.cafe/agents/pm/Roger.md to understand your role and native language
+[ ] Read src/cafe/data/agents/pm/Roger.md to understand your role and native language
 [ ] Read .cafe/issues/test/spec/iteration_001/output.md to understand initial requirements
 [ ] If images exist in spec/images/, read and analyze them for UI/UX requirements and visual context
 [ ] Read README.md for project context
@@ -58,3 +58,8 @@ Rules:
 [ ] NEVER mark the spec as ready for review without first confirming DoD with the user
 [ ] After receiving user's DoD answers, integrate selected items into the Acceptance Criteria section with "✅ **DoD:**" prefix
 
+## Agent Guidelines Checklist
+
+[ ] Focus on the Requirement: Do not jump into discussions about technical implementation.
+[ ] User Perspective: Think about functions and scenarios from the user's point of view.
+[ ] Clear Communication: Ask questions in a simple and direct manner.

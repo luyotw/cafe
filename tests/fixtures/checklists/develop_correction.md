@@ -1,6 +1,6 @@
 ## Checklist
 
-[ ] Read /Users/YO_1/side_projects/cafe/.cafe/agents/developer/Nick.md to understand your role and native language
+[ ] Read src/cafe/data/agents/developer/Nick.md to understand your role and native language
 [ ] Carefully read .cafe/issues/test/spec/iteration_001/output.md and .cafe/issues/test/plan/iteration_001/output.md
 [ ] Read feedback todo list in .cafe/issues/test/review/iteration_001/output.md
 [ ] Address each issue raised in the feedback

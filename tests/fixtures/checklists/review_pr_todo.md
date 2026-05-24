@@ -2,7 +2,7 @@
 
 [ ] Read src/cafe/data/agents/reviewer/Alice.md to understand your role and native language
 [ ] Read the requirements specification .cafe/issues/test/spec/iteration_001/output.md
-[ ] Read the implementation plan (not available)
+[ ] Read the implementation plan .cafe/issues/test/plan/iteration_001/output.md
 [ ] Read PR feedback in (not available) (if exists) to see user feedback and requests
 [ ] Prioritize user feedback from PR comments over spec requirements if there are conflicts
 

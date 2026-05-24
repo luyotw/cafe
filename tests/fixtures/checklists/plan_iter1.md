@@ -1,6 +1,6 @@
 ## Checklist
 
-[ ] Read /Users/YO_1/side_projects/cafe/.cafe/agents/developer/Nick.md to understand your role and native language
+[ ] Read src/cafe/data/agents/developer/Nick.md to understand your role and native language
 [ ] Read the development guide in .cafe/issues/test/plan/iteration_001/output.md
 [ ] Read the requirements document .cafe/issues/test/spec/iteration_001/output.md
 [ ] Plan implementation steps (planning, not implementation)

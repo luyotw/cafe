@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from cafe.agents.manager import AgentManager
 from cafe.skills.bridge import load_skill_reference
 from cafe.skills.checklist_composer import (
     generate_develop_checklist,
@@ -121,6 +122,7 @@ GOLDEN_RUNNERS = {
         review_file_path=".cafe/issues/test/review/iteration_001/output.md",
         base_branch="develop",
         checklist_file_path=path,
+        plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
         pr_todo_list_file_path=".cafe/issues/test/pr/iteration_001/output.md",
     ),
     "pr_iter1": lambda path: generate_pr_checklist(
@@ -143,13 +145,32 @@ GOLDEN_RUNNERS = {
 }
 
 
+def _builtin_agent_path(cls, name, role, **_kw: object) -> str:
+    """Always resolve to builtin agent files (ignores local overrides)."""
+    return f"src/cafe/data/agents/{role}/{name}.md"
+
+
 @pytest.mark.parametrize("case_name", json.loads((FIXTURES_DIR / "manifest.json").read_text(encoding="utf-8")))
 def test_golden_checklist_matches_fixture(case_name: str, tmp_path: Path) -> None:
     """Composed checklists stay equivalent to the pre-migration golden snapshots."""
-    output_path = tmp_path / f"{case_name}.md"
-    GOLDEN_RUNNERS[case_name](output_path)
-    expected = (FIXTURES_DIR / f"{case_name}.md").read_text(encoding="utf-8")
-    assert output_path.read_text(encoding="utf-8") == expected
+    saved = AgentManager.get_agent_file_path
+    AgentManager.get_agent_file_path = classmethod(_builtin_agent_path)  # type: ignore[assignment]
+    try:
+        output_path = tmp_path / f"{case_name}.md"
+        GOLDEN_RUNNERS[case_name](output_path)
+        expected = (FIXTURES_DIR / f"{case_name}.md").read_text(encoding="utf-8")
+        actual = output_path.read_text(encoding="utf-8")
+        if actual != expected:
+            for i, (a, e) in enumerate(zip(actual.splitlines(), expected.splitlines())):
+                if a != e:
+                    raise AssertionError(
+                        f"First diff at line {i}:\n  actual:   {a!r}\n  expected: {e!r}"
+                    )
+            raise AssertionError(
+                f"Line count differs: actual={len(actual.splitlines())} expected={len(expected.splitlines())}"
+            )
+    finally:
+        AgentManager.get_agent_file_path = saved
 
 
 @pytest.mark.parametrize(
