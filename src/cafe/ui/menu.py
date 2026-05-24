@@ -209,8 +209,22 @@ class InteractiveMenu:
             {"name": "Agent CLI & model setup", "value": "setup"},
             {"name": "View config", "value": "config"},
             {"name": "Edit config", "value": "config_edit"},
+            {"name": "Manage crew", "value": "crew_manage"},
             {"name": "Manage agents", "value": "agent_edit"},
             {"name": "Manage templates", "value": "template_edit"},
+            {"name": "Back", "value": "back"},
+        ]
+
+    def _build_crew_menu_choices(self) -> List[Dict[str, Any]]:
+        """Build the list of choices for the crew management submenu.
+
+        Returns:
+            List of InquirerPy choice dicts with "name" and "value" keys
+        """
+        return [
+            {"name": "List crew", "value": "crew_list"},
+            {"name": "Set primary CLI", "value": "crew_set_primary"},
+            {"name": "Set fallback CLI", "value": "crew_set_fallback"},
             {"name": "Back", "value": "back"},
         ]
 
@@ -306,10 +320,31 @@ class InteractiveMenu:
                 _run_command(["config"])
             elif selection == "config_edit":
                 _run_command(["config", "edit"])
+            elif selection == "crew_manage":
+                self._show_crew_menu()
             elif selection == "agent_edit":
                 _run_command(["agent", "edit"])
             elif selection == "template_edit":
                 _run_command(["template", "edit"])
+
+    def _show_crew_menu(self) -> None:
+        """Display the crew management submenu and handle the user's selection.
+
+        This menu loops until the user selects "Back".
+        """
+        while True:
+            choices = self._build_crew_menu_choices()
+            selection = prompt_list("CAFE  Manage crew", choices)
+
+            if selection == "back":
+                return
+
+            if selection == "crew_list":
+                _run_command(["crew", "list"])
+            elif selection == "crew_set_primary":
+                _run_command(["crew", "set-primary"])
+            elif selection == "crew_set_fallback":
+                _run_command(["crew", "set-fallback"])
 
     def _get_available_agents(self) -> List[Dict[str, str]]:
         """Get all configured agents.

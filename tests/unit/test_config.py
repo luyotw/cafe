@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import yaml
 
 from cafe.utils.config import ConfigManager, ConfigError
+from cafe.utils.crew import CrewManager
 from cafe.core.types import AgentCLI
 
 
@@ -81,6 +82,27 @@ class TestLoadConfig:
 
         with pytest.raises(ConfigError, match="Failed to load config"):
             manager.load_config()
+
+    def test_load_config_migrates_legacy_agents_to_crew_yaml(self, tmp_path: Path) -> None:
+        """載入含 legacy agents 的 config 時會遷移至 crew.yaml 並清除 config agents。"""
+        config_dir = tmp_path / ".cafe"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            "python_bin: python3\n"
+            "agents:\n"
+            "  pm:\n    name: Roger\n    cli: copilot\n"
+        )
+
+        manager = ConfigManager(config_dir=str(config_dir))
+        loaded = manager.load_config()
+
+        assert "agents" not in loaded
+        assert loaded["python_bin"] == "python3"
+        crew_data = yaml.safe_load((config_dir / "crew.yaml").read_text())
+        assert crew_data["pm"]["name"] == "Roger"
+        config_on_disk = yaml.safe_load(config_file.read_text())
+        assert "agents" not in config_on_disk
 
 
 class TestDefaultConfig:
@@ -283,13 +305,17 @@ class TestResetConfig:
     def test_reset_persists_to_file(self, config_with_file) -> None:
         """測試重置會持久化到檔案"""
         config_with_file.set("agents.pm.cli", "claude")
+        crew_file = config_with_file.config_dir / "crew.yaml"
+        if crew_file.exists():
+            crew_file.unlink()
         config_with_file.reset()
 
         # Load with new manager
         manager2 = ConfigManager(config_dir=str(config_with_file.config_dir))
-        config = manager2.load_config()
+        manager2.load_config()
+        crew = CrewManager(cafe_dir=config_with_file.config_dir).load()
 
-        assert config["agents"]["pm"]["cli"] == "gemini"  # Default from get_default_config()
+        assert crew["pm"]["cli"] == "gemini"  # Default from get_default_config()
 
 
 class TestAliasResolution:
@@ -396,13 +422,12 @@ class TestConfigUnicodeHandling:
         # Save config
         config_manager.save_config(unicode_config)
 
-        # Load config back
-        loaded_config = config_manager.load_config()
+        config_manager.load_config()
+        crew = CrewManager(cafe_dir=config_dir).load()
 
-        # Verify Unicode characters are preserved (not escaped)
-        assert loaded_config["agents"]["developer"]["name"] == "黃建"
-        assert loaded_config["agents"]["pm"]["name"] == "方竹"
-        assert loaded_config["agents"]["reviewer"]["name"] == "安那"
+        assert crew["developer"]["name"] == "黃建"
+        assert crew["pm"]["name"] == "方竹"
+        assert crew["reviewer"]["name"] == "安那"
 
     def test_config_file_contains_readable_unicode(self, tmp_path: Path) -> None:
         """Test that saved config file contains readable Unicode (not escape sequences)."""
@@ -441,18 +466,18 @@ class TestConfigUnicodeHandling:
             "python_bin": "python3",
         }
 
-        # First save
         config_manager.save_config(original_config)
-        loaded_once = config_manager.load_config()
+        config_manager.load_config()
+        crew_once = CrewManager(cafe_dir=config_dir).load()
 
-        # Second save (with loaded config)
-        config_manager.save_config(loaded_once)
-        loaded_twice = config_manager.load_config()
+        config_manager.save_config({"python_bin": "python3"})
+        config_manager.load_config()
+        crew_twice = CrewManager(cafe_dir=config_dir).load()
 
-        # All Unicode should be preserved
         for agent_type in ["developer", "pm", "reviewer"]:
-            assert original_config["agents"][agent_type]["name"] == loaded_once["agents"][agent_type]["name"]
-            assert original_config["agents"][agent_type]["name"] == loaded_twice["agents"][agent_type]["name"]
+            expected = original_config["agents"][agent_type]["name"]
+            assert crew_once[agent_type]["name"] == expected
+            assert crew_twice[agent_type]["name"] == expected
 
 
 class TestGetAllowedDirectories:

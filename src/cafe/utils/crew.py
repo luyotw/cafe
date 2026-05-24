@@ -1,5 +1,6 @@
 """Crew configuration management for CAFE."""
 
+import copy
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -167,3 +168,57 @@ class CrewManager:
         self.cafe_dir.mkdir(parents=True, exist_ok=True)
         with open(self.crew_file, "w") as f:
             yaml.dump(agents, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    def _load_crew_file_only(self) -> Dict[str, Any]:
+        """Load crew.yaml only (no config.yaml agents fallback)."""
+        if not self.crew_file.exists():
+            return {}
+        try:
+            data = yaml.safe_load(self.crew_file.read_text())
+            return data if isinstance(data, dict) else {}
+        except yaml.YAMLError:
+            return {}
+
+    def migrate_legacy_agents_from_config(self) -> bool:
+        """Move legacy ``agents:`` from config.yaml into crew.yaml, then remove it.
+
+        Existing crew.yaml role entries are never overwritten. Returns True when
+        the config file had a non-empty ``agents`` block that was processed.
+        """
+        if not self.config_file.exists():
+            return False
+
+        try:
+            config_data = yaml.safe_load(self.config_file.read_text())
+        except yaml.YAMLError:
+            return False
+
+        if not isinstance(config_data, dict):
+            return False
+
+        legacy_agents = config_data.get("agents")
+        if not isinstance(legacy_agents, dict) or not legacy_agents:
+            return False
+
+        crew_data = self._load_crew_file_only()
+        merged_any = False
+        for role, role_config in legacy_agents.items():
+            if role in crew_data:
+                continue
+            if isinstance(role_config, dict):
+                crew_data[role] = copy.copy(role_config)
+                merged_any = True
+
+        if merged_any:
+            self.save(crew_data)
+
+        del config_data["agents"]
+        with open(self.config_file, "w") as f:
+            yaml.dump(
+                config_data,
+                f,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
+            )
+        return True

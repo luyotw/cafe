@@ -8,6 +8,7 @@ import json
 import time
 
 from cafe.core.types import AgentCLI
+from cafe.utils.crew import CrewManager
 
 
 class ConfigError(Exception):
@@ -176,6 +177,7 @@ class ConfigManager:
             )
 
         try:
+            CrewManager(cafe_dir=self.config_dir).migrate_legacy_agents_from_config()
             with open(self.config_file, "r") as f:
                 self._config = yaml.safe_load(f)
             if issue_config:

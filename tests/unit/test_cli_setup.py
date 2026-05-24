@@ -210,7 +210,9 @@ class TestSetupInteractiveFlow:
     def test_interactive_preserves_existing_agents_key(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Interactive setup does not remove an existing agents: key from config.yaml."""
+        """Interactive setup migrates legacy agents into crew.yaml without losing assignments."""
+        import yaml
+
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir()
         original = {
@@ -228,6 +230,6 @@ class TestSetupInteractiveFlow:
 
         assert result.exit_code == 0
         cfg = _read_config(cafe_dir)
-        # agents key should be preserved (not written to, but not deleted either)
-        assert "agents" in cfg
-        assert cfg["agents"]["pm"]["cli"] == "claude"
+        assert "agents" not in cfg
+        crew = yaml.safe_load((cafe_dir / "crew.yaml").read_text())
+        assert crew["pm"]["cli"] == "claude"

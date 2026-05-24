@@ -163,21 +163,21 @@ class TestConfigCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            # Save custom config with dict structure for agents
             custom_config = {
+                "python_bin": "python3",
                 "agents": {
                     "pm": {"name": "Roger"}
-                }
+                },
             }
             config_manager = ConfigManager()
             config_manager.save_config(custom_config)
 
-            result = runner.invoke(app, ["config", "get", "agents.pm.name"])
+            result = runner.invoke(app, ["config", "get", "python_bin"])
         finally:
             os.chdir(old_cwd)
 
         assert result.exit_code == 0
-        assert "Roger" in result.stdout
+        assert "python3" in result.stdout
 
     def test_config_get_nonexistent_key(self, tmp_path: Path) -> None:
         """測試取得不存在設定值"""
