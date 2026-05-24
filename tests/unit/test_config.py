@@ -518,6 +518,109 @@ class TestGetAllowedDirectories:
         assert manager2.get_allowed_directories() == []
 
 
+class TestAllowedDirectoryMutations:
+    """Test ConfigManager list/add/remove allowed_directories helpers."""
+
+    def test_list_allowed_directories_returns_empty_when_missing(self, tmp_path: Path) -> None:
+        """config.yaml 未含 allowed_directories 時 list 應回傳空 list。"""
+        config_dir = tmp_path / ".cafe"
+        config_dir.mkdir()
+        (config_dir / "config.yaml").write_text("agents: {}\n")
+        manager = ConfigManager(config_dir=str(config_dir))
+        manager.load_config()
+        assert manager.list_allowed_directories() == []
+
+    def test_add_allowed_directory_appends_and_persists(self, tmp_path: Path, monkeypatch) -> None:
+        """add_allowed_directory 應追加新路徑並寫入 config.yaml。"""
+        monkeypatch.chdir(tmp_path)
+        config_dir = tmp_path / ".cafe"
+        config_dir.mkdir()
+        (config_dir / "config.yaml").write_text("agents: {}\n")
+        (tmp_path / "docs").mkdir()
+
+        manager = ConfigManager(config_dir=str(config_dir))
+        manager.load_config()
+        assert manager.add_allowed_directory("docs") is True
+        assert manager.get_allowed_directories() == ["docs"]
+
+        reloaded = ConfigManager(config_dir=str(config_dir))
+        reloaded.load_config()
+        assert reloaded.get_allowed_directories() == ["docs"]
+
+    def test_add_allowed_directory_dedupes_duplicate(self, tmp_path: Path, monkeypatch) -> None:
+        """重複加入相同路徑時應回傳 False 且不產生第二筆。"""
+        monkeypatch.chdir(tmp_path)
+        config_dir = tmp_path / ".cafe"
+        config_dir.mkdir()
+        (config_dir / "config.yaml").write_text("agents: {}\nallowed_directories:\n  - src\n")
+        (tmp_path / "src").mkdir()
+
+        manager = ConfigManager(config_dir=str(config_dir))
+        manager.load_config()
+        assert manager.add_allowed_directory("src") is False
+        assert manager.get_allowed_directories() == ["src"]
+
+    def test_add_allowed_directory_dedupes_equivalent_paths(self, tmp_path: Path, monkeypatch) -> None:
+        """正規化後等價的路徑不應重複加入。"""
+        monkeypatch.chdir(tmp_path)
+        config_dir = tmp_path / ".cafe"
+        config_dir.mkdir()
+        (config_dir / "config.yaml").write_text("agents: {}\n")
+        (tmp_path / "src").mkdir()
+
+        manager = ConfigManager(config_dir=str(config_dir))
+        manager.load_config()
+        assert manager.add_allowed_directory("./src") is True
+        assert manager.add_allowed_directory("src") is False
+        assert manager.get_allowed_directories() == ["src"]
+
+    def test_add_allowed_directory_preserves_other_config_keys(self, tmp_path: Path, monkeypatch) -> None:
+        """新增 allowed directory 時應保留其他 config 鍵與順序。"""
+        monkeypatch.chdir(tmp_path)
+        config_dir = tmp_path / ".cafe"
+        config_dir.mkdir()
+        original = "agents: {}\nallowed_directories:\n  - src\nextra: kept\n"
+        (config_dir / "config.yaml").write_text(original)
+        (tmp_path / "tests").mkdir()
+
+        manager = ConfigManager(config_dir=str(config_dir))
+        manager.load_config()
+        assert manager.add_allowed_directory("tests") is True
+
+        saved = (config_dir / "config.yaml").read_text()
+        assert saved.index("agents:") < saved.index("allowed_directories:")
+        assert "extra: kept" in saved
+        assert manager.get_allowed_directories() == ["src", "tests"]
+
+    def test_remove_allowed_directory_removes_existing(self, tmp_path: Path) -> None:
+        """remove_allowed_directory 應移除既有項目並持久化。"""
+        config_dir = tmp_path / ".cafe"
+        config_dir.mkdir()
+        (config_dir / "config.yaml").write_text(
+            "agents: {}\nallowed_directories:\n  - src\n  - tests\n"
+        )
+
+        manager = ConfigManager(config_dir=str(config_dir))
+        manager.load_config()
+        assert manager.remove_allowed_directory("src") is True
+        assert manager.get_allowed_directories() == ["tests"]
+
+        reloaded = ConfigManager(config_dir=str(config_dir))
+        reloaded.load_config()
+        assert reloaded.get_allowed_directories() == ["tests"]
+
+    def test_remove_allowed_directory_noop_when_missing(self, tmp_path: Path) -> None:
+        """移除不存在的路徑時應回傳 False 且 list 不變。"""
+        config_dir = tmp_path / ".cafe"
+        config_dir.mkdir()
+        (config_dir / "config.yaml").write_text("agents: {}\nallowed_directories:\n  - src\n")
+
+        manager = ConfigManager(config_dir=str(config_dir))
+        manager.load_config()
+        assert manager.remove_allowed_directory("nope") is False
+        assert manager.get_allowed_directories() == ["src"]
+
+
 class TestValidateDirectoriesExist:
     """Test validate_directories_exist()."""
 
