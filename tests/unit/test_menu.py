@@ -408,10 +408,12 @@ class TestInteractiveMenuSettingsSubmenu:
         assert "config" in values
         assert "config_edit" in values
         assert "crew_manage" in values
+        assert "allowed_dirs_manage" in values
         assert "agent_edit" in values
         assert "template_edit" in values
         assert "back" in values
         assert "Manage crew" in names
+        assert "Manage allowed directories" in names
         assert "Manage agents" in names
 
     def test_settings_back_from_main_menu_returns_to_main(self):
@@ -576,6 +578,41 @@ class TestInteractiveMenuSettingsSubmenu:
         assert "settings_to_crew" in prompt_calls
         assert "crew" in prompt_calls
 
+    def test_settings_manage_allowed_directories_enters_submenu(self):
+        """測試從 Settings 選擇 Manage allowed directories 會進入子選單"""
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.detect_state.return_value = MenuState.NO_ACTIVE_ISSUE
+        detector.get_current_issue_name.return_value = None
+
+        menu = InteractiveMenu(state_detector=detector)
+        prompt_calls = []
+        settings_visits = 0
+        main_visits = 0
+
+        def prompt_side_effect(msg, choices, **kwargs):
+            nonlocal settings_visits, main_visits
+            values = [c["value"] for c in choices]
+            if "allowed_dirs_list" in values:
+                prompt_calls.append("allowed_dirs")
+                return "back"
+            if "allowed_dirs_manage" in values:
+                settings_visits += 1
+                if settings_visits == 1:
+                    prompt_calls.append("settings_to_allowed_dirs")
+                    return "allowed_dirs_manage"
+                return "back"
+            if "prepare" in values:
+                main_visits += 1
+                prompt_calls.append("main")
+                return "settings" if main_visits == 1 else "exit"
+            return "exit"
+
+        with patch("cafe.ui.menu.prompt_list", side_effect=prompt_side_effect):
+            menu.run()
+
+        assert "settings_to_allowed_dirs" in prompt_calls
+        assert "allowed_dirs" in prompt_calls
+
 
 class TestInteractiveMenuCrewSubmenu:
     """Tests for crew management submenu."""
@@ -731,6 +768,182 @@ class TestInteractiveMenuCrewSubmenu:
         assert "issue" in prompt_calls
         assert "crew" in prompt_calls
         assert prompt_calls.count("issue") >= 2
+
+
+class TestInteractiveMenuAllowedDirectoriesSubmenu:
+    """Tests for allowed directories management submenu."""
+
+    def test_allowed_directories_menu_shows_all_options(self):
+        """測試 allowed directories 子選單顯示所有選項"""
+        detector = MagicMock(spec=MenuStateDetector)
+        menu = InteractiveMenu(state_detector=detector)
+        choices = menu._build_allowed_directories_menu_choices()
+
+        values = [c["value"] for c in choices]
+        assert "allowed_dirs_list" in values
+        assert "allowed_dirs_add" in values
+        assert "allowed_dirs_remove" in values
+        assert "back" in values
+
+    def test_allowed_directories_menu_back_returns_to_settings(self):
+        """測試 allowed directories 子選單 Back 回到 Settings"""
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.detect_state.return_value = MenuState.NO_ACTIVE_ISSUE
+        detector.get_current_issue_name.return_value = None
+
+        menu = InteractiveMenu(state_detector=detector)
+        prompt_calls = []
+        settings_visits = 0
+        main_visits = 0
+
+        def prompt_side_effect(msg, choices, **kwargs):
+            nonlocal settings_visits, main_visits
+            values = [c["value"] for c in choices]
+            if "allowed_dirs_list" in values:
+                prompt_calls.append("allowed_dirs")
+                return "back"
+            if "allowed_dirs_manage" in values:
+                settings_visits += 1
+                prompt_calls.append("settings")
+                return "allowed_dirs_manage" if settings_visits == 1 else "back"
+            if "prepare" in values:
+                main_visits += 1
+                return "settings" if main_visits == 1 else "exit"
+            return "exit"
+
+        with patch("cafe.ui.menu.prompt_list", side_effect=prompt_side_effect):
+            menu.run()
+
+        assert prompt_calls.count("settings") >= 2
+
+    def test_allowed_directories_list_prints_entries(self):
+        """測試 List 會列出目前 allowed directories"""
+        detector = MagicMock(spec=MenuStateDetector)
+        menu = InteractiveMenu(state_detector=detector)
+        mock_config = MagicMock()
+        mock_config.list_allowed_directories.return_value = ["src", "tests"]
+
+        with patch("cafe.ui.menu.console.print") as mock_print:
+            menu._handle_allowed_directories_list(mock_config)
+
+        mock_config.list_allowed_directories.assert_called_once()
+        printed = [call.args[0] for call in mock_print.call_args_list]
+        assert "src" in printed
+        assert "tests" in printed
+
+    def test_allowed_directories_list_empty_prints_message(self):
+        """測試 List 在空 list 時顯示訊息"""
+        detector = MagicMock(spec=MenuStateDetector)
+        menu = InteractiveMenu(state_detector=detector)
+        mock_config = MagicMock()
+        mock_config.list_allowed_directories.return_value = []
+
+        with patch("cafe.ui.menu.console.print") as mock_print:
+            menu._handle_allowed_directories_list(mock_config)
+
+        assert mock_print.call_count == 1
+
+    def test_allowed_directories_add_warns_and_saves_missing_directory(self, tmp_path, monkeypatch):
+        """測試 Add 對不存在目錄顯示警告但仍呼叫 add_allowed_directory"""
+        monkeypatch.chdir(tmp_path)
+        detector = MagicMock(spec=MenuStateDetector)
+        menu = InteractiveMenu(state_detector=detector)
+        mock_config = MagicMock()
+        mock_config.add_allowed_directory.return_value = True
+
+        with (
+            patch("cafe.ui.menu.prompt_text", return_value="missing-dir"),
+            patch("cafe.ui.menu.console.print") as mock_print,
+        ):
+            menu._handle_allowed_directories_add(mock_config)
+
+        mock_config.add_allowed_directory.assert_called_once_with("missing-dir")
+        printed = [str(call.args[0]) for call in mock_print.call_args_list]
+        assert any("Warning" in text for text in printed)
+
+    def test_allowed_directories_add_duplicate_does_not_add_twice(self, tmp_path, monkeypatch):
+        """測試 Add 重複路徑時 add_allowed_directory 回傳 False"""
+        monkeypatch.chdir(tmp_path)
+        detector = MagicMock(spec=MenuStateDetector)
+        menu = InteractiveMenu(state_detector=detector)
+        mock_config = MagicMock()
+        mock_config.add_allowed_directory.return_value = False
+
+        with (
+            patch("cafe.ui.menu.prompt_text", return_value="src"),
+            patch("cafe.ui.menu.console.print"),
+        ):
+            menu._handle_allowed_directories_add(mock_config)
+
+        mock_config.add_allowed_directory.assert_called_once_with("src")
+
+    def test_allowed_directories_remove_empty_prints_message(self):
+        """測試 Remove 在空 list 時顯示訊息且不呼叫 prompt_list 選 entry"""
+        detector = MagicMock(spec=MenuStateDetector)
+        menu = InteractiveMenu(state_detector=detector)
+        mock_config = MagicMock()
+        mock_config.list_allowed_directories.return_value = []
+
+        with (
+            patch("cafe.ui.menu.prompt_list") as mock_prompt,
+            patch("cafe.ui.menu.console.print") as mock_print,
+        ):
+            menu._handle_allowed_directories_remove(mock_config)
+
+        mock_prompt.assert_not_called()
+        assert mock_print.call_count == 1
+
+    def test_allowed_directories_menu_without_config_shows_message(self, tmp_path, monkeypatch):
+        """測試未初始化專案時進入 allowed directories 子選單會顯示提示且不拋例外"""
+        monkeypatch.chdir(tmp_path)
+        menu = InteractiveMenu()
+
+        with (
+            patch("cafe.ui.menu.ConfigManager") as mock_config_cls,
+            patch("cafe.ui.menu.console.print") as mock_print,
+        ):
+            menu._show_allowed_directories_menu()
+
+        mock_config_cls.assert_not_called()
+        assert mock_print.call_count == 1
+
+    def test_allowed_directories_menu_without_config_returns_to_settings(self, tmp_path, monkeypatch):
+        """測試未初始化專案時 Settings → Manage allowed directories 可安全返回"""
+        monkeypatch.chdir(tmp_path)
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.detect_state.return_value = MenuState.NOT_INITIALIZED
+        detector.get_current_issue_name.return_value = None
+
+        menu = InteractiveMenu(state_detector=detector)
+
+        with (
+            patch("cafe.ui.menu.prompt_list") as mock_prompt,
+            patch("cafe.ui.menu.console.print") as mock_print,
+        ):
+            mock_prompt.side_effect = ["settings", "allowed_dirs_manage", "back", "exit"]
+            menu.run()
+
+        for call in mock_prompt.call_args_list:
+            values = [c["value"] for c in call[0][1]]
+            assert "allowed_dirs_list" not in values
+
+        printed = [str(call.args[0]) for call in mock_print.call_args_list]
+        assert any("init" in text.lower() for text in printed)
+
+    def test_allowed_directories_remove_deletes_selected_entry(self):
+        """測試 Remove 會移除使用者選擇的 entry"""
+        detector = MagicMock(spec=MenuStateDetector)
+        menu = InteractiveMenu(state_detector=detector)
+        mock_config = MagicMock()
+        mock_config.list_allowed_directories.return_value = ["src", "tests"]
+
+        with (
+            patch("cafe.ui.menu.prompt_list", return_value="src"),
+            patch("cafe.ui.menu.console.print"),
+        ):
+            menu._handle_allowed_directories_remove(mock_config)
+
+        mock_config.remove_allowed_directory.assert_called_once_with("src")
 
 
 # ---------------------------------------------------------------------------
