@@ -893,6 +893,43 @@ class TestInteractiveMenuAllowedDirectoriesSubmenu:
         mock_prompt.assert_not_called()
         assert mock_print.call_count == 1
 
+    def test_allowed_directories_menu_without_config_shows_message(self, tmp_path, monkeypatch):
+        """測試未初始化專案時進入 allowed directories 子選單會顯示提示且不拋例外"""
+        monkeypatch.chdir(tmp_path)
+        menu = InteractiveMenu()
+
+        with (
+            patch("cafe.ui.menu.ConfigManager") as mock_config_cls,
+            patch("cafe.ui.menu.console.print") as mock_print,
+        ):
+            menu._show_allowed_directories_menu()
+
+        mock_config_cls.assert_not_called()
+        assert mock_print.call_count == 1
+
+    def test_allowed_directories_menu_without_config_returns_to_settings(self, tmp_path, monkeypatch):
+        """測試未初始化專案時 Settings → Manage allowed directories 可安全返回"""
+        monkeypatch.chdir(tmp_path)
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.detect_state.return_value = MenuState.NOT_INITIALIZED
+        detector.get_current_issue_name.return_value = None
+
+        menu = InteractiveMenu(state_detector=detector)
+
+        with (
+            patch("cafe.ui.menu.prompt_list") as mock_prompt,
+            patch("cafe.ui.menu.console.print") as mock_print,
+        ):
+            mock_prompt.side_effect = ["settings", "allowed_dirs_manage", "back", "exit"]
+            menu.run()
+
+        for call in mock_prompt.call_args_list:
+            values = [c["value"] for c in call[0][1]]
+            assert "allowed_dirs_list" not in values
+
+        printed = [str(call.args[0]) for call in mock_print.call_args_list]
+        assert any("init" in text.lower() for text in printed)
+
     def test_allowed_directories_remove_deletes_selected_entry(self):
         """測試 Remove 會移除使用者選擇的 entry"""
         detector = MagicMock(spec=MenuStateDetector)

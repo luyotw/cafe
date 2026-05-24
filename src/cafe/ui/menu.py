@@ -367,6 +367,10 @@ class InteractiveMenu:
 
         This menu loops until the user selects "Back".
         """
+        if not Path(".cafe/config.yaml").exists():
+            console.print("[yellow]Project not initialized. Run 'cafe init' first.[/yellow]")
+            return
+
         config_manager = ConfigManager()
         while True:
             choices = self._build_allowed_directories_menu_choices()
