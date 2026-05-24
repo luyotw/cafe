@@ -1,7 +1,7 @@
 """測試 plan phase checklist 的 XML 問答指令支援"""
 
 from pathlib import Path
-from cafe.utils.checklist_generator import generate_plan_checklist
+from cafe.skills.checklist_composer import generate_plan_checklist
 
 
 def test_generate_plan_checklist_includes_xml_instruction_when_path_provided(tmp_path):

@@ -31,7 +31,7 @@ from cafe.core.resume_user_input import (
     prior_cli_and_session,
     resolve_resume_user_input,
 )
-from cafe.utils.checklist_generator import (
+from cafe.skills.checklist_composer import (
     generate_develop_checklist,
     generate_plan_checklist,
     generate_pr_checklist,

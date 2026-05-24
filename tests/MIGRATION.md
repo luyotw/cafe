@@ -18,7 +18,7 @@ Production spec already runs via `BlackboardWorkflowRuntime` + `GenericPhase` + 
 | `test_spec_interactive_qa_e2e.py` | XML parse, checkbox, `interactive_qa_flow` | `tests/unit/test_questions_schema.py`, `tests/unit/test_native_user_input_hook.py` |
 | `test_spec_phase_sync_github_config.py` | `issue.yaml` `spec.sync_github` | `tests/unit/test_issue_yaml_config.py`, `tests/unit/test_resolve_sync_github.py` |
 | `test_spec_github_sync.py` | No phase-internal confirmed sync | `tests/unit/test_skill_sync_github_script.py`, runtime baton hooks |
-| `test_spec_prompt_with_images.py` | Images checklist line | `tests/unit/test_checklist_generator.py` (`SPEC_EXECUTION_STEPS_ITERATION_1`) |
+| `test_spec_prompt_with_images.py` | Images checklist line | `tests/unit/test_skill_checklist_composer.py` (`spec_first/execution_steps_iteration_1.md`) |
 | `test_spec_image_download.py` | Image URL download | `tests/unit/test_image_download.py` |
 | `test_spec_interactive_qa_e2e.py` | Spec clarification pause → resume → plan | `tests/integration/test_spec_clarification_runtime.py`, `tests/integration/test_workflow_e2e.py` |
 | `test_context_session_id_update.py` | `iteration.json` session_id | `tests/unit/test_context_session_id_update.py` (`GenericWorkflowStepExecutor`) |
@@ -28,7 +28,7 @@ Production spec already runs via `BlackboardWorkflowRuntime` + `GenericPhase` + 
 
 | Behavior | Rationale |
 | --- | --- |
-| `SpecPhase._generate_local_prompt` `**Images:**` block | Runtime spec uses skill checklist (`execution_steps_iteration_1.md`) + `checklist_templates.SPEC_EXECUTION_STEPS_ITERATION_1`; `GenericPhase` does not inject a separate images prompt block. |
+| `SpecPhase._generate_local_prompt` `**Images:**` block | Runtime spec uses skill checklist (`spec_first/references/execution_steps_iteration_1.md`); `GenericPhase` does not inject a separate images prompt block. |
 | `SpecPhase._fetch_github_issue` image download to `spec/images/` | `UserInputCollector._fetch_github_issue` discards `image_urls`; download was not on the production path. Image utilities remain covered in `test_image_download.py`. |
 | `SpecPhase._prepare_user_input_for_iteration` review/display/spec-file guards | Replaced by `UserInputCollector` + blackboard; covered in `test_native_user_input_hook.py` and workflow e2e tests. |
 | `SpecPhase._ensure_spec_file_written` mock-mode stripping | Spec-phase-only helper; not used by playbook runtime. |
@@ -81,12 +81,12 @@ Production develop already runs via `BlackboardWorkflowRuntime` + `GenericPhase`
 
 | Source | Behavior | New location |
 | --- | --- | --- |
-| `test_develop_phase_prompt.py` | Correction checklist `feedback_file_path` | `tests/unit/test_checklist_generator.py`, `tests/unit/test_generic_workflow_step.py` |
+| `test_develop_phase_prompt.py` | Correction checklist `feedback_file_path` | `tests/unit/test_skill_checklist_composer.py`, `tests/unit/test_generic_workflow_step.py` |
 | `test_develop_clarification.py` | `need_clarification` + questions.xml | `tests/unit/test_phase_review_mixin.py`, `tests/integration/test_develop_clarification_runtime.py` |
 | `test_develop_clarification.py` | `questions_xml_file` in checklist | `tests/unit/test_generic_workflow_step.py` |
 | `test_develop_no_changes_needed.py` | Reasoning gate + user decision | `tests/unit/test_no_changes_needed_handler.py`, `tests/unit/test_native_user_input_hook.py` |
 | `test_develop_phase_no_changes_chat.py` | Agree/disagree/chat UI | `tests/unit/test_no_changes_needed_handler.py` |
-| `test_develop_no_changes_needed.py` | Checklist `output_file` / `no_changes_needed` | `tests/unit/test_checklist_generator.py` |
+| `test_develop_no_changes_needed.py` | Checklist `output_file` / `no_changes_needed` | `tests/unit/test_skill_checklist_composer.py` |
 | `test_context_session_id_update.py` | develop `iteration.json` session_id | `tests/unit/test_context_session_id_update.py` (`GenericWorkflowStepExecutor`) |
 | `test_checklist_validation_status_code.py` | develop checklist gate | `tests/unit/test_checklist_validation_status_code.py` |
 | `test_workflow_e2e.py` | develop self-loop / handoff | `tests/integration/test_workflow_e2e.py`, `tests/integration/test_develop_clarification_runtime.py` |

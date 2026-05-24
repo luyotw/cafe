@@ -1,32 +1,29 @@
 """Tests for legacy phase/checklist integration with SkillLoader."""
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from cafe.skills.bridge import load_skill_body, try_load_skill_body, try_load_skill_reference
+from cafe.skills.checklist_composer import generate_plan_checklist
 from cafe.skills.exceptions import SkillDiscoveryError
-from cafe.utils.checklist_generator import generate_plan_checklist
 
 
-def test_generate_plan_checklist_prefers_skill_reference(tmp_path: Path) -> None:
+def test_generate_plan_checklist_uses_skill_references(tmp_path: Path) -> None:
     checklist_path = tmp_path / "checklist.md"
 
-    with patch(
-        "cafe.utils.checklist_generator.try_load_skill_reference",
-        return_value="## Checklist\n\n[ ] Skill-backed checklist item\n",
-    ):
-        generate_plan_checklist(
-            agent_name="Nick",
-            plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
-            spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
-            checklist_file_path=checklist_path,
-            template_mode="manual",
-        )
+    generate_plan_checklist(
+        agent_name="Nick",
+        plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
+        spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+        checklist_file_path=checklist_path,
+        template_mode="manual",
+    )
 
     content = checklist_path.read_text(encoding="utf-8")
-    assert "Skill-backed checklist item" in content
+    assert "planning, not implementation" in content
+    assert ".cafe/issues/test/plan/iteration_001/output.md" in content
 
 
 def test_load_skill_body_prefers_project_override(tmp_path: Path, monkeypatch) -> None:
@@ -41,9 +38,6 @@ def test_load_skill_body_prefers_project_override(tmp_path: Path, monkeypatch) -
     body = load_skill_body("plan")
 
     assert "Custom project plan skill" in body
-
-
-# --- Task 3: Narrowed exception handling ---
 
 
 def test_try_load_skill_body_returns_empty_string_on_skill_discovery_error() -> None:
