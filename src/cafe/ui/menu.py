@@ -210,6 +210,7 @@ class InteractiveMenu:
             {"name": "View config", "value": "config"},
             {"name": "Edit config", "value": "config_edit"},
             {"name": "Manage crew", "value": "crew_manage"},
+            {"name": "Manage allowed directories", "value": "allowed_dirs_manage"},
             {"name": "Manage agents", "value": "agent_edit"},
             {"name": "Manage templates", "value": "template_edit"},
             {"name": "Back", "value": "back"},
@@ -225,6 +226,19 @@ class InteractiveMenu:
             {"name": "List crew", "value": "crew_list"},
             {"name": "Set primary CLI", "value": "crew_set_primary"},
             {"name": "Set fallback CLI", "value": "crew_set_fallback"},
+            {"name": "Back", "value": "back"},
+        ]
+
+    def _build_allowed_directories_menu_choices(self) -> List[Dict[str, Any]]:
+        """Build the list of choices for the allowed directories submenu.
+
+        Returns:
+            List of InquirerPy choice dicts with "name" and "value" keys
+        """
+        return [
+            {"name": "List", "value": "allowed_dirs_list"},
+            {"name": "Add", "value": "allowed_dirs_add"},
+            {"name": "Remove", "value": "allowed_dirs_remove"},
             {"name": "Back", "value": "back"},
         ]
 
@@ -322,6 +336,8 @@ class InteractiveMenu:
                 _run_command(["config", "edit"])
             elif selection == "crew_manage":
                 self._show_crew_menu()
+            elif selection == "allowed_dirs_manage":
+                self._show_allowed_directories_menu()
             elif selection == "agent_edit":
                 _run_command(["agent", "edit"])
             elif selection == "template_edit":
@@ -345,6 +361,70 @@ class InteractiveMenu:
                 _run_command(["crew", "set-primary"])
             elif selection == "crew_set_fallback":
                 _run_command(["crew", "set-fallback"])
+
+    def _show_allowed_directories_menu(self) -> None:
+        """Display the allowed directories submenu and handle the user's selection.
+
+        This menu loops until the user selects "Back".
+        """
+        config_manager = ConfigManager()
+        while True:
+            choices = self._build_allowed_directories_menu_choices()
+            selection = prompt_list("CAFE  Manage allowed directories", choices)
+
+            if selection == "back":
+                return
+
+            if selection == "allowed_dirs_list":
+                self._handle_allowed_directories_list(config_manager)
+            elif selection == "allowed_dirs_add":
+                self._handle_allowed_directories_add(config_manager)
+            elif selection == "allowed_dirs_remove":
+                self._handle_allowed_directories_remove(config_manager)
+
+    def _handle_allowed_directories_list(self, config_manager: ConfigManager) -> None:
+        """Print current allowed directories."""
+        entries = config_manager.list_allowed_directories()
+        if not entries:
+            console.print("[yellow]No allowed directories configured.[/yellow]")
+            return
+        for entry in entries:
+            console.print(entry)
+
+    def _handle_allowed_directories_add(self, config_manager: ConfigManager) -> None:
+        """Prompt for a directory path and append it to allowed_directories."""
+        path = prompt_text("Directory path:")
+        if not path.strip():
+            return
+
+        check_path = Path(path.strip()).expanduser()
+        try:
+            check_path = check_path.resolve()
+        except (OSError, RuntimeError):
+            pass
+        if not check_path.is_dir():
+            console.print("[yellow]Warning: directory does not exist on disk; saving anyway.[/yellow]")
+
+        if config_manager.add_allowed_directory(path):
+            console.print("[green]Allowed directory added.[/green]")
+        else:
+            console.print("[yellow]Directory already in allowed list.[/yellow]")
+
+    def _handle_allowed_directories_remove(self, config_manager: ConfigManager) -> None:
+        """Prompt for an existing directory entry and remove it."""
+        entries = config_manager.list_allowed_directories()
+        if not entries:
+            console.print("[yellow]No allowed directories to remove.[/yellow]")
+            return
+
+        choices = [{"name": entry, "value": entry} for entry in entries]
+        choices.append({"name": "Back", "value": "back"})
+        selection = prompt_list("Select directory to remove:", choices)
+        if selection == "back":
+            return
+
+        config_manager.remove_allowed_directory(selection)
+        console.print("[green]Allowed directory removed.[/green]")
 
     def _get_available_agents(self) -> List[Dict[str, str]]:
         """Get all configured agents.
