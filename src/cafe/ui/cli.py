@@ -14,7 +14,6 @@ from typer.core import TyperGroup
 from cafe.ui.inquirer_prompts import prompt_checkbox, prompt_confirm, prompt_list, prompt_multiline, prompt_text  # noqa: F401 — backward-compat re-export for test patch targets
 from cafe.ui.menu import InteractiveMenu
 from cafe.ui.commands import lifecycle as lifecycle_commands
-from cafe.ui.commands import phases_legacy as phases_legacy_commands
 from cafe.ui.commands import issues as issues_commands
 from cafe.ui.commands import templates as template_commands
 from cafe.ui.commands import catalog as catalog_commands
@@ -228,7 +227,7 @@ class DynamicStepTyperGroup(TyperGroup):
     """Typer group that resolves playbook-defined step commands on demand."""
 
     def get_command(self, ctx: click.Context, cmd_name: str) -> Optional[click.Command]:
-        if cmd_name == "dev":
+        if cmd_name == "dev" or cmd_name in ALL_PHASES:
             return None
         command = super().get_command(ctx, cmd_name)
         if command is not None:
@@ -238,8 +237,9 @@ class DynamicStepTyperGroup(TyperGroup):
     def list_commands(self, ctx: click.Context) -> List[str]:
         commands = [command for command in super().list_commands(ctx) if command != "dev"]
         for step_name in _load_playbook_step_names(_resolve_runtime_playbook_name()):
-            if step_name not in commands:
-                commands.append(step_name)
+            if step_name in ALL_PHASES or step_name in commands:
+                continue
+            commands.append(step_name)
         return sorted(commands)
 
 app = typer.Typer(
@@ -696,13 +696,6 @@ app.command()(lifecycle_commands.restore)
 app.command()(lifecycle_commands.reset)
 
 
-app.command(hidden=True)(phases_legacy_commands.spec)
-app.command(hidden=True)(phases_legacy_commands.plan)
-app.command(hidden=True)(phases_legacy_commands.develop)
-app.command(hidden=True)(phases_legacy_commands.review)
-app.command(hidden=True)(phases_legacy_commands.pr)
-
-
 app.command()(issues_commands.config)
 app.command(name="ls")(issues_commands.list_issues)
 app.command(name="rm")(issues_commands.remove_issue)
@@ -721,12 +714,6 @@ prepare = lifecycle_commands.prepare
 close = lifecycle_commands.close
 restore = lifecycle_commands.restore
 reset = lifecycle_commands.reset
-
-spec = phases_legacy_commands.spec
-plan = phases_legacy_commands.plan
-develop = phases_legacy_commands.develop
-review = phases_legacy_commands.review
-pr = phases_legacy_commands.pr
 
 config = issues_commands.config
 list_issues = issues_commands.list_issues
