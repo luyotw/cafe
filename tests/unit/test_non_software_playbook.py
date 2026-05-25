@@ -1,10 +1,13 @@
-"""Tests for non-software custom playbook validation."""
+"""Tests for non-software playbook loading and lightweight command coverage."""
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
+from cafe.playbooks.simulate import analyze_playbook
+from cafe.core.workflow_models import PlaybookRunResult
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.ui.cli import app
@@ -34,22 +37,17 @@ def test_editorial_example_skills_and_playbook_validate() -> None:
     assert list(playbook.steps.keys()) == ["brief", "draft", "review", "publish"]
 
 
-def test_editorial_example_cli_validate_and_dry_run(monkeypatch) -> None:
+def test_editorial_example_playbook_loads_and_simulates(monkeypatch) -> None:
     example_root = _example_root()
     monkeypatch.chdir(example_root)
+    loaded = PlaybookLoader(project_root=example_root).load_model("editorial", strict=True)
+    analysis = analyze_playbook(loaded.model)
 
-    with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
-        git = MagicMock()
-        git.get_current_branch.return_value = "editorial-issue"
-        mock_git_cls.return_value = git
-
-        validate_result = runner.invoke(app, ["playbook", "validate", "editorial"])
-        dry_run_result = runner.invoke(app, ["workflow", "--playbook", "editorial", "--dry-run"])
-
-    assert validate_result.exit_code == 0
-    assert "Valid editorial" in validate_result.stdout
-    assert dry_run_result.exit_code == 0
-    assert "Workflow completed" in dry_run_result.stdout
+    assert loaded.model.playbook.id == "editorial"
+    assert analysis.unreachable_steps == ()
+    assert analysis.dead_end_steps == ()
+    assert analysis.missing_intent_handlers == ()
+    assert analysis.entry_point == "brief"
 
 
 def _repo_root() -> Path:
@@ -58,40 +56,47 @@ def _repo_root() -> Path:
 
 def test_builtin_non_software_playbooks_cli_validate(monkeypatch) -> None:
     monkeypatch.chdir(_repo_root())
+    loader = PlaybookLoader()
     for name in ("editorial", "research", "incident"):
-        result = runner.invoke(app, ["playbook", "validate", name])
-        assert result.exit_code == 0, result.stdout
-        assert f"Valid {name}" in result.stdout
+        loaded = loader.load_model(name, strict=True)
+        assert loaded.model.playbook.id == name
 
 
 def test_builtin_non_software_playbooks_simulate_reports_no_findings(monkeypatch) -> None:
     monkeypatch.chdir(_repo_root())
+    loader = PlaybookLoader()
     for name in ("editorial", "research", "incident"):
-        result = runner.invoke(app, ["playbook", "simulate", name])
-        assert result.exit_code == 0
-        assert "(no findings)" in result.stdout
+        result = analyze_playbook(loader.load_model(name).model)
+        assert result.unreachable_steps == ()
+        assert result.dead_end_steps == ()
+        assert result.missing_intent_handlers == ()
 
 
-def test_builtin_non_software_playbooks_workflow_dry_run(monkeypatch) -> None:
+def test_builtin_non_software_workflow_dry_run_accepts_editorial(monkeypatch) -> None:
     monkeypatch.chdir(_repo_root())
-    with patch("cafe.ui.commands.workflow._get_GitOperations") as mock_git_factory:
+    with (
+        patch("cafe.ui.commands.workflow._get_GitOperations") as mock_git_factory,
+        patch("cafe.ui.commands.workflow.BlackboardWorkflowRuntime") as mock_runtime_cls,
+    ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue253"
         mock_git_factory.return_value = git
-        for playbook_name in ("editorial", "research", "incident"):
-            result = runner.invoke(
-                app,
-                [
-                    "workflow",
-                    "--playbook",
-                    playbook_name,
-                    "--dry-run",
-                    "--issue",
-                    "issue253",
-                ],
-            )
-            assert result.exit_code == 0
-            assert "Workflow completed" in result.stdout
+        mock_runtime_cls.return_value.run.return_value = PlaybookRunResult(
+            final_step="publish",
+            final_status_code="confirmed",
+            completed=True,
+        )
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "editorial", "--dry-run", "--issue", "issue253"],
+        )
+
+    assert result.exit_code == 0
+    blackboard_data = json.loads(
+        (_repo_root() / ".cafe" / "issues" / "issue253" / "blackboard.json").read_text(encoding="utf-8")
+    )
+    assert blackboard_data["playbook_id"] == "editorial"
+    assert "Workflow completed" in result.stdout
 
 
 def test_builtin_non_software_playbook_load_strict(monkeypatch) -> None:

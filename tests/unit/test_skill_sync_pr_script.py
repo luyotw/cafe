@@ -1,6 +1,9 @@
 import os
 import subprocess
 from pathlib import Path
+from unittest.mock import Mock
+
+from cafe.utils.github import post_pr_todo_list
 
 
 def _write_fake_git(bin_dir: Path) -> None:
@@ -75,61 +78,31 @@ def _run_sync_pr(project_root: Path, output_file: Path, env: dict[str, str]) -> 
     )
 
 
-def test_sync_pr_posts_todo_comment_only_when_all_items_checked(tmp_path: Path) -> None:
-    project_root = Path(__file__).resolve().parents[2]
+def test_post_pr_todo_list_posts_comment_only_when_all_items_checked(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
-    pr_iter = issue_dir / "pr" / "iteration_010"
     todo_iter = issue_dir / "pr" / "iteration_009"
-    pr_iter.mkdir(parents=True, exist_ok=True)
     todo_iter.mkdir(parents=True, exist_ok=True)
-
-    output_file = pr_iter / "output.md"
-    output_file.write_text("# PR title\n\nBody content\n", encoding="utf-8")
     (todo_iter / "user_input.md").write_text("review comments", encoding="utf-8")
     (todo_iter / "output.md").write_text("## Todo List\n- [x] done\n", encoding="utf-8")
-    (issue_dir / "issue.yaml").write_text("pr:\n  post_todo_list: true\n", encoding="utf-8")
 
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    log_file = tmp_path / "gh.log"
-    _write_fake_git(bin_dir)
-    _write_fake_gh(bin_dir, log_file)
+    github_ops = Mock()
 
-    env = os.environ.copy()
-    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    post_pr_todo_list(issue_dir=issue_dir, pr_number="77", github_ops=github_ops)
 
-    result = _run_sync_pr(project_root, output_file, env)
-    assert result.returncode == 0
-    assert "comment:" in log_file.read_text(encoding="utf-8")
+    github_ops.add_pr_comment.assert_called_once()
 
 
-def test_sync_pr_skips_todo_comment_when_items_unchecked(tmp_path: Path) -> None:
-    project_root = Path(__file__).resolve().parents[2]
+def test_post_pr_todo_list_skips_comment_when_items_unchecked(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
-    pr_iter = issue_dir / "pr" / "iteration_010"
     todo_iter = issue_dir / "pr" / "iteration_009"
-    pr_iter.mkdir(parents=True, exist_ok=True)
     todo_iter.mkdir(parents=True, exist_ok=True)
-
-    output_file = pr_iter / "output.md"
-    output_file.write_text("# PR title\n\nBody content\n", encoding="utf-8")
     (todo_iter / "user_input.md").write_text("review comments", encoding="utf-8")
     (todo_iter / "output.md").write_text("## Todo List\n- [ ] pending\n", encoding="utf-8")
-    (issue_dir / "issue.yaml").write_text("pr:\n  post_todo_list: true\n", encoding="utf-8")
+    github_ops = Mock()
 
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    log_file = tmp_path / "gh.log"
-    _write_fake_git(bin_dir)
-    _write_fake_gh(bin_dir, log_file)
+    post_pr_todo_list(issue_dir=issue_dir, pr_number="77", github_ops=github_ops)
 
-    env = os.environ.copy()
-    env["PATH"] = f"{bin_dir}:{env['PATH']}"
-
-    result = _run_sync_pr(project_root, output_file, env)
-    assert result.returncode == 0
-    if log_file.exists():
-        assert "comment:" not in log_file.read_text(encoding="utf-8")
+    github_ops.add_pr_comment.assert_not_called()
 
 def test_builtin_playbooks_publish_pr_through_sync_hook() -> None:
     project_root = Path(__file__).resolve().parents[2]

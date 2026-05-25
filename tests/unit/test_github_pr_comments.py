@@ -299,10 +299,12 @@ class TestGetAllPRComments:
         )
 
         with patch('cafe.utils.github.get_pr_comments') as mock_review, \
-             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline:
+             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline, \
+             patch('cafe.utils.github.get_pr_review_body_comments') as mock_review_body:
 
             mock_review.return_value = [review_comment]
             mock_timeline.return_value = [timeline_comment]
+            mock_review_body.return_value = []
 
             comments = get_all_pr_comments(123)
 
@@ -330,12 +332,14 @@ class TestGetAllPRComments:
         )
 
         with patch('cafe.utils.github.get_pr_comments') as mock_review, \
-             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline:
+             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline, \
+             patch('cafe.utils.github.get_pr_review_body_comments') as mock_review_body:
 
             # Review comments fail
             mock_review.side_effect = GitHubError("GraphQL API error")
             # Timeline comments succeed
             mock_timeline.return_value = [timeline_comment]
+            mock_review_body.return_value = []
 
             comments = get_all_pr_comments(123)
 
@@ -361,12 +365,14 @@ class TestGetAllPRComments:
         )
 
         with patch('cafe.utils.github.get_pr_comments') as mock_review, \
-             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline:
+             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline, \
+             patch('cafe.utils.github.get_pr_review_body_comments') as mock_review_body:
 
             # Review comments succeed
             mock_review.return_value = [review_comment]
             # Timeline comments fail
             mock_timeline.side_effect = ValueError("PR not found")
+            mock_review_body.return_value = []
 
             comments = get_all_pr_comments(123)
 
@@ -381,11 +387,13 @@ class TestGetAllPRComments:
         預期：拋出 GitHubError 異常
         """
         with patch('cafe.utils.github.get_pr_comments') as mock_review, \
-             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline:
+             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline, \
+             patch('cafe.utils.github.get_pr_review_body_comments') as mock_review_body:
 
             # Both fail
             mock_review.side_effect = GitHubError("GraphQL API error")
             mock_timeline.side_effect = ValueError("PR not found")
+            mock_review_body.side_effect = GitHubError("Review body API error")
 
             with pytest.raises(GitHubError, match="Failed to get any comments"):
                 get_all_pr_comments(123)

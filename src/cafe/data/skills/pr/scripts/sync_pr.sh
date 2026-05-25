@@ -97,9 +97,7 @@ ensure_clean_worktree() {
 
 post_todo_comment() {
   local pr_number="$1"
-  local issue_dir issue_yaml
-  local todo_result todo_action todo_body user_input_path
-  local post_enabled is_todo has_unchecked
+  local issue_dir todo_result todo_action comment_body
 
   issue_dir=$("$PYTHON_BIN" - "$OUTPUT_FILE" <<'PY'
 from pathlib import Path
@@ -108,39 +106,24 @@ out = Path(sys.argv[1]).resolve()
 print(out.parents[2])
 PY
 )
-  issue_yaml="$issue_dir/issue.yaml"
-
-  post_enabled=$("$PYTHON_BIN" - "$issue_yaml" <<'PY'
-import sys
-from pathlib import Path
-import yaml
-
-issue_yaml = Path(sys.argv[1])
-if not issue_yaml.exists():
-    print("true")
-    raise SystemExit(0)
-data = yaml.safe_load(issue_yaml.read_text(encoding="utf-8")) or {}
-pr_cfg = data.get("pr") or {}
-value = pr_cfg.get("post_todo_list")
-if value is None:
-    print("true")
-else:
-    print("true" if bool(value) else "false")
-PY
-)
-
-  if [[ "$post_enabled" != "true" ]]; then
-    echo "skipped: post_todo_list_disabled" >&2
-    return 0
-  fi
 
   todo_result=$("$PYTHON_BIN" - "$issue_dir" <<'PY'
 from pathlib import Path
 import json
 import re
 import sys
+import yaml
 
 issue_dir = Path(sys.argv[1])
+issue_yaml = issue_dir / "issue.yaml"
+if issue_yaml.exists():
+    data = yaml.safe_load(issue_yaml.read_text(encoding="utf-8")) or {}
+    pr_cfg = data.get("pr") or {}
+    post_enabled = pr_cfg.get("post_todo_list")
+    if post_enabled is not None and not bool(post_enabled):
+        print(json.dumps({"action": "skipped", "reason": "post_todo_list_disabled"}))
+        raise SystemExit(0)
+
 pr_dir = issue_dir / "pr"
 if not pr_dir.exists():
     print(json.dumps({"action": "skipped", "reason": "pr_dir_missing"}))
@@ -163,8 +146,7 @@ for iter_dir in sorted(pr_dir.glob("iteration_*"), reverse=True):
         raise SystemExit(0)
     print(json.dumps({
         "action": "ready",
-        "todo_content": todo_content,
-        "user_input_path": str(user_input),
+        "comment_body": f"> 📋 Original review comments: `{user_input}`\n\n{todo_content}",
     }))
     raise SystemExit(0)
 
@@ -178,16 +160,8 @@ PY
     return 0
   fi
 
-  todo_body=$("$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin).get("todo_content",""))' <<<"$todo_result")
-  user_input_path=$("$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin).get("user_input_path",""))' <<<"$todo_result")
-
-  gh pr comment "$pr_number" --body "$("$PYTHON_BIN" - "$todo_body" "$user_input_path" <<'PY'
-import sys
-todo_content = sys.argv[1]
-user_input_path = sys.argv[2]
-print(f"> 📋 Original review comments: `{user_input_path}`\n\n{todo_content}")
-PY
-)"
+  comment_body=$("$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin).get("comment_body",""))' <<<"$todo_result")
+  gh pr comment "$pr_number" --body "$comment_body"
   echo "posted: todo_comment" >&2
 }
 
@@ -204,15 +178,14 @@ fi
 EXISTING_PR=$(gh pr view --json number,url,state,baseRefName 2>/dev/null || echo "")
 
 if [[ -n "$EXISTING_PR" ]]; then
-  PR_STATE=$(echo "$EXISTING_PR" | "$PYTHON_BIN" -c "import sys,json; d=json.load(sys.stdin); print(d['state'])")
+  IFS=$'\t' read -r PR_STATE PR_NUMBER PR_URL PR_BASE < <(
+    echo "$EXISTING_PR" | "$PYTHON_BIN" -c "import sys,json; d=json.load(sys.stdin); print('\t'.join([d.get('state',''), str(d.get('number','')), d.get('url',''), d.get('baseRefName','')]))"
+  )
 else
   PR_STATE=""
 fi
 
 if [[ "$PR_STATE" == "OPEN" ]]; then
-  PR_NUMBER=$(echo "$EXISTING_PR" | "$PYTHON_BIN" -c "import sys,json; d=json.load(sys.stdin); print(d['number'])")
-  PR_URL=$(echo "$EXISTING_PR" | "$PYTHON_BIN" -c "import sys,json; d=json.load(sys.stdin); print(d['url'])")
-  PR_BASE=$(echo "$EXISTING_PR" | "$PYTHON_BIN" -c "import sys,json; d=json.load(sys.stdin); print(d.get('baseRefName', ''))")
   echo "Updating PR #$PR_NUMBER..." >&2
   gh pr edit "$PR_NUMBER" --title "$TITLE" --body "$BODY" >&2
   post_todo_comment "$PR_NUMBER"
