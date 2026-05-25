@@ -263,7 +263,12 @@ class BlackboardWorkflowRuntime:
         return None
 
     def _load_agent_written_handoff_contract(self, *, current_step: str):
-        """Load and normalize a baton written by a just-finished agent step."""
+        """Load and normalize a baton written by a just-finished agent step.
+
+        ``allow_legacy_text=True`` is kept so that sessions started by older
+        builds remain resumable. Production agents must always write structured
+        JSON batons to ``next_step.txt``; the legacy fallback is for safety only.
+        """
         contract = self.blackboard_store.load_handoff_contract(
             self.blackboard,
             allowed_steps=list(self.steps.keys()),
