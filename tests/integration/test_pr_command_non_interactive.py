@@ -12,6 +12,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
+from cafe.core.blackboard import HandoffIntent, HandoffOwner
+from cafe.core.workflow_models import StepExecutionResult
 from cafe.ui.cli import app
 from cafe.utils.pr import parse_pr_body, parse_pr_title
 
@@ -92,8 +94,8 @@ def test_sync_pr_create_uses_parsed_title_and_body(tmp_path: Path) -> None:
     assert any("pr create" in line and "Draft Feature" in line for line in log_lines)
 
 
-def test_cafe_pr_no_interactive_routes_through_runtime_alias(tmp_path: Path, monkeypatch) -> None:
-    """Legacy cafe pr delegates to workflow runtime alias (not PRPhase)."""
+def test_cafe_workflow_pr_non_interactive_routes_through_runtime(tmp_path: Path, monkeypatch) -> None:
+    """Non-interactive PR step runs via cafe workflow --start-step pr --execute."""
     monkeypatch.chdir(tmp_path)
     from tests.conftest import create_minimal_config
 
@@ -106,21 +108,47 @@ def test_cafe_pr_no_interactive_routes_through_runtime_alias(tmp_path: Path, mon
     plan_dir.mkdir(parents=True)
     (spec_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
     (plan_dir / "output.md").write_text("# Plan\n", encoding="utf-8")
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "playbook_id": "default",
+                "current_step": "pr",
+                "artifacts": {},
+                "events": [],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
 
-    alias_result = {
-        "status_code": "confirmed",
-        "iterations": 1,
-        "output_file": str(issue_dir / "pr" / "iteration_001" / "output.md"),
-        "completed": True,
-    }
+    pr_output = issue_dir / "pr" / "iteration_001" / "output.md"
+    pr_output.parent.mkdir(parents=True, exist_ok=True)
 
-    with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
+    class FakeExecutor:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+            assert step_name == "pr"
+            pr_output.write_text("# PR\n\n## Summary\nDone\n", encoding="utf-8")
+            return StepExecutionResult(
+                response="confirmed",
+                artifacts={"pr": str(pr_output)},
+                status_code="confirmed",
+                handoff_owner=HandoffOwner.DONE,
+                handoff_intent=HandoffIntent.WORKFLOW_COMPLETE,
+            )
+
+    with patch("cafe.ui.cli.GitOperations") as mock_git_cls, patch(
+        "cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()
+    ):
         git = MagicMock()
         git.is_valid_branch.return_value = True
         git.get_current_branch.return_value = issue_name
         mock_git_cls.return_value = git
-        with patch("cafe.ui.commands.phases_legacy._execute_single_step_alias", return_value=alias_result):
-            result = runner.invoke(app, ["pr", "--no-interactive"], catch_exceptions=False)
+        result = runner.invoke(
+            app,
+            ["workflow", "--start-step", "pr", "--execute", "--single-step"],
+            catch_exceptions=False,
+        )
 
     assert result.exit_code == 0
-    assert "PR content completed" in result.stdout
+    assert "Executing step=pr" in result.stdout

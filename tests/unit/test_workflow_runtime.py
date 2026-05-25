@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.core.workflow_models import BatonRejected, StepExecutionResult, StepInterrupted
+from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 
 
@@ -180,7 +180,15 @@ def test_runtime_reports_pr_publish_failures_as_publish_error(tmp_path: Path) ->
     assert "cannot sync PR with uncommitted changes" in result.detail
 
     blackboard = BlackboardStore(issue_dir).load_or_create("pr")
-    event = blackboard.events[-2]
+    contract = BlackboardStore(issue_dir).load_handoff_contract(
+        blackboard,
+        allowed_steps=["pr"],
+    )
+    assert blackboard.current_step == "pr"
+    assert contract.from_step == "pr"
+    assert contract.to_owner == HandoffOwner.AGENT
+    assert contract.to_step == "pr"
+    event = blackboard.events[-3]
     assert event.event_type == "step_interrupted"
     assert event.data["reason"] == "publish_error"
 
@@ -542,7 +550,7 @@ def test_runtime_single_step_pause_does_not_emit_workflow_paused_event(tmp_path:
     assert pause_events == []
 
 
-def test_runtime_legacy_step_uses_default_transition_when_status_missing(tmp_path: Path) -> None:
+def test_runtime_legacy_step_stays_on_same_step_when_status_missing(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-default"
     playbook = {
         "playbook": {"id": "default"},
@@ -576,10 +584,50 @@ def test_runtime_legacy_step_uses_default_transition_when_status_missing(tmp_pat
     )
     result = runtime.run(start_step="spec")
 
-    assert result.completed is True
-    assert result.final_step == "plan"
-    assert result.final_status_code == "confirmed"
-    assert calls == ["spec", "plan"]
+    assert result.completed is False
+    assert result.final_step == "spec"
+    assert result.final_status_code == "NO_STATUS_CODE"
+    assert calls == ["spec"]
+
+
+def test_runtime_ignores_stale_baton_when_status_missing(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-stale-baton"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "plan"},
+            },
+            "plan": {
+                "skill": "plan",
+                "role": "developer",
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    BlackboardStore(issue_dir).update_handoff_contract(
+        blackboard,
+        from_step="plan",
+        to_owner=HandoffOwner.AGENT,
+        to_step="plan",
+        intent=HandoffIntent.AWAIT_AGENT,
+        status_code="confirmed",
+        source="test.stale_baton",
+    )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args, **_kwargs: ("plain response without status token", {}),
+    )
+    assert runtime._resolve_next_step_from_handoff(current_step="spec") is None
 
 
 def test_runtime_legacy_step_honors_review_confirmed_advance(tmp_path: Path) -> None:

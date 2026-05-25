@@ -145,7 +145,7 @@ Re-read `.cafe/strategic_context.yaml` and linked documents before answering que
 - Read `.cafe/issues/<issue>/blackboard.json` only when command output is insufficient to understand the current handoff.
 
 ## Operating Rules
-- Prefer `cafe make` over manually running `cafe spec`, `cafe plan`, `cafe develop`, `cafe review`, or `cafe pr`.
+- Prefer `cafe make` over legacy per-step commands (removed in issue #315). For a single step use `cafe workflow --start-step <step> --execute`.
 - Do not manually edit workflow artifacts, blackboard, or `next_step.txt` unless you are repairing a broken workflow state.
 - Do not bypass CAFE by directly asking an agent to implement the issue when the user asked to use the CAFE workflow.
 - If CAFE reports uncommitted chat handoff changes, commit or stash the relevant changes before resuming.

@@ -81,7 +81,7 @@ Default development flow (spec → plan → develop → review → pr) is driven
 | Agent instructions, checklists, phase prompts | Skills (`SKILL.md` and related files) |
 | Orchestration, blackboard, execution | Runtime code under `src/cafe/core/` and `src/cafe/phases/` |
 
-Primary CLI entrypoints: `cafe make` and `cafe workflow`. Hidden `cafe spec` / `plan` / `develop` / `review` / `pr` commands are documented aliases for `cafe workflow --start-step <step> --execute`.
+Primary CLI entrypoints: `cafe make` and `cafe workflow`. Legacy `cafe spec` / `plan` / `develop` / `review` / `pr` commands were removed in issue #315; use `cafe workflow --start-step <step> --execute` for explicit single-step runs.
 
 ## Coding Style
 

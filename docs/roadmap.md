@@ -85,7 +85,7 @@ CAFE 長期採 **repo-first** 的 definition model，但不預設最終所有流
 
 完成標準：
 - default 開發流程可完全跑在新架構上
-- **per-phase Python workflow classes（Spec/Plan/Develop/Review/PR Phase）已退役**；workflow 行為以 **playbook YAML + skill + runtime**（`BlackboardWorkflowRuntime` / `GenericPhase`）為唯一來源。隱藏指令 `cafe spec|plan|develop|review|pr` 保留為 `cafe workflow --start-step <step> --execute` 的別名（Option A，見 issue #294）。
+- **per-phase Python workflow classes（Spec/Plan/Develop/Review/PR Phase）已退役**；workflow 行為以 **playbook YAML + skill + runtime**（`BlackboardWorkflowRuntime` / `GenericPhase`）為唯一來源。隱藏指令 `cafe spec|plan|develop|review|pr` 已於 issue #315 退場；請使用 `cafe make` 或 `cafe workflow --start-step <step> --execute`。
 - custom skill / custom playbook 可運作
 - v0.2 的狀態機與 Blackboard 不會把人工介入硬綁成 `interactive_qa` 單一路徑
 - 至少一條非軟體開發流程可用 custom playbook 完成 `writeable + validatable`

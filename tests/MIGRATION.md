@@ -138,7 +138,7 @@ GitHub: issue #294 (closes umbrella #288)
 
 Baseline (develop iteration 001): `pytest tests/unit tests/integration -q` → 1980 passed, 5 skipped, 1 xfailed.
 
-**Product decision:** Option A — retain hidden `cafe spec|plan|develop|review|pr` as thin documented aliases equivalent to `cafe workflow --start-step <step> --execute` (via `BlackboardWorkflowRuntime` + `GenericPhase`). Primary entrypoints remain `cafe make` and `cafe workflow`.
+**Product decision (issue #294):** Option A — retain hidden `cafe spec|plan|develop|review|pr` as thin documented aliases. **Retired in issue #315** — `phases_legacy.py` and the hidden commands were deleted; use `cafe make` or `cafe workflow --start-step <step> --execute`.
 
 Pre-flight `src/` grep (before cleanup): `src/cafe/utils/pr.py`, `src/cafe/ui/cli_shared.py`, `src/cafe/core/phase.py`.
 
@@ -148,8 +148,8 @@ Final verification: `rg 'SpecPhase|PlanPhase|DevelopPhase|ReviewPhase|PRPhase' s
 
 | Area | Behavior | Notes |
 | --- | --- | --- |
-| Legacy CLI notice | Alias wording + workflow start-step equivalence | `cli_shared._print_legacy_phase_command_notice`, `tests/unit/test_cli_spec_output.py` |
-| Module docs | Option A recorded on `phases_legacy.py` | Per-command docstrings cite `cafe workflow --start-step`; notice must not say "being retired" |
+| Legacy CLI notice | Retired in issue #315 | `tests/unit/test_phases_legacy_retired.py` guardrail; `cafe workflow --start-step <step> --execute` is the replacement |
+| Module docs | Retired (issue #315) | `phases_legacy.py` removed; migration note in CHANGELOG |
 | Contributor docs | Source-of-truth boundary | `CONTRIBUTING.md` **Workflow behavior**, `docs/roadmap.md` v0.2 completion criteria |
 | PR parsing utils | `parse_pr_title` / `parse_pr_body` | `src/cafe/utils/pr.py` (generic module docstring) |
 
@@ -157,6 +157,6 @@ Final verification: `rg 'SpecPhase|PlanPhase|DevelopPhase|ReviewPhase|PRPhase' s
 
 | Behavior | Rationale |
 | --- | --- |
-| Option B (delete `phases_legacy.py`) | Spec iteration 002 confirmed Option A for scripted backward compatibility |
+| Option B (delete `phases_legacy.py`) | Adopted in issue #315 after Option A served its transition period |
 | Per-phase Python classes | Already removed in #289–#293; this issue scrubs cosmetic names only |
 | “being retired” legacy CLI copy | Replaced with explicit alias-to-workflow messaging |
