@@ -5,17 +5,19 @@ with support for back navigation, free-text input, answer modification,
 and checkbox (multi-select) questions.
 """
 
-from typing import Optional
+from typing import Callable, Optional
 
 from InquirerPy import inquirer
 from InquirerPy.separator import Separator
 
 from cafe.core.questions_schema import Question
 from cafe.ui.chat import launch_chat_session
+from cafe.ui.inquirer_prompts import prompt_multiline
 
 # Sentinel values for special choices
 OTHER_SENTINEL = "__OTHER__"
 BACK_SENTINEL = "__BACK__"
+CHAT_REFRESH_SENTINEL = "__CHAT_REFRESH__"
 
 # Display text for empty checkbox selection
 NONE_SELECTED = "(none selected)"
@@ -26,6 +28,7 @@ def interactive_qa_flow(
     role: Optional[str] = None,
     issue_name: Optional[str] = None,
     agent_name: Optional[str] = None,
+    after_chat: Optional[Callable[[], list[Question] | None]] = None,
 ) -> str:
     """Run interactive Q&A flow and return formatted answers.
 
@@ -49,6 +52,7 @@ def interactive_qa_flow(
     Returns:
         Formatted Q&A string for passing to agent as user_input
     """
+    questions = list(questions)
     total = len(questions)
     answers: dict[int, str] = {}
     idx = 0
@@ -61,13 +65,22 @@ def interactive_qa_flow(
         if q.multi_select:
             answer = _ask_checkbox(
                 q, idx, total, previous_answer,
-                role=role, issue_name=issue_name, agent_name=agent_name,
+                role=role, issue_name=issue_name, agent_name=agent_name, after_chat=after_chat,
             )
         else:
             answer = _ask_select(
                 q, idx, total, previous_answer,
-                role=role, issue_name=issue_name, agent_name=agent_name,
+                role=role, issue_name=issue_name, agent_name=agent_name, after_chat=after_chat,
             )
+
+        if answer == CHAT_REFRESH_SENTINEL:
+            refreshed = after_chat() if after_chat else None
+            if refreshed:
+                questions = list(refreshed)
+                total = len(questions)
+                answers = {}
+                idx = 0
+            continue
 
         if answer == BACK_SENTINEL:
             idx -= 1
@@ -81,10 +94,7 @@ def interactive_qa_flow(
         _print_summary(questions, answers)
 
         summary_choices: list = ["Confirm and continue", "Modify an answer..."]
-        if role and issue_name:
-            summary_choices.append(Separator())
-            chat_label = agent_name or role
-            summary_choices.append({"name": f"Chat with {chat_label}", "value": "chat"})
+        _append_chat_choice(summary_choices, role, issue_name, agent_name)
 
         action = inquirer.select(
             message="Confirm answers?",
@@ -93,6 +103,11 @@ def interactive_qa_flow(
 
         if action == "chat":
             launch_chat_session(role, issue_name)
+            refreshed = after_chat() if after_chat else None
+            if refreshed:
+                questions = list(refreshed)
+                total = len(questions)
+                answers = {}
             continue
 
         if action == "Confirm and continue":
@@ -114,20 +129,24 @@ def interactive_qa_flow(
         previous_answer = answers.get(modify_idx)
 
         if q.multi_select:
-            answer = _ask_checkbox(q, modify_idx, total, previous_answer, force_no_back=True)
+            answer = _ask_checkbox(
+                q, modify_idx, total, previous_answer, force_no_back=True,
+                role=role, issue_name=issue_name, agent_name=agent_name, after_chat=after_chat,
+            )
         else:
-            choices = _build_choices(q, modify_idx, total, previous_answer, force_no_back=True)
-            answer = inquirer.select(
-                message=f"[{modify_idx + 1}/{total}] {q.title}",
-                choices=choices,
-                default=previous_answer,
-            ).execute()
+            answer = _ask_select(
+                q, modify_idx, total, previous_answer,
+                force_no_back=True,
+                role=role, issue_name=issue_name, agent_name=agent_name, after_chat=after_chat,
+            )
 
-            if answer == OTHER_SENTINEL:
-                text_kwargs = {"message": "Type your answer:"}
-                if previous_answer is not None:
-                    text_kwargs["default"] = previous_answer
-                answer = inquirer.text(**text_kwargs).execute()
+        if answer == CHAT_REFRESH_SENTINEL:
+            refreshed = after_chat() if after_chat else None
+            if refreshed:
+                questions = list(refreshed)
+                total = len(questions)
+                answers = {}
+            continue
 
         answers[modify_idx] = answer
 
@@ -139,9 +158,11 @@ def _ask_select(
     idx: int,
     total: int,
     previous_answer: str | None = None,
+    force_no_back: bool = False,
     role: Optional[str] = None,
     issue_name: Optional[str] = None,
     agent_name: Optional[str] = None,
+    after_chat: Optional[Callable[[], list[Question] | None]] = None,
 ) -> str:
     """Ask a single-select question.
 
@@ -151,6 +172,7 @@ def _ask_select(
     while True:
         choices = _build_choices(
             question, idx, total, previous_answer,
+            force_no_back=force_no_back,
             role=role, issue_name=issue_name, agent_name=agent_name,
         )
 
@@ -162,16 +184,15 @@ def _ask_select(
 
         if answer == "chat":
             launch_chat_session(role, issue_name)
+            if after_chat:
+                return CHAT_REFRESH_SENTINEL
             continue
 
         if answer == BACK_SENTINEL:
             return BACK_SENTINEL
 
         if answer == OTHER_SENTINEL:
-            text_kwargs = {"message": "Type your answer:"}
-            if previous_answer is not None:
-                text_kwargs["default"] = previous_answer
-            answer = inquirer.text(**text_kwargs).execute()
+            answer = _prompt_other_answer(previous_answer)
 
         return answer
 
@@ -185,6 +206,7 @@ def _ask_checkbox(
     role: Optional[str] = None,
     issue_name: Optional[str] = None,
     agent_name: Optional[str] = None,
+    after_chat: Optional[Callable[[], list[Question] | None]] = None,
 ) -> str:
     """Ask a multi-select (checkbox) question.
 
@@ -227,18 +249,18 @@ def _ask_checkbox(
 
         # Prompt for custom input only if user selected "Other"
         if has_other:
-            text_kwargs = {"message": "Type your answer:"}
-            if prev_other_text is not None:
-                text_kwargs["default"] = prev_other_text
-            custom = inquirer.text(**text_kwargs).execute()
+            custom = _prompt_other_answer(prev_other_text)
             if custom and custom.strip():
                 result_items.append(custom.strip())
 
         # Show follow-up action prompt for Back/Chat navigation
         action = _ask_checkbox_action(
             idx, total, result_items, force_no_back,
-            role=role, issue_name=issue_name, agent_name=agent_name,
+            role=role, issue_name=issue_name, agent_name=agent_name, after_chat=after_chat,
         )
+
+        if action == CHAT_REFRESH_SENTINEL:
+            return CHAT_REFRESH_SENTINEL
 
         if action == BACK_SENTINEL:
             return BACK_SENTINEL
@@ -261,6 +283,7 @@ def _ask_checkbox_action(
     role: Optional[str] = None,
     issue_name: Optional[str] = None,
     agent_name: Optional[str] = None,
+    after_chat: Optional[Callable[[], list[Question] | None]] = None,
 ) -> str:
     """Show a follow-up action prompt after checkbox selection.
 
@@ -274,16 +297,8 @@ def _ask_checkbox_action(
         {"name": "Reselect", "value": "redo"},
     ]
 
-    if idx > 0 and not force_no_back:
-        action_choices.append(Separator())
-        action_choices.append(
-            {"name": f"← Back to [{idx}/{total}]", "value": BACK_SENTINEL}
-        )
-
-    if role and issue_name:
-        action_choices.append(Separator())
-        chat_label = agent_name or role
-        action_choices.append({"name": f"Chat with {chat_label}", "value": "chat"})
+    _append_back_choice(action_choices, idx, total, force_no_back)
+    _append_chat_choice(action_choices, role, issue_name, agent_name)
 
     action = inquirer.select(
         message="Action:",
@@ -292,6 +307,8 @@ def _ask_checkbox_action(
 
     if action == "chat":
         launch_chat_session(role, issue_name)
+        if after_chat:
+            return CHAT_REFRESH_SENTINEL
         return "redo"
 
     return action
@@ -332,20 +349,45 @@ def _build_choices(
         for opt in choices
     ]
 
-    # Add Back option for question 2+ (not in modify flow)
-    if idx > 0 and not force_no_back:
-        choices_with_values.append(Separator())
-        choices_with_values.append(
-            {"name": f"← Back to [{idx}/{total}]", "value": BACK_SENTINEL}
-        )
-
-    # Add chat option when role and issue_name are provided
-    if role and issue_name:
-        choices_with_values.append(Separator())
-        chat_label = agent_name or role
-        choices_with_values.append({"name": f"Chat with {chat_label}", "value": "chat"})
+    _append_back_choice(choices_with_values, idx, total, force_no_back)
+    _append_chat_choice(choices_with_values, role, issue_name, agent_name)
 
     return choices_with_values
+
+
+def _prompt_other_answer(default: str | None = None) -> str:
+    """Prompt for a free-form Other answer, allowing multiline input."""
+    return prompt_multiline(
+        "Type your answer:",
+        default=default or "",
+    )
+
+
+def _append_back_choice(
+    choices: list,
+    idx: int,
+    total: int,
+    force_no_back: bool,
+) -> None:
+    """Append a Back choice when the current flow allows it."""
+    if idx <= 0 or force_no_back:
+        return
+    choices.append(Separator())
+    choices.append({"name": f"← Back to [{idx}/{total}]", "value": BACK_SENTINEL})
+
+
+def _append_chat_choice(
+    choices: list,
+    role: Optional[str],
+    issue_name: Optional[str],
+    agent_name: Optional[str],
+) -> None:
+    """Append a Chat choice when inline chat is available."""
+    if not (role and issue_name):
+        return
+    chat_label = agent_name or role
+    choices.append(Separator())
+    choices.append({"name": f"Chat with {chat_label}", "value": "chat"})
 
 
 def _parse_previous_checkbox_answer(answer: str, known_options: list[str]) -> list[str]:

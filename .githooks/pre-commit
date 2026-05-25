@@ -8,6 +8,15 @@ set -e
 echo "🧪 Running pre-commit tests..."
 echo ""
 
+PROJECT_PYTHON=".venv/bin/python"
+
+ensure_test_env() {
+    if [ ! -x "$PROJECT_PYTHON" ] || ! "$PROJECT_PYTHON" -c "import pytest" >/dev/null 2>&1; then
+        echo "🔧 Syncing project test environment..."
+        uv sync --extra dev --frozen
+    fi
+}
+
 # Set PYTHONPATH
 export PYTHONPATH="src:$PYTHONPATH"
 
@@ -29,7 +38,8 @@ echo "🔒 Git isolation enabled: GIT_CEILING_DIRECTORIES=$GIT_CEILING_DIRECTORI
 
 # Run unit and integration tests inside the project-managed Python environment
 echo "Running fast tests/unit and tests/integration (excluding slow tests)..."
-uv run pytest tests/unit/ tests/integration/ -q --tb=short --no-cov -m "not slow"
+ensure_test_env
+"$PROJECT_PYTHON" -m pytest tests/unit/ tests/integration/ -q --tb=short --no-cov -m "not slow"
 
 # Check exit code
 if [ $? -eq 0 ]; then

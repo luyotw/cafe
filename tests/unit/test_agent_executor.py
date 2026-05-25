@@ -1,5 +1,6 @@
 """Tests for AgentExecutor."""
 
+from pathlib import Path
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -121,6 +122,155 @@ class TestAgentExecutorErrorHandling:
             # The error message should contain details
             assert "Connection timeout" in str(exc_info.value)
 
+    def test_rate_limit_display_message_summarizes_noisy_gemini_error(self) -> None:
+        """Gemini quota errors should be concise for terminal display."""
+        config = AgentConfig(name="David", cli=AgentCLI.GEMINI, session_id="test-session")
+        executor = AgentExecutor(config)
+        stderr = (
+            "Warning: --allowed-tools cli argument and tools.allowed in settings.json are deprecated\n"
+            "Error executing tool run_shell_command: Tool execution denied by policy.\n"
+            "TerminalQuotaError: You have exhausted your capacity on this model. "
+            "Your quota will reset after 12h49m8s.\n"
+            "    at classifyGoogleError (file:///usr/local/Cellar/gemini-cli/bundle/chunk.js:1:1)\n"
+        )
+
+        display_message = executor._format_rate_limit_display_message("Gemini", stderr)
+
+        assert display_message == (
+            "Gemini API rate limit reached. Quota resets after 12h49m8s. "
+            "Some tool calls were also denied by CLI policy."
+        )
+        assert "TerminalQuotaError" not in display_message
+        assert "classifyGoogleError" not in display_message
+
+    def test_claude_disabled_subscription_is_cli_unavailable(self) -> None:
+        """Claude org policy failures should be fallbackable instead of generic execution errors."""
+        config = AgentConfig(name="Richard", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            "Your organization has disabled Claude subscription access for Claude Code · "
+            "Use an Anthropic API key instead, or ask your admin to enable access\n",
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 1
+
+        with patch("subprocess.Popen", return_value=mock_process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor.execute("Test prompt")
+
+        assert exc_info.value.error_type == "cli_unavailable"
+        assert "subscription access is disabled" in (exc_info.value.display_message or "")
+
+    def test_claude_auth_failed_stream_json_is_cli_unavailable(self) -> None:
+        """Claude auth failures can arrive as stream-json assistant/result events."""
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"system","subtype":"init","session_id":"abc","model":"haiku"}\n',
+            '{"type":"assistant","message":{"content":[{"type":"text","text":"Failed to authenticate. API Error: 403 The socket connection was closed unexpectedly."}]},"error":"authentication_failed"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 1
+        mock_process.terminate.return_value = None
+
+        with patch("subprocess.Popen", return_value=mock_process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor.execute("Test prompt")
+
+        assert exc_info.value.error_type == "cli_unavailable"
+        assert "authentication failed" in (exc_info.value.display_message or "")
+
+    def test_cursor_usage_limit_stdout_is_rate_limit(self) -> None:
+        """Cursor usage-limit notices can arrive as non-JSON stdout with a zero exit code."""
+        config = AgentConfig(name="Richard", cli=AgentCLI.CURSOR)
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"system","subtype":"init","session_id":"abc","model":"Auto"}\n',
+            'S: You\'ve hit your usage limit Get Cursor Pro for more Agent usage, unlimited Tab, and more.\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+        mock_process.terminate.return_value = None
+
+        with patch("subprocess.Popen", return_value=mock_process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor.execute("Test prompt")
+
+        assert exc_info.value.error_type == "rate_limit"
+        assert "API rate limit reached" in (exc_info.value.display_message or "")
+
+    @pytest.mark.parametrize(
+        ("cli", "message"),
+        [
+            (AgentCLI.CLAUDE, "Error: invalid model cafe-nonexistent-model-xyz"),
+            (AgentCLI.GEMINI, "ModelNotFoundError: Requested entity was not found."),
+            (AgentCLI.CURSOR, "Cannot use this model: cafe-nonexistent-model-xyz."),
+            (
+                AgentCLI.CODEX,
+                "The 'cafe-nonexistent-model-xyz' model is not supported when using Codex with a ChatGPT account.",
+            ),
+            (AgentCLI.COPILOT, 'Error: Model "cafe-nonexistent-model-xyz" from --model flag is not available.'),
+        ],
+    )
+    def test_invalid_model_errors_are_classified_as_model_not_found(self, cli: AgentCLI, message: str) -> None:
+        """Known bad-model errors from all supported CLIs should be fallbackable."""
+        config = AgentConfig(name="Richard", cli=cli, model="cafe-nonexistent-model-xyz")
+        executor = AgentExecutor(config)
+
+        error_type, display_message = executor._classify_execution_error(cli.value.capitalize(), message)
+
+        assert error_type == "model_not_found"
+        assert "cafe-nonexistent-model-xyz" in (display_message or "")
+
+    def test_stream_json_error_event_is_model_not_found(self) -> None:
+        """Codex/Gemini-style JSON error events should be classified before parsing as success."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX, model="cafe-nonexistent-model-xyz")
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"thread.started","thread_id":"abc"}\n',
+            '{"type":"error","message":"The cafe-nonexistent-model-xyz model is not supported when using Codex with a ChatGPT account."}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = "Reading additional input from stdin...\n"
+        mock_process.wait.return_value = 1
+        mock_process.terminate.return_value = None
+
+        with patch("subprocess.Popen", return_value=mock_process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor.execute("Test prompt")
+
+        assert exc_info.value.error_type == "model_not_found"
+        assert "not available or not supported" in (exc_info.value.display_message or "")
+
+    def test_non_stream_invalid_model_stderr_is_model_not_found(self) -> None:
+        """Copilot-style stderr model errors should be classified after non-zero exit."""
+        config = AgentConfig(name="Roger", cli=AgentCLI.COPILOT, model="cafe-nonexistent-model-xyz")
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = ["", ""]
+        mock_process.stderr.read.return_value = (
+            'Error: Model "cafe-nonexistent-model-xyz" from --model flag is not available.\n'
+        )
+        mock_process.wait.return_value = 1
+
+        with patch("subprocess.Popen", return_value=mock_process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor.execute("Test prompt")
+
+        assert exc_info.value.error_type == "model_not_found"
+
 
 class TestCodexPermissionExtraction:
     """Test Codex-specific permission denial extraction."""
@@ -143,6 +293,24 @@ class TestCodexPermissionExtraction:
         assert len(denials) == 1
         assert denials[0].tool_name == "Bash"
         assert denials[0].tool_input["command"].startswith("git add src/cafe/ui/cli.py")
+
+    def test_codex_exec_does_not_override_codex_home(self) -> None:
+        """Codex executions should inherit the default environment."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process) as mock_popen, patch("sys.platform", "win32"):
+            executor.execute("Test prompt")
+
+        assert "CODEX_HOME" not in mock_popen.call_args.kwargs["env"]
 
 
 class TestTokenUsageTracking:
@@ -259,6 +427,35 @@ class TestTokenUsageTracking:
             assert total_usage.input_tokens == 30
             assert total_usage.output_tokens == 15
             assert total_usage.total_cost_usd == 0.03
+
+
+class TestClaudeAllowedToolsFormatting:
+    """Test Claude allowed-tools normalization."""
+
+    def test_claude_keeps_expected_tool_casing(self) -> None:
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+
+        result = executor.preview_cli_command_args(
+            "Test prompt",
+            allowed_tools=[
+                "read",
+                "ls",
+                "web_fetch",
+                "web_search",
+                "edit(./.cafe/issues/test/spec/output.md)",
+            ],
+        )
+
+        assert "--allowed-tools" in result
+        allowed_tools_value = result[result.index("--allowed-tools") + 1]
+        assert "Read" in allowed_tools_value
+        assert "LS" in allowed_tools_value
+        assert "WebFetch" in allowed_tools_value
+        assert "WebSearch" in allowed_tools_value
+        assert "Edit(.cafe/issues/test/spec/output.md)" in allowed_tools_value
+        assert "Webfetch" not in allowed_tools_value
+        assert "Websearch" not in allowed_tools_value
 
 
 class TestCopilotTokenUsageExtraction:
@@ -537,6 +734,28 @@ class TestStreamingExecution:
                     parse_stream_json=True,
                 )
 
+    def test_execute_with_streaming_handles_early_stderr_failure(self, capsys) -> None:
+        """Early fatal stderr should still raise an execution error."""
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stderr.readline.return_value = "Error: session not found\n"
+        mock_process.stderr.read.return_value = ""
+        mock_process.kill.return_value = None
+
+        with patch("subprocess.Popen", return_value=mock_process), \
+             patch("select.select", return_value=([mock_process.stderr], [], [])), \
+             patch("sys.platform", "darwin"):
+            with pytest.raises(AgentExecutionError):
+                executor._execute_with_streaming(
+                    cmd=["claude", "--resume", "abc", "-p", "test"],
+                    cli_name="Claude",
+                    parse_stream_json=True,
+                )
+
+        assert capsys.readouterr().out == ""
+
     def test_execute_with_streaming_handles_malformed_json(self, capsys) -> None:
         """測試處理格式錯誤 JSON（回退到 plain text）"""
         config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
@@ -613,6 +832,25 @@ class TestStreamingExecution:
         # duration_ms from streaming should be preserved
         assert agent_response.token_usage.duration_ms == 12345
         assert agent_response.token_usage.duration_api_ms == 12000
+
+
+class TestProjectSkillWorkspacePreparation:
+    """Test deprecated workspace preparation is skipped during execution."""
+
+    def test_execute_skips_cli_workspace_preparation_before_running(self) -> None:
+        """Claude execution should no longer prepare CLI workspace before build_command."""
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE, session_id="session-123")
+        executor = AgentExecutor(config)
+        mock_cli = MagicMock()
+        mock_cli.build_command.return_value = ["claude", "-p", "Test prompt"]
+        mock_cli.translate_allowed_tools.return_value = []
+        mock_cli.parse_response.return_value = ("done", TokenUsage(), [])
+
+        with patch.object(executor, "_get_cli_strategy", return_value=mock_cli), \
+             patch.object(executor, "_execute_with_session_recovery", return_value=AgentResponse(response="done", token_usage=TokenUsage(), permission_denials=[])):
+            executor.execute("Test prompt")
+
+        mock_cli.prepare_project_workspace.assert_not_called()
 
 
 class TestCLICommandArgsGeneration:

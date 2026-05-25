@@ -2,7 +2,6 @@
 
 import json
 import logging
-import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -130,18 +129,32 @@ class ClaudeCLI(AbstractCLI):
             List of converted tool names (e.g. ["Read", "Write(/.cafe/config.yaml)"])
         """
         processed_tools = []
+        tool_name_map = {
+            "bash": "Bash",
+            "read": "Read",
+            "write": "Write",
+            "edit": "Edit",
+            "grep": "Grep",
+            "glob": "Glob",
+            "ls": "LS",
+            "webfetch": "WebFetch",
+            "web_fetch": "WebFetch",
+            "websearch": "WebSearch",
+            "web_search": "WebSearch",
+        }
 
         for tool in tools:
             # Handle tools with paths or commands (e.g. write(/path) or bash(git status))
             if "(" in tool and ")" in tool:
                 tool_name = tool.split("(")[0].lower()
                 path_or_cmd = tool.split("(")[1].rstrip(")")
+                display_tool_name = tool_name_map.get(tool_name, tool.split("(")[0])
 
                 # Determine if it's a path or command
                 # If tool_name is bash, treat as command, don't convert path format
                 if tool_name == "bash":
                     # Command parameter, use directly, don't add / prefix
-                    processed_tool = f"{tool_name.capitalize()}({path_or_cmd})"
+                    processed_tool = f"{display_tool_name}({path_or_cmd})"
                 else:
                     # Path parameter, needs conversion to git-ignore format
                     path_obj = Path(path_or_cmd)
@@ -154,28 +167,28 @@ class ClaudeCLI(AbstractCLI):
 
                     if is_git_ignore_format:
                         # Already git ignore format, keep unchanged
-                        processed_tool = f"{tool_name.capitalize()}({path_or_cmd})"
+                        processed_tool = f"{display_tool_name}({path_or_cmd})"
                     elif path_obj.is_absolute():
                         # Absolute path, convert to git ignore format
                         try:
                             repo_root = get_repo_root()
                             git_ignore_path = to_git_ignore_path(path_obj, repo_root)
-                            processed_tool = f"{tool_name.capitalize()}({git_ignore_path})"
+                            processed_tool = f"{display_tool_name}({git_ignore_path})"
                         except (ValueError, OSError) as e:
                             # Conversion failed, use original path and log warning
                             logger.warning(
                                 f"Failed to convert path to git-ignore format: {path_or_cmd}. "
                                 f"Error: {e}. Using original path."
                             )
-                            processed_tool = f"{tool_name.capitalize()}({path_or_cmd})"
+                            processed_tool = f"{display_tool_name}({path_or_cmd})"
                     else:
                         # Relative path, remove ./ prefix if present
                         if path_or_cmd.startswith("./"):
                             path_or_cmd = path_or_cmd[2:]
-                        processed_tool = f"{tool_name.capitalize()}({path_or_cmd})"
+                        processed_tool = f"{display_tool_name}({path_or_cmd})"
             else:
-                # Tool has no path parameter, just capitalize first letter
-                processed_tool = tool.capitalize()
+                # Tool has no path parameter, normalize known Claude tool names.
+                processed_tool = tool_name_map.get(tool.lower(), tool)
 
             # Remove duplicates
             if processed_tool not in processed_tools:
@@ -224,37 +237,5 @@ class ClaudeCLI(AbstractCLI):
         return None
 
     def create_session(self) -> str:
-        """Create new Claude session.
-
-        Execute a simple Claude command to create new session, and extract session ID from response.
-
-        Returns:
-            New session ID
-
-        Raises:
-            Exception: If session creation fails or session ID cannot be extracted
-        """
-        cmd = ["claude", "-p", "Say 'hi'", "--output-format", "json"]
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        try:
-            response_data = json.loads(result.stdout)
-
-            # Check for errors (e.g. usage limit reached)
-            if response_data.get("is_error"):
-                error_msg = response_data.get("result", "Unknown error")
-                print(f"\n⚠️  Claude API Error: {error_msg}\n")
-                raise Exception(f"Claude API error: {error_msg}")
-
-            session_id = response_data.get("session_id")
-            if not session_id:
-                raise Exception("No session_id in response")
-            return session_id
-        except json.JSONDecodeError as e:
-            raise Exception(f"Failed to parse Claude response: {e}") from e
+        """Claude sessions are created by the real prompt execution."""
+        return ""

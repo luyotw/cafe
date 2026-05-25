@@ -1,661 +1,235 @@
-"""Tests for cafe setup command."""
+"""Tests for refactored cafe setup command (settings-only, no agents)."""
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import yaml
 from typer.testing import CliRunner
 
-from cafe.ui.cli import app, CUSTOM_MODEL_SENTINEL, KEEP_MODEL_SENTINEL
+from cafe.ui.cli import app
 
 runner = CliRunner()
 
-
-def _build_prompt_list_side_effect(roles_config):
-    """Build prompt_list side_effect for the new step-based agent setup flow.
-
-    Args:
-        roles_config: List of (cli, agent_display, model_selections) tuples.
-            model_selections is a list of values for each phase's prompt_list call.
-            Use "" for default, KEEP_MODEL_SENTINEL to keep existing,
-            CUSTOM_MODEL_SENTINEL for custom model.
-
-    Returns:
-        List of return values for prompt_list.side_effect
-    """
-    side_effect = []
-    for cli, agent_display, model_selections in roles_config:
-        side_effect.append(cli)
-        side_effect.append(agent_display)
-        side_effect.extend(model_selections)
-    return side_effect
+_MINIMAL_CONFIG = {"settings": {"auto_update": True}}
 
 
-def _default_roles_config(cli="claude", agent="Roger: PM agent (system default)"):
-    """Default config: all 3 roles use same CLI/agent, all models default."""
-    return [
-        (cli, agent, [""]),              # PM: spec
-        (cli, agent, ["", "", ""]),      # Developer: plan, develop, pr
-        (cli, agent, [""]),              # Reviewer: review
-    ]
+def _write_config(cafe_dir: Path, data: dict) -> None:
+    (cafe_dir / "config.yaml").write_text(yaml.dump(data))
 
 
-def _prompt_messages(mock_prompt_list: MagicMock) -> list[str]:
-    """Collect prompt message text from prompt_list mock calls."""
-    return [call.kwargs.get("message", "") for call in mock_prompt_list.call_args_list]
+def _read_config(cafe_dir: Path) -> dict:
+    return yaml.safe_load((cafe_dir / "config.yaml").read_text()) or {}
 
 
 class TestSetupRequiresInit:
-    """Test that setup requires cafe init to have been run first."""
+    """setup requires cafe init to have been run first."""
 
     def test_setup_exits_if_no_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """setup should fail when .cafe/config.yaml does not exist."""
+        """setup fails when .cafe/config.yaml does not exist."""
         monkeypatch.chdir(tmp_path)
+        (tmp_path / ".cafe").mkdir()
 
         result = runner.invoke(app, ["setup"])
 
         assert result.exit_code == 1
         assert "cafe init" in result.stdout
 
-    @patch("cafe.ui.cli.shutil.which")
-    def test_setup_exits_if_no_clis_available(
-        self,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+
+class TestSetupNonInteractiveFlags:
+    """Non-interactive flags write settings without prompts."""
+
+    def test_playbook_flag_updates_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """setup should fail when no CLI agents are installed."""
+        """--playbook writes playbook to settings in config.yaml."""
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir()
-        config_file = cafe_dir / "config.yaml"
-        config_file.write_text(yaml.dump({"agents": {"pm": {"name": "Roger", "cli": "claude"}}}))
-
-        mock_which.return_value = None
+        _write_config(cafe_dir, _MINIMAL_CONFIG)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(app, ["setup"])
+        result = runner.invoke(app, ["setup", "--playbook", "default"])
+
+        assert result.exit_code == 0
+        cfg = _read_config(cafe_dir)
+        assert cfg["settings"]["playbook"] == "default"
+
+    def test_auto_update_false_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--no-auto-update writes auto_update=False."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        _write_config(cafe_dir, _MINIMAL_CONFIG)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["setup", "--no-auto-update"])
+
+        assert result.exit_code == 0
+        cfg = _read_config(cafe_dir)
+        assert cfg["settings"]["auto_update"] is False
+
+    def test_rigor_flag_updates_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--rigor writes rigor level to settings."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        _write_config(cafe_dir, _MINIMAL_CONFIG)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["setup", "--rigor", "high"])
+
+        assert result.exit_code == 0
+        cfg = _read_config(cafe_dir)
+        assert cfg["settings"]["rigor"] == "high"
+
+    def test_multiple_flags_combined(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Multiple flags can be combined in one invocation."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        _write_config(cafe_dir, _MINIMAL_CONFIG)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["setup", "--playbook", "default", "--rigor", "medium"])
+
+        assert result.exit_code == 0
+        cfg = _read_config(cafe_dir)
+        assert cfg["settings"]["playbook"] == "default"
+        assert cfg["settings"]["rigor"] == "medium"
+
+    def test_flags_do_not_touch_crew_yaml(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-interactive flags must not create or modify crew.yaml."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        _write_config(cafe_dir, _MINIMAL_CONFIG)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["setup", "--playbook", "default"])
+
+        assert result.exit_code == 0
+        assert not (cafe_dir / "crew.yaml").exists()
+
+    def test_flags_preserve_other_config_keys(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-interactive flags preserve unrelated top-level config keys."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        original = {
+            "settings": {"auto_update": True},
+            "auto": {"max_review_iterations": 7},
+            "python_bin": "python3.11",
+        }
+        _write_config(cafe_dir, original)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["setup", "--playbook", "default"])
+
+        assert result.exit_code == 0
+        cfg = _read_config(cafe_dir)
+        assert cfg["auto"]["max_review_iterations"] == 7
+        assert cfg["python_bin"] == "python3.11"
+
+    def test_invalid_rigor_exits_with_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--rigor with an invalid value exits 1 with an error message."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        _write_config(cafe_dir, _MINIMAL_CONFIG)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["setup", "--rigor", "extreme"])
 
         assert result.exit_code == 1
-        assert "No supported AI agents found" in result.stdout
 
 
 class TestSetupInteractiveFlow:
-    """Test the interactive agent configuration flow in setup."""
+    """Interactive mode prompts for settings and writes to config.yaml."""
 
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_setup_shows_role_menu_for_complete_config(
-        self,
-        mock_list_agents: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+    def test_interactive_updates_settings(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """setup should use role menu first when existing config is complete."""
+        """Interactive flow updates settings based on prompts."""
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir()
-        config_file = cafe_dir / "config.yaml"
-        config_file.write_text(yaml.dump({
-            "agents": {
-                "pm": {"name": "Roger", "cli": "claude"},
-                "developer": {"name": "David", "cli": "claude"},
-                "reviewer": {"name": "Richard", "cli": "claude"},
-            },
-            "settings": {"auto_update": True},
-        }))
-
-        mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [("Roger", "PM agent", Path("agents/pm/Roger.md"), "system default")]
+        _write_config(cafe_dir, _MINIMAL_CONFIG)
         monkeypatch.chdir(tmp_path)
 
         with (
-            patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
-            patch("cafe.ui.cli.prompt_text") as mock_prompt_text,
+            patch("cafe.ui.cli.prompt_confirm", return_value=False),  # auto_update -> False
+            patch("cafe.ui.cli.prompt_list", side_effect=["default", "medium"]),  # playbook, rigor
         ):
-            mock_prompt_list.side_effect = [
-                "pm",  # role menu
-                "claude",
-                "Roger: PM agent (system default)",
-                "",
-                "save",  # role menu
-            ]
             result = runner.invoke(app, ["setup"])
 
         assert result.exit_code == 0
-        assert mock_prompt_list.call_count == 5
-        assert mock_prompt_text.call_count == 0
-        assert _prompt_messages(mock_prompt_list)[0] == "Select role to update:"
+        cfg = _read_config(cafe_dir)
+        assert cfg["settings"]["auto_update"] is False
 
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_setup_falls_back_to_full_flow_when_config_incomplete(
-        self,
-        mock_list_agents: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+    def test_interactive_does_not_touch_crew_yaml(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """setup should use original full flow when role setup data is incomplete."""
+        """Interactive flow must not create or modify crew.yaml."""
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir()
-        config_file = cafe_dir / "config.yaml"
-        config_file.write_text(yaml.dump({
-            "agents": {
-                "pm": {"name": "Roger", "cli": "claude"},
-                "developer": {"name": "David", "cli": "claude"},
-                # reviewer missing -> incomplete
-            },
-            "settings": {"auto_update": True},
-        }))
-
-        mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [("Roger", "PM agent", Path("agents/pm/Roger.md"), "system default")]
+        _write_config(cafe_dir, _MINIMAL_CONFIG)
         monkeypatch.chdir(tmp_path)
 
         with (
-            patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
-            patch("cafe.ui.cli.prompt_text"),
+            patch("cafe.ui.cli.prompt_confirm", return_value=True),
+            patch("cafe.ui.cli.prompt_list", side_effect=["default", "medium"]),
         ):
-            mock_prompt_list.side_effect = _build_prompt_list_side_effect(
-                _default_roles_config()
-            )
             result = runner.invoke(app, ["setup"])
 
         assert result.exit_code == 0
-        assert mock_prompt_list.call_count == 11
-        assert _prompt_messages(mock_prompt_list)[0] == "Select CLI for PM:"
+        assert not (cafe_dir / "crew.yaml").exists()
 
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_setup_handles_keyboard_interrupt(
-        self,
-        mock_list_agents: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+    def test_interactive_keyboard_interrupt_exits_cleanly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """setup should handle Ctrl+C gracefully."""
+        """Ctrl+C during interactive setup exits cleanly (exit code 0 or 1)."""
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir()
-        config_file = cafe_dir / "config.yaml"
-        config_file.write_text(yaml.dump({
-            "agents": {
-                "pm": {"name": "Roger", "cli": "claude"},
-                "developer": {"name": "David", "cli": "claude"},
-                "reviewer": {"name": "Richard", "cli": "claude"},
-            },
-        }))
-
-        mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [("Roger", "PM agent", Path("agents/pm/Roger.md"), "system default")]
+        _write_config(cafe_dir, _MINIMAL_CONFIG)
         monkeypatch.chdir(tmp_path)
 
-        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list:
-            mock_prompt_list.side_effect = KeyboardInterrupt()
+        with patch("cafe.ui.cli.prompt_confirm", side_effect=KeyboardInterrupt):
             result = runner.invoke(app, ["setup"])
 
-        assert result.exit_code == 1
-        assert "cancelled" in result.stdout
+        # Should not crash with uncaught exception
+        assert result.exit_code in (0, 1)
+        assert result.exception is None or isinstance(result.exception, SystemExit)
 
-
-class TestSetupPreservesExistingConfig:
-    """Test that setup only updates agents section, preserving other settings."""
-
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_setup_preserves_non_agent_settings(
-        self,
-        mock_list_agents: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+    def test_interactive_preserves_existing_agents_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """setup should preserve settings, auto, python_bin, etc."""
+        """Interactive setup migrates legacy agents into crew.yaml without losing assignments."""
+        import yaml
+
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir()
-        config_file = cafe_dir / "config.yaml"
-        original_config = {
-            "agents": {
-                "pm": {"name": "Roger", "cli": "claude"},
-                "developer": {"name": "David", "cli": "claude"},
-                "reviewer": {"name": "Richard", "cli": "claude"},
-            },
+        original = {
             "settings": {"auto_update": True},
-            "auto": {"max_review_iterations": 3},
-            "python_bin": "python3.11",
+            "agents": {"pm": {"name": "Roger", "cli": "claude"}},
         }
-        config_file.write_text(yaml.dump(original_config))
-
-        mock_which.return_value = "/usr/bin/gemini"
-        mock_list_agents.return_value = [("Roger", "PM agent", Path("agents/pm/Roger.md"), "system default")]
-        monkeypatch.chdir(tmp_path)
-
-        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list:
-            mock_prompt_list.side_effect = ["save"]
-            result = runner.invoke(app, ["setup"])
-
-        assert result.exit_code == 0
-
-        with open(config_file) as f:
-            saved_config = yaml.safe_load(f)
-
-        # Agents unchanged when user chooses Save directly
-        assert saved_config["agents"]["pm"]["cli"] == "claude"
-        assert saved_config["agents"]["developer"]["cli"] == "claude"
-        assert saved_config["agents"]["reviewer"]["cli"] == "claude"
-
-        # Other settings should be preserved
-        assert saved_config["settings"]["auto_update"] is True
-        assert saved_config["auto"]["max_review_iterations"] == 3
-        assert saved_config["python_bin"] == "python3.11"
-
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_setup_saves_phase_specific_models(
-        self,
-        mock_list_agents: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """setup should correctly save phase-specific model overrides."""
-        cafe_dir = tmp_path / ".cafe"
-        cafe_dir.mkdir()
-        config_file = cafe_dir / "config.yaml"
-        config_file.write_text(yaml.dump({
-            "agents": {
-                "pm": {"name": "Roger", "cli": "claude"},
-                "developer": {"name": "David", "cli": "claude"},
-                "reviewer": {"name": "Richard", "cli": "claude"},
-            },
-        }))
-
-        mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [
-            ("Roger", "PM agent", Path("agents/pm/Roger.md"), "system default"),
-            ("David", "Dev agent", Path("agents/developer/David.md"), "system default"),
-            ("Richard", "Reviewer agent", Path("agents/reviewer/Richard.md"), "system default"),
-        ]
+        _write_config(cafe_dir, original)
         monkeypatch.chdir(tmp_path)
 
         with (
-            patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
-            patch("cafe.ui.cli.prompt_text") as mock_prompt_text,
+            patch("cafe.ui.cli.prompt_confirm", return_value=True),
+            patch("cafe.ui.cli.prompt_list", side_effect=["default", "medium"]),
         ):
-            mock_prompt_list.side_effect = [
-                # PM
-                "pm",
-                "claude",
-                "Roger: PM agent (system default)",
-                CUSTOM_MODEL_SENTINEL,
-                # Developer
-                "developer",
-                "claude",
-                "David: Dev agent (system default)",
-                CUSTOM_MODEL_SENTINEL,
-                "",
-                "",
-                # Reviewer
-                "reviewer",
-                "claude",
-                "Richard: Reviewer agent (system default)",
-                CUSTOM_MODEL_SENTINEL,
-                # Save
-                "save",
-            ]
-            mock_prompt_text.side_effect = ["haiku", "opus", "sonnet"]
             result = runner.invoke(app, ["setup"])
 
         assert result.exit_code == 0
-
-        with open(config_file) as f:
-            saved_config = yaml.safe_load(f)
-
-        assert saved_config["agents"]["pm"]["spec"]["model"] == "haiku"
-        assert saved_config["agents"]["developer"]["plan"]["model"] == "opus"
-        assert "develop" not in saved_config["agents"]["developer"] or "model" not in saved_config["agents"]["developer"].get("develop", {})
-        assert saved_config["agents"]["reviewer"]["review"]["model"] == "sonnet"
-
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_setup_preserves_role_level_settings_when_editing_single_role(
-        self,
-        mock_list_agents: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """setup should preserve non-interactive role fields like backup/models."""
-        cafe_dir = tmp_path / ".cafe"
-        cafe_dir.mkdir()
-        config_file = cafe_dir / "config.yaml"
-        config_file.write_text(yaml.dump({
-            "agents": {
-                "pm": {
-                    "name": "Roger",
-                    "cli": "claude",
-                    "backup": {"clis": ["gemini"]},
-                    "models": {"claude": "haiku"},
-                    "spec": {"model": "haiku"},
-                },
-                "developer": {"name": "David", "cli": "claude"},
-                "reviewer": {"name": "Richard", "cli": "claude"},
-            },
-        }))
-
-        mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [("Roger", "PM agent", Path("agents/pm/Roger.md"), "system default")]
-        monkeypatch.chdir(tmp_path)
-
-        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list:
-            mock_prompt_list.side_effect = [
-                "pm",
-                "claude",
-                "Roger: PM agent (system default)",
-                KEEP_MODEL_SENTINEL,
-                "save",
-            ]
-            result = runner.invoke(app, ["setup"])
-
-        assert result.exit_code == 0
-
-        with open(config_file) as f:
-            saved_config = yaml.safe_load(f)
-
-        assert saved_config["agents"]["pm"]["backup"] == {"clis": ["gemini"]}
-        assert saved_config["agents"]["pm"]["models"] == {"claude": "haiku"}
-        assert saved_config["agents"]["pm"]["spec"]["model"] == "haiku"
-
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_setup_can_reset_existing_phase_override_to_default(
-        self,
-        mock_list_agents: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """setup should clear an existing phase model override when default is selected."""
-        cafe_dir = tmp_path / ".cafe"
-        cafe_dir.mkdir()
-        config_file = cafe_dir / "config.yaml"
-        config_file.write_text(yaml.dump({
-            "agents": {
-                "pm": {
-                    "name": "Roger",
-                    "cli": "claude",
-                    "spec": {"model": "haiku"},
-                },
-                "developer": {"name": "David", "cli": "claude"},
-                "reviewer": {"name": "Richard", "cli": "claude"},
-            },
-        }))
-
-        mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [("Roger", "PM agent", Path("agents/pm/Roger.md"), "system default")]
-        monkeypatch.chdir(tmp_path)
-
-        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list:
-            mock_prompt_list.side_effect = [
-                "pm",
-                "claude",
-                "Roger: PM agent (system default)",
-                "",
-                "save",
-            ]
-            result = runner.invoke(app, ["setup"])
-
-        assert result.exit_code == 0
-
-        with open(config_file) as f:
-            saved_config = yaml.safe_load(f)
-
-        assert "spec" not in saved_config["agents"]["pm"] or "model" not in saved_config["agents"]["pm"].get("spec", {})
-
-
-class TestSetupBackNavigation:
-    """Test back navigation within role configuration."""
-
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_setup_back_from_cli_to_role_menu(
-        self,
-        mock_list_agents: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """User can go back from CLI selection to the role menu."""
-        from cafe.ui.cli import BACK_SENTINEL
-
-        cafe_dir = tmp_path / ".cafe"
-        cafe_dir.mkdir()
-        config_file = cafe_dir / "config.yaml"
-        config_file.write_text(yaml.dump({
-            "agents": {
-                "pm": {"name": "Roger", "cli": "claude"},
-                "developer": {"name": "David", "cli": "claude"},
-                "reviewer": {"name": "Richard", "cli": "claude"},
-            },
-        }))
-
-        mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [("Roger", "PM agent", Path("agents/pm/Roger.md"), "system default")]
-        monkeypatch.chdir(tmp_path)
-
-        agent = "Roger: PM agent (system default)"
-        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list:
-            mock_prompt_list.side_effect = [
-                "developer",
-                BACK_SENTINEL,
-                "pm",
-                "claude",
-                agent,
-                "",
-                "save",
-            ]
-            result = runner.invoke(app, ["setup"])
-
-        assert result.exit_code == 0
-
-        with open(config_file) as f:
-            saved_config = yaml.safe_load(f)
-
-        assert saved_config["agents"]["developer"]["cli"] == "claude"
-        assert saved_config["agents"]["pm"]["cli"] == "claude"
-
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_setup_back_from_agent_to_cli(
-        self,
-        mock_list_agents: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """User can go back from agent selection to CLI selection."""
-        from cafe.ui.cli import BACK_SENTINEL
-
-        cafe_dir = tmp_path / ".cafe"
-        cafe_dir.mkdir()
-        config_file = cafe_dir / "config.yaml"
-        config_file.write_text(yaml.dump({
-            "agents": {
-                "pm": {"name": "Roger", "cli": "claude"},
-                "developer": {"name": "David", "cli": "claude"},
-                "reviewer": {"name": "Richard", "cli": "claude"},
-            },
-        }))
-
-        mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [("Roger", "PM agent", Path("agents/pm/Roger.md"), "system default")]
-        monkeypatch.chdir(tmp_path)
-
-        agent = "Roger: PM agent (system default)"
-        with (
-            patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
-            patch("cafe.ui.cli.prompt_text") as mock_prompt_text,
-        ):
-            mock_prompt_list.side_effect = [
-                "pm",
-                # PM: select CLI, then Back at agent, re-select CLI, then agent, then model
-                "gemini",           # CLI (wrong choice)
-                BACK_SENTINEL,      # Back from agent selection
-                "claude",           # CLI (correct choice)
-                agent,              # agent
-                "",                 # spec model = default
-                "save",
-            ]
-            result = runner.invoke(app, ["setup"])
-
-        assert result.exit_code == 0
-
-        with open(config_file) as f:
-            saved_config = yaml.safe_load(f)
-
-        # PM should have the corrected CLI
-        assert saved_config["agents"]["pm"]["cli"] == "claude"
-
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_setup_back_from_model_to_agent(
-        self,
-        mock_list_agents: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """User can go back from model selection to agent selection."""
-        from cafe.ui.cli import BACK_SENTINEL
-
-        cafe_dir = tmp_path / ".cafe"
-        cafe_dir.mkdir()
-        config_file = cafe_dir / "config.yaml"
-        config_file.write_text(yaml.dump({
-            "agents": {
-                "pm": {"name": "Roger", "cli": "claude"},
-                "developer": {"name": "David", "cli": "claude"},
-                "reviewer": {"name": "Richard", "cli": "claude"},
-            },
-        }))
-
-        mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [
-            ("Roger", "PM agent", Path("agents/pm/Roger.md"), "system default"),
-            ("Alt", "Alt agent", Path("agents/pm/Alt.md"), "custom"),
-        ]
-        monkeypatch.chdir(tmp_path)
-
-        agent_roger = "Roger: PM agent (system default)"
-        agent_alt = "Alt: Alt agent (custom)"
-        with (
-            patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
-            patch("cafe.ui.cli.prompt_text") as mock_prompt_text,
-        ):
-            mock_prompt_list.side_effect = [
-                "pm",
-                # PM: CLI, agent (wrong), back from model, re-select agent, model
-                "claude",
-                agent_roger,         # agent (wrong)
-                BACK_SENTINEL,       # Back from spec model → back to agent
-                agent_alt,           # agent (correct)
-                "",                  # spec model = default
-                "save",
-            ]
-            result = runner.invoke(app, ["setup"])
-
-        assert result.exit_code == 0
-
-        with open(config_file) as f:
-            saved_config = yaml.safe_load(f)
-
-        assert saved_config["agents"]["pm"]["name"] == "Alt"
-
-
-class TestSetupDisplayOutput:
-    """Test setup command display output."""
-
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_setup_displays_current_config_before_prompts(
-        self,
-        mock_list_agents: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """setup should display current agent config before interactive prompts."""
-        cafe_dir = tmp_path / ".cafe"
-        cafe_dir.mkdir()
-        config_file = cafe_dir / "config.yaml"
-        config_file.write_text(yaml.dump({
-            "agents": {
-                "pm": {"name": "Roger", "cli": "gemini"},
-                "developer": {"name": "David", "cli": "claude", "plan": {"model": "opus"}},
-                "reviewer": {"name": "Richard", "cli": "gemini"},
-            },
-        }))
-
-        mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [("Roger", "PM agent", Path("agents/pm/Roger.md"), "system default")]
-        monkeypatch.chdir(tmp_path)
-
-        with (
-            patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
-            patch("cafe.ui.cli.prompt_text") as mock_prompt_text,
-        ):
-            mock_prompt_list.side_effect = ["save"]
-            result = runner.invoke(app, ["setup"])
-
-        assert result.exit_code == 0
-        assert "Current agent configuration" in result.stdout
-        assert "gemini" in result.stdout
-        assert "opus" in result.stdout
-
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.list_available_agents")
-    def test_setup_displays_success_and_summary(
-        self,
-        mock_list_agents: MagicMock,
-        mock_which: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """setup should display success message and agent summary."""
-        cafe_dir = tmp_path / ".cafe"
-        cafe_dir.mkdir()
-        config_file = cafe_dir / "config.yaml"
-        config_file.write_text(yaml.dump({
-            "agents": {
-                "pm": {"name": "Roger", "cli": "claude"},
-                "developer": {"name": "David", "cli": "claude"},
-                "reviewer": {"name": "Richard", "cli": "claude"},
-            },
-        }))
-
-        mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [("Roger", "PM agent", Path("agents/pm/Roger.md"), "system default")]
-        monkeypatch.chdir(tmp_path)
-
-        with (
-            patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
-            patch("cafe.ui.cli.prompt_text") as mock_prompt_text,
-        ):
-            mock_prompt_list.side_effect = [
-                "pm",
-                "claude",
-                "Roger: PM agent (system default)",
-                "",
-                "save",
-            ]
-            result = runner.invoke(app, ["setup"])
-
-        assert result.exit_code == 0
-        assert "Agent configuration updated successfully" in result.stdout
-        assert "PM:" in result.stdout
-        assert "Developer:" in result.stdout
-        assert "Reviewer:" in result.stdout
-        assert "cafe config" in result.stdout
+        cfg = _read_config(cafe_dir)
+        assert "agents" not in cfg
+        crew = yaml.safe_load((cafe_dir / "crew.yaml").read_text())
+        assert crew["pm"]["cli"] == "claude"

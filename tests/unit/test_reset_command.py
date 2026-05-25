@@ -38,8 +38,8 @@ def phase_with_iterations(tmp_issue_dir: Path):
         iter_dir = phase_dir / f"iteration_{i:03d}"
         iter_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create context.json (required for iteration detection)
-        context_file = iter_dir / "context.json"
+        # Create iteration.json (required for iteration detection)
+        context_file = iter_dir / "iteration.json"
         context_file.write_text(json.dumps({"iteration": i}))
 
         # Create output.md
@@ -246,10 +246,10 @@ class TestIterationRemovalAndStatusUpdate:
         status_data = {
             "phase": "spec",
             "status": "completed",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "timestamp": "2024-01-03T00:00:00+00:00",
             "iteration": 3,
-            "message": "Phase completed with CAFE_CONFIRMED",
+            "message": "Phase completed with confirmed",
             "end_time": "2024-01-03T00:00:00+00:00",
         }
         status_path.write_text(json.dumps(status_data))
@@ -276,18 +276,18 @@ class TestIterationRemovalAndStatusUpdate:
         assert copied_data == original_data
 
     def test_end_time_from_context_json(self, phase_with_iterations: Path):
-        """Test 5.3b: Read end_time from context.json when updating status.json."""
-        # Update context.json in iteration_003 to include end_time
-        iter3_context = phase_with_iterations / "iteration_003" / "context.json"
+        """Test 5.3b: Read end_time from iteration.json when updating status.json."""
+        # Update iteration.json in iteration_003 to include end_time
+        iter3_context = phase_with_iterations / "iteration_003" / "iteration.json"
         context_data = {
             "iteration": 3,
             "timestamp": "2024-01-03T10:00:00+00:00",
             "end_time": "2024-01-03T10:30:00+00:00",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
         }
         iter3_context.write_text(json.dumps(context_data))
 
-        # Simulate what cafe reset does: read context.json and create status.json
+        # Simulate what cafe reset does: read iteration.json and create status.json
         loaded_context = json.loads(iter3_context.read_text())
         target_end_time = loaded_context.get("end_time")
         target_timestamp = loaded_context.get("timestamp")
@@ -298,7 +298,7 @@ class TestIterationRemovalAndStatusUpdate:
             "status_code": loaded_context.get("status_code"),
             "timestamp": target_timestamp,
             "iteration": 3,
-            "message": "Phase completed with CAFE_CONFIRMED",
+            "message": "Phase completed with confirmed",
             "end_time": target_end_time or target_timestamp,
         }
 
@@ -310,18 +310,18 @@ class TestIterationRemovalAndStatusUpdate:
         assert loaded_status["end_time"] == "2024-01-03T10:30:00+00:00"
 
     def test_end_time_fallback_to_timestamp(self, phase_with_iterations: Path):
-        """Test 5.3c: Fallback to timestamp when end_time is not in context.json."""
-        # Update context.json in iteration_003 WITHOUT end_time
-        iter3_context = phase_with_iterations / "iteration_003" / "context.json"
+        """Test 5.3c: Fallback to timestamp when end_time is not in iteration.json."""
+        # Update iteration.json in iteration_003 WITHOUT end_time
+        iter3_context = phase_with_iterations / "iteration_003" / "iteration.json"
         context_data = {
             "iteration": 3,
             "timestamp": "2024-01-03T10:00:00+00:00",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             # No end_time field
         }
         iter3_context.write_text(json.dumps(context_data))
 
-        # Simulate what cafe reset does: read context.json and create status.json
+        # Simulate what cafe reset does: read iteration.json and create status.json
         loaded_context = json.loads(iter3_context.read_text())
         target_end_time = loaded_context.get("end_time")  # Will be None
         target_timestamp = loaded_context.get("timestamp")
@@ -332,7 +332,7 @@ class TestIterationRemovalAndStatusUpdate:
             "status_code": loaded_context.get("status_code"),
             "timestamp": target_timestamp,
             "iteration": 3,
-            "message": "Phase completed with CAFE_CONFIRMED",
+            "message": "Phase completed with confirmed",
             "end_time": target_end_time or target_timestamp,  # Fallback to timestamp
         }
 
@@ -351,7 +351,7 @@ class TestIterationRemovalAndStatusUpdate:
 
         iter_dir = phase_dir / "iteration_001"
         iter_dir.mkdir(parents=True, exist_ok=True)
-        iter_dir.joinpath("context.json").write_text('{}')
+        iter_dir.joinpath("iteration.json").write_text('{}')
 
         status_path = phase_dir / "status.json"
         status_path.write_text('{"current_iteration": 1}')

@@ -1,19 +1,43 @@
 """Configuration management for CAFE."""
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import subprocess
 import yaml
 import json
 import time
 
 from cafe.core.types import AgentCLI
+from cafe.utils.crew import CrewManager
 
 
 class ConfigError(Exception):
     """Configuration error."""
 
-    pass
+
+def validate_directories_exist(dirs: List[str], base_dir: Path) -> None:
+    """Verify each directory in dirs exists under base_dir.
+
+    Raises:
+        ConfigError: if any entry is outside base_dir, missing, or not a directory.
+    """
+    base_dir = base_dir.resolve()
+    invalid = []
+    for directory in dirs:
+        directory_path = Path(directory)
+        resolved = (base_dir / directory_path).resolve()
+        if (
+            directory_path.is_absolute()
+            or ".." in directory_path.parts
+            or not resolved.is_relative_to(base_dir)
+            or not resolved.is_dir()
+        ):
+            invalid.append(directory)
+    if invalid:
+        raise ConfigError(
+            "Allowed directories must be existing relative directories under "
+            f"{base_dir}: {', '.join(invalid)}"
+        )
 
 
 def get_global_cafe_dir() -> Path:
@@ -153,6 +177,7 @@ class ConfigManager:
             )
 
         try:
+            CrewManager(cafe_dir=self.config_dir).migrate_legacy_agents_from_config()
             with open(self.config_file, "r") as f:
                 self._config = yaml.safe_load(f)
             if issue_config:
@@ -254,6 +279,63 @@ class ConfigManager:
                 return default
 
         return value
+
+    def get_allowed_directories(self) -> List[str]:
+        """Return the project-level allowed_directories list from config.
+
+        Returns an empty list when the key is absent or not a list, so callers
+        never need to guard against None or unexpected types.
+        """
+        value = self.get("allowed_directories", [])
+        if not isinstance(value, list):
+            return []
+        return value
+
+    def list_allowed_directories(self) -> List[str]:
+        """Return the current allowed_directories list."""
+        return self.get_allowed_directories()
+
+    def add_allowed_directory(self, path: str) -> bool:
+        """Append a normalized path to allowed_directories if not already present."""
+        normalized = self._normalize_allowed_directory_path(path)
+        current = self.get_allowed_directories()
+        existing = {self._normalize_allowed_directory_path(entry) for entry in current}
+        if normalized in existing:
+            return False
+        self.set("allowed_directories", [*current, normalized])
+        return True
+
+    def remove_allowed_directory(self, path: str) -> bool:
+        """Remove the first allowed_directories entry matching the normalized path."""
+        normalized = self._normalize_allowed_directory_path(path)
+        current = self.get_allowed_directories()
+        updated: List[str] = []
+        removed = False
+        for entry in current:
+            if not removed and self._normalize_allowed_directory_path(entry) == normalized:
+                removed = True
+                continue
+            updated.append(entry)
+        if not removed:
+            return False
+        self.set("allowed_directories", updated)
+        return True
+
+    def _normalize_allowed_directory_path(self, path: str) -> str:
+        """Normalize a user-provided directory path for storage and comparison."""
+        expanded = Path(path.strip()).expanduser()
+        try:
+            resolved = expanded.resolve()
+        except (OSError, RuntimeError):
+            resolved = expanded
+
+        cwd = Path.cwd()
+        try:
+            if resolved.is_relative_to(cwd):
+                return resolved.relative_to(cwd).as_posix()
+        except ValueError:
+            pass
+        return resolved.as_posix()
 
     def set(self, key: str, value: Any) -> None:
         """Set configuration value.

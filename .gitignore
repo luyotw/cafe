@@ -5,4 +5,11 @@
 .pytest_cache/
 .coverage
 .cafe
+.claude
+.codex
+.copilot
+.gemini
+.cursor
+.cursor-agent
 dist/
+configs/

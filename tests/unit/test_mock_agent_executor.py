@@ -1,8 +1,7 @@
 """Tests for MockAgentExecutor."""
 
-import pytest
 from cafe.agents.mock_executor import MockAgentExecutor
-from cafe.core.types import AgentConfig, AgentCLI, TokenUsage
+from cafe.core.types import AgentCLI, AgentConfig, TokenUsage
 
 
 class TestMockAgentExecutor:
@@ -18,7 +17,7 @@ class TestMockAgentExecutor:
         agent_response = executor.execute("test prompt")
 
         # Assert
-        assert "CAFE_READY_FOR_REVIEW" in agent_response.response
+        assert "ready_for_review" in agent_response.response
         assert isinstance(agent_response.token_usage, TokenUsage)
 
     def test_custom_response(self):
@@ -42,12 +41,12 @@ class TestMockAgentExecutor:
         # Arrange
         config = AgentConfig(name="TestAgent", cli=AgentCLI.CLAUDE)
         executor = MockAgentExecutor(config=config)
-        
+
         # Act
         executor.execute("prompt 1")
         executor.execute("prompt 2")
         executor.execute("prompt 3")
-        
+
         # Assert
         assert executor.call_count == 3
 
@@ -56,11 +55,11 @@ class TestMockAgentExecutor:
         # Arrange
         config = AgentConfig(name="TestAgent", cli=AgentCLI.CLAUDE)
         executor = MockAgentExecutor(config=config)
-        
+
         # Act
         executor.execute("first prompt")
         executor.execute("second prompt")
-        
+
         # Assert
         assert executor.last_prompt == "second prompt"
 
@@ -69,10 +68,10 @@ class TestMockAgentExecutor:
         # Arrange
         config = AgentConfig(name="TestAgent", cli=AgentCLI.CLAUDE)
         executor = MockAgentExecutor(config=config)
-        
+
         # Act
         executor.execute("prompt", tools=["bash", "read"])
-        
+
         # Assert
         assert executor.last_tools == ["bash", "read"]
 
@@ -111,10 +110,10 @@ class TestMockAgentExecutor:
         config = AgentConfig(name="TestAgent", cli=AgentCLI.CLAUDE)
         executor = MockAgentExecutor(config=config)
         executor.execute("prompt", tools=["bash"])
-        
+
         # Act
         executor.reset()
-        
+
         # Assert
         assert executor.call_count == 0
         assert executor.last_prompt is None
@@ -125,7 +124,37 @@ class TestMockAgentExecutor:
         # Arrange
         config = AgentConfig(name="TestAgent", cli=AgentCLI.GEMINI)
         executor = MockAgentExecutor(config=config)
-        
+
         # Assert
         assert executor.config.name == "TestAgent"
         assert executor.config.cli == AgentCLI.GEMINI
+
+    def test_preview_cli_command_args_available(self):
+        """測試 mock executor 提供 preview args 介面"""
+        config = AgentConfig(name="TestAgent", cli=AgentCLI.CODEX)
+        executor = MockAgentExecutor(config=config)
+
+        result = executor.preview_cli_command_args(
+            "test prompt",
+            allowed_tools=["read"],
+            allowed_directories=["/tmp"],
+        )
+
+        assert result == ["--mock-agent", "TestAgent", "--prompt", "test prompt"]
+
+    def test_preview_cli_environment_available(self):
+        """測試 mock executor 提供 preview env 介面"""
+        config = AgentConfig(name="TestAgent", cli=AgentCLI.CODEX)
+        executor = MockAgentExecutor(config=config)
+
+        assert executor.preview_cli_environment() == {}
+
+    def test_execute_writes_response_to_runtime_output_file(self, tmp_path):
+        """測試 mock executor 會模擬 agent 寫入 runtime output.md。"""
+        config = AgentConfig(name="TestAgent", cli=AgentCLI.CLAUDE)
+        executor = MockAgentExecutor(config=config, response="confirmed\n\nMock output")
+        output_file = tmp_path / "issue" / "develop" / "iteration_001" / "output.md"
+
+        executor.execute(f"Runtime files:\noutput_file={output_file}\n")
+
+        assert output_file.read_text(encoding="utf-8") == "confirmed\n\nMock output"

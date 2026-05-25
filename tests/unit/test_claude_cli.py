@@ -1,9 +1,9 @@
 """測試 ClaudeCLI 實作."""
 
-import json
-import pytest
 from pathlib import Path
 from unittest.mock import patch
+import json
+import pytest
 
 from cafe.agents.cli.claude import ClaudeCLI
 from cafe.core.types import AgentConfig, AgentCLI, PermissionDenial, TokenUsage
@@ -204,6 +204,34 @@ class TestClaudeCLIAddDirectories:
         assert result == cmd
 
 
+class TestClaudeCLIProjectSkills:
+    """測試 Claude 已不再依賴專案技能 symlink 準備."""
+
+    def test_prepare_project_workspace_does_not_create_skills_symlink(self, claude_config, tmp_path, monkeypatch):
+        """即使專案有 .cafe/skills，也不應再建立 .claude/skills 軟連結."""
+        monkeypatch.chdir(tmp_path)
+        skill_dir = tmp_path / ".cafe" / "skills" / "alpha"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: alpha\ndescription: alpha\n---\n\n# alpha\n",
+            encoding="utf-8",
+        )
+
+        cli = ClaudeCLI(claude_config)
+        cli.prepare_project_workspace(tmp_path)
+
+        assert not (tmp_path / ".claude" / "skills").exists()
+
+    def test_prepare_project_workspace_skips_when_no_project_skills(self, claude_config, tmp_path, monkeypatch):
+        """沒有 .cafe/skills 時，不應建立多餘目錄或連結."""
+        monkeypatch.chdir(tmp_path)
+
+        cli = ClaudeCLI(claude_config)
+        cli.prepare_project_workspace(tmp_path)
+
+        assert not (tmp_path / ".claude" / "skills").exists()
+
+
 class TestClaudeCLIGetOutputFormat:
     """測試 get_output_format() 方法."""
 
@@ -215,6 +243,19 @@ class TestClaudeCLIGetOutputFormat:
         assert "--output-format" in result
         assert "stream-json" in result
         assert "--verbose" in result
+
+
+class TestClaudeCLICreateSession:
+    """測試 create_session()."""
+
+    def test_create_session_is_noop(self, claude_config_with_model):
+        cli = ClaudeCLI(claude_config_with_model)
+
+        with patch("subprocess.run") as mock_run:
+            session_id = cli.create_session()
+
+        assert session_id == ""
+        mock_run.assert_not_called()
 
 
 class TestClaudeCLIParseResponse:

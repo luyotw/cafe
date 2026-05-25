@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 from cafe.ui.cli import app, _setup_agents
 from cafe.core.git import GitOperations
-from cafe.core.types import AgentCLI, PhaseResult, PhaseStatus
+from cafe.core.types import AgentCLI
 from cafe.utils.config import ConfigManager
 
 
@@ -163,21 +163,21 @@ class TestConfigCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            # Save custom config with dict structure for agents
             custom_config = {
+                "python_bin": "python3",
                 "agents": {
                     "pm": {"name": "Roger"}
-                }
+                },
             }
             config_manager = ConfigManager()
             config_manager.save_config(custom_config)
 
-            result = runner.invoke(app, ["config", "get", "agents.pm.name"])
+            result = runner.invoke(app, ["config", "get", "python_bin"])
         finally:
             os.chdir(old_cwd)
 
         assert result.exit_code == 0
-        assert "Roger" in result.stdout
+        assert "python3" in result.stdout
 
     def test_config_get_nonexistent_key(self, tmp_path: Path) -> None:
         """測試取得不存在設定值"""
@@ -225,328 +225,6 @@ class TestConfigCommand:
         assert result.exit_code == 0
         # Without args, config command shows all configuration
         assert "agents" in result.stdout or "Configuration" in result.stdout
-
-
-class TestPlanCommand:
-    """Test plan command."""
-
-    @patch("cafe.ui.cli.GitOperations")
-    @patch("cafe.ui.cli.select_template")
-    @patch("cafe.ui.cli.PlanPhase")
-    def test_plan_local_mode_success(
-        self,
-        mock_plan_phase: Mock,
-        mock_select_template: Mock,
-        mock_git_ops: Mock,
-        tmp_path: Path,
-    ) -> None:
-        """測試 plan 指令 local mode 成功執行"""
-        # Setup: Create config.yaml
-        _create_minimal_config(tmp_path)
-
-        # Setup: Create versioned spec file in the expected location (new structure)
-        branch_name = "test-issue"
-        spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
-        iter_dir = spec_dir / "iteration_001"
-        iter_dir.mkdir(parents=True, exist_ok=True)
-        spec_file = iter_dir / "output.md"
-        spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
-
-        # Create a default template
-        template_dir = tmp_path / ".cafe" / "templates" / "plan"
-        template_dir.mkdir(parents=True, exist_ok=True)
-        (template_dir / "default.md").write_text("# Plan Template")
-
-        # Mock Git operations
-        mock_git_instance = MagicMock()
-        mock_git_instance.is_valid_branch.return_value = True
-        mock_git_instance.get_current_branch.return_value = branch_name
-        mock_git_ops.return_value = mock_git_instance
-
-        # Mock template selection
-        mock_select_template.return_value = "default"
-
-        # Mock phase execution
-        mock_phase_instance = MagicMock()
-        mock_phase_instance.execute.return_value = PhaseResult(
-            status=PhaseStatus.COMPLETED,
-            message="Plan completed",
-            data={"iterations": 2}
-        )
-        mock_plan_phase.return_value = mock_phase_instance
-
-        # Execute
-        import os
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan", "--no-interactive", "--template", "default"])
-        finally:
-            os.chdir(old_cwd)
-
-        # Verify
-        assert result.exit_code == 0
-        assert "Implementation plan completed" in result.stdout
-        assert "Iterations: 2" in result.stdout
-        mock_plan_phase.assert_called_once()
-
-    @patch("cafe.ui.cli.GitOperations")
-    @patch("cafe.ui.cli.select_template")
-    @patch("cafe.ui.cli.PlanPhase")
-    def test_plan_github_mode_with_issue(
-        self,
-        mock_plan_phase: Mock,
-        mock_select_template: Mock,
-        mock_git_ops: Mock,
-        tmp_path: Path,
-    ) -> None:
-        """測試 plan 指令使用 issue ID"""
-        # Setup: Create config.yaml
-        _create_minimal_config(tmp_path)
-
-        # Setup: Checks if versioned spec file exists first (new structure)
-        branch_name = "test-issue"
-        spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
-        iter_dir = spec_dir / "iteration_001"
-        iter_dir.mkdir(parents=True, exist_ok=True)
-        spec_file = iter_dir / "output.md"
-        spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
-
-        # Create a default template
-        template_dir = tmp_path / ".cafe" / "templates" / "plan"
-        template_dir.mkdir(parents=True, exist_ok=True)
-        (template_dir / "default.md").write_text("# Plan Template")
-
-        # Mock Git operations
-        mock_git_instance = MagicMock()
-        mock_git_instance.is_valid_branch.return_value = True
-        mock_git_instance.get_current_branch.return_value = branch_name
-        mock_git_ops.return_value = mock_git_instance
-
-        # Mock template selection
-        mock_select_template.return_value = "default"
-
-        # Mock phase execution
-        mock_phase_instance = MagicMock()
-        mock_phase_instance.execute.return_value = PhaseResult(
-            status=PhaseStatus.COMPLETED,
-            message="Plan completed",
-            data={"iterations": 1}
-        )
-        mock_plan_phase.return_value = mock_phase_instance
-
-        # Execute
-        import os
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan", "-i", "123", "--no-interactive", "--template", "default"])
-        finally:
-            os.chdir(old_cwd)
-
-        # Verify
-        assert result.exit_code == 0
-        assert "GitHub Issue: #123" in result.stdout
-        mock_plan_phase.assert_called_once()
-
-    @patch("cafe.ui.cli.GitOperations")
-    @patch("cafe.ui.cli.select_template")
-    @patch("cafe.ui.cli.PlanPhase")
-    def test_plan_fails_with_error(
-        self,
-        mock_plan_phase: Mock,
-        mock_select_template: Mock,
-        mock_git_ops: Mock,
-        tmp_path: Path,
-    ) -> None:
-        """測試 plan 指令執行失敗"""
-        # Setup: Create config.yaml
-        _create_minimal_config(tmp_path)
-
-        # Setup: Create versioned spec file in the expected location (new structure)
-        branch_name = "test-issue"
-        spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
-        iter_dir = spec_dir / "iteration_001"
-        iter_dir.mkdir(parents=True, exist_ok=True)
-        spec_file = iter_dir / "output.md"
-        spec_file.write_text("# Spec")
-
-        # Create a default template
-        template_dir = tmp_path / ".cafe" / "templates" / "plan"
-        template_dir.mkdir(parents=True, exist_ok=True)
-        (template_dir / "default.md").write_text("# Plan Template")
-
-        # Mock Git operations
-        mock_git_instance = MagicMock()
-        mock_git_instance.is_valid_branch.return_value = True
-        mock_git_instance.get_current_branch.return_value = branch_name
-        mock_git_ops.return_value = mock_git_instance
-
-        # Mock template selection
-        mock_select_template.return_value = "default"
-
-        # Mock phase execution failure
-        mock_phase_instance = MagicMock()
-        mock_phase_instance.execute.return_value = PhaseResult(
-            status=PhaseStatus.FAILED,
-            message="Missing dev guide"
-        )
-        mock_plan_phase.return_value = mock_phase_instance
-
-        # Execute
-        import os
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan", "--no-interactive", "--template", "default"])
-        finally:
-            os.chdir(old_cwd)
-
-        # Verify
-        assert result.exit_code == 1
-        assert "Plan phase failed" in result.stdout
-
-
-    @patch("cafe.ui.cli.GitOperations")
-    @patch("cafe.ui.cli.select_template")
-    @patch("cafe.ui.cli.PlanPhase")
-    def test_plan_loads_template_from_issue_config(
-        self,
-        mock_plan_phase: Mock,
-        mock_select_template: Mock,
-        mock_git_ops: Mock,
-        tmp_path: Path,
-    ) -> None:
-        """測試 plan 指令從 issue.yaml 載入 template 設定，不應該提示選擇"""
-        # Setup: Create config.yaml
-        _create_minimal_config(tmp_path)
-
-        # Setup: Create versioned spec file (new structure)
-        branch_name = "test-issue"
-        spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
-        iter_dir = spec_dir / "iteration_001"
-        iter_dir.mkdir(parents=True, exist_ok=True)
-        spec_file = iter_dir / "output.md"
-        spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
-
-        # Setup: Create issue.yaml with plan.template: auto
-        issue_config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
-        issue_config_file.write_text("plan:\n  template: auto\n")
-
-        # Create a default template
-        template_dir = tmp_path / ".cafe" / "templates" / "plan"
-        template_dir.mkdir(parents=True, exist_ok=True)
-        (template_dir / "default.md").write_text("# Plan Template")
-
-        # Mock Git operations
-        mock_git_instance = MagicMock()
-        mock_git_instance.is_valid_branch.return_value = True
-        mock_git_instance.get_current_branch.return_value = branch_name
-        mock_git_ops.return_value = mock_git_instance
-
-        # Mock phase execution
-        mock_phase_instance = MagicMock()
-        mock_phase_instance.execute.return_value = PhaseResult(
-            status=PhaseStatus.COMPLETED,
-            message="Plan completed",
-            data={"iterations": 1, "status_code": "CAFE_CONFIRMED"}
-        )
-        mock_plan_phase.return_value = mock_phase_instance
-
-        # Execute
-        import os
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan", "--no-interactive"])
-        finally:
-            os.chdir(old_cwd)
-
-        # Verify: Should not call select_template because config has template setting
-        mock_select_template.assert_not_called()
-
-        # Verify: PlanPhase should be called with template_mode="auto"
-        mock_plan_phase.assert_called_once()
-        call_kwargs = mock_plan_phase.call_args[1]
-        assert call_kwargs["template_mode"] == "auto"
-        assert call_kwargs["template_path"] is None
-
-        # Verify: Command succeeded
-        assert result.exit_code == 0
-        # Verify auto mode is indicated in output
-        assert "Template mode: auto" in result.stdout
-
-    @patch("cafe.ui.cli.GitOperations")
-    @patch("cafe.ui.cli.select_template")
-    @patch("cafe.ui.cli.PlanPhase")
-    @patch("sys.stdin.isatty")
-    def test_plan_loads_template_from_issue_config_interactive(
-        self,
-        mock_isatty: Mock,
-        mock_plan_phase: Mock,
-        mock_select_template: Mock,
-        mock_git_ops: Mock,
-        tmp_path: Path,
-    ) -> None:
-        """測試互動模式下，plan 指令從 issue.yaml 載入 template 設定，不應該提示選擇"""
-        # Setup: Create config.yaml
-        _create_minimal_config(tmp_path)
-
-        # Setup: Create versioned spec file (new structure)
-        branch_name = "test-issue"
-        spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
-        iter_dir = spec_dir / "iteration_001"
-        iter_dir.mkdir(parents=True, exist_ok=True)
-        spec_file = iter_dir / "output.md"
-        spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
-
-        # Setup: Create issue.yaml with plan.template: auto
-        issue_config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
-        issue_config_file.write_text("plan:\n  template: auto\n")
-
-        # Create a default template
-        template_dir = tmp_path / ".cafe" / "templates" / "plan"
-        template_dir.mkdir(parents=True, exist_ok=True)
-        (template_dir / "default.md").write_text("# Plan Template")
-
-        # Mock Git operations
-        mock_git_instance = MagicMock()
-        mock_git_instance.is_valid_branch.return_value = True
-        mock_git_instance.get_current_branch.return_value = branch_name
-        mock_git_ops.return_value = mock_git_instance
-
-        # Mock isatty to simulate interactive mode
-        mock_isatty.return_value = True
-
-        # Mock phase execution
-        mock_phase_instance = MagicMock()
-        mock_phase_instance.execute.return_value = PhaseResult(
-            status=PhaseStatus.COMPLETED,
-            message="Plan completed",
-            data={"iterations": 1, "status_code": "CAFE_CONFIRMED"}
-        )
-        mock_plan_phase.return_value = mock_phase_instance
-
-        # Execute in interactive mode (default)
-        import os
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan"])
-        finally:
-            os.chdir(old_cwd)
-
-        # Verify: Should not call select_template because config has template setting
-        mock_select_template.assert_not_called()
-
-        # Verify: PlanPhase should be called with template_mode="auto"
-        mock_plan_phase.assert_called_once()
-        call_kwargs = mock_plan_phase.call_args[1]
-        assert call_kwargs["template_mode"] == "auto"
-        assert call_kwargs["template_path"] is None
-
-        # Verify: Command succeeded
-        assert result.exit_code == 0
 
 
 class TestCloseCommand:
@@ -746,7 +424,8 @@ worktree_path: {worktree_path}
         assert "Failed to update base branch" in result.stdout
         assert "Remaining steps" in result.stdout
         assert "git pull" in result.stdout
-        assert "git branch -d test-issue" in result.stdout
+        assert "git branch -D test-issue" in result.stdout
+        assert "cafe rm test-issue" in result.stdout
 
         # Verify delete was not called
         mock_git_instance.delete_branch.assert_not_called()
@@ -845,7 +524,8 @@ worktree_path: {worktree_path}
         assert "Failed to remove worktree" in result.stdout
         assert "Remaining steps" in result.stdout
         assert f"git worktree remove {worktree_path}" in result.stdout
-        assert "git branch -d test-issue" in result.stdout
+        assert "git branch -D test-issue" in result.stdout
+        assert "cafe rm test-issue" in result.stdout
 
         # Verify delete_branch was not called
         mock_git_instance.delete_branch.assert_not_called()
@@ -979,15 +659,21 @@ class TestEditFileWithEditor:
         assert exc_info.value.exit_code == 1
 
 
-class TestSpecEditCommand:
-    """測試 cafe spec edit 指令"""
+class TestEditCommand:
+    """測試 cafe edit <phase> 指令"""
+
+    def test_edit_rejects_unknown_phase(self) -> None:
+        result = runner.invoke(app, ["edit", "unknown"])
+
+        assert result.exit_code == 1
+        assert "phase must be one of spec, plan, develop, review, pr" in result.stdout
 
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli._edit_file_with_editor")
-    def test_spec_edit_opens_latest_file(
+    def test_edit_spec_opens_latest_file(
         self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
-        """測試正確找到並開啟最新 spec_XXX.md 檔案"""
+        """測試正確找到並開啟最新 spec artifact."""
         import os
 
         # Setup
@@ -1012,7 +698,7 @@ class TestSpecEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["spec", "edit"])
+            result = runner.invoke(app, ["edit", "spec"])
         finally:
             os.chdir(old_cwd)
 
@@ -1024,7 +710,7 @@ class TestSpecEditCommand:
         assert called_path.parent.name == "iteration_002"
 
     @patch("cafe.ui.cli.GitOperations")
-    def test_spec_edit_no_file_shows_error(
+    def test_edit_spec_no_file_shows_error(
         self, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
         """測試沒有 spec 檔案時顯示錯誤"""
@@ -1045,17 +731,17 @@ class TestSpecEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["spec", "edit"])
+            result = runner.invoke(app, ["edit", "spec"])
         finally:
             os.chdir(old_cwd)
 
         # Verify
         assert result.exit_code == 1
         assert "No spec file found" in result.stdout
-        assert "cafe spec" in result.stdout
+        assert "cafe make --user-input" in result.stdout
 
     @patch("cafe.ui.cli.GitOperations")
-    def test_spec_edit_not_in_issue_branch_shows_error(
+    def test_edit_spec_not_in_issue_branch_shows_error(
         self, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
         """測試不在 issue branch 上時顯示錯誤"""
@@ -1072,7 +758,7 @@ class TestSpecEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["spec", "edit"])
+            result = runner.invoke(app, ["edit", "spec"])
         finally:
             os.chdir(old_cwd)
 
@@ -1083,7 +769,7 @@ class TestSpecEditCommand:
 
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli._edit_file_with_editor")
-    def test_spec_edit_shows_success_message(
+    def test_edit_spec_shows_success_message(
         self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
         """測試編輯完成後顯示成功訊息"""
@@ -1107,7 +793,7 @@ class TestSpecEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["spec", "edit"])
+            result = runner.invoke(app, ["edit", "spec"])
         finally:
             os.chdir(old_cwd)
 
@@ -1116,15 +802,12 @@ class TestSpecEditCommand:
         mock_edit.assert_called_once()
 
 
-class TestPlanEditCommand:
-    """測試 cafe plan edit 指令"""
-
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli._edit_file_with_editor")
-    def test_plan_edit_opens_latest_file(
+    def test_edit_plan_opens_latest_file(
         self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
-        """測試正確找到並開啟最新 plan_XXX.md 檔案"""
+        """測試正確找到並開啟最新 plan artifact."""
         import os
 
         # Setup
@@ -1149,7 +832,7 @@ class TestPlanEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan", "edit"])
+            result = runner.invoke(app, ["edit", "plan"])
         finally:
             os.chdir(old_cwd)
 
@@ -1161,7 +844,7 @@ class TestPlanEditCommand:
         assert called_path.parent.name == "iteration_002"
 
     @patch("cafe.ui.cli.GitOperations")
-    def test_plan_edit_no_file_shows_error(
+    def test_edit_plan_no_file_shows_error(
         self, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
         """測試沒有 plan 檔案時顯示錯誤"""
@@ -1182,17 +865,17 @@ class TestPlanEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan", "edit"])
+            result = runner.invoke(app, ["edit", "plan"])
         finally:
             os.chdir(old_cwd)
 
         # Verify
         assert result.exit_code == 1
         assert "No plan file found" in result.stdout
-        assert "cafe plan" in result.stdout
+        assert "Run 'cafe make' first." in result.stdout
 
     @patch("cafe.ui.cli.GitOperations")
-    def test_plan_edit_not_in_issue_branch_shows_error(
+    def test_edit_plan_not_in_issue_branch_shows_error(
         self, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
         """測試不在 issue branch 上時顯示錯誤"""
@@ -1209,7 +892,7 @@ class TestPlanEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan", "edit"])
+            result = runner.invoke(app, ["edit", "plan"])
         finally:
             os.chdir(old_cwd)
 
@@ -1220,7 +903,7 @@ class TestPlanEditCommand:
 
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli._edit_file_with_editor")
-    def test_plan_edit_shows_success_message(
+    def test_edit_plan_shows_success_message(
         self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
         """測試編輯完成後顯示成功訊息"""
@@ -1244,7 +927,7 @@ class TestPlanEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan", "edit"])
+            result = runner.invoke(app, ["edit", "plan"])
         finally:
             os.chdir(old_cwd)
 
@@ -1253,15 +936,12 @@ class TestPlanEditCommand:
         mock_edit.assert_called_once()
 
 
-class TestReviewEditCommand:
-    """測試 cafe review edit 指令"""
-
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli._edit_file_with_editor")
-    def test_review_edit_opens_latest_file(
+    def test_edit_review_opens_latest_file(
         self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
-        """測試正確找到並開啟最新 review_XXX.md 檔案"""
+        """測試正確找到並開啟最新 review artifact."""
         import os
 
         # Setup
@@ -1286,7 +966,7 @@ class TestReviewEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["review", "edit"])
+            result = runner.invoke(app, ["edit", "review"])
         finally:
             os.chdir(old_cwd)
 
@@ -1298,7 +978,7 @@ class TestReviewEditCommand:
         assert called_path.parent.name == "iteration_002"
 
     @patch("cafe.ui.cli.GitOperations")
-    def test_review_edit_no_file_shows_error(
+    def test_edit_review_no_file_shows_error(
         self, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
         """測試沒有 review 檔案時顯示錯誤"""
@@ -1319,17 +999,17 @@ class TestReviewEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["review", "edit"])
+            result = runner.invoke(app, ["edit", "review"])
         finally:
             os.chdir(old_cwd)
 
         # Verify
         assert result.exit_code == 1
         assert "No review file found" in result.stdout
-        assert "cafe review" in result.stdout
+        assert "Run 'cafe make' first." in result.stdout
 
     @patch("cafe.ui.cli.GitOperations")
-    def test_review_edit_not_in_issue_branch_shows_error(
+    def test_edit_review_not_in_issue_branch_shows_error(
         self, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
         """測試不在 issue branch 上時顯示錯誤"""
@@ -1346,7 +1026,7 @@ class TestReviewEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["review", "edit"])
+            result = runner.invoke(app, ["edit", "review"])
         finally:
             os.chdir(old_cwd)
 
@@ -1357,7 +1037,7 @@ class TestReviewEditCommand:
 
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli._edit_file_with_editor")
-    def test_review_edit_shows_success_message(
+    def test_edit_review_shows_success_message(
         self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
         """測試編輯完成後顯示成功訊息"""
@@ -1381,11 +1061,37 @@ class TestReviewEditCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["review", "edit"])
+            result = runner.invoke(app, ["edit", "review"])
         finally:
             os.chdir(old_cwd)
 
         # Verify - message from _edit_file_with_editor
+        assert result.exit_code == 0
+        mock_edit.assert_called_once()
+
+    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.cli._edit_file_with_editor")
+    def test_edit_spec_opens_latest_artifact(
+        self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
+    ) -> None:
+        import os
+
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = "test-issue"
+        mock_git_ops_class.return_value = mock_git_instance
+
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "iteration_001"
+        issue_dir.mkdir(parents=True)
+        (issue_dir / "output.md").write_text("Spec content")
+
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["edit", "spec"])
+        finally:
+            os.chdir(old_cwd)
+
         assert result.exit_code == 0
         mock_edit.assert_called_once()
 

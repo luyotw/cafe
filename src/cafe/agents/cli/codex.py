@@ -1,7 +1,6 @@
 """Codex CLI tool implementation."""
 
 import json
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -58,6 +57,11 @@ class CodexCLI(AbstractCLI):
         else:
             cmd.append("exec")
 
+        if self.config.session_id:
+            cmd.append(self.config.session_id)
+
+        cmd.append(prompt)
+
         if self.config.model:
             cmd.extend(["--model", self.config.model])
 
@@ -66,10 +70,6 @@ class CodexCLI(AbstractCLI):
         if allowed_directories and not self.config.session_id:
             cmd = self.add_directories(cmd, self._expand_initial_allowed_directories(allowed_directories, cwd))
 
-        if self.config.session_id:
-            cmd.append(self.config.session_id)
-
-        cmd.append(prompt)
         return cmd
 
     def parse_response(
@@ -157,21 +157,5 @@ class CodexCLI(AbstractCLI):
         return None
 
     def create_session(self) -> str:
-        """Create a new Codex exec session and return its thread ID."""
-        cmd = ["codex", "exec", "--json", "--skip-git-repo-check", "Say 'hi'"]
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to create Codex session: {result.stderr}")
-
-        session_id = self.extract_session_id(result.stdout.splitlines())
-        if not session_id:
-            raise RuntimeError("Could not extract Codex session ID from output")
-
-        return session_id
+        """Codex sessions are created by the real exec command itself."""
+        return ""

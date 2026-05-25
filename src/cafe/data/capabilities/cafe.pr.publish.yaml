@@ -1,0 +1,22 @@
+id: cafe.pr.publish
+script_ref: sync_pr
+idempotency_hint: update_in_place
+args_schema:
+  required:
+    - output
+  properties:
+    output:
+      type: string
+    base:
+      type: string
+expected_outputs:
+  required:
+    - pr_url
+    - pr_number
+  properties:
+    pr_url:
+      type: string
+    pr_number:
+      type: string
+    action:
+      type: string

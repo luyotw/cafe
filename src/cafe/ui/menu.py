@@ -7,6 +7,7 @@ context-aware menu to guide users through common workflows.
 
 import subprocess
 import sys
+import json
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,8 +15,10 @@ from typing import Any, Dict, List, Optional
 from rich.console import Console
 
 from cafe.core.git import GitOperations
+from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui.inquirer_prompts import prompt_list, prompt_text
 from cafe.utils.config import ConfigManager
+from cafe.utils.crew import CrewManager
 from cafe.utils.git_utils import is_branch_initialized
 
 
@@ -169,7 +172,7 @@ class InteractiveMenu:
             choices += [
                 {"name": "New issue", "value": "prepare"},
                 {"name": "List issues", "value": "ls"},
-                {"name": "Remove issue", "value": "rm"},
+                {"name": "Remove issues", "value": "rm"},
                 {"name": "Restore archived issue", "value": "restore"},
             ]
 
@@ -190,7 +193,8 @@ class InteractiveMenu:
             {"name": "Chat with agent", "value": "chat"},
             {"name": "Show status", "value": "summary"},
             {"name": "Reset iteration", "value": "reset"},
-            {"name": "Close issue", "value": "close"},
+            {"name": "Close current issue", "value": "close"},
+            {"name": "Remove issues", "value": "rm"},
             {"name": "Settings", "value": "settings"},
             {"name": "Exit", "value": "exit"},
         ]
@@ -205,8 +209,36 @@ class InteractiveMenu:
             {"name": "Agent CLI & model setup", "value": "setup"},
             {"name": "View config", "value": "config"},
             {"name": "Edit config", "value": "config_edit"},
+            {"name": "Manage crew", "value": "crew_manage"},
+            {"name": "Manage allowed directories", "value": "allowed_dirs_manage"},
             {"name": "Manage agents", "value": "agent_edit"},
             {"name": "Manage templates", "value": "template_edit"},
+            {"name": "Back", "value": "back"},
+        ]
+
+    def _build_crew_menu_choices(self) -> List[Dict[str, Any]]:
+        """Build the list of choices for the crew management submenu.
+
+        Returns:
+            List of InquirerPy choice dicts with "name" and "value" keys
+        """
+        return [
+            {"name": "List crew", "value": "crew_list"},
+            {"name": "Set primary CLI", "value": "crew_set_primary"},
+            {"name": "Set fallback CLI", "value": "crew_set_fallback"},
+            {"name": "Back", "value": "back"},
+        ]
+
+    def _build_allowed_directories_menu_choices(self) -> List[Dict[str, Any]]:
+        """Build the list of choices for the allowed directories submenu.
+
+        Returns:
+            List of InquirerPy choice dicts with "name" and "value" keys
+        """
+        return [
+            {"name": "List", "value": "allowed_dirs_list"},
+            {"name": "Add", "value": "allowed_dirs_add"},
+            {"name": "Remove", "value": "allowed_dirs_remove"},
             {"name": "Back", "value": "back"},
         ]
 
@@ -276,6 +308,8 @@ class InteractiveMenu:
             _run_command(["summary"])
         elif selection == "reset":
             _run_command(["reset"])
+        elif selection == "rm":
+            _run_command(["rm"])
         elif selection == "close":
             _run_command(["close"])
             return _EXIT_SENTINEL
@@ -300,15 +334,106 @@ class InteractiveMenu:
                 _run_command(["config"])
             elif selection == "config_edit":
                 _run_command(["config", "edit"])
+            elif selection == "crew_manage":
+                self._show_crew_menu()
+            elif selection == "allowed_dirs_manage":
+                self._show_allowed_directories_menu()
             elif selection == "agent_edit":
                 _run_command(["agent", "edit"])
             elif selection == "template_edit":
                 _run_command(["template", "edit"])
 
+    def _show_crew_menu(self) -> None:
+        """Display the crew management submenu and handle the user's selection.
+
+        This menu loops until the user selects "Back".
+        """
+        while True:
+            choices = self._build_crew_menu_choices()
+            selection = prompt_list("CAFE  Manage crew", choices)
+
+            if selection == "back":
+                return
+
+            if selection == "crew_list":
+                _run_command(["crew", "list"])
+            elif selection == "crew_set_primary":
+                _run_command(["crew", "set-primary"])
+            elif selection == "crew_set_fallback":
+                _run_command(["crew", "set-fallback"])
+
+    def _show_allowed_directories_menu(self) -> None:
+        """Display the allowed directories submenu and handle the user's selection.
+
+        This menu loops until the user selects "Back".
+        """
+        if not Path(".cafe/config.yaml").exists():
+            console.print("[yellow]Project not initialized. Run 'cafe init' first.[/yellow]")
+            return
+
+        config_manager = ConfigManager()
+        while True:
+            choices = self._build_allowed_directories_menu_choices()
+            selection = prompt_list("CAFE  Manage allowed directories", choices)
+
+            if selection == "back":
+                return
+
+            if selection == "allowed_dirs_list":
+                self._handle_allowed_directories_list(config_manager)
+            elif selection == "allowed_dirs_add":
+                self._handle_allowed_directories_add(config_manager)
+            elif selection == "allowed_dirs_remove":
+                self._handle_allowed_directories_remove(config_manager)
+
+    def _handle_allowed_directories_list(self, config_manager: ConfigManager) -> None:
+        """Print current allowed directories."""
+        entries = config_manager.list_allowed_directories()
+        if not entries:
+            console.print("[yellow]No allowed directories configured.[/yellow]")
+            return
+        for entry in entries:
+            console.print(entry)
+
+    def _handle_allowed_directories_add(self, config_manager: ConfigManager) -> None:
+        """Prompt for a directory path and append it to allowed_directories."""
+        path = prompt_text("Directory path:")
+        if not path.strip():
+            return
+
+        check_path = Path(path.strip()).expanduser()
+        try:
+            check_path = check_path.resolve()
+        except (OSError, RuntimeError):
+            pass
+        if not check_path.is_dir():
+            console.print("[yellow]Warning: directory does not exist on disk; saving anyway.[/yellow]")
+
+        if config_manager.add_allowed_directory(path):
+            console.print("[green]Allowed directory added.[/green]")
+        else:
+            console.print("[yellow]Directory already in allowed list.[/yellow]")
+
+    def _handle_allowed_directories_remove(self, config_manager: ConfigManager) -> None:
+        """Prompt for an existing directory entry and remove it."""
+        entries = config_manager.list_allowed_directories()
+        if not entries:
+            console.print("[yellow]No allowed directories to remove.[/yellow]")
+            return
+
+        choices = [{"name": entry, "value": entry} for entry in entries]
+        choices.append({"name": "Back", "value": "back"})
+        selection = prompt_list("Select directory to remove:", choices)
+        if selection == "back":
+            return
+
+        config_manager.remove_allowed_directory(selection)
+        console.print("[green]Allowed directory removed.[/green]")
+
     def _get_available_agents(self) -> List[Dict[str, str]]:
         """Get all configured agents.
 
-        Returns all agents (pm, developer, reviewer) that have been configured,
+        Returns all playbook roles that have a configured or default agent,
         regardless of the current workflow phase.
 
         Returns:
@@ -317,13 +442,71 @@ class InteractiveMenu:
         agents: List[Dict[str, str]] = []
         try:
             config_manager = ConfigManager()
-            for role in ("pm", "developer", "reviewer"):
-                name = config_manager.get(f"agents.{role}.name")
+            role_names = self._get_playbook_role_names()
+            role_defaults = self._get_playbook_role_defaults(role_names)
+            crew_data = self._load_crew_data(config_manager)
+            for role in role_names:
+                name = None
+                if role in crew_data and isinstance(crew_data[role], dict):
+                    raw_name = crew_data[role].get("name")
+                    name = str(raw_name) if raw_name else None
+                if not name:
+                    name = config_manager.get(f"agents.{role}.name")
+                if not name:
+                    name = role_defaults.get(role)
                 if name:
                     agents.append({"role": role, "name": name})
         except Exception:
             pass
         return agents
+
+    def _get_playbook_role_names(self) -> List[str]:
+        issue_name = self._detector.get_current_issue_name()
+        playbook_id = "default"
+        if issue_name:
+            blackboard_file = Path(".cafe") / "issues" / issue_name / "blackboard.json"
+            try:
+                data = json.loads(blackboard_file.read_text(encoding="utf-8"))
+                playbook_id = str(data.get("playbook_id") or "default")
+            except Exception:
+                playbook_id = "default"
+
+        try:
+            playbook = PlaybookLoader(project_root=Path.cwd()).load(playbook_id)
+            roles = playbook.get("roles", {})
+            if isinstance(roles, dict) and roles:
+                return [str(role) for role in roles.keys()]
+        except Exception:
+            pass
+        return ["pm", "developer", "reviewer"]
+
+    def _get_playbook_role_defaults(self, role_names: List[str]) -> Dict[str, str]:
+        defaults: Dict[str, str] = {}
+        issue_name = self._detector.get_current_issue_name()
+        playbook_id = "default"
+        if issue_name:
+            try:
+                data = json.loads((Path(".cafe") / "issues" / issue_name / "blackboard.json").read_text(encoding="utf-8"))
+                playbook_id = str(data.get("playbook_id") or "default")
+            except Exception:
+                playbook_id = "default"
+        try:
+            playbook = PlaybookLoader(project_root=Path.cwd()).load(playbook_id)
+            roles = playbook.get("roles", {})
+            for role in role_names:
+                role_def = roles.get(role, {}) if isinstance(roles, dict) else {}
+                if isinstance(role_def, dict) and role_def.get("default_agent"):
+                    defaults[role] = str(role_def["default_agent"])
+        except Exception:
+            pass
+        return defaults
+
+    @staticmethod
+    def _load_crew_data(config_manager: ConfigManager) -> Dict[str, Any]:
+        try:
+            return CrewManager(cafe_dir=Path(config_manager.config_dir)).load()
+        except Exception:
+            return {}
 
     def _handle_chat(self) -> None:
         """Prompt user to select an agent role then launch cafe chat."""

@@ -108,6 +108,34 @@ class TestGeminiCLIAddDirectories:
         assert "/path/to/dir2" in result
 
 
+class TestGeminiCLIProjectSkills:
+    """測試 Gemini 已不再依賴專案技能 symlink 準備."""
+
+    def test_prepare_project_workspace_does_not_create_skills_symlink(self, gemini_config, tmp_path, monkeypatch):
+        """即使專案有 .cafe/skills，也不應再建立 .gemini/skills 軟連結."""
+        monkeypatch.chdir(tmp_path)
+        skill_dir = tmp_path / ".cafe" / "skills" / "alpha"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: alpha\ndescription: alpha\n---\n\n# alpha\n",
+            encoding="utf-8",
+        )
+
+        cli = GeminiCLI(gemini_config)
+        cli.prepare_project_workspace(tmp_path)
+
+        assert not (tmp_path / ".gemini" / "skills").exists()
+
+    def test_prepare_project_workspace_skips_when_no_project_skills(self, gemini_config, tmp_path, monkeypatch):
+        """沒有 .cafe/skills 時，不應建立多餘目錄或連結."""
+        monkeypatch.chdir(tmp_path)
+
+        cli = GeminiCLI(gemini_config)
+        cli.prepare_project_workspace(tmp_path)
+
+        assert not (tmp_path / ".gemini" / "skills").exists()
+
+
 class TestGeminiCLIParseResponse:
     """測試 parse_response() 方法."""
 

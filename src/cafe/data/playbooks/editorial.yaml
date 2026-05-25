@@ -1,0 +1,86 @@
+playbook:
+  id: editorial
+  name: "Editorial Workflow（撰稿 → 審閱 → 發佈）"
+
+roles:
+  editor:
+    description: "內容編輯／審閱"
+    default_agent: "Roger"
+    default_cli: "gemini"
+  writer:
+    description: "撰稿者"
+    default_agent: "David"
+    default_cli: "claude"
+
+steps:
+  brief:
+    type: skill
+    skill:
+      "1": brief_first
+      default: brief_revise
+    role: editor
+    handoff_label: "Revise editorial brief"
+    chat_role: editor
+    assignee_type: agent
+    output_artifact: brief
+    valid_intents:
+      - confirmed
+      - need_clarification
+      - ready_for_review
+    allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
+    "on":
+      await_agent: draft
+      need_clarification: brief
+      confirm_output: brief
+
+  draft:
+    type: skill
+    skill: draft
+    role: writer
+    handoff_label: "Continue manuscript draft"
+    chat_role: writer
+    assignee_type: agent
+    input_artifacts: [brief]
+    output_artifact: manuscript
+    valid_intents:
+      - confirmed
+      - need_clarification
+    allowed_tools: [Read, Edit, Write, Grep, Glob, WebFetch, WebSearch]
+    "on":
+      await_agent: review
+      need_clarification: draft
+
+  review:
+    type: skill
+    skill: editorial_review
+    role: editor
+    handoff_label: "Run editorial review"
+    chat_role: editor
+    assignee_type: agent
+    input_artifacts: [brief, manuscript]
+    output_artifact: review_feedback
+    valid_intents:
+      - confirmed
+      - needs_changes
+    allowed_goto: [brief, draft]
+    allowed_tools: [Read, Grep, Glob]
+    "on":
+      await_agent: publish
+      manual_handoff: draft
+
+  publish:
+    type: skill
+    skill: publish
+    role: writer
+    handoff_label: "Prepare publication output"
+    chat_role: writer
+    assignee_type: agent
+    input_artifacts: [brief, manuscript, review_feedback]
+    output_artifact: published_piece
+    valid_intents:
+      - confirmed
+    allowed_tools: [Read, Edit, Write, Grep, Glob]
+    "on":
+      await_agent: _done
+
+entry_point: brief

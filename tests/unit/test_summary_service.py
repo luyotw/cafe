@@ -91,6 +91,151 @@ class TestLoadPhaseStatus:
         result = service.load_phase_status("nonexistent-issue", "spec")
         assert result is None
 
+    def test_load_phase_status_synthesizes_completed_from_iterations(self, tmp_path, monkeypatch):
+        """Test synthesizing phase status when status.json is absent."""
+        from cafe.services.summary_service import SummaryService
+
+        monkeypatch.chdir(tmp_path)
+
+        issue_dir = tmp_path / ".cafe/issues/test-issue"
+        phase_dir = issue_dir / "pr"
+        (phase_dir / "iteration_001").mkdir(parents=True)
+        (phase_dir / "iteration_001/iteration.json").write_text(
+            json.dumps(
+                {
+                    "iteration": 1,
+                    "timestamp": "2026-04-27T10:00:00+08:00",
+                    "end_time": "2026-04-27T10:15:00+08:00",
+                    "status_code": "confirmed",
+                }
+            )
+        )
+        (issue_dir / "blackboard.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "current_step": "done",
+                    "playbook_id": "default",
+                    "artifacts": {},
+                    "events": [],
+                    "decisions": [],
+                    "handoff_summary": "",
+                    "handoff_contract": {
+                        "version": 1,
+                        "from_step": "pr",
+                        "to_owner": "done",
+                        "to_step": "done",
+                        "intent": "workflow_complete",
+                        "status_code": "",
+                        "created_at": "2026-04-27T10:16:00+08:00",
+                        "source": "workflow",
+                    },
+                    "updated_at": "2026-04-27T10:16:00+08:00",
+                }
+            )
+        )
+        (issue_dir / "next_step.txt").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "from_step": "pr",
+                    "to_owner": "done",
+                    "to_step": "done",
+                    "intent": "workflow_complete",
+                    "status_code": "",
+                    "created_at": "2026-04-27T10:16:00+08:00",
+                    "source": "workflow",
+                }
+            )
+        )
+
+        service = SummaryService()
+        result = service.load_phase_status("test-issue", "pr")
+        assert result is not None
+        assert result["status"] == "completed"
+        assert result["timestamp"] == "2026-04-27T10:00:00+08:00"
+        assert result["end_time"] == "2026-04-27T10:15:00+08:00"
+        assert result["status_code"] == "confirmed"
+
+    def test_load_phase_status_synthesizes_in_progress_from_user_baton(self, tmp_path, monkeypatch):
+        """Test paused phases stay in-progress without a phase status file."""
+        from cafe.services.summary_service import SummaryService
+
+        monkeypatch.chdir(tmp_path)
+
+        issue_dir = tmp_path / ".cafe/issues/test-issue"
+        phase_dir = issue_dir / "spec"
+        (phase_dir / "iteration_001").mkdir(parents=True)
+        (phase_dir / "iteration_001/iteration.json").write_text(
+            json.dumps(
+                {
+                    "iteration": 1,
+                    "timestamp": "2026-04-27T09:00:00+08:00",
+                    "status_code": "need_clarification",
+                }
+            )
+        )
+        baton = {
+            "version": 1,
+            "from_step": "spec",
+            "to_owner": "user",
+            "to_step": "user",
+            "intent": "confirm_output",
+            "status_code": "need_clarification",
+            "created_at": "2026-04-27T09:05:00+08:00",
+            "source": "workflow",
+        }
+        (issue_dir / "blackboard.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "current_step": "user",
+                    "playbook_id": "default",
+                    "artifacts": {},
+                    "events": [],
+                    "decisions": [],
+                    "handoff_summary": "",
+                    "handoff_contract": baton,
+                    "updated_at": "2026-04-27T09:05:00+08:00",
+                }
+            )
+        )
+        (issue_dir / "next_step.txt").write_text(json.dumps(baton))
+
+        service = SummaryService()
+        result = service.load_phase_status("test-issue", "spec")
+        assert result is not None
+        assert result["status"] == "in_progress"
+        assert result["timestamp"] == "2026-04-27T09:00:00+08:00"
+        assert result["status_code"] == "need_clarification"
+        assert "end_time" not in result
+
+    def test_load_phase_status_does_not_create_blackboard_files(self, tmp_path, monkeypatch):
+        """Test summary fallback stays read-only when workflow state is absent."""
+        from cafe.services.summary_service import SummaryService
+
+        monkeypatch.chdir(tmp_path)
+
+        phase_dir = tmp_path / ".cafe/issues/test-issue/pr"
+        (phase_dir / "iteration_001").mkdir(parents=True)
+        (phase_dir / "iteration_001/iteration.json").write_text(
+            json.dumps(
+                {
+                    "iteration": 1,
+                    "timestamp": "2026-04-27T10:00:00+08:00",
+                    "end_time": "2026-04-27T10:15:00+08:00",
+                    "status_code": "confirmed",
+                }
+            )
+        )
+
+        service = SummaryService()
+        result = service.load_phase_status("test-issue", "pr")
+        assert result is not None
+        assert result["status"] == "completed"
+        assert not (tmp_path / ".cafe/issues/test-issue/blackboard.json").exists()
+        assert not (tmp_path / ".cafe/issues/test-issue/next_step.txt").exists()
+
     def test_load_phase_status_returns_correct_structure(self, tmp_path, monkeypatch):
         """Test that loaded status has required fields."""
         from cafe.services.summary_service import SummaryService
@@ -142,8 +287,8 @@ class TestLoadIterationStatuses:
         phase_dir = tmp_path / ".cafe/issues/test-issue/spec"
         (phase_dir / "iteration_001").mkdir(parents=True)
         (phase_dir / "iteration_002").mkdir(parents=True)
-        (phase_dir / "iteration_001/context.json").write_text('{"iteration": 1, "status_code": "CAFE_CONFIRMED", "timestamp": "2026-01-14T10:00:00+08:00"}')
-        (phase_dir / "iteration_002/context.json").write_text('{"iteration": 2, "status_code": "CAFE_CONFIRMED", "timestamp": "2026-01-14T11:00:00+08:00"}')
+        (phase_dir / "iteration_001/iteration.json").write_text('{"iteration": 1, "status_code": "confirmed", "timestamp": "2026-01-14T10:00:00+08:00"}')
+        (phase_dir / "iteration_002/iteration.json").write_text('{"iteration": 2, "status_code": "confirmed", "timestamp": "2026-01-14T11:00:00+08:00"}')
 
         result = service.load_iteration_statuses("test-issue", "spec")
         assert isinstance(result, list)
@@ -174,7 +319,7 @@ class TestLoadIterationStatuses:
         assert result == []
 
     def test_load_iteration_statuses_parses_iteration_info(self, tmp_path, monkeypatch):
-        """Test parsing iteration number and metadata from context.json files."""
+        """Test parsing iteration number and metadata from iteration.json files."""
         from cafe.services.summary_service import SummaryService
 
         monkeypatch.chdir(tmp_path)
@@ -182,8 +327,8 @@ class TestLoadIterationStatuses:
         service = SummaryService()
         phase_dir = tmp_path / ".cafe/issues/test-issue/review"
         (phase_dir / "iteration_001").mkdir(parents=True)
-        context_data = {"iteration": 1, "status_code": "CAFE_NEED_CLARIFICATION", "timestamp": "2025-01-04T14:00:00Z"}
-        (phase_dir / "iteration_001/context.json").write_text(json.dumps(context_data))
+        context_data = {"iteration": 1, "status_code": "need_clarification", "timestamp": "2025-01-04T14:00:00Z"}
+        (phase_dir / "iteration_001/iteration.json").write_text(json.dumps(context_data))
 
         result = service.load_iteration_statuses("test-issue", "review")
         assert isinstance(result, list)
@@ -191,7 +336,7 @@ class TestLoadIterationStatuses:
         assert result[0]["iteration"] == 1
 
     def test_load_iteration_statuses_handles_malformed_iteration_json(self, tmp_path, monkeypatch):
-        """Test handling of malformed JSON in iteration context.json files."""
+        """Test handling of malformed JSON in iteration iteration.json files."""
         from cafe.services.summary_service import SummaryService
 
         monkeypatch.chdir(tmp_path)
@@ -199,7 +344,7 @@ class TestLoadIterationStatuses:
         service = SummaryService()
         phase_dir = tmp_path / ".cafe/issues/test-issue/pr"
         (phase_dir / "iteration_001").mkdir(parents=True)
-        (phase_dir / "iteration_001/context.json").write_text('{invalid json}')
+        (phase_dir / "iteration_001/iteration.json").write_text('{invalid json}')
 
         result = service.load_iteration_statuses("test-issue", "pr")
         # Should skip malformed file and return empty or populated list
@@ -223,7 +368,7 @@ class TestLoadIterationStatuses:
         assert isinstance(result, list)
 
     def test_load_iteration_statuses_from_context_files(self, tmp_path, monkeypatch):
-        """Test reading iterations from context.json files."""
+        """Test reading iterations from iteration.json files."""
         from cafe.services.summary_service import SummaryService
 
         monkeypatch.chdir(tmp_path)
@@ -232,29 +377,29 @@ class TestLoadIterationStatuses:
         phase_dir = tmp_path / ".cafe/issues/test-issue/review"
         phase_dir.mkdir(parents=True)
 
-        # Create 4 iteration context.json files
+        # Create 4 iteration iteration.json files
         for i in range(1, 5):
             (phase_dir / f"iteration_{i:03d}").mkdir(parents=True)
             context = {
                 "iteration": i,
                 "timestamp": f"2026-01-05T00:{40+i*5:02d}:00.000000",
-                "status_code": "CAFE_CONFIRMED" if i == 4 else "CAFE_NEEDS_CHANGES",
+                "status_code": "confirmed" if i == 4 else "needs_changes",
             }
-            (phase_dir / f"iteration_{i:03d}/context.json").write_text(json.dumps(context))
+            (phase_dir / f"iteration_{i:03d}/iteration.json").write_text(json.dumps(context))
 
         result = service.load_iteration_statuses("test-issue", "review")
         assert isinstance(result, list)
         assert len(result) == 4
         assert result[0]["iteration"] == 1
         assert result[0]["timestamp"] == "2026-01-05T00:45:00.000000"
-        assert result[3]["status_code"] == "CAFE_CONFIRMED"
+        assert result[3]["status_code"] == "confirmed"
 
 
 class TestLoadIterationContexts:
-    """Test loading iteration data from context.json"""
+    """Test loading iteration data from iteration.json"""
 
     def test_load_iteration_statuses_reads_from_context_json(self, tmp_path, monkeypatch):
-        """Verify load_iteration_statuses() reads data from context.json"""
+        """Verify load_iteration_statuses() reads data from iteration.json"""
         from cafe.services.summary_service import SummaryService
 
         monkeypatch.chdir(tmp_path)
@@ -264,21 +409,21 @@ class TestLoadIterationContexts:
         (phase_dir / "iteration_001").mkdir(parents=True)
         (phase_dir / "iteration_002").mkdir(parents=True)
 
-        # Create context.json files (including start_time and end_time)
+        # Create iteration.json files (including start_time and end_time)
         context1 = {
             "iteration": 1,
             "timestamp": "2026-01-14T10:00:00+08:00",
             "end_time": "2026-01-14T10:15:00+08:00",
-            "status_code": "CAFE_READY_FOR_REVIEW"
+            "status_code": "ready_for_review"
         }
         context2 = {
             "iteration": 2,
             "timestamp": "2026-01-14T10:30:00+08:00",
             "end_time": "2026-01-14T10:45:00+08:00",
-            "status_code": "CAFE_CONFIRMED"
+            "status_code": "confirmed"
         }
-        (phase_dir / "iteration_001/context.json").write_text(json.dumps(context1))
-        (phase_dir / "iteration_002/context.json").write_text(json.dumps(context2))
+        (phase_dir / "iteration_001/iteration.json").write_text(json.dumps(context1))
+        (phase_dir / "iteration_002/iteration.json").write_text(json.dumps(context2))
 
         result = service.load_iteration_statuses("test-issue", "spec")
         assert isinstance(result, list)
@@ -286,7 +431,7 @@ class TestLoadIterationContexts:
         assert result[0]["iteration"] == 1
         assert result[0]["timestamp"] == "2026-01-14T10:00:00+08:00"
         assert result[0]["end_time"] == "2026-01-14T10:15:00+08:00"
-        assert result[0]["status_code"] == "CAFE_READY_FOR_REVIEW"
+        assert result[0]["status_code"] == "ready_for_review"
 
     def test_load_iteration_statuses_handles_missing_end_time(self, tmp_path, monkeypatch):
         """Verify handling when end_time is missing"""
@@ -298,13 +443,13 @@ class TestLoadIterationContexts:
         phase_dir = tmp_path / ".cafe/issues/test-issue/plan"
         (phase_dir / "iteration_001").mkdir(parents=True)
 
-        # Create context.json without end_time (simulating in-progress iteration)
+        # Create iteration.json without end_time (simulating in-progress iteration)
         context = {
             "iteration": 1,
             "timestamp": "2026-01-14T11:00:00+08:00",
-            "status_code": "CAFE_NEED_CLARIFICATION"
+            "status_code": "need_clarification"
         }
-        (phase_dir / "iteration_001/context.json").write_text(json.dumps(context))
+        (phase_dir / "iteration_001/iteration.json").write_text(json.dumps(context))
 
         result = service.load_iteration_statuses("test-issue", "plan")
         assert isinstance(result, list)
@@ -330,9 +475,9 @@ class TestLoadIterationContexts:
                 "iteration": i,
                 "timestamp": f"2026-01-14T{10+i}:00:00+08:00",
                 "end_time": f"2026-01-14T{10+i}:15:00+08:00",
-                "status_code": "CAFE_CONFIRMED"
+                "status_code": "confirmed"
             }
-            (phase_dir / f"iteration_{i:03d}/context.json").write_text(json.dumps(context))
+            (phase_dir / f"iteration_{i:03d}/iteration.json").write_text(json.dumps(context))
 
         result = service.load_iteration_statuses("test-issue", "develop")
         assert isinstance(result, list)
@@ -344,7 +489,7 @@ class TestLoadIterationContexts:
 
 
 class TestLoadTokenUsageData:
-    """Test loading token usage data from context.json"""
+    """Test loading token usage data from iteration.json"""
 
     def test_load_iteration_statuses_extracts_token_usage(self, tmp_path, monkeypatch):
         """Verify load_iteration_statuses() extracts cli, model, and stats fields"""
@@ -356,12 +501,12 @@ class TestLoadTokenUsageData:
         phase_dir = tmp_path / ".cafe/issues/test-issue/spec"
         (phase_dir / "iteration_001").mkdir(parents=True)
 
-        # Create context.json with token usage data
+        # Create iteration.json with token usage data
         context = {
             "iteration": 1,
             "timestamp": "2026-01-31T10:00:00+08:00",
             "end_time": "2026-01-31T10:15:00+08:00",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "cli": "gemini",
             "model": "gemini-2.5-flash",
             "stats": {
@@ -374,7 +519,7 @@ class TestLoadTokenUsageData:
                 "duration_api_ms": 81850
             }
         }
-        (phase_dir / "iteration_001/context.json").write_text(json.dumps(context))
+        (phase_dir / "iteration_001/iteration.json").write_text(json.dumps(context))
 
         result = service.load_iteration_statuses("test-issue", "spec")
         assert len(result) == 1
@@ -394,13 +539,13 @@ class TestLoadTokenUsageData:
         phase_dir = tmp_path / ".cafe/issues/test-issue/plan"
         (phase_dir / "iteration_001").mkdir(parents=True)
 
-        # Create context.json without token usage data
+        # Create iteration.json without token usage data
         context = {
             "iteration": 1,
             "timestamp": "2026-01-31T11:00:00+08:00",
-            "status_code": "CAFE_CONFIRMED"
+            "status_code": "confirmed"
         }
-        (phase_dir / "iteration_001/context.json").write_text(json.dumps(context))
+        (phase_dir / "iteration_001/iteration.json").write_text(json.dumps(context))
 
         result = service.load_iteration_statuses("test-issue", "plan")
         assert len(result) == 1
@@ -423,7 +568,7 @@ class TestLoadTokenUsageData:
                 "iteration": 1,
                 "timestamp": "2026-01-31T10:00:00+08:00",
                 "end_time": "2026-01-31T10:15:00+08:00",
-                "status_code": "CAFE_CONFIRMED",
+                "status_code": "confirmed",
                 "cli": "gemini",
                 "model": "gemini-2.5-flash",
                 "stats": {
@@ -437,7 +582,7 @@ class TestLoadTokenUsageData:
                 "iteration": 2,
                 "timestamp": "2026-01-31T11:00:00+08:00",
                 "end_time": "2026-01-31T11:20:00+08:00",
-                "status_code": "CAFE_CONFIRMED",
+                "status_code": "confirmed",
                 "cli": "claude",
                 "model": "claude-3-5-sonnet",
                 "stats": {
@@ -451,7 +596,7 @@ class TestLoadTokenUsageData:
 
         for i, context in enumerate(contexts, 1):
             (phase_dir / f"iteration_{i:03d}").mkdir(parents=True)
-            (phase_dir / f"iteration_{i:03d}/context.json").write_text(json.dumps(context))
+            (phase_dir / f"iteration_{i:03d}/iteration.json").write_text(json.dumps(context))
 
         result = service.load_iteration_statuses("test-issue", "spec")
         assert len(result) == 2

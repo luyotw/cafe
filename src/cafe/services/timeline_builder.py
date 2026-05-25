@@ -52,16 +52,18 @@ class TimelineEntry:
 class TimelineBuilder:
     """Builder for creating workflow timeline from phase and iteration data."""
 
-    PHASES = ["spec", "plan", "develop", "review", "pr"]
+    DEFAULT_PHASES = ["spec", "plan", "develop", "review", "pr"]
 
-    def __init__(self, issue_name: str):
+    def __init__(self, issue_name: str, phase_names: Optional[List[str]] = None):
         """Initialize timeline builder.
 
         Args:
             issue_name: Name of the issue to build timeline for
+            phase_names: Ordered playbook steps to display
         """
         self.issue_name = issue_name
         self.base_dir = Path(".cafe/issues") / issue_name
+        self.phase_names = list(phase_names or self.DEFAULT_PHASES)
 
     def build_timeline_entries(
         self, phase_statuses: Dict[str, Dict[str, Any]], iteration_data: Dict[str, List[Dict[str, Any]]]
@@ -78,7 +80,7 @@ class TimelineBuilder:
         entries: List[TimelineEntry] = []
 
         # Process each phase
-        for phase_name in self.PHASES:
+        for phase_name in self.phase_names:
             phase_status = phase_statuses.get(phase_name)
             iterations = iteration_data.get(phase_name, [])
 
@@ -172,20 +174,25 @@ class TimelineBuilder:
         end_time = None
         elapsed_time = None
 
-        # Map status - iterations.jsonl has status codes like "CAFE_CONFIRMED", "CAFE_NEEDS_CHANGES"
+        # Map status - iterations.jsonl has status codes like "confirmed", "needs_changes"
         # These should map to "completed" since they represent completed iterations
-        status_str = iteration_status.get("status", "pending")
+        status_str = iteration_status.get("status")
         if status_str and status_str.startswith("CAFE_"):
             # These are CAFE status codes, map them to completed
             status = PhaseStatus.COMPLETED
             status_code = status_str
         else:
-            # These are PhaseStatus values
-            try:
-                status = PhaseStatus(status_str) if status_str else PhaseStatus.PENDING
-            except ValueError:
-                status = PhaseStatus.PENDING
             status_code = iteration_status.get("status_code")
+            if status_code:
+                status = PhaseStatus.COMPLETED
+            elif iteration_status.get("end_time"):
+                status = PhaseStatus.COMPLETED
+            else:
+                # These are PhaseStatus values
+                try:
+                    status = PhaseStatus(status_str) if status_str else PhaseStatus.PENDING
+                except ValueError:
+                    status = PhaseStatus.PENDING
 
         # Try to read end_time from status data if available
         end_timestamp_str = iteration_status.get("end_time", "")

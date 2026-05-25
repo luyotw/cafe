@@ -26,8 +26,8 @@ def _make_phase(issue_name: str = "test-issue", interactive: bool = True) -> Con
 class TestAskUserForReviewDecisionChat:
     """Tests for chat option in _ask_user_for_review_decision()."""
 
-    @patch("cafe.core.phase.launch_chat_session")
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.launch_chat_session")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_confirm_choice_returns_confirm(self, mock_prompt_list, mock_launch_chat):
         """Test that selecting Confirm returns 'confirm'."""
         mock_prompt_list.return_value = "c"
@@ -38,9 +38,9 @@ class TestAskUserForReviewDecisionChat:
         assert result == "confirm"
         mock_launch_chat.assert_not_called()
 
-    @patch("cafe.core.phase.prompt_multiline")
-    @patch("cafe.core.phase.launch_chat_session")
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.prompt_multiline")
+    @patch("cafe.core.phase_review_mixin.launch_chat_session")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_modify_choice_returns_modification_text(
         self, mock_prompt_list, mock_launch_chat, mock_multiline
     ):
@@ -54,7 +54,7 @@ class TestAskUserForReviewDecisionChat:
         assert result == "Please add error handling"
         mock_launch_chat.assert_not_called()
 
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_choices_include_chat_option(self, mock_prompt_list):
         """Test that the choices list includes a chat option and a separator."""
         mock_prompt_list.return_value = "c"
@@ -70,7 +70,7 @@ class TestAskUserForReviewDecisionChat:
         assert len(chat_choices) == 1
         assert "David" in chat_choices[0]["name"]
 
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_choices_include_edit_option_with_phase_specific_label(self, mock_prompt_list):
         """Test that edit option appears with provided label and correct order."""
         mock_prompt_list.return_value = "c"
@@ -95,7 +95,7 @@ class TestAskUserForReviewDecisionChat:
         assert choices[0]["name"] == "Confirm - Continue"
         assert choices[1]["name"] == "Request modification - Send feedback"
 
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_choices_do_not_include_edit_option_by_default(self, mock_prompt_list):
         """Test that edit option is not shown when no label is provided."""
         mock_prompt_list.return_value = "c"
@@ -108,9 +108,9 @@ class TestAskUserForReviewDecisionChat:
         edit_choices = [c for c in choices if isinstance(c, dict) and c.get("value") == "edit"]
         assert edit_choices == []
 
-    @patch("cafe.core.phase.prompt_multiline")
-    @patch("cafe.core.phase.launch_chat_session")
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.prompt_multiline")
+    @patch("cafe.core.phase_review_mixin.launch_chat_session")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_selecting_chat_launches_session_then_re_prompts(
         self, mock_prompt_list, mock_launch_chat, mock_multiline
     ):
@@ -125,9 +125,9 @@ class TestAskUserForReviewDecisionChat:
         mock_launch_chat.assert_called_once_with("developer", "my-issue")
         assert mock_prompt_list.call_count == 2
 
-    @patch("cafe.core.phase.prompt_multiline")
-    @patch("cafe.core.phase.launch_chat_session")
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.prompt_multiline")
+    @patch("cafe.core.phase_review_mixin.launch_chat_session")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_selecting_chat_multiple_times_then_confirm(
         self, mock_prompt_list, mock_launch_chat, mock_multiline
     ):
@@ -141,7 +141,7 @@ class TestAskUserForReviewDecisionChat:
         assert mock_launch_chat.call_count == 2
         assert mock_prompt_list.call_count == 3
 
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_default_role_is_developer(self, mock_prompt_list):
         """Test that role defaults to 'developer' when not specified."""
         mock_prompt_list.return_value = "c"
@@ -152,9 +152,9 @@ class TestAskUserForReviewDecisionChat:
 
         assert result == "confirm"
 
-    @patch("cafe.core.phase.prompt_multiline")
-    @patch("cafe.core.phase.launch_chat_session")
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.prompt_multiline")
+    @patch("cafe.core.phase_review_mixin.launch_chat_session")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_re_displays_output_file_after_chat(
         self, mock_prompt_list, mock_launch_chat, mock_multiline, tmp_path
     ):
@@ -175,21 +175,21 @@ class TestAskUserForReviewDecisionChat:
         printed_text = " ".join(str(a) for call in mock_print.call_args_list for a in call[0])
         assert "Some agent output here" in printed_text
 
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_no_output_file_no_error(self, mock_prompt_list):
         """Test that skipping output_file works fine (no error)."""
         mock_prompt_list.side_effect = ["chat", "c"]
         phase = _make_phase(issue_name="my-issue")
 
-        with patch("cafe.core.phase.launch_chat_session"):
+        with patch("cafe.core.phase_review_mixin.launch_chat_session"):
             # Should not raise even without output_file
             result = phase._ask_user_for_review_decision("plan", agent_name="David", role="developer")
 
         assert result == "confirm"
 
-    @patch("cafe.core.phase.prompt_multiline")
-    @patch("cafe.core.phase.launch_chat_session")
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.prompt_multiline")
+    @patch("cafe.core.phase_review_mixin.launch_chat_session")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_calls_display_callback_after_chat(
         self, mock_prompt_list, mock_launch_chat, mock_multiline
     ):
@@ -208,9 +208,9 @@ class TestAskUserForReviewDecisionChat:
         assert result == "confirm"
         mock_callback.assert_called_once()
 
-    @patch("cafe.core.phase.prompt_multiline")
-    @patch("cafe.core.phase.launch_chat_session")
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.prompt_multiline")
+    @patch("cafe.core.phase_review_mixin.launch_chat_session")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_display_callback_takes_precedence_over_output_file(
         self, mock_prompt_list, mock_launch_chat, mock_multiline, tmp_path
     ):
@@ -236,8 +236,8 @@ class TestAskUserForReviewDecisionChat:
         printed_text = " ".join(str(a) for call in mock_print.call_args_list for a in call[0])
         assert "file content" not in printed_text
 
-    @patch("cafe.core.phase.subprocess.run")
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.subprocess.run")
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_selecting_edit_opens_editor_then_reprompts(self, mock_prompt_list, mock_subprocess_run, tmp_path):
         """Test selecting edit opens editor, re-displays file, then prompts again."""
         output_file = tmp_path / "output.md"
@@ -260,8 +260,8 @@ class TestAskUserForReviewDecisionChat:
         printed_text = " ".join(str(a) for call in mock_print.call_args_list for a in call[0])
         assert "updated content" in printed_text
 
-    @patch("cafe.core.phase.subprocess.run", side_effect=FileNotFoundError())
-    @patch("cafe.core.phase.prompt_list")
+    @patch("cafe.core.phase_review_mixin.subprocess.run", side_effect=FileNotFoundError())
+    @patch("cafe.core.phase_review_mixin.prompt_list")
     def test_edit_editor_not_found_shows_error_and_reprompts(self, mock_prompt_list, mock_subprocess_run, tmp_path):
         """Test editor-not-found error keeps user in same review menu."""
         output_file = tmp_path / "output.md"

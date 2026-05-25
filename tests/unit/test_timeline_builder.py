@@ -59,6 +59,18 @@ class TestBuildTimelineEntries:
         entries = builder.build_timeline_entries({}, {})
         assert isinstance(entries, list)
 
+    def test_build_timeline_entries_respects_custom_phase_order(self):
+        """Test that builder iterates over playbook-defined phase names."""
+        builder = TimelineBuilder("test-issue", phase_names=["qa"])
+        phase_statuses = {"spec": {"timestamp": "2025-01-01T00:00:00Z", "status": "completed"}}
+        iteration_data = {
+            "qa": [{"iteration": 1, "timestamp": "2025-01-02T00:00:00Z", "status": "completed"}]
+        }
+
+        entries = builder.build_timeline_entries(phase_statuses, iteration_data)
+        assert len(entries) == 1
+        assert entries[0].phase == "qa"
+
     def test_build_timeline_entries_creates_correct_structure(self):
         """Test the data structure of created timeline entries."""
         builder = TimelineBuilder("test-issue")
@@ -271,7 +283,7 @@ class TestTimelineEntryWithTokenUsage:
             end_time=datetime.now(timezone.utc),
             status=PhaseStatus.COMPLETED,
             iteration=1,
-            status_code="CAFE_CONFIRMED",
+            status_code="confirmed",
             cli="gemini",
             model="gemini-2.5-flash",
             input_tokens=109260,
@@ -332,7 +344,7 @@ class TestPopulateTokenUsageInIterations:
             "iteration": 1,
             "timestamp": "2026-01-31T10:00:00+08:00",
             "end_time": "2026-01-31T10:15:00+08:00",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "cli": "gemini",
             "model": "gemini-2.5-flash",
             "stats": {
@@ -359,7 +371,7 @@ class TestPopulateTokenUsageInIterations:
         iteration_status = {
             "iteration": 1,
             "timestamp": "2026-01-31T10:00:00+08:00",
-            "status_code": "CAFE_CONFIRMED"
+            "status_code": "confirmed"
         }
 
         entry = builder._create_iteration_entry("spec", iteration_status)
@@ -378,7 +390,7 @@ class TestPopulateTokenUsageInIterations:
         iteration_status = {
             "iteration": 1,
             "timestamp": "2026-01-31T10:00:00+08:00",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "cli": "claude",
             "model": "claude-3-5-sonnet",
             "stats": {
@@ -405,7 +417,7 @@ class TestPopulateTokenUsageInIterations:
             "iteration": 1,
             "timestamp": "2026-01-31T10:00:00+08:00",
             "end_time": "2026-01-31T10:15:00+08:00",
-            "status_code": "CAFE_CONFIRMED",
+            "status_code": "confirmed",
             "cli": "claude",
             "model": "claude-3-5-sonnet",
             "stats": {
@@ -421,6 +433,23 @@ class TestPopulateTokenUsageInIterations:
         assert entry is not None
         assert entry.cost_usd == 0.15
 
+    def test_create_iteration_entry_infers_completed_from_end_time_without_status_code(self):
+        """Baton-driven contexts may omit status_code but still represent a completed iteration."""
+        from cafe.core.types import PhaseStatus
+
+        builder = TimelineBuilder("test-issue")
+
+        iteration_status = {
+            "iteration": 1,
+            "timestamp": "2026-04-27T10:00:00+08:00",
+            "end_time": "2026-04-27T10:15:00+08:00",
+        }
+
+        entry = builder._create_iteration_entry("pr", iteration_status)
+
+        assert entry is not None
+        assert entry.status == PhaseStatus.COMPLETED
+
     def test_build_timeline_entries_includes_token_usage(self):
         """Test that build_timeline_entries() preserves token usage data"""
         builder = TimelineBuilder("test-issue")
@@ -431,7 +460,7 @@ class TestPopulateTokenUsageInIterations:
                 "iteration": 1,
                 "timestamp": "2026-01-31T10:00:00+08:00",
                 "end_time": "2026-01-31T10:15:00+08:00",
-                "status_code": "CAFE_CONFIRMED",
+                "status_code": "confirmed",
                 "cli": "gemini",
                 "model": "gemini-2.5-flash",
                 "stats": {

@@ -1,0 +1,82 @@
+playbook:
+  id: research
+  name: "Research Workflow（問題 → 搜尋整理 → 綜合 → 報告）"
+
+roles:
+  researcher:
+    description: "研究／分析人員"
+    default_agent: "Morgan"
+    default_cli: "claude"
+
+steps:
+  question:
+    type: skill
+    skill: research_question
+    role: researcher
+    handoff_label: "Refine research question"
+    chat_role: researcher
+    assignee_type: agent
+    output_artifact: research_question_brief
+    valid_intents:
+      - confirmed
+      - need_clarification
+    allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
+    "on":
+      await_agent: collect
+      need_clarification: question
+
+  collect:
+    type: skill
+    skill: research_collect
+    role: researcher
+    handoff_label: "Continue evidence collection"
+    chat_role: researcher
+    assignee_type: agent
+    input_artifacts: [research_question_brief]
+    output_artifact: research_notes
+    valid_intents:
+      - confirmed
+      - need_clarification
+    allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
+    "on":
+      await_agent: synthesize
+      need_clarification: collect
+      manual_handoff: question
+
+  synthesize:
+    type: skill
+    skill: research_synthesize
+    role: researcher
+    handoff_label: "Revise research synthesis"
+    chat_role: researcher
+    assignee_type: agent
+    input_artifacts: [research_question_brief, research_notes]
+    output_artifact: research_synthesis
+    valid_intents:
+      - confirmed
+      - need_clarification
+    allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
+    "on":
+      await_agent: report
+      need_clarification: synthesize
+      manual_handoff: collect
+
+  report:
+    type: skill
+    skill: research_report
+    role: researcher
+    handoff_label: "Update research report"
+    chat_role: researcher
+    assignee_type: agent
+    input_artifacts: [research_question_brief, research_notes, research_synthesis]
+    output_artifact: research_report_doc
+    valid_intents:
+      - confirmed
+      - need_clarification
+    allowed_tools: [Read, Edit, Write, Grep, Glob]
+    "on":
+      await_agent: _done
+      need_clarification: report
+      manual_handoff: synthesize
+
+entry_point: question

@@ -27,7 +27,7 @@ class TestTemplateSyncCommand:
     """Tests for cafe template sync command."""
 
     @patch("cafe.ui.init_helpers.sync_templates")
-    @patch("cafe.ui.cli.Path")
+    @patch("cafe.ui.commands.templates.Path")
     def test_template_sync_calls_sync_function(
         self,
         mock_path_cls: MagicMock,
@@ -50,7 +50,7 @@ class TestTemplateSyncCommand:
         assert result.exit_code == 0
         mock_sync_templates.assert_called_once()
 
-    @patch("cafe.ui.cli.Path")
+    @patch("cafe.ui.commands.templates.Path")
     def test_template_sync_error_when_cafe_not_initialized(
         self,
         mock_path_cls: MagicMock,
@@ -66,9 +66,9 @@ class TestTemplateSyncCommand:
         assert result.exit_code == 1
         assert "not initialized" in result.stdout or "Error" in result.stdout
 
-    @patch("cafe.ui.cli.console")
+    @patch("cafe.ui.commands.templates.console")
     @patch("cafe.ui.init_helpers.sync_templates")
-    @patch("cafe.ui.cli.Path")
+    @patch("cafe.ui.commands.templates.Path")
     def test_template_sync_displays_success_message(
         self,
         mock_path_cls: MagicMock,
@@ -95,9 +95,9 @@ class TestTemplateSyncCommand:
         call_args = str(mock_console.print.call_args_list)
         assert "4" in call_args or "template" in call_args
 
-    @patch("cafe.ui.cli.console")
+    @patch("cafe.ui.commands.templates.console")
     @patch("cafe.ui.init_helpers.sync_templates")
-    @patch("cafe.ui.cli.Path")
+    @patch("cafe.ui.commands.templates.Path")
     def test_template_sync_displays_warning_on_failures(
         self,
         mock_path_cls: MagicMock,

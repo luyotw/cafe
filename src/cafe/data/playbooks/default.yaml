@@ -1,0 +1,134 @@
+playbook:
+  id: default
+  name: "Standard Development Workflow"
+
+roles:
+  pm:
+    description: "Product Manager"
+    default_agent: "Roger"
+    default_cli: "gemini"
+  developer:
+    description: "Developer"
+    default_agent: "David"
+    default_cli: "claude"
+  reviewer:
+    description: "Code Reviewer"
+    default_agent: "Richard"
+    default_cli: "gemini"
+
+steps:
+  spec:
+    type: skill
+    skill:
+      "1": spec_first
+      default: spec_revise
+    role: pm
+    handoff_label: "Update requirements spec"
+    chat_role: pm
+    assignee_type: agent
+    input_artifacts: []
+    output_artifact: spec
+    allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
+    hooks:
+      prepare_input: [GitHubIssueFetcher, UserInputCollector]
+      after_execute: [InteractiveQAHandler]
+    "on":
+      confirm_output: spec
+      need_clarification: spec
+      need_permission: spec
+      await_agent: plan
+
+  plan:
+    type: skill
+    skill: plan
+    role: developer
+    handoff_label: "Revise implementation plan"
+    chat_role: developer
+    assignee_type: agent
+    input_artifacts: [spec]
+    output_artifact: plan
+    allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
+    hooks:
+      prepare_input: [UserInputCollector]
+      after_execute:
+        - script: sync_github.sh
+          when_intents: [confirmed]
+          args:
+            phase: plan
+            output: "{output_file}"
+          schema:
+            type: object
+            required: [phase, output]
+            additionalProperties: false
+            properties:
+              phase:
+                type: string
+                enum: [spec, plan]
+              output:
+                type: string
+    "on":
+      confirm_output: plan
+      need_clarification: plan
+      need_permission: plan
+      await_agent: develop
+
+  develop:
+    type: skill
+    skill: develop
+    role: developer
+    handoff_label: "Continue implementation"
+    chat_role: developer
+    assignee_type: agent
+    input_artifacts: [spec, plan]
+    output_artifact: code
+    allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
+    hooks:
+      prepare_input: [UserInputCollector]
+      after_execute: [NoChangesNeededHandler, PermissionRetryHandler]
+    "on":
+      await_agent: review
+      manual_handoff: pr
+      need_clarification: develop
+      need_permission: develop
+      no_changes_needed: review
+
+  review:
+    type: skill
+    skill: review
+    role: reviewer
+    handoff_label: "Run review again"
+    chat_role: reviewer
+    assignee_type: agent
+    input_artifacts: [spec, plan, code]
+    output_artifact: review_feedback
+    allowed_tools: [Read, Grep, Glob, "Bash(git:*)"]
+    max_iterations: 3
+    allowed_goto: [spec, develop, plan]
+    hooks:
+      prepare_input: [UserInputCollector]
+      before_execute: [NewChangesGate]
+    "on":
+      await_agent: pr
+      manual_handoff: develop
+      need_clarification: review
+
+  pr:
+    type: skill
+    skill: pr
+    role: developer
+    handoff_label: "Refresh PR output"
+    chat_role: developer
+    assignee_type: agent
+    input_artifacts: [spec, code, review_feedback]
+    output_artifact: pr_result
+    allowed_tools: [Read, Edit, Write, Grep, Glob]
+    allowed_goto: [develop, review]
+    hooks:
+      prepare_input: [GitHubPRCreator, UserInputCollector]
+      publish_output: [GitHubPRCreator, LocalPRReviewer, PRLinkOpener]
+    "on":
+      await_agent: _done
+      need_permission: pr
+      manual_handoff: develop
+
+entry_point: spec

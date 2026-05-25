@@ -1,0 +1,74 @@
+playbook:
+  id: incident
+  name: "Incident Response Workflow（偵測 → 分類 → 緩解 → 事後檢討）"
+
+roles:
+  ops:
+    description: "值班／維運應變"
+    default_agent: "Casey"
+    default_cli: "claude"
+
+steps:
+  detect:
+    type: skill
+    skill: incident_detect
+    role: ops
+    assignee_type: agent
+    output_artifact: incident_signal
+    valid_intents:
+      - confirmed
+      - need_clarification
+    allowed_tools: [Read, Grep, Glob, Bash, WebFetch, WebSearch]
+    "on":
+      await_agent: triage
+      need_clarification: detect
+
+  triage:
+    type: skill
+    skill: incident_triage
+    role: ops
+    assignee_type: agent
+    input_artifacts: [incident_signal]
+    output_artifact: incident_plan
+    valid_intents:
+      - confirmed
+      - need_clarification
+    allowed_tools: [Read, Grep, Glob, Bash]
+    "on":
+      await_agent: mitigate
+      need_clarification: triage
+      manual_handoff: detect
+
+  mitigate:
+    type: skill
+    skill: incident_mitigate
+    role: ops
+    assignee_type: agent
+    input_artifacts: [incident_signal, incident_plan]
+    output_artifact: incident_recovery
+    valid_intents:
+      - confirmed
+      - need_clarification
+    allowed_tools: [Read, Edit, Write, Grep, Glob, Bash]
+    "on":
+      await_agent: postmortem
+      need_clarification: mitigate
+      manual_handoff: triage
+
+  postmortem:
+    type: skill
+    skill: incident_postmortem
+    role: ops
+    assignee_type: agent
+    input_artifacts: [incident_signal, incident_plan, incident_recovery]
+    output_artifact: incident_learning
+    valid_intents:
+      - confirmed
+      - need_clarification
+    allowed_tools: [Read, Edit, Write, Grep, Glob]
+    "on":
+      await_agent: _done
+      need_clarification: postmortem
+      manual_handoff: triage
+
+entry_point: detect

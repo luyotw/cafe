@@ -18,9 +18,9 @@ def runner():
 class TestTemplateEditAutoSync:
     """Tests for automatic sync after template edit."""
 
-    @patch("cafe.ui.cli.subprocess.run")
+    @patch("cafe.ui.commands.templates.subprocess.run")
     @patch("cafe.ui.init_helpers.sync_templates")
-    @patch("cafe.ui.cli.prompt_list")
+    @patch("cafe.ui.commands.templates.prompt_list")
     @patch("cafe.templates.manager.get_global_cafe_dir")
     def test_template_edit_triggers_sync_after_successful_edit(
         self,
@@ -46,7 +46,7 @@ class TestTemplateEditAutoSync:
         mock_sync_templates.return_value = (3, 0)
 
         # Setup local .cafe directory
-        with patch("cafe.ui.cli.Path") as mock_path:
+        with patch("cafe.ui.commands.templates.Path") as mock_path:
             mock_path_instance = MagicMock()
             mock_path_instance.exists.return_value = True
             mock_path.return_value = mock_path_instance
@@ -56,9 +56,9 @@ class TestTemplateEditAutoSync:
         # Verify sync was called after edit
         assert mock_sync_templates.called
 
-    @patch("cafe.ui.cli.subprocess.run")
+    @patch("cafe.ui.commands.templates.subprocess.run")
     @patch("cafe.ui.init_helpers.sync_templates")
-    @patch("cafe.ui.cli.prompt_list")
+    @patch("cafe.ui.commands.templates.prompt_list")
     @patch("cafe.templates.manager.get_global_cafe_dir")
     def test_template_edit_does_not_sync_if_edit_fails(
         self,

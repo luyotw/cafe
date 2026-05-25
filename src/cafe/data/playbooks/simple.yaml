@@ -1,0 +1,68 @@
+playbook:
+  id: simple
+  name: "Simple Workflow"
+
+roles:
+  pm:
+    description: "Product Manager"
+    default_agent: "Roger"
+    default_cli: "gemini"
+  developer:
+    description: "Developer"
+    default_agent: "David"
+    default_cli: "claude"
+
+steps:
+  spec:
+    type: skill
+    skill:
+      "1": spec_first
+      default: spec_revise
+    role: pm
+    assignee_type: agent
+    input_artifacts: []
+    output_artifact: spec
+    allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
+    hooks:
+      prepare_input: [GitHubIssueFetcher, UserInputCollector]
+      after_execute: [InteractiveQAHandler]
+    "on":
+      confirm_output: spec
+      need_clarification: spec
+      need_permission: spec
+      await_agent: develop
+
+  develop:
+    type: skill
+    skill: develop
+    role: developer
+    assignee_type: agent
+    input_artifacts: [spec]
+    output_artifact: code
+    allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
+    hooks:
+      prepare_input: [UserInputCollector]
+      after_execute: [PermissionRetryHandler]
+    "on":
+      await_agent: pr
+      need_clarification: develop
+      need_permission: develop
+
+  pr:
+    type: skill
+    skill: pr
+    role: developer
+    assignee_type: agent
+    input_artifacts: [spec, code]
+    output_artifact: pr_result
+    allowed_tools: [Read, Edit, Write, Grep, Glob]
+    allowed_goto: [develop]
+    hooks:
+      prepare_input: [GitHubPRCreator, UserInputCollector]
+      publish_output: [GitHubPRCreator, LocalPRReviewer, PRLinkOpener]
+    "on":
+      await_agent: _done
+      need_permission: pr
+      manual_handoff: develop
+
+entry_point: spec

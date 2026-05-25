@@ -4,6 +4,7 @@
 """
 
 import pytest
+from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 import json
 from cafe.utils.github import (
@@ -298,10 +299,12 @@ class TestGetAllPRComments:
         )
 
         with patch('cafe.utils.github.get_pr_comments') as mock_review, \
-             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline:
+             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline, \
+             patch('cafe.utils.github.get_pr_review_body_comments') as mock_review_body:
 
             mock_review.return_value = [review_comment]
             mock_timeline.return_value = [timeline_comment]
+            mock_review_body.return_value = []
 
             comments = get_all_pr_comments(123)
 
@@ -329,12 +332,14 @@ class TestGetAllPRComments:
         )
 
         with patch('cafe.utils.github.get_pr_comments') as mock_review, \
-             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline:
+             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline, \
+             patch('cafe.utils.github.get_pr_review_body_comments') as mock_review_body:
 
             # Review comments fail
             mock_review.side_effect = GitHubError("GraphQL API error")
             # Timeline comments succeed
             mock_timeline.return_value = [timeline_comment]
+            mock_review_body.return_value = []
 
             comments = get_all_pr_comments(123)
 
@@ -360,12 +365,14 @@ class TestGetAllPRComments:
         )
 
         with patch('cafe.utils.github.get_pr_comments') as mock_review, \
-             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline:
+             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline, \
+             patch('cafe.utils.github.get_pr_review_body_comments') as mock_review_body:
 
             # Review comments succeed
             mock_review.return_value = [review_comment]
             # Timeline comments fail
             mock_timeline.side_effect = ValueError("PR not found")
+            mock_review_body.return_value = []
 
             comments = get_all_pr_comments(123)
 
@@ -380,11 +387,13 @@ class TestGetAllPRComments:
         預期：拋出 GitHubError 異常
         """
         with patch('cafe.utils.github.get_pr_comments') as mock_review, \
-             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline:
+             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline, \
+             patch('cafe.utils.github.get_pr_review_body_comments') as mock_review_body:
 
             # Both fail
             mock_review.side_effect = GitHubError("GraphQL API error")
             mock_timeline.side_effect = ValueError("PR not found")
+            mock_review_body.side_effect = GitHubError("Review body API error")
 
             with pytest.raises(GitHubError, match="Failed to get any comments"):
                 get_all_pr_comments(123)
@@ -929,7 +938,7 @@ All tests are passing now.
         from cafe.utils.github import parse_comment_processing_results
 
         agent_response = """
-CAFE_CONFIRMED
+confirmed
 
 ### Processed Comments
 - [#IC_kwDOQCpNoM7hfWZl] Fixed the bug in authentication flow
@@ -965,7 +974,7 @@ class TestGetProcessedCommentIDs:
         import json
 
         with TemporaryDirectory() as tmpdir:
-            # Create a mock iteration directory with context.json
+            # Create a mock iteration directory with iteration.json
             iteration_dir = Path(tmpdir) / "iteration_001"
             iteration_dir.mkdir(parents=True)
 
@@ -980,7 +989,7 @@ class TestGetProcessedCommentIDs:
                 ]
             }
 
-            with open(iteration_dir / "context.json", "w") as f:
+            with open(iteration_dir / "iteration.json", "w") as f:
                 json.dump(context_data, f)
 
             # Get processed comment IDs
@@ -1012,7 +1021,7 @@ class TestGetProcessedCommentIDs:
                 "pr_comments_processed": [{"id": "111", "description": "Fix 1"}],
                 "pr_comments_skipped": []
             }
-            with open(iter1_dir / "context.json", "w") as f:
+            with open(iter1_dir / "iteration.json", "w") as f:
                 json.dump(context1, f)
 
             # Create iteration 2
@@ -1023,7 +1032,7 @@ class TestGetProcessedCommentIDs:
                 "pr_comments_processed": [{"id": "222", "description": "Fix 2"}],
                 "pr_comments_skipped": [{"id": "333", "reason": "Skip"}]
             }
-            with open(iter2_dir / "context.json", "w") as f:
+            with open(iter2_dir / "iteration.json", "w") as f:
                 json.dump(context2, f)
 
             # Create iteration 3
@@ -1034,7 +1043,7 @@ class TestGetProcessedCommentIDs:
                 "pr_comments_processed": [],
                 "pr_comments_skipped": [{"id": "444", "reason": "Skip 2"}]
             }
-            with open(iter3_dir / "context.json", "w") as f:
+            with open(iter3_dir / "iteration.json", "w") as f:
                 json.dump(context3, f)
 
             # Get processed comment IDs
@@ -1062,9 +1071,9 @@ class TestGetProcessedCommentIDs:
             assert len(result) == 0
 
     def test_get_processed_comment_ids_ignores_malformed_files(self):
-        """測試當某些 context.json 文件格式錯誤時的情況
+        """測試當某些 iteration.json 文件格式錯誤時的情況
 
-        情境：有些 iteration 的 context.json 存在但沒有 comment 數據
+        情境：有些 iteration 的 iteration.json 存在但沒有 comment 數據
         預期：跳過格式錯誤的文件，返回有效的 comment IDs
         """
         from cafe.utils.github import get_processed_comment_ids_from_history
@@ -1080,14 +1089,14 @@ class TestGetProcessedCommentIDs:
                 "iteration": 1,
                 "pr_comments_processed": [{"id": "111", "description": "Fix"}]
             }
-            with open(iter1_dir / "context.json", "w") as f:
+            with open(iter1_dir / "iteration.json", "w") as f:
                 json.dump(context1, f)
 
             # Create iteration 2 with no comment data
             iter2_dir = Path(tmpdir) / "iteration_002"
             iter2_dir.mkdir(parents=True)
             context2 = {"iteration": 2}  # Missing pr_comments_processed
-            with open(iter2_dir / "context.json", "w") as f:
+            with open(iter2_dir / "iteration.json", "w") as f:
                 json.dump(context2, f)
 
             # Get processed comment IDs
@@ -1096,3 +1105,144 @@ class TestGetProcessedCommentIDs:
             # Should only include valid comment IDs
             assert "111" in result
             assert len(result) == 1
+
+
+def test_load_pr_last_seen_comment_ids_reads_artifact(tmp_path: Path) -> None:
+    from cafe.utils.github import load_pr_last_seen_comment_ids
+
+    pr_dir = tmp_path / "pr"
+    art = pr_dir / "artifacts" / "pr_last_seen_comments.json"
+    art.parent.mkdir(parents=True, exist_ok=True)
+    art.write_text(
+        json.dumps({"last_seen_comment_ids": ["a", "b"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    assert load_pr_last_seen_comment_ids(pr_dir) == {"a", "b"}
+
+
+def test_load_pr_last_seen_comment_ids_legacy_context(tmp_path: Path) -> None:
+    from cafe.utils.github import load_pr_last_seen_comment_ids
+
+    pr_dir = tmp_path / "pr"
+    it = pr_dir / "iteration_001"
+    it.mkdir(parents=True)
+    (it / "iteration.json").write_text(
+        json.dumps({"last_seen_comment_ids": ["x"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    assert load_pr_last_seen_comment_ids(pr_dir) == {"x"}
+
+
+def test_persist_last_seen_comment_ids_round_trip(tmp_path: Path) -> None:
+    from cafe.utils.github import (
+        load_last_seen_comment_ids_from_artifact,
+        load_pr_last_seen_comment_ids,
+        persist_last_seen_comment_ids,
+    )
+
+    pr_dir = tmp_path / "pr"
+    persist_last_seen_comment_ids(pr_dir, ["1", "2"])
+    assert load_last_seen_comment_ids_from_artifact(pr_dir) == {"1", "2"}
+    assert load_pr_last_seen_comment_ids(pr_dir) == {"1", "2"}
+
+
+def test_load_last_seen_comment_ids_from_artifact_missing_returns_none(tmp_path: Path) -> None:
+    from cafe.utils.github import load_last_seen_comment_ids_from_artifact
+
+    assert load_last_seen_comment_ids_from_artifact(tmp_path / "pr") is None
+
+
+class TestPostPrTodoList:
+    def _setup_todo_iteration(self, issue_dir: Path, todo_content: str) -> None:
+        pr_dir = issue_dir / "pr" / "iteration_001"
+        pr_dir.mkdir(parents=True, exist_ok=True)
+        (pr_dir / "user_input.md").write_text("reviewer comment", encoding="utf-8")
+        (pr_dir / "output.md").write_text(todo_content, encoding="utf-8")
+
+    def test_all_items_checked_calls_add_pr_comment(self, tmp_path: Path) -> None:
+        from cafe.utils.github import GitHubOps, post_pr_todo_list
+
+        issue_dir = tmp_path / ".cafe" / "issues" / "test"
+        self._setup_todo_iteration(
+            issue_dir, "## Todo List\n\n- [x] Fix bug\n- [x] Add test\n"
+        )
+        github_ops = MagicMock(spec=GitHubOps)
+        post_pr_todo_list(
+            issue_dir=issue_dir,
+            pr_number="42",
+            github_ops=github_ops,
+            post_todo_list=True,
+        )
+        github_ops.add_pr_comment.assert_called_once()
+        assert "Fix bug" in github_ops.add_pr_comment.call_args[0][1]
+
+    def test_unchecked_item_skips_comment(self, tmp_path: Path) -> None:
+        from cafe.utils.github import GitHubOps, post_pr_todo_list
+
+        issue_dir = tmp_path / ".cafe" / "issues" / "test"
+        self._setup_todo_iteration(
+            issue_dir, "## Todo List\n\n- [x] Done\n- [ ] Not done\n"
+        )
+        github_ops = MagicMock(spec=GitHubOps)
+        post_pr_todo_list(
+            issue_dir=issue_dir,
+            pr_number="42",
+            github_ops=github_ops,
+            post_todo_list=True,
+        )
+        github_ops.add_pr_comment.assert_not_called()
+
+    def test_post_todo_list_false_skips(self, tmp_path: Path) -> None:
+        from cafe.utils.github import GitHubOps, post_pr_todo_list
+
+        issue_dir = tmp_path / ".cafe" / "issues" / "test"
+        self._setup_todo_iteration(issue_dir, "## Todo List\n\n- [x] Done\n")
+        github_ops = MagicMock(spec=GitHubOps)
+        post_pr_todo_list(
+            issue_dir=issue_dir,
+            pr_number="42",
+            github_ops=github_ops,
+            post_todo_list=False,
+        )
+        github_ops.add_pr_comment.assert_not_called()
+
+    def test_picks_latest_iteration_with_user_input(self, tmp_path: Path) -> None:
+        from cafe.utils.github import GitHubOps, post_pr_todo_list
+
+        issue_dir = tmp_path / ".cafe" / "issues" / "test"
+        pr_base = issue_dir / "pr"
+        old = pr_base / "iteration_001"
+        old.mkdir(parents=True)
+        (old / "user_input.md").write_text("old", encoding="utf-8")
+        (old / "output.md").write_text("## Todo List\n\n- [ ] Old\n", encoding="utf-8")
+        latest = pr_base / "iteration_003"
+        latest.mkdir(parents=True)
+        (latest / "user_input.md").write_text("new", encoding="utf-8")
+        (latest / "output.md").write_text("## Todo List\n\n- [x] New done\n", encoding="utf-8")
+        github_ops = MagicMock(spec=GitHubOps)
+        post_pr_todo_list(
+            issue_dir=issue_dir,
+            pr_number="42",
+            github_ops=github_ops,
+            post_todo_list=True,
+        )
+        assert "New done" in github_ops.add_pr_comment.call_args[0][1]
+
+    def test_skips_non_todo_output(self, tmp_path: Path) -> None:
+        from cafe.utils.github import GitHubOps, post_pr_todo_list
+
+        issue_dir = tmp_path / ".cafe" / "issues" / "test"
+        pr_dir = issue_dir / "pr" / "iteration_001"
+        pr_dir.mkdir(parents=True)
+        (pr_dir / "user_input.md").write_text("comments", encoding="utf-8")
+        (pr_dir / "output.md").write_text(
+            "# Fix login\n\n## Summary\nBody only.", encoding="utf-8"
+        )
+        github_ops = MagicMock(spec=GitHubOps)
+        post_pr_todo_list(
+            issue_dir=issue_dir,
+            pr_number="42",
+            github_ops=github_ops,
+            post_todo_list=True,
+        )
+        github_ops.add_pr_comment.assert_not_called()

@@ -1,0 +1,68 @@
+playbook:
+  id: hotfix
+  name: "Hotfix Workflow"
+
+roles:
+  developer:
+    description: "Developer"
+    default_agent: "David"
+    default_cli: "claude"
+  reviewer:
+    description: "Code Reviewer"
+    default_agent: "Richard"
+    default_cli: "gemini"
+
+steps:
+  develop:
+    type: skill
+    skill: develop
+    role: developer
+    assignee_type: agent
+    input_artifacts: []
+    output_artifact: code
+    allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
+    hooks:
+      prepare_input: [UserInputCollector]
+      after_execute: [PermissionRetryHandler]
+    "on":
+      await_agent: review
+      manual_handoff: pr
+      need_clarification: develop
+      need_permission: develop
+
+  review:
+    type: skill
+    skill: review
+    role: reviewer
+    assignee_type: agent
+    input_artifacts: [code]
+    output_artifact: review_feedback
+    allowed_tools: [Read, Grep, Glob, "Bash(git:*)"]
+    max_iterations: 1
+    allowed_goto: [develop]
+    hooks:
+      prepare_input: [UserInputCollector]
+      before_execute: [NewChangesGate]
+    "on":
+      await_agent: pr
+      manual_handoff: develop
+      need_clarification: review
+
+  pr:
+    type: skill
+    skill: pr
+    role: developer
+    assignee_type: agent
+    input_artifacts: [code, review_feedback]
+    output_artifact: pr_result
+    allowed_tools: [Read, Edit, Write, Grep, Glob]
+    allowed_goto: [develop, review]
+    hooks:
+      prepare_input: [GitHubPRCreator, UserInputCollector]
+      publish_output: [GitHubPRCreator, LocalPRReviewer, PRLinkOpener]
+    "on":
+      await_agent: _done
+      need_permission: pr
+      manual_handoff: develop
+
+entry_point: develop

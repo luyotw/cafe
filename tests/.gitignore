@@ -1,5 +1,5 @@
 # Test artifacts created by tests with incorrect tmp_path usage
-# ReviewPhase tests use tmp_path / "requirements.md" instead of proper issue structure
+# Legacy review tests use tmp_path / "requirements.md" instead of proper issue structure
 # This creates MagicMock/ directory when spec_path.parent.parent.name evaluates to MagicMock
-# TODO: Fix ReviewPhase tests to use proper .cafe/issues/{name}/spec/spec.md structure
+# TODO: Fix review tests to use proper .cafe/issues/{name}/spec/spec.md structure
 MagicMock/

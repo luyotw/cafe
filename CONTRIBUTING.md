@@ -61,6 +61,28 @@ You can contribute to this project in several ways:
 
 6.  Open a Pull Request to the `main` branch of the original repository. In the PR description, please detail your changes, their purpose, and any relevant Issue numbers.
 
+## Pre-release Verification
+
+Before cutting a release or merging large changes to builtin skills, playbooks, or agents, run the builtin tooling audit:
+
+```bash
+cafe audit
+```
+
+This command checks that all builtin skills and playbooks are internally consistent (agent files exist, placeholder conventions are met, hooks are registered and executable, and baton intents are valid). It exits non-zero if any check fails. Run it again after fixing any reported gaps to confirm they are resolved.
+
+## Workflow behavior
+
+Default development flow (spec → plan → develop → review → pr) is driven by **playbook YAML**, **skills**, and the **workflow runtime** (`BlackboardWorkflowRuntime`, `GenericPhase`). Do not add logic to removed per-phase Python classes (`SpecPhase`, `PlanPhase`, etc.).
+
+| Change type | Where it belongs |
+| --- | --- |
+| Step transitions, baton intents, hooks | Playbook YAML under `playbooks/` |
+| Agent instructions, checklists, phase prompts | Skills (`SKILL.md` and related files) |
+| Orchestration, blackboard, execution | Runtime code under `src/cafe/core/` and `src/cafe/phases/` |
+
+Primary CLI entrypoints: `cafe make` and `cafe workflow`. Legacy `cafe spec` / `plan` / `develop` / `review` / `pr` commands were removed in issue #315; use `cafe workflow --start-step <step> --execute` for explicit single-step runs.
+
 ## Coding Style
 
 *   This project follows the [PEP 8](https://www.python.org/dev/peps/pep-0008/) style guide.

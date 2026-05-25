@@ -47,12 +47,9 @@ class TestAgentEditAutoSync:
 
         # Setup local .cafe directory
         local_cafe_dir = Path(".cafe")
-        with patch("cafe.ui.cli.Path") as mock_path:
-            mock_path_instance = MagicMock()
-            mock_path_instance.exists.return_value = True
-            mock_path.return_value = mock_path_instance
+        local_cafe_dir.mkdir(exist_ok=True)
 
-            result = runner.invoke(app, ["agent", "edit"])
+        result = runner.invoke(app, ["agent", "edit"])
 
         # Verify sync was called after edit
         assert mock_sync_agents.called

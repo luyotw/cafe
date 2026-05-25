@@ -173,6 +173,7 @@ class TestInteractiveMenuMainMenu:
         assert "prepare" in values
         assert "ls" in values
         assert "restore" in values
+        assert "rm" in values
         assert "settings" in values
         assert "exit" in values
         # Init project should NOT be shown in NO_ACTIVE_ISSUE state
@@ -263,6 +264,7 @@ class TestInteractiveMenuIssueMenu:
         assert "chat" in values
         assert "summary" in values
         assert "reset" in values
+        assert "rm" in values
         assert "close" in values
         assert "settings" in values
         assert "exit" in values
@@ -318,7 +320,7 @@ class TestInteractiveMenuIssueMenu:
         assert "summary" in call_cmd
 
     def test_issue_menu_dispatches_close_command(self):
-        """測試選擇 Close issue 時執行 cafe close"""
+        """測試選擇 Close current issue 時執行 cafe close"""
         detector = MagicMock(spec=MenuStateDetector)
         # After close, state changes to NO_ACTIVE_ISSUE
         detector.detect_state.side_effect = [
@@ -340,6 +342,29 @@ class TestInteractiveMenuIssueMenu:
         mock_run.assert_called_once()
         call_cmd = mock_run.call_args[0][0]
         assert "close" in call_cmd
+
+    def test_issue_menu_dispatches_rm_and_returns_to_menu(self):
+        """測試選擇 Remove issues 時執行 cafe rm，之後回到選單"""
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.detect_state.side_effect = [
+            MenuState.ACTIVE_ISSUE,
+            MenuState.ACTIVE_ISSUE,
+        ]
+        detector.get_current_issue_name.return_value = "my-issue"
+
+        menu = InteractiveMenu(state_detector=detector)
+
+        with (
+            patch("cafe.ui.menu.prompt_list") as mock_prompt,
+            patch("cafe.ui.menu.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            mock_prompt.side_effect = ["rm", "exit"]
+            menu.run()
+
+        mock_run.assert_called_once()
+        call_cmd = mock_run.call_args[0][0]
+        assert "rm" in call_cmd
 
     def test_close_exits_menu_immediately(self):
         """測試 close 指令執行後直接退出，不回主選單"""
@@ -378,12 +403,18 @@ class TestInteractiveMenuSettingsSubmenu:
         choices = menu._build_settings_menu_choices()
 
         values = [c["value"] for c in choices]
+        names = [c["name"] for c in choices]
         assert "setup" in values
         assert "config" in values
         assert "config_edit" in values
+        assert "crew_manage" in values
+        assert "allowed_dirs_manage" in values
         assert "agent_edit" in values
         assert "template_edit" in values
         assert "back" in values
+        assert "Manage crew" in names
+        assert "Manage allowed directories" in names
+        assert "Manage agents" in names
 
     def test_settings_back_from_main_menu_returns_to_main(self):
         """測試從主選單進入設定後，Back 回到主選單"""
@@ -492,6 +523,428 @@ class TestInteractiveMenuSettingsSubmenu:
         called_cmds = [call[0][0] for call in mock_run.call_args_list]
         assert any("config" in cmd for cmd in called_cmds)
 
+    def test_settings_dispatches_agent_edit_command(self):
+        """測試選擇 Manage agents 時執行 cafe agent edit"""
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.detect_state.return_value = MenuState.NO_ACTIVE_ISSUE
+        detector.get_current_issue_name.return_value = None
+
+        menu = InteractiveMenu(state_detector=detector)
+
+        with (
+            patch("cafe.ui.menu.prompt_list") as mock_prompt,
+            patch("cafe.ui.menu.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            mock_prompt.side_effect = ["settings", "agent_edit", "back", "exit"]
+            menu.run()
+
+        called_cmds = [call[0][0] for call in mock_run.call_args_list]
+        assert any("agent" in cmd and "edit" in cmd for cmd in called_cmds)
+
+    def test_settings_manage_crew_enters_crew_submenu(self):
+        """測試從 Settings 選擇 Manage crew 會進入 crew 子選單"""
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.detect_state.return_value = MenuState.NO_ACTIVE_ISSUE
+        detector.get_current_issue_name.return_value = None
+
+        menu = InteractiveMenu(state_detector=detector)
+        prompt_calls = []
+        settings_visits = 0
+        main_visits = 0
+
+        def prompt_side_effect(msg, choices, **kwargs):
+            values = [c["value"] for c in choices]
+            if "crew_list" in values:
+                prompt_calls.append("crew")
+                return "back"
+            if "crew_manage" in values:
+                nonlocal settings_visits
+                settings_visits += 1
+                if settings_visits == 1:
+                    prompt_calls.append("settings_to_crew")
+                    return "crew_manage"
+                return "back"
+            if "prepare" in values:
+                nonlocal main_visits
+                main_visits += 1
+                prompt_calls.append("main")
+                return "settings" if main_visits == 1 else "exit"
+            return "exit"
+
+        with patch("cafe.ui.menu.prompt_list", side_effect=prompt_side_effect):
+            menu.run()
+
+        assert "settings_to_crew" in prompt_calls
+        assert "crew" in prompt_calls
+
+    def test_settings_manage_allowed_directories_enters_submenu(self):
+        """測試從 Settings 選擇 Manage allowed directories 會進入子選單"""
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.detect_state.return_value = MenuState.NO_ACTIVE_ISSUE
+        detector.get_current_issue_name.return_value = None
+
+        menu = InteractiveMenu(state_detector=detector)
+        prompt_calls = []
+        settings_visits = 0
+        main_visits = 0
+
+        def prompt_side_effect(msg, choices, **kwargs):
+            nonlocal settings_visits, main_visits
+            values = [c["value"] for c in choices]
+            if "allowed_dirs_list" in values:
+                prompt_calls.append("allowed_dirs")
+                return "back"
+            if "allowed_dirs_manage" in values:
+                settings_visits += 1
+                if settings_visits == 1:
+                    prompt_calls.append("settings_to_allowed_dirs")
+                    return "allowed_dirs_manage"
+                return "back"
+            if "prepare" in values:
+                main_visits += 1
+                prompt_calls.append("main")
+                return "settings" if main_visits == 1 else "exit"
+            return "exit"
+
+        with patch("cafe.ui.menu.prompt_list", side_effect=prompt_side_effect):
+            menu.run()
+
+        assert "settings_to_allowed_dirs" in prompt_calls
+        assert "allowed_dirs" in prompt_calls
+
+
+class TestInteractiveMenuCrewSubmenu:
+    """Tests for crew management submenu."""
+
+    def test_crew_menu_shows_all_options(self):
+        """測試 crew 子選單顯示所有選項"""
+        detector = MagicMock(spec=MenuStateDetector)
+        menu = InteractiveMenu(state_detector=detector)
+        choices = menu._build_crew_menu_choices()
+
+        values = [c["value"] for c in choices]
+        assert "crew_list" in values
+        assert "crew_set_primary" in values
+        assert "crew_set_fallback" in values
+        assert "back" in values
+
+    def test_crew_menu_dispatches_list_command(self):
+        """測試選擇 List crew 時執行 cafe crew list"""
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.detect_state.return_value = MenuState.NO_ACTIVE_ISSUE
+        detector.get_current_issue_name.return_value = None
+
+        menu = InteractiveMenu(state_detector=detector)
+
+        with (
+            patch("cafe.ui.menu.prompt_list") as mock_prompt,
+            patch("cafe.ui.menu.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            mock_prompt.side_effect = ["settings", "crew_manage", "crew_list", "back", "back", "exit"]
+            menu.run()
+
+        called_cmds = [call[0][0] for call in mock_run.call_args_list]
+        assert any("crew" in cmd and "list" in cmd for cmd in called_cmds)
+
+    def test_crew_menu_dispatches_set_primary_command(self):
+        """測試選擇 Set primary CLI 時執行 cafe crew set-primary"""
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.detect_state.return_value = MenuState.NO_ACTIVE_ISSUE
+        detector.get_current_issue_name.return_value = None
+
+        menu = InteractiveMenu(state_detector=detector)
+
+        with (
+            patch("cafe.ui.menu.prompt_list") as mock_prompt,
+            patch("cafe.ui.menu.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            mock_prompt.side_effect = [
+                "settings",
+                "crew_manage",
+                "crew_set_primary",
+                "back",
+                "back",
+                "exit",
+            ]
+            menu.run()
+
+        called_cmds = [call[0][0] for call in mock_run.call_args_list]
+        assert any("crew" in cmd and "set-primary" in cmd for cmd in called_cmds)
+
+    def test_crew_menu_dispatches_set_fallback_command(self):
+        """測試選擇 Set fallback CLI 時執行 cafe crew set-fallback"""
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.detect_state.return_value = MenuState.NO_ACTIVE_ISSUE
+        detector.get_current_issue_name.return_value = None
+
+        menu = InteractiveMenu(state_detector=detector)
+
+        with (
+            patch("cafe.ui.menu.prompt_list") as mock_prompt,
+            patch("cafe.ui.menu.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            mock_prompt.side_effect = [
+                "settings",
+                "crew_manage",
+                "crew_set_fallback",
+                "back",
+                "back",
+                "exit",
+            ]
+            menu.run()
+
+        called_cmds = [call[0][0] for call in mock_run.call_args_list]
+        assert any("crew" in cmd and "set-fallback" in cmd for cmd in called_cmds)
+
+    def test_crew_menu_back_returns_to_settings(self):
+        """測試 crew 子選單 Back 回到 Settings"""
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.detect_state.return_value = MenuState.NO_ACTIVE_ISSUE
+        detector.get_current_issue_name.return_value = None
+
+        menu = InteractiveMenu(state_detector=detector)
+        prompt_calls = []
+        settings_visits = 0
+        main_visits = 0
+
+        def prompt_side_effect(msg, choices, **kwargs):
+            values = [c["value"] for c in choices]
+            if "crew_list" in values:
+                prompt_calls.append("crew")
+                return "back"
+            if "crew_manage" in values:
+                nonlocal settings_visits
+                settings_visits += 1
+                prompt_calls.append("settings")
+                return "crew_manage" if settings_visits == 1 else "back"
+            if "prepare" in values:
+                nonlocal main_visits
+                main_visits += 1
+                return "settings" if main_visits == 1 else "exit"
+            return "exit"
+
+        with patch("cafe.ui.menu.prompt_list", side_effect=prompt_side_effect):
+            menu.run()
+
+        assert prompt_calls.count("settings") >= 2
+
+    def test_crew_menu_back_from_issue_menu_returns_to_issue(self):
+        """測試從 issue 選單進入 Settings → Manage crew → Back 回到 issue 選單"""
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.detect_state.return_value = MenuState.ACTIVE_ISSUE
+        detector.get_current_issue_name.return_value = "my-issue"
+
+        menu = InteractiveMenu(state_detector=detector)
+        prompt_calls = []
+        settings_visits = 0
+        issue_visits = 0
+
+        def prompt_side_effect(msg, choices, **kwargs):
+            values = [c["value"] for c in choices]
+            if "make" in values:
+                nonlocal issue_visits
+                issue_visits += 1
+                prompt_calls.append("issue")
+                if issue_visits == 1:
+                    return "settings"
+                return "exit"
+            if "crew_list" in values:
+                prompt_calls.append("crew")
+                return "back"
+            if "crew_manage" in values:
+                nonlocal settings_visits
+                settings_visits += 1
+                prompt_calls.append("settings")
+                return "crew_manage" if settings_visits == 1 else "back"
+            return "exit"
+
+        with patch("cafe.ui.menu.prompt_list", side_effect=prompt_side_effect):
+            menu.run()
+
+        assert "issue" in prompt_calls
+        assert "crew" in prompt_calls
+        assert prompt_calls.count("issue") >= 2
+
+
+class TestInteractiveMenuAllowedDirectoriesSubmenu:
+    """Tests for allowed directories management submenu."""
+
+    def test_allowed_directories_menu_shows_all_options(self):
+        """測試 allowed directories 子選單顯示所有選項"""
+        detector = MagicMock(spec=MenuStateDetector)
+        menu = InteractiveMenu(state_detector=detector)
+        choices = menu._build_allowed_directories_menu_choices()
+
+        values = [c["value"] for c in choices]
+        assert "allowed_dirs_list" in values
+        assert "allowed_dirs_add" in values
+        assert "allowed_dirs_remove" in values
+        assert "back" in values
+
+    def test_allowed_directories_menu_back_returns_to_settings(self):
+        """測試 allowed directories 子選單 Back 回到 Settings"""
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.detect_state.return_value = MenuState.NO_ACTIVE_ISSUE
+        detector.get_current_issue_name.return_value = None
+
+        menu = InteractiveMenu(state_detector=detector)
+        prompt_calls = []
+        settings_visits = 0
+        main_visits = 0
+
+        def prompt_side_effect(msg, choices, **kwargs):
+            nonlocal settings_visits, main_visits
+            values = [c["value"] for c in choices]
+            if "allowed_dirs_list" in values:
+                prompt_calls.append("allowed_dirs")
+                return "back"
+            if "allowed_dirs_manage" in values:
+                settings_visits += 1
+                prompt_calls.append("settings")
+                return "allowed_dirs_manage" if settings_visits == 1 else "back"
+            if "prepare" in values:
+                main_visits += 1
+                return "settings" if main_visits == 1 else "exit"
+            return "exit"
+
+        with patch("cafe.ui.menu.prompt_list", side_effect=prompt_side_effect):
+            menu.run()
+
+        assert prompt_calls.count("settings") >= 2
+
+    def test_allowed_directories_list_prints_entries(self):
+        """測試 List 會列出目前 allowed directories"""
+        detector = MagicMock(spec=MenuStateDetector)
+        menu = InteractiveMenu(state_detector=detector)
+        mock_config = MagicMock()
+        mock_config.list_allowed_directories.return_value = ["src", "tests"]
+
+        with patch("cafe.ui.menu.console.print") as mock_print:
+            menu._handle_allowed_directories_list(mock_config)
+
+        mock_config.list_allowed_directories.assert_called_once()
+        printed = [call.args[0] for call in mock_print.call_args_list]
+        assert "src" in printed
+        assert "tests" in printed
+
+    def test_allowed_directories_list_empty_prints_message(self):
+        """測試 List 在空 list 時顯示訊息"""
+        detector = MagicMock(spec=MenuStateDetector)
+        menu = InteractiveMenu(state_detector=detector)
+        mock_config = MagicMock()
+        mock_config.list_allowed_directories.return_value = []
+
+        with patch("cafe.ui.menu.console.print") as mock_print:
+            menu._handle_allowed_directories_list(mock_config)
+
+        assert mock_print.call_count == 1
+
+    def test_allowed_directories_add_warns_and_saves_missing_directory(self, tmp_path, monkeypatch):
+        """測試 Add 對不存在目錄顯示警告但仍呼叫 add_allowed_directory"""
+        monkeypatch.chdir(tmp_path)
+        detector = MagicMock(spec=MenuStateDetector)
+        menu = InteractiveMenu(state_detector=detector)
+        mock_config = MagicMock()
+        mock_config.add_allowed_directory.return_value = True
+
+        with (
+            patch("cafe.ui.menu.prompt_text", return_value="missing-dir"),
+            patch("cafe.ui.menu.console.print") as mock_print,
+        ):
+            menu._handle_allowed_directories_add(mock_config)
+
+        mock_config.add_allowed_directory.assert_called_once_with("missing-dir")
+        printed = [str(call.args[0]) for call in mock_print.call_args_list]
+        assert any("Warning" in text for text in printed)
+
+    def test_allowed_directories_add_duplicate_does_not_add_twice(self, tmp_path, monkeypatch):
+        """測試 Add 重複路徑時 add_allowed_directory 回傳 False"""
+        monkeypatch.chdir(tmp_path)
+        detector = MagicMock(spec=MenuStateDetector)
+        menu = InteractiveMenu(state_detector=detector)
+        mock_config = MagicMock()
+        mock_config.add_allowed_directory.return_value = False
+
+        with (
+            patch("cafe.ui.menu.prompt_text", return_value="src"),
+            patch("cafe.ui.menu.console.print"),
+        ):
+            menu._handle_allowed_directories_add(mock_config)
+
+        mock_config.add_allowed_directory.assert_called_once_with("src")
+
+    def test_allowed_directories_remove_empty_prints_message(self):
+        """測試 Remove 在空 list 時顯示訊息且不呼叫 prompt_list 選 entry"""
+        detector = MagicMock(spec=MenuStateDetector)
+        menu = InteractiveMenu(state_detector=detector)
+        mock_config = MagicMock()
+        mock_config.list_allowed_directories.return_value = []
+
+        with (
+            patch("cafe.ui.menu.prompt_list") as mock_prompt,
+            patch("cafe.ui.menu.console.print") as mock_print,
+        ):
+            menu._handle_allowed_directories_remove(mock_config)
+
+        mock_prompt.assert_not_called()
+        assert mock_print.call_count == 1
+
+    def test_allowed_directories_menu_without_config_shows_message(self, tmp_path, monkeypatch):
+        """測試未初始化專案時進入 allowed directories 子選單會顯示提示且不拋例外"""
+        monkeypatch.chdir(tmp_path)
+        menu = InteractiveMenu()
+
+        with (
+            patch("cafe.ui.menu.ConfigManager") as mock_config_cls,
+            patch("cafe.ui.menu.console.print") as mock_print,
+        ):
+            menu._show_allowed_directories_menu()
+
+        mock_config_cls.assert_not_called()
+        assert mock_print.call_count == 1
+
+    def test_allowed_directories_menu_without_config_returns_to_settings(self, tmp_path, monkeypatch):
+        """測試未初始化專案時 Settings → Manage allowed directories 可安全返回"""
+        monkeypatch.chdir(tmp_path)
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.detect_state.return_value = MenuState.NOT_INITIALIZED
+        detector.get_current_issue_name.return_value = None
+
+        menu = InteractiveMenu(state_detector=detector)
+
+        with (
+            patch("cafe.ui.menu.prompt_list") as mock_prompt,
+            patch("cafe.ui.menu.console.print") as mock_print,
+        ):
+            mock_prompt.side_effect = ["settings", "allowed_dirs_manage", "back", "exit"]
+            menu.run()
+
+        for call in mock_prompt.call_args_list:
+            values = [c["value"] for c in call[0][1]]
+            assert "allowed_dirs_list" not in values
+
+        printed = [str(call.args[0]) for call in mock_print.call_args_list]
+        assert any("init" in text.lower() for text in printed)
+
+    def test_allowed_directories_remove_deletes_selected_entry(self):
+        """測試 Remove 會移除使用者選擇的 entry"""
+        detector = MagicMock(spec=MenuStateDetector)
+        menu = InteractiveMenu(state_detector=detector)
+        mock_config = MagicMock()
+        mock_config.list_allowed_directories.return_value = ["src", "tests"]
+
+        with (
+            patch("cafe.ui.menu.prompt_list", return_value="src"),
+            patch("cafe.ui.menu.console.print"),
+        ):
+            menu._handle_allowed_directories_remove(mock_config)
+
+        mock_config.remove_allowed_directory.assert_called_once_with("src")
+
 
 # ---------------------------------------------------------------------------
 # Chat with agent tests
@@ -527,7 +980,42 @@ class TestChatWithAgent:
         assert "developer" in roles
         assert "reviewer" in roles
 
-    def test_get_available_agents_returns_all_in_develop_phase(self, tmp_path, monkeypatch):
+    def test_get_available_agents_uses_custom_playbook_roles(self, tmp_path, monkeypatch):
+        """測試 custom playbook 角色會出現在 chat role picker"""
+        monkeypatch.chdir(tmp_path)
+        issue_dir = tmp_path / ".cafe" / "issues" / "research-issue"
+        issue_dir.mkdir(parents=True)
+        (issue_dir / "blackboard.json").write_text(
+            '{"schema_version":1,"playbook_id":"research","current_step":"question","artifacts":{},"events":[],"decisions":[]}',
+            encoding="utf-8",
+        )
+
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.get_current_issue_name.return_value = "research-issue"
+
+        mock_config = MagicMock()
+        mock_config.config_dir = str(tmp_path / ".cafe")
+        mock_config.get.return_value = None
+
+        menu = InteractiveMenu(state_detector=detector)
+
+        with (
+            patch("cafe.ui.menu.ConfigManager") as mock_config_cls,
+            patch("cafe.ui.menu.CrewManager") as mock_crew_cls,
+            patch("cafe.ui.menu.PlaybookLoader") as mock_loader_cls,
+        ):
+            mock_config_cls.return_value = mock_config
+            mock_crew_cls.return_value.load.return_value = {}
+            mock_loader_cls.return_value.load.return_value = {
+                "roles": {
+                    "researcher": {"default_agent": "Morgan"},
+                },
+            }
+            agents = menu._get_available_agents()
+
+        assert agents == [{"role": "researcher", "name": "Morgan"}]
+
+    def test_get_available_agents_returns_all_for_developer_role(self, tmp_path, monkeypatch):
         """測試 develop 階段時仍回傳所有已設定的 agents"""
         monkeypatch.chdir(tmp_path)
         issue_dir = tmp_path / ".cafe" / "issues" / "my-issue"
@@ -556,7 +1044,7 @@ class TestChatWithAgent:
         assert "developer" in roles
         assert "reviewer" in roles
 
-    def test_get_available_agents_returns_all_in_review_phase(self, tmp_path, monkeypatch):
+    def test_get_available_agents_returns_all_in_review_step(self, tmp_path, monkeypatch):
         """測試 review 階段時仍回傳所有已設定的 agents"""
         monkeypatch.chdir(tmp_path)
         issue_dir = tmp_path / ".cafe" / "issues" / "my-issue"

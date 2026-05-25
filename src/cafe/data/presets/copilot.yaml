@@ -1,0 +1,21 @@
+pm:
+  name: Roger
+  cli: copilot
+  spec:
+    model: claude-sonnet-4.6
+
+developer:
+  name: David
+  cli: copilot
+  plan:
+    model: claude-opus-4.6
+  develop:
+    model: claude-sonnet-4.6
+  pr:
+    model: claude-haiku-4.5
+
+reviewer:
+  name: Richard
+  cli: copilot
+  review:
+    model: claude-opus-4.6

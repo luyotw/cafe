@@ -40,7 +40,7 @@ class TestPhaseStatusAnalysisWithTools:
         
         # 只設定分析執行返回值（測試只呼叫分析, 不呼叫原始執行）
         mock_agent_manager.execute.return_value = (
-            "CAFE_READY_FOR_REVIEW", None, [], {}, [], None
+            "ready_for_review", None, [], {}, [], None
         )
         
         # Mock other dependencies
@@ -70,12 +70,12 @@ class TestPhaseStatusAnalysisWithTools:
         valid_codes = [PhaseStatusCode.READY_FOR_REVIEW, PhaseStatusCode.NEED_CLARIFICATION]
         response, status_code = phase._analyze_missing_status_code_with_logging(
             agent_name="TestAgent",
-            valid_status_codes=valid_codes,
+            valid_intents=valid_codes,
             original_response="No status code",
         )
         
         # 驗證
-        assert response == "CAFE_READY_FOR_REVIEW"
+        assert response == "ready_for_review"
         assert status_code == PhaseStatusCode.READY_FOR_REVIEW
         
         # 驗證 agent.execute 被呼叫了一次（分析呼叫）
@@ -114,7 +114,7 @@ class TestPhaseStatusAnalysisWithTools:
         # Mock agent manager
         mock_agent_manager = MagicMock(spec=AgentManager)
         mock_agent_manager.execute.return_value = (
-            "CAFE_READY_FOR_REVIEW", None, [], {}, [], None
+            "ready_for_review", None, [], {}, [], None
         )
         
         # Mock other dependencies
@@ -157,7 +157,7 @@ class TestPhaseStatusAnalysisWithTools:
         valid_codes = [PhaseStatusCode.READY_FOR_REVIEW]
         response, status_code = phase._analyze_missing_status_code_with_logging(
             agent_name="TestAgent",
-            valid_status_codes=valid_codes,
+            valid_intents=valid_codes,
             original_response="No status code",
         )
         
@@ -218,7 +218,7 @@ class TestPhaseStatusAnalysisWithTools:
         valid_codes = [PhaseStatusCode.READY_FOR_REVIEW]
         response, status_code = phase._analyze_missing_status_code_with_logging(
             agent_name="TestAgent",
-            valid_status_codes=valid_codes,
+            valid_intents=valid_codes,
             original_response="No status code",
         )
         
@@ -249,7 +249,7 @@ class TestPhaseStatusAnalysisWithTools:
         # Mock agent manager
         mock_agent_manager = MagicMock(spec=AgentManager)
         mock_agent_manager.execute.return_value = (
-            "CAFE_NEED_CLARIFICATION\n\nThis spec needs more details.",
+            "need_clarification\n\nThis spec needs more details.",
             None, [], {}, [], None
         )
         
@@ -281,10 +281,10 @@ class TestPhaseStatusAnalysisWithTools:
         ]
         response, status_code = phase._analyze_missing_status_code_with_logging(
             agent_name="TestAgent",
-            valid_status_codes=valid_codes,
+            valid_intents=valid_codes,
             original_response="No status code",
         )
         
         # 驗證
-        assert "CAFE_NEED_CLARIFICATION" in response
+        assert "need_clarification" in response
         assert status_code == PhaseStatusCode.NEED_CLARIFICATION
