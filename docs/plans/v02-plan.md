@@ -3,7 +3,7 @@
 本文件是 **v0.2 的 implementation plan / spec**。  
 版本定位、產品邊界、以及 `v0.3+` 的長期演進方向以 [docs/roadmap.md](/Users/YO_1/side_projects/cafe/docs/roadmap.md) 為準；本文件只定義 `v0.2` 要做什麼、怎麼做、以及如何驗收。
 
-> **備註（issue256 之後）：** 本檔為 v0.2 架構與驗收紀錄，內文嵌入的 YAML 範例可能仍含舊版 `CAFE_*` 控制字串。目前引擎與內建 playbook 已改為 **intent** 鍵（`on:` 轉移）與純文字 outcome token（如 `confirmed`、`ready_for_review`）；請以 `src/cafe/data/playbooks/` 現行檔案為準，勿將本檔內嵌範例當作現行操作介面規格。
+> **備註：** 本檔為 v0.2 架構與驗收紀錄。內文主要 YAML 範例已對齊現行 **intent** 鍵（`on:` 轉移：`await_agent` / `confirm_output` / `need_clarification` / `need_permission` / `manual_handoff` / `no_changes_needed` 等）。下方 `CAFE_GOTO` 章節與「目前待執行項目」、「保留的相容層」段落仍提及 `CAFE_*` 字串，那是 v0.1 → v0.2 過渡的歷史對照，**不是現行操作介面**；請以 `src/cafe/data/playbooks/` 現行檔案為準。
 
 ## 核心需求
 
@@ -222,23 +222,20 @@ steps:
   spec:
     type: skill                  # 預設值，可省略；v0.4 支援 subflow
     skill:
-      1: spec_first              # 第一次迭代用 spec_first skill
+      "1": spec_first            # 第一次迭代用 spec_first skill
       default: spec_revise       # 後續用 spec_revise skill
     role: pm
     assignee_type: agent         # v0.2 預設值；v0.3 支援 human / auto
     output_artifact: spec
     allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
-    valid_status_codes:
-      - CAFE_CONFIRMED
-      - CAFE_NEED_CLARIFICATION
-      - CAFE_READY_FOR_REVIEW
     hooks:
       prepare_input: [GitHubIssueFetcher, UserInputCollector]
       after_execute: [InteractiveQAHandler]
-    on:
-      CAFE_CONFIRMED: plan
-      CAFE_NEED_CLARIFICATION: spec
-      CAFE_READY_FOR_REVIEW: spec
+    "on":
+      await_agent: plan
+      confirm_output: spec
+      need_clarification: spec
+      need_permission: spec
 
   plan:
     skill: plan
@@ -246,14 +243,11 @@ steps:
     input_artifacts: [spec]
     output_artifact: plan
     allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
-    valid_status_codes:
-      - CAFE_CONFIRMED
-      - CAFE_NEED_CLARIFICATION
-      - CAFE_READY_FOR_REVIEW
-    on:
-      CAFE_CONFIRMED: develop
-      CAFE_NEED_CLARIFICATION: plan
-      CAFE_READY_FOR_REVIEW: plan
+    "on":
+      await_agent: develop
+      confirm_output: plan
+      need_clarification: plan
+      need_permission: plan
 
   develop:
     skill: develop
@@ -261,18 +255,14 @@ steps:
     input_artifacts: [spec, plan]
     output_artifact: code
     allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
-    valid_status_codes:
-      - CAFE_CONFIRMED
-      - CAFE_CONFIRMED_SKIP_REVIEW
-      - CAFE_NEED_CLARIFICATION
-      - CAFE_NEED_PERMISSION
     hooks:
-      after_execute: [PermissionRetryHandler]
-    on:
-      CAFE_CONFIRMED: review
-      CAFE_CONFIRMED_SKIP_REVIEW: pr
-      CAFE_NEED_CLARIFICATION: develop
-      CAFE_NEED_PERMISSION: develop
+      after_execute: [NoChangesNeededHandler, PermissionRetryHandler]
+    "on":
+      await_agent: review
+      manual_handoff: pr
+      need_clarification: develop
+      need_permission: develop
+      no_changes_needed: review
 
   review:
     skill: review
@@ -280,16 +270,14 @@ steps:
     input_artifacts: [spec, plan, code]
     output_artifact: review_feedback
     allowed_tools: [Read, Grep, Glob, "Bash(git:*)"]
-    valid_status_codes:
-      - CAFE_CONFIRMED
-      - CAFE_NEEDS_CHANGES
     max_iterations: "$auto.max_review_iterations"
     allowed_goto: [spec, develop, plan]
     hooks:
       before_execute: [NewChangesGate]
-    on:
-      CAFE_CONFIRMED: pr
-      CAFE_NEEDS_CHANGES: develop
+    "on":
+      await_agent: pr
+      manual_handoff: develop
+      need_clarification: review
 
   pr:
     skill: pr
@@ -297,15 +285,13 @@ steps:
     input_artifacts: [spec, code, review_feedback]
     output_artifact: pr_result
     allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
-    valid_status_codes:
-      - CAFE_CONFIRMED
-      - CAFE_NEEDS_CHANGES
     allowed_goto: [develop, review]
     hooks:
       publish_output: [GitHubPRCreator, PRCommentPoster]
-    on:
-      CAFE_CONFIRMED: _done
-      CAFE_NEEDS_CHANGES: develop
+    "on":
+      await_agent: _done
+      manual_handoff: develop
+      need_permission: pr
 
 entry_point: spec
 ```
@@ -321,12 +307,12 @@ entry_point: spec
 | `input_artifacts` | 否 | 從 Blackboard 讀取的 artifact 名稱列表 |
 | `output_artifact` | 否 | 此 step 產出的 artifact 名稱 |
 | `allowed_tools` | 否 | Agent 工具白名單（沿用 PermissionHandler 的 pattern grammar） |
-| `valid_status_codes` | 是 | Agent 可回傳的 status code |
+| `valid_status_codes` | 否 | **Legacy / mock executor 限定**。intent-driven runtime 不再依賴此欄位 |
 | `max_iterations` | 否 | 最大迭代次數（預設不限） |
-| `allowed_goto` | 否 | CAFE_GOTO 可跳轉的目標 step |
+| `allowed_goto` | 否 | goto baton 可跳轉的目標 step |
 | `hooks` | 否 | Lifecycle hook 掛載（見 GenericPhase 章節） |
 | `auto_snapshot` | 否 | 僅對產出 `WORKSPACE` artifact 的 step 生效。預設 `true`，設 `false` 則 dirty workspace 直接報錯 |
-| `on` | 是 | status_code → next step 的轉換表 |
+| `on` | 是 | intent key → next step 的轉換表（`await_agent` / `confirm_output` / `need_clarification` / `need_permission` / `manual_handoff` / `no_changes_needed` 等） |
 
 ### Role 與 Config 的優先順序
 
@@ -414,7 +400,7 @@ v0.2.x 支援在 `before_execute` / `after_execute` 直接宣告 script hook（�
 hooks:
   after_execute:
     - script: sync_github.sh
-      when_status_codes: [CAFE_CONFIRMED]
+      when_intents: [confirmed]
       args:
         phase: plan
         output: "{output_file}"
@@ -438,7 +424,7 @@ hooks:
 - `when_status_codes`（可選）只在 `after_execute` 使用，狀態不匹配時跳過執行。
 - script 只允許掛在 `before_execute` / `after_execute`；若在 `prepare_input` 或 `publish_output` 宣告 script dict，playbook 載入時即報錯。
 - script 以 sandbox 內 subprocess 執行；非 0 exit code、schema 驗證失敗、或 timeout 皆會中止 pipeline，並回報可觀測事件。
-- `schema` 驗證失敗與 script 非 0 / timeout 目前都映射為 `CAFE_NEED_PERMISSION`，表示需要 host/operator 介入處理。
+- `schema` 驗證失敗與 script 非 0 / timeout 目前都映射為 `need_permission` intent，表示需要 host/operator 介入處理。
 
 blackboard 事件 payload（`event_type=script_hook`）：
 - `type`, `step`, `skill`, `stage`, `script`, `status`
@@ -507,7 +493,7 @@ class HookResult:
 | Spec: user story input | hook `UserInputCollector` |
 | Plan: template selection | plan skill 的 references/ 裡放模板，SKILL.md 指令引導選擇 |
 | Develop: tool permission | hook `PermissionRetryHandler` |
-| Develop: review feedback loop | playbook `on: CAFE_NEEDS_CHANGES: develop` |
+| Develop: review feedback loop | playbook `on: manual_handoff: develop` |
 | Review: check new commits | hook `NewChangesGate`（改用 Blackboard artifact version 判斷） |
 | Review: single iteration | playbook `max_iterations: 1` |
 | PR: GitHub PR creation | hook `GitHubPRCreator` |
@@ -879,8 +865,8 @@ steps:
   develop:
     skill: develop
     role: developer
-    on:
-      CAFE_CONFIRMED: security_audit    # 先做安全審計
+    "on":
+      await_agent: security_audit       # 先做安全審計
 
   security_audit:
     skill: security_audit               # 自訂 skill
@@ -889,10 +875,9 @@ steps:
     input_artifacts: [spec, plan, code]
     output_artifact: security_report
     allowed_tools: [Read, Grep, Glob, "Bash(git:*)"]
-    valid_status_codes: [CAFE_CONFIRMED, CAFE_NEEDS_CHANGES]
-    on:
-      CAFE_CONFIRMED: review
-      CAFE_NEEDS_CHANGES: develop
+    "on":
+      await_agent: review
+      manual_handoff: develop
 
   review:
     skill: review
@@ -910,7 +895,7 @@ entry_point: spec
 `InteractiveQAHandler`（after_execute hook）的完整流程：
 
 ```
-1. Agent iteration N 回傳 CAFE_NEED_CLARIFICATION + questions.xml
+1. Agent iteration N 回傳 `need_clarification` intent + questions.xml
 2. Hook 解析 questions.xml，存到 iteration_N/questions.xml（不進 Blackboard）
 3. Hook 回傳 HookResult(artifact_ready=False, context_updates={qa_answers: ...})
 4. Hook 記 event: {type: "interactive_qa_requested", message: "3 questions generated"}
@@ -928,8 +913,8 @@ entry_point: spec
 `pr` step 是**長期存在的 step** — 不是一次性的發佈動作：
 
 - 首次執行：建立 PR
-- 後續迴圈（`CAFE_NEEDS_CHANGES` → develop → review → pr）：更新 PR、refresh comments
-- `CAFE_CONFIRMED` 後才真正結束
+- 後續迴圈（`manual_handoff` → develop → review → pr）：更新 PR、refresh comments
+- `await_agent: _done` baton 後才真正結束
 
 Artifact 分工：
 - `pr_result` (metadata) = PR 本身的狀態（number, url, state），每次 pr step 執行時更新
@@ -938,7 +923,7 @@ Artifact 分工：
 ```
 1. PR step 建立 PR → publish pr_result (metadata: {pr_number, url})
 2. PR 收到 review comments → pr step fetch → publish pr_comments (document)
-3. on: CAFE_NEEDS_CHANGES: develop
+3. on: manual_handoff: develop
 4. Develop 讀 input_artifacts: [spec, plan, review_feedback, pr_comments]
 5. Blackboard digest 顯示 "pr_comments v2 updated since your last run"
 6. Developer 不會漏看任何 feedback 來源
