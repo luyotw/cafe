@@ -6,12 +6,12 @@ primary source of truth for step transitions.
 
 from __future__ import annotations
 
+import json
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
-import json
 from pathlib import Path
-import re
 from typing import Any, Dict, Optional
 
 from cafe.core.active_issue import clear_marker_if_matches
@@ -23,9 +23,13 @@ from cafe.core.status_codes import (
     step_on_declares,
     transition_map_key,
 )
-from cafe.core.workflow_models import BatonRejected, PlaybookRunResult, StepExecutionResult, StepInterrupted
+from cafe.core.workflow_models import (
+    BatonRejected,
+    PlaybookRunResult,
+    StepExecutionResult,
+    StepInterrupted,
+)
 from cafe.utils.checklist_validator import validate_checklist
-
 
 STATUS_TOKEN_PATTERN = re.compile(r"\bCAFE_[A-Z0-9_]+\b")
 GOTO_PATTERN = re.compile(r"GOTO\s*:\s*([a-zA-Z0-9_-]+)")
@@ -253,6 +257,8 @@ class BlackboardWorkflowRuntime:
             )
         except Exception:
             return None
+        if getattr(contract, "from_step", None) != current_step:
+            return None
         to_step = getattr(contract, "to_step", None)
         if to_step is None or to_step == current_step:
             return None
@@ -262,7 +268,29 @@ class BlackboardWorkflowRuntime:
             return str(to_step)
         return None
 
-    def _load_agent_written_handoff_contract(self, *, current_step: str):
+    def _restore_interrupted_step_handoff(self, *, current_step: str, reason: str) -> None:
+        """Keep the baton pinned to the interrupted step when recovery fails."""
+        self.blackboard_store.set_current_step(self.blackboard, current_step)
+        self.blackboard_store.update_handoff_contract(
+            self.blackboard,
+            from_step=current_step,
+            to_owner=HandoffOwner.AGENT,
+            to_step=current_step,
+            intent=HandoffIntent.AWAIT_AGENT,
+            source="workflow.interrupted_step",
+        )
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "interrupted_handoff_reset",
+            {
+                "step": current_step,
+                "reason": reason,
+            },
+        )
+
+    def _load_agent_written_handoff_contract(
+        self, *, current_step: str
+    ) -> HandoffContract:
         """Load and normalize a baton written by a just-finished agent step.
 
         ``allow_legacy_text=True`` is kept so that sessions started by older
@@ -287,7 +315,7 @@ class BlackboardWorkflowRuntime:
         if not issue_yaml.exists():
             return True
         try:
-            import yaml
+            import yaml  # type: ignore[import-untyped]
 
             data = yaml.safe_load(issue_yaml.read_text(encoding="utf-8")) or {}
         except Exception:
@@ -309,7 +337,9 @@ class BlackboardWorkflowRuntime:
             or f"BATON_{contract.intent.value.upper()}"
         )
 
-    def _load_step_handoff_contract(self, *, current_step: str):
+    def _load_step_handoff_contract(
+        self, *, current_step: str
+    ) -> Optional[HandoffContract]:
         contract = self._load_agent_written_handoff_contract(current_step=current_step)
         if contract.from_step != current_step:
             return None
@@ -1049,6 +1079,10 @@ class BlackboardWorkflowRuntime:
                     )
                     if reconciled is not None:
                         return reconciled
+                    self._restore_interrupted_step_handoff(
+                        current_step=current_step,
+                        reason=si.reason,
+                    )
                     self.blackboard_store.record_event(
                         self.blackboard,
                         "workflow_paused",
@@ -1281,6 +1315,10 @@ class BlackboardWorkflowRuntime:
                     )
                     if reconciled is not None:
                         return reconciled
+                    self._restore_interrupted_step_handoff(
+                        current_step=current_step,
+                        reason=si.reason,
+                    )
                     if pause_record_event:
                         self.blackboard_store.record_event(
                             self.blackboard,
@@ -1412,34 +1450,16 @@ class BlackboardWorkflowRuntime:
                         response=frame.response,
                         explicit_status_code=frame.explicit_status_code,
                     )
-                    invalid_intents = sorted(
+                    invalid_intents = {
                         token for token in status_like_tokens if token not in allowed_status_codes
-                    )
-                    default_next_step, _ = self._resolve_next_step(
-                        current_step=current_step,
-                        response="",
-                        status_code="",
-                    )
-                    if default_next_step is not None:
-                        event_name = "status_code_invalid" if invalid_intents else "status_code_missing"
-                        event_data: Dict[str, Any] = {"step": current_step, "response": frame.response}
-                        if invalid_intents:
-                            event_data["invalid_intents"] = invalid_intents
-                            event_data["allowed_status_codes"] = sorted(allowed_status_codes)
-                        event_data["default_transition"] = default_next_step
-                        event_data["runtime"] = runtime_label
-                        self.blackboard_store.record_event(self.blackboard, event_name, event_data)
-                        handoff_next_step = default_next_step
-                        handoff_transition_source = "default"
-                        status_code = "NO_STATUS_CODE"
-                        last_status_code = status_code
-                    elif invalid_intents:
+                    }
+                    if invalid_intents:
                         self.blackboard_store.record_event(
                             self.blackboard,
                             "status_code_invalid",
                             {
                                 "step": current_step,
-                                "invalid_intents": invalid_intents,
+                                "invalid_intents": sorted(invalid_intents),
                                 "allowed_status_codes": sorted(allowed_status_codes),
                                 "response": frame.response,
                                 "runtime": runtime_label,
@@ -1549,8 +1569,11 @@ class BlackboardWorkflowRuntime:
                     for event in frame.execution_result.events
                 )
 
+            next_step: Optional[str]
+            transition_source: str
             if handoff_next_step is not None:
-                next_step, transition_source = handoff_next_step, handoff_transition_source
+                next_step = handoff_next_step
+                transition_source = handoff_transition_source
             else:
                 next_step, transition_source = self._resolve_next_step(
                     current_step=current_step,
