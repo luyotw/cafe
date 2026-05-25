@@ -632,6 +632,9 @@ def workflow(
         entry_point = str(
             playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))
         )
+        # LEGACY: Bootstrap load accepts plain-text `next_step.txt` (v0.1 format) so
+        # existing sessions started with an older CLI build remain resumable.
+        # New sessions always write structured JSON batons. See issue #316.
         resume_blackboard = BlackboardStore(issue_dir).load_or_create(
             entry_point,
             playbook_id=str(playbook_data["playbook"]["id"]),
@@ -721,6 +724,9 @@ def workflow(
             if pending_start_step is not None and pending_start_step not in playbook_data["steps"] and pending_start_step not in {"user", "done"}:
                 raise ValueError(f"Unknown playbook step '{pending_start_step}'")
 
+            # LEGACY: Load current blackboard state allowing legacy plain-text
+            # `next_step.txt` for backward compatibility with sessions that pre-date
+            # structured batons. Prefer JSON baton format for new sessions.
             blackboard = BlackboardStore(issue_dir).load_or_create(
                 str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
                 playbook_id=str(playbook_data["playbook"]["id"]),
