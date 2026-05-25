@@ -160,3 +160,44 @@ Final verification: `rg 'SpecPhase|PlanPhase|DevelopPhase|ReviewPhase|PRPhase' s
 | Option B (delete `phases_legacy.py`) | Adopted in issue #315 after Option A served its transition period |
 | Per-phase Python classes | Already removed in #289–#293; this issue scrubs cosmetic names only |
 | “being retired” legacy CLI copy | Replaced with explicit alias-to-workflow messaging |
+
+## Issue 317 — Workflow/worktree/skill test audit
+
+GitHub: issue #317
+
+Baseline (issue317 develop): `uv run --with pytest pytest tests/unit tests/integration -q` → 2017 passed, 1 skipped, 1 xfailed (before changes); **2022 passed**, 1 skipped, 1 xfailed (after issue317 additions).
+
+### Inventory (keep / update / delete / add)
+
+| File / area | Disposition | Notes |
+| --- | --- | --- |
+| `tests/unit/test_skill_loader.py` | **keep** | project > global > builtin precedence; project `install_skill` body |
+| `tests/unit/test_generic_phase.py` | **keep** | project-local native skill install paths |
+| `tests/unit/test_generic_workflow_step.py` | **keep** | workflow-common + phase skill install per step |
+| `tests/unit/test_workflow_runtime.py` | **keep** | structured baton default; `test_runtime_rejects_legacy_text_baton_in_core_path`; agent-step legacy normalize (`test_runtime_normalizes_legacy_baton_written_by_pr_agent`) as explicit boundary |
+| `tests/unit/test_workflow_models.py` | **keep** | `allow_legacy_text` legacy step-name fallback; invalid JSON still rejects |
+| `tests/unit/test_phases_legacy_retired.py` | **update** | guardrail for retired `cafe spec|plan|…`; add `cafe workflow --start-step spec` dry-run |
+| `tests/unit/test_issue_yaml_config.py` | **update** | docstrings only (remove SpecPhase/PlanPhase mirror wording) |
+| `tests/integration/test_workflow_e2e.py` | **keep** | happy path, pause/resume, baton handoff |
+| `tests/integration/test_*_clarification_runtime.py` | **keep** | per-step user pause contracts |
+| `tests/unit/test_git_worktree.py` | **keep** | git worktree plumbing only |
+| `tests/unit/test_cli_prepare.py`, `test_prepare_non_github.py` | **keep** | prepare/close worktree options |
+| `tests/unit/test_parallel_skill_install.py` | **add** | parallel workflow installs isolated per project root; no home-dir writes |
+| `tests/integration/test_worktree_workflow_parallel.py` | **add** | worktree cwd workflow pause→resume; two worktrees / two issues isolated |
+
+### Added coverage
+
+| Behavior | New location |
+| --- | --- |
+| Parallel CAFE workflows install skills without cross-writing | `tests/unit/test_parallel_skill_install.py` |
+| `install_skill` does not populate user home native skills dir | `tests/unit/test_parallel_skill_install.py` |
+| Workflow in git worktree: spec user pause then advance toward plan | `tests/integration/test_worktree_workflow_parallel.py` |
+| Parallel worktrees: separate blackboard/baton/artifacts per issue | `tests/integration/test_worktree_workflow_parallel.py` |
+| `cafe workflow --start-step spec` supported; `cafe spec` unknown | `tests/unit/test_phases_legacy_retired.py` |
+
+### Removed-by-design (issue317)
+
+| Behavior | Rationale |
+| --- | --- |
+| Duplicate legacy-text baton tests outside runtime/models boundaries | No additional deletes this pass; runtime agent-step normalize kept as single integration boundary alongside `test_workflow_models.allow_legacy_text` |
+| Tests asserting global home as default install target | None found; new contract tests lock project-local install |
