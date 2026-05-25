@@ -1080,7 +1080,7 @@ Artifact 分工：
 
 - `next_step.txt` 的純文字 step name 格式只保留給 chat / CLI handoff 過渡使用，讀取時必須顯式傳入 `allow_legacy_text=True`。
 - Workflow runtime、baton validation、PR feedback alignment 只讀結構化 baton contract，避免 Milestone C 期間繼續把 legacy handoff shape 當成核心執行模型。
-- Hidden legacy phase commands (`cafe spec` / `plan` / `develop` / `review` / `pr`) 暫時保留為 thin wrapper，使用者導引與主要入口都指向 `cafe make` / `cafe workflow`。
+- Hidden legacy phase commands (`cafe spec` / `plan` / `develop` / `review` / `pr`) 已於 issue #315 刪除；使用者導引與主要入口為 `cafe make` / `cafe workflow --start-step <step> --execute`。
 - Generic workflow step 仍會接受現有 skill 回傳的 `CAFE_*` 結果，但只在 step executor 邊界轉成結構化 baton contract（`workflow.status_transition_adapter`）。`BlackboardWorkflowRuntime` 先消費 baton，再把 status parser 留給 mock / legacy executor 測試與過渡 wrapper。
 - `core/phase.py` 在 generic workflow path 僅保留 iteration 目錄、session、token、checklist retry 等執行輔助；它不再是 workflow transition owner。Legacy `*_phase.py` class 僅供隱藏 phase alias 與過渡測試使用。
 - `context.json` 保留作 iteration debug / summary input；`status.json` 不再由 generic workflow step 寫入，也不是 workflow pause、resume、complete 的權威來源。

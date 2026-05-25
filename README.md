@@ -288,13 +288,7 @@ cafe make
   - **Phase 4: Code Review** - The Reviewer agent reviews the code. If modifications are needed, the process returns to Phase 3.
   - **Phase 5: Create PR** - The Developer agent automatically creates a GitHub PR or allows the user to review locally. If there are suggestions for changes, the process returns to Phase 3.
 - You can run the entire flow with a single command, `cafe make`, or resume an interrupted flow.
-- You can also execute each phase separately with its corresponding command:
-  - Phase 1: `cafe spec`
-  - Phase 2: `cafe plan`
-  - Phase 3: `cafe develop`
-  - Phase 4: `cafe review`
-  - Phase 5: `cafe pr`
-  - Each of these phase commands can use the `--auto` flag to automatically proceed to the next phase.
+- To run a single playbook step explicitly, use `cafe workflow --start-step <step> --execute` (for example `cafe workflow --start-step spec --execute --user-input "..."`).
 
 ### Agent System
 - **PM**: Clarifies requirements, avoiding technical details.

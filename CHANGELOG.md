@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Breaking
+- Removed hidden legacy phase commands `cafe spec`, `cafe plan`, `cafe develop`, `cafe review`, and `cafe pr`. Use `cafe make` or `cafe workflow --start-step <step> --execute` instead.
 - Playbooks and phase hooks must use the six shipped **intent** keys (`await_agent`, `confirm_output`, `need_clarification`, `need_permission`, `manual_handoff`, `workflow_complete`) and outcome tokens without the legacy `CAFE_*` prefix. Step allow-lists use `valid_intents`; script hooks use `when_intents`. Agent prompts, bundled skill references, and checklists that still instruct models to print `CAFE_*` lines must be updated or routing and hook gates will misfire.
 - Issues created before the issue241 series no longer guarantee resume compatibility. The legacy `context.json` fallbacks for `_load_user_input` and `_get_previous_iteration_status` have been removed in favor of `user_input.md` and the blackboard `step_completed` event log respectively. If you have an in-progress issue from a prior version that has not yet recorded `step_completed` events on its blackboard (or stored `user_input` only inside `context.json`), the next iteration may skip the clarification / review prompt or resume with an empty user input. Workarounds: (a) finish the issue on the previous version before upgrading, (b) re-run the issue from scratch, or (c) manually create the missing `iteration_NNN/user_input.md` file.
 
