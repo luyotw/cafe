@@ -2,12 +2,76 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.2.0]
+
+Major milestone release: deep refactor of CAFE's workflow engine from hardcoded phase chains to a playbook-driven, baton-first runtime with a generic blackboard state. 438 commits since v0.1.6.
 
 ### Breaking
 - Removed hidden legacy phase commands `cafe spec`, `cafe plan`, `cafe develop`, `cafe review`, and `cafe pr`. Use `cafe make` or `cafe workflow --start-step <step> --execute` instead.
 - Playbooks and phase hooks must use the six shipped **intent** keys (`await_agent`, `confirm_output`, `need_clarification`, `need_permission`, `manual_handoff`, `workflow_complete`) and outcome tokens without the legacy `CAFE_*` prefix. Step allow-lists use `valid_intents`; script hooks use `when_intents`. Agent prompts, bundled skill references, and checklists that still instruct models to print `CAFE_*` lines must be updated or routing and hook gates will misfire.
 - Issues created before the issue241 series no longer guarantee resume compatibility. The legacy `context.json` fallbacks for `_load_user_input` and `_get_previous_iteration_status` have been removed in favor of `user_input.md` and the blackboard `step_completed` event log respectively. If you have an in-progress issue from a prior version that has not yet recorded `step_completed` events on its blackboard (or stored `user_input` only inside `context.json`), the next iteration may skip the clarification / review prompt or resume with an empty user input. Workarounds: (a) finish the issue on the previous version before upgrading, (b) re-run the issue from scratch, or (c) manually create the missing `iteration_NNN/user_input.md` file.
+
+### Added
+
+**Workflow Engine**
+- Playbook-driven workflows with config-selectable playbooks (built-in `default`, `hotfix`, `simple`, `editorial`, `research`, `incident`) and schema validation
+- `playbook simulate` command with static graph diagnostics
+- `BlackboardWorkflowRuntime` replaces `PlaybookRunner` with persistent artifacts and events
+- Baton-first handoffs with validated contracts persisted on issue root; reject-and-retry loop with `BatonRejected`
+- Lifecycle script hooks gated by `when_intents` for spec/plan/PR sync, sandbox-safe execution
+- User-owned workflow handoff menu with continue/resume options; chat handoff via blackboard + baton
+- `cafe workflow --user-input` entrypoint and resume user-input helper
+- Smart auto-advance that answers questions and resumes originating step
+- Workflow handoff and dispute limits; show executed workflow steps during runs
+
+**Crew & Presets**
+- `cafe crew` command suite: `list`, `set-primary`, `set-fallback` with `--cli/--model/--phase-model` flags
+- `CliEntry` model and CLI fallback chain in `AgentConfig`
+- Built-in presets (`default`, `claude-opus`, `gemini-team`) and `cafe preset list/save/apply`
+- `cafe make/workflow --fallback-preset` for rate-limit / CLI-not-found switching
+- `crew.yaml`: agents migrated out of `config.yaml`; `cafe init` writes `crew.yaml` with backward-compatible loading
+- `cafe prepare --preset` flag
+
+**Skills & Native CLI Bridge**
+- Native skill bridge scoped to repo-local CLI dirs with discovery errors and validation
+- Project skill import/remove commands with validation
+- Shared workflow skills for chat handoff seeding, `sync_github` utility, PR/spec/plan skill scripts
+- Skill authoring guide for CAFE skills
+
+**CLI & UX**
+- Interactive menus: manage crew, manage agents/templates, allowed directories, issue removal
+- Allowed directories: workspace-confined sandbox permissions wired through workflow
+- `cafe audit` command with built-in tooling consistency checks
+- `cafe edit` unified command
+- Print PR URL after workflow sync; show clarification before alias retries
+
+**Multi-CLI Support**
+- Codex CLI: resume retries, model-flag handling, session recovery, env recording
+- Cursor agent: `--resume` flag fix
+- Rate-limit detection on stdout (Claude "hit your limit") in addition to stderr
+
+### Fixed
+- Worktree pause/resume/plan integration hardening; active-issue marker; isolated skill installs per worktree
+- PR base branch defaults to `develop` when remote has it; base branch injection into PR skill context
+- Stale baton recovery; graceful interruption handling (Ctrl-C / agent timeout); permission-prompt pause; stale output rejection after agent failures
+- Chat handoff state preservation; bootstrap baton ignored on consumption; missing `next_step.txt` skipped
+- Spec/plan: prevent dirty documents; restore initial prompt on iteration 1; require review confirmation before advancing
+- Generic phase test stability; golden fixtures stabilized against local agent overrides
+
+### Changed
+- Decomposed CLI command groups into `ui/commands` modules; phase + helper surfaces split
+- Unified single-step flow with shared runtime loops; eliminated `set_runtime(globals())` bridge
+- Replaced status-based workflow resume with baton-driven transitions
+- Legacy phase commands routed through workflow aliases
+- `StatusCodeParser` marked legacy; `legacy_text` call sites documented
+
+### Removed
+- `phases_legacy.py` and its CLI registration
+- `PlaybookRunner` (replaced by `BlackboardWorkflowRuntime`)
+- Status-code coercion fallbacks; `BlackboardState.owner`; `require_status_code` param
+- Develop status helper; `_load_pr_comments_from_iteration_file`; generic step status persistence
+- `GitHubPRCreator` publish hook (PR create/update moved to skill script)
+- `--auto-advance` flag (replaced by baton-first runtime fallback)
 
 ## [0.1.6]
 
@@ -137,6 +201,7 @@ All notable changes to this project will be documented in this file.
 - Interactive phase management with checklist validation
 - GitHub integration for issue and PR management
 
+[0.2.0]: https://github.com/luyotw/cafe/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/luyotw/cafe/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/luyotw/cafe/compare/v0.1.4...v0.1.5
 [0.1.3]: https://github.com/luyotw/cafe/compare/v0.1.2...v0.1.3
