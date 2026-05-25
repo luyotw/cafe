@@ -273,8 +273,9 @@ def _resolve_chat_cli(
 
 
 def _load_chat_workflow_context(issue_dir: Path) -> tuple[str, list[str], str]:
-    # LEGACY: Accept legacy plain-text next_step.txt during chat bootstrap for backward compatibility.
-    # Prefer structured batons when available.
+    # LEGACY: Accept plain-text `next_step.txt` (v0.1 format) during chat
+    # bootstrap so sessions started by an older build remain readable.
+    # New chat handoffs always write structured JSON batons.
     blackboard = BlackboardStore(issue_dir).load_or_create("spec", allow_legacy_text=True)
     playbook_id = getattr(blackboard, "playbook_id", "default") or "default"
     current_step = blackboard.current_step
@@ -292,8 +293,8 @@ def _prepare_chat_handoff_state(issue_dir: Path) -> tuple[str, list[str], str]:
     current_step, valid_steps, playbook_id = _load_chat_workflow_context(issue_dir)
     issue_dir.mkdir(parents=True, exist_ok=True)
     store = BlackboardStore(issue_dir)
-    # LEGACY: When preparing chat handoff state, allow legacy text-format next_step for
-    # resumed sessions. Migration target: prefer JSON baton format for future sessions.
+    # LEGACY: Allow legacy text when preparing chat handoff state; resumed
+    # sessions may have been written by an older build.
     blackboard = store.load_or_create(current_step, allow_legacy_text=True)
     if current_step == "done":
         store.update_handoff_contract(
@@ -490,10 +491,12 @@ def launch_chat_session(role: str, issue_name: str) -> int:
         return _handle_chat_launch_failure(agent_cli, result)
 
     store = BlackboardStore(issue_dir)
-    # LEGACY: After chat CLI exit, reload blackboard allowing legacy next_step.txt formats
-    # so older chat handoffs remain consumable. New chat handoffs should write JSON batons.
+    # LEGACY: After chat CLI exit, reload blackboard allowing legacy
+    # `next_step.txt` formats so older chat handoffs remain consumable.
+    # New chat handoffs should always write structured JSON batons.
     blackboard = store.load_or_create(_current_step, allow_legacy_text=True)
-    # LEGACY: Accept legacy text when loading handoff contract here; prefer structured handoffs.
+    # LEGACY: Load handoff contract with legacy text fallback for the same
+    # backward-compatibility reason.
     contract = store.load_handoff_contract(
         blackboard,
         allowed_steps=_valid_steps,

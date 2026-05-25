@@ -489,16 +489,16 @@ def _consume_pending_chat_handoff(
         return None
 
     try:
-        # LEGACY: This load accepts plain-text `next_step.txt` (v0.1 format) to support
-        # chat/CLI handoff bootstrapping. New code should prefer structured baton JSON.
-        # See issue #316 for migration plan.
+        # LEGACY: This load accepts plain-text `next_step.txt` (v0.1 format) to
+        # support chat/CLI handoff bootstrapping. New code should prefer structured
+        # baton JSON. See issue #316 for migration plan.
         blackboard = store.load_or_create(
             str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
             playbook_id=str(playbook_data["playbook"]["id"]),
             allow_legacy_text=True,
         )
-        # LEGACY: Allow legacy text parsing for the handoff contract here; callers should
-        # prefer baton-based handoffs where possible.
+        # LEGACY: Allow legacy text parsing for the handoff contract here;
+        # callers should prefer baton-based handoffs where possible.
         contract = store.load_handoff_contract(
             blackboard,
             allowed_steps=list(playbook_data["steps"].keys()),
@@ -1238,8 +1238,8 @@ def _execute_single_step_alias(
     playbook_data = PlaybookLoader().load(playbook_name)
     if step_name not in playbook_data["steps"]:
         raise ValueError(f"Playbook '{playbook_name}' does not define step '{step_name}'")
-    # LEGACY: single-step alias bootstrap accepts legacy plain-text `next_step.txt` for
-    # CLI convenience. Preserve for v0.2 compatibility; target migration in v0.3.
+    # LEGACY: Single-step alias bootstrap accepts legacy plain-text `next_step.txt`
+    # for CLI convenience. Preserve for v0.2 compatibility; target migration in v0.3.
     blackboard = BlackboardStore(issue_dir).load_or_create(
         str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
         playbook_id=str(playbook_data["playbook"]["id"]),
@@ -1284,8 +1284,8 @@ def _execute_single_step_alias(
         playbook_id=str(playbook_data["playbook"]["id"]),
         allow_legacy_text=True,
     )
-    # LEGACY: The handoff contract loader accepts legacy text; new agent-written handoffs
-    # should emit structured batons instead.
+    # LEGACY: Handoff contract loader accepts legacy text; new agent-written
+    # handoffs should emit structured batons instead.
     handoff = store.load_handoff_contract(
         latest_blackboard,
         allowed_steps=list(playbook_data["steps"].keys()),
