@@ -89,7 +89,7 @@ def _write_agent_baton(
 def test_worktree_workflow_spec_pause_resume_reaches_plan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Workflow driven from a linked worktree keeps artifacts under that worktree."""
+    """Workflow in a worktree pauses at user, resumes on spec, and reaches plan."""
     git = _init_repo_with_cafe(tmp_path, monkeypatch)
     main_repo = Path.cwd()
     worktree_path = tmp_path / "repo" / "worktrees" / "feature-wt"
@@ -103,9 +103,12 @@ def test_worktree_workflow_spec_pause_resume_reaches_plan(
         nonlocal spec_calls
         artifact_key = str(step_def.get("output_artifact", step_name))
         rel_path = f"{step_name}/iteration_001/output.md"
+        artifact_path = issue_dir / rel_path
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
         if step_name == "spec":
             spec_calls += 1
             if spec_calls == 1:
+                artifact_path.write_text("# Spec draft\n", encoding="utf-8")
                 _write_agent_baton(
                     issue_dir,
                     from_step="spec",
@@ -115,10 +118,11 @@ def test_worktree_workflow_spec_pause_resume_reaches_plan(
                 )
                 return StepExecutionResult(
                     response="confirm_output",
-                    artifacts={artifact_key: rel_path},
+                    artifacts={artifact_key: str(artifact_path)},
                     status_code="confirm_output",
                     auto_continue=False,
                 )
+            artifact_path.write_text("# Spec confirmed\n", encoding="utf-8")
             _write_agent_baton(
                 issue_dir,
                 from_step="spec",
@@ -127,16 +131,12 @@ def test_worktree_workflow_spec_pause_resume_reaches_plan(
                 intent="await_agent",
             )
         elif step_name == "plan":
-            _write_agent_baton(
-                issue_dir,
-                from_step="plan",
-                to_owner="user",
-                to_step="user",
-                intent="confirm_output",
-            )
+            artifact_path.write_text("# Plan\n", encoding="utf-8")
+        else:
+            artifact_path.write_text(f"# {step_name}\n", encoding="utf-8")
         return StepExecutionResult(
             response="confirmed",
-            artifacts={artifact_key: rel_path},
+            artifacts={artifact_key: str(artifact_path)},
             status_code="confirmed",
         )
 
@@ -144,20 +144,46 @@ def test_worktree_workflow_spec_pause_resume_reaches_plan(
     issue_dir = worktree_path / ".cafe" / "issues" / issue_name
     issue_dir.mkdir(parents=True)
 
-    result = _run_until_settled(
+    runner = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
         executor=executor,
-        start_step="spec",
     )
+    paused = runner.run(start_step="spec", max_transitions=10)
 
-    assert result is not None
+    assert paused.completed is False
     blackboard = BlackboardStore(issue_dir).load_or_create("spec")
-    assert blackboard.current_step in {"plan", "user"}
+    assert blackboard.current_step == "user"
+    assert spec_calls == 1
+    pause_events = [e for e in blackboard.events if e.event_type == "workflow_paused"]
+    assert pause_events
+
+    with pytest.raises(RuntimeError, match="max transition limit"):
+        BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            executor=executor,
+        ).run(start_step="spec", max_transitions=2)
+
+    assert spec_calls == 2
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    plan_started = [
+        e
+        for e in blackboard.events
+        if e.event_type == "step_started" and e.data.get("step") == "plan"
+    ]
+    plan_completed = [
+        e
+        for e in blackboard.events
+        if e.event_type == "step_completed" and e.data.get("step") == "plan"
+    ]
+    assert plan_started
+    assert plan_completed
+    plan_artifact = issue_dir / "plan" / "iteration_001" / "output.md"
+    assert plan_artifact.exists()
+    assert plan_artifact.read_text(encoding="utf-8") == "# Plan\n"
     assert str(issue_dir).startswith(str(worktree_path.resolve()))
     assert not (main_repo / ".cafe" / "issues" / issue_name).exists()
-    plan_artifact = issue_dir / "plan" / "iteration_001" / "output.md"
-    assert plan_artifact.exists() or blackboard.current_step == "user"
 
 
 def test_parallel_worktrees_keep_issue_state_isolated(
