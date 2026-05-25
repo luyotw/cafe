@@ -23,5 +23,4 @@ def test_cli_source_does_not_reference_phases_legacy() -> None:
 def test_legacy_phase_commands_are_unknown(legacy_command: str) -> None:
     result = runner.invoke(app, [legacy_command])
     assert result.exit_code != 0
-    combined = (result.stdout or "") + (result.stderr or "")
-    assert "No such command" in combined
+    assert "No such command" in result.output
