@@ -1,4 +1,16 @@
-"""Step outcome tokens for workflow execution (non-legacy vocabulary)."""
+"""Step outcome tokens and (legacy) free-text parser for workflow execution.
+
+Active:
+- ``PhaseStatusCode`` enum — agent-declared step outcome tokens.
+- ``PLAYBOOK_INTENT_KEYS`` — keys allowed in playbook step ``on`` maps.
+- ``transition_map_key`` — collapses outcome tokens to playbook transition keys.
+
+Legacy (kept for mock/legacy agent paths only):
+- ``StatusCodeParser`` — extracts a ``PhaseStatusCode`` from a free-text agent
+  response. Built-in skills and playbooks write structured batons via
+  ``next_step.txt`` and do not depend on this parser. See issue #316 for the
+  migration plan.
+"""
 
 from __future__ import annotations
 
@@ -70,7 +82,12 @@ def step_on_declares(step_def: dict, intent_key: str) -> bool:
 
 
 class StatusCodeParser:
-    """Parser for extracting step outcome tokens from agent responses."""
+    """Legacy free-text → ``PhaseStatusCode`` parser.
+
+    Used only by mock agents and legacy agent paths. New built-in skills and
+    playbooks must write structured batons to ``next_step.txt`` instead of
+    relying on free-text status codes.
+    """
 
     @staticmethod
     def extract(response: str, valid_codes: Optional[List[PhaseStatusCode]] = None) -> Optional[PhaseStatusCode]:
