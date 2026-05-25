@@ -70,9 +70,13 @@ class NativeSkillBridge:
         return f"{self.SKILL_NAME_PREFIX}{name}"
 
     def install_skill(self, name: str, cli: AgentCLI) -> Path:
-        """Install one resolved skill into the user-level CLI-native directory."""
+        """Install one resolved skill into the project-local CLI-native directory.
+
+        Using the worktree-local skill directory avoids cross-process races when
+        multiple CAFE workflows install/update the same native skill in parallel.
+        """
         source_dir = self.skill_loader.get_skill_dir(name)
-        target_dir = self.get_global_native_skills_dir(cli) / self.get_installed_skill_name(name)
+        target_dir = self.get_native_skills_dir(cli) / self.get_installed_skill_name(name)
         skills_root = target_dir.parent
         # Recover from invalid roots (regular file or dangling symlink), which can
         # otherwise raise FileExistsError even with exist_ok=True.
