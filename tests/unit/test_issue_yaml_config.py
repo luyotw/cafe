@@ -16,7 +16,7 @@ def _read_issue_config(config_file: Path) -> dict:
 
 
 def _load_spec_sync_github(issue_dir: Path, cli_value: bool | None = None) -> bool:
-    """Mirror legacy spec-phase sync_github resolution without SpecPhase."""
+    """Resolve spec.sync_github the same way the workflow runtime does (issue.yaml)."""
     config_data = _read_issue_config(issue_dir / "issue.yaml")
     spec_config = config_data.get("spec", {}) if config_data else {}
     config_value = bool(spec_config["sync_github"]) if "sync_github" in spec_config else None
@@ -35,7 +35,7 @@ def _save_spec_issue_config(
     rigor: SpecRigor,
     sync_github: bool,
 ) -> None:
-    """Mirror legacy spec-phase save while preserving unrelated keys."""
+    """Persist spec.sync_github in issue.yaml while preserving unrelated keys."""
     config_file = issue_dir / "issue.yaml"
     existing = _read_issue_config(config_file)
     config_data = {**existing}
@@ -126,7 +126,7 @@ class TestSaveSpecSyncGithub:
 
 
 def _load_plan_sync_github(issue_dir: Path, cli_value: bool | None = None) -> bool:
-    """Mirror legacy plan-phase sync_github resolution without PlanPhase."""
+    """Resolve plan.sync_github the same way the workflow runtime does (issue.yaml)."""
     config_data = _read_issue_config(issue_dir / "issue.yaml")
     plan_config = config_data.get("plan", {}) if config_data else {}
     spec_config = config_data.get("spec", {}) if config_data else {}
