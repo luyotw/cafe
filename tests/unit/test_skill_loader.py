@@ -230,7 +230,7 @@ def test_install_skill_uses_project_version_over_global(tmp_path: Path) -> None:
     )
     bridge.install_skill("plan", AgentCLI.CLAUDE)
 
-    installed = tmp_path / "home" / ".claude" / "skills" / "cafe-plan" / "SKILL.md"
+    installed = tmp_path / "project" / ".claude" / "skills" / "cafe-plan" / "SKILL.md"
     assert "Project version" in installed.read_text(encoding="utf-8")
 
 
@@ -238,7 +238,7 @@ def test_install_skill_recovers_when_skills_root_is_file(tmp_path: Path) -> None
     global_root = tmp_path / "global" / "skills"
     _write_skill(global_root, "plan")
     project_root = tmp_path / "project"
-    bad_root = tmp_path / "home" / ".copilot" / "skills"
+    bad_root = project_root / ".copilot" / "skills"
     bad_root.parent.mkdir(parents=True, exist_ok=True)
     bad_root.write_text("not-a-directory", encoding="utf-8")
 
@@ -259,7 +259,7 @@ def test_install_skill_recovers_when_skills_root_is_broken_symlink(tmp_path: Pat
     global_root = tmp_path / "global" / "skills"
     _write_skill(global_root, "plan")
     project_root = tmp_path / "project"
-    bad_root = tmp_path / "home" / ".copilot" / "skills"
+    bad_root = project_root / ".copilot" / "skills"
     bad_root.parent.mkdir(parents=True, exist_ok=True)
     bad_root.symlink_to(tmp_path / "missing-target")
 

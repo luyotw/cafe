@@ -561,9 +561,9 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
 
     result = executor.execute_step("review", playbook["steps"]["review"], state)
 
-    assert (tmp_path / "home" / ".codex" / "skills" / "cafe-workflow-common" / "SKILL.md").exists()
-    assert (tmp_path / "home" / ".codex" / "skills" / "cafe-github_sync" / "SKILL.md").exists()
-    assert (tmp_path / "home" / ".codex" / "skills" / "cafe-review" / "SKILL.md").exists()
+    assert (tmp_path / ".codex" / "skills" / "cafe-workflow-common" / "SKILL.md").exists()
+    assert (tmp_path / ".codex" / "skills" / "cafe-github_sync" / "SKILL.md").exists()
+    assert (tmp_path / ".codex" / "skills" / "cafe-review" / "SKILL.md").exists()
     iteration_dir = issue_dir / "review" / "iteration_001"
     output_file = iteration_dir / "output.md"
     checklist_file = iteration_dir / "checklist.md"
