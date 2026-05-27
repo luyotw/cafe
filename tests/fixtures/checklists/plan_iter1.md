@@ -4,6 +4,10 @@
 [ ] Read the development guide in .cafe/issues/test/plan/iteration_001/output.md
 [ ] Read the requirements document .cafe/issues/test/spec/iteration_001/output.md
 [ ] Plan implementation steps (planning, not implementation)
+[ ] Complete **`## Test List`** in the plan output (`Unit tests (N)` and `Integration tests (M)` with labels mapping to invariants or user journeys; if N or M is 0, explain why)
+[ ] Read `src/cafe/data/skills/plan/references/test_invariants_policy.md` when writing Test List items and assertion guidance
+[ ] Confirm: Integration test entries describe **user journeys** and **invariant outcomes**, not UI components
+[ ] Confirm: Test List items avoid brittle bindings (UI copy, CSS classes, DOM structure, internal state shape) unless the spec explicitly requires them
 [ ] Append plan after "## Development Guide" section
 [ ] Keep "## Development Guide" section unchanged
 [ ] Confirm: Only wrote plans and steps, NO actual code
