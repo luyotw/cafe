@@ -29,6 +29,28 @@ bash scripts/sync_github.sh --help
 - User 確認暫停、交給 `develop` 前是否執行 GitHub sync、以及 baton 順序：請依 shared skill「workflow-common」的 **Confirming spec and plan with the user**、**Where policies live**，並搭配 `github_sync` skill 的腳本說明；本 skill 不重複敘述。
 - 計畫草稿需 user 確認時：把 next-step baton 寫入 `user`，不要直接交給 `develop`（其餘細節以 workflow-common 為準）。
 
+### Required plan sections (must be filled before handoff)
+
+Every plan output must include these **labeled** sections (see built-in templates under `assets/templates/`):
+
+1. **Negative space** — what deps/abstractions we will **not** introduce, each with a one-line reason. If none apply, state explicitly (e.g. "No new dependencies expected.").
+2. **Layering map** — where business logic, persistence, and UI live, with **concrete file or module paths**.
+3. **Dependency ADR** — table or list of runtime/dev deps to add (why, alternatives, requirement served), or explicit "No new dependencies expected."
+
+Empty placeholders are incomplete. The user must see all three sections at plan confirm (`confirm_output`).
+
+### Project principles alignment (graceful degradation)
+
+Before finalizing the plan, if the project has `.cafe/strategic_context.yaml`:
+
+- Read `documents.principles.path`:
+  - If `status: exists`: load that file (do not hardcode `PRINCIPLES.md`). Ground **Negative space** (red lines / out-of-scope) and **Dependency ADR** (capability or requirement ties) using principles.
+  - If `status: missing` or the field is absent: keep the three sections in pure technical form; optional note "Principles document not configured; leave principles cross-refs blank."
+
+### Stale major versions (prompt-level)
+
+When the Dependency ADR proposes a **new major** of a package, note whether that major was released within the last **30 days** (default window). If so, justify the risk in the ADR or pick a stable alternative. Full registry automation is out of scope; checklist/template language is the minimum deliverable.
+
 ## Output
 Write plan to: {output_file}
 
