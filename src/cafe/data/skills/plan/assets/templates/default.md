@@ -59,6 +59,16 @@
     }
     ```
 
+## Test List
+
+### Unit tests (N)
+1. **Label** — Invariant: … — Scope: pure business logic / shared library module
+
+### Integration tests (M)
+1. **Label** — Journey: … — Invariant outcome: … — Boundary: system-level behavior (not per-component)
+
+_(If N or M is 0, one sentence explains why.)_
+
 ### 📋 Development Task Breakdown
 
 #### Task 1: Create service layer foundation

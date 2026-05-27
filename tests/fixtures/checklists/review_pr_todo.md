@@ -48,6 +48,14 @@
 [ ] Review test quality and edge cases
 [ ] Check the tests are not fragile or flaky
 
+## Test Invariants Review
+[ ] Plan includes a **Test List** with **Unit tests (N)** and **Integration tests (M)**; each item has a label mapped to an invariant or user journey; if N or M is zero, the plan states why
+[ ] New/changed tests align with the plan Test List and protect invariants or journey outcomes—not implementation details
+[ ] New/changed tests do **not** couple to disallowed UI copy, CSS classes, DOM structure, or internal state shape (unless spec/DoD explicitly allows exact copy as a product requirement)
+[ ] Integration tests map to plan journeys/invariants, not per-component or internal UI structure
+[ ] Extractable pure business logic in shared library modules has unit-level coverage when applicable
+[ ] Allowed UI contracts are respected: accessibility roles/labels, test ids (`data-testid`), and exact copy only when mandated in the spec
+
 ## Final Steps
 [ ] Confirm: No code was modified
 [ ] Write review findings to .cafe/issues/test/review/iteration_001/output.md in todo list format (same format as PR phase)
