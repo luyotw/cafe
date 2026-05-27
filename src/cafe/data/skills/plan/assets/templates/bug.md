@@ -12,6 +12,18 @@
 - [File/component 1]
 - [File/component 2]
 
+## Negative space
+
+> Fill after investigation. List obvious-but-declined additions (extra deps, refactors, new abstractions) with one-line reasons. If N/A: "No scope expansion beyond the bug fix."
+
+## Layering map
+
+> Fill after root-cause analysis. Map business logic, persistence, and UI to concrete paths.
+
+## Dependency ADR
+
+> Fill after investigation. List any new runtime/dev deps with why, alternatives, and requirement served — or **"No new dependencies expected."** Flag new majors released within **30 days** unless justified.
+
 ---
 
 ## Test List

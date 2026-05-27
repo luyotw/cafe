@@ -40,7 +40,9 @@
 [ ] Check if existing unused code can be removed
 
 ## Anti-Over-Engineering Review
-[ ] Dependency hygiene: every new entry in `package.json` / `pyproject.toml` / equivalent has a justification recorded in the plan and serves a declared requirement; flag any unannounced dependency
+[ ] Dependency ADR vs manifest diff: diff dependency manifests (`package.json`, `pyproject.toml`, `requirements*.txt`, or equivalent) against the approved plan's **Dependency ADR** list; any package present in the manifest diff but **not declared** in the plan is undeclared — route back to `develop` and name the package in review output
+[ ] Dependency hygiene: every new manifest entry has a matching ADR entry and serves a declared requirement; flag unannounced or undeclared dependencies
+[ ] Stale majors: if the plan or manifests introduce a **new major** released within the last **30 days**, verify the ADR justifies the risk or an acceptable stable alternative was chosen; flag unjustified bleeding-edge majors
 [ ] Layering and speculative abstractions: business logic that could be a pure function is not buried inside a UI component; no abstractions added for hypothetical future scenarios; implementation matches the layering map declared in the plan
 [ ] Explicit cross-component contracts: when two components share state via persistence or other indirect channels, the protocol is documented (in code or plan), not coincidental; flag implicit coupling that only works because of current framework behavior
 

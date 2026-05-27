@@ -1,5 +1,37 @@
 ## Implementation Analysis
 
+### Negative space
+
+> What we are **not** introducing, and why. If nothing obvious applies, state explicitly (e.g. "No additional runtime deps; template-only change.").
+
+| Declined | Reason |
+| --- | --- |
+| Client router (e.g. react-router) | Only two static tabs; local state suffices |
+| CSS framework | Plain CSS covers the design |
+| PWA / offline stack | Not requested in the spec |
+
+> If `.cafe/strategic_context.yaml` has `documents.principles.path` with `status: exists`, tie declines to principles red lines / out-of-scope items. Otherwise leave principles cross-refs blank.
+
+### Layering map
+
+> Where business logic, persistence, and UI live — use **concrete file or module paths**.
+
+| Layer | Location |
+| --- | --- |
+| Business logic | `services/auth_service.py` |
+| Persistence / data | `models/user.py`, ORM queries in service layer |
+| UI / HTTP | `views/auth_views.py`, `templates/auth/` |
+
+### Dependency ADR
+
+> Every **runtime and dev** dependency this issue expects to add. If none: write **"No new dependencies expected."**
+
+| Package | Type | Why | Alternatives considered | Requirement served |
+| --- | --- | --- | --- | --- |
+| *(example)* `pyjwt` | runtime | JWT signing for login tokens | Session cookies only | Auth token feature |
+
+> For a **new major** version, note release age. If the major shipped within the last **30 days**, justify the risk here or pick a stable alternative.
+
 * Code style reference examples
     * Service layer pattern: `services/user_service.py`
     * View layer style: `views/user_views.py`

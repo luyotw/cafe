@@ -87,6 +87,8 @@ Default development flow (spec → plan → develop → review → pr) is driven
 
 Primary CLI entrypoints: `cafe make` and `cafe workflow`. Legacy `cafe spec` / `plan` / `develop` / `review` / `pr` commands were removed in issue #315; use `cafe workflow --start-step <step> --execute` for explicit single-step runs.
 
+Built-in **plan** templates require three architecture sections in every plan artifact: **Negative space** (what we decline to add), **Layering map** (concrete paths for logic/persistence/UI), and **Dependency ADR** (per new dependency or an explicit "none"). The user sees these at plan confirm; **review** diffs dependency manifests against the ADR and routes undeclared packages back to develop.
+
 ## Coding Style
 
 *   This project follows the [PEP 8](https://www.python.org/dev/peps/pep-0008/) style guide.

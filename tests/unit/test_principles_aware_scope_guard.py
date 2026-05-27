@@ -43,6 +43,18 @@ def test_spec_default_template_has_principles_alignment_section() -> None:
     assert "Leave blank" in template or "leave blank" in template
 
 
+def test_plan_skill_reads_strategic_context_for_architecture_sections() -> None:
+    plan_skill = (
+        PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "plan" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert "strategic_context.yaml" in plan_skill
+    assert "documents.principles.path" in plan_skill
+    assert "Negative space" in plan_skill
+    assert "Dependency ADR" in plan_skill
+    assert "30 days" in plan_skill
+
+
 def test_review_checklist_has_anti_over_engineering_section() -> None:
     review_steps = (
         PROJECT_ROOT
@@ -59,3 +71,6 @@ def test_review_checklist_has_anti_over_engineering_section() -> None:
     assert "Dependency hygiene" in review_steps
     assert "Layering and speculative abstractions" in review_steps
     assert "Explicit cross-component contracts" in review_steps
+    assert "Dependency ADR vs manifest diff" in review_steps
+    assert "undeclared" in review_steps.lower()
+    assert "30 days" in review_steps

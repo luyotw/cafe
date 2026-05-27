@@ -3,6 +3,23 @@
 ## Goal
 Add a "forgot password" link to the login page
 
+## Negative space
+
+- **Not adding:** [dependency or abstraction declined] — [one-line reason]
+- If none apply: "No new runtime deps beyond existing stack."
+
+## Layering map
+
+| Layer | Path |
+| --- | --- |
+| UI | `templates/auth/login.html` |
+| Logic | `views/auth_views.py` |
+
+## Dependency ADR
+
+- **New deps:** None expected (or list package + 1–2 sentences: why / alternative / requirement).
+- **Recent majors:** If proposing a new major released within **30 days**, justify here or choose a stable version.
+
 ## Test List
 
 ### Unit tests (N)
