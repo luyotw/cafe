@@ -14,6 +14,16 @@
 
 ---
 
+## Test List
+
+### Unit tests (N)
+1. **Label** — Invariant: … — Scope: pure business logic / shared library module
+
+### Integration tests (M)
+1. **Label** — Journey: … — Invariant outcome: … — Boundary: system-level behavior (not per-component)
+
+_(If N or M is 0, one sentence explains why.)_
+
 ## Task Breakdown
 
 > **Instructions for Developer:** Update this checklist as you progress. Replace placeholders with actual implementation steps once you identify the root cause.

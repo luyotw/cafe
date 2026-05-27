@@ -3,6 +3,16 @@
 ## Goal
 Add a "forgot password" link to the login page
 
+## Test List
+
+### Unit tests (N)
+1. **Label** — Invariant: … — Scope: pure business logic / shared library module
+
+### Integration tests (M)
+1. **Label** — Journey: … — Invariant outcome: … — Boundary: system-level behavior (not per-component)
+
+_(If N or M is 0, one sentence explains why.)_
+
 ## Tasks
 - [ ] Task 1: Add `forgot_password()` view in `views/auth_views.py`
 - [ ] Task 2: Add "Forgot password?" link to `templates/auth/login.html`
