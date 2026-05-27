@@ -7,8 +7,8 @@ class TestSpecTemplatesDoDFormat:
     """Tests to verify DoD format is present in spec templates."""
 
     def _get_template_path(self, template_name: str) -> Path:
-        """Get the path to a spec template file."""
-        return Path("src/cafe/data/templates/spec") / template_name
+        """Get the path to a spec template file (bundled under spec skill assets)."""
+        return Path("src/cafe/data/skills/spec/assets/templates") / template_name
 
     def test_default_template_acceptance_criteria_contains_dod_format(self) -> None:
         """Test that default.md template's Acceptance Criteria section contains DoD format."""

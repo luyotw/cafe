@@ -18,6 +18,22 @@ class TemplateManager:
         """
         self.template_type = template_type
 
+    def _builtin_dir(self) -> Path:
+        """Builtin template directory under the owning skill's assets/.
+
+        Templates are owned by the skill that produces them (spec → spec
+        skill, plan → plan skill). The owning skill's directory name matches
+        the template type.
+        """
+        return (
+            Path(__file__).parent.parent
+            / "data"
+            / "skills"
+            / self.template_type
+            / "assets"
+            / "templates"
+        )
+
     def add_template(self, source_path: str, template_name: str) -> Path:
         """Add a new template from a file to global directory.
 
@@ -69,8 +85,8 @@ class TemplateManager:
         templates = {}  # name -> (source_type, file_path)
         system_contents = {}  # name -> content (for comparison)
 
-        # First, collect system templates (from package data)
-        package_data_dir = Path(__file__).parent.parent / "data" / "templates" / self.template_type
+        # First, collect system templates (bundled under owning skill's assets/)
+        package_data_dir = self._builtin_dir()
         if package_data_dir.exists():
             for file in package_data_dir.glob("*.md"):
                 template_name = file.stem
@@ -172,8 +188,8 @@ class TemplateManager:
         if global_path.exists():
             return global_path
 
-        # Fall back to system default (package data)
-        package_data_dir = Path(__file__).parent.parent / "data" / "templates" / self.template_type
+        # Fall back to system default (bundled under owning skill's assets/)
+        package_data_dir = self._builtin_dir()
         system_path = package_data_dir / template_name
         if system_path.exists():
             return system_path

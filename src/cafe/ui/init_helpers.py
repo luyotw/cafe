@@ -145,13 +145,36 @@ def _get_system_agents_dir() -> Path:
     return Path(__file__).parent.parent / "data" / "agents"
 
 
-def _get_system_templates_dir() -> Path:
-    """Get the system default templates directory path.
+def _get_system_skills_dir() -> Path:
+    """Get the system default skills directory path.
 
     Returns:
-        Path to system templates directory (src/cafe/data/templates/)
+        Path to system skills directory (src/cafe/data/skills/)
     """
-    return Path(__file__).parent.parent / "data" / "templates"
+    return Path(__file__).parent.parent / "data" / "skills"
+
+
+def _discover_builtin_template_types() -> List[Tuple[str, Path]]:
+    """Find builtin template types by scanning skill assets.
+
+    A skill that bundles document templates exposes them under
+    ``<skill>/assets/templates/``. The skill directory name (e.g. ``spec``,
+    ``plan``) doubles as the template type.
+
+    Returns:
+        List of (template_type, templates_dir) tuples.
+    """
+    skills_dir = _get_system_skills_dir()
+    if not skills_dir.exists():
+        return []
+    found: List[Tuple[str, Path]] = []
+    for skill_dir in sorted(skills_dir.iterdir()):
+        if not skill_dir.is_dir():
+            continue
+        templates_dir = skill_dir / "assets" / "templates"
+        if templates_dir.exists():
+            found.append((skill_dir.name, templates_dir))
+    return found
 
 
 def copy_agents_to_local(cafe_dir: Path) -> List[Tuple[str, str, bool]]:
@@ -211,8 +234,8 @@ def copy_templates_to_local(cafe_dir: Path) -> List[Tuple[str, str, bool]]:
     """Copy template files from global custom or system default directories to local .cafe.
 
     Global custom (~/.cafe/templates/<phase>/) takes precedence over system default
-    (src/cafe/data/templates/<phase>/). Copies to .cafe/templates/<phase>/, overwriting
-    any existing local files.
+    (bundled under each owning skill's assets/templates/). Copies to
+    .cafe/templates/<phase>/, overwriting any existing local files.
 
     Args:
         cafe_dir: Path to the local .cafe directory
@@ -223,18 +246,14 @@ def copy_templates_to_local(cafe_dir: Path) -> List[Tuple[str, str, bool]]:
     from cafe.utils.config import get_global_cafe_dir
 
     results: List[Tuple[str, str, bool]] = []
-    system_templates_dir = _get_system_templates_dir()
+    builtin_template_types = _discover_builtin_template_types()
     global_templates_dir = get_global_cafe_dir() / "templates"
 
-    # Derive template types from the system templates directory structure
-    template_types = [d.name for d in system_templates_dir.iterdir() if d.is_dir()] if system_templates_dir.exists() else []
-
-    for template_type in template_types:
+    for template_type, system_type_dir in builtin_template_types:
         # Collect all templates for this type; global custom overrides system default
         files: Dict[str, Tuple[Path, str]] = {}
 
         # Add system defaults first
-        system_type_dir = system_templates_dir / template_type
         if system_type_dir.exists():
             for template_file in system_type_dir.glob("*.md"):
                 files[template_file.name] = (template_file, "system default")

@@ -8,17 +8,32 @@ import pytest
 class TestDirectoryStructure:
     """測試專案目錄結構是否符合預期."""
 
-    def test_templates_directory_exists_in_package_data(self) -> None:
-        """測試 templates 目錄存在於 package data 目錄."""
-        templates_dir = Path("src/cafe/data/templates")
-        assert templates_dir.exists(), "src/cafe/data/templates directory should exist"
-        assert templates_dir.is_dir(), "templates should be a directory"
+    def test_templates_bundled_under_owning_skills(self) -> None:
+        """測試 templates 已搬到 owning skill 的 assets/ 目錄底下."""
+        spec_templates = Path("src/cafe/data/skills/spec/assets/templates")
+        plan_templates = Path("src/cafe/data/skills/plan/assets/templates")
+        assert spec_templates.is_dir(), (
+            "Spec templates should live under spec skill's assets/templates/"
+        )
+        assert plan_templates.is_dir(), (
+            "Plan templates should live under plan skill's assets/templates/"
+        )
 
-    def test_templates_plan_default_exists_in_package_data(self) -> None:
-        """測試 templates/plan/default.md 檔案存在於 package data."""
-        default_template = Path("src/cafe/data/templates/plan/default.md")
-        assert default_template.exists(), "src/cafe/data/templates/plan/default.md should exist"
-        assert default_template.is_file(), "default.md should be a file"
+    def test_templates_plan_default_exists_under_skill_assets(self) -> None:
+        """測試 plan default.md 模板存在於 plan skill 的 assets/ 底下."""
+        default_template = Path(
+            "src/cafe/data/skills/plan/assets/templates/default.md"
+        )
+        assert default_template.is_file(), (
+            "src/cafe/data/skills/plan/assets/templates/default.md should exist"
+        )
+
+    def test_legacy_templates_directory_removed(self) -> None:
+        """舊的 src/cafe/data/templates/ 目錄已移除."""
+        legacy = Path("src/cafe/data/templates")
+        assert not legacy.exists(), (
+            "src/cafe/data/templates should be removed; templates live under skill assets/"
+        )
 
     def test_src_cafe_templates_plan_does_not_exist(self) -> None:
         """測試 src/cafe/templates/plan 目錄不存在（模板內容已移除）."""
