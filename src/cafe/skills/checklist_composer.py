@@ -39,19 +39,19 @@ def generate_spec_checklist(
 
     if iteration == 1:
         execution_steps = _load_skill_checklist_reference(
-            "spec_first",
+            "spec",
             "execution_steps_iteration_1.md",
         )
     else:
         execution_steps = _load_skill_checklist_reference(
-            "spec_revise",
+            "spec",
             "execution_steps_iteration_n.md",
         )
 
     iteration_note = ""
     if iteration >= 4:
         iteration_note = _load_skill_checklist_reference(
-            "spec_first",
+            "spec",
             "important_notes_iteration_4_plus.md",
         )
 
@@ -78,7 +78,7 @@ def generate_spec_checklist(
                 "[ ] Follow template structure when writing analysis results\n"
             )
 
-    dod_instruction = _load_skill_checklist_reference("spec_first", "dod_instruction.md")
+    dod_instruction = _load_skill_checklist_reference("spec", "dod_instruction.md")
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
 
     basic_principles_checklist = ""
@@ -100,7 +100,7 @@ def generate_spec_checklist(
 
     if questions_xml_file:
         placeholders["xml_questions_instruction"] = _resolve_xml_questions_instruction(
-            "spec_first",
+            "spec",
             "xml_questions_instruction.md",
             questions_xml_file,
         )

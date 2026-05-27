@@ -15,9 +15,7 @@ roles:
 steps:
   spec:
     type: skill
-    skill:
-      "1": spec_first
-      default: spec_revise
+    skill: spec
     role: pm
     assignee_type: agent
     input_artifacts: []

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -10,6 +11,16 @@ import yaml
 
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.utils.config import get_global_cafe_dir
+
+_logger = logging.getLogger(__name__)
+
+# Deprecated skill names that resolve to a newer skill. Issued for backward
+# compatibility with user playbooks / presets that still reference the old
+# split skills. Plan to remove in a future minor release.
+_SKILL_ALIASES: Dict[str, str] = {
+    "spec_first": "spec",
+    "spec_revise": "spec",
+}
 
 
 def read_skill_frontmatter(skill_file: Path) -> Dict[str, str]:
@@ -115,9 +126,25 @@ class SkillLoader:
 
     def get_skill_dir(self, name: str) -> Path:
         self._ensure_catalog()
-        if name not in self._catalog:
-            raise SkillDiscoveryError(name)
-        return self._catalog[name].directory
+        if name in self._catalog:
+            return self._catalog[name].directory
+        resolved = self._resolve_alias(name)
+        if resolved is not None and resolved in self._catalog:
+            return self._catalog[resolved].directory
+        raise SkillDiscoveryError(name)
+
+    @staticmethod
+    def _resolve_alias(name: str) -> Optional[str]:
+        target = _SKILL_ALIASES.get(name)
+        if target is None:
+            return None
+        _logger.warning(
+            "Skill '%s' is deprecated; resolving to '%s'. Update playbooks/presets to use '%s'.",
+            name,
+            target,
+            target,
+        )
+        return target
 
     def activate(self, name: str, context: Optional[Dict[str, str]] = None) -> str:
         """Load full skill content and replace placeholders."""
