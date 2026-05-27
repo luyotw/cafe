@@ -13,8 +13,7 @@ def test_phase_scripts_delegate_to_shared_implementation() -> None:
     assert shared.exists()
 
     wrappers = [
-        project_root / "src/cafe/data/skills/spec_first/scripts/sync_github.sh",
-        project_root / "src/cafe/data/skills/spec_revise/scripts/sync_github.sh",
+        project_root / "src/cafe/data/skills/spec/scripts/sync_github.sh",
         project_root / "src/cafe/data/skills/plan/scripts/sync_github.sh",
     ]
 
@@ -27,8 +26,7 @@ def test_phase_scripts_delegate_to_shared_implementation() -> None:
 @pytest.mark.parametrize(
     "script_rel_path,phase",
     [
-        ("src/cafe/data/skills/spec_first/scripts/sync_github.sh", "spec"),
-        ("src/cafe/data/skills/spec_revise/scripts/sync_github.sh", "spec"),
+        ("src/cafe/data/skills/spec/scripts/sync_github.sh", "spec"),
         ("src/cafe/data/skills/plan/scripts/sync_github.sh", "plan"),
     ],
 )

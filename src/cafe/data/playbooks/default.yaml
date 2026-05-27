@@ -19,9 +19,7 @@ roles:
 steps:
   spec:
     type: skill
-    skill:
-      "1": spec_first
-      default: spec_revise
+    skill: spec
     role: pm
     handoff_label: "Update requirements spec"
     chat_role: pm

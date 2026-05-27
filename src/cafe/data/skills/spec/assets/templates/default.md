@@ -31,6 +31,16 @@
 - **In scope**: [What will be implemented]
 - **Out of scope**: [What will NOT be implemented]
 
+### Principles Alignment
+
+> Only fill these fields when the project declares a principles document in
+> `.cafe/strategic_context.yaml` (`documents.principles.path` with
+> `status: exists`). Leave blank otherwise.
+
+- **Touches do-not-do list or red lines?**: [Yes / No — and which item, if Yes]
+- **Serves which declared capability or roadmap stage?**: [Quote or reference the principles item this work delivers]
+- **What completion criterion would be missing if this feature were removed?**: [Describe the gap to the principles' acceptance bar]
+
 ### Acceptance Criteria
 - ✅ [Criterion 1]
 - ✅ [Criterion 2]

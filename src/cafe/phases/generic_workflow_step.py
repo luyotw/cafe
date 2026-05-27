@@ -660,7 +660,7 @@ class GenericWorkflowStepExecutor(Phase):
             or self._artifact_path(blackboard_state, "pr_result")
         )
 
-        if skill_name in {"spec_first", "spec_revise"}:
+        if skill_name in {"spec", "spec_first", "spec_revise"}:
             prev_spec = None
             if self.iteration > 1:
                 prev_spec_file = self._get_versioned_file_path(step_name, self.iteration - 1, self.phase_dir)

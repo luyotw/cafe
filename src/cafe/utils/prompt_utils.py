@@ -132,8 +132,15 @@ def get_template_allowed_directories(template_mode: str, template_path: Optional
 
     if template_mode == "auto":
         # Auto mode: add both system and custom templates directories
-        # System templates directory (package data)
-        package_data_dir = Path(__file__).parent.parent / "data" / "templates" / template_type
+        # System templates directory (bundled under owning skill's assets/)
+        package_data_dir = (
+            Path(__file__).parent.parent
+            / "data"
+            / "skills"
+            / template_type
+            / "assets"
+            / "templates"
+        )
         if package_data_dir.exists():
             dirs.append(str(package_data_dir.resolve()))
         # Custom templates directory (global cafe dir)

@@ -473,6 +473,19 @@ class TestCopyTemplatesToLocal:
         (system_dir / "plan" / "simple.md").write_text("# Simple Plan (system)")
         (system_dir / "spec" / "default.md").write_text("# Default Spec (system)")
 
+    @staticmethod
+    def _fake_discover(system_dir: Path):
+        """Return a fake discovery callable for monkeypatching."""
+
+        def _impl():
+            return [
+                (phase_dir.name, phase_dir)
+                for phase_dir in sorted(system_dir.iterdir())
+                if phase_dir.is_dir()
+            ]
+
+        return _impl
+
     def test_copy_templates_with_system_defaults_only(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -496,7 +509,7 @@ class TestCopyTemplatesToLocal:
             "cafe.utils.config.get_global_cafe_dir", lambda: global_dir
         )
         monkeypatch.setattr(
-            "cafe.ui.init_helpers._get_system_templates_dir", lambda: system_dir
+            "cafe.ui.init_helpers._discover_builtin_template_types", self._fake_discover(system_dir)
         )
 
         results = copy_templates_to_local(cafe_dir)
@@ -537,7 +550,7 @@ class TestCopyTemplatesToLocal:
             "cafe.utils.config.get_global_cafe_dir", lambda: global_dir
         )
         monkeypatch.setattr(
-            "cafe.ui.init_helpers._get_system_templates_dir", lambda: system_dir
+            "cafe.ui.init_helpers._discover_builtin_template_types", self._fake_discover(system_dir)
         )
 
         results = copy_templates_to_local(cafe_dir)
@@ -578,7 +591,7 @@ class TestCopyTemplatesToLocal:
             "cafe.utils.config.get_global_cafe_dir", lambda: global_dir
         )
         monkeypatch.setattr(
-            "cafe.ui.init_helpers._get_system_templates_dir", lambda: system_dir
+            "cafe.ui.init_helpers._discover_builtin_template_types", self._fake_discover(system_dir)
         )
 
         copy_templates_to_local(cafe_dir)
@@ -611,7 +624,7 @@ class TestCopyTemplatesToLocal:
             "cafe.utils.config.get_global_cafe_dir", lambda: global_dir
         )
         monkeypatch.setattr(
-            "cafe.ui.init_helpers._get_system_templates_dir", lambda: system_dir
+            "cafe.ui.init_helpers._discover_builtin_template_types", self._fake_discover(system_dir)
         )
 
         # Mock shutil.copy2 to raise PermissionError
