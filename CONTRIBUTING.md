@@ -61,6 +61,10 @@ You can contribute to this project in several ways:
 
 6.  Open a Pull Request to the `main` branch of the original repository. In the PR description, please detail your changes, their purpose, and any relevant Issue numbers.
 
+## Testing policy (workflow)
+
+Plan, develop, and review skills enforce a **test invariants** policy: tests should protect business rules and user-journey outcomes, not fragile UI structure. See `src/cafe/data/skills/plan/references/test_invariants_policy.md` for what to test, what to avoid, and examples.
+
 ## Pre-release Verification
 
 Before cutting a release or merging large changes to builtin skills, playbooks, or agents, run the builtin tooling audit:
