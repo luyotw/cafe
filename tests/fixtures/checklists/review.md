@@ -39,6 +39,11 @@
 [ ] Check for files or code that should not be deleted
 [ ] Check if existing unused code can be removed
 
+## Anti-Over-Engineering Review
+[ ] Dependency hygiene: every new entry in `package.json` / `pyproject.toml` / equivalent has a justification recorded in the plan and serves a declared requirement; flag any unannounced dependency
+[ ] Layering and speculative abstractions: business logic that could be a pure function is not buried inside a UI component; no abstractions added for hypothetical future scenarios; implementation matches the layering map declared in the plan
+[ ] Explicit cross-component contracts: when two components share state via persistence or other indirect channels, the protocol is documented (in code or plan), not coincidental; flag implicit coupling that only works because of current framework behavior
+
 ## Testing Review
 [ ] Review test quality and edge cases
 [ ] Check the tests are not fragile or flaky
