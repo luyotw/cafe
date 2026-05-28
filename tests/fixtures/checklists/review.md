@@ -35,6 +35,7 @@
 [ ] Verify proper error handling
 [ ] Check code correctness, readability, performance, security
 [ ] Check for missing updates (error messages, prompts, documentation, examples)
+[ ] Comment hygiene (no landmines): code comments must not contain unverified speculation presented as fact. If a comment makes a claim ("this happens because...", "X is safe because...") it must be backed by evidence in code/tests/docs/links, or rewritten as a question/TODO with the missing evidence explicitly stated.
 [ ] Check for files that should not be committed (config files, log files)
 [ ] Check for files or code that should not be deleted
 [ ] Check if existing unused code can be removed
