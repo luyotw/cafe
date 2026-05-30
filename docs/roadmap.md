@@ -152,7 +152,7 @@ CAFE 長期採 **repo-first** 的 definition model，但不預設最終所有流
 - 若 agent 寫完 script 就能直接用 host 權限執行，等於把 workflow authoring 變成 privilege escalation 機制
 - 非技術使用者無法判斷自己究竟授權了哪種外部 mutation
 
-因此 v3 應區分兩種 script execution：
+因此 v0.3 應區分兩種 script execution：
 - **sandbox execution**
   - agent 自己在受限環境執行，用於開發、測試、dry-run
 - **host execution**
@@ -162,6 +162,8 @@ CAFE 長期採 **repo-first** 的 definition model，但不預設最終所有流
 
 目標：
 把 CAFE 從「流程引擎」推進到「人機協作流程系統」。
+
+細部 milestone plan 見：[docs/plans/v03-plan.md](plans/v03-plan.md)。
 
 核心能力：
 - 正式 `HumanTask` 模型
@@ -180,6 +182,18 @@ CAFE 長期採 **repo-first** 的 definition model，但不預設最終所有流
 - `CapabilityContract`
 - `CapabilityPolicy`
 - `ExecutionRequest`
+
+Milestone 摘要：
+- **Milestone A: HumanTask contract 與 runtime 狀態**
+  - 定義 `HumanTask` / `TaskResult` / `WaitState` / `Assignment`，讓 workflow 遇到 human-owned step 時建立 task 並 pause。
+- **Milestone B: CLI task inbox 與 completion flow**
+  - 提供 `cafe task list/show/complete/cancel`，讓 human completion payload 驗證後可回填 artifact 並 resume workflow。
+- **Milestone C: Human-agent playbook validation samples**
+  - 擴充 playbook validation，並用至少一條非軟體開發流程驗證 human / hybrid / auto step 語意。
+- **Milestone D: Trusted capability contract registry**
+  - 讓 host-side mutation 只能透過已註冊 capability、policy、receipt gate 執行。
+- **Milestone E: v0.3 end-to-end validation**
+  - 用 mixed agent + human workflow 與 capability receipt smoke test 驗證 v0.3 可從 start 跑到 done。
 
 完成標準：
 - 一條流程中可同時混合 agent steps 與 human tasks
