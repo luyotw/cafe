@@ -1,7 +1,7 @@
 
 ## Interactive Q&A Questions
 
-[ ] If user clarification is needed: write questions to {questions_xml_file} in the following XML format and hand off to `user`:
+[ ] If user clarification is needed: write questions to {questions_xml_file} in the following XML format and hand off to `user` with `intent=need_clarification`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>

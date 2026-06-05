@@ -231,3 +231,10 @@ def test_spec_checklist_includes_dod_instruction(tmp_path: Path) -> None:
     )
     content = checklist_path.read_text(encoding="utf-8")
     assert "Definition of Done" in content
+
+
+def test_spec_and_develop_xml_question_instruction_requires_need_clarification() -> None:
+    spec_instruction = load_skill_reference("spec_first", "xml_questions_instruction.md")
+    develop_instruction = load_skill_reference("develop", "xml_questions_instruction.md")
+    assert "intent=need_clarification" in spec_instruction
+    assert "intent=need_clarification" in develop_instruction

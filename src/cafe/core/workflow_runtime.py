@@ -148,6 +148,7 @@ class BlackboardWorkflowRuntime:
             f"has invalid value '{br.invalid_value}'. "
             f"Valid values are: {br.valid_values}. "
             "Please rewrite next_step.txt with a correct baton. "
+            "Retry in baton-only mode: do not rewrite output.md, checklist.md, or questions.xml unless strictly required. "
             "If you are asking the user a question, use to_owner='user', "
             "to_step='user', and intent='need_clarification'."
         )

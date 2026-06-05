@@ -2281,6 +2281,7 @@ def test_runtime_retry_extra_prompt_contains_feedback(tmp_path: Path) -> None:
     assert "to_owner" in retry_prompt
     assert "human" in retry_prompt
     assert "agent" in retry_prompt
+    assert "Retry in baton-only mode" in retry_prompt
 
 
 def test_runtime_plan_need_permission_pauses_at_user(tmp_path: Path) -> None:

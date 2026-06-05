@@ -1171,6 +1171,50 @@ def test_generic_workflow_step_restores_spec_runtime_allowed_tools(tmp_path: Pat
     assert "edit(./.cafe/issues/issue-spec-tools/spec/iteration_001/questions.xml)" in allowed_tools
 
 
+def test_generic_workflow_step_uses_baton_only_tools_on_baton_error(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-spec-baton-retry"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": {"1": "spec_first", "default": "spec_first"},
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read", "Grep", "Glob", "WebFetch", "WebSearch"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done", "need_clarification": "spec"},
+            }
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    agent_manager = FakeAgentManager("confirmed")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-spec-baton-retry",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+        step_user_inputs={"spec": "[BATON ERROR] fix baton only"},
+    )
+
+    executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    allowed_tools = agent_manager.allowed_tools_calls[0] or []
+    assert "read" in allowed_tools
+    assert "grep" in allowed_tools
+    assert "glob" in allowed_tools
+    assert "ls" in allowed_tools
+    assert "edit(./.cafe/issues/issue-spec-baton-retry/blackboard.json)" in allowed_tools
+    assert "edit(./.cafe/issues/issue-spec-baton-retry/next_step.txt)" in allowed_tools
+    assert "edit(./.cafe/issues/issue-spec-baton-retry/spec/iteration_001/output.md)" not in allowed_tools
+    assert "edit(./.cafe/issues/issue-spec-baton-retry/spec/iteration_001/checklist.md)" not in allowed_tools
+    assert "edit(./.cafe/issues/issue-spec-baton-retry/spec/iteration_001/questions.xml)" not in allowed_tools
+
+
 def test_generic_workflow_step_restores_develop_runtime_allowed_tools(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-develop-tools"

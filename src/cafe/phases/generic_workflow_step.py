@@ -213,6 +213,11 @@ class GenericWorkflowStepExecutor(Phase):
                 resolved_user_input = (
                     f"{extra_prompt}\n\n{resolved_user_input}" if resolved_user_input else extra_prompt
                 )
+            attempt_allowed_tools = (
+                self._build_baton_retry_allowed_tools()
+                if self._is_baton_retry_user_input(resolved_user_input)
+                else allowed_tools
+            )
             response, _ = self._execute_agent_iteration(
                 agent_name=agent_name,
                 prompt=prompt,
@@ -220,7 +225,7 @@ class GenericWorkflowStepExecutor(Phase):
                 valid_intents=valid_intents,
                 require_status_code=False,
                 persist_status=False,
-                allowed_tools=allowed_tools,
+                allowed_tools=attempt_allowed_tools,
                 phase_specific_data=phase_specific_data,
             )
             return response
@@ -571,6 +576,16 @@ class GenericWorkflowStepExecutor(Phase):
             add("bash(git show)")
             add("bash(git status)")
 
+        return allowed_tools
+
+    @staticmethod
+    def _is_baton_retry_user_input(user_input: str) -> bool:
+        return "[BATON ERROR]" in user_input
+
+    def _build_baton_retry_allowed_tools(self) -> List[str]:
+        allowed_tools = ["read", "grep", "glob", "ls"]
+        allowed_tools.append(f"edit({self._display_path(self.issue_dir / 'blackboard.json')})")
+        allowed_tools.append(f"edit({self._display_path(self.issue_dir / 'next_step.txt')})")
         return allowed_tools
 
     def _build_context(

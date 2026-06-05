@@ -76,6 +76,9 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
     assert "blackboard_file=.cafe/issues/demo/blackboard.json" in prompt
     assert "next_step_file=.cafe/issues/demo/next_step.txt" in prompt
     assert "Runtime context:" in prompt
+    assert "Baton contract (single source of truth):" in prompt
+    assert "valid intent values: [await_agent, confirm_output, need_clarification, need_permission, no_changes_needed, manual_handoff, workflow_complete]" in prompt
+    assert "do not invoke external workflow-driving skills (e.g. use-cafe-workflow)" in prompt
     assert "Do NOT finish this step until ALL checklist items are marked as [x]." in prompt
     assert "Do NOT return a status code" not in prompt
     assert "Latest workflow handoff from blackboard:" in prompt
@@ -201,6 +204,7 @@ def test_build_prompt_contract_covers_shared_skills_files_context_and_gate(tmp_p
         "next_step_file=.cafe/issues/demo/next_step.txt",
     ):
         assert line in prompt
+    assert "Baton contract (single source of truth):" in prompt
     assert "Do NOT finish this step until ALL checklist items are marked as [x]." in prompt
     assert "Do NOT return a status code" not in prompt
     assert_runtime_handoff_guardrails_persist(prompt)

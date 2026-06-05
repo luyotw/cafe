@@ -12,6 +12,7 @@ from cafe.core.hooks import BUILTIN_HOOKS, HookResult
 from cafe.core.hooks.script_schema import validate_script_args_schema
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
+from cafe.core.blackboard import HandoffIntent
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.core.types import AgentCLI
@@ -103,6 +104,16 @@ class GenericPhase:
             lines.extend(["Runtime files:"])
             lines.extend(runtime_files)
             lines.append("")
+
+        baton_intents = ", ".join(intent.value for intent in HandoffIntent)
+        runtime_context.extend(
+            [
+                "Baton contract (single source of truth):",
+                f"- valid intent values: [{baton_intents}]",
+                "- when asking user questions, handoff must be to_owner='user', to_step='user', intent='need_clarification'",
+                "- stay within this prompt's listed shared skills + phase skill; do not invoke external workflow-driving skills (e.g. use-cafe-workflow)",
+            ]
+        )
 
         if context and context.get("handoff_summary"):
             runtime_context.extend(

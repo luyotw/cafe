@@ -58,6 +58,7 @@ Write a JSON object to `next_step.txt` with these fields:
 | `confirm_output` | Asking the user to approve a spec or plan artifact |
 | `need_clarification` | Asking the user a question before proceeding |
 | `need_permission` | Requesting a capability or resource the agent cannot self-authorize |
+| `no_changes_needed` | Declaring no further edits are required and handing off per playbook |
 | `manual_handoff` | Explicitly routing to a non-default next step |
 | `workflow_complete` | Final step finished; workflow ends |
 
@@ -131,6 +132,7 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 - Do not skip the blackboard read just because the phase prompt also includes artifact paths.
 - Do not write `blackboard.json` — only write `next_step.txt`. The runtime updates the blackboard based on your baton.
 - Do not use status codes in your response text as the primary transition mechanism — write the baton instead.
+- Do not invoke high-level workflow-driving skills (for example `use-cafe-workflow`) inside a running phase. Follow only the shared skills and phase skill already listed by the runtime prompt.
 
 ## Where policies live (canonical index)
 
