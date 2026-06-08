@@ -424,7 +424,25 @@ def _display_iteration_delta(
 
 
 _VALID_RIGOR_VALUES = ["low", "medium", "high"]
-_VALID_PLAYBOOK_VALUES = ["default", "tdd", "bugfix"]
+
+
+def _get_valid_playbook_values() -> List[str]:
+    """Return playbook names that actually exist on disk.
+
+    Listing dynamically (builtin/global/project) keeps the interactive choices in
+    sync with the playbook files, so we never offer a playbook that has no
+    definition — the previous hard-coded list advertised "tdd"/"bugfix" which were
+    never shipped as .yaml files, letting users pick a playbook that silently fell
+    back to default.
+    """
+    try:
+        playbooks = PlaybookLoader().list_playbooks()
+    except Exception:
+        playbooks = []
+    # Surface "default" first so it stays the default highlighted choice.
+    if "default" in playbooks:
+        playbooks = ["default"] + [name for name in playbooks if name != "default"]
+    return playbooks or ["default"]
 
 
 @app.command()
@@ -503,7 +521,7 @@ def init(
         )
         new_playbook = prompt_list(
             message="Select playbook:",
-            choices=_VALID_PLAYBOOK_VALUES,
+            choices=_get_valid_playbook_values(),
         )
         new_rigor = prompt_list(
             message="Select rigor level:",
@@ -585,7 +603,7 @@ def setup(
         )
         new_playbook = prompt_list(
             message="Select playbook:",
-            choices=_VALID_PLAYBOOK_VALUES,
+            choices=_get_valid_playbook_values(),
         )
         new_rigor = prompt_list(
             message="Select rigor level:",
