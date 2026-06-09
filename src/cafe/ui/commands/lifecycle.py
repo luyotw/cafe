@@ -204,6 +204,23 @@ def prepare(
                 console.print(f"[red]Error: {e}[/red]")
                 raise typer.Exit(1)
 
+        from cafe.core.prepare_profile import PrepareProfile, PrepareRigorError
+        from cafe.playbooks.loader import PlaybookLoader
+        from cafe.ui.cli_shared import _resolve_selected_playbook
+        from cafe.utils.git_utils import is_github_repo
+
+        playbook_name = _resolve_selected_playbook(None)
+        try:
+            loaded_playbook = PlaybookLoader().load_model(playbook_name)
+        except (FileNotFoundError, ValueError) as exc:
+            console.print(f"[red]Error: Failed to load playbook '{playbook_name}': {exc}[/red]")
+            console.print(
+                "[yellow]Check .cafe/config.yaml playbook setting or add the playbook file.[/yellow]"
+            )
+            raise typer.Exit(1)
+
+        profile = PrepareProfile.from_playbook(loaded_playbook.model, is_github_repo())
+
         # 2. Determine interactive mode and config prompt behavior
         # should_prompt_for_config: Should we show config prompts?
         #   - True if user didn't provide issue_name as argument AND interactive flag is True
@@ -240,18 +257,21 @@ def prepare(
                 console.print("[red]Error: --issue-id is required when using --input-method=github[/red]")
                 raise typer.Exit(1)
 
-            # 4.4. Validate rigor if provided
-            if rigor and rigor not in ["low", "medium", "high"]:
-                console.print("[red]Error: --rigor must be 'low', 'medium', or 'high'[/red]")
-                raise typer.Exit(1)
-
-            # 4.5. Set default values for optional parameters
+            # 4.4. Apply playbook non-interactive defaults
+            defaults = profile.non_interactive_defaults()
             if rigor is None:
-                rigor = "medium"
+                rigor = defaults.rigor
             if plan_template is None:
-                plan_template = "default"
+                plan_template = defaults.plan_template
             if spec_template is None:
-                spec_template = "auto"
+                spec_template = defaults.spec_template
+
+            # 4.5. Validate rigor against playbook constraints
+            try:
+                profile.validate_rigor(rigor)
+            except PrepareRigorError as exc:
+                console.print(f"[red]Error: {exc}[/red]")
+                raise typer.Exit(1)
 
         # 5. Initialize Git operations
         try:
@@ -349,7 +369,7 @@ def prepare(
         plan_config = {}
         pr_config = {}
 
-        if should_prompt_for_config:
+        if profile.should_prompt_spec_plan_config(should_prompt_for_config):
             console.print()
             console.print("[bold cyan]📝 Pre-configure spec and plan phases[/bold cyan]")
             console.print(
@@ -361,56 +381,32 @@ def prepare(
             display = Display()
             github_ops = GitHubOps()
 
-            # Step 1: Prompt for input method and issue ID (only for GitHub repos)
-            from cafe.utils.git_utils import is_github_repo
-
-            if is_github_repo():
+            # Step 1: Input method and issue ID (playbook-driven)
+            if profile.should_prompt_input_method():
                 input_method, issue_id = prompt_for_input_method(display, github_ops)
                 spec_config["input_method"] = input_method
                 if issue_id is not None:
                     spec_config["issue_id"] = str(issue_id)
             else:
-                # Non-GitHub repo: use manual input only
-                spec_config["input_method"] = "manual"
+                spec_config["input_method"] = profile.default_input_method()
                 issue_id = None
 
             # Step 2: Prompt for setup mode (after input method selection)
             console.print()
-            setup_mode_choices = [
-                "Quick setup (use recommended defaults)",
-                "Custom configuration",
-            ]
+            setup_mode_choices = profile.enabled_setup_mode_labels()
             setup_mode_choice = prompt_list(
                 message="Choose setup mode:",
                 choices=setup_mode_choices,
                 default=setup_mode_choices[0],
             )
-            
-            use_quick_setup = setup_mode_choice.startswith("Quick setup")
-            
+
+            use_quick_setup = profile.is_quick_setup_choice(setup_mode_choice)
+
             if use_quick_setup:
-                # Quick setup: Apply default values without prompting
-                # Default values
-                spec_config["rigor"] = "medium"
-                spec_config["template"] = "auto"
-                plan_config["template"] = "auto"
-                
-                # Sync settings based on input method
-                if issue_id is not None:
-                    spec_config["sync_github"] = True  # GitHub Issue -> sync
-                    plan_config["sync_github"] = True
-                else:
-                    spec_config["sync_github"] = False  # Manual input -> no sync
-                    plan_config["sync_github"] = False
-                
-                # Auto create PR depends on whether it's a GitHub repo
-                if is_github_repo():
-                    pr_config["auto_create"] = True
-                    # In Quick setup, auto_create is always True for GitHub repos,
-                    # so always enable post_todo_list as well
-                    pr_config["post_todo_list"] = True
-                else:
-                    pr_config["auto_create"] = False
+                quick_config = profile.quick_setup_issue_config(issue_id)
+                spec_config.update(quick_config.spec)
+                plan_config.update(quick_config.plan)
+                pr_config.update(quick_config.pr)
 
                 # Display default values summary
                 console.print()
@@ -419,7 +415,7 @@ def prepare(
                 console.print(f"  • Spec template: {spec_config['template']}")
                 console.print(f"  • Plan template: {plan_config['template']}")
                 console.print(f"  • Input method: {spec_config['input_method']}")
-                if is_github_repo():
+                if profile.is_github_repo:
                     console.print(f"  • Sync to GitHub: {spec_config.get('sync_github', False)}")
                     console.print(f"  • Auto create PR: {pr_config.get('auto_create', False)}")
                     console.print(f"  • Post PR todo list: {pr_config.get('post_todo_list', False)}")
