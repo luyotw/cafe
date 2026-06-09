@@ -72,7 +72,7 @@ steps:
   spec:
     role: pm
     skill: spec_first
-    on:
+    "on":
       await_agent: _done
 {prepare_block}
 """
@@ -140,13 +140,16 @@ def test_invalid_boolean_shape_rejected() -> None:
             prepare_block="""
 commands:
   prepare:
-    prompt_for_spec_plan_config: yes
+    prompt_for_spec_plan_config:
+      enabled: true
 """
         )
     )
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError) as exc_info:
         PlaybookDefinition.model_validate(data)
+
+    assert "prompt_for_spec_plan_config" in str(exc_info.value)
 
 
 def test_unknown_nested_prepare_key_forbidden() -> None:
@@ -194,7 +197,7 @@ steps:
   spec:
     role: pm
     skill: spec_first
-    on:
+    "on":
       await_agent: _done
 commands:
   prepare:
@@ -230,7 +233,7 @@ steps:
   spec:
     role: pm
     skill: spec_first
-    on:
+    "on":
       await_agent: _done
 """,
     )
