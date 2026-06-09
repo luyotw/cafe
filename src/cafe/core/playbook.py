@@ -12,10 +12,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from cafe.core.status_codes import PLAYBOOK_INTENT_KEYS, PhaseStatusCode
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
+from cafe.templates.manager import TemplateManager
 
 
 DONE_TARGET = "_done"
 SCRIPT_HOOK_STAGES = {"before_execute", "after_execute"}
+
+RigorLevel = Literal["low", "medium", "high"]
+InputMethodDefault = Literal["manual", "github"]
 
 
 class PlaybookMeta(BaseModel):
@@ -126,6 +130,138 @@ class StepConfig(BaseModel):
         return normalized
 
 
+class PrepareSetupModeEntry(BaseModel):
+    """One setup mode offered during interactive prepare."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    label: str
+
+
+class PrepareSetupModes(BaseModel):
+    """Quick setup vs custom configuration choices."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    quick: PrepareSetupModeEntry = Field(
+        default_factory=lambda: PrepareSetupModeEntry(
+            label="Quick setup (use recommended defaults)"
+        )
+    )
+    custom: PrepareSetupModeEntry = Field(
+        default_factory=lambda: PrepareSetupModeEntry(label="Custom configuration")
+    )
+
+
+class PrepareQuickSetupSpec(BaseModel):
+    """Spec defaults applied when the user picks quick setup."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rigor: RigorLevel = "medium"
+    template: str = "auto"
+
+
+class PrepareQuickSetupPlan(BaseModel):
+    """Plan defaults applied when the user picks quick setup."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    template: str = "auto"
+
+
+class PrepareSyncGithubDefaults(BaseModel):
+    """GitHub sync defaults derived from input method during quick setup."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    when_issue_id_present: bool = True
+    when_manual_input: bool = False
+
+
+class PrepareQuickSetupPr(BaseModel):
+    """PR defaults applied when the user picks quick setup."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    auto_create_on_github_repo: bool = True
+    post_todo_list_when_auto_create: bool = True
+
+
+class PrepareQuickSetup(BaseModel):
+    """Recommended defaults for interactive quick setup."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    spec: PrepareQuickSetupSpec = Field(default_factory=PrepareQuickSetupSpec)
+    plan: PrepareQuickSetupPlan = Field(default_factory=PrepareQuickSetupPlan)
+    sync_github: PrepareSyncGithubDefaults = Field(default_factory=PrepareSyncGithubDefaults)
+    pr: PrepareQuickSetupPr = Field(default_factory=PrepareQuickSetupPr)
+
+
+class PrepareNonInteractiveDefaults(BaseModel):
+    """Defaults used when prepare runs with --no-interactive."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rigor: RigorLevel = "medium"
+    spec_template: str = "auto"
+    plan_template: str = "default"
+
+
+class PrepareInputMethod(BaseModel):
+    """Input-method prompt behavior for prepare."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    prompt_on_github_repo: bool = True
+    non_github_default: InputMethodDefault = "manual"
+
+
+class PrepareConstraints(BaseModel):
+    """Allowed values for prepare configuration fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rigor: List[RigorLevel] = Field(default_factory=lambda: ["low", "medium", "high"])
+
+
+class PrepareConfig(BaseModel):
+    """Declarative ``cafe prepare`` prompt and default metadata."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    prompt_for_spec_plan_config: bool = True
+    setup_modes: PrepareSetupModes = Field(default_factory=PrepareSetupModes)
+    quick_setup: PrepareQuickSetup = Field(default_factory=PrepareQuickSetup)
+    non_interactive_defaults: PrepareNonInteractiveDefaults = Field(
+        default_factory=PrepareNonInteractiveDefaults
+    )
+    input_method: PrepareInputMethod = Field(default_factory=PrepareInputMethod)
+    constraints: PrepareConstraints = Field(default_factory=PrepareConstraints)
+
+
+class CommandsConfig(BaseModel):
+    """Command-level metadata blocks owned by a playbook."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    prepare: Optional[PrepareConfig] = None
+
+
+def default_prepare_config() -> PrepareConfig:
+    """Return backward-compatible prepare defaults matching the built-in default playbook."""
+    return PrepareConfig()
+
+
+def resolve_prepare_config(model: PlaybookDefinition) -> PrepareConfig:
+    """Resolve effective prepare metadata, applying defaults when omitted."""
+    if model.commands and model.commands.prepare is not None:
+        return model.commands.prepare
+    return default_prepare_config()
+
+
 class PlaybookDefinition(BaseModel):
     """Top-level playbook definition."""
 
@@ -134,6 +270,7 @@ class PlaybookDefinition(BaseModel):
     playbook: PlaybookMeta
     roles: Dict[str, PlaybookRole] = Field(default_factory=dict)
     steps: Dict[str, StepConfig]
+    commands: Optional[CommandsConfig] = None
     entry_point: Optional[str] = None
 
     @model_validator(mode="after")
@@ -233,9 +370,64 @@ def validate_playbook(
                 f"Step '{step_name}': assignee_type={step.assignee_type} (reserved for v0.3)"
             )
 
+    _validate_prepare_metadata(model)
+
     if warnings and strict:
         raise ValueError("\n".join(warnings))
     return warnings
+
+
+def _validate_prepare_metadata(model: PlaybookDefinition) -> None:
+    """Validate prepare metadata templates and rigor constraints."""
+    prepare = resolve_prepare_config(model)
+    spec_manager = TemplateManager(template_type="spec")
+    plan_manager = TemplateManager(template_type="plan")
+
+    _validate_prepare_template(
+        spec_manager,
+        prepare.quick_setup.spec.template,
+        "commands.prepare.quick_setup.spec.template",
+    )
+    _validate_prepare_template(
+        plan_manager,
+        prepare.quick_setup.plan.template,
+        "commands.prepare.quick_setup.plan.template",
+    )
+    _validate_prepare_template(
+        spec_manager,
+        prepare.non_interactive_defaults.spec_template,
+        "commands.prepare.non_interactive_defaults.spec_template",
+    )
+    _validate_prepare_template(
+        plan_manager,
+        prepare.non_interactive_defaults.plan_template,
+        "commands.prepare.non_interactive_defaults.plan_template",
+    )
+
+    allowed_rigor = set(prepare.constraints.rigor)
+    if prepare.quick_setup.spec.rigor not in allowed_rigor:
+        raise ValueError(
+            "commands.prepare.quick_setup.spec.rigor "
+            f"{prepare.quick_setup.spec.rigor!r} is not listed in "
+            f"commands.prepare.constraints.rigor"
+        )
+    if prepare.non_interactive_defaults.rigor not in allowed_rigor:
+        raise ValueError(
+            "commands.prepare.non_interactive_defaults.rigor "
+            f"{prepare.non_interactive_defaults.rigor!r} is not listed in "
+            f"commands.prepare.constraints.rigor"
+        )
+
+
+def _validate_prepare_template(
+    manager: TemplateManager,
+    template_name: str,
+    field_path: str,
+) -> None:
+    if template_name == "auto":
+        return
+    if not manager.template_exists(template_name):
+        raise ValueError(f"Unknown template {template_name!r} for {field_path}")
 
 
 def _report_structural_issue(
