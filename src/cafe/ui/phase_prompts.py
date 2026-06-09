@@ -67,25 +67,33 @@ def prompt_for_input_method(display: Display, github_ops: GitHubOps) -> tuple[st
                 print()
 
 
-def prompt_for_rigor(display: Display) -> str:
+def prompt_for_rigor(display: Display, allowed: Optional[List[str]] = None) -> str:
     """Ask for specification rigor level
 
     Args:
         display: Display instance (not currently used, but kept for future extension)
+        allowed: Optional allowed rigor values from the selected playbook
 
     Returns:
         Rigor level string: 'low' | 'medium' | 'high'
     """
-    choices = [
-        "Low - Fast development mode\n   • Ask only critical information\n   • Allow ambiguity, let developers decide\n   • Suitable for: rapid prototypes, MVP, internal tools",
-        "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",
-        "High - Precise specification mode\n   • Ask all details and edge cases\n   • Ensure requirements are testable, no ambiguity\n   • Suitable for: core features, API design, external products",
-    ]
+    choice_by_value = {
+        "low": "Low - Fast development mode\n   • Ask only critical information\n   • Allow ambiguity, let developers decide\n   • Suitable for: rapid prototypes, MVP, internal tools",
+        "medium": "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",
+        "high": "High - Precise specification mode\n   • Ask all details and edge cases\n   • Ensure requirements are testable, no ambiguity\n   • Suitable for: core features, API design, external products",
+    }
+    allowed_values = allowed or ["low", "medium", "high"]
+    choices = [choice_by_value[value] for value in allowed_values if value in choice_by_value]
+    default_choice = (
+        choice_by_value["medium"]
+        if "medium" in allowed_values
+        else choices[0]
+    )
 
     choice = prompt_list(
         message="Please select specification rigor level:",
         choices=choices,
-        default=choices[1],  # Default to Medium
+        default=default_choice,
     )
 
     # Parse the choice to get rigor level
