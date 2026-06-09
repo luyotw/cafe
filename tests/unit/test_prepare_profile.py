@@ -170,6 +170,7 @@ commands:
 """
         profile = _profile_from_yaml(tmp_path, prepare_yaml, is_github_repo=False)
         profile.validate_rigor("high")
+        assert profile.allowed_rigor_values() == ["high"]
 
 
 class TestPrepareProfileSetupModes:

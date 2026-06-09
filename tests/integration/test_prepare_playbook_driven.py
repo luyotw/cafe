@@ -211,6 +211,58 @@ commands:
         )
         assert bad_result.exit_code == 1
 
+    @patch("cafe.ui.phase_prompts.prompt_confirm")
+    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.template_selector.prompt_list")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
+    def test_custom_configuration_rigor_choices_follow_playbook_constraints(
+        self,
+        mock_prompt_text,
+        mock_cli_list,
+        mock_phase_list,
+        mock_template_list,
+        mock_cli_confirm,
+        mock_phase_confirm,
+        temp_repo_dir,
+        mock_git_ops,
+    ):
+        prepare_block = """
+commands:
+  prepare:
+    quick_setup:
+      spec:
+        rigor: high
+    non_interactive_defaults:
+      rigor: high
+    constraints:
+      rigor: [high]
+"""
+        _write_custom_playbook(temp_repo_dir, "strict-custom", prepare_block)
+        _write_config_with_playbook(temp_repo_dir, "strict-custom")
+
+        mock_prompt_text.return_value = "strict-custom"
+        mock_cli_confirm.return_value = False
+        mock_phase_confirm.return_value = False
+        mock_cli_list.return_value = "Custom configuration"
+        mock_phase_list.side_effect = [
+            "1. Manual input",
+            "High - Precise specification mode\n   • Ask all details and edge cases\n   • Ensure requirements are testable, no ambiguity\n   • Suitable for: core features, API design, external products",
+        ]
+        mock_template_list.return_value = "auto"
+
+        result = runner.invoke(app, ["prepare"])
+
+        assert result.exit_code == 0
+        rigor_prompt = mock_phase_list.call_args_list[1]
+        assert rigor_prompt.kwargs["choices"] == [
+            "High - Precise specification mode\n   • Ask all details and edge cases\n   • Ensure requirements are testable, no ambiguity\n   • Suitable for: core features, API design, external products"
+        ]
+        config_file = temp_repo_dir / ".cafe" / "issues" / "strict-custom" / "issue.yaml"
+        config_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        assert config_data["spec"]["rigor"] == "high"
+
     def test_invalid_playbook_exits_with_actionable_error(
         self, temp_repo_dir, mock_git_ops
     ):

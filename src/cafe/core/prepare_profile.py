@@ -94,6 +94,9 @@ class PrepareProfile:
                 f"--rigor must be one of: {allowed_display}"
             )
 
+    def allowed_rigor_values(self) -> list[str]:
+        return list(self.prepare.constraints.rigor)
+
     def should_prompt_input_method(self) -> bool:
         return self.is_github_repo and self.prepare.input_method.prompt_on_github_repo
 

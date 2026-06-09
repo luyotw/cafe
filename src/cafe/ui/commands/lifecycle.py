@@ -441,7 +441,12 @@ def prepare(
                     console.print()
 
                 # Prompt for rigor level
-                rigor = prompt_for_rigor(display)
+                rigor = prompt_for_rigor(display, allowed=profile.allowed_rigor_values())
+                try:
+                    profile.validate_rigor(rigor)
+                except PrepareRigorError as exc:
+                    console.print(f"[red]Error: {exc}[/red]")
+                    raise typer.Exit(1)
                 spec_config["rigor"] = rigor
 
                 # Prompt for spec template
