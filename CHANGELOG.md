@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1]
+
+### Added
+- Added playbook-owned `commands.prepare` metadata for `cafe prepare` prompts, quick-setup defaults, non-interactive defaults, input-method behavior, and rigor constraints.
+- Wired `cafe prepare` to consume the selected playbook's prepare metadata through a `PrepareProfile` decision layer while preserving default workflow behavior.
+- Added the `tdd` built-in playbook and dynamic playbook choices.
+- Added plan architecture sections, Dependency ADR enforcement, Test List gates, and test-invariants guidance across plan/develop/review workflow skills.
+
+### Changed
+- Moved spec and plan templates into their owning skill assets.
+- Merged `spec_first` and `spec_revise` into one iteration-aware `spec` skill.
+- Strengthened spec scope guarding through strategic context and anti-over-engineering review guidance.
+
+### Fixed
+- Hardened baton retry handoff contract handling.
+- Ensured prepare custom-configuration rigor choices respect playbook constraints.
+- Tightened prepare metadata tests so boolean validation targets the intended schema field.
+- Flag unverified speculative review comments during host review.
+
 ## [0.2.0]
 
 Major milestone release: deep refactor of CAFE's workflow engine from hardcoded phase chains to a playbook-driven, baton-first runtime with a generic blackboard state. 438 commits since v0.1.6.
@@ -201,6 +220,7 @@ Major milestone release: deep refactor of CAFE's workflow engine from hardcoded 
 - Interactive phase management with checklist validation
 - GitHub integration for issue and PR management
 
+[0.2.1]: https://github.com/luyotw/cafe/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/luyotw/cafe/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/luyotw/cafe/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/luyotw/cafe/compare/v0.1.4...v0.1.5
