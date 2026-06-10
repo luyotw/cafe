@@ -10,6 +10,12 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from cafe.core.status_codes import PLAYBOOK_INTENT_KEYS, PhaseStatusCode
+from cafe.core.prepare_fields import (
+    PrepareField,
+    assert_prepare_semantics_match,
+    resolve_prepare_fields,
+    validate_field_semantics,
+)
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 from cafe.templates.manager import TemplateManager
@@ -240,6 +246,14 @@ class PrepareConfig(BaseModel):
     )
     input_method: PrepareInputMethod = Field(default_factory=PrepareInputMethod)
     constraints: PrepareConstraints = Field(default_factory=PrepareConstraints)
+    fields: Optional[List[PrepareField]] = None
+    fields_ref: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_fields_source(self) -> "PrepareConfig":
+        if self.fields and self.fields_ref:
+            raise ValueError("commands.prepare.fields and commands.prepare.fields_ref are mutually exclusive")
+        return self
 
 
 class CommandsConfig(BaseModel):
@@ -248,6 +262,9 @@ class CommandsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     prepare: Optional[PrepareConfig] = None
+
+
+_PREPARE_FIELDS_ONLY_KEYS = frozenset({"fields", "fields_ref"})
 
 
 def default_prepare_config() -> PrepareConfig:
@@ -370,15 +387,20 @@ def validate_playbook(
                 f"Step '{step_name}': assignee_type={step.assignee_type} (reserved for v0.3)"
             )
 
-    _validate_prepare_metadata(model)
+    _validate_prepare_metadata(model, skill_loader=skill_loader, playbook_path=path)
 
     if warnings and strict:
         raise ValueError("\n".join(warnings))
     return warnings
 
 
-def _validate_prepare_metadata(model: PlaybookDefinition) -> None:
-    """Validate prepare metadata templates and rigor constraints."""
+def _validate_prepare_metadata(
+    model: PlaybookDefinition,
+    *,
+    skill_loader: SkillLoader,
+    playbook_path: Path,
+) -> None:
+    """Validate prepare metadata templates, rigor constraints, and declarative fields."""
     prepare = resolve_prepare_config(model)
     spec_manager = TemplateManager(template_type="spec")
     plan_manager = TemplateManager(template_type="plan")
@@ -417,6 +439,28 @@ def _validate_prepare_metadata(model: PlaybookDefinition) -> None:
             f"{prepare.non_interactive_defaults.rigor!r} is not listed in "
             f"commands.prepare.constraints.rigor"
         )
+
+    parsed_fields = resolve_prepare_fields(
+        prepare,
+        playbook_path=playbook_path,
+        skill_loader=skill_loader,
+    )
+    if parsed_fields is None:
+        return
+
+    has_explicit_legacy_prepare_metadata = bool(
+        prepare.model_fields_set - _PREPARE_FIELDS_ONLY_KEYS
+    )
+    validate_field_semantics(
+        parsed_fields.fields,
+        prepare,
+        spec_manager=spec_manager,
+        plan_manager=plan_manager,
+        enforce_legacy_setup_modes=has_explicit_legacy_prepare_metadata,
+    )
+
+    if has_explicit_legacy_prepare_metadata:
+        assert_prepare_semantics_match(model.commands.prepare, parsed_fields)
 
 
 def _validate_prepare_template(

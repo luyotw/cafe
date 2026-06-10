@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from cafe.core.playbook import PlaybookDefinition, PrepareConfig, resolve_prepare_config
+from cafe.core.prepare_fields import ParsedPrepareFields, resolve_prepare_fields
+from cafe.skills.loader import SkillLoader
 
 
 class PrepareRigorError(ValueError):
@@ -102,3 +105,16 @@ class PrepareProfile:
 
     def default_input_method(self) -> str:
         return self.prepare.input_method.non_github_default
+
+    def resolved_prepare_fields(
+        self,
+        *,
+        playbook_path: Path,
+        skill_loader: SkillLoader,
+    ) -> Optional[ParsedPrepareFields]:
+        """Return declarative prepare fields for this playbook, if declared."""
+        return resolve_prepare_fields(
+            self.prepare,
+            playbook_path=playbook_path,
+            skill_loader=skill_loader,
+        )
