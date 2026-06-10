@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional, Any, Dict, List, Tuple
 import yaml
 
+from cafe.core.prepare_fields import PrepareField
 from cafe.core.types import SpecRigor
 from cafe.ui.display import Display
 from cafe.ui.inquirer_prompts import prompt_list, prompt_text, prompt_confirm
@@ -14,7 +15,12 @@ from cafe.utils.github import GitHubOps, GitHubError
 from cafe.utils.git_utils import is_github_repo
 
 
-def prompt_for_input_method(display: Display, github_ops: GitHubOps) -> tuple[str, Optional[int]]:
+def prompt_for_input_method(
+    display: Display,
+    github_ops: GitHubOps,
+    *,
+    field: Optional[PrepareField] = None,
+) -> tuple[str, Optional[int]]:
     """Ask user to select input method (manual vs GitHub Issue)
 
     Args:
@@ -26,45 +32,63 @@ def prompt_for_input_method(display: Display, github_ops: GitHubOps) -> tuple[st
         - method: "manual" or "github"
         - issue_id: Issue ID (int) if GitHub is selected, None otherwise
     """
-    choices = [
-        "1. Manual input",
-        "2. Fetch from GitHub Issue",
-    ]
+    if field is not None and field.choices:
+        choices = [f"{index + 1}. {choice.label}" for index, choice in enumerate(field.choices)]
+        message = field.label
+        if field.help:
+            message = f"{field.label}\n{field.help}"
+    else:
+        choices = [
+            "1. Manual input",
+            "2. Fetch from GitHub Issue",
+        ]
+        message = "Please select input method:"
 
     choice = prompt_list(
-        message="Please select input method:",
+        message=message,
         choices=choices,
     )
 
-    if choice.startswith("1"):
-        return ("manual", None)
+    selected_value = "manual"
+    if field is not None and field.choices:
+        for index, entry in enumerate(field.choices):
+            if choice.startswith(f"{index + 1}") or choice.endswith(entry.label):
+                selected_value = entry.value
+                break
+    elif choice.startswith("1"):
+        selected_value = "manual"
     else:
-        # GitHub Issue mode
-        print()
-        print("⚠️  Note: Upon completion, spec.md will be posted back to GitHub Issue as a comment")
-        print()
+        selected_value = "github"
 
-        # Ask for Issue ID or URL, with error retry handling
-        while True:
-            issue_input = prompt_text(
-                message="Please enter GitHub Issue ID or URL:",
-                default="",
-            )
+    if selected_value == "manual":
+        return ("manual", None)
 
-            try:
-                # Use GitHubOps to extract issue number
-                issue_id_str = github_ops.extract_issue_number(issue_input)
-                issue_id = int(issue_id_str)
+    # GitHub Issue mode
+    print()
+    print("⚠️  Note: Upon completion, spec.md will be posted back to GitHub Issue as a comment")
+    print()
 
-                print()
-                print(f"✓ Will fetch requirements from GitHub Issue #{issue_id}")
-                print()
+    # Ask for Issue ID or URL, with error retry handling
+    while True:
+        issue_input = prompt_text(
+            message="Please enter GitHub Issue ID or URL:",
+            default="",
+        )
 
-                return ("github", issue_id)
-            except (ValueError, GitHubError) as e:
-                print(f"❌ Invalid Issue ID or URL: {e}")
-                print("Please try again...")
-                print()
+        try:
+            # Use GitHubOps to extract issue number
+            issue_id_str = github_ops.extract_issue_number(issue_input)
+            issue_id = int(issue_id_str)
+
+            print()
+            print(f"✓ Will fetch requirements from GitHub Issue #{issue_id}")
+            print()
+
+            return ("github", issue_id)
+        except (ValueError, GitHubError) as e:
+            print(f"❌ Invalid Issue ID or URL: {e}")
+            print("Please try again...")
+            print()
 
 
 def prompt_for_rigor(display: Display, allowed: Optional[List[str]] = None) -> str:

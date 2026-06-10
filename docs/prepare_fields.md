@@ -1,6 +1,6 @@
 # Declarative Prepare Fields
 
-This document describes the declarative prepare field contract introduced for playbook and skill assets. It is validation-only in the current release: `cafe prepare` interactive rendering still uses legacy `commands.prepare` metadata.
+This document describes the declarative prepare field contract for playbook and skill assets. When a playbook declares `fields` or `fields_ref`, interactive `cafe prepare` renders prompts from those definitions. Playbooks without declarative fields keep the legacy `commands.prepare` interactive path.
 
 ## PrepareField schema
 

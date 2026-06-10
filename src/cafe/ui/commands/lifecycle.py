@@ -77,6 +77,150 @@ def set_runtime(
     Path = path_cls
 
 
+def _run_legacy_prepare_prompts(
+    profile: Any,
+    *,
+    display: Any,
+    github_ops: Any,
+    issue_name: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], Optional[int]]:
+    """Run legacy interactive prepare prompts when no declarative fields exist."""
+    from cafe.core.prepare_profile import PrepareRigorError
+    from cafe.ui.phase_prompts import prompt_and_save_auto_create
+
+    spec_config: dict[str, Any] = {}
+    plan_config: dict[str, Any] = {}
+    pr_config: dict[str, Any] = {}
+    issue_id: Optional[int] = None
+
+    if profile.should_prompt_input_method():
+        input_method, issue_id = prompt_for_input_method(display, github_ops)
+        spec_config["input_method"] = input_method
+        if issue_id is not None:
+            spec_config["issue_id"] = str(issue_id)
+    else:
+        spec_config["input_method"] = profile.default_input_method()
+
+    console.print()
+    setup_mode_choices = profile.enabled_setup_mode_labels()
+    setup_mode_choice = prompt_list(
+        message="Choose setup mode:",
+        choices=setup_mode_choices,
+        default=setup_mode_choices[0],
+    )
+
+    if profile.is_quick_setup_choice(setup_mode_choice):
+        quick_config = profile.quick_setup_issue_config(issue_id)
+        spec_config.update(quick_config.spec)
+        plan_config.update(quick_config.plan)
+        pr_config.update(quick_config.pr)
+
+        console.print()
+        console.print("[green]✓ Quick setup applied with recommended defaults:[/green]")
+        console.print(f"  • Rigor level: {spec_config['rigor']}")
+        console.print(f"  • Spec template: {spec_config['template']}")
+        console.print(f"  • Plan template: {plan_config['template']}")
+        console.print(f"  • Input method: {spec_config['input_method']}")
+        if profile.is_github_repo:
+            console.print(f"  • Sync to GitHub: {spec_config.get('sync_github', False)}")
+            console.print(f"  • Auto create PR: {pr_config.get('auto_create', False)}")
+            console.print(f"  • Post PR todo list: {pr_config.get('post_todo_list', False)}")
+        console.print()
+        return spec_config, plan_config, pr_config, issue_id
+
+    if issue_id is not None:
+        console.print()
+        spec_config["sync_github"] = prompt_confirm(
+            "Sync spec to GitHub issue when confirmed?",
+            default=True,
+        )
+        console.print()
+        plan_config["sync_github"] = prompt_confirm(
+            "Sync plan to GitHub issue when confirmed?",
+            default=True,
+        )
+        console.print()
+
+    rigor = prompt_for_rigor(display, allowed=profile.allowed_rigor_values())
+    try:
+        profile.validate_rigor(rigor)
+    except PrepareRigorError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
+    spec_config["rigor"] = rigor
+
+    spec_template_manager = TemplateManager(template_type="spec")
+    spec_templates_with_source = spec_template_manager.list_templates()
+    spec_templates = [name for name, _ in spec_templates_with_source]
+    if spec_templates:
+        console.print()
+        console.print("[bold cyan]Please select a spec template:[/bold cyan]")
+        spec_template_paths = {
+            name: spec_template_manager.get_template_path(name) for name in spec_templates
+        }
+        selected_spec_template = select_template(
+            spec_templates, spec_template_paths, spec_templates_with_source
+        )
+        if selected_spec_template:
+            spec_config["template"] = selected_spec_template
+
+    plan_template_manager = TemplateManager(template_type="plan")
+    plan_templates_with_source = plan_template_manager.list_templates()
+    plan_templates = [name for name, _ in plan_templates_with_source]
+    if plan_templates:
+        console.print()
+        console.print("[bold cyan]Please select a plan template:[/bold cyan]")
+        plan_template_paths = {
+            name: plan_template_manager.get_template_path(name) for name in plan_templates
+        }
+        selected_plan_template = select_template(
+            plan_templates, plan_template_paths, plan_templates_with_source
+        )
+        if selected_plan_template:
+            plan_config["template"] = selected_plan_template
+    else:
+        console.print()
+        console.print("[yellow]⚠️  No plan templates found. Using default template.[/yellow]")
+        console.print("[dim]    Tip: Use 'cafe template add <source> <name>' to add templates.[/dim]")
+
+    config_file = Path(".cafe") / "issues" / issue_name / "issue.yaml"
+    auto_create_pr_result = prompt_and_save_auto_create(config_file, "pr.auto_create")
+    pr_config["auto_create"] = auto_create_pr_result
+    if auto_create_pr_result:
+        console.print()
+        pr_config["post_todo_list"] = prompt_confirm(
+            "Post organized PR comments as todo list to PR?",
+            default=True,
+        )
+    return spec_config, plan_config, pr_config, issue_id
+
+
+def _run_field_driven_prepare_prompts(
+    profile: Any,
+    parsed: Any,
+    *,
+    display: Any,
+    github_ops: Any,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], Optional[int]]:
+    """Run interactive prepare prompts from declarative PrepareField definitions."""
+    from cafe.ui.prepare_field_renderer import RendererDeps, run_field_driven_prepare_flow
+
+    deps = RendererDeps(
+        prompt_list=prompt_list,
+        prompt_confirm=prompt_confirm,
+        prompt_text=prompt_text,
+        prompt_for_input_method=prompt_for_input_method,
+        select_template=select_template,
+        spec_template_manager=TemplateManager(template_type="spec"),
+        plan_template_manager=TemplateManager(template_type="plan"),
+        console=console,
+        display=display,
+        github_ops=github_ops,
+    )
+    config, issue_id = run_field_driven_prepare_flow(parsed, profile, deps=deps)
+    return config.spec, config.plan, config.pr, issue_id
+
+
 def prepare(
     issue_name: Optional[str] = typer.Argument(
         None,
@@ -377,135 +521,29 @@ def prepare(
             )
             console.print()
 
-            # Initialize Display for prompts
             display = Display()
             github_ops = GitHubOps()
+            from cafe.skills.loader import SkillLoader
 
-            # Step 1: Input method and issue ID (playbook-driven)
-            if profile.should_prompt_input_method():
-                input_method, issue_id = prompt_for_input_method(display, github_ops)
-                spec_config["input_method"] = input_method
-                if issue_id is not None:
-                    spec_config["issue_id"] = str(issue_id)
-            else:
-                spec_config["input_method"] = profile.default_input_method()
-                issue_id = None
-
-            # Step 2: Prompt for setup mode (after input method selection)
-            console.print()
-            setup_mode_choices = profile.enabled_setup_mode_labels()
-            setup_mode_choice = prompt_list(
-                message="Choose setup mode:",
-                choices=setup_mode_choices,
-                default=setup_mode_choices[0],
+            parsed_fields = profile.resolved_prepare_fields(
+                playbook_path=loaded_playbook.path,
+                skill_loader=SkillLoader(),
             )
-
-            use_quick_setup = profile.is_quick_setup_choice(setup_mode_choice)
-
-            if use_quick_setup:
-                quick_config = profile.quick_setup_issue_config(issue_id)
-                spec_config.update(quick_config.spec)
-                plan_config.update(quick_config.plan)
-                pr_config.update(quick_config.pr)
-
-                # Display default values summary
-                console.print()
-                console.print("[green]✓ Quick setup applied with recommended defaults:[/green]")
-                console.print(f"  • Rigor level: {spec_config['rigor']}")
-                console.print(f"  • Spec template: {spec_config['template']}")
-                console.print(f"  • Plan template: {plan_config['template']}")
-                console.print(f"  • Input method: {spec_config['input_method']}")
-                if profile.is_github_repo:
-                    console.print(f"  • Sync to GitHub: {spec_config.get('sync_github', False)}")
-                    console.print(f"  • Auto create PR: {pr_config.get('auto_create', False)}")
-                    console.print(f"  • Post PR todo list: {pr_config.get('post_todo_list', False)}")
-                console.print()
+            issue_id: Optional[int] = None
+            if parsed_fields is None:
+                spec_config, plan_config, pr_config, issue_id = _run_legacy_prepare_prompts(
+                    profile,
+                    display=display,
+                    github_ops=github_ops,
+                    issue_name=issue_name,
+                )
             else:
-                # Custom configuration: Prompt for remaining settings
-                
-                # Prompt for sync settings (only when issue_id is present)
-                if issue_id is not None:
-                    console.print()
-                    sync_spec = prompt_confirm(
-                        "Sync spec to GitHub issue when confirmed?",
-                        default=True
-                    )
-                    spec_config["sync_github"] = sync_spec
-
-                    console.print()
-                    sync_plan = prompt_confirm(
-                        "Sync plan to GitHub issue when confirmed?",
-                        default=True
-                    )
-                    plan_config["sync_github"] = sync_plan
-                    console.print()
-
-                # Prompt for rigor level
-                rigor = prompt_for_rigor(display, allowed=profile.allowed_rigor_values())
-                try:
-                    profile.validate_rigor(rigor)
-                except PrepareRigorError as exc:
-                    console.print(f"[red]Error: {exc}[/red]")
-                    raise typer.Exit(1)
-                spec_config["rigor"] = rigor
-
-                # Prompt for spec template
-                spec_template_manager = TemplateManager(template_type="spec")
-                spec_templates_with_source = spec_template_manager.list_templates()
-                spec_templates = [name for name, _ in spec_templates_with_source]
-
-                if spec_templates:
-                    console.print()
-                    console.print("[bold cyan]Please select a spec template:[/bold cyan]")
-                    spec_template_paths = {
-                        name: spec_template_manager.get_template_path(name) for name in spec_templates
-                    }
-                    selected_spec_template = select_template(
-                        spec_templates, spec_template_paths, spec_templates_with_source
-                    )
-                    if selected_spec_template:
-                        spec_config["template"] = selected_spec_template
-
-                # Prompt for plan template
-                plan_template_manager = TemplateManager(template_type="plan")
-                plan_templates_with_source = plan_template_manager.list_templates()
-                plan_templates = [name for name, _ in plan_templates_with_source]
-
-                if plan_templates:
-                    console.print()
-                    console.print("[bold cyan]Please select a plan template:[/bold cyan]")
-                    plan_template_paths = {
-                        name: plan_template_manager.get_template_path(name) for name in plan_templates
-                    }
-                    selected_plan_template = select_template(
-                        plan_templates, plan_template_paths, plan_templates_with_source
-                    )
-                    if selected_plan_template:
-                        plan_config["template"] = selected_plan_template
-                else:
-                    console.print()
-                    console.print(
-                        "[yellow]⚠️  No plan templates found. Using default template.[/yellow]"
-                    )
-                    console.print(
-                        "[dim]    Tip: Use 'cafe template add <source> <name>' to add templates.[/dim]"
-                    )
-
-                # Prompt for PR auto-create setting (only for GitHub repos)
-                from cafe.ui.phase_prompts import prompt_and_save_auto_create
-
-                config_file = Path(".cafe") / "issues" / issue_name / "issue.yaml"
-                auto_create_pr_result = prompt_and_save_auto_create(config_file, "pr.auto_create")
-                pr_config["auto_create"] = auto_create_pr_result
-
-                # Prompt for post_todo_list only when auto_create is enabled
-                if auto_create_pr_result:
-                    console.print()
-                    post_todo_list_result = prompt_confirm(
-                        "Post organized PR comments as todo list to PR?",
-                        default=True,
-                    )
-                    pr_config["post_todo_list"] = post_todo_list_result
+                spec_config, plan_config, pr_config, issue_id = _run_field_driven_prepare_prompts(
+                    profile,
+                    parsed_fields,
+                    display=display,
+                    github_ops=github_ops,
+                )
         elif not interactive:
             # Explicit non-interactive mode (--no-interactive): use CLI parameters
             from cafe.utils.git_utils import is_github_repo

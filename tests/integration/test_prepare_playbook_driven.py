@@ -107,7 +107,7 @@ class TestPreparePlaybookDriven:
         mock_prompt_text_cli.return_value = "parity-quick"
         mock_prompt_text_phase.return_value = "123"
         mock_prompt_confirm.return_value = False
-        mock_phase_list.return_value = "2. Fetch from GitHub Issue"
+        mock_phase_list.return_value = "2. GitHub issue"
         mock_cli_list.return_value = "Quick setup (use recommended defaults)"
 
         result = runner.invoke(app, ["prepare"])
