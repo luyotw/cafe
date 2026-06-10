@@ -280,6 +280,7 @@ def validate_field_semantics(
     *,
     spec_manager: TemplateManager,
     plan_manager: TemplateManager,
+    enforce_legacy_setup_modes: bool = True,
 ) -> None:
     """Apply semantic validation to loaded prepare fields."""
     allowed_rigor = set(prepare.constraints.rigor)
@@ -304,7 +305,7 @@ def validate_field_semantics(
                         "commands.prepare.constraints.rigor"
                     )
 
-        if field.type == "setup_mode":
+        if field.type == "setup_mode" and enforce_legacy_setup_modes:
             legacy = prepare.setup_modes
             expected = [
                 (legacy.quick.label, legacy.quick.enabled),

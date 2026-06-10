@@ -407,6 +407,61 @@ commands:
         loader.load_model("mismatch")
 
 
+def test_prepare_fields_without_legacy_metadata_skips_parity_validate(tmp_path: Path) -> None:
+    loader = _loader(tmp_path)
+    playbook_dir = loader._roots()[0]
+    playbook_dir.mkdir(parents=True, exist_ok=True)
+    asset = playbook_dir / "declarative_only_fields.yaml"
+    asset.write_text(
+        yaml.safe_dump(
+            {
+                "fields": [
+                    {
+                        "id": "setup_mode",
+                        "type": "setup_mode",
+                        "label": "Setup",
+                        "choices": [
+                            {"value": "quick", "label": "Fast path"},
+                        ],
+                    },
+                    {
+                        "id": "quick_rigor",
+                        "type": "enum",
+                        "label": "Rigor",
+                        "write": "spec.rigor",
+                        "default": "high",
+                        "show_when": {"setup_mode": "quick"},
+                        "choices": [
+                            {"value": "low", "label": "Low"},
+                            {"value": "medium", "label": "Medium"},
+                            {"value": "high", "label": "High"},
+                        ],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_playbook(
+        playbook_dir,
+        "declarative-only",
+        _minimal_playbook_yaml(
+            playbook_id="declarative-only",
+            prepare_block=f"""
+commands:
+  prepare:
+    fields_ref: {asset.name}
+""",
+        ),
+    )
+
+    loaded = loader.load_model("declarative-only")
+
+    assert loaded.model.commands is not None
+    assert loaded.model.commands.prepare is not None
+    assert loaded.model.commands.prepare.fields_ref == asset.name
+
+
 def test_default_playbook_fields_ref_passes_semantic_validation() -> None:
     loader = PlaybookLoader()
     loaded = loader.load_model("default")

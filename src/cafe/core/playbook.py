@@ -264,6 +264,9 @@ class CommandsConfig(BaseModel):
     prepare: Optional[PrepareConfig] = None
 
 
+_PREPARE_FIELDS_ONLY_KEYS = frozenset({"fields", "fields_ref"})
+
+
 def default_prepare_config() -> PrepareConfig:
     """Return backward-compatible prepare defaults matching the built-in default playbook."""
     return PrepareConfig()
@@ -445,14 +448,18 @@ def _validate_prepare_metadata(
     if parsed_fields is None:
         return
 
+    has_explicit_legacy_prepare_metadata = bool(
+        prepare.model_fields_set - _PREPARE_FIELDS_ONLY_KEYS
+    )
     validate_field_semantics(
         parsed_fields.fields,
         prepare,
         spec_manager=spec_manager,
         plan_manager=plan_manager,
+        enforce_legacy_setup_modes=has_explicit_legacy_prepare_metadata,
     )
 
-    if model.commands is not None and model.commands.prepare is not None:
+    if has_explicit_legacy_prepare_metadata:
         assert_prepare_semantics_match(model.commands.prepare, parsed_fields)
 
 
