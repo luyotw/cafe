@@ -47,6 +47,7 @@ commands:
       non_github_default: manual
     constraints:
       rigor: [low, medium, high]
+    fields_ref: skill://spec/assets/prepare/default_prepare_fields.yaml
 
 steps:
   spec:

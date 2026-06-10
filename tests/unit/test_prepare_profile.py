@@ -222,3 +222,30 @@ commands:
 """
         profile = _profile_from_yaml(tmp_path, prepare_yaml, is_github_repo=True)
         assert profile.should_prompt_input_method() is False
+
+
+class TestPrepareProfileResolvedFields:
+    """Test List unit #14 — resolved prepare field contract."""
+
+    def test_returns_none_when_fields_not_declared(self) -> None:
+        loader = PlaybookLoader()
+        loaded = loader.load_model("simple")
+        profile = PrepareProfile.from_playbook(loaded.model, is_github_repo=True)
+        assert (
+            profile.resolved_prepare_fields(
+                playbook_path=loaded.path,
+                skill_loader=SkillLoader(),
+            )
+            is None
+        )
+
+    def test_returns_fields_for_default_playbook(self) -> None:
+        loader = PlaybookLoader()
+        loaded = loader.load_model("default")
+        profile = PrepareProfile.from_playbook(loaded.model, is_github_repo=True)
+        parsed = profile.resolved_prepare_fields(
+            playbook_path=loaded.path,
+            skill_loader=SkillLoader(),
+        )
+        assert parsed is not None
+        assert any(field.id == "setup_mode" for field in parsed.fields)
