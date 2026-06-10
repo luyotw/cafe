@@ -65,9 +65,9 @@ def _write_playbook(root: Path, name: str, content: str) -> None:
     (root / f"{name}.yaml").write_text(content, encoding="utf-8")
 
 
-def _minimal_playbook_yaml(*, prepare_block: str = "") -> str:
+def _minimal_playbook_yaml(*, prepare_block: str = "", playbook_id: str = "test") -> str:
     return f"""
-playbook: {{id: test}}
+playbook: {{id: {playbook_id}}}
 steps:
   spec:
     role: pm
@@ -245,23 +245,33 @@ steps:
 
 
 def _expected_standard_prepare() -> dict:
-    return default_prepare_config().model_dump()
+    return _legacy_prepare_dump(default_prepare_config())
+
+
+def _legacy_prepare_dump(prepare) -> dict:
+    data = prepare.model_dump()
+    data.pop("fields", None)
+    data.pop("fields_ref", None)
+    return data
 
 
 def test_builtin_default_playbook_prepare_parity() -> None:
     loader = PlaybookLoader()
     resolved = resolve_prepare_config(loader.load_model("default").model)
 
-    assert resolved.model_dump() == _expected_standard_prepare()
+    assert _legacy_prepare_dump(resolved) == _expected_standard_prepare()
+    assert resolved.fields_ref == "skill://spec/assets/prepare/default_prepare_fields.yaml"
 
 
 def test_builtin_simple_and_tdd_match_default_prepare() -> None:
     loader = PlaybookLoader()
-    default_prepare = resolve_prepare_config(loader.load_model("default").model).model_dump()
+    default_prepare = _legacy_prepare_dump(
+        resolve_prepare_config(loader.load_model("default").model)
+    )
 
     for name in ("simple", "tdd"):
         resolved = resolve_prepare_config(loader.load_model(name).model)
-        assert resolved.model_dump() == default_prepare
+        assert _legacy_prepare_dump(resolved) == default_prepare
 
 
 def test_builtin_hotfix_disables_spec_plan_prompts() -> None:
@@ -279,3 +289,127 @@ def test_builtin_non_prepare_playbooks_still_load_without_prepare_section() -> N
     for name in ("research", "editorial", "incident"):
         model = loader.load_model(name).model
         assert model.commands is None or model.commands.prepare is None
+
+
+def test_prepare_fields_and_fields_ref_are_mutually_exclusive() -> None:
+    data = yaml.safe_load(
+        _minimal_playbook_yaml(
+            prepare_block="""
+commands:
+  prepare:
+    fields_ref: assets/fields.yaml
+    fields:
+      - id: rigor
+        type: enum
+        label: Rigor
+        write: spec.rigor
+        choices:
+          - value: low
+            label: Low
+"""
+        )
+    )
+    with pytest.raises(ValidationError):
+        PlaybookDefinition.model_validate(data)
+
+
+def test_invalid_prepare_field_write_target_fails_validate(tmp_path: Path) -> None:
+    loader = _loader(tmp_path)
+    playbook_dir = loader._roots()[0]
+    playbook_dir.mkdir(parents=True, exist_ok=True)
+    asset = playbook_dir / "bad_fields.yaml"
+    asset.write_text(
+        yaml.safe_dump(
+            {
+                "fields": [
+                    {
+                        "id": "bad",
+                        "type": "boolean",
+                        "label": "Bad",
+                        "write": "spec.unknown",
+                        "default": True,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_playbook(
+        playbook_dir,
+        "bad",
+        _minimal_playbook_yaml(
+            playbook_id="bad",
+            prepare_block=f"""
+commands:
+  prepare:
+    fields_ref: {asset.name}
+""",
+        ),
+    )
+
+    with pytest.raises((ValueError, ValidationError), match="unknown write target"):
+        loader.load_model("bad")
+
+
+def test_prepare_fields_semantic_mismatch_fails_validate(tmp_path: Path) -> None:
+    loader = _loader(tmp_path)
+    playbook_dir = loader._roots()[0]
+    playbook_dir.mkdir(parents=True, exist_ok=True)
+    asset = playbook_dir / "mismatch_fields.yaml"
+    asset.write_text(
+        yaml.safe_dump(
+            {
+                "fields": [
+                    {
+                        "id": "setup_mode",
+                        "type": "setup_mode",
+                        "label": "Setup",
+                        "choices": [
+                            {"value": "quick", "label": "Quick setup (use recommended defaults)"},
+                            {"value": "custom", "label": "Custom configuration"},
+                        ],
+                    },
+                    {
+                        "id": "quick_rigor",
+                        "type": "enum",
+                        "label": "Rigor",
+                        "write": "spec.rigor",
+                        "default": "high",
+                        "show_when": {"setup_mode": "quick"},
+                        "choices": [
+                            {"value": "low", "label": "Low"},
+                            {"value": "medium", "label": "Medium"},
+                            {"value": "high", "label": "High"},
+                        ],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_playbook(
+        playbook_dir,
+        "mismatch",
+        _minimal_playbook_yaml(
+            playbook_id="mismatch",
+            prepare_block=f"""
+commands:
+  prepare:
+    quick_setup:
+      spec:
+        rigor: medium
+    fields_ref: {asset.name}
+""",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="disagrees with legacy"):
+        loader.load_model("mismatch")
+
+
+def test_default_playbook_fields_ref_passes_semantic_validation() -> None:
+    loader = PlaybookLoader()
+    loaded = loader.load_model("default")
+    assert loaded.model.commands is not None
+    assert loaded.model.commands.prepare is not None
+    assert loaded.model.commands.prepare.fields_ref is not None
