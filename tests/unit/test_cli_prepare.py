@@ -99,13 +99,10 @@ class TestPrepareCommand:
         """測試互動式輸入 issue name"""
         # Mock user inputs
         mock_prompt_text.return_value = "my-feature"
-        mock_cli_confirm.return_value = False  # worktree (n)
-        mock_phase_confirm.return_value = True  # pr auto_create (y)
-        mock_cli_list.return_value = "Custom configuration"  # setup mode
-        mock_phase_list.side_effect = [
-            "1. Manual input",  # input method (manual)
-            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
-        ]
+        mock_cli_confirm.side_effect = [False, True, True]  # worktree, pr auto_create, post_todo_list
+        mock_phase_confirm.return_value = True
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
+        mock_phase_list.return_value = "1. Manual input"
         mock_template_list.return_value = "default (system default)"  # template
 
         result = runner.invoke(app, ["prepare"])
@@ -395,13 +392,10 @@ class TestPrepareCommandWorktree:
         """測試互動模式詢問是否使用 worktree, 使用者選擇 Yes"""
         # Mock user inputs: issue name, worktree path
         mock_prompt_text.side_effect = ["my-feature", "worktrees/my-feature"]
-        mock_cli_confirm.return_value = True  # worktree (y)
-        mock_phase_confirm.return_value = True  # pr auto_create (y)
-        mock_cli_list.return_value = "Custom configuration"  # setup mode
-        mock_phase_list.side_effect = [
-            "1. Manual input",  # input method (manual)
-            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
-        ]
+        mock_cli_confirm.side_effect = [True, True, True]  # worktree, pr auto_create, post_todo_list
+        mock_phase_confirm.return_value = True
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
+        mock_phase_list.return_value = "1. Manual input"
         mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
@@ -431,13 +425,10 @@ class TestPrepareCommandWorktree:
         """測試互動模式詢問是否使用 worktree, 使用者選擇 No"""
         # Mock user inputs
         mock_prompt_text.return_value = "normal-feature"
-        mock_cli_confirm.return_value = False  # worktree (n)
-        mock_phase_confirm.return_value = True  # pr auto_create (y)
-        mock_cli_list.return_value = "Custom configuration"  # setup mode
-        mock_phase_list.side_effect = [
-            "1. Manual input",  # input method (manual)
-            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
-        ]
+        mock_cli_confirm.side_effect = [False, True, True]  # worktree, pr auto_create, post_todo_list
+        mock_phase_confirm.return_value = True
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
+        mock_phase_list.return_value = "1. Manual input"
         mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
@@ -463,13 +454,10 @@ class TestPrepareCommandWorktree:
         """測試互動模式建議預設路徑 .cafe/worktrees/{issue-name}"""
         # Mock user inputs: issue name, default path (empty string)
         mock_prompt_text.side_effect = ["test-issue", ".cafe/worktrees/test-issue"]
-        mock_cli_confirm.return_value = True  # worktree (y)
-        mock_phase_confirm.return_value = True  # pr auto_create (y)
-        mock_cli_list.return_value = "Custom configuration"  # setup mode
-        mock_phase_list.side_effect = [
-            "1. Manual input",  # input method (manual)
-            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
-        ]
+        mock_cli_confirm.side_effect = [True, True, True]  # worktree, pr auto_create, post_todo_list
+        mock_phase_confirm.return_value = True
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
+        mock_phase_list.return_value = "1. Manual input"
         mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
@@ -531,13 +519,10 @@ class TestPrepareCommandWorktree:
         """測試互動模式選擇自動建立 PR (yes)"""
         # Mock user inputs
         mock_prompt_text.return_value = "test-issue"
-        mock_cli_confirm.return_value = False  # worktree (n)
-        mock_phase_confirm.return_value = True  # pr auto_create (y)
-        mock_cli_list.return_value = "Custom configuration"  # setup mode
-        mock_phase_list.side_effect = [
-            "1. Manual input",  # input method (manual)
-            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
-        ]
+        mock_cli_confirm.side_effect = [False, True, True]  # worktree, pr auto_create, post_todo_list
+        mock_phase_confirm.return_value = True
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
+        mock_phase_list.return_value = "1. Manual input"
         mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
@@ -562,13 +547,10 @@ class TestPrepareCommandWorktree:
         """測試互動模式選擇不自動建立 PR (no)"""
         # Mock user inputs
         mock_prompt_text.return_value = "test-issue"
-        mock_cli_confirm.return_value = False  # worktree (n)
-        mock_phase_confirm.return_value = False  # pr auto_create (n)
-        mock_cli_list.return_value = "Custom configuration"  # setup mode
-        mock_phase_list.side_effect = [
-            "1. Manual input",  # input method (manual)
-            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
-        ]
+        mock_cli_confirm.side_effect = [False, False]  # worktree, pr auto_create
+        mock_phase_confirm.return_value = False
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
+        mock_phase_list.return_value = "1. Manual input"
         mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
@@ -875,11 +857,8 @@ class TestPrepareCommandSetupMode:
         # Input method 選擇 -> Manual input (第一個 prompt)
         # Setup mode 選擇 -> Custom configuration (第二個 prompt)
         # Rigor 選擇 -> High (第三個 prompt)
-        mock_phase_list.side_effect = [
-            "1. Manual input",  # input method (manual)
-            "High - Precise specification mode\n   • Ask all details and edge cases\n   • Ensure requirements are testable, no ambiguity\n   • Suitable for: core features, API design, external products",  # rigor
-        ]
-        mock_cli_list.return_value = "Custom configuration"
+        mock_phase_list.return_value = "1. Manual input"
+        mock_cli_list.side_effect = ["Custom configuration", "High"]
         mock_template_list.return_value = "default (system default)"  # template selector parses this
 
         result = runner.invoke(app, ["prepare"])
@@ -896,10 +875,10 @@ class TestPrepareCommandSetupMode:
             assert config_data["spec"]["template"] == "default"
             assert config_data["plan"]["template"] == "default"
 
-        # 驗證詢問了 input method 和設定模式
-        assert mock_cli_list.call_count == 1  # setup mode
-        # 驗證詢問了 input method、rigor (2 個 prompt_list)
-        assert mock_phase_list.call_count == 2
+        # 驗證詢問了 setup mode 與 rigor
+        assert mock_cli_list.call_count == 2
+        # 驗證詢問了 input method
+        assert mock_phase_list.call_count == 1
         # 驗證詢問了 templates (2 次：spec 和 plan)
         assert mock_template_list.call_count == 2
 
@@ -990,7 +969,7 @@ class TestPrepareCommandSetupMode:
         mock_cli_confirm.return_value = False  # worktree (n)
         
         # Input method 選擇 -> Fetch from GitHub Issue (第一個 prompt)
-        mock_phase_list.return_value = "2. Fetch from GitHub Issue"
+        mock_phase_list.return_value = "2. GitHub issue"
         
         # Setup mode 選擇 -> Quick setup (第二個 prompt，在輸入 Issue ID 後)
         mock_cli_list.return_value = "Quick setup (use recommended defaults)"
@@ -1059,7 +1038,7 @@ class TestPrepareCommandPostPrTodoList:
         mock_prompt_text_phase.return_value = "123"
         mock_cli_confirm.return_value = False  # worktree (n)
 
-        mock_phase_list.return_value = "2. Fetch from GitHub Issue"
+        mock_phase_list.return_value = "2. GitHub issue"
         mock_cli_list.return_value = "Quick setup (use recommended defaults)"
 
         result = runner.invoke(app, ["prepare"])
@@ -1105,10 +1084,9 @@ class TestPrepareCommandPostPrTodoList:
         mock_prompt_text_phase.return_value = "42"
         # worktree=No, sync_spec=True, sync_plan=True, auto_create=True, post_todo_list=False
         mock_cli_confirm.side_effect = [False, True, True, True, False]
-        mock_phase_confirm.side_effect = [True]  # auto_create prompt in phase_prompts
 
-        mock_phase_list.return_value = "2. Fetch from GitHub Issue"
-        mock_cli_list.return_value = "Custom configuration"
+        mock_phase_list.return_value = "2. GitHub issue"
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
         mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
@@ -1153,13 +1131,11 @@ class TestPrepareCommandPostPrTodoList:
 
         mock_prompt_text_cli.return_value = "custom-no-auto-create"
         mock_prompt_text_phase.return_value = "42"
-        # worktree=No, sync_spec=True, sync_plan=True
-        mock_cli_confirm.side_effect = [False, True, True]
-        # auto_create prompt in phase_prompts returns False
-        mock_phase_confirm.side_effect = [False]
+        # worktree=No, sync_spec=True, sync_plan=True, auto_create=False
+        mock_cli_confirm.side_effect = [False, True, True, False]
 
-        mock_phase_list.return_value = "2. Fetch from GitHub Issue"
-        mock_cli_list.return_value = "Custom configuration"
+        mock_phase_list.return_value = "2. GitHub issue"
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
         mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
