@@ -14,21 +14,30 @@ from cafe.core.prepare_fields import (
     PrepareFieldChoice,
     parse_prepare_fields,
 )
-from cafe.core.prepare_profile import PrepareProfile
+from cafe.core.prepare_profile import PrepareProfile, PrepareRigorError
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.ui.prepare_field_renderer import (
+    NonInteractiveCliAnswers,
+    NonInteractiveResolverDeps,
+    PrepareNonInteractiveContext,
+    PrepareNonInteractiveRequiredFieldError,
+    PrepareNonInteractiveTemplateError,
     PreparePromptContext,
     RendererDeps,
     apply_quick_defaults,
     field_is_visible,
+    field_is_visible_for_non_interactive,
     format_enum_choice,
     parse_enum_selection,
     prompt_setup_mode,
     prompt_custom_fields,
+    resolve_non_interactive_issue_config,
     set_write_value,
+    validate_non_interactive_required,
     visible_fields,
 )
+from cafe.templates.manager import TemplateManager
 from cafe.core.prepare_profile import PrepareIssueConfig
 
 
@@ -194,6 +203,202 @@ class TestPostTodoListVisibility:
         )
         ctx = PreparePromptContext(True, None, "custom", _profile(), pr_auto_create=False)
         assert not field_is_visible(field, ctx)
+
+
+def _resolver_deps() -> NonInteractiveResolverDeps:
+    return NonInteractiveResolverDeps(
+        spec_template_manager=TemplateManager(template_type="spec"),
+        plan_template_manager=TemplateManager(template_type="plan"),
+    )
+
+
+class TestNonInteractiveContext:
+    def test_cli_answers_optional_overrides(self) -> None:
+        answers = NonInteractiveCliAnswers(
+            input_method="manual",
+            rigor="high",
+            spec_template="auto",
+            plan_template="default",
+        )
+        assert answers.input_method == "manual"
+        assert answers.rigor == "high"
+
+    def test_required_input_method_validation(self) -> None:
+        with pytest.raises(PrepareNonInteractiveRequiredFieldError):
+            validate_non_interactive_required(NonInteractiveCliAnswers())
+
+    def test_github_mode_requires_issue_id(self) -> None:
+        with pytest.raises(PrepareNonInteractiveRequiredFieldError):
+            validate_non_interactive_required(
+                NonInteractiveCliAnswers(input_method="github")
+            )
+
+
+class TestNonInteractiveVisibility:
+    def test_ignores_setup_mode_gate(self) -> None:
+        field = PrepareField.model_validate(
+            {
+                "id": "quick_rigor",
+                "type": "enum",
+                "label": "Rigor",
+                "write": "spec.rigor",
+                "show_when": {"setup_mode": "quick"},
+                "choices": [{"value": "medium", "label": "Medium"}],
+            }
+        )
+        ctx = PrepareNonInteractiveContext(True, None, _profile())
+        assert field_is_visible_for_non_interactive(field, ctx)
+
+    def test_github_repo_gate_still_applies(self) -> None:
+        field = PrepareField.model_validate(
+            {
+                "id": "pr_auto",
+                "type": "boolean",
+                "label": "Auto PR",
+                "write": "pr.auto_create",
+                "show_when": {"github_repo": True},
+            }
+        )
+        assert field_is_visible_for_non_interactive(
+            field, PrepareNonInteractiveContext(True, None, _profile())
+        )
+        assert not field_is_visible_for_non_interactive(
+            field, PrepareNonInteractiveContext(False, None, _profile(is_github_repo=False))
+        )
+
+
+class TestNonInteractiveResolver:
+    def test_default_playbook_manual_defaults(self) -> None:
+        parsed = _default_fields()
+        profile = _profile()
+        config = resolve_non_interactive_issue_config(
+            profile,
+            NonInteractiveCliAnswers(input_method="manual"),
+            parsed_fields=parsed,
+            deps=_resolver_deps(),
+        )
+        assert config.spec == {
+            "input_method": "manual",
+            "rigor": "medium",
+            "template": "auto",
+        }
+        assert config.plan == {"template": "default"}
+        assert config.pr == {}
+
+    def test_cli_override_precedence(self) -> None:
+        parsed = _default_fields()
+        profile = _profile()
+        config = resolve_non_interactive_issue_config(
+            profile,
+            NonInteractiveCliAnswers(
+                input_method="manual",
+                rigor="low",
+                spec_template="detailed",
+                plan_template="bug",
+            ),
+            parsed_fields=parsed,
+            deps=_resolver_deps(),
+        )
+        assert config.spec["rigor"] == "low"
+        assert config.spec["template"] == "detailed"
+        assert config.plan["template"] == "bug"
+
+    def test_legacy_playbook_without_fields(self) -> None:
+        loader = PlaybookLoader()
+        loaded = loader.load_model("simple")
+        profile = PrepareProfile.from_playbook(loaded.model, is_github_repo=True)
+        config = resolve_non_interactive_issue_config(
+            profile,
+            NonInteractiveCliAnswers(input_method="manual"),
+            parsed_fields=None,
+            deps=_resolver_deps(),
+        )
+        defaults = profile.non_interactive_defaults()
+        assert config.spec["rigor"] == defaults.rigor
+        assert config.spec["template"] == defaults.spec_template
+        assert config.plan["template"] == defaults.plan_template
+
+    def test_github_mode_writes_issue_id(self) -> None:
+        parsed = _default_fields()
+        profile = _profile()
+        config = resolve_non_interactive_issue_config(
+            profile,
+            NonInteractiveCliAnswers(input_method="github", issue_id=336),
+            parsed_fields=parsed,
+            deps=_resolver_deps(),
+        )
+        assert config.spec["input_method"] == "github"
+        assert config.spec["issue_id"] == "336"
+
+    def test_invalid_rigor_blocked(self, tmp_path: Path, monkeypatch) -> None:
+        from tests.conftest import create_minimal_config
+        from tests.integration.test_prepare_playbook_driven import (
+            _write_config_with_playbook,
+            _write_custom_playbook,
+        )
+
+        create_minimal_config(tmp_path)
+        prepare_block = """
+commands:
+  prepare:
+    quick_setup:
+      spec:
+        rigor: high
+    non_interactive_defaults:
+      rigor: high
+    constraints:
+      rigor: [high]
+"""
+        _write_custom_playbook(tmp_path, "strict", prepare_block)
+        _write_config_with_playbook(tmp_path, "strict")
+        monkeypatch.chdir(tmp_path)
+        loader = PlaybookLoader()
+        strict_profile = PrepareProfile.from_playbook(
+            loader.load_model("strict").model,
+            is_github_repo=True,
+        )
+        with pytest.raises(PrepareRigorError):
+            resolve_non_interactive_issue_config(
+                strict_profile,
+                NonInteractiveCliAnswers(input_method="manual", rigor="low"),
+                parsed_fields=None,
+                deps=_resolver_deps(),
+            )
+
+    def test_invalid_plan_template_blocked(self) -> None:
+        profile = _profile()
+        with pytest.raises(PrepareNonInteractiveTemplateError):
+            resolve_non_interactive_issue_config(
+                profile,
+                NonInteractiveCliAnswers(
+                    input_method="manual",
+                    plan_template="does-not-exist",
+                ),
+                parsed_fields=_default_fields(),
+                deps=_resolver_deps(),
+            )
+
+    def test_pr_flags_only_when_explicit(self) -> None:
+        profile = _profile()
+        without_pr = resolve_non_interactive_issue_config(
+            profile,
+            NonInteractiveCliAnswers(input_method="manual"),
+            parsed_fields=_default_fields(),
+            deps=_resolver_deps(),
+        )
+        assert without_pr.pr == {}
+
+        with_pr = resolve_non_interactive_issue_config(
+            profile,
+            NonInteractiveCliAnswers(
+                input_method="manual",
+                auto_create_pr=True,
+                post_pr_todo_list=False,
+            ),
+            parsed_fields=_default_fields(),
+            deps=_resolver_deps(),
+        )
+        assert with_pr.pr == {"auto_create": True, "post_todo_list": False}
 
 
 class TestPromptCustomFields:

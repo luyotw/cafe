@@ -273,3 +273,77 @@ commands:
 
         assert result.exit_code == 1
         assert "Failed to load playbook" in result.stdout
+
+    @pytest.mark.parametrize("playbook_id", ["default", "simple", "hotfix", "tdd"])
+    def test_builtin_playbooks_non_interactive_defaults(
+        self, playbook_id, temp_repo_dir, mock_git_ops
+    ):
+        """Integration — built-in playbooks keep non-interactive default parity."""
+        if playbook_id != "default":
+            _write_config_with_playbook(temp_repo_dir, playbook_id)
+
+        result = runner.invoke(
+            app,
+            ["prepare", f"ni-{playbook_id}", "--no-interactive", "--input-method=manual"],
+        )
+
+        assert result.exit_code == 0
+        config_file = temp_repo_dir / ".cafe" / "issues" / f"ni-{playbook_id}" / "issue.yaml"
+        config_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        assert config_data["spec"]["input_method"] == "manual"
+        assert config_data["spec"]["rigor"] == "medium"
+        assert config_data["spec"]["template"] == "auto"
+        assert config_data["plan"]["template"] == "default"
+
+    def test_invalid_rigor_exits_before_polluted_issue_yaml(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        """Integration — invalid rigor fails before writing polluted issue.yaml."""
+        prepare_block = """
+commands:
+  prepare:
+    non_interactive_defaults:
+      rigor: high
+    constraints:
+      rigor: [high]
+"""
+        _write_custom_playbook(temp_repo_dir, "strict", prepare_block)
+        _write_config_with_playbook(temp_repo_dir, "strict")
+
+        result = runner.invoke(
+            app,
+            [
+                "prepare",
+                "strict-bad",
+                "--no-interactive",
+                "--input-method=manual",
+                "--rigor=low",
+            ],
+        )
+
+        assert result.exit_code == 1
+        config_file = temp_repo_dir / ".cafe" / "issues" / "strict-bad" / "issue.yaml"
+        if config_file.exists():
+            config_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+            assert "spec" not in config_data or config_data.get("spec", {}).get("rigor") != "low"
+
+    def test_missing_plan_template_exits_before_polluted_issue_yaml(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        """Integration — missing plan template fails before polluted issue.yaml write."""
+        result = runner.invoke(
+            app,
+            [
+                "prepare",
+                "bad-template",
+                "--no-interactive",
+                "--input-method=manual",
+                "--plan-template=missing-template-name",
+            ],
+        )
+
+        assert result.exit_code == 1
+        config_file = temp_repo_dir / ".cafe" / "issues" / "bad-template" / "issue.yaml"
+        if config_file.exists():
+            config_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+            assert config_data.get("plan", {}).get("template") != "missing-template-name"

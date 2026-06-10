@@ -141,6 +141,25 @@ class TestPrepareNonGitHubRepo:
         assert "spec" not in config_data
         assert "pr" not in config_data
 
+    def test_prepare_non_github_repo_explicit_no_interactive_writes_spec(
+        self, temp_repo_dir, mock_git_ops_non_github
+    ):
+        """Explicit --no-interactive on non-GitHub repo writes spec/plan defaults."""
+        result = runner.invoke(
+            app,
+            ["prepare", "ni-non-github", "--no-interactive", "--input-method=manual"],
+        )
+
+        assert result.exit_code == 0
+        config_file = temp_repo_dir / ".cafe" / "issues" / "ni-non-github" / "issue.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+
+        assert config_data["spec"]["input_method"] == "manual"
+        assert config_data["spec"]["rigor"] == "medium"
+        assert config_data["plan"]["template"] == "default"
+        assert "pr" not in config_data
+
 
 @pytest.fixture
 def mock_git_ops_github():
