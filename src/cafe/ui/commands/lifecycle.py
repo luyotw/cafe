@@ -386,34 +386,20 @@ def prepare(
 
         # 4. Validate non-interactive mode parameters (only when user explicitly passed --no-interactive)
         if not interactive:
-            # 4.1. input_method is required in non-interactive mode
-            if input_method is None:
-                console.print("[red]Error: --input-method is required in non-interactive mode[/red]")
-                raise typer.Exit(1)
+            from cafe.ui.prepare_field_renderer import (
+                NonInteractiveCliAnswers,
+                PrepareNonInteractiveRequiredFieldError,
+                validate_non_interactive_required,
+            )
 
-            # 4.2. input_method must be 'manual' or 'github'
-            if input_method not in ["manual", "github"]:
-                console.print("[red]Error: --input-method must be 'manual' or 'github'[/red]")
-                raise typer.Exit(1)
-
-            # 4.3. When input_method is 'github', issue_id is required
-            if input_method == "github" and issue_id is None:
-                console.print("[red]Error: --issue-id is required when using --input-method=github[/red]")
-                raise typer.Exit(1)
-
-            # 4.4. Apply playbook non-interactive defaults
-            defaults = profile.non_interactive_defaults()
-            if rigor is None:
-                rigor = defaults.rigor
-            if plan_template is None:
-                plan_template = defaults.plan_template
-            if spec_template is None:
-                spec_template = defaults.spec_template
-
-            # 4.5. Validate rigor against playbook constraints
             try:
-                profile.validate_rigor(rigor)
-            except PrepareRigorError as exc:
+                validate_non_interactive_required(
+                    NonInteractiveCliAnswers(
+                        input_method=input_method,
+                        issue_id=issue_id,
+                    )
+                )
+            except PrepareNonInteractiveRequiredFieldError as exc:
                 console.print(f"[red]Error: {exc}[/red]")
                 raise typer.Exit(1)
 
@@ -491,23 +477,6 @@ def prepare(
         cafe_dir = Path(".cafe")
         _ensure_default_content(cafe_dir)
 
-        # 9.1. Validate plan template exists (only in non-interactive mode after templates are initialized)
-        if not interactive and plan_template and plan_template != "auto":
-            plan_template_manager = TemplateManager(template_type="plan")
-            template_path = plan_template_manager.get_template_path(plan_template)
-            if not template_path:
-                console.print(f"[red]Error: Plan template '{plan_template}' not found[/red]")
-                console.print()
-                console.print("[yellow]Available plan templates:[/yellow]")
-                available_templates = plan_template_manager.list_templates()
-                if available_templates:
-                    for name, source_type in available_templates:
-                        source_label = " (system default)" if source_type == "system" else " (custom)"
-                        console.print(f"  - {name}{source_label}")
-                else:
-                    console.print("  (none)")
-                raise typer.Exit(1)
-
         # 10. Assemble spec/plan/pr configuration (prompt mode or parameter mode)
         spec_config = {}
         plan_config = {}
@@ -545,30 +514,61 @@ def prepare(
                     github_ops=github_ops,
                 )
         elif not interactive:
-            # Explicit non-interactive mode (--no-interactive): use CLI parameters
-            from cafe.utils.git_utils import is_github_repo
+            from cafe.skills.loader import SkillLoader
+            from cafe.ui.prepare_field_renderer import (
+                NonInteractiveCliAnswers,
+                NonInteractiveResolverDeps,
+                PrepareNonInteractiveError,
+                PrepareNonInteractiveTemplateError,
+                resolve_non_interactive_issue_config,
+            )
 
-            # Spec config
-            spec_config["input_method"] = input_method
-            if input_method == "github" and issue_id is not None:
-                spec_config["issue_id"] = str(issue_id)
-            spec_config["rigor"] = rigor
-            if spec_template:
-                spec_config["template"] = spec_template
-            if sync_spec_github is not None:
-                spec_config["sync_github"] = sync_spec_github
+            parsed_fields = profile.resolved_prepare_fields(
+                playbook_path=loaded_playbook.path,
+                skill_loader=SkillLoader(),
+            )
+            resolver_deps = NonInteractiveResolverDeps(
+                spec_template_manager=TemplateManager(template_type="spec"),
+                plan_template_manager=TemplateManager(template_type="plan"),
+            )
+            try:
+                resolved_config = resolve_non_interactive_issue_config(
+                    profile,
+                    NonInteractiveCliAnswers(
+                        input_method=input_method,
+                        issue_id=issue_id,
+                        rigor=rigor,
+                        spec_template=spec_template,
+                        plan_template=plan_template,
+                        sync_spec_github=sync_spec_github,
+                        sync_plan_github=sync_plan_github,
+                        auto_create_pr=auto_create_pr,
+                        post_pr_todo_list=post_pr_todo_list,
+                    ),
+                    parsed_fields=parsed_fields,
+                    deps=resolver_deps,
+                )
+            except PrepareRigorError as exc:
+                console.print(f"[red]Error: {exc}[/red]")
+                raise typer.Exit(1)
+            except PrepareNonInteractiveTemplateError as exc:
+                console.print(f"[red]Error: {exc.template_kind} template '{exc.template_name}' not found[/red]")
+                console.print()
+                console.print(f"[yellow]Available {exc.template_kind.lower()} templates:[/yellow]")
+                if exc.available:
+                    for name, source_type in exc.available:
+                        source_label = " (system default)" if source_type == "system" else " (custom)"
+                        console.print(f"  - {name}{source_label}")
+                else:
+                    console.print("  (none)")
+                raise typer.Exit(1)
+            except PrepareNonInteractiveError as exc:
+                console.print(f"[red]Error: {exc}[/red]")
+                raise typer.Exit(1)
 
-            # Plan config
-            if plan_template:
-                plan_config["template"] = plan_template
-            if sync_plan_github is not None:
-                plan_config["sync_github"] = sync_plan_github
-
-            # PR config (only for GitHub repos)
-            if is_github_repo() and auto_create_pr:
-                pr_config["auto_create"] = True
-            if post_pr_todo_list is not None:
-                pr_config["post_todo_list"] = post_pr_todo_list
+            spec_config = resolved_config.spec
+            plan_config = resolved_config.plan
+            pr_config = resolved_config.pr
         # else: issue_name was provided as argument but not --no-interactive
         #       Don't save any config (old behavior for backward compatibility)
 

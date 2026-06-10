@@ -3,13 +3,70 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, List, Literal, Optional
+from typing import Any, Callable, List, Literal, Optional, Tuple
 
 from cafe.core.prepare_fields import ParsedPrepareFields, PrepareField, PrepareFieldChoice
 from cafe.core.prepare_profile import PrepareIssueConfig, PrepareProfile, PrepareRigorError
 from cafe.templates.manager import TemplateManager
 
 SetupMode = Literal["quick", "custom"]
+
+_ALLOWED_INPUT_METHODS = frozenset({"manual", "github"})
+
+
+class PrepareNonInteractiveError(ValueError):
+    """Raised when non-interactive prepare answers fail validation."""
+
+
+class PrepareNonInteractiveRequiredFieldError(PrepareNonInteractiveError):
+    """Raised when a required non-interactive flag is missing or invalid."""
+
+
+class PrepareNonInteractiveTemplateError(PrepareNonInteractiveError):
+    """Raised when a template name does not resolve to an existing template."""
+
+    def __init__(
+        self,
+        template_kind: str,
+        template_name: str,
+        available: List[Tuple[str, str]],
+    ) -> None:
+        self.template_kind = template_kind
+        self.template_name = template_name
+        self.available = available
+        super().__init__(f"{template_kind} template {template_name!r} not found")
+
+
+@dataclass
+class PrepareNonInteractiveContext:
+    """Runtime context for non-interactive prepare field visibility."""
+
+    is_github_repo: bool
+    issue_id: Optional[int]
+    profile: PrepareProfile
+
+
+@dataclass
+class NonInteractiveCliAnswers:
+    """CLI flags for ``cafe prepare --no-interactive``."""
+
+    input_method: Optional[str] = None
+    issue_id: Optional[int] = None
+    rigor: Optional[str] = None
+    spec_template: Optional[str] = None
+    plan_template: Optional[str] = None
+    sync_spec_github: Optional[bool] = None
+    sync_plan_github: Optional[bool] = None
+    auto_create_pr: bool = False
+    post_pr_todo_list: Optional[bool] = None
+
+
+@dataclass(frozen=True)
+class NonInteractiveResolverDeps:
+    """Template managers used to validate non-interactive template answers."""
+
+    spec_template_manager: TemplateManager
+    plan_template_manager: TemplateManager
 
 
 @dataclass
@@ -65,6 +122,197 @@ def field_is_visible(field: PrepareField, ctx: PreparePromptContext) -> bool:
 def visible_fields(parsed: ParsedPrepareFields, ctx: PreparePromptContext) -> List[PrepareField]:
     """Return visible fields in declaration order."""
     return [field for field in parsed.fields if field_is_visible(field, ctx)]
+
+
+def field_is_visible_for_non_interactive(
+    field: PrepareField,
+    ctx: PrepareNonInteractiveContext,
+) -> bool:
+    """Return whether one field applies in non-interactive mode."""
+    if field.type == "setup_mode" or field.id == "input_method":
+        return False
+    show_when = field.show_when
+    if show_when is None:
+        return True
+    if show_when.github_repo is not None and show_when.github_repo != ctx.is_github_repo:
+        return False
+    if show_when.issue_id_present is not None:
+        has_issue = ctx.issue_id is not None
+        if show_when.issue_id_present != has_issue:
+            return False
+    return True
+
+
+def visible_fields_for_non_interactive(
+    parsed: ParsedPrepareFields,
+    ctx: PrepareNonInteractiveContext,
+) -> List[PrepareField]:
+    """Return fields visible for non-interactive default resolution."""
+    return [field for field in parsed.fields if field_is_visible_for_non_interactive(field, ctx)]
+
+
+def validate_non_interactive_required(answers: NonInteractiveCliAnswers) -> None:
+    """Validate required CLI flags before non-interactive prepare continues."""
+    if answers.input_method is None:
+        raise PrepareNonInteractiveRequiredFieldError(
+            "--input-method is required in non-interactive mode"
+        )
+    if answers.input_method not in _ALLOWED_INPUT_METHODS:
+        raise PrepareNonInteractiveRequiredFieldError(
+            "--input-method must be 'manual' or 'github'"
+        )
+    if answers.input_method == "github" and answers.issue_id is None:
+        raise PrepareNonInteractiveRequiredFieldError(
+            "--issue-id is required when using --input-method=github"
+        )
+
+
+def _validate_template_name(
+    manager: TemplateManager,
+    template_kind: str,
+    template_name: Optional[str],
+) -> None:
+    if not template_name or template_name == "auto":
+        return
+    if not manager.template_exists(template_name):
+        raise PrepareNonInteractiveTemplateError(
+            template_kind,
+            template_name,
+            manager.list_templates(),
+        )
+
+
+def _validate_field_enum_value(
+    field: PrepareField,
+    value: Any,
+    *,
+    profile: PrepareProfile,
+) -> None:
+    if field.type != "enum":
+        return
+    allowed = {choice.value for choice in field.choices}
+    if field.write == "spec.rigor":
+        allowed &= set(profile.allowed_rigor_values())
+    if value not in allowed:
+        raise PrepareNonInteractiveError(
+            f"invalid value {value!r} for prepare field {field.id!r}"
+        )
+
+
+def validate_non_interactive_config(
+    profile: PrepareProfile,
+    answers: NonInteractiveCliAnswers,
+    *,
+    rigor: str,
+    spec_template: Optional[str],
+    plan_template: Optional[str],
+    parsed_fields: Optional[ParsedPrepareFields],
+    deps: NonInteractiveResolverDeps,
+) -> None:
+    """Validate resolved non-interactive answers before writing issue.yaml."""
+    profile.validate_rigor(rigor)
+
+    if parsed_fields is not None:
+        ctx = PrepareNonInteractiveContext(
+            is_github_repo=profile.is_github_repo,
+            issue_id=answers.issue_id if answers.input_method == "github" else None,
+            profile=profile,
+        )
+        value_by_write = {
+            "spec.rigor": rigor,
+            "spec.template": spec_template,
+            "plan.template": plan_template,
+            "spec.input_method": answers.input_method,
+        }
+        if answers.sync_spec_github is not None:
+            value_by_write["spec.sync_github"] = answers.sync_spec_github
+        if answers.sync_plan_github is not None:
+            value_by_write["plan.sync_github"] = answers.sync_plan_github
+        for field in visible_fields_for_non_interactive(parsed_fields, ctx):
+            if field.write is None or field.write not in value_by_write:
+                continue
+            value = value_by_write[field.write]
+            if value is not None:
+                _validate_field_enum_value(field, value, profile=profile)
+
+    _validate_template_name(deps.spec_template_manager, "Spec", spec_template)
+    _validate_template_name(deps.plan_template_manager, "Plan", plan_template)
+
+
+def resolve_non_interactive_issue_config(
+    profile: PrepareProfile,
+    answers: NonInteractiveCliAnswers,
+    *,
+    parsed_fields: Optional[ParsedPrepareFields] = None,
+    deps: NonInteractiveResolverDeps,
+) -> PrepareIssueConfig:
+    """Resolve and validate non-interactive prepare config for issue.yaml."""
+    validate_non_interactive_required(answers)
+
+    defaults = profile.non_interactive_defaults()
+    explicit_legacy_defaults = "non_interactive_defaults" in profile.prepare.model_fields_set
+    field_defaults: dict[str, Any] = {}
+    if parsed_fields is not None and not explicit_legacy_defaults:
+        ctx = PrepareNonInteractiveContext(
+            is_github_repo=profile.is_github_repo,
+            issue_id=answers.issue_id if answers.input_method == "github" else None,
+            profile=profile,
+        )
+        for field in visible_fields_for_non_interactive(parsed_fields, ctx):
+            if field.write in {"spec.rigor", "spec.template", "plan.template"}:
+                if field.default is not None and field.write not in field_defaults:
+                    field_defaults[field.write] = field.default
+
+    default_rigor = (
+        defaults.rigor
+        if explicit_legacy_defaults
+        else field_defaults.get("spec.rigor", defaults.rigor)
+    )
+    default_spec_template = (
+        defaults.spec_template
+        if explicit_legacy_defaults
+        else field_defaults.get("spec.template", defaults.spec_template)
+    )
+    default_plan_template = (
+        defaults.plan_template
+        if explicit_legacy_defaults
+        else field_defaults.get("plan.template", defaults.plan_template)
+    )
+    rigor = answers.rigor if answers.rigor is not None else default_rigor
+    spec_template = answers.spec_template if answers.spec_template is not None else default_spec_template
+    plan_template = answers.plan_template if answers.plan_template is not None else default_plan_template
+
+    validate_non_interactive_config(
+        profile,
+        answers,
+        rigor=rigor,
+        spec_template=spec_template,
+        plan_template=plan_template,
+        parsed_fields=parsed_fields,
+        deps=deps,
+    )
+
+    config = empty_issue_config()
+    set_write_value(config, "spec.input_method", answers.input_method)
+    if answers.input_method == "github" and answers.issue_id is not None:
+        set_write_value(config, "spec.issue_id", str(answers.issue_id))
+    set_write_value(config, "spec.rigor", rigor)
+    if spec_template:
+        set_write_value(config, "spec.template", spec_template)
+    if answers.sync_spec_github is not None:
+        set_write_value(config, "spec.sync_github", answers.sync_spec_github)
+
+    if plan_template:
+        set_write_value(config, "plan.template", plan_template)
+    if answers.sync_plan_github is not None:
+        set_write_value(config, "plan.sync_github", answers.sync_plan_github)
+
+    if profile.is_github_repo and answers.auto_create_pr:
+        set_write_value(config, "pr.auto_create", True)
+    if answers.post_pr_todo_list is not None:
+        set_write_value(config, "pr.post_todo_list", answers.post_pr_todo_list)
+
+    return config
 
 
 def format_enum_choice(choice: PrepareFieldChoice) -> str:
