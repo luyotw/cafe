@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cafe.core.playbook import PlaybookDefinition, resolve_prepare_config
+from cafe.core.playbook import PlaybookDefinition, PrepareConfig, resolve_prepare_config
 from cafe.core.prepare_fields import (
     ParsedPrepareFields,
     PrepareField,
@@ -317,6 +317,55 @@ class TestNonInteractiveResolver:
         assert config.spec["rigor"] == defaults.rigor
         assert config.spec["template"] == defaults.spec_template
         assert config.plan["template"] == defaults.plan_template
+
+    def test_declarative_fields_supply_defaults_when_legacy_defaults_absent(self) -> None:
+        field_defs = [
+            {
+                "id": "custom_rigor",
+                "type": "enum",
+                "label": "Rigor",
+                "write": "spec.rigor",
+                "default": "low",
+                "show_when": {"setup_mode": "custom"},
+                "choices": [
+                    {"value": "low", "label": "Low"},
+                    {"value": "medium", "label": "Medium"},
+                    {"value": "high", "label": "High"},
+                ],
+            },
+            {
+                "id": "custom_spec_template",
+                "type": "template",
+                "label": "Spec template",
+                "write": "spec.template",
+                "default": "detailed",
+                "show_when": {"setup_mode": "custom"},
+            },
+            {
+                "id": "custom_plan_template",
+                "type": "template",
+                "label": "Plan template",
+                "write": "plan.template",
+                "default": "bug",
+                "show_when": {"setup_mode": "custom"},
+            },
+        ]
+        profile = PrepareProfile(
+            prepare=PrepareConfig.model_validate({"fields": field_defs}),
+            is_github_repo=True,
+        )
+        parsed = ParsedPrepareFields(fields=parse_prepare_fields(field_defs))
+
+        config = resolve_non_interactive_issue_config(
+            profile,
+            NonInteractiveCliAnswers(input_method="manual"),
+            parsed_fields=parsed,
+            deps=_resolver_deps(),
+        )
+
+        assert config.spec["rigor"] == "low"
+        assert config.spec["template"] == "detailed"
+        assert config.plan["template"] == "bug"
 
     def test_github_mode_writes_issue_id(self) -> None:
         parsed = _default_fields()

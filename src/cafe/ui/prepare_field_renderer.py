@@ -250,13 +250,37 @@ def resolve_non_interactive_issue_config(
     validate_non_interactive_required(answers)
 
     defaults = profile.non_interactive_defaults()
-    rigor = answers.rigor if answers.rigor is not None else defaults.rigor
-    spec_template = (
-        answers.spec_template if answers.spec_template is not None else defaults.spec_template
+    explicit_legacy_defaults = "non_interactive_defaults" in profile.prepare.model_fields_set
+    field_defaults: dict[str, Any] = {}
+    if parsed_fields is not None and not explicit_legacy_defaults:
+        ctx = PrepareNonInteractiveContext(
+            is_github_repo=profile.is_github_repo,
+            issue_id=answers.issue_id if answers.input_method == "github" else None,
+            profile=profile,
+        )
+        for field in visible_fields_for_non_interactive(parsed_fields, ctx):
+            if field.write in {"spec.rigor", "spec.template", "plan.template"}:
+                if field.default is not None and field.write not in field_defaults:
+                    field_defaults[field.write] = field.default
+
+    default_rigor = (
+        defaults.rigor
+        if explicit_legacy_defaults
+        else field_defaults.get("spec.rigor", defaults.rigor)
     )
-    plan_template = (
-        answers.plan_template if answers.plan_template is not None else defaults.plan_template
+    default_spec_template = (
+        defaults.spec_template
+        if explicit_legacy_defaults
+        else field_defaults.get("spec.template", defaults.spec_template)
     )
+    default_plan_template = (
+        defaults.plan_template
+        if explicit_legacy_defaults
+        else field_defaults.get("plan.template", defaults.plan_template)
+    )
+    rigor = answers.rigor if answers.rigor is not None else default_rigor
+    spec_template = answers.spec_template if answers.spec_template is not None else default_spec_template
+    plan_template = answers.plan_template if answers.plan_template is not None else default_plan_template
 
     validate_non_interactive_config(
         profile,
