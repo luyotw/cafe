@@ -2,6 +2,8 @@
 
 import pytest
 from unittest.mock import patch
+from pathlib import Path
+import json
 
 from cafe.agents.executor import AgentExecutionError
 from cafe.agents.manager import AgentManager
@@ -229,6 +231,176 @@ class TestClisChainFallbackBasic:
         assert "Original error:" in captured
         assert "Claude execution failed: oauth_org_not_allowed" in captured
         assert "Codex execution failed: You've hit your usage limit" in captured
+
+    def test_active_cli_is_preferred_when_saved(self, tmp_path, monkeypatch) -> None:
+        """Last successful CLI is preferred even when not primary."""
+        monkeypatch.chdir(tmp_path)
+        manager = AgentManager(issue_name="issue-1")
+        manager.register_agent(
+            AgentConfig(
+                name="David",
+                cli=AgentCLI.CLAUDE,
+                model="opus",
+                clis=[
+                    CliEntry(cli=AgentCLI.CLAUDE, model="opus"),
+                    CliEntry(cli=AgentCLI.GEMINI),
+                ],
+            )
+        )
+        manager.session_manager.save_session("David", AgentCLI.GEMINI, "gemini-session-xyz", "issue-1")
+        active_file = Path(".cafe/issues/issue-1/active_clis.json")
+        active_file.parent.mkdir(parents=True, exist_ok=True)
+        active_file.write_text(
+            json.dumps({"David": {"cli": "gemini", "model": None, "updated_at": "2026-06-13T00:00:00+08:00"}}),
+            encoding="utf-8",
+        )
+
+        created_configs = []
+        original_init = __import__(
+            "cafe.agents.executor", fromlist=["AgentExecutor"]
+        ).AgentExecutor.__init__
+
+        def capture_init(self, config):
+            created_configs.append(config)
+            original_init(self, config)
+
+        with patch(
+            "cafe.agents.executor.AgentExecutor.__init__",
+            capture_init,
+        ), patch(
+            "cafe.agents.executor.AgentExecutor.execute",
+            return_value=_ok("fallback"),
+        ):
+            response, *_ = manager.execute("David", "prompt")
+
+        assert response == "fallback"
+        assert len(created_configs) == 1
+        assert created_configs[0].cli == AgentCLI.GEMINI
+        assert created_configs[0].session_id == "gemini-session-xyz"
+
+    def test_stale_active_cli_falls_back_to_configured_primary(self, tmp_path, monkeypatch) -> None:
+        """Active CLI not in chain is ignored and fallback order stays configured."""
+        monkeypatch.chdir(tmp_path)
+        manager = AgentManager(issue_name="issue-1")
+        manager.register_agent(
+            AgentConfig(
+                name="David",
+                cli=AgentCLI.CLAUDE,
+                model="opus",
+                clis=[
+                    CliEntry(cli=AgentCLI.CLAUDE, model="opus"),
+                    CliEntry(cli=AgentCLI.GEMINI),
+                ],
+            )
+        )
+        manager.session_manager.save_session("David", AgentCLI.GEMINI, "gemini-session-abc", "issue-1")
+        active_file = Path(".cafe/issues/issue-1/active_clis.json")
+        active_file.parent.mkdir(parents=True, exist_ok=True)
+        active_file.write_text(
+            json.dumps({"David": {"cli": "cursor", "model": None, "updated_at": "2026-06-13T00:00:00+08:00"}}),
+            encoding="utf-8",
+        )
+
+        executed_clis: list[AgentCLI] = []
+
+        def side_effect(*args, **kwargs):
+            if args and hasattr(args[0], "config"):
+                executed_clis.append(args[0].config.cli)
+            elif args:
+                # Patch signature can vary depending on how AgentExecutor.execute is
+                # mocked (class-level or bound-method patching), so infer by index.
+                executed_clis.append(AgentCLI.GEMINI if len(executed_clis) == 1 else AgentCLI.CLAUDE)
+            else:
+                executed_clis.append(AgentCLI.CLAUDE)
+
+            if len(executed_clis) == 1:
+                raise _rate_limit()
+            return _ok("fallback-ok")
+
+        with patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect):
+            response, *_ = manager.execute("David", "prompt")
+
+        assert response == "fallback-ok"
+        assert executed_clis == [AgentCLI.CLAUDE, AgentCLI.GEMINI]
+
+    def test_active_cli_without_model_does_not_inherit_base_model(self, tmp_path, monkeypatch) -> None:
+        """Active CLI model=None keeps CLI-specific model resolution, not base model."""
+        monkeypatch.chdir(tmp_path)
+        manager = AgentManager(issue_name="issue-1")
+        manager.register_agent(
+            AgentConfig(
+                name="David",
+                cli=AgentCLI.CLAUDE,
+                model="base-claude",
+                clis=[
+                    CliEntry(cli=AgentCLI.CLAUDE, model="claude-model"),
+                    CliEntry(cli=AgentCLI.GEMINI),
+                ],
+            )
+        )
+        active_file = Path(".cafe/issues/issue-1/active_clis.json")
+        active_file.parent.mkdir(parents=True, exist_ok=True)
+        active_file.write_text(
+            json.dumps({"David": {"cli": "gemini", "model": None, "updated_at": "2026-06-13T00:00:00+08:00"}}),
+            encoding="utf-8",
+        )
+
+        created_configs = []
+        original_init = __import__(
+            "cafe.agents.executor", fromlist=["AgentExecutor"]
+        ).AgentExecutor.__init__
+
+        def capture_init(self, config):
+            created_configs.append(config)
+            original_init(self, config)
+
+        with (
+            patch("cafe.agents.executor.AgentExecutor.__init__", capture_init),
+            patch("cafe.agents.executor.AgentExecutor.execute", return_value=_ok("ok")),
+        ):
+            response, *_ = manager.execute("David", "prompt")
+
+        assert response == "ok"
+        assert len(created_configs) == 1
+        assert created_configs[0].cli == AgentCLI.GEMINI
+        assert created_configs[0].model is None
+
+    def test_session_lookup_is_isolated_by_issue_name(self, tmp_path) -> None:
+        """Session lookup for fallback continuation stays issue-local."""
+        manager_issue_1 = AgentManager(issue_name="issue-1")
+        manager_issue_2 = AgentManager(issue_name="issue-2")
+        config = AgentConfig(
+            name="David",
+            cli=AgentCLI.CLAUDE,
+            model="opus",
+            clis=[
+                CliEntry(cli=AgentCLI.CLAUDE, model="opus"),
+                CliEntry(cli=AgentCLI.GEMINI),
+            ],
+        )
+        manager_issue_1.register_agent(config)
+        manager_issue_2.register_agent(config)
+
+        manager_issue_1.session_manager.save_session("David", AgentCLI.GEMINI, "session-issue-1", "issue-1")
+        manager_issue_2.session_manager.save_session("David", AgentCLI.GEMINI, "session-issue-2", "issue-2")
+
+        issue_1_dir = Path(".cafe/issues/issue-1")
+        issue_2_dir = Path(".cafe/issues/issue-2")
+        issue_1_dir.mkdir(parents=True, exist_ok=True)
+        issue_2_dir.mkdir(parents=True, exist_ok=True)
+        (issue_1_dir / "active_clis.json").write_text(
+            json.dumps({"David": {"cli": "gemini", "model": None, "updated_at": "2026-06-13T00:00:00+08:00"}}),
+            encoding="utf-8",
+        )
+        (issue_2_dir / "active_clis.json").write_text(
+            json.dumps({"David": {"cli": "gemini", "model": None, "updated_at": "2026-06-13T00:00:00+08:00"}}),
+            encoding="utf-8",
+        )
+
+        execution_1 = manager_issue_1.get_execution_config("David", phase_name="develop")
+        execution_2 = manager_issue_2.get_execution_config("David", phase_name="develop")
+        assert execution_1.session_id == "session-issue-1"
+        assert execution_2.session_id == "session-issue-2"
 
 
 class TestClisChainModelResolution:

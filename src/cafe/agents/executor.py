@@ -464,6 +464,8 @@ class AgentExecutor:
         "claude": [
             "limit reached",
             "hit your limit",
+            "exceeded your usage",
+            "you have exceeded your usage",
         ],
         "gemini": [
             "exhausted your capacity",

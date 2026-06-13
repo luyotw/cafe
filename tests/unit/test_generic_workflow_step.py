@@ -11,7 +11,7 @@ import pytest
 from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.hooks import HookResult
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.core.types import AgentCLI, TokenUsage
+from cafe.core.types import AgentCLI, AgentConfig, TokenUsage
 from cafe.phases.generic_phase import GenericPhaseExecution
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
@@ -518,6 +518,117 @@ def test_generic_workflow_step_executor_uses_iteration_specific_skill_mapping(tm
     executor.execute_step("spec", playbook["steps"]["spec"], state)
 
     assert generic_phase.skill_names == ["plan"]
+
+
+def test_generic_workflow_step_resolve_resume_user_input_uses_execution_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume"
+    phase_dir = issue_dir / "develop"
+    phase_dir.mkdir(parents=True, exist_ok=True)
+    (phase_dir / "iteration_001" / "iteration.json").parent.mkdir(parents=True, exist_ok=True)
+    (phase_dir / "iteration_001" / "iteration.json").write_text(
+        json.dumps({"iteration": 1, "cli": "gemini", "session_id": "session-abc"}),
+        encoding="utf-8",
+    )
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "develop": {
+                "skill": "plan",
+                "role": "developer",
+                "output_artifact": "develop",
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+
+    class ResumeAwareManager(FakeAgentManager):
+        def get_execution_config(self, agent_name: str, phase_name=None):
+            return AgentConfig(
+                name=agent_name,
+                cli=AgentCLI.GEMINI,
+                session_id="session-abc",
+                model="gemini-model",
+            )
+
+    manager = ResumeAwareManager("ready_for_review")
+    state = BlackboardStore(issue_dir).load_or_create("develop")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-resume",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    executor.phase_dir = phase_dir
+    executor.issue_dir = issue_dir
+    executor.iteration = 2
+    executor._step_agent_name = "David"
+
+    resolved = executor._resolve_iteration_user_input("develop")
+    assert resolved == "continue"
+
+
+def test_generic_workflow_step_resume_user_input_rejects_different_execution_cli(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-mismatch"
+    phase_dir = issue_dir / "develop"
+    phase_dir.mkdir(parents=True, exist_ok=True)
+    (phase_dir / "iteration_001" / "iteration.json").parent.mkdir(parents=True, exist_ok=True)
+    (phase_dir / "iteration_001" / "iteration.json").write_text(
+        json.dumps({"iteration": 1, "cli": "gemini", "session_id": "session-abc"}),
+        encoding="utf-8",
+    )
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "develop": {
+                "skill": "plan",
+                "role": "developer",
+                "output_artifact": "develop",
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+
+    class ResumeAwareManager(FakeAgentManager):
+        def get_execution_config(self, agent_name: str, phase_name=None):
+            return AgentConfig(
+                name=agent_name,
+                cli=AgentCLI.COPILOT,
+                session_id="session-different",
+                model="copilot-model",
+            )
+
+    manager = ResumeAwareManager("ready_for_review")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-resume-mismatch",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    executor.phase_dir = phase_dir
+    executor.issue_dir = issue_dir
+    executor.iteration = 2
+    executor._step_agent_name = "David"
+
+    resolved = executor._resolve_iteration_user_input("develop")
+    assert resolved == "workflow execute"
 
 
 def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill(tmp_path: Path, monkeypatch) -> None:
