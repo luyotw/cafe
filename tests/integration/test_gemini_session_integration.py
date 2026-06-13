@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 from cafe.agents.manager import AgentManager
-from cafe.core.types import AgentCLI, AgentConfig
+from cafe.core.types import AgentCLI, AgentConfig, CliEntry
 from cafe.core.session import SessionManager
 
 
@@ -117,3 +117,85 @@ class TestGeminiSessionIntegration:
             assert "--resume" in second_call_args
             resume_index = second_call_args.index("--resume")
             assert second_call_args[resume_index + 1] == "continuous-session-789"
+
+    def test_fallback_cli_session_is_reused_on_next_iteration(self, tmp_path: Path, monkeypatch) -> None:
+        """Fallback runner should reuse its existing session once it becomes effective."""
+        monkeypatch.chdir(tmp_path)
+        session_manager = SessionManager(sessions_dir=str(tmp_path / ".cafe" / "sessions"))
+        issue_name = "issue-fallback-reuse"
+        issue_dir = tmp_path / ".cafe" / "issues" / issue_name
+        agent_manager = AgentManager(session_manager=session_manager, issue_name=issue_name)
+
+        agent_manager.register_agent(
+            AgentConfig(
+                name="PM_Agent",
+                cli=AgentCLI.CLAUDE,
+                model="opus",
+                clis=[
+                    CliEntry(cli=AgentCLI.CLAUDE, model="opus"),
+                    CliEntry(cli=AgentCLI.GEMINI, model="gemini-pro"),
+                ],
+            )
+        )
+
+        issue_dir.mkdir(parents=True, exist_ok=True)
+        fallback_session = "gemini-issue-session-111"
+
+        def mock_process(lines, return_code=0, stderr: str = ""):
+            mock_process_ = MagicMock()
+            mock_process_.stdout.readline.side_effect = list(lines) + [""]
+            mock_process_.stderr.read.return_value = stderr
+            mock_process_.wait.return_value = return_code
+            return mock_process_
+
+        call_count = 0
+
+        def first_run_side_effect(*_, **__):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # Primary CLI fails with a fallbackable error
+                return mock_process([], return_code=1, stderr="You have exceeded your usage limit")
+            # Primary fallback runs Gemini and establishes its session
+            return mock_process(
+                [
+                    '{"type":"init","session_id":"gemini-issue-session-111","model":"auto"}\n',
+                    '{"type":"message","role":"assistant","content":"Fallback response"}\n',
+                    '{"response": "Fallback response"}\n',
+                ],
+            )
+
+        with patch("subprocess.Popen", side_effect=first_run_side_effect), \
+             patch("sys.platform", "win32"):
+            response1, _, _, _, _, _ = agent_manager.execute("PM_Agent", "First prompt")
+
+        assert response1 == "Fallback response"
+
+        (issue_dir / "active_clis.json").write_text(
+            '{"PM_Agent": {"cli": "gemini", "model": "gemini-pro", "updated_at": "2026-06-13T00:00:00+08:00"}}',
+            encoding="utf-8",
+        )
+
+        second_call_commands: list[list[str]] = []
+        call_count = 0
+
+        def second_run_side_effect(cmd, *_, **__):
+            second_call_commands.append(list(cmd))
+            return mock_process(
+                [
+                    '{"type":"init","session_id":"gemini-issue-session-111","model":"auto"}\n',
+                    '{"type":"message","role":"assistant","content":"Second response"}\n',
+                    '{"response": "Second response"}\n',
+                ]
+            )
+
+        with patch("subprocess.Popen", side_effect=second_run_side_effect), \
+             patch("sys.platform", "win32"):
+            response2, _, _, _, _, _ = agent_manager.execute("PM_Agent", "Second prompt")
+
+        assert response2 == "Second response"
+        assert len(second_call_commands) == 1
+        second_call = second_call_commands[0]
+        assert "--resume" in second_call
+        resume_idx = second_call.index("--resume")
+        assert second_call[resume_idx + 1] == fallback_session

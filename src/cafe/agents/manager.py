@@ -3,11 +3,12 @@
 import json
 import os
 import subprocess
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from cafe.agents.executor import AgentExecutor, AgentExecutionError
 from cafe.core.session import SessionManager
-from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, PermissionDenial, TokenUsage
+from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, CliEntry, TokenUsage
 
 
 class AgentNotFoundError(Exception):
@@ -81,6 +82,166 @@ class AgentManager:
         executor = AgentExecutor(config_with_session)
         self.agents[config.name] = executor
 
+    def _load_active_cli_from_file(self, agent_name: str) -> Optional[tuple[AgentCLI, Optional[str], Optional[str]]]:
+        """Load the last successful CLI for this agent from active_clis.json."""
+        if self.issue_name is None:
+            return None
+        active_file = Path(".cafe") / "issues" / self.issue_name / "active_clis.json"
+        if not active_file.exists():
+            return None
+
+        try:
+            raw = json.loads(active_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(raw, dict):
+            return None
+
+        record = raw.get(agent_name)
+        if not isinstance(record, dict):
+            return None
+
+        raw_cli = record.get("cli")
+        if not isinstance(raw_cli, str):
+            return None
+
+        try:
+            cli = AgentCLI(raw_cli)
+        except ValueError:
+            return None
+
+        model = record.get("model")
+        model_value = model if isinstance(model, str) else None
+        return cli, model_value, None
+
+    def _configured_chain_for_agent(self, config: AgentConfig) -> list[CliEntry]:
+        """Return configured CLI chain entries for this agent, with legacy fallback support."""
+        if config.clis:
+            return [
+                CliEntry(
+                    cli=entry.cli,
+                    model=entry.model,
+                    phase_models=dict(entry.phase_models),
+                )
+                for entry in config.clis
+                if isinstance(entry, CliEntry)
+            ]
+
+        chain: list[CliEntry] = [
+            CliEntry(cli=config.cli, model=config.model),
+        ]
+        for backup_cli in config.backup_clis:
+            phase_models = {}
+            raw_phase_models = config.models_config.get(backup_cli.value)
+            if isinstance(raw_phase_models, dict):
+                phase_models = dict(raw_phase_models)
+            chain.append(CliEntry(cli=backup_cli, phase_models=phase_models))
+
+        return chain
+
+    @staticmethod
+    def _normalize_chain(cli_chain: List[CliEntry]) -> list[CliEntry]:
+        """Remove duplicate entries from a CLI chain while preserving order."""
+        output: list[CliEntry] = []
+        seen: set[AgentCLI] = set()
+        for entry in cli_chain:
+            if entry.cli in seen:
+                continue
+            seen.add(entry.cli)
+            output.append(entry)
+        return output
+
+    def _resolve_execution_chain(
+        self,
+        config: AgentConfig,
+    ) -> list[CliEntry]:
+        """Build execution chain with fallback preference from last successful CLI."""
+        chain = self._normalize_chain(self._configured_chain_for_agent(config))
+
+        last_success = self._load_active_cli_from_file(config.name)
+        if not last_success:
+            return chain
+
+        preferred_cli = last_success[0]
+        cli_values = [entry.cli for entry in chain]
+        if preferred_cli not in cli_values:
+            return chain
+
+        reordered = [entry for entry in chain if entry.cli != preferred_cli]
+        preferred_entry = next((entry for entry in chain if entry.cli == preferred_cli), None)
+        if preferred_entry is None:
+            return chain
+
+        reordered.insert(0, preferred_entry)
+        return self._normalize_chain(reordered)
+
+    def _session_id_for_cli(self, agent_name: str, cli: AgentCLI) -> Optional[str]:
+        """Load a persisted session ID for agent+CLI, if available."""
+        saved = self.session_manager.load_session(agent_name, cli, self.issue_name)
+        if not saved:
+            return None
+
+        return saved.session_id
+
+    def get_last_successful_cli_and_session(
+        self,
+        agent_name: str,
+    ) -> tuple[Optional[AgentCLI], Optional[str]]:
+        """Return last successful CLI and its session for this agent, if available."""
+        try:
+            config = self.get_agent(agent_name).config
+        except AgentNotFoundError:
+            return None, None
+
+        active_info = self._load_active_cli_from_file(agent_name)
+        if not active_info:
+            return None, None
+
+        active_cli, _active_model, _ = active_info
+        configured = [entry.cli for entry in self._normalize_chain(self._configured_chain_for_agent(config))]
+        if active_cli not in configured:
+            return None, None
+
+        return active_cli, self._session_id_for_cli(agent_name, active_cli)
+
+    def get_execution_config(
+        self,
+        agent_name: str,
+        phase_name: Optional[str] = None,
+    ) -> AgentConfig:
+        """Return an AgentConfig adjusted for the effective CLI continuation target."""
+        base = self.get_agent(agent_name).config
+        chain = self._resolve_execution_chain(base)
+        if not chain:
+            return base
+
+        primary = chain[0]
+        primary_session_id = self._session_id_for_cli(agent_name, primary.cli)
+        primary_model = primary.resolve_model(phase_name)
+        if primary_model is None:
+            primary_model = primary.model
+
+        return AgentConfig(
+            name=base.name,
+            cli=primary.cli,
+            session_id=primary_session_id,
+            model=primary_model,
+            clis=chain,
+            backup_clis=[entry.cli for entry in chain[1:]],
+            models_config=base.models_config,
+        )
+
+    @staticmethod
+    def _config_is_equivalent(a: AgentConfig, b: AgentConfig) -> bool:
+        return (
+            a.cli == b.cli
+            and a.session_id == b.session_id
+            and a.model == b.model
+            and a.clis == b.clis
+            and a.backup_clis == b.backup_clis
+            and a.models_config == b.models_config
+        )
+
     def get_agent(self, name: str) -> AgentExecutor:
         """Get agent executor by name.
 
@@ -146,7 +307,18 @@ class AgentManager:
             AgentNotFoundError: If agent not found
             AgentExecutionError: If all agents (primary + backups) fail
         """
-        executor = self.get_agent(agent_name)
+        base_executor = self.get_agent(agent_name)
+
+        try:
+            execution_config = self.get_execution_config(agent_name, phase_name=phase_name)
+        except Exception:
+            execution_config = base_executor.config
+
+        if not self._config_is_equivalent(base_executor.config, execution_config):
+            executor = AgentExecutor(execution_config)
+            self.agents[agent_name] = executor
+        else:
+            executor = base_executor
 
         # Show prompt if enabled
         if self.show_prompt:
@@ -161,7 +333,12 @@ class AgentManager:
 
         while True:
             try:
-                agent_response = executor.execute(prompt, allowed_tools, allowed_directories, streaming_output_file)
+                agent_response = executor.execute(
+                    prompt,
+                    allowed_tools,
+                    allowed_directories,
+                    streaming_output_file,
+                )
                 break  # Success, exit loop
             except AgentExecutionError as e:
                 # Handle session conflict (only retry once)
@@ -326,17 +503,22 @@ class AgentManager:
             backup_model = entry.resolve_model(phase_name)
             print(f"Trying {entry.cli.value}...")
 
-            # Create a new executor for the fallback CLI (fresh session)
+            # Create a new executor for the fallback CLI, reusing its session if one exists.
+            fallback_session_id = self._session_id_for_cli(config.name, entry.cli)
             backup_config = AgentConfig(
                 name=config.name,
                 cli=entry.cli,
                 model=backup_model,
+                session_id=fallback_session_id,
             )
             backup_executor = AgentExecutor(backup_config)
 
             try:
                 agent_response = backup_executor.execute(
-                    prompt, allowed_tools, allowed_directories, streaming_output_file
+                    prompt,
+                    allowed_tools,
+                    allowed_directories,
+                    streaming_output_file,
                 )
                 if agent_response.cli is None:
                     agent_response.cli = entry.cli

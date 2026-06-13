@@ -401,11 +401,20 @@ class GenericWorkflowStepExecutor(Phase):
         )
         prior_cli, prior_session_id = prior_cli_and_session(prior_context)
 
-        config = self.agent_manager.get_agent(agent_name).config
-        current_cli = config.cli.value if hasattr(config.cli, "value") else str(config.cli)
-        current_session_id = (
-            config.session_id if isinstance(config.session_id, str) else None
+        try:
+            execution_config = self._resolve_execution_config_for_iteration(
+                agent_name=agent_name,
+                step_name=step_name,
+            )
+        except Exception:
+            execution_config = self.agent_manager.get_agent(agent_name).config
+
+        current_cli = (
+            execution_config.cli.value
+            if hasattr(execution_config.cli, "value")
+            else str(execution_config.cli)
         )
+        current_session_id = execution_config.session_id if isinstance(execution_config.session_id, str) else None
 
         return resolve_resume_user_input(
             candidate=candidate,

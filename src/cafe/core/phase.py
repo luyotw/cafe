@@ -19,11 +19,12 @@ from cafe.core.phase_checklist_mixin import PhaseChecklistMixin
 from cafe.core.phase_sandbox_mixin import PhaseSandboxMixin
 from cafe.core.phase_review_mixin import PhaseReviewMixin
 from cafe.core.phase_state_mixin import PhaseStateMixin
+from cafe.agents.executor import AgentExecutor
 
 # Backward-compat re-export for test imports
 from cafe.core.phase_state_mixin import ensure_agent_file_exists  # noqa: F401
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
-from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, TokenUsage
+from cafe.core.types import AgentCLI, AgentConfig, PhaseProgress, PhaseResult, PhaseStatus, TokenUsage
 
 
 class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklistMixin, ABC):
@@ -334,7 +335,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         model: Optional[str],
         phase_specific_data: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Remember the last successful CLI for chat handoff resolution."""
+        """Remember the last successful CLI for handoff resolution."""
         if not agent_cli:
             return
         issue_dir = getattr(self, "issue_dir", None)
@@ -359,6 +360,55 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             active_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as exc:
             logger.debug("failed to record active CLI for %s: %s", agent_name, exc)
+
+    def _resolve_execution_config_for_iteration(
+        self,
+        agent_name: str,
+        step_name: Optional[str] = None,
+    ) -> AgentConfig:
+        """Return execution config for this step, including fallback continuation targets."""
+        default_config = self.agent_manager.get_agent(agent_name).config
+        get_execution_config = getattr(self.agent_manager, "get_execution_config", None)
+        if not callable(get_execution_config):
+            return default_config
+
+        try:
+            execution_config = get_execution_config(agent_name, phase_name=step_name)
+        except Exception:
+            return default_config
+
+        if isinstance(execution_config, AgentConfig):
+            return execution_config
+
+        if isinstance(execution_config, AgentCLI):
+            return AgentConfig(
+                name=agent_name,
+                cli=execution_config,
+            )
+
+        if not all(
+            hasattr(execution_config, attr)
+            for attr in ("cli", "session_id", "model", "clis", "backup_clis", "models_config")
+        ):
+            return default_config
+
+        if not isinstance(execution_config.clis, list):
+            return default_config
+        if not isinstance(execution_config.backup_clis, list):
+            return default_config
+        if not isinstance(execution_config.models_config, dict):
+            return default_config
+
+        cli = execution_config.cli
+        if not isinstance(cli, (AgentCLI, str)):
+            return default_config
+
+        if execution_config.session_id is not None and not isinstance(execution_config.session_id, str):
+            return default_config
+        if execution_config.model is not None and not isinstance(execution_config.model, str):
+            return default_config
+
+        return execution_config
 
     def _get_iteration_dir(self, iteration: int) -> Path:
         """Get iteration directory path.
@@ -557,18 +607,58 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             phase_specific_data=phase_specific_data or {},
         )
 
-        # 2. Get agent metadata
-        agent_executor = self.agent_manager.get_agent(agent_name)
-        agent_cli = agent_executor.config.cli.value
-        agent_session_id = agent_executor.config.session_id
-        allowed_directories = self._get_allowed_directories()
-        cli_command_args = self.agent_manager.preview_cli_command_args(
-            agent_name,
-            prompt,
-            allowed_tools=allowed_tools,
-            allowed_directories=allowed_directories,
+        # 2. Resolve execution metadata (primary may be effective fallback CLI)
+        execution_phase_name = None
+        if phase_specific_data:
+            raw_step_name = phase_specific_data.get("step_name")
+            if isinstance(raw_step_name, str):
+                execution_phase_name = raw_step_name
+        if execution_phase_name is None:
+            execution_phase_name = getattr(self, "phase_name", None)
+
+        execution_config = self._resolve_execution_config_for_iteration(
+            agent_name=agent_name,
+            step_name=execution_phase_name,
         )
-        cli_environment = self.agent_manager.preview_cli_environment(agent_name) or {}
+        agent_cli_obj = execution_config.cli
+        agent_cli = agent_cli_obj.value if isinstance(agent_cli_obj, AgentCLI) else str(agent_cli_obj)
+        agent_session_id = execution_config.session_id
+        allowed_directories = self._get_allowed_directories()
+        preview_cli_command_args = getattr(self.agent_manager, "preview_cli_command_args", None)
+        preview_cli_environment = getattr(self.agent_manager, "preview_cli_environment", None)
+
+        if callable(preview_cli_command_args):
+            try:
+                cli_command_args = preview_cli_command_args(
+                    agent_name,
+                    prompt,
+                    allowed_tools=allowed_tools,
+                    allowed_directories=allowed_directories,
+                )
+            except TypeError:
+                cli_command_args = preview_cli_command_args(
+                    agent_name,
+                    prompt,
+                    allowed_tools,
+                    allowed_directories,
+                )
+            except Exception:
+                cli_command_args = AgentExecutor(execution_config).preview_cli_command_args(
+                    prompt,
+                    allowed_tools=allowed_tools,
+                    allowed_directories=allowed_directories,
+                )
+        else:
+            cli_command_args = AgentExecutor(execution_config).preview_cli_command_args(
+                prompt,
+                allowed_tools=allowed_tools,
+                allowed_directories=allowed_directories,
+            )
+
+        if callable(preview_cli_environment):
+            cli_environment = preview_cli_environment(agent_name) or {}
+        else:
+            cli_environment = AgentExecutor(execution_config).preview_cli_environment() or {}
         cli_environment_preview = {
             key: value
             for key, value in cli_environment.items()
@@ -622,13 +712,6 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
 
         # Track model separately (use latest value, don't accumulate)
         model: Optional[str] = None
-        execution_phase_name = None
-        if phase_specific_data:
-            raw_step_name = phase_specific_data.get("step_name")
-            if isinstance(raw_step_name, str):
-                execution_phase_name = raw_step_name
-        if execution_phase_name is None:
-            execution_phase_name = getattr(self, "phase_name", None)
 
         try:
             execute_kwargs = {
@@ -668,7 +751,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                     agent_session_id = actual_session_id
                     has_valid_last_session = True
             if not has_valid_last_session:
-                agent_session_id = agent_executor.config.session_id
+                agent_session_id = execution_config.session_id
 
             self._record_active_agent_cli(
                 agent_name=agent_name,
