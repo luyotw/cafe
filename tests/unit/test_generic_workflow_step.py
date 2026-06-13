@@ -1701,6 +1701,74 @@ def test_generic_workflow_step_applies_phase_specific_model_per_step(tmp_path: P
     assert "claude-opus-4.6" in (agent_manager.preview_calls[1] or [])
 
 
+def test_generic_workflow_step_applies_phase_specific_model_from_clis_format(tmp_path: Path, monkeypatch) -> None:
+    # Regression: per-phase models declared in the new `clis:` list format must
+    # reach the CLI command. Previously _resolve_step_model only understood the
+    # old `role.<phase>.model` shape, so the clis list was silently ignored and
+    # the CLI fell back to its default model.
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-clis-models"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}, "developer": {"default_agent": "David"}},
+        "steps": {
+            "spec": {
+                "skill": {"1": "spec_first", "default": "spec_first"},
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "plan"},
+            },
+            "plan": {
+                "skill": "plan",
+                "role": "developer",
+                "output_artifact": "plan",
+                "allowed_tools": ["Read"],
+                "input_artifacts": ["spec"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+
+    def _mark_checklist_complete(*, streaming_output_file, **kwargs) -> None:
+        iteration_dir = Path(streaming_output_file).parent
+        checklist_file = iteration_dir / "checklist.md"
+        checklist_file.write_text("- [x] completed\n", encoding="utf-8")
+
+    agent_manager = FakeAgentManager(
+        ["confirmed", "confirmed"],
+        on_execute=_mark_checklist_complete,
+    )
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-clis-models",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger", "developer": "David"},
+        role_configs={
+            "pm": {"clis": [{"cli": "claude", "spec": "opus"}]},
+            "developer": {"clis": [{"cli": "claude", "plan": "opus", "develop": "sonnet"}]},
+        },
+    )
+
+    executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    store.set_artifact(state, "spec", str(spec_file))
+    executor.execute_step("plan", playbook["steps"]["plan"], state)
+
+    assert "--model" in (agent_manager.preview_calls[0] or [])
+    assert "opus" in (agent_manager.preview_calls[0] or [])
+    assert "--model" in (agent_manager.preview_calls[1] or [])
+    assert "opus" in (agent_manager.preview_calls[1] or [])
+
+
 def test_generic_workflow_step_develop_confirmed(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-develop-ready"

@@ -493,6 +493,17 @@ class GenericWorkflowStepExecutor(Phase):
         if not isinstance(config, dict):
             return None
 
+        # New crew.yaml format: per-phase models live under clis[].<phase>.
+        # Delegate to the canonical chain resolver so this path stays in sync
+        # with setup_agents() instead of silently ignoring the clis list.
+        if isinstance(config.get("clis"), list):
+            from cafe.utils.crew import normalize_role_config
+
+            chain = normalize_role_config(config)
+            if chain:
+                return chain[0].resolve_model(step_name)
+            return None
+
         phase_config = config.get(step_name)
         if isinstance(phase_config, dict):
             model = phase_config.get("model")
