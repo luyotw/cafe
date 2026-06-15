@@ -192,16 +192,38 @@ class GitOperations:
         """
         return bool(self.get_status())
 
-    def delete_branch(self, branch_name: str) -> None:
+    def has_staged_changes(self) -> bool:
+        """Check if there are staged (index) changes ready to commit.
+
+        Unlike :meth:`has_uncommitted_changes`, this ignores untracked and
+        unstaged files, so it correctly reports whether a commit would
+        actually produce a change. Used to guard against committing an empty
+        squash merge.
+
+        Returns:
+            True if the index differs from HEAD
+        """
+        try:
+            self.run_git("diff", "--cached", "--quiet")
+            return False
+        except GitError:
+            # Non-zero exit means there are staged differences.
+            return True
+
+    def delete_branch(self, branch_name: str, force: bool = False) -> None:
         """Delete a local branch.
 
         Args:
             branch_name: Name of branch to delete
+            force: Use force delete (-D) instead of safe delete (-d).
+                Required for squash-merged branches, which Git still
+                considers "not merged" because no merge commit points at them.
 
         Raises:
             GitError: If branch deletion fails
         """
-        self.run_git("branch", "-d", branch_name)
+        flag = "-D" if force else "-d"
+        self.run_git("branch", flag, branch_name)
 
     def pull(self) -> None:
         """Pull latest changes from remote.
@@ -221,6 +243,17 @@ class GitOperations:
             GitError: If merge fails
         """
         self.run_git("merge", branch_name)
+
+    def merge_squash(self, branch_name: str) -> None:
+        """Squash-merge a branch into the current branch (stages only, no commit).
+
+        Args:
+            branch_name: Name of the branch to squash-merge
+
+        Raises:
+            GitError: If merge fails
+        """
+        self.run_git("merge", "--squash", branch_name)
 
     def get_main_branch(self) -> str:
         """Get the main branch name (main or master).

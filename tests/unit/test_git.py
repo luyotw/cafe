@@ -268,6 +268,15 @@ class TestGitOperations:
 
             mock_run.assert_called_once_with("branch", "-d", "feature-branch")
 
+    def test_delete_branch_force(self) -> None:
+        """測試 force=True 時使用 -D 強制刪除分支"""
+        git = GitOperations()
+
+        with patch.object(git, "run_git") as mock_run:
+            git.delete_branch("feature-branch", force=True)
+
+            mock_run.assert_called_once_with("branch", "-D", "feature-branch")
+
     def test_delete_branch_failure(self) -> None:
         """測試刪除分支失敗時拋出 GitError"""
         git = GitOperations()
@@ -277,6 +286,25 @@ class TestGitOperations:
 
             with pytest.raises(GitError, match="Branch deletion failed"):
                 git.delete_branch("feature-branch")
+
+    def test_merge_squash(self) -> None:
+        """測試 squash merge 只 stage 不 commit"""
+        git = GitOperations()
+
+        with patch.object(git, "run_git") as mock_run:
+            git.merge_squash("feature-branch")
+
+            mock_run.assert_called_once_with("merge", "--squash", "feature-branch")
+
+    def test_merge_squash_failure(self) -> None:
+        """測試 squash merge 失敗時拋出 GitError"""
+        git = GitOperations()
+
+        with patch.object(git, "run_git") as mock_run:
+            mock_run.side_effect = GitError("Merge failed")
+
+            with pytest.raises(GitError, match="Merge failed"):
+                git.merge_squash("feature-branch")
 
     def test_pull(self) -> None:
         """測試拉取遠端更新"""

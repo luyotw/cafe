@@ -771,7 +771,107 @@ def _backup_issue_directory(issue_dir: Path, issue_name: str) -> Path:
     return archive_path
 
 
-def close() -> None:
+def _resolve_squash_message(issue_dir: Path, issue_name: str, override: Optional[str]) -> str:
+    """Resolve the commit message for a squash merge.
+
+    Resolution order (later wins is reversed: explicit override first):
+    1. ``override`` (the ``-m`` / ``--message`` value) if provided.
+    2. The H1 title from the latest PR artifact:
+       ``<issue_dir>/pr/iteration_*/output.md`` first line starting with ``# ``,
+       picking the iteration with the highest number.
+    3. Fallback to ``issue_name``.
+
+    Args:
+        issue_dir: Path to the issue data directory (e.g. .cafe/issues/<issue>).
+        issue_name: Issue name, used as the final fallback.
+        override: Explicit message from --message, or None.
+
+    Returns:
+        The resolved commit message.
+    """
+    if override is not None and override.strip():
+        return override.strip()
+
+    pr_dir = issue_dir / "pr"
+    if pr_dir.is_dir():
+        # Pick the iteration with the largest numeric suffix, since later
+        # iterations refine the PR title we want as the squash commit message.
+        iteration_dirs = [d for d in pr_dir.glob("iteration_*") if d.is_dir()]
+
+        def _iteration_number(path: Path) -> int:
+            suffix = path.name[len("iteration_"):]
+            try:
+                return int(suffix)
+            except ValueError:
+                return -1
+
+        for iteration_dir in sorted(iteration_dirs, key=_iteration_number, reverse=True):
+            output_md = iteration_dir / "output.md"
+            if not output_md.is_file():
+                continue
+            try:
+                content = output_md.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for line in content.splitlines():
+                # The first Markdown H1 line is the PR title.
+                if line.startswith("# "):
+                    title = line[2:].strip()
+                    if title:
+                        return title
+                    break
+            break
+
+    return issue_name
+
+
+def _perform_squash_merge(git_ops, feature_branch, issue_dir, issue_name, message):
+    """Run a squash merge and commit the result.
+
+    Stages the feature branch via ``git merge --squash``, then commits with a
+    resolved message. If nothing was staged (feature branch is not ahead of
+    base), skips the commit and reports that no merge was needed.
+
+    Args:
+        git_ops: GitOperations instance bound to the base-branch checkout.
+        feature_branch: Branch to squash-merge.
+        issue_dir: Issue data directory used to resolve the PR title.
+        issue_name: Issue name, used as the fallback commit message.
+        message: Optional --message override.
+    """
+    console.print("[dim]Squash-merging feature branch into base branch...[/dim]")
+    git_ops.merge_squash(feature_branch)
+
+    # A squash merge stages nothing when the feature branch is not ahead of
+    # base. Committing then fails with "nothing to commit", so guard for it.
+    # Check staged changes specifically: untracked files (e.g. .cafe issue
+    # data) would make has_uncommitted_changes() true even with nothing staged.
+    if not git_ops.has_staged_changes():
+        console.print(
+            f"[green]✓ Base branch already up to date; no merge needed for: {feature_branch}[/green]"
+        )
+        return
+
+    commit_message = _resolve_squash_message(issue_dir, issue_name, message)
+    git_ops.commit(commit_message)
+    console.print(
+        f"[green]✓ Squash-merged feature branch: {feature_branch} ({commit_message})[/green]"
+    )
+
+
+def close(
+    squash: bool = typer.Option(
+        False,
+        "--squash",
+        help="Squash-merge the feature branch into the base branch (local review mode only)",
+    ),
+    message: Optional[str] = typer.Option(
+        None,
+        "-m",
+        "--message",
+        help="Override the squash commit message (only used with --squash)",
+    ),
+) -> None:
     """Close current feature and return to base branch.
 
     \b
@@ -897,12 +997,28 @@ def close() -> None:
 
             # Step 3: Merge or pull changes based on pr.auto_create config
             pr_auto_create = config_data.get("pr", {}).get("auto_create", True)
+            # In worktree mode the issue data still lives in the worktree at this
+            # point (the sync to repo root happens later, in Step 5), so resolve
+            # the squash PR title from the worktree issue dir.
+            worktree_abs = Path(worktree_path).resolve()
+            worktree_issue_dir = worktree_abs / ".cafe" / "issues" / feature_branch
+            if squash and pr_auto_create is not False:
+                # PR mode pulls instead of merging locally; squash is handled on
+                # the GitHub side, so --squash has no effect here.
+                console.print(
+                    "[yellow]⚠️  --squash is ignored when pr.auto_create is true (GitHub PR mode).[/yellow]"
+                )
             try:
                 if pr_auto_create is False:
                     # Local review mode: merge feature branch into base branch
-                    console.print("[dim]Merging feature branch into base branch...[/dim]")
-                    git_ops.merge(feature_branch)
-                    console.print(f"[green]✓ Merged feature branch: {feature_branch}[/green]")
+                    if squash:
+                        _perform_squash_merge(
+                            git_ops, feature_branch, worktree_issue_dir, issue_name, message
+                        )
+                    else:
+                        console.print("[dim]Merging feature branch into base branch...[/dim]")
+                        git_ops.merge(feature_branch)
+                        console.print(f"[green]✓ Merged feature branch: {feature_branch}[/green]")
                 else:
                     # GitHub PR mode: pull latest changes
                     console.print("[dim]Updating base branch...[/dim]")
@@ -913,7 +1029,10 @@ def close() -> None:
                 console.print()
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
                 if pr_auto_create is False:
-                    console.print(f"  1. git merge {feature_branch}")
+                    if squash:
+                        console.print(f"  1. git merge --squash {feature_branch} && git commit")
+                    else:
+                        console.print(f"  1. git merge {feature_branch}")
                 else:
                     console.print("  1. git pull")
                 console.print(f"  2. git worktree remove {worktree_path}")
@@ -924,9 +1043,7 @@ def close() -> None:
 
             # Step 4: Move worktree config.yaml into issue dir before sync
             # so it gets archived and restore puts it back in issue dir (override)
-            worktree_abs = Path(worktree_path).resolve()
             worktree_config = worktree_abs / ".cafe" / "config.yaml"
-            worktree_issue_dir = worktree_abs / ".cafe" / "issues" / feature_branch
             if worktree_config.exists() and worktree_issue_dir.exists():
                 shutil.move(str(worktree_config), str(worktree_issue_dir / "config.yaml"))
 
@@ -976,9 +1093,16 @@ def close() -> None:
             clear_marker_if_matches(worktree_abs / ".cafe", issue_name)
 
             # Step 6: Delete feature branch
+            # Squash merges leave no merge commit pointing at the feature branch,
+            # so Git treats it as "not merged" and `git branch -d` would fail.
+            # Force-delete in that case.
+            force_delete = squash and pr_auto_create is False
             try:
                 console.print(f"[dim]Deleting feature branch: {feature_branch}[/dim]")
-                git_ops.delete_branch(feature_branch)
+                if force_delete:
+                    git_ops.delete_branch(feature_branch, force=True)
+                else:
+                    git_ops.delete_branch(feature_branch)
                 console.print(f"[green]✓ Deleted feature branch: {feature_branch}[/green]")
             except Exception as e:
                 console.print(f"[red]❌ Failed to delete branch: {e}[/red]")
@@ -1013,12 +1137,25 @@ def close() -> None:
 
             # Step 2: Merge or pull changes based on pr.auto_create config
             pr_auto_create = config_data.get("pr", {}).get("auto_create", True)
+            # In normal mode the issue data lives in the repo root.
+            normal_issue_dir = Path.cwd() / ".cafe" / "issues" / feature_branch
+            if squash and pr_auto_create is not False:
+                # PR mode pulls instead of merging locally; squash is handled on
+                # the GitHub side, so --squash has no effect here.
+                console.print(
+                    "[yellow]⚠️  --squash is ignored when pr.auto_create is true (GitHub PR mode).[/yellow]"
+                )
             try:
                 if pr_auto_create is False:
                     # Local review mode: merge feature branch into base branch
-                    console.print("[dim]Merging feature branch into base branch...[/dim]")
-                    git_ops.merge(feature_branch)
-                    console.print(f"[green]✓ Merged feature branch: {feature_branch}[/green]")
+                    if squash:
+                        _perform_squash_merge(
+                            git_ops, feature_branch, normal_issue_dir, issue_name, message
+                        )
+                    else:
+                        console.print("[dim]Merging feature branch into base branch...[/dim]")
+                        git_ops.merge(feature_branch)
+                        console.print(f"[green]✓ Merged feature branch: {feature_branch}[/green]")
                 else:
                     # GitHub PR mode: pull latest changes
                     console.print("[dim]Updating base branch...[/dim]")
@@ -1029,7 +1166,10 @@ def close() -> None:
                 console.print()
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
                 if pr_auto_create is False:
-                    console.print(f"  1. git merge {feature_branch}")
+                    if squash:
+                        console.print(f"  1. git merge --squash {feature_branch} && git commit")
+                    else:
+                        console.print(f"  1. git merge {feature_branch}")
                 else:
                     console.print("  1. git pull")
                 console.print(f"  2. git branch -D {feature_branch}  # Force delete if needed")
@@ -1038,9 +1178,15 @@ def close() -> None:
                 raise typer.Exit(1)
 
             # Step 3: Delete feature branch
+            # Squash merges leave no merge commit, so `git branch -d` fails;
+            # force-delete when we squashed.
+            force_delete = squash and pr_auto_create is False
             try:
                 console.print(f"[dim]Deleting feature branch: {feature_branch}[/dim]")
-                git_ops.delete_branch(feature_branch)
+                if force_delete:
+                    git_ops.delete_branch(feature_branch, force=True)
+                else:
+                    git_ops.delete_branch(feature_branch)
                 console.print(f"[green]✓ Deleted feature branch: {feature_branch}[/green]")
             except Exception as e:
                 console.print(f"[red]❌ Failed to delete branch: {e}[/red]")
