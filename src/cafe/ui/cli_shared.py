@@ -395,7 +395,11 @@ def _resolve_selected_playbook(playbook_name: Optional[str]) -> str:
     except ConfigError:
         return "default"
 
-    selected = config_manager.get("playbook", "default")
+    # playbook 設定存在 settings.playbook 之下（cafe config 寫入處），
+    # 舊版讀頂層 "playbook" 永遠取不到、退回 default，使 config 選 playbook 失效。
+    selected = config_manager.get("settings.playbook", None)
+    if not selected:
+        selected = config_manager.get("playbook", "default")
     return str(selected) if selected else "default"
 
 
