@@ -2,7 +2,7 @@
 
 import copy
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import yaml
 
@@ -139,10 +139,27 @@ class CrewManager:
     def exists(self) -> bool:
         return self.crew_file.exists()
 
+    def _repo_root_crew_file(self) -> Optional[Path]:
+        """Return the main repo root's ``.cafe/crew.yaml`` when this cafe_dir is
+        inside a cafe worktree (``…/.cafe/worktrees/<issue>/.cafe``); else None.
+
+        A git worktree's own ``.cafe`` normally has no ``crew.yaml``, so callers
+        can fall back to the repo root's crew config instead of the default CLI.
+        """
+        try:
+            parts = self.cafe_dir.resolve().parts
+        except OSError:
+            return None
+        for i in range(len(parts) - 1):
+            if parts[i] == ".cafe" and parts[i + 1] == "worktrees":
+                return Path(*parts[:i]) / ".cafe" / "crew.yaml"
+        return None
+
     def load(self) -> Dict[str, Any]:
         """Load crew configuration.
 
-        Priority: crew.yaml > config.yaml agents: section > empty dict.
+        Priority: this dir's crew.yaml > repo-root crew.yaml (worktree fallback)
+        > config.yaml agents: section > empty dict.
         """
         if self.crew_file.exists():
             try:
@@ -150,6 +167,18 @@ class CrewManager:
                 return data if isinstance(data, dict) else {}
             except yaml.YAMLError:
                 return {}
+
+        # Worktree fallback: inherit the main repo root's crew.yaml so a worktree
+        # without its own crew.yaml still uses the configured role→CLI mapping
+        # instead of silently dropping to the default CLI.
+        root_crew = self._repo_root_crew_file()
+        if root_crew and root_crew.exists():
+            try:
+                data = yaml.safe_load(root_crew.read_text())
+                if isinstance(data, dict):
+                    return data
+            except yaml.YAMLError:
+                pass
 
         if self.config_file.exists():
             try:

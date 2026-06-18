@@ -141,6 +141,17 @@ def setup_agents(
     except (AttributeError, TypeError):
         crew_data = {}
 
+    if not crew_data:
+        # No crew.yaml in this .cafe, the repo root (worktree fallback), or
+        # config.yaml agents. Roles will silently use the default CLI, which is
+        # rarely intended — guide the user to configure the role→CLI mapping.
+        console.print(
+            "[yellow]⚠️  No crew.yaml found[/yellow] (checked this .cafe, the repo "
+            "root, and config.yaml agents). Roles will fall back to the default "
+            "CLI, which may not be what you want. Create [bold].cafe/crew.yaml[/bold] "
+            "at the repo root to map roles → CLI (e.g. via `cafe crew`)."
+        )
+
     def _role_config(role: str, default_name: str) -> dict:
         if crew_data and role in crew_data and isinstance(crew_data[role], dict):
             return crew_data[role]
