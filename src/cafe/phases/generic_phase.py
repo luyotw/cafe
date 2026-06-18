@@ -106,13 +106,24 @@ class GenericPhase:
             lines.append("")
 
         baton_intents = ", ".join(intent.value for intent in HandoffIntent)
-        runtime_context.extend(
-            [
-                "Baton contract (single source of truth):",
-                f"- valid intent values: [{baton_intents}]",
-                "- when asking user questions, handoff must be to_owner='user', to_step='user', intent='need_clarification'",
-                "- stay within this prompt's listed shared skills + phase skill; do not invoke external workflow-driving skills (e.g. use-cafe-workflow)",
-            ]
+        runtime_context.append("Baton contract (single source of truth):")
+        runtime_context.append(f"- valid intent values: [{baton_intents}]")
+        # 列出本 playbook 實際合法的 to_step，避免 agent 沿用共用 skill 範例裡的 step
+        # （如 pr）而寫出此 playbook 不存在的目標導致 baton 被拒。
+        if context and context.get("valid_to_steps"):
+            runtime_context.append(
+                f"- valid to_step values: [{context['valid_to_steps']}] "
+                "— use ONLY these; this playbook has no other steps (e.g. do not assume 'pr')"
+            )
+        if context and context.get("step_transitions"):
+            runtime_context.append(
+                f"- this step's defined transitions (intent→to_step): {context['step_transitions']}"
+            )
+        runtime_context.append(
+            "- when asking user questions, handoff must be to_owner='user', to_step='user', intent='need_clarification'"
+        )
+        runtime_context.append(
+            "- stay within this prompt's listed shared skills + phase skill; do not invoke external workflow-driving skills (e.g. use-cafe-workflow)"
         )
 
         if context and context.get("handoff_summary"):

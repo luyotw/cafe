@@ -626,12 +626,24 @@ class GenericWorkflowStepExecutor(Phase):
             "researcher": "researcher",
             "ops": "ops",
         }.get(role, "developer")
+        # 這條 playbook 實際可用的 to_step（= 所有 step 名 + 內建 user/done），
+        # 與 baton 驗證器一致。注入 prompt 讓 agent 不會憑共用 skill 的範例（如 pr）
+        # 猜出本 playbook 不存在的 step。
+        valid_to_steps = list(self.playbook.get("steps", {}).keys()) + ["user", "done"]
+        # 本 step 依 intent 定義的下一步（含 _done → done 正規化），給 agent 明確指向。
+        step_on = step_def.get("on", {}) if isinstance(step_def.get("on"), dict) else {}
+        step_transitions = {
+            str(k): ("done" if str(v) in ("_done", "done") else str(v))
+            for k, v in step_on.items()
+        }
         context = {
             "agent_file": AgentManager.get_agent_file_path(agent_name, role_dir),
             "handoff_summary": getattr(blackboard_state, "handoff_summary", ""),
             "blackboard_path": self._display_path(self.issue_dir / "blackboard.json"),
             "next_step_path": self._display_path(self.issue_dir / "next_step.txt"),
             "output_file": self._display_path(output_file),
+            "valid_to_steps": ", ".join(valid_to_steps),
+            "step_transitions": ", ".join(f"{i}→{s}" for i, s in step_transitions.items()),
         }
 
         for artifact_name in step_def.get("input_artifacts", []):
