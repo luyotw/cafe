@@ -635,13 +635,17 @@ class AgentExecutor:
         """
         error_lower = error_text.lower()
 
-        # Check all CLI-specific patterns
-        for cli_name, patterns in self.RATE_LIMIT_PATTERNS.items():
-            for pattern in patterns:
-                if pattern.lower() in error_lower:
-                    return True
+        # Only check the *running* CLI's own patterns. Checking every CLI's
+        # patterns misclassifies a foreign-but-generic phrase (e.g. copilot's
+        # "rate limit" or gemini's "code: 429") that happens to appear in a
+        # different CLI's transient error as a rate limit, triggering an
+        # unwanted fallback even when that CLI's quota is fine.
+        cli_patterns = self.RATE_LIMIT_PATTERNS.get(self.config.cli.value, [])
+        for pattern in cli_patterns:
+            if pattern.lower() in error_lower:
+                return True
 
-        # Generic fallback patterns
+        # Generic fallback patterns (provider-agnostic rate-limit signals)
         generic_patterns = [
             "resource_exhausted",
             "ratelimitexceeded",
