@@ -16,27 +16,38 @@ class ConfigError(Exception):
 
 
 def validate_directories_exist(dirs: List[str], base_dir: Path) -> None:
-    """Verify each directory in dirs exists under base_dir.
+    """Verify each allowed directory is usable.
+
+    Relative entries must resolve to an existing directory under base_dir.
+    Absolute entries are operator-provided (CLI --add-dir / config
+    allowed_directories, never agent-controlled) and are allowed to live
+    outside base_dir so cross-repo playbooks can grant access to a sibling
+    repo; they only need to be an existing directory.
 
     Raises:
-        ConfigError: if any entry is outside base_dir, missing, or not a directory.
+        ConfigError: if any entry is missing, not a directory, or a relative
+        path that escapes base_dir.
     """
     base_dir = base_dir.resolve()
     invalid = []
     for directory in dirs:
         directory_path = Path(directory)
+        if directory_path.is_absolute():
+            # Operator-provided external dir: allow if it exists and is a directory.
+            if not directory_path.resolve().is_dir():
+                invalid.append(directory)
+            continue
         resolved = (base_dir / directory_path).resolve()
         if (
-            directory_path.is_absolute()
-            or ".." in directory_path.parts
+            ".." in directory_path.parts
             or not resolved.is_relative_to(base_dir)
             or not resolved.is_dir()
         ):
             invalid.append(directory)
     if invalid:
         raise ConfigError(
-            "Allowed directories must be existing relative directories under "
-            f"{base_dir}: {', '.join(invalid)}"
+            "Allowed directories must be existing directories (relative ones "
+            f"under {base_dir}, or absolute ones that exist): {', '.join(invalid)}"
         )
 
 
