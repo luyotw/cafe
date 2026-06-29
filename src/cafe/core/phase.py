@@ -673,6 +673,10 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 context_data = json.load(f)
             context_data["prompt"] = prompt
             context_data["cli"] = agent_cli
+            # 開始執行前就記下已解析的 model,讓 summary 在 iteration 一開始就抓得到 CLI/Model
+            # (執行後會再以 agent 實際回報的 model 覆寫;見下方 model 更新)。
+            if execution_config.model:
+                context_data["model"] = execution_config.model
             context_data["session_id"] = agent_session_id
             context_data["allowed_tools"] = allowed_tools
             context_data["denied_tools"] = denied_tools
