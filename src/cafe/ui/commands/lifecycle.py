@@ -634,11 +634,18 @@ def prepare(
             # Create .cafe directory structure in worktree
             worktree_cafe_dir.mkdir(parents=True, exist_ok=True)
 
-            # Copy config.yaml from repo root
-            repo_config = repo_cafe_dir / "config.yaml"
-            worktree_config = worktree_cafe_dir / "config.yaml"
-            if repo_config.exists():
-                shutil.copy2(repo_config, worktree_config)
+            # Copy root .cafe config into the worktree so it inherits the repo's
+            # setup regardless of where the worktree lives. Without crew.yaml the
+            # worktree silently falls back to the default CLI; strategic_context
+            # and docs back workflow Q&A / review.
+            for config_name in ("config.yaml", "crew.yaml", "strategic_context.yaml"):
+                repo_file = repo_cafe_dir / config_name
+                if repo_file.exists():
+                    shutil.copy2(repo_file, worktree_cafe_dir / config_name)
+
+            repo_docs = repo_cafe_dir / "docs"
+            if repo_docs.is_dir():
+                shutil.copytree(repo_docs, worktree_cafe_dir / "docs", dirs_exist_ok=True)
 
             # Create issues directory structure in worktree
             worktree_issues_dir = worktree_cafe_dir / "issues" / issue_name
