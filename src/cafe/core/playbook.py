@@ -61,6 +61,32 @@ class StepHooks(BaseModel):
 SkillSelector = Union[str, Dict[str, str]]
 
 
+class StepAlignmentConfig(BaseModel):
+    """Policy gate configuration for pre-execution alignment checkpoints."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    trigger_policy: Literal["policy", "disabled"] = "policy"
+    pause_threshold: int = 5
+    note_threshold: int = 2
+    affected_document_categories: List[str] = Field(default_factory=list)
+    reuse_approved: bool = True
+
+    @field_validator("pause_threshold", "note_threshold")
+    @classmethod
+    def _validate_thresholds(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("alignment thresholds must be non-negative")
+        return value
+
+    @field_validator("affected_document_categories")
+    @classmethod
+    def _validate_categories(cls, value: List[str]) -> List[str]:
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        return list(dict.fromkeys(cleaned))
+
+
 class StepConfig(BaseModel):
     """One playbook step."""
 
@@ -80,6 +106,7 @@ class StepConfig(BaseModel):
     auto_snapshot: bool = True
     handoff_label: Optional[str] = None
     chat_role: Optional[str] = None
+    alignment: Optional[StepAlignmentConfig] = None
     on: Dict[str, str]
 
     @field_validator("on")

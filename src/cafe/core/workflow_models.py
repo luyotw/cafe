@@ -14,6 +14,7 @@ class StepExecutionResult:
     artifacts: dict[str, str]
     status_code: str | None = None
     auto_continue: bool = False
+    artifact_ready: bool = True
     events: list[dict[str, Any]] = field(default_factory=list)
 
 

@@ -359,6 +359,159 @@ def test_workflow_command_resume_user_input_targets_handoff_from_step(tmp_path: 
     assert reloaded.current_step == "develop"
 
 
+def test_user_phase_alignment_checkpoint_approve_resumes_step(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-align-user"
+    request_dir = issue_dir / "develop" / "iteration_001"
+    request_dir.mkdir(parents=True, exist_ok=True)
+    (request_dir / "alignment_request.json").write_text(
+        json.dumps(
+            {
+                "fingerprint": "fp-1",
+                "from_step": "develop",
+                "recommended_resume_target": "develop",
+                "strategic_document_update_requirements": [],
+                "allowed_decisions": ["approve"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    playbook_data = {
+        "playbook": {"id": "default"},
+        "steps": {"develop": {"role": "developer", "on": {"await_agent": "review"}}, "review": {"role": "reviewer", "on": {}}},
+    }
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="develop",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
+        status_code="alignment_checkpoint",
+        source="test",
+    )
+
+    with patch("cafe.ui.inquirer_prompts.prompt_list", return_value="approve"):
+        result = _handle_user_phase(
+            issue_name="issue-align-user",
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+        )
+
+    assert result == "develop"
+    reloaded = store.load_or_create("develop", playbook_id="default")
+    assert reloaded.current_step == "develop"
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
+
+
+def test_user_phase_alignment_checkpoint_accepts_updated_strategic_document(tmp_path: Path) -> None:
+    roadmap = tmp_path / "ROADMAP.md"
+    roadmap.write_text("Updated roadmap direction\n", encoding="utf-8")
+    cafe_dir = tmp_path / ".cafe"
+    cafe_dir.mkdir(parents=True, exist_ok=True)
+    (cafe_dir / "strategic_context.yaml").write_text(
+        "version: 1\n"
+        "documents:\n"
+        "  roadmap:\n"
+        "    path: ROADMAP.md\n",
+        encoding="utf-8",
+    )
+    issue_dir = cafe_dir / "issues" / "codex" / "issue-align-docs"
+    request_dir = issue_dir / "develop" / "iteration_001"
+    request_dir.mkdir(parents=True, exist_ok=True)
+    (request_dir / "alignment_request.json").write_text(
+        json.dumps(
+            {
+                "fingerprint": "fp-2",
+                "from_step": "develop",
+                "recommended_resume_target": "develop",
+                "strategic_document_update_requirements": [
+                    {"category": "roadmap", "current_sha256": "previous-roadmap-sha"}
+                ],
+                "allowed_decisions": ["strategic_documents_updated"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    playbook_data = {
+        "playbook": {"id": "default"},
+        "steps": {"develop": {"role": "developer", "on": {"await_agent": "review"}}, "review": {"role": "reviewer", "on": {}}},
+    }
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="develop",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
+        status_code="alignment_checkpoint",
+        source="test",
+    )
+
+    with patch("cafe.ui.inquirer_prompts.prompt_list", return_value="strategic_documents_updated"):
+        result = _handle_user_phase(
+            issue_name="codex/issue-align-docs",
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+        )
+
+    assert result == "develop"
+    reloaded = store.load_or_create("develop", playbook_id="default")
+    assert reloaded.current_step == "develop"
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
+
+
+def test_workflow_command_does_not_treat_generic_user_input_as_alignment_approval(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-align-resume"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="develop",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
+        status_code="alignment_checkpoint",
+        source="test",
+    )
+
+    with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-align-resume"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "default",
+                "--execute",
+                "--user-input",
+                "looks good",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "alignment decision payload" in result.stdout
+    assert not (issue_dir / "develop" / "iteration_001" / "user_input.md").exists()
+    reloaded = store.load_or_create("spec", playbook_id="default")
+    assert reloaded.current_step == "user"
+
+
 def test_workflow_command_resume_confirm_output_keeps_await_agent_intent(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-confirm"

@@ -21,7 +21,9 @@ from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.ui.cli_shared import (
     VALID_CONTENT_TYPES,
+    apply_alignment_decision_from_payload,
     get_show_file_path as _get_show_file_path,
+    parse_alignment_decision_payload,
     resolve_iteration_number as _resolve_iteration_number,
 )
 from cafe.agents.executor import AgentExecutionError
@@ -800,6 +802,29 @@ def workflow(
                             allowed_steps=step_keys,
                         )
                         from_step = getattr(contract, "from_step", None) or blackboard.current_step
+                        if contract.intent == HandoffIntent.ALIGNMENT_CHECKPOINT:
+                            decision_payload = parse_alignment_decision_payload(user_input)
+                            if decision_payload is None:
+                                console.print(
+                                    "[yellow]Workflow is waiting for an explicit alignment decision payload.[/yellow]"
+                                )
+                                console.print(
+                                    "[dim]Use JSON such as {\"decision\":\"approve\"}, "
+                                    "{\"decision\":\"narrow\",\"correction\":\"...\"}, "
+                                    "or {\"decision\":\"update_strategic_documents_first\"}.[/dim]"
+                                )
+                                return
+                            selected_step = apply_alignment_decision_from_payload(
+                                issue_dir=issue_dir,
+                                playbook_data=playbook_data,
+                                blackboard=blackboard,
+                                payload=decision_payload,
+                            )
+                            user_input = None
+                            if selected_step:
+                                pending_start_step = selected_step
+                                continue
+                            return
                         store = BlackboardStore(issue_dir)
                         from_step_dir = issue_dir / from_step
                         iteration_dirs = sorted(from_step_dir.glob("iteration_*")) if from_step_dir.exists() else []

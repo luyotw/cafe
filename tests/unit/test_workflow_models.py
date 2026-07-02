@@ -157,6 +157,38 @@ def test_blackboard_load_or_create_persists_current_step_and_playbook(tmp_path: 
     assert loaded.playbook_id == "default"
 
 
+def test_alignment_checkpoint_baton_must_be_user_owned_user_target(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-align-baton"
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+
+    _write_baton(
+        issue_dir,
+        _base_payload(
+            from_step="develop",
+            to_owner="user",
+            to_step="user",
+            intent="alignment_checkpoint",
+            status_code="alignment_checkpoint",
+        ),
+    )
+    valid = store.load_handoff_contract(state, allowed_steps=["develop", "review"])
+    assert valid.intent == HandoffIntent.ALIGNMENT_CHECKPOINT
+
+    _write_baton(
+        issue_dir,
+        _base_payload(
+            from_step="develop",
+            to_owner="agent",
+            to_step="review",
+            intent="alignment_checkpoint",
+            status_code="alignment_checkpoint",
+        ),
+    )
+    with pytest.raises(ValueError, match="alignment_checkpoint"):
+        store.load_handoff_contract(state, allowed_steps=["develop", "review"])
+
+
 def test_blackboard_store_records_artifacts_events_and_decisions(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-2"
     store = BlackboardStore(issue_dir)

@@ -364,6 +364,9 @@ class GenericPhase:
                 raise ValueError(f"Unsupported hook entry type '{type(hook_entry).__name__}' in stage '{stage}'")
 
             aggregate.context_updates.update(result.context_updates)
+            stage_context = kwargs.get("context")
+            if isinstance(stage_context, dict):
+                stage_context.update(result.context_updates)
             aggregate.events.extend(result.events)
             aggregate.artifact_ready = aggregate.artifact_ready and result.artifact_ready
             aggregate.retry_requested = aggregate.retry_requested or result.retry_requested
