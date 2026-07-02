@@ -22,6 +22,7 @@ PLAYBOOK_INTENT_KEYS: frozenset[str] = frozenset(
     {
         "await_agent",
         "confirm_output",
+        "alignment_checkpoint",
         "need_clarification",
         "need_permission",
         "no_changes_needed",
@@ -41,6 +42,7 @@ class PhaseStatusCode(str, Enum):
 
     AWAIT_AGENT = "await_agent"
     CONFIRM_OUTPUT = "confirm_output"
+    ALIGNMENT_CHECKPOINT = "alignment_checkpoint"
     NEED_CLARIFICATION = "need_clarification"
     NEED_PERMISSION = "need_permission"
     WORKFLOW_COMPLETE = "workflow_complete"
@@ -64,6 +66,7 @@ def transition_map_key(code: PhaseStatusCode) -> str:
         PhaseStatusCode.NO_CHANGES_NEEDED: "no_changes_needed",
         PhaseStatusCode.NO_RESPONSE: "await_agent",
         PhaseStatusCode.READY_FOR_REVIEW: "confirm_output",
+        PhaseStatusCode.ALIGNMENT_CHECKPOINT: "alignment_checkpoint",
         PhaseStatusCode.NEED_CLARIFICATION: "need_clarification",
         PhaseStatusCode.NEED_PERMISSION: "need_permission",
         PhaseStatusCode.NEEDS_CHANGES: "manual_handoff",
@@ -164,6 +167,7 @@ class StatusCodeParser:
         return code in {
             PhaseStatusCode.NEED_PERMISSION,
             PhaseStatusCode.NEED_CLARIFICATION,
+            PhaseStatusCode.ALIGNMENT_CHECKPOINT,
             PhaseStatusCode.READY_FOR_REVIEW,
             PhaseStatusCode.CONFIRM_OUTPUT,
         }

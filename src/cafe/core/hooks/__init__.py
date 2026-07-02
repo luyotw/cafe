@@ -75,6 +75,7 @@ from cafe.core.hooks.native import (
     PRLinkOpener,
     UserInputCollector,
 )
+from cafe.core.hooks.alignment import AlignmentCheckpointGate
 
 
 BUILTIN_HOOKS = {
@@ -90,5 +91,6 @@ BUILTIN_HOOKS = {
         LocalPRReviewer,
         PRCommentPoster,
         PRLinkOpener,
+        AlignmentCheckpointGate,
     ]
 }

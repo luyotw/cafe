@@ -656,10 +656,16 @@ class TestValidateDirectoriesExist:
             validate_directories_exist(["notadir"], tmp_path)
         assert "notadir" in str(exc_info.value)
 
-    def test_validate_directories_exist_rejects_absolute_path(self, tmp_path: Path) -> None:
-        """絕對路徑即使存在也應拒絕，避免授權 worktree 外部目錄。"""
+    def test_validate_directories_exist_allows_existing_absolute_path(self, tmp_path: Path) -> None:
+        """絕對路徑可由 operator 授權給 cross-repo playbooks 使用。"""
         from cafe.utils.config import validate_directories_exist
         outside = tmp_path.parent
+        validate_directories_exist([str(outside)], tmp_path)
+
+    def test_validate_directories_exist_rejects_missing_absolute_path(self, tmp_path: Path) -> None:
+        """絕對路徑仍需存在且必須是目錄。"""
+        from cafe.utils.config import validate_directories_exist
+        outside = tmp_path.parent / "missing-absolute-dir"
         with pytest.raises(ConfigError) as exc_info:
             validate_directories_exist([str(outside)], tmp_path)
         assert str(outside) in str(exc_info.value)

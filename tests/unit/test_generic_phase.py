@@ -77,7 +77,7 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
     assert "next_step_file=.cafe/issues/demo/next_step.txt" in prompt
     assert "Runtime context:" in prompt
     assert "Baton contract (single source of truth):" in prompt
-    assert "valid intent values: [await_agent, confirm_output, need_clarification, need_permission, no_changes_needed, manual_handoff, workflow_complete]" in prompt
+    assert "valid intent values: [await_agent, confirm_output, alignment_checkpoint, need_clarification, need_permission, no_changes_needed, manual_handoff, workflow_complete]" in prompt
     assert "do not invoke external workflow-driving skills (e.g. use-cafe-workflow)" in prompt
     assert "Do NOT finish this step until ALL checklist items are marked as [x]." in prompt
     assert "Do NOT return a status code" not in prompt
@@ -249,6 +249,15 @@ class PrepareHook:
         return HookResult(context_updates={"who": "prepared"})
 
 
+class CapturePreparedContextHook:
+    name = "CapturePreparedContextHook"
+    seen_context: dict[str, str] = {}
+
+    def run(self, **kwargs):
+        self.__class__.seen_context = dict(kwargs.get("context") or {})
+        return HookResult()
+
+
 class RetryHook:
     name = "RetryHook"
 
@@ -332,6 +341,31 @@ def test_execute_runs_prepare_input_and_after_execute_retry(tmp_path: Path) -> N
     assert "Shared skills:" in prompts[1]
     assert "Phase skill: /plan" in prompts[1]
     assert result.status_code is None
+
+
+def test_prepare_hooks_receive_prior_context_updates(tmp_path: Path) -> None:
+    CapturePreparedContextHook.seen_context = {}
+    phase = GenericPhase(
+        _setup_loader(tmp_path),
+        hook_registry={
+            "PrepareHook": PrepareHook,
+            "CapturePreparedContextHook": CapturePreparedContextHook,
+        },
+    )
+
+    phase.execute(
+        skill_name="plan",
+        skill_invocation="/plan",
+        step_def={
+            "hooks": {"prepare_input": ["PrepareHook", "CapturePreparedContextHook"]},
+            "valid_intents": ["confirmed"],
+        },
+        context={"existing": "context"},
+        agent_executor=lambda prompt: "confirmed",
+    )
+
+    assert CapturePreparedContextHook.seen_context["existing"] == "context"
+    assert CapturePreparedContextHook.seen_context["who"] == "prepared"
 
 
 def test_execute_skips_publish_when_artifact_not_ready(tmp_path: Path) -> None:

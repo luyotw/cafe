@@ -123,6 +123,75 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
     )
 
 
+def test_alignment_checkpoint_gate_pauses_before_agent(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".cafe").mkdir(exist_ok=True)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "roadmap.md").write_text("roadmap", encoding="utf-8")
+    (tmp_path / ".cafe" / "strategic_context.yaml").write_text(
+        """
+version: 1
+documents:
+  roadmap:
+    path: docs/roadmap.md
+    status: exists
+mandate:
+  axes:
+    product_scope:
+      level: escalate
+      grounds: [roadmap]
+""",
+        encoding="utf-8",
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-align-hook"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "output_artifact": "code",
+                "allowed_tools": ["Read"],
+                "hooks": {"prepare_input": ["AlignmentCheckpointGate"]},
+                "alignment": {"affected_document_categories": ["roadmap"]},
+                "on": {"await_agent": "_done", "alignment_checkpoint": "develop"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+    agent_manager = FakeAgentManager("confirmed")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-align-hook",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+        step_user_inputs={"develop": "This changes roadmap scope."},
+    )
+
+    result = executor.execute_step("develop", playbook["steps"]["develop"], state)
+
+    assert result.status_code == "alignment_checkpoint"
+    assert agent_manager.prompts == []
+    assert (issue_dir / "develop" / "iteration_001" / "alignment_request.json").exists()
+    reloaded = BlackboardStore(issue_dir).load_or_create("develop")
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.intent == HandoffIntent.ALIGNMENT_CHECKPOINT
+    assert "code" not in reloaded.artifacts
+
+
 def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-1"

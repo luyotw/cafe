@@ -36,6 +36,7 @@ GOTO_PATTERN = re.compile(r"GOTO\s*:\s*([a-zA-Z0-9_-]+)")
 PAUSE_STATUS_CODES = {
     PhaseStatusCode.READY_FOR_REVIEW.value,
     PhaseStatusCode.CONFIRM_OUTPUT.value,
+    PhaseStatusCode.ALIGNMENT_CHECKPOINT.value,
     PhaseStatusCode.NEED_CLARIFICATION.value,
     PhaseStatusCode.NEED_PERMISSION.value,
 }
@@ -137,6 +138,8 @@ class BlackboardWorkflowRuntime:
             return HandoffIntent.CONFIRM_OUTPUT
         if status_code == PhaseStatusCode.NEED_CLARIFICATION.value:
             return HandoffIntent.NEED_CLARIFICATION
+        if status_code == PhaseStatusCode.ALIGNMENT_CHECKPOINT.value:
+            return HandoffIntent.ALIGNMENT_CHECKPOINT
         if status_code == PhaseStatusCode.NEED_PERMISSION.value:
             return HandoffIntent.NEED_PERMISSION
         return HandoffIntent.MANUAL_HANDOFF

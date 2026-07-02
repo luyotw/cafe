@@ -287,7 +287,7 @@ class GenericWorkflowStepExecutor(Phase):
 
         output_key = str(step_def.get("output_artifact", step_name))
         artifacts: Dict[str, str] = {}
-        if output_file.exists():
+        if execution.artifact_ready and output_file.exists():
             output_path = str(output_file)
             artifacts[output_key] = output_path
             self._write_artifact_record(
@@ -629,7 +629,8 @@ class GenericWorkflowStepExecutor(Phase):
         # 這條 playbook 實際可用的 to_step（= 所有 step 名 + 內建 user/done），
         # 與 baton 驗證器一致。注入 prompt 讓 agent 不會憑共用 skill 的範例（如 pr）
         # 猜出本 playbook 不存在的 step。
-        valid_to_steps = list(self.playbook.get("steps", {}).keys()) + ["user", "done"]
+        playbook = getattr(self, "playbook", {})
+        valid_to_steps = list(playbook.get("steps", {}).keys()) + ["user", "done"]
         # 本 step 依 intent 定義的下一步（含 _done → done 正規化），給 agent 明確指向。
         step_on = step_def.get("on", {}) if isinstance(step_def.get("on"), dict) else {}
         step_transitions = {
@@ -854,6 +855,8 @@ class GenericWorkflowStepExecutor(Phase):
             return "manual_handoff"
         if status_code == PhaseStatusCode.NEED_CLARIFICATION:
             return "need_clarification"
+        if status_code == PhaseStatusCode.ALIGNMENT_CHECKPOINT:
+            return "alignment_checkpoint"
         if status_code == PhaseStatusCode.NEED_PERMISSION:
             return "need_permission"
         if status_code == PhaseStatusCode.NO_CHANGES_NEEDED:
@@ -944,6 +947,7 @@ class GenericWorkflowStepExecutor(Phase):
         if not auto_continue and status_code.value in {
             PhaseStatusCode.READY_FOR_REVIEW.value,
             PhaseStatusCode.CONFIRM_OUTPUT.value,
+            PhaseStatusCode.ALIGNMENT_CHECKPOINT.value,
             PhaseStatusCode.NEED_CLARIFICATION.value,
             PhaseStatusCode.NEED_PERMISSION.value,
         }:
