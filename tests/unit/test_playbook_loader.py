@@ -162,6 +162,71 @@ steps:
     assert result.model.steps["brief"].chat_role == "writer"
 
 
+def test_load_supports_alignment_config(tmp_path: Path) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "develop")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "default",
+        """
+playbook:
+  id: default
+steps:
+  develop:
+    skill: develop
+    role: developer
+    alignment:
+      trigger_policy: policy
+      pause_threshold: 5
+      note_threshold: 2
+      affected_document_categories: [roadmap, positioning]
+      reuse_approved: true
+    on:
+      await_agent: _done
+      alignment_checkpoint: develop
+""",
+    )
+
+    result = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    ).load_model("default")
+
+    alignment = result.model.steps["develop"].alignment
+    assert alignment is not None
+    assert alignment.pause_threshold == 5
+    assert alignment.affected_document_categories == ["roadmap", "positioning"]
+
+
+def test_load_rejects_unknown_alignment_config_key(tmp_path: Path) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "develop")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "default",
+        """
+playbook:
+  id: default
+steps:
+  develop:
+    skill: develop
+    role: developer
+    alignment:
+      unknown: true
+    on:
+      await_agent: _done
+""",
+    )
+
+    with pytest.raises(ValueError, match="unknown"):
+        PlaybookLoader(
+            project_root=tmp_path / "project",
+            global_root=tmp_path / "global",
+            builtin_root=builtin_root,
+        ).load_model("default")
+
+
 def test_load_rejects_unknown_step_chat_role(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
     _write_skill(builtin_root / "skills", "brief_first")

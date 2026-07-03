@@ -727,6 +727,16 @@ def _handle_user_phase(
             summary=summary,
         )
 
+    if handoff_intent == HandoffIntent.ALIGNMENT_CHECKPOINT and from_step in playbook_data.get("steps", {}):
+        return _handle_alignment_checkpoint_handoff(
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+            store=store,
+            from_step=from_step,
+            summary=summary,
+        )
+
     if handoff_intent == HandoffIntent.NEED_CLARIFICATION and from_step in playbook_data.get("steps", {}):
         return _handle_clarification_handoff(
             issue_name=issue_name,
@@ -797,6 +807,350 @@ def _handle_develop_no_changes_needed_handoff(
     )
     console.print(f"[green]Resuming[/green] {from_step}")
     return from_step
+
+
+def parse_alignment_decision_payload(user_input: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Parse explicit non-interactive alignment decisions.
+
+    Plain text must not approve alignment checkpoints. Non-interactive callers
+    have to send JSON so approval is deliberate, for example
+    `{"decision":"approve"}` or `{"decision":"narrow","correction":"..."}`.
+    """
+    if not isinstance(user_input, str) or not user_input.strip():
+        return None
+    try:
+        payload = json.loads(user_input)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    decision = _normalize_alignment_decision(payload.get("decision"))
+    if not decision:
+        return None
+    parsed = dict(payload)
+    parsed["decision"] = decision
+    return parsed
+
+
+def apply_alignment_decision_from_payload(
+    *,
+    issue_dir: Path,
+    playbook_data: Dict[str, Any],
+    blackboard,
+    payload: Dict[str, Any],
+) -> Optional[str]:
+    """Apply a parsed non-interactive alignment decision payload."""
+    store = BlackboardStore(issue_dir)
+    contract = getattr(blackboard, "handoff_contract", None)
+    from_step = getattr(contract, "from_step", None) if contract else None
+    if not from_step or from_step not in playbook_data.get("steps", {}):
+        return None
+    request_payload, request_file = _load_latest_alignment_request(issue_dir, str(from_step))
+    return _apply_alignment_decision(
+        issue_dir=issue_dir,
+        playbook_data=playbook_data,
+        blackboard=blackboard,
+        store=store,
+        from_step=str(from_step),
+        request_payload=request_payload,
+        request_file=request_file,
+        decision=str(payload["decision"]),
+        correction=str(payload.get("correction") or payload.get("reason") or "").strip(),
+    )
+
+
+def _handle_alignment_checkpoint_handoff(
+    *,
+    issue_dir: Path,
+    playbook_data: Dict[str, Any],
+    blackboard,
+    store: BlackboardStore,
+    from_step: str,
+    summary: str,
+) -> Optional[str]:
+    """Handle alignment_checkpoint handoff with stable user decisions."""
+    console.print(f"[yellow]Alignment checkpoint requested[/yellow] step={from_step}")
+    if summary:
+        console.print(f"[dim]{summary}[/dim]")
+
+    request_payload, request_file = _load_latest_alignment_request(issue_dir, from_step)
+    if request_file is not None:
+        console.print(f"[dim]Request: {request_file}[/dim]")
+    if request_payload:
+        console.print()
+        console.print("[bold]Alignment summary[/bold]")
+        for key, label in (
+            ("interpreted_goal", "Goal"),
+            ("proposed_scope", "Scope"),
+            ("non_scope", "Non-scope"),
+            ("risk_level", "Risk"),
+            ("strategic_update_recommendation", "Strategic docs"),
+            ("decision_requested", "Decision"),
+        ):
+            value = request_payload.get(key)
+            if value:
+                console.print(f"  {label}: {value}")
+        affected = request_payload.get("affected_documents") or []
+        if affected:
+            names = [
+                f"{item.get('category')}:{item.get('status')}"
+                for item in affected
+                if isinstance(item, dict)
+            ]
+            console.print(f"  Affected docs: {', '.join(names)}")
+        console.print()
+
+    from cafe.ui.inquirer_prompts import prompt_list, prompt_multiline
+
+    choices = [
+        {"name": "Approve and continue", "value": "approve"},
+        {"name": "Narrow scope and continue", "value": "narrow_scope"},
+        {"name": "Revise specification", "value": "revise_spec"},
+        {"name": "Revise plan", "value": "revise_plan"},
+        {"name": "Update strategic documents first", "value": "update_strategic_documents_first"},
+        {"name": "Strategic documents updated", "value": "strategic_documents_updated"},
+        {"name": "Pause for manual decision", "value": "manual_pause"},
+        {"name": "Reject or defer", "value": "reject_or_defer"},
+    ]
+    decision = prompt_list("How should this alignment checkpoint continue?", choices, default="approve")
+    correction = ""
+    if decision in {"narrow_scope", "revise_spec", "revise_plan", "reject_or_defer", "manual_pause"}:
+        correction = prompt_multiline("Add context for this alignment decision", default="").strip()
+
+    return _apply_alignment_decision(
+        issue_dir=issue_dir,
+        playbook_data=playbook_data,
+        blackboard=blackboard,
+        store=store,
+        from_step=from_step,
+        request_payload=request_payload,
+        request_file=request_file,
+        decision=str(decision),
+        correction=correction,
+    )
+
+
+def _normalize_alignment_decision(raw: Any) -> Optional[str]:
+    normalized = str(raw or "").strip().lower().replace("-", "_")
+    aliases = {
+        "approve": "approve",
+        "continue": "approve",
+        "approve_and_continue": "approve",
+        "narrow": "narrow_scope",
+        "narrow_scope": "narrow_scope",
+        "revise_spec": "revise_spec",
+        "spec": "revise_spec",
+        "revise_plan": "revise_plan",
+        "plan": "revise_plan",
+        "update_docs": "update_strategic_documents_first",
+        "update_documents": "update_strategic_documents_first",
+        "update_strategic_documents_first": "update_strategic_documents_first",
+        "docs_updated": "strategic_documents_updated",
+        "strategic_documents_updated": "strategic_documents_updated",
+        "pause": "manual_pause",
+        "manual_pause": "manual_pause",
+        "reject": "reject_or_defer",
+        "defer": "reject_or_defer",
+        "reject_or_defer": "reject_or_defer",
+    }
+    return aliases.get(normalized)
+
+
+def _load_latest_alignment_request(issue_dir: Path, from_step: str) -> tuple[Dict[str, Any], Optional[Path]]:
+    step_dir = issue_dir / from_step
+    candidates = sorted(step_dir.glob("iteration_*/alignment_request.json")) if step_dir.exists() else []
+    for request_file in reversed(candidates):
+        try:
+            data = json.loads(request_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if isinstance(data, dict):
+            return data, request_file
+    return {}, None
+
+
+def _apply_alignment_decision(
+    *,
+    issue_dir: Path,
+    playbook_data: Dict[str, Any],
+    blackboard,
+    store: BlackboardStore,
+    from_step: str,
+    request_payload: Dict[str, Any],
+    request_file: Optional[Path],
+    decision: str,
+    correction: str = "",
+) -> Optional[str]:
+    decision = _normalize_alignment_decision(decision) or decision
+    fingerprint = str(request_payload.get("fingerprint") or "")
+    requirements = request_payload.get("strategic_document_update_requirements") or []
+
+    if decision == "approve" and requirements:
+        console.print("[yellow]Strategic document updates are required before approval can resume execution.[/yellow]")
+        store.record_event(
+            blackboard,
+            "alignment_decision_blocked",
+            {"step": from_step, "decision": decision, "fingerprint": fingerprint, "reason": "required_document_update"},
+        )
+        return None
+
+    if decision == "strategic_documents_updated":
+        if not _alignment_documents_changed(issue_dir, requirements):
+            console.print("[yellow]No affected strategic document change was detected; workflow remains paused.[/yellow]")
+            store.record_event(
+                blackboard,
+                "alignment_decision_blocked",
+                {"step": from_step, "decision": decision, "fingerprint": fingerprint, "reason": "document_hash_unchanged"},
+            )
+            return None
+        decision = "approve"
+
+    if decision == "update_strategic_documents_first":
+        store.set_current_step(blackboard, "user")
+        store.set_handoff_summary(blackboard, f"Waiting for strategic document updates before {from_step}")
+        store.update_handoff_contract(
+            blackboard,
+            from_step=from_step,
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
+            status_code="alignment_checkpoint",
+            source="user.alignment_update_docs_first",
+        )
+        store.record_event(
+            blackboard,
+            "alignment_decision",
+            {
+                "step": from_step,
+                "decision": decision,
+                "fingerprint": fingerprint,
+                "unblocks_execution": False,
+                "requirements": requirements,
+            },
+        )
+        console.print("[yellow]Workflow remains paused for strategic document updates.[/yellow]")
+        return None
+
+    if decision in {"manual_pause", "reject_or_defer"}:
+        store.set_current_step(blackboard, "user")
+        store.set_handoff_summary(blackboard, correction or f"Alignment decision: {decision}")
+        store.update_handoff_contract(
+            blackboard,
+            from_step=from_step,
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
+            status_code="alignment_checkpoint",
+            source=f"user.alignment_{decision}",
+        )
+        store.record_event(
+            blackboard,
+            "alignment_decision",
+            {
+                "step": from_step,
+                "decision": decision,
+                "fingerprint": fingerprint,
+                "correction": correction,
+                "unblocks_execution": False,
+            },
+        )
+        console.print("[yellow]Workflow remains paused.[/yellow]")
+        return None
+
+    target_step = from_step
+    if decision == "revise_spec":
+        target_step = "spec" if "spec" in playbook_data.get("steps", {}) else from_step
+    elif decision == "revise_plan":
+        target_step = "plan" if "plan" in playbook_data.get("steps", {}) else from_step
+
+    if decision == "narrow_scope":
+        correction = correction or "Narrow scope according to the alignment checkpoint decision."
+        _write_alignment_user_input(issue_dir=issue_dir, step_name=from_step, request_file=request_file, text=correction)
+    elif decision in {"revise_spec", "revise_plan"}:
+        _write_next_iteration_user_input(issue_dir=issue_dir, step_name=target_step, text=correction or f"Revise due to alignment decision from {from_step}.")
+
+    store.set_current_step(blackboard, target_step)
+    store.set_handoff_summary(blackboard, correction or f"Alignment decision '{decision}' for {from_step}")
+    store.update_handoff_contract(
+        blackboard,
+        from_step=from_step,
+        to_owner=HandoffOwner.AGENT,
+        to_step=target_step,
+        intent=HandoffIntent.AWAIT_AGENT,
+        status_code="",
+        source=f"user.alignment_{decision}",
+    )
+    store.record_event(
+        blackboard,
+        "alignment_decision",
+        {
+            "step": from_step,
+            "decision": decision,
+            "target_step": target_step,
+            "fingerprint": fingerprint,
+            "correction": correction,
+            "unblocks_execution": True,
+        },
+    )
+    console.print(f"[green]Alignment decision recorded[/green] {decision} -> {target_step}")
+    return target_step
+
+
+def _alignment_documents_changed(issue_dir: Path, requirements: Any) -> bool:
+    if not isinstance(requirements, list) or not requirements:
+        return True
+    from cafe.core.strategic_context import load_strategic_context
+
+    project_root, issue_name = _resolve_issue_context_root(issue_dir)
+    context = load_strategic_context(project_root, issue_name=issue_name)
+    for item in requirements:
+        if not isinstance(item, dict):
+            continue
+        category = str(item.get("category") or "")
+        if not category:
+            continue
+        previous_hash = item.get("current_sha256")
+        current = context.document(category)
+        if current.sha256 and current.sha256 != previous_hash:
+            return True
+    return False
+
+
+def _resolve_issue_context_root(issue_dir: Path) -> tuple[Path, str]:
+    resolved = issue_dir.resolve()
+    for parent in resolved.parents:
+        if parent.name == "issues" and parent.parent.name == ".cafe":
+            return parent.parent.parent, resolved.relative_to(parent).as_posix()
+    for parent in resolved.parents:
+        if parent.name == ".cafe":
+            return parent.parent, resolved.name
+    return issue_dir.parent.parent.parent, issue_dir.name
+
+
+def _write_alignment_user_input(*, issue_dir: Path, step_name: str, request_file: Optional[Path], text: str) -> None:
+    if request_file is not None:
+        target_dir = request_file.parent
+    else:
+        target_dir = _latest_or_next_iteration_dir(issue_dir=issue_dir, step_name=step_name)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    (target_dir / "user_input.md").write_text(text, encoding="utf-8")
+
+
+def _write_next_iteration_user_input(*, issue_dir: Path, step_name: str, text: str) -> None:
+    step_dir = issue_dir / step_name
+    iteration_dirs = sorted(step_dir.glob("iteration_*")) if step_dir.exists() else []
+    next_iter = len(iteration_dirs) + 1
+    target_dir = step_dir / f"iteration_{next_iter:03d}"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    (target_dir / "user_input.md").write_text(text, encoding="utf-8")
+
+
+def _latest_or_next_iteration_dir(*, issue_dir: Path, step_name: str) -> Path:
+    step_dir = issue_dir / step_name
+    iteration_dirs = sorted(step_dir.glob("iteration_*")) if step_dir.exists() else []
+    if iteration_dirs:
+        return iteration_dirs[-1]
+    return step_dir / "iteration_001"
 
 
 def _handle_clarification_handoff(

@@ -43,6 +43,7 @@ class HandoffIntent(str, Enum):
 
     AWAIT_AGENT = "await_agent"
     CONFIRM_OUTPUT = "confirm_output"
+    ALIGNMENT_CHECKPOINT = "alignment_checkpoint"
     NEED_CLARIFICATION = "need_clarification"
     NEED_PERMISSION = "need_permission"
     NO_CHANGES_NEEDED = "no_changes_needed"
@@ -240,6 +241,11 @@ class HandoffContract:
 
         if self.intent == HandoffIntent.CONFIRM_OUTPUT and self.from_step not in allowed_steps:
             raise ValueError("intent=confirm_output is only valid when from_step is a playbook step")
+        if self.intent == HandoffIntent.ALIGNMENT_CHECKPOINT:
+            if self.to_owner != HandoffOwner.USER or self.to_step != "user":
+                raise ValueError("intent=alignment_checkpoint must be user-owned and target to_step=user")
+            if self.from_step not in allowed_steps:
+                raise ValueError("intent=alignment_checkpoint is only valid when from_step is a playbook step")
 
 
 @dataclass
