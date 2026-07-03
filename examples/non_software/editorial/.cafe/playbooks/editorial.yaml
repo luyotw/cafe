@@ -15,8 +15,8 @@ roles:
 steps:
   brief:
     skill:
-      "1": brief_first
-      default: brief_revise
+      "1": cafe-brief_first
+      default: cafe-brief_revise
     role: editor
     output_artifact: brief
     valid_intents:
@@ -29,7 +29,7 @@ steps:
       confirm_output: brief
 
   draft:
-    skill: draft
+    skill: cafe-draft
     role: writer
     input_artifacts: [brief]
     output_artifact: manuscript
@@ -41,7 +41,7 @@ steps:
       need_clarification: draft
 
   review:
-    skill: editorial_review
+    skill: cafe-editorial_review
     role: editor
     input_artifacts: [brief, manuscript]
     output_artifact: review_feedback
@@ -54,7 +54,7 @@ steps:
       manual_handoff: draft
 
   publish:
-    skill: publish
+    skill: cafe-publish
     role: writer
     input_artifacts: [brief, manuscript, review_feedback]
     output_artifact: published_piece
