@@ -68,7 +68,7 @@ exit 1
 
 
 def _run_sync_pr(project_root: Path, output_file: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    script = project_root / "src/cafe/data/skills/pr/scripts/sync_pr.sh"
+    script = project_root / "src/cafe/data/skills/cafe-pr/scripts/sync_pr.sh"
     return subprocess.run(
         ["/bin/bash", str(script), "--output", str(output_file), "--base", "main"],
         capture_output=True,

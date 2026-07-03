@@ -31,6 +31,7 @@ from cafe.core.resume_user_input import (
     prior_cli_and_session,
     resolve_resume_user_input,
 )
+from cafe.skills.loader import canonical_skill_name
 from cafe.skills.checklist_composer import (
     generate_develop_checklist,
     generate_plan_checklist,
@@ -87,7 +88,7 @@ def align_pr_baton_after_execution(
 class GenericWorkflowStepExecutor(Phase):
     """Execute one playbook step without shelling out to legacy CLI commands."""
 
-    SHARED_WORKFLOW_SKILLS = ["workflow-common", "github_sync"]
+    SHARED_WORKFLOW_SKILLS = ["cafe-workflow-common", "cafe-github_sync"]
 
     def __init__(
         self,
@@ -676,7 +677,7 @@ class GenericWorkflowStepExecutor(Phase):
             if pr_feedback:
                 context["feedback_file"] = self._display_path(Path(pr_feedback.path))
 
-        if self._resolve_skill_name(step_def, self.iteration) == "pr":
+        if canonical_skill_name(self._resolve_skill_name(step_def, self.iteration)) == "cafe-pr":
             base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
             resolved_base = str(base_branch or self.git_ops.get_default_base_branch())
             context["base_branch"] = resolved_base
@@ -708,7 +709,8 @@ class GenericWorkflowStepExecutor(Phase):
             or self._artifact_path(blackboard_state, "pr_result")
         )
 
-        if skill_name in {"spec", "spec_first", "spec_revise"}:
+        skill_name = canonical_skill_name(skill_name)
+        if skill_name == "cafe-spec":
             prev_spec = None
             if self.iteration > 1:
                 prev_spec_file = self._get_versioned_file_path(step_name, self.iteration - 1, self.phase_dir)
@@ -723,7 +725,7 @@ class GenericWorkflowStepExecutor(Phase):
             )
             return
 
-        if skill_name == "plan":
+        if skill_name == "cafe-plan":
             if not spec_path:
                 raise ValueError("Plan step requires spec artifact")
             prev_plan = None
@@ -741,7 +743,7 @@ class GenericWorkflowStepExecutor(Phase):
             )
             return
 
-        if skill_name == "develop":
+        if skill_name == "cafe-develop":
             if not spec_path or not plan_path:
                 raise ValueError("Develop step requires spec and plan artifacts")
             generate_develop_checklist(
@@ -757,7 +759,7 @@ class GenericWorkflowStepExecutor(Phase):
             )
             return
 
-        if skill_name == "review":
+        if skill_name == "cafe-review":
             if not spec_path:
                 raise ValueError("Review step requires spec artifact")
             base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
@@ -771,7 +773,7 @@ class GenericWorkflowStepExecutor(Phase):
             )
             return
 
-        if skill_name == "pr":
+        if skill_name == "cafe-pr":
             if not spec_path or not plan_path:
                 raise ValueError("PR step requires spec and plan artifacts")
             prev_pr = None

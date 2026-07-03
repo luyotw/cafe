@@ -27,11 +27,11 @@ def test_editorial_example_skills_and_playbook_validate() -> None:
     playbook = PlaybookLoader(project_root=example_root).load_model("editorial").model
 
     assert {item.name for item in skills} >= {
-        "brief_first",
-        "brief_revise",
-        "draft",
-        "editorial_review",
-        "publish",
+        "cafe-brief_first",
+        "cafe-brief_revise",
+        "cafe-draft",
+        "cafe-editorial_review",
+        "cafe-publish",
     }
     assert playbook.entry_point == "brief"
     assert list(playbook.steps.keys()) == ["brief", "draft", "review", "publish"]

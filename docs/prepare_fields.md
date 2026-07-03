@@ -115,7 +115,7 @@ Playbook-relative additional rules:
 
 The built-in default playbook references:
 
-`src/cafe/data/skills/spec/assets/prepare/default_prepare_fields.yaml`
+`src/cafe/data/skills/cafe-spec/assets/prepare/default_prepare_fields.yaml`
 
 That asset fully describes the current default prepare flow, including setup mode selection, quick/custom branches, GitHub-only prompts, and sync/PR defaults. Legacy `commands.prepare` remains on `src/cafe/data/playbooks/default.yaml` for runtime behavior and parity validation.
 

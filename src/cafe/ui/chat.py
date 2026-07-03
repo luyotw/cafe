@@ -17,10 +17,10 @@ from cafe.utils.crew import CrewManager, normalize_role_config
 
 
 CHAT_SKILL_NAMES = [
-    "common-chat-handoff",
-    "chat-develop-change",
-    "chat-spec-revision",
-    "chat-plan-revision",
+    "cafe-common-chat-handoff",
+    "cafe-chat-develop-change",
+    "cafe-chat-spec-revision",
+    "cafe-chat-plan-revision",
 ]
 
 CURSOR_NATIVE_MODULE_HINT = "@anysphere/file-service-"

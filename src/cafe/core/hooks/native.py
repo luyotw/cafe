@@ -743,7 +743,7 @@ class GitHubPRCreator(NoOpHook):
     """Prepare generic PR iterations for GitHub mode and sync PR metadata."""
 
     name = "GitHubPRCreator"
-    TRUSTED_PR_SCRIPT = "src/cafe/data/skills/pr/scripts/sync_pr.sh"
+    TRUSTED_PR_SCRIPT = "src/cafe/data/skills/cafe-pr/scripts/sync_pr.sh"
 
     def run(self, **kwargs: Any) -> HookResult:
         stage = kwargs.get("stage")
@@ -952,7 +952,7 @@ class GitHubPRCreator(NoOpHook):
     @staticmethod
     def _resolve_sync_script(repo_root: Path) -> Path:
         loader = SkillLoader(project_root=repo_root)
-        skill_dir = loader.get_skill_dir("pr")
+        skill_dir = loader.get_skill_dir("cafe-pr")
         script_path = skill_dir / "scripts" / "sync_pr.sh"
         if script_path.exists():
             return script_path
@@ -961,7 +961,7 @@ class GitHubPRCreator(NoOpHook):
             Path(__file__).resolve().parents[2]
             / "data"
             / "skills"
-            / "pr"
+            / "cafe-pr"
             / "scripts"
             / "sync_pr.sh"
         )

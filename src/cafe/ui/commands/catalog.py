@@ -12,7 +12,7 @@ from rich.console import Console
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook, format_dot, format_text_report
 from cafe.skills.importer import SkillImportSummary, import_skills, preview_importable_skills
-from cafe.skills.loader import SkillLoader
+from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.skills.remover import SkillRemoveSummary, remove_skills
 from cafe.ui.inquirer_prompts import prompt_checkbox, prompt_confirm  # noqa: F401 — kept for type resolution; actual calls go through cli for test-patch compat
 
@@ -160,7 +160,7 @@ def skill_show(
         loader = _build_skill_loader()
         items = {item.name: item for item in loader.discover()}
         body = loader.activate(name)
-        item = items[name]
+        item = items.get(name) or items[canonical_skill_name(name)]
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)

@@ -24,7 +24,7 @@ playbook:
   id: custom
 steps:
   qa:
-    skill: review
+    skill: cafe-review
     role: reviewer
     valid_intents: [confirmed]
     on:

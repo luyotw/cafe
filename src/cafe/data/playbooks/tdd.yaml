@@ -51,7 +51,7 @@ commands:
 steps:
   spec:
     type: skill
-    skill: spec
+    skill: cafe-spec
     role: pm
     handoff_label: "Update requirements spec"
     chat_role: pm
@@ -70,7 +70,7 @@ steps:
 
   plan:
     type: skill
-    skill: plan
+    skill: cafe-plan
     role: developer
     handoff_label: "Revise implementation plan"
     chat_role: developer
@@ -104,7 +104,7 @@ steps:
 
   develop:
     type: skill
-    skill: develop
+    skill: cafe-develop
     role: developer
     handoff_label: "Continue implementation"
     chat_role: developer
@@ -124,7 +124,7 @@ steps:
 
   review:
     type: skill
-    skill: review
+    skill: cafe-review
     role: reviewer
     handoff_label: "Run review again"
     chat_role: reviewer
@@ -144,7 +144,7 @@ steps:
 
   pr:
     type: skill
-    skill: pr
+    skill: cafe-pr
     role: developer
     handoff_label: "Refresh PR output"
     chat_role: developer

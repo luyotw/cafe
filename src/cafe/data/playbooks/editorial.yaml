@@ -16,8 +16,8 @@ steps:
   brief:
     type: skill
     skill:
-      "1": brief_first
-      default: brief_revise
+      "1": cafe-brief_first
+      default: cafe-brief_revise
     role: editor
     handoff_label: "Revise editorial brief"
     chat_role: editor
@@ -35,7 +35,7 @@ steps:
 
   draft:
     type: skill
-    skill: draft
+    skill: cafe-draft
     role: writer
     handoff_label: "Continue manuscript draft"
     chat_role: writer
@@ -62,7 +62,7 @@ steps:
 
   review:
     type: skill
-    skill: editorial_review
+    skill: cafe-editorial_review
     role: editor
     handoff_label: "Run editorial review"
     chat_role: editor
@@ -80,7 +80,7 @@ steps:
 
   publish:
     type: skill
-    skill: publish
+    skill: cafe-publish
     role: writer
     handoff_label: "Prepare publication output"
     chat_role: writer

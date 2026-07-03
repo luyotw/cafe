@@ -14,7 +14,7 @@ BRITTLE_KEYWORDS = (
 
 
 def _assert_develop_steps_include_test_policy(reference_name: str) -> None:
-    content = load_skill_reference("develop", reference_name)
+    content = load_skill_reference("cafe-develop", reference_name)
     lower = content.lower()
     assert any(kw.lower() in lower for kw in TEST_LIST_KEYWORDS), (
         f"develop/{reference_name} must mention plan Test List"

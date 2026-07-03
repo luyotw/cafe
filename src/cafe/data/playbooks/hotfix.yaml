@@ -47,7 +47,7 @@ commands:
 steps:
   develop:
     type: skill
-    skill: develop
+    skill: cafe-develop
     role: developer
     assignee_type: agent
     input_artifacts: []
@@ -64,7 +64,7 @@ steps:
 
   review:
     type: skill
-    skill: review
+    skill: cafe-review
     role: reviewer
     assignee_type: agent
     input_artifacts: [code]
@@ -82,7 +82,7 @@ steps:
 
   pr:
     type: skill
-    skill: pr
+    skill: cafe-pr
     role: developer
     assignee_type: agent
     input_artifacts: [code, review_feedback]

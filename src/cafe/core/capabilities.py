@@ -115,11 +115,11 @@ def resolve_repo_relative_path(*, repo_root: Path, raw_path: str, field_name: st
 def resolve_sync_pr_script(repo_root: Path) -> Path:
     """Resolve packaged ``sync_pr.sh`` (same search order as GitHubPRCreator)."""
     loader = SkillLoader(project_root=repo_root)
-    skill_dir = loader.get_skill_dir("pr")
+    skill_dir = loader.get_skill_dir("cafe-pr")
     script_path = skill_dir / "scripts" / "sync_pr.sh"
     if script_path.exists():
         return script_path
-    fallback = Path(__file__).resolve().parents[1] / "data" / "skills" / "pr" / "scripts" / "sync_pr.sh"
+    fallback = Path(__file__).resolve().parents[1] / "data" / "skills" / "cafe-pr" / "scripts" / "sync_pr.sh"
     if fallback.exists():
         return fallback
     raise FileNotFoundError(f"PR sync script not found: {script_path}")

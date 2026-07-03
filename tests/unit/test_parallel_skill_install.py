@@ -8,10 +8,10 @@ from cafe.skills.native_bridge import NativeSkillBridge
 
 
 def _write_plan_skill(root: Path, body: str) -> None:
-    skill_dir = root / "plan"
+    skill_dir = root / "cafe-plan"
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(
-        f"---\nname: plan\ndescription: test plan\n---\n\n{body}\n",
+        f"---\nname: cafe-plan\ndescription: test plan\n---\n\n{body}\n",
         encoding="utf-8",
     )
 
@@ -52,8 +52,8 @@ def test_parallel_workflow_skill_installs_use_isolated_project_roots(tmp_path: P
         tmp_path, project_root=project_b, global_root=global_root, home_dir=home_dir
     )
 
-    bridge_a.install_skill("plan", AgentCLI.CODEX)
-    bridge_b.install_skill("plan", AgentCLI.CODEX)
+    bridge_a.install_skill("cafe-plan", AgentCLI.CODEX)
+    bridge_b.install_skill("cafe-plan", AgentCLI.CODEX)
 
     installed_a = project_a / ".codex" / "skills" / "cafe-plan" / "SKILL.md"
     installed_b = project_b / ".codex" / "skills" / "cafe-plan" / "SKILL.md"
@@ -84,7 +84,7 @@ def test_parallel_workflow_installs_do_not_write_global_home_skills(tmp_path: Pa
     bridge = _bridge_for_project(
         tmp_path, project_root=project_root, global_root=global_root, home_dir=home_dir
     )
-    bridge.install_skill("plan", AgentCLI.CODEX)
+    bridge.install_skill("cafe-plan", AgentCLI.CODEX)
 
     project_installed = project_root / ".codex" / "skills" / "cafe-plan" / "SKILL.md"
     assert project_installed.exists()

@@ -260,7 +260,7 @@ def test_builtin_default_playbook_prepare_parity() -> None:
     resolved = resolve_prepare_config(loader.load_model("default").model)
 
     assert _legacy_prepare_dump(resolved) == _expected_standard_prepare()
-    assert resolved.fields_ref == "skill://spec/assets/prepare/default_prepare_fields.yaml"
+    assert resolved.fields_ref == "skill://cafe-spec/assets/prepare/default_prepare_fields.yaml"
 
 
 def test_builtin_simple_and_tdd_match_default_prepare() -> None:

@@ -11,7 +11,7 @@ roles:
 steps:
   question:
     type: skill
-    skill: research_question
+    skill: cafe-research_question
     role: researcher
     handoff_label: "Refine research question"
     chat_role: researcher
@@ -27,7 +27,7 @@ steps:
 
   collect:
     type: skill
-    skill: research_collect
+    skill: cafe-research_collect
     role: researcher
     handoff_label: "Continue evidence collection"
     chat_role: researcher
@@ -45,7 +45,7 @@ steps:
 
   synthesize:
     type: skill
-    skill: research_synthesize
+    skill: cafe-research_synthesize
     role: researcher
     handoff_label: "Revise research synthesis"
     chat_role: researcher
@@ -63,7 +63,7 @@ steps:
 
   report:
     type: skill
-    skill: research_report
+    skill: cafe-research_report
     role: researcher
     handoff_label: "Update research report"
     chat_role: researcher

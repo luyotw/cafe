@@ -335,10 +335,10 @@ def test_prepare_chat_environment_installs_chat_skills_only() -> None:
 
     installed = [call.args[0] for call in mock_install.call_args_list]
     assert installed == [
-        "common-chat-handoff",
-        "chat-develop-change",
-        "chat-spec-revision",
-        "chat-plan-revision",
+        "cafe-common-chat-handoff",
+        "cafe-chat-develop-change",
+        "cafe-chat-spec-revision",
+        "cafe-chat-plan-revision",
     ]
 
 

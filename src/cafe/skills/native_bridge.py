@@ -28,8 +28,6 @@ class SkillValidationResult:
 class NativeSkillBridge:
     """Bridge resolved CAFE skills into each CLI's native skill directory."""
 
-    SKILL_NAME_PREFIX = "cafe-"
-
     CLI_PREFIXES = {
         AgentCLI.CODEX: "$",
         AgentCLI.CLAUDE: "/",
@@ -66,8 +64,17 @@ class NativeSkillBridge:
         return self.home_dir / self.CLI_SKILL_DIRS[cli]
 
     def get_installed_skill_name(self, name: str) -> str:
-        """Return the installed skill folder/invocation name."""
-        return f"{self.SKILL_NAME_PREFIX}{name}"
+        """Return the installed skill folder/invocation name.
+
+        Skills install verbatim under their resolved catalog folder name.
+        Builtin workflow skills already carry the ``cafe-`` prefix in their
+        folder names, so no rename happens at copy time; deprecated aliases
+        (e.g. ``spec``) resolve to the prefixed folder.
+        """
+        try:
+            return self.skill_loader.get_skill_dir(name).name
+        except (SkillDiscoveryError, FileNotFoundError):
+            return name
 
     def install_skill(self, name: str, cli: AgentCLI) -> Path:
         """Install one resolved skill into the project-local CLI-native directory.

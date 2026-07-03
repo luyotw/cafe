@@ -59,13 +59,13 @@ playbook:
 steps:
   spec:
     type: skill
-    skill: spec
+    skill: cafe-spec
     role: pm
     "on":
       await_agent: plan
   plan:
     type: skill
-    skill: plan
+    skill: cafe-plan
     role: developer
     "on":
       await_agent: _done

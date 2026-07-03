@@ -3,7 +3,7 @@
 from pathlib import Path
 
 POLICY_PATH = Path(
-    "src/cafe/data/skills/plan/references/test_invariants_policy.md"
+    "src/cafe/data/skills/cafe-plan/references/test_invariants_policy.md"
 )
 
 

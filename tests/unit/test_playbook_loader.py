@@ -127,7 +127,7 @@ steps:
 
 def test_load_supports_step_handoff_label_and_chat_role(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
-    _write_skill(builtin_root / "skills", "brief_first")
+    _write_skill(builtin_root / "skills", "cafe-brief_first")
     _write_playbook(
         builtin_root / "playbooks",
         "editorial",
@@ -141,7 +141,7 @@ roles:
     description: writer
 steps:
   brief:
-    skill: brief_first
+    skill: cafe-brief_first
     role: editor
     handoff_label: Refine editorial brief
     chat_role: writer
@@ -164,7 +164,7 @@ steps:
 
 def test_load_supports_alignment_config(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
-    _write_skill(builtin_root / "skills", "develop")
+    _write_skill(builtin_root / "skills", "cafe-develop")
     _write_playbook(
         builtin_root / "playbooks",
         "default",
@@ -173,7 +173,7 @@ playbook:
   id: default
 steps:
   develop:
-    skill: develop
+    skill: cafe-develop
     role: developer
     alignment:
       trigger_policy: policy
@@ -201,7 +201,7 @@ steps:
 
 def test_load_rejects_unknown_alignment_config_key(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
-    _write_skill(builtin_root / "skills", "develop")
+    _write_skill(builtin_root / "skills", "cafe-develop")
     _write_playbook(
         builtin_root / "playbooks",
         "default",
@@ -210,7 +210,7 @@ playbook:
   id: default
 steps:
   develop:
-    skill: develop
+    skill: cafe-develop
     role: developer
     alignment:
       unknown: true
@@ -229,7 +229,7 @@ steps:
 
 def test_load_rejects_unknown_step_chat_role(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
-    _write_skill(builtin_root / "skills", "brief_first")
+    _write_skill(builtin_root / "skills", "cafe-brief_first")
     _write_playbook(
         builtin_root / "playbooks",
         "editorial",
@@ -241,7 +241,7 @@ roles:
     description: editor
 steps:
   brief:
-    skill: brief_first
+    skill: cafe-brief_first
     role: editor
     chat_role: writer
     valid_intents: [confirmed]
@@ -262,7 +262,7 @@ steps:
 
 def test_load_supports_dictionary_script_hook_declarations(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
-    _write_skill(builtin_root / "skills", "plan")
+    _write_skill(builtin_root / "skills", "cafe-plan")
     _write_playbook(
         builtin_root / "playbooks",
         "default",
@@ -274,7 +274,7 @@ roles:
     description: dev
 steps:
   plan:
-    skill: plan
+    skill: cafe-plan
     role: developer
     hooks:
       after_execute:
@@ -314,7 +314,7 @@ steps:
 
 def test_load_rejects_script_hook_dict_in_unsupported_stage(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
-    _write_skill(builtin_root / "skills", "pr")
+    _write_skill(builtin_root / "skills", "cafe-pr")
     _write_playbook(
         builtin_root / "playbooks",
         "default",
@@ -326,7 +326,7 @@ roles:
     description: dev
 steps:
   pr:
-    skill: pr
+    skill: cafe-pr
     role: developer
     hooks:
       publish_output:
@@ -375,7 +375,7 @@ steps:
 
 def test_load_invalid_allowed_goto_raises(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
-    _write_skill(builtin_root / "skills", "develop")
+    _write_skill(builtin_root / "skills", "cafe-develop")
     _write_playbook(
         builtin_root / "playbooks",
         "bad",
@@ -384,7 +384,7 @@ playbook: {id: bad}
 steps:
   develop:
     role: developer
-    skill: develop
+    skill: cafe-develop
     valid_intents: [confirmed]
     allowed_goto: [review]
     on:
@@ -403,7 +403,7 @@ steps:
 
 def test_load_invalid_transition_raises(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
-    _write_skill(builtin_root / "skills", "review")
+    _write_skill(builtin_root / "skills", "cafe-review")
     _write_playbook(
         builtin_root / "playbooks",
         "bad",
@@ -412,7 +412,7 @@ playbook: {id: bad}
 steps:
   review:
     role: reviewer
-    skill: review
+    skill: cafe-review
     valid_intents: [confirmed]
     on:
       await_agent: not_exist
@@ -431,7 +431,7 @@ steps:
 def test_custom_playbook_reports_redundant_tool_warning(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
     project_root = tmp_path / "project"
-    _write_skill(builtin_root / "skills", "develop")
+    _write_skill(builtin_root / "skills", "cafe-develop")
     _write_playbook(
         project_root / ".cafe" / "playbooks",
         "custom",
@@ -440,7 +440,7 @@ playbook: {id: custom}
 steps:
   develop:
     role: developer
-    skill: develop
+    skill: cafe-develop
     allowed_tools: [Bash, "Bash(git:*)"]
     valid_intents: [confirmed]
     on:
@@ -461,7 +461,7 @@ steps:
 def test_strict_mode_upgrades_custom_warning_to_error(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
     project_root = tmp_path / "project"
-    _write_skill(builtin_root / "skills", "develop")
+    _write_skill(builtin_root / "skills", "cafe-develop")
     _write_playbook(
         project_root / ".cafe" / "playbooks",
         "custom",
@@ -470,7 +470,7 @@ playbook: {id: custom}
 steps:
   develop:
     role: developer
-    skill: develop
+    skill: cafe-develop
     allowed_tools: [Bash, "Bash(git:*)"]
     valid_intents: [confirmed]
     on:

@@ -82,7 +82,7 @@ def test_builtin_catalog_includes_pr_skill(tmp_path: Path) -> None:
 
     items = loader.discover()
 
-    assert any(item.name == "pr" and item.source == "builtin" for item in items)
+    assert any(item.name == "cafe-pr" and item.source == "builtin" for item in items)
 
 
 def test_imported_project_skill_is_discovered_with_project_precedence(tmp_path: Path) -> None:
@@ -120,10 +120,10 @@ def test_builtin_catalog_includes_chat_handoff_skills(tmp_path: Path) -> None:
     names = {item.name for item in items if item.source == "builtin"}
 
     assert {
-        "common-chat-handoff",
-        "chat-develop-change",
-        "chat-spec-revision",
-        "chat-plan-revision",
+        "cafe-common-chat-handoff",
+        "cafe-chat-develop-change",
+        "cafe-chat-spec-revision",
+        "cafe-chat-plan-revision",
     }.issubset(names)
 
 
@@ -209,11 +209,11 @@ def test_install_skill_uses_project_version_over_global(tmp_path: Path) -> None:
     """When a project skill overrides a global skill, install_skill uses the project version."""
     global_root = tmp_path / "global" / "skills"
     project = tmp_path / "project" / ".cafe" / "skills"
-    _write_skill(global_root, "plan")
-    project_skill_dir = project / "plan"
+    _write_skill(global_root, "cafe-plan")
+    project_skill_dir = project / "cafe-plan"
     project_skill_dir.mkdir(parents=True, exist_ok=True)
     (project_skill_dir / "SKILL.md").write_text(
-        "---\nname: plan\ndescription: project plan\n---\n\nProject version\n",
+        "---\nname: cafe-plan\ndescription: project plan\n---\n\nProject version\n",
         encoding="utf-8",
     )
 
@@ -228,7 +228,7 @@ def test_install_skill_uses_project_version_over_global(tmp_path: Path) -> None:
         project_root=tmp_path / "project",
         home_dir=tmp_path / "home",
     )
-    bridge.install_skill("plan", AgentCLI.CLAUDE)
+    bridge.install_skill("cafe-plan", AgentCLI.CLAUDE)
 
     installed = tmp_path / "project" / ".claude" / "skills" / "cafe-plan" / "SKILL.md"
     assert "Project version" in installed.read_text(encoding="utf-8")
@@ -236,7 +236,7 @@ def test_install_skill_uses_project_version_over_global(tmp_path: Path) -> None:
 
 def test_install_skill_recovers_when_skills_root_is_file(tmp_path: Path) -> None:
     global_root = tmp_path / "global" / "skills"
-    _write_skill(global_root, "plan")
+    _write_skill(global_root, "cafe-plan")
     project_root = tmp_path / "project"
     bad_root = project_root / ".copilot" / "skills"
     bad_root.parent.mkdir(parents=True, exist_ok=True)
@@ -250,14 +250,14 @@ def test_install_skill_recovers_when_skills_root_is_file(tmp_path: Path) -> None
     loader.discover()
     bridge = NativeSkillBridge(loader, project_root=project_root, home_dir=tmp_path / "home")
 
-    installed = bridge.install_skill("plan", AgentCLI.COPILOT)
+    installed = bridge.install_skill("cafe-plan", AgentCLI.COPILOT)
     assert installed.exists()
     assert bad_root.is_dir()
 
 
 def test_install_skill_recovers_when_skills_root_is_broken_symlink(tmp_path: Path) -> None:
     global_root = tmp_path / "global" / "skills"
-    _write_skill(global_root, "plan")
+    _write_skill(global_root, "cafe-plan")
     project_root = tmp_path / "project"
     bad_root = project_root / ".copilot" / "skills"
     bad_root.parent.mkdir(parents=True, exist_ok=True)
@@ -271,6 +271,6 @@ def test_install_skill_recovers_when_skills_root_is_broken_symlink(tmp_path: Pat
     loader.discover()
     bridge = NativeSkillBridge(loader, project_root=project_root, home_dir=tmp_path / "home")
 
-    installed = bridge.install_skill("plan", AgentCLI.COPILOT)
+    installed = bridge.install_skill("cafe-plan", AgentCLI.COPILOT)
     assert installed.exists()
     assert bad_root.is_dir()

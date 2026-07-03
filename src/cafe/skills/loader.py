@@ -16,11 +16,53 @@ _logger = logging.getLogger(__name__)
 
 # Deprecated skill names that resolve to a newer skill. Issued for backward
 # compatibility with user playbooks / presets that still reference the old
-# split skills. Plan to remove in a future minor release.
+# names. Builtin workflow skills carry the "cafe-" prefix in their folder
+# names since the internal/external skill reorganization; unprefixed names
+# remain valid via these aliases. Plan to remove in a future minor release.
 _SKILL_ALIASES: Dict[str, str] = {
-    "spec_first": "spec",
-    "spec_revise": "spec",
+    "spec_first": "cafe-spec",
+    "spec_revise": "cafe-spec",
+    "write-skill": "write-cafe-skill",
+    **{
+        name: f"cafe-{name}"
+        for name in (
+            "alignment",
+            "brief_first",
+            "brief_revise",
+            "chat-develop-change",
+            "chat-plan-revision",
+            "chat-spec-revision",
+            "common-chat-handoff",
+            "develop",
+            "draft",
+            "editorial_review",
+            "github_sync",
+            "incident_detect",
+            "incident_mitigate",
+            "incident_postmortem",
+            "incident_triage",
+            "plan",
+            "pr",
+            "publish",
+            "research_collect",
+            "research_question",
+            "research_report",
+            "research_synthesize",
+            "review",
+            "spec",
+            "workflow-common",
+        )
+    },
 }
+
+
+def canonical_skill_name(name: str) -> str:
+    """Map a possibly-deprecated skill name to its canonical name.
+
+    Does not consult the catalog; project/global skills that intentionally
+    reuse an old builtin name still win at `get_skill_dir` resolution time.
+    """
+    return _SKILL_ALIASES.get(name, name)
 
 
 def read_skill_frontmatter(skill_file: Path) -> Dict[str, str]:
@@ -108,6 +150,12 @@ class SkillLoader:
                     if source == "builtin" or strict:
                         raise ValueError(mismatch)
                     warning = mismatch
+                elif source != "builtin" and skill_dir.name in _SKILL_ALIASES:
+                    warning = (
+                        f"Skill '{skill_dir.name}' uses a deprecated builtin name; "
+                        f"rename it to '{_SKILL_ALIASES[skill_dir.name]}' to override the builtin, "
+                        "or pick a distinct name"
+                    )
 
                 catalog[skill_dir.name] = SkillCatalogEntry(
                     name=skill_dir.name,

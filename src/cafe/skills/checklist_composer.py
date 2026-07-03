@@ -7,6 +7,7 @@ from typing import Optional
 
 from cafe.agents.manager import AgentManager
 from cafe.skills.bridge import load_skill_reference
+from cafe.skills.loader import canonical_skill_name
 from cafe.templates.manager import TemplateManager
 from cafe.utils.checklist_utils import generate_checklist_file, resolve_checklist_placeholders
 from cafe.utils.prompt_utils import convert_to_checklist, extract_agent_guidelines_checklist
@@ -14,7 +15,7 @@ from cafe.utils.prompt_utils import convert_to_checklist, extract_agent_guidelin
 
 def _load_skill_checklist_reference(skill_name: str, ref_name: str) -> str:
     """Load checklist section content from a skill reference file."""
-    return load_skill_reference(skill_name, ref_name)
+    return load_skill_reference(canonical_skill_name(skill_name), ref_name)
 
 
 def _resolve_xml_questions_instruction(skill_name: str, ref_name: str, questions_xml_file: str) -> str:

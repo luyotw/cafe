@@ -25,11 +25,13 @@ class TemplateManager:
         skill, plan → plan skill). The owning skill's directory name matches
         the template type.
         """
+        from cafe.skills.loader import canonical_skill_name
+
         return (
             Path(__file__).parent.parent
             / "data"
             / "skills"
-            / self.template_type
+            / canonical_skill_name(self.template_type)
             / "assets"
             / "templates"
         )

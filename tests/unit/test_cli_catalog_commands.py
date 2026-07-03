@@ -35,7 +35,7 @@ playbook:
   id: custom
 steps:
   develop:
-    skill: develop
+    skill: cafe-develop
     role: developer
     valid_intents: [confirmed]
     on:
@@ -53,10 +53,10 @@ steps:
 
 def test_playbook_validate_reports_warning_and_strict_failure(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    skill_dir = tmp_path / ".cafe" / "skills" / "develop"
+    skill_dir = tmp_path / ".cafe" / "skills" / "cafe-develop"
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(
-        "---\nname: develop\ndescription: custom\n---\n\nDevelop\n",
+        "---\nname: cafe-develop\ndescription: custom\n---\n\nDevelop\n",
         encoding="utf-8",
     )
     playbook_dir = tmp_path / ".cafe" / "playbooks"
@@ -67,7 +67,7 @@ playbook:
   id: custom
 steps:
   develop:
-    skill: develop
+    skill: cafe-develop
     role: developer
     allowed_tools: [Bash, "Bash(git:*)"]
     valid_intents: [confirmed]
@@ -88,10 +88,10 @@ steps:
 
 def test_skill_list_and_show_prefer_project_override(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    skill_dir = tmp_path / ".cafe" / "skills" / "plan"
+    skill_dir = tmp_path / ".cafe" / "skills" / "cafe-plan"
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(
-        "---\nname: plan\ndescription: custom plan\n---\n\nProject override body\n",
+        "---\nname: cafe-plan\ndescription: custom plan\n---\n\nProject override body\n",
         encoding="utf-8",
     )
 
@@ -108,7 +108,7 @@ def test_skill_list_and_show_prefer_project_override(tmp_path: Path, monkeypatch
 
 def test_skill_validate_supports_strict_mode(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    skill_dir = tmp_path / ".cafe" / "skills" / "plan"
+    skill_dir = tmp_path / ".cafe" / "skills" / "cafe-plan"
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(
         "---\nname: wrong_name\ndescription: custom plan\n---\n\nProject override body\n",
@@ -385,7 +385,7 @@ playbook:
   id: custom
 steps:
   qa:
-    skill: review
+    skill: cafe-review
     role: reviewer
     valid_intents: [confirmed]
     on:

@@ -6,16 +6,16 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PLAN_TEMPLATES_DIR = (
-    PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "plan" / "assets" / "templates"
+    PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "cafe-plan" / "assets" / "templates"
 )
-PLAN_SKILL = PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "plan" / "SKILL.md"
+PLAN_SKILL = PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "cafe-plan" / "SKILL.md"
 PLAN_EXEC_STEPS = (
     PROJECT_ROOT
     / "src"
     / "cafe"
     / "data"
     / "skills"
-    / "plan"
+    / "cafe-plan"
     / "references"
     / "execution_steps_iteration_1.md"
 )
@@ -25,7 +25,7 @@ REVIEW_EXEC_STEPS = (
     / "cafe"
     / "data"
     / "skills"
-    / "review"
+    / "cafe-review"
     / "references"
     / "execution_steps.md"
 )

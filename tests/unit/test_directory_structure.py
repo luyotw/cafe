@@ -10,8 +10,8 @@ class TestDirectoryStructure:
 
     def test_templates_bundled_under_owning_skills(self) -> None:
         """測試 templates 已搬到 owning skill 的 assets/ 目錄底下."""
-        spec_templates = Path("src/cafe/data/skills/spec/assets/templates")
-        plan_templates = Path("src/cafe/data/skills/plan/assets/templates")
+        spec_templates = Path("src/cafe/data/skills/cafe-spec/assets/templates")
+        plan_templates = Path("src/cafe/data/skills/cafe-plan/assets/templates")
         assert spec_templates.is_dir(), (
             "Spec templates should live under spec skill's assets/templates/"
         )
@@ -22,10 +22,10 @@ class TestDirectoryStructure:
     def test_templates_plan_default_exists_under_skill_assets(self) -> None:
         """測試 plan default.md 模板存在於 plan skill 的 assets/ 底下."""
         default_template = Path(
-            "src/cafe/data/skills/plan/assets/templates/default.md"
+            "src/cafe/data/skills/cafe-plan/assets/templates/default.md"
         )
         assert default_template.is_file(), (
-            "src/cafe/data/skills/plan/assets/templates/default.md should exist"
+            "src/cafe/data/skills/cafe-plan/assets/templates/default.md should exist"
         )
 
     def test_legacy_templates_directory_removed(self) -> None:

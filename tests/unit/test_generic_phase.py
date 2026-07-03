@@ -16,9 +16,9 @@ from cafe.skills.native_bridge import NativeSkillBridge
 def _setup_loader(tmp_path: Path) -> SkillLoader:
     skill_root = tmp_path / "builtin" / "skills"
     for name, body in {
-        "plan": "Hello {who}\n",
-        "workflow-common": "Read blackboard first.\n",
-        "review": "Review the latest changes.\n",
+        "cafe-plan": "Hello {who}\n",
+        "cafe-workflow-common": "Read blackboard first.\n",
+        "cafe-review": "Review the latest changes.\n",
     }.items():
         builtin = skill_root / name
         builtin.mkdir(parents=True, exist_ok=True)
@@ -38,9 +38,9 @@ def _setup_loader(tmp_path: Path) -> SkillLoader:
 def test_build_prompt_references_skill_invocation_not_embedded_body(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     prompt = phase.build_prompt(
-        skill_name="plan",
+        skill_name="cafe-plan",
         skill_invocation="/plan",
-        shared_skill_invocations=["/workflow-common"],
+        shared_skill_invocations=["/cafe-workflow-common"],
         context={"handoff_summary": "Resume plan"},
         output_file=tmp_path / "out.md",
         checklist_file=tmp_path / "checklist.md",
@@ -53,9 +53,9 @@ def test_build_prompt_references_skill_invocation_not_embedded_body(tmp_path: Pa
 def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     prompt = phase.build_prompt(
-        skill_name="plan",
+        skill_name="cafe-plan",
         skill_invocation="/plan",
-        shared_skill_invocations=["/workflow-common"],
+        shared_skill_invocations=["/cafe-workflow-common"],
         context={
             "who": "team",
             "blackboard_path": ".cafe/issues/demo/blackboard.json",
@@ -67,7 +67,7 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
         questions_xml_file=Path("questions.xml"),
     )
     assert "Shared skills:" in prompt
-    assert "/workflow-common" in prompt
+    assert "/cafe-workflow-common" in prompt
     assert "Phase skill: /plan" in prompt
     assert "Runtime files:" in prompt
     assert "output_file=out.md" in prompt
@@ -91,9 +91,9 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
 def test_build_prompt_uses_baton_wording_when_status_code_not_required(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     prompt = phase.build_prompt(
-        skill_name="plan",
+        skill_name="cafe-plan",
         skill_invocation="/plan",
-        shared_skill_invocations=["/workflow-common"],
+        shared_skill_invocations=["/cafe-workflow-common"],
         context={
             "blackboard_path": ".cafe/issues/demo/blackboard.json",
             "handoff_summary": "Reopen PR and complete the local artifact before host-side publish.",
@@ -112,9 +112,9 @@ def test_build_prompt_uses_baton_wording_when_status_code_not_required(tmp_path:
 def test_build_prompt_omits_questions_line_when_questions_file_not_passed(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     prompt = phase.build_prompt(
-        skill_name="plan",
+        skill_name="cafe-plan",
         skill_invocation="/plan",
-        shared_skill_invocations=["/workflow-common"],
+        shared_skill_invocations=["/cafe-workflow-common"],
         context={
             "blackboard_path": ".cafe/issues/demo/blackboard.json",
             "next_step_path": ".cafe/issues/demo/next_step.txt",
@@ -129,9 +129,9 @@ def test_build_prompt_omits_questions_line_when_questions_file_not_passed(tmp_pa
 def test_build_prompt_includes_user_input_when_set(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     prompt = phase.build_prompt(
-        skill_name="plan",
+        skill_name="cafe-plan",
         skill_invocation="/plan",
-        shared_skill_invocations=["/workflow-common"],
+        shared_skill_invocations=["/cafe-workflow-common"],
         context={
             "blackboard_path": ".cafe/issues/demo/blackboard.json",
             "next_step_path": ".cafe/issues/demo/next_step.txt",
@@ -147,9 +147,9 @@ def test_build_prompt_includes_user_input_when_set(tmp_path: Path) -> None:
 def test_build_prompt_pr_phase_appends_publish_ordering_when_handoff_present(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     prompt = phase.build_prompt(
-        skill_name="pr",
+        skill_name="cafe-pr",
         skill_invocation="/pr",
-        shared_skill_invocations=["/workflow-common", "/github_sync"],
+        shared_skill_invocations=["/cafe-workflow-common", "/cafe-github_sync"],
         context={
             "blackboard_path": ".cafe/issues/demo/blackboard.json",
             "handoff_summary": "Finish local PR artifact.",
@@ -179,9 +179,9 @@ def assert_runtime_handoff_guardrails_persist(prompt: str) -> None:
 def test_build_prompt_contract_covers_shared_skills_files_context_and_gate(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     prompt = phase.build_prompt(
-        skill_name="develop",
+        skill_name="cafe-develop",
         skill_invocation="/develop",
-        shared_skill_invocations=["/workflow-common", "/github_sync"],
+        shared_skill_invocations=["/cafe-workflow-common", "/cafe-github_sync"],
         context={
             "blackboard_path": ".cafe/issues/demo/blackboard.json",
             "next_step_path": ".cafe/issues/demo/next_step.txt",
@@ -193,8 +193,8 @@ def test_build_prompt_contract_covers_shared_skills_files_context_and_gate(tmp_p
         questions_xml_file=Path("develop/questions.xml"),
     )
     assert prompt.startswith("Shared skills:")
-    assert "/workflow-common" in prompt
-    assert "/github_sync" in prompt
+    assert "/cafe-workflow-common" in prompt
+    assert "/cafe-github_sync" in prompt
     assert "Phase skill: /develop" in prompt
     for line in (
         "output_file=develop/out.md",
@@ -297,9 +297,9 @@ def test_execute_short_circuits_when_before_execute_stops(tmp_path: Path) -> Non
     calls: list[str] = []
 
     result = phase.execute(
-        skill_name="plan",
+        skill_name="cafe-plan",
         skill_invocation="/plan",
-        shared_skill_invocations=["/workflow-common"],
+        shared_skill_invocations=["/cafe-workflow-common"],
         step_def={
             "hooks": {"before_execute": ["StopHook"]},
             "valid_intents": ["need_clarification"],
@@ -322,9 +322,9 @@ def test_execute_runs_prepare_input_and_after_execute_retry(tmp_path: Path) -> N
     responses = iter(["confirmed", "confirmed"])
 
     result = phase.execute(
-        skill_name="plan",
+        skill_name="cafe-plan",
         skill_invocation="/plan",
-        shared_skill_invocations=["/workflow-common"],
+        shared_skill_invocations=["/cafe-workflow-common"],
         step_def={
             "hooks": {
                 "prepare_input": ["PrepareHook"],
@@ -354,7 +354,7 @@ def test_prepare_hooks_receive_prior_context_updates(tmp_path: Path) -> None:
     )
 
     phase.execute(
-        skill_name="plan",
+        skill_name="cafe-plan",
         skill_invocation="/plan",
         step_def={
             "hooks": {"prepare_input": ["PrepareHook", "CapturePreparedContextHook"]},
@@ -375,9 +375,9 @@ def test_execute_skips_publish_when_artifact_not_ready(tmp_path: Path) -> None:
     )
 
     result = phase.execute(
-        skill_name="plan",
+        skill_name="cafe-plan",
         skill_invocation="/plan",
-        shared_skill_invocations=["/workflow-common"],
+        shared_skill_invocations=["/cafe-workflow-common"],
         step_def={
             "hooks": {
                 "after_execute": ["NoArtifactHook"],
@@ -400,9 +400,9 @@ def test_execute_applies_publish_output_status_override(tmp_path: Path) -> None:
     )
 
     result = phase.execute(
-        skill_name="plan",
+        skill_name="cafe-plan",
         skill_invocation="/plan",
-        shared_skill_invocations=["/workflow-common"],
+        shared_skill_invocations=["/cafe-workflow-common"],
         step_def={
             "hooks": {
                 "publish_output": ["PublishOverrideHook"],
@@ -427,7 +427,7 @@ def test_prepare_skill_installs_skill_and_returns_cli_invocation(tmp_path: Path)
     )
     phase = GenericPhase(loader, skill_bridge=bridge)
 
-    invocation = phase.prepare_skill(skill_name="plan", agent_cli=AgentCLI.CODEX)
+    invocation = phase.prepare_skill(skill_name="cafe-plan", agent_cli=AgentCLI.CODEX)
 
     assert invocation == "$cafe-plan"
     assert (project_root / ".codex" / "skills" / "cafe-plan" / "SKILL.md").exists()
@@ -530,7 +530,7 @@ def test_execute_runs_script_hook_with_schema_and_interpolation(tmp_path: Path) 
     loader = _setup_loader(tmp_path)
     _write_skill_script(
         loader,
-        skill_name="plan",
+        skill_name="cafe-plan",
         script_name="echo_args.sh",
         body=(
             "#!/usr/bin/env bash\n"
@@ -543,9 +543,9 @@ def test_execute_runs_script_hook_with_schema_and_interpolation(tmp_path: Path) 
     output_file.write_text("x", encoding="utf-8")
 
     result = phase.execute(
-        skill_name="plan",
+        skill_name="cafe-plan",
         skill_invocation="/plan",
-        shared_skill_invocations=["/workflow-common"],
+        shared_skill_invocations=["/cafe-workflow-common"],
         context={"output_file": str(output_file)},
         step_def={
             "hooks": {
@@ -587,9 +587,9 @@ def test_execute_rejects_script_hook_path_traversal(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="parent traversal"):
         phase.execute(
-            skill_name="plan",
+            skill_name="cafe-plan",
             skill_invocation="/plan",
-            shared_skill_invocations=["/workflow-common"],
+            shared_skill_invocations=["/cafe-workflow-common"],
             step_def={
                 "hooks": {
                     "before_execute": [
@@ -608,7 +608,7 @@ def test_execute_rejects_script_hook_path_traversal(tmp_path: Path) -> None:
 def test_execute_rejects_script_hook_symlink_outside_scripts_dir(tmp_path: Path) -> None:
     loader = _setup_loader(tmp_path)
     phase = GenericPhase(loader)
-    skill_dir = loader.get_skill_dir("plan")
+    skill_dir = loader.get_skill_dir("cafe-plan")
     scripts_dir = skill_dir / "scripts"
     scripts_dir.mkdir(parents=True, exist_ok=True)
 
@@ -622,9 +622,9 @@ def test_execute_rejects_script_hook_symlink_outside_scripts_dir(tmp_path: Path)
 
     with pytest.raises(ValueError, match="must stay inside"):
         phase.execute(
-            skill_name="plan",
+            skill_name="cafe-plan",
             skill_invocation="/plan",
-            shared_skill_invocations=["/workflow-common"],
+            shared_skill_invocations=["/cafe-workflow-common"],
             step_def={
                 "hooks": {
                     "before_execute": [
@@ -645,7 +645,7 @@ def test_execute_script_hook_validation_failure_stops_pipeline(tmp_path: Path) -
     marker = tmp_path / "marker.txt"
     _write_skill_script(
         loader,
-        skill_name="plan",
+        skill_name="cafe-plan",
         script_name="touch_marker.sh",
         body=(
             "#!/usr/bin/env bash\n"
@@ -656,9 +656,9 @@ def test_execute_script_hook_validation_failure_stops_pipeline(tmp_path: Path) -
     phase = GenericPhase(loader)
 
     result = phase.execute(
-        skill_name="plan",
+        skill_name="cafe-plan",
         skill_invocation="/plan",
-        shared_skill_invocations=["/workflow-common"],
+        shared_skill_invocations=["/cafe-workflow-common"],
         step_def={
             "hooks": {
                 "before_execute": [
@@ -690,7 +690,7 @@ def test_execute_script_hook_failure_stops_pipeline(tmp_path: Path) -> None:
     loader = _setup_loader(tmp_path)
     _write_skill_script(
         loader,
-        skill_name="plan",
+        skill_name="cafe-plan",
         script_name="fail.sh",
         body=(
             "#!/usr/bin/env bash\n"
@@ -702,9 +702,9 @@ def test_execute_script_hook_failure_stops_pipeline(tmp_path: Path) -> None:
     phase = GenericPhase(loader)
 
     result = phase.execute(
-        skill_name="plan",
+        skill_name="cafe-plan",
         skill_invocation="/plan",
-        shared_skill_invocations=["/workflow-common"],
+        shared_skill_invocations=["/cafe-workflow-common"],
         step_def={
             "hooks": {
                 "after_execute": [
@@ -731,7 +731,7 @@ def test_execute_script_hook_can_skip_when_status_mismatch(tmp_path: Path) -> No
     loader = _setup_loader(tmp_path)
     _write_skill_script(
         loader,
-        skill_name="plan",
+        skill_name="cafe-plan",
         script_name="noop.sh",
         body=(
             "#!/usr/bin/env bash\n"
@@ -742,9 +742,9 @@ def test_execute_script_hook_can_skip_when_status_mismatch(tmp_path: Path) -> No
     phase = GenericPhase(loader)
 
     result = phase.execute(
-        skill_name="plan",
+        skill_name="cafe-plan",
         skill_invocation="/plan",
-        shared_skill_invocations=["/workflow-common"],
+        shared_skill_invocations=["/cafe-workflow-common"],
         step_def={
             "hooks": {
                 "after_execute": [
@@ -769,7 +769,7 @@ def test_execute_script_hook_passes_timeout_to_subprocess(tmp_path: Path, monkey
     loader = _setup_loader(tmp_path)
     _write_skill_script(
         loader,
-        skill_name="plan",
+        skill_name="cafe-plan",
         script_name="noop.sh",
         body="#!/usr/bin/env bash\necho noop\n",
     )
@@ -783,9 +783,9 @@ def test_execute_script_hook_passes_timeout_to_subprocess(tmp_path: Path, monkey
     monkeypatch.setattr("cafe.phases.generic_phase.subprocess.run", _run)
 
     result = phase.execute(
-        skill_name="plan",
+        skill_name="cafe-plan",
         skill_invocation="/plan",
-        shared_skill_invocations=["/workflow-common"],
+        shared_skill_invocations=["/cafe-workflow-common"],
         step_def={
             "hooks": {
                 "before_execute": [
@@ -810,7 +810,7 @@ def test_execute_script_hook_timeout_stops_pipeline(tmp_path: Path, monkeypatch:
     loader = _setup_loader(tmp_path)
     _write_skill_script(
         loader,
-        skill_name="plan",
+        skill_name="cafe-plan",
         script_name="slow.sh",
         body="#!/usr/bin/env bash\nsleep 30\n",
     )
@@ -822,9 +822,9 @@ def test_execute_script_hook_timeout_stops_pipeline(tmp_path: Path, monkeypatch:
     monkeypatch.setattr("cafe.phases.generic_phase.subprocess.run", _run)
 
     result = phase.execute(
-        skill_name="plan",
+        skill_name="cafe-plan",
         skill_invocation="/plan",
-        shared_skill_invocations=["/workflow-common"],
+        shared_skill_invocations=["/cafe-workflow-common"],
         step_def={
             "hooks": {
                 "before_execute": [
@@ -854,7 +854,7 @@ def test_execute_script_hook_timeout_decodes_bytes_output(
     loader = _setup_loader(tmp_path)
     _write_skill_script(
         loader,
-        skill_name="plan",
+        skill_name="cafe-plan",
         script_name="slow.sh",
         body="#!/usr/bin/env bash\nsleep 30\n",
     )
@@ -866,9 +866,9 @@ def test_execute_script_hook_timeout_decodes_bytes_output(
     monkeypatch.setattr("cafe.phases.generic_phase.subprocess.run", _run)
 
     result = phase.execute(
-        skill_name="plan",
+        skill_name="cafe-plan",
         skill_invocation="/plan",
-        shared_skill_invocations=["/workflow-common"],
+        shared_skill_invocations=["/cafe-workflow-common"],
         step_def={
             "hooks": {
                 "before_execute": [

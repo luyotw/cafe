@@ -17,7 +17,7 @@ from cafe.core.workflow_models import StepExecutionResult
 from cafe.ui.cli import app
 from cafe.utils.pr import parse_pr_body, parse_pr_title
 
-SCRIPT_PATH = Path("src/cafe/data/skills/pr/scripts/sync_pr.sh")
+SCRIPT_PATH = Path("src/cafe/data/skills/cafe-pr/scripts/sync_pr.sh")
 runner = CliRunner()
 
 

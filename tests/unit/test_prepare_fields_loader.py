@@ -66,7 +66,7 @@ def _write_skill(root: Path, name: str) -> None:
 
 def _loader(tmp_path: Path) -> SkillLoader:
     builtin_root = tmp_path / "builtin"
-    _write_skill(builtin_root / "skills", "spec")
+    _write_skill(builtin_root / "skills", "cafe-spec")
     return SkillLoader(
         project_root=tmp_path / "project",
         global_root=tmp_path / "global",
@@ -92,7 +92,7 @@ def test_fields_ref_playbook_relative_loads_yaml(tmp_path: Path) -> None:
 
 def test_fields_ref_skill_uri_loads_asset(tmp_path: Path) -> None:
     loader = _loader(tmp_path)
-    asset_dir = loader.get_skill_dir("spec") / "assets" / "prepare"
+    asset_dir = loader.get_skill_dir("cafe-spec") / "assets" / "prepare"
     asset_dir.mkdir(parents=True)
     asset = asset_dir / "fields.yaml"
     asset.write_text(yaml.safe_dump({"fields": [MINIMAL_FIELD]}), encoding="utf-8")
@@ -156,17 +156,17 @@ def test_parse_fields_ref_classifies_sources() -> None:
 def test_skill_loader_precedence_for_fields_ref(tmp_path: Path) -> None:
     project_root = tmp_path / "project"
     builtin_root = tmp_path / "builtin"
-    _write_skill(builtin_root / "skills", "spec")
-    _write_skill(project_root / ".cafe" / "skills", "spec")
+    _write_skill(builtin_root / "skills", "cafe-spec")
+    _write_skill(project_root / ".cafe" / "skills", "cafe-spec")
 
-    builtin_asset = builtin_root / "skills" / "spec" / "assets" / "prepare" / "fields.yaml"
+    builtin_asset = builtin_root / "skills" / "cafe-spec" / "assets" / "prepare" / "fields.yaml"
     builtin_asset.parent.mkdir(parents=True)
     builtin_asset.write_text(
         yaml.safe_dump({"fields": [dict(MINIMAL_FIELD, default="low")]}),
         encoding="utf-8",
     )
 
-    project_asset = project_root / ".cafe" / "skills" / "spec" / "assets" / "prepare" / "fields.yaml"
+    project_asset = project_root / ".cafe" / "skills" / "cafe-spec" / "assets" / "prepare" / "fields.yaml"
     project_asset.parent.mkdir(parents=True)
     project_asset.write_text(
         yaml.safe_dump({"fields": [dict(MINIMAL_FIELD, default="high")]}),

@@ -13,7 +13,7 @@ from cafe.core.hooks.script_schema import validate_script_args_schema
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
 from cafe.core.blackboard import HandoffIntent
-from cafe.skills.loader import SkillLoader
+from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.core.types import AgentCLI
 
@@ -136,7 +136,7 @@ class GenericPhase:
                     "If the handoff asks for a retry, re-run, re-sync, or re-open action, do not treat an old artifact or a closed external object as completion.",
                 ]
             )
-            if skill_name == "pr":
+            if canonical_skill_name(skill_name) == "cafe-pr":
                 runtime_context.extend(
                     [
                         "For the PR phase, completion is local-only: finish the PR artifact and checklist, then update the workflow baton.",

@@ -9,25 +9,25 @@ import yaml
 
 def test_phase_scripts_delegate_to_shared_implementation() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    shared = project_root / "src/cafe/data/skills/github_sync/scripts/sync_github.sh"
+    shared = project_root / "src/cafe/data/skills/cafe-github_sync/scripts/sync_github.sh"
     assert shared.exists()
 
     wrappers = [
-        project_root / "src/cafe/data/skills/spec/scripts/sync_github.sh",
-        project_root / "src/cafe/data/skills/plan/scripts/sync_github.sh",
+        project_root / "src/cafe/data/skills/cafe-spec/scripts/sync_github.sh",
+        project_root / "src/cafe/data/skills/cafe-plan/scripts/sync_github.sh",
     ]
 
     for wrapper in wrappers:
         content = wrapper.read_text(encoding="utf-8")
-        assert "../../github_sync/scripts/sync_github.sh" in content
+        assert "../../cafe-github_sync/scripts/sync_github.sh" in content
         assert "exec /bin/bash" in content
 
 
 @pytest.mark.parametrize(
     "script_rel_path,phase",
     [
-        ("src/cafe/data/skills/spec/scripts/sync_github.sh", "spec"),
-        ("src/cafe/data/skills/plan/scripts/sync_github.sh", "plan"),
+        ("src/cafe/data/skills/cafe-spec/scripts/sync_github.sh", "spec"),
+        ("src/cafe/data/skills/cafe-plan/scripts/sync_github.sh", "plan"),
     ],
 )
 def test_sync_script_skips_when_sync_disabled_without_gh(

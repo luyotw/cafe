@@ -93,13 +93,13 @@ class FakeGitOperations:
 def _build_loader(tmp_path: Path) -> GenericPhase:
     skill_root = tmp_path / "builtin" / "skills"
     for name, body in {
-        "spec_first": "## Role\nRead your agent file: {agent_file}\n\n## Context\n{blackboard_digest}\n",
-        "plan": "Write plan to: {output_file}\n",
-        "develop": "Implement the current request.\n",
-        "workflow-common": "Read blackboard first.\n",
-        "github_sync": "Shared GitHub sync helper.\n",
-        "review": "Review the latest changes.\n",
-        "pr": "Write PR content to: {output_file}\n",
+        "cafe-spec": "## Role\nRead your agent file: {agent_file}\n\n## Context\n{blackboard_digest}\n",
+        "cafe-plan": "Write plan to: {output_file}\n",
+        "cafe-develop": "Implement the current request.\n",
+        "cafe-workflow-common": "Read blackboard first.\n",
+        "cafe-github_sync": "Shared GitHub sync helper.\n",
+        "cafe-review": "Review the latest changes.\n",
+        "cafe-pr": "Write PR content to: {output_file}\n",
     }.items():
         skill_dir = skill_root / name
         skill_dir.mkdir(parents=True, exist_ok=True)

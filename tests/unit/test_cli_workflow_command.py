@@ -2046,13 +2046,13 @@ steps:
       await_agent: plan
       need_clarification: develop
   plan:
-    skill: plan
+    skill: cafe-plan
     role: developer
     valid_intents: [confirmed]
     on:
       await_agent: _done
   develop:
-    skill: develop
+    skill: cafe-develop
     role: developer
     valid_intents: [confirmed]
     on: {}
@@ -2100,13 +2100,13 @@ playbook:
   id: single
 steps:
   plan:
-    skill: plan
+    skill: cafe-plan
     role: developer
     valid_intents: [confirmed]
     on:
       await_agent: develop
   develop:
-    skill: develop
+    skill: cafe-develop
     role: developer
     valid_intents: [confirmed]
     on:
@@ -2172,13 +2172,13 @@ playbook:
   id: custom
 steps:
   develop:
-    skill: develop
+    skill: cafe-develop
     role: developer
     valid_intents: [confirmed]
     on:
       await_agent: pr
   pr:
-    skill: pr
+    skill: cafe-pr
     role: developer
     valid_intents: [confirmed]
     on:

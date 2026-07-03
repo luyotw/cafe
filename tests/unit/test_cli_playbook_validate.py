@@ -28,7 +28,7 @@ playbook: {id: custom}
 steps:
   spec:
     role: pm
-    skill: spec
+    skill: cafe-spec
     on:
       await_agent: _done
 """,

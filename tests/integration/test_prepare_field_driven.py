@@ -59,7 +59,7 @@ playbook:
 steps:
   spec:
     type: skill
-    skill: spec
+    skill: cafe-spec
     role: pm
     "on":
       await_agent: _done
