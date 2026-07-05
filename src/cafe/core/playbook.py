@@ -20,7 +20,6 @@ from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 from cafe.templates.manager import TemplateManager
 
-
 DONE_TARGET = "_done"
 SCRIPT_HOOK_STAGES = {"before_execute", "after_execute"}
 
@@ -99,6 +98,7 @@ class StepConfig(BaseModel):
     input_artifacts: List[str] = Field(default_factory=list)
     output_artifact: Optional[str] = None
     allowed_tools: List[str] = Field(default_factory=list)
+    capability_requests: List[str] = Field(default_factory=list)
     valid_intents: List[str] = Field(default_factory=list)
     max_iterations: Optional[Union[int, str]] = None
     allowed_goto: List[str] = Field(default_factory=list)
@@ -116,7 +116,9 @@ class StepConfig(BaseModel):
             if key == "default":
                 continue
             if key.startswith("CAFE_"):
-                raise ValueError(f"Legacy CAFE_ transition key is not allowed in playbook on: {key!r}")
+                raise ValueError(
+                    f"Legacy CAFE_ transition key is not allowed in playbook on: {key!r}"
+                )
             if key not in PLAYBOOK_INTENT_KEYS:
                 raise ValueError(
                     f"Invalid playbook transition key {key!r}; "
@@ -138,6 +140,19 @@ class StepConfig(BaseModel):
             except ValueError as exc:
                 raise ValueError(f"Unknown step outcome token in valid_intents: {token!r}") from exc
         return [item.strip() for item in value]
+
+    @field_validator("capability_requests")
+    @classmethod
+    def _validate_capability_requests(cls, value: List[str]) -> List[str]:
+        cleaned: List[str] = []
+        for item in value:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError("capability_requests entries must be non-empty strings")
+            token = item.strip()
+            if token in cleaned:
+                raise ValueError(f"duplicate capability_requests entry: {token!r}")
+            cleaned.append(token)
+        return cleaned
 
     @field_validator("skill")
     @classmethod
@@ -279,7 +294,9 @@ class PrepareConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_fields_source(self) -> "PrepareConfig":
         if self.fields and self.fields_ref:
-            raise ValueError("commands.prepare.fields and commands.prepare.fields_ref are mutually exclusive")
+            raise ValueError(
+                "commands.prepare.fields and commands.prepare.fields_ref are mutually exclusive"
+            )
         return self
 
 
@@ -523,7 +540,9 @@ def _validate_step_role(step_name: str, step: StepConfig, roles: Dict[str, Playb
         raise ValueError(f"Step '{step_name}' references unknown role '{step.role}'")
 
 
-def _validate_step_chat_role(step_name: str, step: StepConfig, roles: Dict[str, PlaybookRole]) -> None:
+def _validate_step_chat_role(
+    step_name: str, step: StepConfig, roles: Dict[str, PlaybookRole]
+) -> None:
     if roles and step.chat_role and step.chat_role not in roles:
         raise ValueError(f"Step '{step_name}' references unknown chat_role '{step.chat_role}'")
 
@@ -534,9 +553,7 @@ def _validate_step_skills(step_name: str, step: StepConfig, skill_loader: SkillL
         try:
             skill_loader.get_skill_dir(skill_name)
         except (SkillDiscoveryError, FileNotFoundError) as exc:
-            raise ValueError(
-                f"Step '{step_name}' references unknown skill '{skill_name}'"
-            ) from exc
+            raise ValueError(f"Step '{step_name}' references unknown skill '{skill_name}'") from exc
 
 
 def _validate_script_hook_stages(step_name: str, hooks: StepHooks) -> None:
@@ -564,9 +581,7 @@ def _validate_targets(
 ) -> None:
     for target in targets:
         if target not in steps:
-            raise ValueError(
-                f"Step '{step_name}' has invalid {field_name} target '{target}'"
-            )
+            raise ValueError(f"Step '{step_name}' has invalid {field_name} target '{target}'")
 
 
 def _validate_transition_targets(
@@ -589,9 +604,7 @@ def _collect_tool_warnings(step_name: str, allowed_tools: List[str]) -> List[str
     warnings: List[str] = []
     seen: Dict[str, str] = {}
     broad_tools = {
-        tool.strip(): tool.strip()
-        for tool in allowed_tools
-        if "(" not in tool and tool.strip()
+        tool.strip(): tool.strip() for tool in allowed_tools if "(" not in tool and tool.strip()
     }
 
     for tool in allowed_tools:

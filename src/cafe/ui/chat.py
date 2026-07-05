@@ -15,12 +15,12 @@ from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.config import ConfigManager
 from cafe.utils.crew import CrewManager, normalize_role_config
 
-
 CHAT_SKILL_NAMES = [
     "cafe-common-chat-handoff",
     "cafe-chat-develop-change",
     "cafe-chat-spec-revision",
     "cafe-chat-plan-revision",
+    "cafe-chat-alignment-decision",
 ]
 
 CURSOR_NATIVE_MODULE_HINT = "@anysphere/file-service-"
@@ -56,11 +56,14 @@ def _extract_latest_codex_session_id(
 
     return latest_session_id
 
+
 def get_chat_next_step_path(issue_dir: Path) -> Path:
     return issue_dir / "next_step.txt"
 
 
-def _load_chat_role_config(config_manager: ConfigManager, role: str, issue_dir: Optional[Path] = None) -> Optional[dict]:
+def _load_chat_role_config(
+    config_manager: ConfigManager, role: str, issue_dir: Optional[Path] = None
+) -> Optional[dict]:
     """Load role config from crew.yaml first, then config.yaml."""
     try:
         cafe_dir = Path(getattr(config_manager, "config_dir"))
@@ -361,7 +364,9 @@ def _format_cli_specific_error(agent_cli: AgentCLI, stderr: str, stdout: str) ->
     return None
 
 
-def _handle_chat_launch_failure(agent_cli: AgentCLI, result: subprocess.CompletedProcess[object]) -> int:
+def _handle_chat_launch_failure(
+    agent_cli: AgentCLI, result: subprocess.CompletedProcess[object]
+) -> int:
     """Print a concise launch failure and return the CLI's exit code."""
     stderr = (getattr(result, "stderr", None) or "").strip()
     stdout = (getattr(result, "stdout", None) or "").strip()
@@ -378,7 +383,14 @@ def _handle_chat_launch_failure(agent_cli: AgentCLI, result: subprocess.Complete
     return result.returncode
 
 
-def launch_chat_session(role: str, issue_name: str) -> int:
+def launch_chat_session(
+    role: str,
+    issue_name: str,
+    *,
+    chat_mode: Optional[str] = None,
+    extra_env: Optional[dict[str, str]] = None,
+    initial_prompt: Optional[str] = None,
+) -> int:
     """Launch an inline chat session with the agent for the given role.
 
     Resolves agent config from ConfigManager, loads the existing session,
@@ -389,6 +401,7 @@ def launch_chat_session(role: str, issue_name: str) -> int:
     Args:
         role: Agent role ("pm", "developer", or "reviewer")
         issue_name: Current issue name (used to load issue-specific session)
+        initial_prompt: Optional first message to send when the interactive CLI supports it.
     """
     issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
 
@@ -460,7 +473,21 @@ def launch_chat_session(role: str, issue_name: str) -> int:
         if agent_cli_str in ("claude", "copilot", "gemini"):
             cli_command.extend(["--model", agent_model])
 
+    if initial_prompt and agent_cli_str in {"codex", "claude"}:
+        cli_command.append(initial_prompt)
+
     env = cli_strategy.build_environment()
+    env["CAFE_ISSUE_NAME"] = issue_name
+    env["CAFE_ISSUE_DIR"] = str(issue_dir)
+    env["CAFE_CHAT_CURRENT_STEP"] = _current_step
+    env["CAFE_CHAT_PLAYBOOK_ID"] = _playbook_id
+    if initial_prompt:
+        env["CAFE_CHAT_INITIAL_PROMPT"] = initial_prompt
+    if chat_mode:
+        env["CAFE_CHAT_MODE"] = chat_mode
+    if extra_env:
+        for key, value in extra_env.items():
+            env[str(key)] = str(value)
     print(f"\nOpening chat with {role} ({agent_name})...")
     if session_id:
         print(f"Resuming session: {session_id}")
@@ -503,6 +530,9 @@ def launch_chat_session(role: str, issue_name: str) -> int:
         allow_legacy_text=True,
     )
     if contract.source == "chat.bootstrap":
-        print("\n⚠️  Chat ended without writing a next-step baton. The agent did not complete workflow handoff.\n")
+        print(
+            "\n⚠️  Chat ended without writing a next-step baton. "
+            "The agent did not complete workflow handoff.\n"
+        )
 
     return result.returncode

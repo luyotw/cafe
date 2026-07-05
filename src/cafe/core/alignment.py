@@ -131,8 +131,7 @@ class AlignmentCheckpointPayload:
             "fingerprint": self.fingerprint,
             "allowed_decisions": list(self.allowed_decisions),
             "strategic_document_update_requirements": [
-                requirement.to_dict()
-                for requirement in self.strategic_document_update_requirements
+                requirement.to_dict() for requirement in self.strategic_document_update_requirements
             ],
         }
 
@@ -191,6 +190,33 @@ DOCUMENT_KEYWORDS: Dict[str, tuple[str, ...]] = {
     "strategic_context": ("strategic_context", "strategic context", "mandate", "授權", "決策權限"),
 }
 
+TRUSTED_CAPABILITY_BOUNDARY_KEYWORDS: tuple[str, ...] = (
+    "capability contract",
+    "capability contracts",
+    "capability-contract",
+    "capability-contracts",
+    "capability registry",
+    "trusted capability",
+    "trusted capabilities",
+    "trusted host",
+    "trusted host-side",
+    "host-side capability",
+    "host-side capabilities",
+    "host-side execution",
+    "host-side action",
+    "host-side actions",
+    "execution request",
+    "trust boundary",
+    "host 端",
+    "主機端",
+    "主機端執行",
+    "可信能力",
+    "受信任能力",
+    "能力合約",
+    "能力契約",
+    "信任邊界",
+)
+
 
 def evaluate_alignment_policy(
     input_data: AlignmentPolicyInput,
@@ -234,16 +260,13 @@ def evaluate_alignment_policy(
                     affected_categories.append(category)
 
     matched_out_of_mandate = [
-        item
-        for item in strategic_context.out_of_mandate
-        if item and item.lower() in text
+        item for item in strategic_context.out_of_mandate if item and item.lower() in text
     ]
     if matched_out_of_mandate:
         triggered.append(
             TriggeredRule(
                 "out_of_mandate",
-                "Task overlaps declared out-of-mandate items: "
-                + ", ".join(matched_out_of_mandate),
+                "Task overlaps declared out-of-mandate items: " + ", ".join(matched_out_of_mandate),
                 "high",
             )
         )
@@ -276,8 +299,7 @@ def evaluate_alignment_policy(
     triggered.extend(score_rules)
 
     affected_documents = tuple(
-        strategic_context.document(category)
-        for category in affected_categories
+        strategic_context.document(category) for category in affected_categories
     )
     requirements = tuple(
         _document_requirement(strategic_context.document(category))
@@ -301,7 +323,11 @@ def evaluate_alignment_policy(
         affected_documents=affected_documents,
         requirements=requirements,
         risks=tuple(dict.fromkeys(risks or _default_risks(level))),
-        assumptions=tuple(dict.fromkeys(assumptions or ("Policy signals were derived from workflow input and artifacts.",))),
+        assumptions=tuple(
+            dict.fromkeys(
+                assumptions or ("Policy signals were derived from workflow input and artifacts.",)
+            )
+        ),
     )
     return AlignmentPolicyResult(
         level=level,
@@ -336,7 +362,9 @@ def merge_agent_alignment_evidence(
         risk_level=policy_result.payload.risk_level,
         affected_documents=policy_result.payload.affected_documents,
         risks=tuple(dict.fromkeys((*policy_result.payload.risks, *evidence.risks))),
-        assumptions=tuple(dict.fromkeys((*policy_result.payload.assumptions, *evidence.assumptions))),
+        assumptions=tuple(
+            dict.fromkeys((*policy_result.payload.assumptions, *evidence.assumptions))
+        ),
         strategic_update_recommendation=policy_result.payload.strategic_update_recommendation,
         decision_requested=policy_result.payload.decision_requested,
         recommended_resume_target=policy_result.payload.recommended_resume_target,
@@ -353,7 +381,12 @@ def merge_agent_alignment_evidence(
 
 
 def _policy_text(input_data: AlignmentPolicyInput) -> str:
-    parts = [input_data.step_name, input_data.user_input, input_data.proposed_scope, input_data.non_scope]
+    parts = [
+        input_data.step_name,
+        input_data.user_input,
+        input_data.proposed_scope,
+        input_data.non_scope,
+    ]
     parts.extend(input_data.artifacts.values())
     return "\n".join(part for part in parts if part).lower()
 
@@ -394,27 +427,32 @@ def _detect_document_categories(text: str) -> list[str]:
 
 def _detect_required_update_categories(text: str, explicit: Sequence[str]) -> list[str]:
     categories = list(dict.fromkeys(explicit))
-    update_requested = any(
-        token in text
-        for token in (
-            "update",
-            "revise",
-            "change",
-            "modify",
-            "更新",
-            "修訂",
-            "修改",
-            "調整",
-            "建立",
-            "新增",
-        )
-    )
-    if not update_requested:
-        return categories
-    for category in _detect_document_categories(text):
+    for category, keywords in DOCUMENT_KEYWORDS.items():
+        if not _mentions_document_update(text, keywords):
+            continue
         if category not in categories:
             categories.append(category)
     return categories
+
+
+def _mentions_document_update(text: str, keywords: Sequence[str]) -> bool:
+    english_verbs = r"(?:update|revise|change|modify|create|add)"
+    english_nouns = (
+        r"(?:update|updates|revision|revisions|change|changes|modification|modifications)"
+    )
+    chinese_verbs = "(?:更新|修訂|修改|調整|建立|新增)"
+
+    for keyword in keywords:
+        escaped = re.escape(keyword.lower())
+        if re.search(rf"\b{english_verbs}\b[^\n]{{0,48}}\b{escaped}\b", text):
+            return True
+        if re.search(rf"\b{escaped}\b[^\n]{{0,48}}\b{english_nouns}\b", text):
+            return True
+        if re.search(rf"{chinese_verbs}.{{0,24}}{escaped}", text):
+            return True
+        if re.search(rf"{escaped}.{{0,24}}{chinese_verbs}", text):
+            return True
+    return False
 
 
 def _score_signals(
@@ -423,6 +461,15 @@ def _score_signals(
     strategic_context: StrategicContext,
 ) -> list[TriggeredRule]:
     rules: list[TriggeredRule] = []
+    if _matches_keywords(text, TRUSTED_CAPABILITY_BOUNDARY_KEYWORDS):
+        rules.append(
+            TriggeredRule(
+                "trusted_capability_boundary",
+                "Trusted host capability or trust boundary change detected.",
+                "high",
+                5,
+            )
+        )
     if _matches_keywords(
         text,
         (
@@ -438,13 +485,34 @@ def _score_signals(
             "原則",
         ),
     ):
-        rules.append(TriggeredRule("product_or_governance_impact", "Product or governance impact detected.", "medium", 3))
-    if _matches_keywords(text, ("external mutation", "external api", "publish", "deploy", "host-side")):
-        rules.append(TriggeredRule("external_mutation_risk", "External mutation risk detected.", "medium", 2))
+        rules.append(
+            TriggeredRule(
+                "product_or_governance_impact",
+                "Product or governance impact detected.",
+                "medium",
+                3,
+            )
+        )
+    if _matches_keywords(
+        text, ("external mutation", "external api", "publish", "deploy", "host-side")
+    ):
+        rules.append(
+            TriggeredRule("external_mutation_risk", "External mutation risk detected.", "medium", 2)
+        )
     if _matches_keywords(text, ("large", "ambiguous", "unclear", "broad")):
-        rules.append(TriggeredRule("large_ambiguous_issue", "Large or ambiguous issue signal detected.", "low", 1))
-    if _matches_keywords(text, ("architecture outside", "outside obvious scope", "cross-module architecture")):
-        rules.append(TriggeredRule("architecture_scope_risk", "Architecture scope risk detected.", "medium", 2))
+        rules.append(
+            TriggeredRule(
+                "large_ambiguous_issue", "Large or ambiguous issue signal detected.", "low", 1
+            )
+        )
+    if _matches_keywords(
+        text, ("architecture outside", "outside obvious scope", "cross-module architecture")
+    ):
+        rules.append(
+            TriggeredRule(
+                "architecture_scope_risk", "Architecture scope risk detected.", "medium", 2
+            )
+        )
     for category in affected_categories:
         doc = strategic_context.document(category)
         if doc.status in {"missing", "draft"}:
@@ -468,6 +536,8 @@ def _should_include_configured_documents(
     if required_categories:
         return True
     if any(rule.risk_level == "high" for rule in triggered_rules):
+        return True
+    if _matches_keywords(text, TRUSTED_CAPABILITY_BOUNDARY_KEYWORDS):
         return True
     return _matches_keywords(
         text,
@@ -514,7 +584,9 @@ def _build_payload(
     assumptions: tuple[str, ...],
 ) -> AlignmentCheckpointPayload:
     if requirements:
-        recommendation = "Update affected strategic documents first, narrow scope, or explicitly defer/reject."
+        recommendation = (
+            "Update affected strategic documents first, narrow scope, or explicitly defer/reject."
+        )
     elif any(doc.status in {"missing", "draft"} for doc in affected_documents):
         recommendation = "Review missing or draft strategic documents before relying on them."
     else:
@@ -537,9 +609,12 @@ def _build_payload(
     ).hexdigest()
 
     return AlignmentCheckpointPayload(
-        interpreted_goal=input_data.user_input.strip() or f"Continue workflow step '{input_data.step_name}'.",
-        proposed_scope=input_data.proposed_scope.strip() or "Proceed with the current workflow step scope.",
-        non_scope=input_data.non_scope.strip() or "Do not treat alignment as host capability approval.",
+        interpreted_goal=input_data.user_input.strip()
+        or f"Continue workflow step '{input_data.step_name}'.",
+        proposed_scope=input_data.proposed_scope.strip()
+        or "Proceed with the current workflow step scope.",
+        non_scope=input_data.non_scope.strip()
+        or "Do not treat alignment as host capability approval.",
         triggered_rules=triggered_rules,
         risk_level=risk_level,
         affected_documents=affected_documents,

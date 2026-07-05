@@ -108,6 +108,9 @@ CAFE 長期採 **repo-first** 的 definition model，但不預設最終所有流
 核心能力：
 - custom hooks / scripts automation
 - host-side capability execution 雛型
+- capability contract consolidation：可把 PR-specific publish plumbing 收斂成
+  generic request validation 與 execution receipt handling，但必須維持既有 PR
+  publish 行為穩定，且不得放寬 trusted host capability boundary
 - playbook / skill tooling
 - validation / simulation / dry-run 強化
 - 更多 custom playbook 驗證樣本
@@ -121,7 +124,7 @@ CAFE 長期採 **repo-first** 的 definition model，但不預設最終所有流
 - 可用至少一條非軟體開發流程做 validate / dry-run 驗證
 
 建議先用 `pr` phase 做雛型：
-- agent 只負責產生本地 artifact 與 `publish_request.json`
+- agent 只負責產生本地 artifact 與 `capability_request.json`（`publish_request.json` 作為 PR legacy alias 保留）
 - host-side hook 讀 contract 後才執行受信任 script（例如 `sync_pr.sh`）
 - 第一期只允許 **agent 選擇既有 trusted script 並填參數**
 - 不在 v0.2.x 直接開放 agent 任意新寫 script 後自動拿 host 權限執行

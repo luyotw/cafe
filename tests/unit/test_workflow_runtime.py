@@ -68,7 +68,9 @@ def test_runtime_blocks_pr_done_without_publish_receipt(tmp_path: Path) -> None:
     }
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        _write_baton(issue_dir, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete")
+        _write_baton(
+            issue_dir, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete"
+        )
         return StepExecutionResult(response="done", artifacts={"pr_result": "p1"})
 
     runtime = BlackboardWorkflowRuntime(
@@ -95,7 +97,9 @@ def test_runtime_completes_pr_when_publish_receipt_exists(tmp_path: Path) -> Non
     }
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        _write_baton(issue_dir, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete")
+        _write_baton(
+            issue_dir, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete"
+        )
         return StepExecutionResult(
             response="done",
             artifacts={"pr_result": "p1"},
@@ -124,7 +128,9 @@ def test_runtime_completes_pr_when_capability_receipt_success_exists(tmp_path: P
     }
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        _write_baton(issue_dir, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete")
+        _write_baton(
+            issue_dir, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete"
+        )
         return StepExecutionResult(
             response="done",
             artifacts={"pr_result": "p1"},
@@ -148,6 +154,97 @@ def test_runtime_completes_pr_when_capability_receipt_success_exists(tmp_path: P
     result = runtime.run(start_step="pr")
 
     assert result.completed is True
+    assert result.final_status_code == "BATON_WORKFLOW_COMPLETE"
+
+
+def test_runtime_blocks_declared_capability_step_without_receipt(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-capability-step"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "publish": {
+                "skill": "spec_first",
+                "role": "developer",
+                "capability_requests": ["demo.publish"],
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        _write_baton(
+            issue_dir,
+            from_step="publish",
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
+        return StepExecutionResult(response="done", artifacts={"publish_result": "p1"})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="publish")
+
+    assert result.completed is False
+    assert result.final_step == "publish"
+    assert result.final_status_code == "MISSING_CAPABILITY_RECEIPT"
+    blackboard = BlackboardStore(issue_dir).load_or_create("publish")
+    assert blackboard.current_step == "publish"
+    blocked_events = [
+        event for event in blackboard.events if event.event_type == "workflow_blocked"
+    ]
+    assert blocked_events[-1].data["missing_capabilities"] == ["demo.publish"]
+
+
+def test_runtime_completes_declared_capability_step_with_receipt(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-capability-step-success"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "publish": {
+                "skill": "spec_first",
+                "role": "developer",
+                "capability_requests": ["demo.publish"],
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        _write_baton(
+            issue_dir,
+            from_step="publish",
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
+        return StepExecutionResult(
+            response="done",
+            artifacts={"publish_result": "p1"},
+            events=[
+                {
+                    "type": "capability_receipt",
+                    "capability": "demo.publish",
+                    "success": True,
+                    "correlation_id": "generic-ok",
+                    "category": None,
+                    "code": None,
+                }
+            ],
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="publish")
+
+    assert result.completed is True
+    assert result.final_step == "publish"
     assert result.final_status_code == "BATON_WORKFLOW_COMPLETE"
 
 
@@ -245,7 +342,9 @@ def test_runtime_retries_stale_invalid_baton_from_startup(tmp_path: Path) -> Non
     }
     prompts: list[str] = []
 
-    def executor(step_name: str, step_def: dict, state: object, *, extra_prompt: str | None = None) -> StepExecutionResult:
+    def executor(
+        step_name: str, step_def: dict, state: object, *, extra_prompt: str | None = None
+    ) -> StepExecutionResult:
         prompts.append(extra_prompt or "")
         _write_baton(
             issue_dir,
@@ -402,7 +501,9 @@ def test_runtime_single_step_executes_pr_without_legacy_runner(tmp_path: Path) -
     }
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        _write_baton(issue_dir, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete")
+        _write_baton(
+            issue_dir, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete"
+        )
         return StepExecutionResult(
             response="done",
             artifacts={"pr_result": "p1"},
@@ -493,7 +594,9 @@ def test_runtime_single_step_baton_transition_uses_single_step_labels(tmp_path: 
     }
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        _write_baton(issue_dir, from_step="pr", to_owner="agent", to_step="review", intent="await_agent")
+        _write_baton(
+            issue_dir, from_step="pr", to_owner="agent", to_step="review", intent="await_agent"
+        )
         return StepExecutionResult(response="done", artifacts={"pr_result": "p1"})
 
     runtime = BlackboardWorkflowRuntime(
@@ -657,7 +760,9 @@ def test_runtime_legacy_step_honors_review_confirmed_advance(tmp_path: Path) -> 
                 status_code="confirmed",
                 events=[{"type": "review_confirmed_advance"}],
             )
-        _write_baton(issue_dir, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete")
+        _write_baton(
+            issue_dir, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete"
+        )
         return StepExecutionResult(
             response="done",
             artifacts={"pr_result": "p1"},
@@ -733,7 +838,9 @@ def test_runtime_review_confirmed_routes_to_pr_without_legacy_class(tmp_path: Pa
     assert blackboard.artifacts["review_feedback"].path == "review-output.md"
 
 
-def test_runtime_review_needs_changes_routes_to_develop_without_legacy_class(tmp_path: Path) -> None:
+def test_runtime_review_needs_changes_routes_to_develop_without_legacy_class(
+    tmp_path: Path,
+) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "review-needs-changes"
     playbook = {
         "playbook": {"id": "default"},
@@ -1275,7 +1382,9 @@ def test_runtime_pauses_brief_ready_for_review_with_confirm_output_intent(tmp_pa
     assert blackboard.handoff_contract.intent == HandoffIntent.CONFIRM_OUTPUT
 
 
-def test_runtime_ready_for_review_without_confirm_output_uses_manual_handoff(tmp_path: Path) -> None:
+def test_runtime_ready_for_review_without_confirm_output_uses_manual_handoff(
+    tmp_path: Path,
+) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "develop-review-no-confirm"
     playbook = {
         "playbook": {"id": "default"},
@@ -1385,10 +1494,14 @@ def test_runtime_emits_expected_runtime_labels_per_path(tmp_path: Path) -> None:
     legacy_runtime.run(start_step="review")
     legacy_state = BlackboardStore(issue_dir_legacy).load_or_create("review")
     review_started = [
-        e for e in legacy_state.events if e.event_type == "step_started" and e.data.get("step") == "review"
+        e
+        for e in legacy_state.events
+        if e.event_type == "step_started" and e.data.get("step") == "review"
     ]
     review_completed = [
-        e for e in legacy_state.events if e.event_type == "step_completed" and e.data.get("step") == "review"
+        e
+        for e in legacy_state.events
+        if e.event_type == "step_completed" and e.data.get("step") == "review"
     ]
     boundary_transition = [
         e
@@ -1411,7 +1524,13 @@ def test_runtime_emits_expected_runtime_labels_per_path(tmp_path: Path) -> None:
     }
 
     def pr_executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        _write_baton(issue_dir_pr, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete")
+        _write_baton(
+            issue_dir_pr,
+            from_step="pr",
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
         return StepExecutionResult(
             response="done",
             artifacts={},
@@ -1659,7 +1778,11 @@ def test_runtime_handles_keyboard_interrupt(tmp_path: Path) -> None:
     bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
     interrupted_events = [e for e in bb.events if e.event_type == "step_interrupted"]
     assert len(interrupted_events) == 1
-    msg = json.loads(interrupted_events[0].message) if isinstance(interrupted_events[0].message, str) else interrupted_events[0].message
+    msg = (
+        json.loads(interrupted_events[0].message)
+        if isinstance(interrupted_events[0].message, str)
+        else interrupted_events[0].message
+    )
     assert msg["step"] == "spec"
 
 
@@ -1696,7 +1819,11 @@ def test_runtime_handles_agent_execution_error(tmp_path: Path) -> None:
     bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
     interrupted_events = [e for e in bb.events if e.event_type == "step_interrupted"]
     assert len(interrupted_events) == 1
-    msg = json.loads(interrupted_events[0].message) if isinstance(interrupted_events[0].message, str) else interrupted_events[0].message
+    msg = (
+        json.loads(interrupted_events[0].message)
+        if isinstance(interrupted_events[0].message, str)
+        else interrupted_events[0].message
+    )
     assert msg["step"] == "spec"
     assert msg["reason"] == "agent_rate_limit"
 
@@ -1751,12 +1878,16 @@ def test_runtime_reconciles_agent_error_after_valid_handoff(tmp_path: Path) -> N
         for e in bb.events
     )
 
-    iteration_data = json.loads((issue_dir / "spec" / "iteration_001" / "iteration.json").read_text())
+    iteration_data = json.loads(
+        (issue_dir / "spec" / "iteration_001" / "iteration.json").read_text()
+    )
     assert iteration_data["status_code"] == "confirmed"
     assert iteration_data["end_time"]
 
 
-def test_runtime_preserves_interrupted_when_reconciliation_evidence_incomplete(tmp_path: Path) -> None:
+def test_runtime_preserves_interrupted_when_reconciliation_evidence_incomplete(
+    tmp_path: Path,
+) -> None:
     """Incomplete persisted evidence should not be inferred as a completed handoff."""
     from cafe.agents.executor import AgentExecutionError
 
@@ -1847,11 +1978,15 @@ def test_runtime_resume_reconciliation_is_idempotent(tmp_path: Path) -> None:
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
-        executor=lambda *_args, **_kwargs: StepExecutionResult(response="confirmed", artifacts={}, status_code="confirmed"),
+        executor=lambda *_args, **_kwargs: StepExecutionResult(
+            response="confirmed", artifacts={}, status_code="confirmed"
+        ),
     )
 
     first = runtime._try_resume_reconcile_interrupted_handoff(runtime_label="legacy_until_boundary")
-    second = runtime._try_resume_reconcile_interrupted_handoff(runtime_label="legacy_until_boundary")
+    second = runtime._try_resume_reconcile_interrupted_handoff(
+        runtime_label="legacy_until_boundary"
+    )
 
     assert first is not None
     assert second is None
@@ -1923,7 +2058,9 @@ def test_runtime_reconciles_after_consumed_handoff_start_step(tmp_path: Path) ->
     reconciled_event = next(e for e in bb.events if e.event_type == "step_reconciled")
     assert reconciled_event.data["step"] == "spec"
     assert reconciled_event.data["to_step"] == "plan"
-    iteration_data = json.loads((issue_dir / "spec" / "iteration_001" / "iteration.json").read_text())
+    iteration_data = json.loads(
+        (issue_dir / "spec" / "iteration_001" / "iteration.json").read_text()
+    )
     assert iteration_data["status_code"] == "confirmed"
     assert iteration_data["end_time"]
 
@@ -1931,6 +2068,7 @@ def test_runtime_reconciles_after_consumed_handoff_start_step(tmp_path: Path) ->
 # ---------------------------------------------------------------------------
 # extra_prompt 傳遞測試
 # ---------------------------------------------------------------------------
+
 
 def _simple_playbook(step_name: str = "spec") -> dict:
     return {
@@ -1988,20 +2126,29 @@ def test_execute_one_iteration_no_extra_prompt_defaults_to_none(tmp_path: Path) 
 # reject-and-retry 機制測試
 # ---------------------------------------------------------------------------
 
-def _make_valid_baton_text(issue_dir: Path, *, from_step: str = "spec", to_step: str = "done", intent: str = "workflow_complete") -> None:
+
+def _make_valid_baton_text(
+    issue_dir: Path,
+    *,
+    from_step: str = "spec",
+    to_step: str = "done",
+    intent: str = "workflow_complete",
+) -> None:
     """寫入合法 baton 到 next_step.txt。"""
     to_owner = "done" if to_step == "done" else ("user" if to_step == "user" else "agent")
     (issue_dir / "next_step.txt").write_text(
-        json.dumps({
-            "version": 1,
-            "from_step": from_step,
-            "to_owner": to_owner,
-            "to_step": to_step,
-            "intent": intent,
-            "status_code": "",
-            "created_at": "2026-05-14T10:00:00+08:00",
-            "source": "test",
-        }),
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": from_step,
+                "to_owner": to_owner,
+                "to_step": to_step,
+                "intent": intent,
+                "status_code": "",
+                "created_at": "2026-05-14T10:00:00+08:00",
+                "source": "test",
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -2009,21 +2156,25 @@ def _make_valid_baton_text(issue_dir: Path, *, from_step: str = "spec", to_step:
 def _make_invalid_baton_text(issue_dir: Path) -> None:
     """寫入 to_owner='human'（無效）的 baton。"""
     (issue_dir / "next_step.txt").write_text(
-        json.dumps({
-            "version": 1,
-            "from_step": "spec",
-            "to_owner": "human",
-            "to_step": "user",
-            "intent": "need_clarification",
-            "status_code": "",
-            "created_at": "2026-05-14T10:00:00+08:00",
-            "source": "test",
-        }),
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": "spec",
+                "to_owner": "human",
+                "to_step": "user",
+                "intent": "need_clarification",
+                "status_code": "",
+                "created_at": "2026-05-14T10:00:00+08:00",
+                "source": "test",
+            }
+        ),
         encoding="utf-8",
     )
 
 
-def _make_invalid_target_baton_text(issue_dir: Path, *, from_step: str = "spec", to_step: str = "release") -> None:
+def _make_invalid_target_baton_text(
+    issue_dir: Path, *, from_step: str = "spec", to_step: str = "release"
+) -> None:
     """Write a baton whose target step does not exist in the playbook."""
     _write_baton(
         issue_dir,
@@ -2045,7 +2196,9 @@ def test_runtime_retries_once_on_baton_rejected_then_succeeds(tmp_path: Path) ->
         if call_count[0] == 1:
             _make_invalid_baton_text(issue_dir)
         else:
-            _make_valid_baton_text(issue_dir, from_step="spec", to_step="done", intent="workflow_complete")
+            _make_valid_baton_text(
+                issue_dir, from_step="spec", to_step="done", intent="workflow_complete"
+            )
         return StepExecutionResult(response="done", artifacts={}, status_code="")
 
     runtime = BlackboardWorkflowRuntime(
@@ -2072,7 +2225,9 @@ def test_runtime_retries_twice_on_baton_rejected_then_succeeds(tmp_path: Path) -
         if call_count[0] <= 2:
             _make_invalid_baton_text(issue_dir)
         else:
-            _make_valid_baton_text(issue_dir, from_step="spec", to_step="done", intent="workflow_complete")
+            _make_valid_baton_text(
+                issue_dir, from_step="spec", to_step="done", intent="workflow_complete"
+            )
         return StepExecutionResult(response="done", artifacts={}, status_code="")
 
     runtime = BlackboardWorkflowRuntime(
@@ -2101,7 +2256,9 @@ def test_runtime_retries_invalid_target_step_then_succeeds(tmp_path: Path) -> No
         if call_count[0] == 1:
             _make_invalid_target_baton_text(issue_dir, from_step="spec", to_step="release")
         else:
-            _make_valid_baton_text(issue_dir, from_step="spec", to_step="done", intent="workflow_complete")
+            _make_valid_baton_text(
+                issue_dir, from_step="spec", to_step="done", intent="workflow_complete"
+            )
         return StepExecutionResult(response="done", artifacts={}, status_code="")
 
     runtime = BlackboardWorkflowRuntime(
@@ -2134,9 +2291,13 @@ def test_runtime_retries_same_phase_baton_then_succeeds(tmp_path: Path) -> None:
         call_count[0] += 1
         captured_prompts.append(kwargs.get("extra_prompt"))
         if call_count[0] == 1:
-            _write_baton(issue_dir, from_step="spec", to_owner="agent", to_step="spec", intent="await_agent")
+            _write_baton(
+                issue_dir, from_step="spec", to_owner="agent", to_step="spec", intent="await_agent"
+            )
         else:
-            _make_valid_baton_text(issue_dir, from_step="spec", to_step="done", intent="workflow_complete")
+            _make_valid_baton_text(
+                issue_dir, from_step="spec", to_step="done", intent="workflow_complete"
+            )
         return StepExecutionResult(response="done", artifacts={}, status_code="")
 
     runtime = BlackboardWorkflowRuntime(
@@ -2175,9 +2336,13 @@ def test_runtime_retries_same_phase_baton_for_pr_then_succeeds(tmp_path: Path) -
         call_count[0] += 1
         captured_prompts.append(kwargs.get("extra_prompt"))
         if call_count[0] == 1:
-            _write_baton(issue_dir, from_step="pr", to_owner="agent", to_step="pr", intent="await_agent")
+            _write_baton(
+                issue_dir, from_step="pr", to_owner="agent", to_step="pr", intent="await_agent"
+            )
             return StepExecutionResult(response="stale", artifacts={"pr_result": "p1"})
-        _write_baton(issue_dir, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete")
+        _write_baton(
+            issue_dir, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete"
+        )
         return StepExecutionResult(
             response="done",
             artifacts={"pr_result": "p1"},
@@ -2231,7 +2396,9 @@ def test_runtime_baton_rejected_event_has_correct_fields(tmp_path: Path) -> None
         if call_count[0] == 1:
             _make_invalid_baton_text(issue_dir)
         else:
-            _make_valid_baton_text(issue_dir, from_step="spec", to_step="done", intent="workflow_complete")
+            _make_valid_baton_text(
+                issue_dir, from_step="spec", to_step="done", intent="workflow_complete"
+            )
         return StepExecutionResult(response="done", artifacts={}, status_code="")
 
     runtime = BlackboardWorkflowRuntime(
@@ -2264,7 +2431,9 @@ def test_runtime_retry_extra_prompt_contains_feedback(tmp_path: Path) -> None:
         if call_count[0] == 1:
             _make_invalid_baton_text(issue_dir)
         else:
-            _make_valid_baton_text(issue_dir, from_step="spec", to_step="done", intent="workflow_complete")
+            _make_valid_baton_text(
+                issue_dir, from_step="spec", to_step="done", intent="workflow_complete"
+            )
         return StepExecutionResult(response="done", artifacts={}, status_code="")
 
     runtime = BlackboardWorkflowRuntime(

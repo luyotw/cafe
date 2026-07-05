@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import yaml
 
@@ -45,7 +45,9 @@ def load_capability_registry(capabilities_dirs: Sequence[Path]) -> Dict[str, Dic
     for base in capabilities_dirs:
         if not base.is_dir():
             continue
-        paths = sorted(base.glob("*.yaml")) + sorted(base.glob("*.yml")) + sorted(base.glob("*.json"))
+        paths = (
+            sorted(base.glob("*.yaml")) + sorted(base.glob("*.yml")) + sorted(base.glob("*.json"))
+        )
         for path in paths:
             try:
                 raw = path.read_text(encoding="utf-8")
@@ -95,12 +97,59 @@ def _validate_string_args(args: Mapping[str, Any], required: Sequence[str]) -> O
     return None
 
 
+def _receipt_inputs(raw_args: Any) -> Dict[str, Any]:
+    return dict(raw_args) if isinstance(raw_args, Mapping) else {}
+
+
 def _validate_outputs(payload: Mapping[str, Any], schema: Mapping[str, Any]) -> Optional[str]:
     required = _schema_required(schema, label="expected_outputs")
     for key in required:
         if key not in payload or str(payload.get(key) or "").strip() == "":
             return f"missing_output:{key}"
     return None
+
+
+def _git_ref_exists(repo_root: Path, ref: str) -> bool:
+    """Return True when a git ref can be resolved locally."""
+    try:
+        return (
+            subprocess.run(
+                ["git", "show-ref", "--verify", "--quiet", ref],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                check=False,
+            ).returncode
+            == 0
+        )
+    except (FileNotFoundError, OSError):
+        return False
+
+
+def _resolve_publish_base(base_arg: str, *, repo_root: Path) -> str:
+    """Return a publish base ref that resolves to a known GitHub branch.
+
+    Keep legacy behavior for valid remote base refs, but avoid passing local-only
+    branch names that GitHub cannot use as PR bases.
+    """
+    base = str(base_arg or "").strip()
+    if not base:
+        return ""
+
+    candidates = [base, base.removeprefix("refs/heads/"), base.removeprefix("refs/remotes/origin/")]
+    if base.startswith("refs/remotes/"):
+        first_slash = base.find("/")
+        if first_slash >= 0:
+            candidates.append(base[first_slash + 1 :])
+    elif "/" in base:
+        candidates.append(base.rsplit("/", 1)[-1])
+
+    for candidate in dict.fromkeys(candidates):
+        if not candidate:
+            continue
+        if _git_ref_exists(repo_root, f"refs/remotes/origin/{candidate}"):
+            return candidate
+    return ""
 
 
 def resolve_repo_relative_path(*, repo_root: Path, raw_path: str, field_name: str) -> Path:
@@ -119,7 +168,14 @@ def resolve_sync_pr_script(repo_root: Path) -> Path:
     script_path = skill_dir / "scripts" / "sync_pr.sh"
     if script_path.exists():
         return script_path
-    fallback = Path(__file__).resolve().parents[1] / "data" / "skills" / "cafe-pr" / "scripts" / "sync_pr.sh"
+    fallback = (
+        Path(__file__).resolve().parents[1]
+        / "data"
+        / "skills"
+        / "cafe-pr"
+        / "scripts"
+        / "sync_pr.sh"
+    )
     if fallback.exists():
         return fallback
     raise FileNotFoundError(f"PR sync script not found: {script_path}")
@@ -201,10 +257,12 @@ def run_pr_publish_capability(
             success=False,
             category=VALIDATION_ERROR,
             code="unknown_capability",
-            inputs=dict(publish_request.get("args") or {}),
+            inputs=_receipt_inputs(publish_request.get("args")),
             outputs={},
         )
-        return PrPublishRun(receipt=receipt, pr_synced_event=None, error_message="unknown_capability")
+        return PrPublishRun(
+            receipt=receipt, pr_synced_event=None, error_message="unknown_capability"
+        )
 
     args = publish_request.get("args")
     if not isinstance(args, dict):
@@ -217,7 +275,9 @@ def run_pr_publish_capability(
             inputs={},
             outputs={},
         )
-        return PrPublishRun(receipt=receipt, pr_synced_event=None, error_message="missing_args_object")
+        return PrPublishRun(
+            receipt=receipt, pr_synced_event=None, error_message="missing_args_object"
+        )
 
     args_schema = definition.get("args_schema") or {}
     if not isinstance(args_schema, dict):
@@ -282,7 +342,10 @@ def run_pr_publish_capability(
         return PrPublishRun(receipt=receipt, pr_synced_event=None, error_message=str(exc))
 
     cmd: List[str] = ["/bin/bash", str(script_path), "--output", str(output_arg)]
-    base_arg = str(args.get("base") or "").strip()
+    base_arg = _resolve_publish_base(
+        str(args.get("base") or ""),
+        repo_root=repo_root,
+    )
     if base_arg:
         cmd.extend(["--base", base_arg])
 
@@ -315,7 +378,10 @@ def run_pr_publish_capability(
             category=SCRIPT_EXIT_ERROR,
             code=f"exit_{result.returncode}",
             inputs=dict(args),
-            outputs={"stderr": (result.stderr or "")[:4000], "stdout": (result.stdout or "")[:4000]},
+            outputs={
+                "stderr": (result.stderr or "")[:4000],
+                "stdout": (result.stdout or "")[:4000],
+            },
         )
         return PrPublishRun(receipt=receipt, pr_synced_event=None, error_message="script_failed")
 
@@ -331,7 +397,9 @@ def run_pr_publish_capability(
             inputs=dict(args),
             outputs={"stdout": (result.stdout or "")[:4000]},
         )
-        return PrPublishRun(receipt=receipt, pr_synced_event=None, error_message="invalid_stdout_json")
+        return PrPublishRun(
+            receipt=receipt, pr_synced_event=None, error_message="invalid_stdout_json"
+        )
 
     out_schema = definition.get("expected_outputs") or {}
     if not isinstance(out_schema, dict):
@@ -377,6 +445,44 @@ def run_pr_publish_capability(
         },
     }
     return PrPublishRun(receipt=receipt, pr_synced_event=pr_synced, error_message=None)
+
+
+def run_capability_request(
+    *,
+    repo_root: Path,
+    registry: Mapping[str, Any],
+    capability_request: Mapping[str, Any],
+    output_file: Path,
+    timeout_sec: float = 600.0,
+) -> PrPublishRun:
+    """Execute one trusted capability request or return a validation receipt.
+
+    The generic entry point intentionally only dispatches allow-listed
+    implementations. Unknown or not-yet-implemented capability ids become
+    validation receipts and never execute host-side scripts.
+    """
+    cap_id = str(capability_request.get("capability") or "").strip()
+    if cap_id == CAPABILITY_PR_PUBLISH_ID:
+        return run_pr_publish_capability(
+            repo_root=repo_root,
+            registry=registry,
+            publish_request=capability_request,
+            pr_markdown_file=output_file,
+            timeout_sec=timeout_sec,
+        )
+
+    definition = registry.get(cap_id)
+    code = "unknown_capability" if definition is None else "unsupported_capability"
+    receipt = _base_receipt(
+        correlation_id=uuid.uuid4().hex[:20],
+        capability=cap_id or "unknown",
+        success=False,
+        category=VALIDATION_ERROR,
+        code=code,
+        inputs=_receipt_inputs(capability_request.get("args")),
+        outputs={},
+    )
+    return PrPublishRun(receipt=receipt, pr_synced_event=None, error_message=code)
 
 
 def capability_receipt_hook_event(receipt: Mapping[str, Any]) -> Dict[str, Any]:

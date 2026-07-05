@@ -64,4 +64,12 @@ Use an explicit JSON payload:
 {"decision":"update_strategic_documents_first"}
 ```
 
+```json
+{"decision":"strategic_documents_updated","user_confirmed":true,"user_confirmation":"User confirmed the final strategic document content."}
+```
+
+`strategic_documents_updated` requires confirmation evidence in non-interactive
+runs unless the update is mechanically copied from already confirmed strategic
+material.
+
 If the payload is missing or invalid, the workflow remains paused at `user`.

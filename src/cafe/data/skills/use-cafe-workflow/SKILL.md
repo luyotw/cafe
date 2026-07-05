@@ -131,6 +131,90 @@ Re-read `.cafe/strategic_context.yaml` and linked documents before answering que
    cafe workflow --execute --start-step <step> --single-step
    ```
 
+## Alignment Checkpoints
+
+When CAFE pauses with `intent=alignment_checkpoint`, the workflow driver should
+try to resolve the checkpoint on behalf of the user when the decision is clear
+from confirmed project context. Do not automatically hand off every checkpoint
+to the user.
+
+### Inspect
+
+1. Read the latest `.cafe/issues/<issue>/<step>/iteration_*/alignment_request.json`.
+2. Re-read `.cafe/strategic_context.yaml` and every referenced strategic document
+   that is relevant to the request.
+3. Read the current issue artifacts needed to understand the proposed scope
+   (`spec`, `plan`, or the blocked step output).
+4. Classify the checkpoint against the repo mandate:
+   - **Resolvable by driver:** the decision follows directly from confirmed
+     strategic docs, issue acceptance criteria, and existing mandate.
+   - **Needs user:** the decision changes or confirms product positioning,
+     roadmap direction, principles, trusted capability boundaries beyond existing
+     docs, business/legal/pricing/production access, or any ambiguous tradeoff.
+
+### Driver-owned Decisions
+
+If the checkpoint is resolvable by the driver, continue non-interactively with an
+explicit JSON decision payload. Plain text must not be used for alignment approval.
+
+Examples:
+
+```bash
+cafe make --user-input '{"decision":"approve","reason":"Within confirmed roadmap and capability boundary."}'
+```
+
+```bash
+cafe make --user-input '{"decision":"narrow_scope","correction":"Keep this to PR publish plumbing; do not introduce a broader product-level contract model."}'
+```
+
+```bash
+cafe make --user-input '{"decision":"revise_spec","correction":"Specify that capability contracts protect trusted host execution boundaries; broad product ontology is out of scope."}'
+```
+
+Use `approve` only when no missing or draft strategic document blocks the
+decision. Use `narrow_scope`, `revise_spec`, or `revise_plan` when the desired
+alignment correction is clear from confirmed context.
+
+### Strategic Document Updates
+
+If a strategic document is `missing` or `draft`, the driver may draft or revise
+the document, but must not treat its own draft as confirmed strategy.
+
+The driver may mark a document `status: exists` and continue with
+`strategic_documents_updated` only when one of these is true:
+
+- the user explicitly confirmed the final document content in the current
+  thread/chat; or
+- the document content is copied or mechanically split from an already confirmed
+  strategic document, with no new product judgment.
+
+When finalizing confirmed strategic documents non-interactively, include
+confirmation evidence in the JSON payload:
+
+```bash
+cafe make --user-input '{"decision":"strategic_documents_updated","reason":"Positioning doc confirmed and strategic_context updated.","user_confirmed":true,"user_confirmation":"User confirmed the positioning framing: primary trusted host capability boundary, secondary external mutation risk; broad product contract model is out of scope."}'
+```
+
+If the document requires product judgment and the user has not confirmed it,
+leave the document as `draft` or `missing` and ask the user concise questions.
+Do not write `strategic_documents_updated`.
+
+### Ask The User When Uncertain
+
+When the driver cannot resolve the checkpoint confidently, stop and ask the user
+one focused question with a recommended answer and tradeoff. Good questions name
+the decision axis directly, for example:
+
+```text
+For #347, should capability contracts be positioned primarily as:
+1. trusted host capability boundary protection (recommended),
+2. external mutation risk reduction, or
+3. a broader product-level contract model?
+```
+
+After the user answers, apply the answer through the same JSON decision flow
+instead of opening the interactive menu unless the user asks for chat.
+
 ## Useful Options
 - Use `--fallback-preset <preset>` when the primary CLI is rate-limited, unavailable, missing, or configured with a bad model.
 - Use repeated `--add-dir <path>` for extra directories the agents must read or edit.
