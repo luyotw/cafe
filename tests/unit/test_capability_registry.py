@@ -209,3 +209,113 @@ def test_run_pr_publish_success_mocked_subprocess(
     assert run.receipt["success"] is True
     assert run.pr_synced_event is not None
     assert run.pr_synced_event["url"] == "https://example/pr/1"
+
+
+def test_run_pr_publish_skips_invalid_base_reference(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import cafe.core.capabilities as cap_mod
+
+    out = tmp_path / "pr.md"
+    out.write_text("# Title\n", encoding="utf-8")
+    rel = str(out.relative_to(tmp_path))
+    calls: list[list[str]] = []
+
+    class _Result:
+        def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def _fake_run(*cmd_args: object, **_kwargs: object) -> _Result:
+        cmd = list(cmd_args[0])
+        calls.append(cmd)
+        if cmd and cmd[0] == "git":
+            return _Result(returncode=1)
+        if cmd and cmd[0] == "/bin/bash":
+            return _Result(
+                returncode=0,
+                stdout='{"pr_url":"https://example/pr/1","pr_number":"1","action":"synced"}\n',
+            )
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    monkeypatch.setattr(cap_mod.subprocess, "run", _fake_run)
+
+    reg = {
+        CAPABILITY_PR_PUBLISH_ID: {
+            "id": CAPABILITY_PR_PUBLISH_ID,
+            "script_ref": "sync_pr",
+            "args_schema": {"required": ["output"]},
+            "expected_outputs": {"required": ["pr_url", "pr_number"]},
+        }
+    }
+    run = cap_mod.run_pr_publish_capability(
+        repo_root=tmp_path,
+        registry=reg,
+        publish_request={
+            "capability": CAPABILITY_PR_PUBLISH_ID,
+            "args": {"output": rel, "base": "codex/alignment-policy-escalation"},
+        },
+        pr_markdown_file=out,
+    )
+    assert run.receipt["success"] is True
+
+    bash_calls = [cmd for cmd in calls if cmd and cmd[0] == "/bin/bash"]
+    assert bash_calls, "sync_pr command was not invoked"
+    assert "--base" not in bash_calls[0]
+
+
+def test_run_pr_publish_skips_local_only_base_reference(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import cafe.core.capabilities as cap_mod
+
+    out = tmp_path / "pr.md"
+    out.write_text("# Title\n", encoding="utf-8")
+    rel = str(out.relative_to(tmp_path))
+    calls: list[list[str]] = []
+
+    class _Result:
+        def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def _fake_run(*cmd_args: object, **_kwargs: object) -> _Result:
+        cmd = list(cmd_args[0])
+        calls.append(cmd)
+        if cmd and cmd[0] == "git":
+            ref = str(cmd[-1])
+            return _Result(returncode=0 if ref.startswith("refs/heads/") else 1)
+        if cmd and cmd[0] == "/bin/bash":
+            return _Result(
+                returncode=0,
+                stdout='{"pr_url":"https://example/pr/1","pr_number":"1","action":"synced"}\n',
+            )
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    monkeypatch.setattr(cap_mod.subprocess, "run", _fake_run)
+
+    reg = {
+        CAPABILITY_PR_PUBLISH_ID: {
+            "id": CAPABILITY_PR_PUBLISH_ID,
+            "script_ref": "sync_pr",
+            "args_schema": {"required": ["output"]},
+            "expected_outputs": {"required": ["pr_url", "pr_number"]},
+        }
+    }
+    run = cap_mod.run_pr_publish_capability(
+        repo_root=tmp_path,
+        registry=reg,
+        publish_request={
+            "capability": CAPABILITY_PR_PUBLISH_ID,
+            "args": {"output": rel, "base": "codex/alignment-policy-escalation"},
+        },
+        pr_markdown_file=out,
+    )
+    assert run.receipt["success"] is True
+
+    bash_calls = [cmd for cmd in calls if cmd and cmd[0] == "/bin/bash"]
+    assert bash_calls, "sync_pr command was not invoked"
+    assert "--base" not in bash_calls[0]

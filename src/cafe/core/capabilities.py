@@ -109,6 +109,49 @@ def _validate_outputs(payload: Mapping[str, Any], schema: Mapping[str, Any]) -> 
     return None
 
 
+def _git_ref_exists(repo_root: Path, ref: str) -> bool:
+    """Return True when a git ref can be resolved locally."""
+    try:
+        return (
+            subprocess.run(
+                ["git", "show-ref", "--verify", "--quiet", ref],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                check=False,
+            ).returncode
+            == 0
+        )
+    except (FileNotFoundError, OSError):
+        return False
+
+
+def _resolve_publish_base(base_arg: str, *, repo_root: Path) -> str:
+    """Return a publish base ref that resolves to a known GitHub branch.
+
+    Keep legacy behavior for valid remote base refs, but avoid passing local-only
+    branch names that GitHub cannot use as PR bases.
+    """
+    base = str(base_arg or "").strip()
+    if not base:
+        return ""
+
+    candidates = [base, base.removeprefix("refs/heads/"), base.removeprefix("refs/remotes/origin/")]
+    if base.startswith("refs/remotes/"):
+        first_slash = base.find("/")
+        if first_slash >= 0:
+            candidates.append(base[first_slash + 1 :])
+    elif "/" in base:
+        candidates.append(base.rsplit("/", 1)[-1])
+
+    for candidate in dict.fromkeys(candidates):
+        if not candidate:
+            continue
+        if _git_ref_exists(repo_root, f"refs/remotes/origin/{candidate}"):
+            return candidate
+    return ""
+
+
 def resolve_repo_relative_path(*, repo_root: Path, raw_path: str, field_name: str) -> Path:
     if not str(raw_path).strip():
         raise ValueError(f"missing_{field_name}")
@@ -299,7 +342,10 @@ def run_pr_publish_capability(
         return PrPublishRun(receipt=receipt, pr_synced_event=None, error_message=str(exc))
 
     cmd: List[str] = ["/bin/bash", str(script_path), "--output", str(output_arg)]
-    base_arg = str(args.get("base") or "").strip()
+    base_arg = _resolve_publish_base(
+        str(args.get("base") or ""),
+        repo_root=repo_root,
+    )
     if base_arg:
         cmd.extend(["--base", base_arg])
 

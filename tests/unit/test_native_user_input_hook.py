@@ -1010,7 +1010,9 @@ def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_with
             status_code=None,
         )
 
-    mock_run.assert_called_once()
+    assert mock_run.call_count == 2
+    assert mock_run.call_args_list[0].args[0][0] == "git"
+    assert mock_run.call_args_list[1].args[0][0] == "/bin/bash"
     assert result.events[0]["type"] == "pr_synced"
     assert result.events[0]["source"] == "capability"
     assert result.events[1]["type"] == "capability_receipt"
@@ -1077,7 +1079,9 @@ def test_github_pr_creator_publish_output_runs_from_pr_done_await_agent_baton(
             status_code=None,
         )
 
-    mock_run.assert_called_once()
+    assert mock_run.call_count == 2
+    assert mock_run.call_args_list[0].args[0][0] == "git"
+    assert mock_run.call_args_list[1].args[0][0] == "/bin/bash"
     assert result.events[0]["type"] == "pr_synced"
     assert result.events[1]["type"] == "capability_receipt"
     assert result.context_updates["pr_sync_action"] == "updated"
@@ -1130,7 +1134,9 @@ def test_github_pr_creator_publish_output_runs_from_legacy_done_baton(
             status_code=None,
         )
 
-    mock_run.assert_called_once()
+    assert mock_run.call_count == 2
+    assert mock_run.call_args_list[0].args[0][0] == "git"
+    assert mock_run.call_args_list[1].args[0][0] == "/bin/bash"
     assert result.events[0]["type"] == "pr_synced"
     assert result.events[0]["action"] == "updated"
     assert result.events[1]["type"] == "capability_receipt"
