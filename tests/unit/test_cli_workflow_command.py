@@ -4,17 +4,24 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 from typer.testing import CliRunner
 
 from cafe.agents.executor import AgentExecutionError
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.git import BranchHealth
 from cafe.core.workflow_models import StepExecutionResult
-from cafe.ui.cli import app, _execute_single_step_alias, _find_external_resume_step, _handle_user_phase
-from cafe.ui.cli_shared import _build_workflow_step_executor
+from cafe.ui.cli import (
+    app,
+    _execute_single_step_alias,
+    _find_external_resume_step,
+    _handle_user_phase,
+)
+from cafe.ui.cli_shared import (
+    _alignment_checkpoint_menu_choices,
+    _build_workflow_step_executor,
+    apply_alignment_decision_from_payload,
+)
 from cafe.utils.config import ConfigManager
-
 
 runner = CliRunner()
 
@@ -29,7 +36,11 @@ def _result(
 ) -> StepExecutionResult:
     return StepExecutionResult(
         response=status_code,
-        artifacts=artifacts if artifacts is not None else {str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+        artifacts=(
+            artifacts
+            if artifacts is not None
+            else {str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"}
+        ),
         status_code=status_code,
         events=events or [],
     )
@@ -57,7 +68,41 @@ def _handoff_to_step(
     )
 
 
-def test_single_step_alias_updates_workflow_pointer_to_requested_step(tmp_path: Path, monkeypatch) -> None:
+def test_alignment_checkpoint_menu_is_chat_first_and_concise() -> None:
+    choices = _alignment_checkpoint_menu_choices(
+        "Roger",
+        [
+            "approve",
+            "narrow_scope",
+            "revise_spec",
+            "revise_plan",
+            "update_strategic_documents_first",
+            "strategic_documents_updated",
+            "manual_pause",
+            "reject_or_defer",
+        ],
+    )
+
+    assert choices == [
+        {"name": "Chat with Roger about alignment", "value": "chat_alignment"},
+        {"name": "Approve and continue", "value": "approve"},
+        {"name": "Strategic documents updated", "value": "strategic_documents_updated"},
+        {"name": "Pause for manual decision", "value": "manual_pause"},
+    ]
+
+
+def test_alignment_checkpoint_menu_hides_disallowed_direct_decisions() -> None:
+    choices = _alignment_checkpoint_menu_choices("Roger", ["approve"])
+
+    assert choices == [
+        {"name": "Chat with Roger about alignment", "value": "chat_alignment"},
+        {"name": "Approve and continue", "value": "approve"},
+    ]
+
+
+def test_single_step_alias_updates_workflow_pointer_to_requested_step(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-210"
     issue_dir.mkdir(parents=True, exist_ok=True)
@@ -81,8 +126,15 @@ def test_single_step_alias_updates_workflow_pointer_to_requested_step(tmp_path: 
         def __init__(self) -> None:
             self.agent_manager = MagicMock()
 
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
-            return _result(status_code="no_changes_needed", step_name=step_name, step_def=step_def, artifacts={})
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
+            return _result(
+                status_code="no_changes_needed",
+                step_name=step_name,
+                step_def=step_def,
+                artifacts={},
+            )
 
     with patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()):
         result = _execute_single_step_alias(
@@ -119,7 +171,9 @@ def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None
     executed_steps: list[str] = []
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             executed_steps.append(step_name)
             if step_name == "pr":
                 _handoff_to_step(
@@ -134,7 +188,9 @@ def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()) as mock_builder,
+        patch(
+            "cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()
+        ) as mock_builder,
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-200"
@@ -154,16 +210,22 @@ def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None
         assert executed_steps == ["spec", "plan", "develop", "review", "pr"]
 
 
-def test_workflow_command_passes_initial_user_input_to_spec_step(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_command_passes_initial_user_input_to_spec_step(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()) as mock_builder,
+        patch(
+            "cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()
+        ) as mock_builder,
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-201"
@@ -188,16 +250,22 @@ def test_workflow_command_passes_initial_user_input_to_spec_step(tmp_path: Path,
     }
 
 
-def test_workflow_command_passes_initial_user_input_to_question_step(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_command_passes_initial_user_input_to_question_step(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()) as mock_builder,
+        patch(
+            "cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()
+        ) as mock_builder,
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-research-input"
@@ -221,16 +289,22 @@ def test_workflow_command_passes_initial_user_input_to_question_step(tmp_path: P
     }
 
 
-def test_workflow_command_passes_initial_user_input_to_brief_step(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_command_passes_initial_user_input_to_brief_step(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()) as mock_builder,
+        patch(
+            "cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()
+        ) as mock_builder,
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-editorial-input"
@@ -254,7 +328,9 @@ def test_workflow_command_passes_initial_user_input_to_brief_step(tmp_path: Path
     }
 
 
-def test_workflow_fallback_rebuild_passes_entry_point_user_input(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_fallback_rebuild_passes_entry_point_user_input(
+    tmp_path: Path, monkeypatch
+) -> None:
     """Fallback executor rebuild should keep entry-point keyed step_user_inputs."""
     monkeypatch.chdir(tmp_path)
     cafe_dir = tmp_path / ".cafe"
@@ -271,7 +347,9 @@ def test_workflow_fallback_rebuild_passes_entry_point_user_input(tmp_path: Path,
     execute_calls = {"count": 0}
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             execute_calls["count"] += 1
             if execute_calls["count"] == 1:
                 raise AgentExecutionError("rate limit", error_type="rate_limit")
@@ -308,7 +386,9 @@ def test_workflow_fallback_rebuild_passes_entry_point_user_input(tmp_path: Path,
     assert builder_calls == [{"develop": user_text}, {"develop": user_text}]
 
 
-def test_workflow_command_resume_user_input_targets_handoff_from_step(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_command_resume_user_input_targets_handoff_from_step(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-plan"
     issue_dir.mkdir(parents=True, exist_ok=True)
@@ -326,12 +406,16 @@ def test_workflow_command_resume_user_input_targets_handoff_from_step(tmp_path: 
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()) as mock_builder,
+        patch(
+            "cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()
+        ) as mock_builder,
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-resume-plan"
@@ -377,7 +461,10 @@ def test_user_phase_alignment_checkpoint_approve_resumes_step(tmp_path: Path) ->
     )
     playbook_data = {
         "playbook": {"id": "default"},
-        "steps": {"develop": {"role": "developer", "on": {"await_agent": "review"}}, "review": {"role": "reviewer", "on": {}}},
+        "steps": {
+            "develop": {"role": "developer", "on": {"await_agent": "review"}},
+            "review": {"role": "reviewer", "on": {}},
+        },
     }
     store = BlackboardStore(issue_dir)
     blackboard = store.load_or_create("user", playbook_id="default")
@@ -392,7 +479,13 @@ def test_user_phase_alignment_checkpoint_approve_resumes_step(tmp_path: Path) ->
         source="test",
     )
 
-    with patch("cafe.ui.inquirer_prompts.prompt_list", return_value="approve"):
+    def fake_prompt_list(message: str, choices: list[dict[str, str]], default: str | None = None):
+        assert message == "How should this alignment checkpoint continue?"
+        assert choices[0]["value"] == "chat_alignment"
+        assert default == "chat_alignment"
+        return "approve"
+
+    with patch("cafe.ui.inquirer_prompts.prompt_list", side_effect=fake_prompt_list):
         result = _handle_user_phase(
             issue_name="issue-align-user",
             issue_dir=issue_dir,
@@ -407,16 +500,543 @@ def test_user_phase_alignment_checkpoint_approve_resumes_step(tmp_path: Path) ->
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
 
 
+def test_user_phase_alignment_checkpoint_chat_decision_uses_host_apply(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-align-chat"
+    request_dir = issue_dir / "spec" / "iteration_001"
+    request_dir.mkdir(parents=True, exist_ok=True)
+    request_file = request_dir / "alignment_request.json"
+    request_file.write_text(
+        json.dumps(
+            {
+                "fingerprint": "fp-chat",
+                "from_step": "spec",
+                "recommended_resume_target": "spec",
+                "strategic_document_update_requirements": [],
+                "allowed_decisions": ["narrow_scope"],
+                "affected_documents": [
+                    {
+                        "category": "roadmap",
+                        "path": "docs/roadmap.md",
+                        "status": "exists",
+                        "exists": True,
+                    },
+                    {
+                        "category": "positioning",
+                        "path": "docs/positioning.md",
+                        "status": "missing",
+                        "exists": False,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    playbook_data = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {"role": "pm", "chat_role": "pm", "on": {"await_agent": "plan"}},
+            "plan": {"role": "developer", "on": {}},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
+        status_code="alignment_checkpoint",
+        source="test",
+    )
+
+    def fake_chat(role: str, issue_name: str, **kwargs):
+        assert role == "pm"
+        assert issue_name == "issue-align-chat"
+        assert kwargs["chat_mode"] == "alignment"
+        initial_prompt = kwargs["initial_prompt"]
+        assert "alignment checkpoint chat" in initial_prompt
+        assert str(request_file) in initial_prompt
+        assert "Decision output file:" in initial_prompt
+        assert "narrow_scope" in initial_prompt
+        assert "Existing strategic docs:" in initial_prompt
+        assert "roadmap:exists (docs/roadmap.md)" in initial_prompt
+        assert "Missing/unconfigured strategic categories:" in initial_prompt
+        assert "positioning:missing (docs/positioning.md)" in initial_prompt
+        assert "Chat-mode decision mapping:" in initial_prompt
+        assert "Option 2 starts strategic document alignment" in initial_prompt
+        assert "does not by itself approve document content" in initial_prompt
+        assert "strategic_documents_updated" in initial_prompt
+        assert "user_confirmed" in initial_prompt
+        assert "user_confirmation" in initial_prompt
+        assert "Write update_strategic_documents_first only" in initial_prompt
+        assert "Do not edit the blackboard" in initial_prompt
+        extra_env = kwargs["extra_env"]
+        assert extra_env["CAFE_ALIGNMENT_REQUEST_FILE"] == str(request_file)
+        decision_file = Path(extra_env["CAFE_ALIGNMENT_DECISION_FILE"])
+        decision_file.write_text(
+            json.dumps(
+                {
+                    "decision": "narrow_scope",
+                    "correction": "Keep this issue limited to capability request UX.",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return 0
+
+    with (
+        patch("cafe.ui.inquirer_prompts.prompt_list", return_value="chat_alignment"),
+        patch("cafe.ui.cli.launch_chat_session", side_effect=fake_chat),
+    ):
+        result = _handle_user_phase(
+            issue_name="issue-align-chat",
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+        )
+
+    assert result == "spec"
+    assert (request_dir / "user_input.md").read_text(encoding="utf-8") == (
+        "Keep this issue limited to capability request UX."
+    )
+    reloaded = store.load_or_create("spec", playbook_id="default")
+    assert reloaded.current_step == "spec"
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
+
+
+def test_user_phase_alignment_checkpoint_rejects_chat_decision_outside_allowed_choices(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-align-chat-blocked"
+    request_dir = issue_dir / "spec" / "iteration_001"
+    request_dir.mkdir(parents=True, exist_ok=True)
+    (request_dir / "alignment_request.json").write_text(
+        json.dumps(
+            {
+                "fingerprint": "fp-chat-blocked",
+                "from_step": "spec",
+                "recommended_resume_target": "spec",
+                "strategic_document_update_requirements": [],
+                "allowed_decisions": ["approve"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    playbook_data = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {"role": "pm", "chat_role": "pm", "on": {"await_agent": "plan"}},
+            "plan": {"role": "developer", "on": {}},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
+        status_code="alignment_checkpoint",
+        source="test",
+    )
+
+    def fake_chat(_role: str, _issue_name: str, **kwargs):
+        Path(kwargs["extra_env"]["CAFE_ALIGNMENT_DECISION_FILE"]).write_text(
+            json.dumps({"decision": "narrow_scope", "correction": "Try to narrow anyway."}),
+            encoding="utf-8",
+        )
+        return 0
+
+    with (
+        patch("cafe.ui.inquirer_prompts.prompt_list", return_value="chat_alignment"),
+        patch("cafe.ui.cli.launch_chat_session", side_effect=fake_chat),
+    ):
+        result = _handle_user_phase(
+            issue_name="issue-align-chat-blocked",
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+        )
+
+    assert result is None
+    reloaded = store.load_or_create("user", playbook_id="default")
+    assert reloaded.current_step == "user"
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.intent == HandoffIntent.ALIGNMENT_CHECKPOINT
+    assert not (request_dir / "user_input.md").exists()
+
+
+def test_user_phase_alignment_checkpoint_rejects_unconfirmed_chat_strategic_docs(
+    tmp_path: Path,
+) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir(parents=True)
+    (docs_dir / "positioning.md").write_text(
+        "# Positioning\n\nDraft positioning.\n", encoding="utf-8"
+    )
+    cafe_dir = tmp_path / ".cafe"
+    cafe_dir.mkdir(parents=True, exist_ok=True)
+    (cafe_dir / "strategic_context.yaml").write_text(
+        "version: 1\n"
+        "documents:\n"
+        "  positioning:\n"
+        "    path: docs/positioning.md\n"
+        "    status: exists\n",
+        encoding="utf-8",
+    )
+    issue_dir = cafe_dir / "issues" / "issue-align-unconfirmed-docs"
+    request_dir = issue_dir / "spec" / "iteration_001"
+    request_dir.mkdir(parents=True, exist_ok=True)
+    (request_dir / "alignment_request.json").write_text(
+        json.dumps(
+            {
+                "fingerprint": "fp-unconfirmed-docs",
+                "from_step": "spec",
+                "recommended_resume_target": "spec",
+                "strategic_document_update_requirements": [],
+                "affected_documents": [
+                    {
+                        "category": "positioning",
+                        "path": "docs/positioning.md",
+                        "status": "missing",
+                        "sha256": None,
+                        "exists": False,
+                    }
+                ],
+                "allowed_decisions": ["strategic_documents_updated"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    playbook_data = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {"role": "pm", "chat_role": "pm", "on": {"await_agent": "plan"}},
+            "plan": {"role": "developer", "on": {}},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
+        status_code="alignment_checkpoint",
+        source="test",
+    )
+
+    def fake_chat(_role: str, _issue_name: str, **kwargs):
+        Path(kwargs["extra_env"]["CAFE_ALIGNMENT_DECISION_FILE"]).write_text(
+            json.dumps(
+                {
+                    "decision": "strategic_documents_updated",
+                    "reason": "Created positioning from existing roadmap context.",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return 0
+
+    with (
+        patch("cafe.ui.inquirer_prompts.prompt_list", return_value="chat_alignment"),
+        patch("cafe.ui.cli.launch_chat_session", side_effect=fake_chat),
+    ):
+        result = _handle_user_phase(
+            issue_name="issue-align-unconfirmed-docs",
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+        )
+
+    assert result is None
+    reloaded = store.load_or_create("user", playbook_id="default")
+    assert reloaded.current_step == "user"
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.intent == HandoffIntent.ALIGNMENT_CHECKPOINT
+    assert any(
+        event.event_type == "alignment_decision_blocked"
+        and event.data.get("reason") == "missing_user_confirmation"
+        for event in reloaded.events
+    )
+
+
+def test_user_phase_alignment_checkpoint_accepts_confirmed_chat_strategic_docs(
+    tmp_path: Path,
+) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir(parents=True)
+    (docs_dir / "positioning.md").write_text(
+        "# Positioning\n\nConfirmed positioning.\n",
+        encoding="utf-8",
+    )
+    cafe_dir = tmp_path / ".cafe"
+    cafe_dir.mkdir(parents=True, exist_ok=True)
+    (cafe_dir / "strategic_context.yaml").write_text(
+        "version: 1\n"
+        "documents:\n"
+        "  positioning:\n"
+        "    path: docs/positioning.md\n"
+        "    status: exists\n",
+        encoding="utf-8",
+    )
+    issue_dir = cafe_dir / "issues" / "issue-align-confirmed-docs"
+    request_dir = issue_dir / "spec" / "iteration_001"
+    request_dir.mkdir(parents=True, exist_ok=True)
+    (request_dir / "alignment_request.json").write_text(
+        json.dumps(
+            {
+                "fingerprint": "fp-confirmed-docs",
+                "from_step": "spec",
+                "recommended_resume_target": "spec",
+                "strategic_document_update_requirements": [],
+                "affected_documents": [
+                    {
+                        "category": "positioning",
+                        "path": "docs/positioning.md",
+                        "status": "missing",
+                        "sha256": None,
+                        "exists": False,
+                    }
+                ],
+                "allowed_decisions": ["strategic_documents_updated"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    playbook_data = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {"role": "pm", "chat_role": "pm", "on": {"await_agent": "plan"}},
+            "plan": {"role": "developer", "on": {}},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
+        status_code="alignment_checkpoint",
+        source="test",
+    )
+
+    def fake_chat(_role: str, _issue_name: str, **kwargs):
+        Path(kwargs["extra_env"]["CAFE_ALIGNMENT_DECISION_FILE"]).write_text(
+            json.dumps(
+                {
+                    "decision": "strategic_documents_updated",
+                    "reason": "User approved the final positioning document.",
+                    "user_confirmed": True,
+                    "user_confirmation": "User confirmed the final positioning draft after review.",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return 0
+
+    with (
+        patch("cafe.ui.inquirer_prompts.prompt_list", return_value="chat_alignment"),
+        patch("cafe.ui.cli.launch_chat_session", side_effect=fake_chat),
+    ):
+        result = _handle_user_phase(
+            issue_name="issue-align-confirmed-docs",
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+        )
+
+    assert result == "spec"
+    reloaded = store.load_or_create("spec", playbook_id="default")
+    assert reloaded.current_step == "spec"
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
+
+
+def test_alignment_payload_rejects_unconfirmed_strategic_documents_updated(
+    tmp_path: Path,
+) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir(parents=True)
+    (docs_dir / "positioning.md").write_text(
+        "# Positioning\n\nDraft positioning.\n",
+        encoding="utf-8",
+    )
+    cafe_dir = tmp_path / ".cafe"
+    cafe_dir.mkdir(parents=True, exist_ok=True)
+    (cafe_dir / "strategic_context.yaml").write_text(
+        "version: 1\n"
+        "documents:\n"
+        "  positioning:\n"
+        "    path: docs/positioning.md\n"
+        "    status: exists\n",
+        encoding="utf-8",
+    )
+    issue_dir = cafe_dir / "issues" / "issue-align-payload-unconfirmed"
+    request_dir = issue_dir / "spec" / "iteration_001"
+    request_dir.mkdir(parents=True, exist_ok=True)
+    (request_dir / "alignment_request.json").write_text(
+        json.dumps(
+            {
+                "fingerprint": "fp-payload-unconfirmed",
+                "from_step": "spec",
+                "recommended_resume_target": "spec",
+                "strategic_document_update_requirements": [],
+                "affected_documents": [
+                    {
+                        "category": "positioning",
+                        "path": "docs/positioning.md",
+                        "status": "missing",
+                        "sha256": None,
+                        "exists": False,
+                    }
+                ],
+                "allowed_decisions": ["strategic_documents_updated"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    playbook_data = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {"role": "pm", "on": {"await_agent": "plan"}},
+            "plan": {"role": "developer", "on": {}},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
+        status_code="alignment_checkpoint",
+        source="test",
+    )
+
+    result = apply_alignment_decision_from_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook_data,
+        blackboard=blackboard,
+        payload={"decision": "docs_updated"},
+    )
+
+    assert result is None
+    reloaded = store.load_or_create("user", playbook_id="default")
+    assert reloaded.current_step == "user"
+    assert any(
+        event.event_type == "alignment_decision_blocked"
+        and event.data.get("reason") == "missing_user_confirmation"
+        for event in reloaded.events
+    )
+
+
+def test_alignment_payload_accepts_confirmed_strategic_documents_updated(
+    tmp_path: Path,
+) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir(parents=True)
+    (docs_dir / "positioning.md").write_text(
+        "# Positioning\n\nConfirmed positioning.\n",
+        encoding="utf-8",
+    )
+    cafe_dir = tmp_path / ".cafe"
+    cafe_dir.mkdir(parents=True, exist_ok=True)
+    (cafe_dir / "strategic_context.yaml").write_text(
+        "version: 1\n"
+        "documents:\n"
+        "  positioning:\n"
+        "    path: docs/positioning.md\n"
+        "    status: exists\n",
+        encoding="utf-8",
+    )
+    issue_dir = cafe_dir / "issues" / "issue-align-payload-confirmed"
+    request_dir = issue_dir / "spec" / "iteration_001"
+    request_dir.mkdir(parents=True, exist_ok=True)
+    (request_dir / "alignment_request.json").write_text(
+        json.dumps(
+            {
+                "fingerprint": "fp-payload-confirmed",
+                "from_step": "spec",
+                "recommended_resume_target": "spec",
+                "strategic_document_update_requirements": [],
+                "affected_documents": [
+                    {
+                        "category": "positioning",
+                        "path": "docs/positioning.md",
+                        "status": "missing",
+                        "sha256": None,
+                        "exists": False,
+                    }
+                ],
+                "allowed_decisions": ["strategic_documents_updated"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    playbook_data = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {"role": "pm", "on": {"await_agent": "plan"}},
+            "plan": {"role": "developer", "on": {}},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
+        status_code="alignment_checkpoint",
+        source="test",
+    )
+
+    result = apply_alignment_decision_from_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook_data,
+        blackboard=blackboard,
+        payload={
+            "decision": "strategic_documents_updated",
+            "user_confirmed": True,
+            "user_confirmation": "User confirmed the final strategic document.",
+        },
+    )
+
+    assert result == "spec"
+    reloaded = store.load_or_create("spec", playbook_id="default")
+    assert reloaded.current_step == "spec"
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
+
+
 def test_user_phase_alignment_checkpoint_accepts_updated_strategic_document(tmp_path: Path) -> None:
     roadmap = tmp_path / "ROADMAP.md"
     roadmap.write_text("Updated roadmap direction\n", encoding="utf-8")
     cafe_dir = tmp_path / ".cafe"
     cafe_dir.mkdir(parents=True, exist_ok=True)
     (cafe_dir / "strategic_context.yaml").write_text(
-        "version: 1\n"
-        "documents:\n"
-        "  roadmap:\n"
-        "    path: ROADMAP.md\n",
+        "version: 1\n" "documents:\n" "  roadmap:\n" "    path: ROADMAP.md\n",
         encoding="utf-8",
     )
     issue_dir = cafe_dir / "issues" / "codex" / "issue-align-docs"
@@ -438,7 +1058,10 @@ def test_user_phase_alignment_checkpoint_accepts_updated_strategic_document(tmp_
     )
     playbook_data = {
         "playbook": {"id": "default"},
-        "steps": {"develop": {"role": "developer", "on": {"await_agent": "review"}}, "review": {"role": "reviewer", "on": {}}},
+        "steps": {
+            "develop": {"role": "developer", "on": {"await_agent": "review"}},
+            "review": {"role": "reviewer", "on": {}},
+        },
     }
     store = BlackboardStore(issue_dir)
     blackboard = store.load_or_create("user", playbook_id="default")
@@ -464,6 +1087,84 @@ def test_user_phase_alignment_checkpoint_accepts_updated_strategic_document(tmp_
     assert result == "develop"
     reloaded = store.load_or_create("develop", playbook_id="default")
     assert reloaded.current_step == "develop"
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
+
+
+def test_user_phase_alignment_checkpoint_accepts_newly_created_missing_affected_document(
+    tmp_path: Path,
+) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir(parents=True)
+    (docs_dir / "positioning.md").write_text(
+        "# Positioning\n\nCAFE serves workflow builders who need human-agent handoffs.\n",
+        encoding="utf-8",
+    )
+    cafe_dir = tmp_path / ".cafe"
+    cafe_dir.mkdir(parents=True, exist_ok=True)
+    (cafe_dir / "strategic_context.yaml").write_text(
+        "version: 1\n"
+        "documents:\n"
+        "  positioning:\n"
+        "    path: docs/positioning.md\n"
+        "    status: exists\n",
+        encoding="utf-8",
+    )
+    issue_dir = cafe_dir / "issues" / "issue-align-positioning"
+    request_dir = issue_dir / "spec" / "iteration_001"
+    request_dir.mkdir(parents=True, exist_ok=True)
+    (request_dir / "alignment_request.json").write_text(
+        json.dumps(
+            {
+                "fingerprint": "fp-positioning",
+                "from_step": "spec",
+                "recommended_resume_target": "spec",
+                "strategic_document_update_requirements": [],
+                "affected_documents": [
+                    {
+                        "category": "positioning",
+                        "path": "docs/positioning.md",
+                        "status": "missing",
+                        "sha256": None,
+                        "exists": False,
+                    }
+                ],
+                "allowed_decisions": ["strategic_documents_updated"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    playbook_data = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {"role": "pm", "on": {"await_agent": "plan"}},
+            "plan": {"role": "developer", "on": {}},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
+        status_code="alignment_checkpoint",
+        source="test",
+    )
+
+    with patch("cafe.ui.inquirer_prompts.prompt_list", return_value="strategic_documents_updated"):
+        result = _handle_user_phase(
+            issue_name="issue-align-positioning",
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+        )
+
+    assert result == "spec"
+    reloaded = store.load_or_create("spec", playbook_id="default")
+    assert reloaded.current_step == "spec"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
 
@@ -512,7 +1213,9 @@ def test_workflow_command_does_not_treat_generic_user_input_as_alignment_approva
     assert reloaded.current_step == "user"
 
 
-def test_workflow_command_resume_confirm_output_keeps_await_agent_intent(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_command_resume_confirm_output_keeps_await_agent_intent(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-confirm"
     issue_dir.mkdir(parents=True, exist_ok=True)
@@ -530,7 +1233,9 @@ def test_workflow_command_resume_confirm_output_keeps_await_agent_intent(tmp_pat
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
     with (
@@ -580,7 +1285,9 @@ def test_make_help_describes_user_input_without_spec_only_wording() -> None:
     assert "handoff" in help_text
 
 
-def test_build_workflow_step_executor_passes_allowed_directories(tmp_path: Path, monkeypatch) -> None:
+def test_build_workflow_step_executor_passes_allowed_directories(
+    tmp_path: Path, monkeypatch
+) -> None:
     """Builder should read config dirs and preserve CLI-provided dirs on the executor."""
     monkeypatch.chdir(tmp_path)
     cafe_dir = tmp_path / ".cafe"
@@ -618,12 +1325,16 @@ def test_workflow_accepts_add_dir_and_passes_through(tmp_path: Path, monkeypatch
     (tmp_path / "src").mkdir()
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()) as mock_builder,
+        patch(
+            "cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()
+        ) as mock_builder,
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-add-dir"
@@ -661,7 +1372,9 @@ def test_workflow_command_prints_generic_event_display(tmp_path: Path, monkeypat
                 ]
             return StepExecutionResult(
                 response="confirmed",
-                artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+                artifacts={
+                    str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"
+                },
                 status_code="confirmed",
                 events=events,
             )
@@ -682,7 +1395,9 @@ def test_workflow_command_prints_generic_event_display(tmp_path: Path, monkeypat
     assert executed_steps == ["spec", "plan", "develop", "review", "pr"]
 
 
-def test_workflow_command_does_not_duplicate_pr_url_without_display(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_command_does_not_duplicate_pr_url_without_display(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     class FakeExecutor:
@@ -708,7 +1423,9 @@ def test_workflow_command_does_not_duplicate_pr_url_without_display(tmp_path: Pa
                 ]
             return StepExecutionResult(
                 response="confirmed",
-                artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+                artifacts={
+                    str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"
+                },
                 status_code="confirmed",
                 events=events,
             )
@@ -751,7 +1468,9 @@ def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, m
     next_step_file.write_text("plan\n", encoding="utf-8")
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             executed_steps.append(step_name)
             if step_name == "pr":
                 _handoff_to_step(
@@ -785,7 +1504,9 @@ def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, m
     assert blackboard_data["current_step"] == "user"
 
 
-def test_workflow_command_does_not_consume_chat_baton_with_uncommitted_changes(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_command_does_not_consume_chat_baton_with_uncommitted_changes(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     executed_steps: list[str] = []
 
@@ -808,9 +1529,13 @@ def test_workflow_command_does_not_consume_chat_baton_with_uncommitted_changes(t
     next_step_file.write_text("develop\n", encoding="utf-8")
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             executed_steps.append(step_name)
-            return _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(
+                status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
+            )
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -904,9 +1629,12 @@ def test_workflow_command_start_step_rebuilds_stale_text_baton(tmp_path: Path, m
                 artifacts={},
             )
 
-    with patch("cafe.ui.cli.GitOperations") as mock_git_cls, patch(
-        "cafe.ui.cli._build_workflow_step_executor",
-        return_value=FakeExecutor(),
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch(
+            "cafe.ui.cli._build_workflow_step_executor",
+            return_value=FakeExecutor(),
+        ),
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-206c"
@@ -963,10 +1691,14 @@ def test_workflow_command_prints_guidance_for_invalid_runtime_baton(
                 "Invalid baton contract payload: Expecting value: line 1 column 1 (char 0)"
             )
 
-    with patch("cafe.ui.cli.GitOperations") as mock_git_cls, patch(
-        "cafe.ui.cli._build_workflow_step_executor",
-        return_value=FakeExecutor(),
-    ), patch("cafe.ui.commands.workflow.BlackboardWorkflowRuntime", FailingRuntime):
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch(
+            "cafe.ui.cli._build_workflow_step_executor",
+            return_value=FakeExecutor(),
+        ),
+        patch("cafe.ui.commands.workflow.BlackboardWorkflowRuntime", FailingRuntime),
+    ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-206d"
         mock_git_cls.return_value = git
@@ -982,12 +1714,21 @@ def test_workflow_command_prints_guidance_for_invalid_runtime_baton(
     assert "Error: workflow run failed: Invalid baton contract payload" in result.stdout
 
 
-def test_workflow_command_prints_paused_when_human_input_is_needed(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_command_prints_paused_when_human_input_is_needed(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
-            return _result(status_code="need_clarification", step_name=step_name, step_def=step_def, artifacts={})
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
+            return _result(
+                status_code="need_clarification",
+                step_name=step_name,
+                step_def=step_def,
+                artifacts={},
+            )
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -1002,7 +1743,9 @@ def test_workflow_command_prints_paused_when_human_input_is_needed(tmp_path: Pat
         assert "Workflow is waiting for user input" in result.stdout
 
 
-def test_workflow_command_prints_recovery_guidance_for_pr_baton_pause(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_command_prints_recovery_guidance_for_pr_baton_pause(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-233"
     issue_dir.mkdir(parents=True, exist_ok=True)
@@ -1021,7 +1764,9 @@ def test_workflow_command_prints_recovery_guidance_for_pr_baton_pause(tmp_path: 
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             return StepExecutionResult(response="no baton", artifacts={}, status_code=None)
 
     with (
@@ -1039,7 +1784,9 @@ def test_workflow_command_prints_recovery_guidance_for_pr_baton_pause(tmp_path: 
     assert "field 'to_step' got 'pr'" in result.stdout
 
 
-def test_workflow_command_offers_recovery_menu_for_baton_pause_in_interactive_mode(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_command_offers_recovery_menu_for_baton_pause_in_interactive_mode(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CAFE_FORCE_INTERACTIVE", "1")
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-233"
@@ -1059,7 +1806,9 @@ def test_workflow_command_offers_recovery_menu_for_baton_pause_in_interactive_mo
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             return StepExecutionResult(response="no baton", artifacts={}, status_code=None)
 
     with (
@@ -1102,7 +1851,9 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             executed_steps.append(step_name)
             if step_name == "pr":
                 _handoff_to_step(
@@ -1113,7 +1864,9 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
                     status_code="confirmed",
                     intent=HandoffIntent.MANUAL_HANDOFF,
                 )
-            return _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(
+                status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
+            )
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -1126,7 +1879,10 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
                 "Mark the workflow complete",
             ],
         ),
-        patch("cafe.ui.cli.prompt_multiline", return_value="Please continue implementation with the new handoff context."),
+        patch(
+            "cafe.ui.cli.prompt_multiline",
+            return_value="Please continue implementation with the new handoff context.",
+        ),
         patch("cafe.ui.cli.prompt_confirm", return_value=True),
     ):
         git = MagicMock()
@@ -1142,11 +1898,18 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
     assert executed_steps == ["develop", "review", "pr"]
     blackboard_data = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
     assert blackboard_data["handoff_summary"] == "workflow completed by user"
-    handoff_event = next(event for event in blackboard_data["events"] if event["event_type"] == "user_handoff")
-    assert handoff_event["data"]["note"] == "Please continue implementation with the new handoff context."
+    handoff_event = next(
+        event for event in blackboard_data["events"] if event["event_type"] == "user_handoff"
+    )
+    assert (
+        handoff_event["data"]["note"]
+        == "Please continue implementation with the new handoff context."
+    )
 
 
-def test_user_phase_uses_playbook_handoff_labels_and_generic_fallback(tmp_path: Path, monkeypatch) -> None:
+def test_user_phase_uses_playbook_handoff_labels_and_generic_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "research-1"
     store = BlackboardStore(issue_dir)
@@ -1188,7 +1951,9 @@ def test_user_phase_uses_playbook_handoff_labels_and_generic_fallback(tmp_path: 
         )
 
     assert result == "collect"
-    step_prompt = next(choices for message, choices in prompts if message == "Which phase should continue next?")
+    step_prompt = next(
+        choices for message, choices in prompts if message == "Which phase should continue next?"
+    )
     assert "Refine research question (question)" in step_prompt
     assert "Continue collect (collect)" in step_prompt
     assert all("implementation" not in choice.lower() for choice in step_prompt)
@@ -1345,10 +2110,7 @@ def test_user_phase_no_changes_needed_resumes_develop_without_generic_menu(
     assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
     assert reloaded.handoff_contract.to_step == "develop"
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
-    assert any(
-        event.event_type == "no_changes_needed_resume"
-        for event in reloaded.events
-    )
+    assert any(event.event_type == "no_changes_needed_resume" for event in reloaded.events)
 
 
 def test_workflow_command_user_owner_can_complete_workflow(tmp_path: Path, monkeypatch) -> None:
@@ -1387,7 +2149,9 @@ def test_workflow_command_user_owner_can_complete_workflow(tmp_path: Path, monke
     assert blackboard_data["current_step"] == "done"
 
 
-def test_workflow_command_user_owner_can_chat_and_resume_from_baton(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_command_user_owner_can_chat_and_resume_from_baton(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CAFE_FORCE_INTERACTIVE", "1")
     executed_steps: list[str] = []
@@ -1409,7 +2173,9 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(tmp_path: Pa
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             executed_steps.append(step_name)
             if step_name == "pr":
                 _handoff_to_step(
@@ -1420,7 +2186,9 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(tmp_path: Pa
                     status_code="confirmed",
                     intent=HandoffIntent.MANUAL_HANDOFF,
                 )
-            return _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(
+                status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
+            )
 
     def fake_launch_chat(role: str, issue_name: str) -> int:
         assert role == "developer"
@@ -1431,7 +2199,10 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(tmp_path: Pa
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
         patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
-        patch("cafe.ui.cli.prompt_list", side_effect=["Open chat with a role", "developer", "Mark the workflow complete"]),
+        patch(
+            "cafe.ui.cli.prompt_list",
+            side_effect=["Open chat with a role", "developer", "Mark the workflow complete"],
+        ),
         patch("cafe.ui.cli.launch_chat_session", side_effect=fake_launch_chat),
     ):
         git = MagicMock()
@@ -1447,7 +2218,9 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(tmp_path: Pa
     assert (issue_dir / "next_step.txt").exists()
 
 
-def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CAFE_FORCE_INTERACTIVE", "1")
 
@@ -1468,7 +2241,9 @@ def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(tmp_
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             assert step_name == "pr"
             _handoff_to_step(
                 issue_dir=issue_dir,
@@ -1478,7 +2253,9 @@ def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(tmp_
                 status_code="confirmed",
                 intent=HandoffIntent.MANUAL_HANDOFF,
             )
-            return _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(
+                status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
+            )
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -1500,7 +2277,9 @@ def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(tmp_
     assert blackboard_data["current_step"] == "done"
 
 
-def test_workflow_command_noninteractive_stops_after_agent_handoff_to_user(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_command_noninteractive_stops_after_agent_handoff_to_user(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-211b"
@@ -1520,7 +2299,9 @@ def test_workflow_command_noninteractive_stops_after_agent_handoff_to_user(tmp_p
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             assert step_name == "pr"
             _handoff_to_step(
                 issue_dir=issue_dir,
@@ -1530,7 +2311,9 @@ def test_workflow_command_noninteractive_stops_after_agent_handoff_to_user(tmp_p
                 status_code="confirmed",
                 intent=HandoffIntent.MANUAL_HANDOFF,
             )
-            return _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(
+                status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
+            )
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -1549,12 +2332,16 @@ def test_workflow_command_noninteractive_stops_after_agent_handoff_to_user(tmp_p
     assert mock_external_resume.call_count == 0
 
 
-def test_user_phase_need_clarification_collects_questions_and_resumes_step(tmp_path: Path, capsys) -> None:
+def test_user_phase_need_clarification_collects_questions_and_resumes_step(
+    tmp_path: Path, capsys
+) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-clarification"
     issue_dir.mkdir(parents=True, exist_ok=True)
     spec_iter_dir = issue_dir / "spec" / "iteration_001"
     spec_iter_dir.mkdir(parents=True)
-    (spec_iter_dir / "output.md").write_text("# Spec Draft\n\nNeeds confirmation.", encoding="utf-8")
+    (spec_iter_dir / "output.md").write_text(
+        "# Spec Draft\n\nNeeds confirmation.", encoding="utf-8"
+    )
     (spec_iter_dir / "questions.xml").write_text(
         """<?xml version="1.0" encoding="UTF-8"?>
 <questions>
@@ -1595,7 +2382,9 @@ def test_user_phase_need_clarification_collects_questions_and_resumes_step(tmp_p
 
     def fake_interactive_qa(questions, **kwargs):
         assert questions[0].title == "Confirm scope?"
-        (spec_iter_dir / "output.md").write_text("# Updated Spec Draft\n\nUpdated after chat.", encoding="utf-8")
+        (spec_iter_dir / "output.md").write_text(
+            "# Updated Spec Draft\n\nUpdated after chat.", encoding="utf-8"
+        )
         (spec_iter_dir / "questions.xml").write_text(
             """<?xml version="1.0" encoding="UTF-8"?>
 <questions>
@@ -1634,7 +2423,9 @@ def test_user_phase_need_clarification_collects_questions_and_resumes_step(tmp_p
     assert reloaded.handoff_contract.to_step == "spec"
 
 
-def test_user_phase_question_need_clarification_resumes_question_step(tmp_path: Path, capsys) -> None:
+def test_user_phase_question_need_clarification_resumes_question_step(
+    tmp_path: Path, capsys
+) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-research-clarify"
     issue_dir.mkdir(parents=True, exist_ok=True)
     question_iter_dir = issue_dir / "question" / "iteration_001"
@@ -1720,7 +2511,9 @@ def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkey
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             executed_steps.append(step_name)
             if step_name == "pr":
                 _handoff_to_step(
@@ -1731,7 +2524,9 @@ def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkey
                     status_code="confirmed",
                     intent=HandoffIntent.MANUAL_HANDOFF,
                 )
-            return _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(
+                status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
+            )
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -1760,7 +2555,9 @@ def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkey
     assert executed_steps == ["develop", "review", "pr"]
 
 
-def test_workflow_command_resumes_incomplete_iteration_before_user_phase(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_command_resumes_incomplete_iteration_before_user_phase(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     executed_steps: list[str] = []
 
@@ -1795,7 +2592,9 @@ def test_workflow_command_resumes_incomplete_iteration_before_user_phase(tmp_pat
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             executed_steps.append(step_name)
             completed_iteration = issue_dir / "spec" / "iteration_003"
             completed_iteration.mkdir(parents=True, exist_ok=True)
@@ -1810,7 +2609,9 @@ def test_workflow_command_resumes_incomplete_iteration_before_user_phase(tmp_pat
                 ),
                 encoding="utf-8",
             )
-            return _result(status_code="ready_for_review", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(
+                status_code="ready_for_review", step_name=step_name, step_def=step_def, artifacts={}
+            )
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -1982,7 +2783,9 @@ def test_find_external_resume_step_returns_none_when_no_github_pr(tmp_path: Path
     mock_fetch.assert_not_called()
 
 
-def test_workflow_command_resumes_pr_when_external_feedback_arrives_while_done(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_command_resumes_pr_when_external_feedback_arrives_while_done(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     executed_steps: list[str] = []
 
@@ -2004,9 +2807,13 @@ def test_workflow_command_resumes_pr_when_external_feedback_arrives_while_done(t
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             executed_steps.append(step_name)
-            return _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(
+                status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
+            )
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -2069,7 +2876,10 @@ steps:
         mock_git_cls.return_value = git
 
         executor = MagicMock()
-        def _execute(step_name: str, step_def: dict, blackboard_state: object, **kwargs) -> StepExecutionResult:
+
+        def _execute(
+            step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
             executed_steps.append(step_name)
             if step_name == "spec":
                 _handoff_to_step(
@@ -2079,7 +2889,10 @@ steps:
                     to_step="develop",
                     status_code="confirmed",
                 )
-            return _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
+            return _result(
+                status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
+            )
+
         executor.execute_step.side_effect = _execute
         mock_builder.return_value = executor
 
@@ -2124,13 +2937,24 @@ steps:
         mock_git_cls.return_value = git
         executor = MagicMock()
         executor.execute_step.side_effect = lambda step_name, step_def, blackboard_state, **kw: (
-            executed_steps.append(step_name) or _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
+            executed_steps.append(step_name)
+            or _result(
+                status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
+            )
         )
         mock_builder.return_value = executor
 
         result = runner.invoke(
             app,
-            ["workflow", "--playbook", "single", "--execute", "--start-step", "plan", "--single-step"],
+            [
+                "workflow",
+                "--playbook",
+                "single",
+                "--execute",
+                "--start-step",
+                "plan",
+                "--single-step",
+            ],
         )
         assert result.exit_code == 0
         assert executed_steps == ["plan"]
@@ -2149,7 +2973,10 @@ def test_workflow_command_runs_hotfix_playbook(tmp_path: Path, monkeypatch) -> N
         mock_git_cls.return_value = git
         executor = MagicMock()
         executor.execute_step.side_effect = lambda step_name, step_def, blackboard_state, **kw: (
-            executed_steps.append(step_name) or _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
+            executed_steps.append(step_name)
+            or _result(
+                status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
+            )
         )
         mock_builder.return_value = executor
 
@@ -2195,8 +3022,13 @@ steps:
         git.get_current_branch.return_value = "issue-204"
         mock_git_cls.return_value = git
         executor = MagicMock()
-        executor.execute_step.side_effect = lambda step_name, step_def, blackboard_state, **kwargs: (
-            executed_steps.append(step_name) or _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
+        executor.execute_step.side_effect = (
+            lambda step_name, step_def, blackboard_state, **kwargs: (
+                executed_steps.append(step_name)
+                or _result(
+                    status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
+                )
+            )
         )
         mock_builder.return_value = executor
 
@@ -2227,13 +3059,17 @@ def test_workflow_execute_syncs_active_issue_on_healthy_branch(tmp_path: Path, m
         )
         mock_builder.return_value = executor
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute", "--single-step"])
+        result = runner.invoke(
+            app, ["workflow", "--playbook", "default", "--execute", "--single-step"]
+        )
 
     assert result.exit_code == 0
     assert (cafe_dir / "active_issue").read_text(encoding="utf-8").strip() == "issue-sync"
 
 
-def test_workflow_execute_recovers_from_unhealthy_git_via_marker(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_execute_recovers_from_unhealthy_git_via_marker(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     cafe_dir = tmp_path / ".cafe"
     issue_dir = cafe_dir / "issues" / "saved-issue"
@@ -2255,7 +3091,9 @@ def test_workflow_execute_recovers_from_unhealthy_git_via_marker(tmp_path: Path,
         )
         mock_builder.return_value = executor
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute", "--single-step"])
+        result = runner.invoke(
+            app, ["workflow", "--playbook", "default", "--execute", "--single-step"]
+        )
 
     assert result.exit_code == 0
     assert (cafe_dir / "active_issue").read_text(encoding="utf-8").strip() == "saved-issue"

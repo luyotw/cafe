@@ -57,6 +57,7 @@ def _seed_pr_artifacts(issue_dir: Path) -> None:
 def test_pr_runtime_completes_with_capability_receipt(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-e2e"
     playbook = _load_default_playbook()
+    assert playbook["steps"]["pr"]["capability_requests"] == ["cafe.pr.publish"]
     _seed_pr_artifacts(issue_dir)
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
@@ -95,7 +96,9 @@ def test_pr_runtime_completes_with_capability_receipt(tmp_path: Path) -> None:
     assert result.final_step == "pr"
     blackboard = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
     receipts = blackboard.get("capability_receipts") or []
-    assert any(r.get("capability") == "cafe.pr.publish" for r in receipts) or result.final_status_code in {
+    assert any(
+        r.get("capability") == "cafe.pr.publish" for r in receipts
+    ) or result.final_status_code in {
         "BATON_WORKFLOW_COMPLETE",
         "confirmed",
     }

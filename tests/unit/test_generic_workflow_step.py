@@ -8,7 +8,13 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import pytest
 
-from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.blackboard import (
+    ArtifactEntry,
+    ArtifactKind,
+    BlackboardStore,
+    HandoffIntent,
+    HandoffOwner,
+)
 from cafe.core.hooks import HookResult
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import AgentCLI, AgentConfig, TokenUsage
@@ -264,16 +270,21 @@ def test_generic_workflow_step_agent_written_baton_preserved(tmp_path: Path, mon
     def on_execute(prompt, response, streaming_output_file=None):
         # Simulate agent writing a baton targeting "plan" instead of "_done"
         baton_path = issue_dir / "next_step.txt"
-        baton_path.write_text(json.dumps({
-            "version": 1,
-            "from_step": "spec",
-            "to_owner": "agent",
-            "to_step": "plan",
-            "intent": "await_agent",
-            "status_code": "confirmed",
-            "created_at": "2026-05-14T10:00:00+08:00",
-            "source": "spec.agent",
-        }), encoding="utf-8")
+        baton_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "from_step": "spec",
+                    "to_owner": "agent",
+                    "to_step": "plan",
+                    "intent": "await_agent",
+                    "status_code": "confirmed",
+                    "created_at": "2026-05-14T10:00:00+08:00",
+                    "source": "spec.agent",
+                }
+            ),
+            encoding="utf-8",
+        )
 
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("spec")
@@ -421,7 +432,9 @@ def test_generic_workflow_step_question_need_clarification_writes_clarification_
     assert reloaded.handoff_contract.to_step == "user"
 
 
-def test_generic_workflow_step_question_step_allows_questions_xml_edit(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_question_step_allows_questions_xml_edit(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-question-tools"
     playbook = {
@@ -453,10 +466,15 @@ def test_generic_workflow_step_question_step_allows_questions_xml_edit(tmp_path:
     executor.execute_step("question", playbook["steps"]["question"], state)
 
     allowed_tools = agent_manager.allowed_tools_calls[0] or []
-    assert "edit(./.cafe/issues/issue-question-tools/question/iteration_001/questions.xml)" in allowed_tools
+    assert (
+        "edit(./.cafe/issues/issue-question-tools/question/iteration_001/questions.xml)"
+        in allowed_tools
+    )
 
 
-def test_generic_workflow_step_auto_confirms_review_in_non_interactive(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_auto_confirms_review_in_non_interactive(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-auto-confirm"
     playbook = {
@@ -502,7 +520,9 @@ def test_generic_workflow_step_auto_confirms_review_in_non_interactive(tmp_path:
     assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
 
 
-def test_generic_workflow_step_does_not_retry_for_legacy_status_tokens(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_does_not_retry_for_legacy_status_tokens(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-status-retry"
     playbook = {
@@ -537,7 +557,9 @@ def test_generic_workflow_step_does_not_retry_for_legacy_status_tokens(tmp_path:
     assert result.status_code is None
 
 
-def test_generic_workflow_step_executor_uses_iteration_specific_skill_mapping(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_executor_uses_iteration_specific_skill_mapping(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-2"
     phase_dir = issue_dir / "spec" / "iteration_001"
@@ -626,7 +648,6 @@ def test_generic_workflow_step_resolve_resume_user_input_uses_execution_config(
             )
 
     manager = ResumeAwareManager("ready_for_review")
-    state = BlackboardStore(issue_dir).load_or_create("develop")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-resume",
@@ -700,7 +721,9 @@ def test_generic_workflow_step_resume_user_input_rejects_different_execution_cli
     assert resolved == "workflow execute"
 
 
-def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-review-skill"
     playbook = {
@@ -753,7 +776,9 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
 
     allowed_tools = agent_manager.allowed_tools_calls[0] or []
     assert "edit(./.cafe/issues/issue-review-skill/review/iteration_001/output.md)" in allowed_tools
-    assert "edit(./.cafe/issues/issue-review-skill/review/iteration_001/checklist.md)" in allowed_tools
+    assert (
+        "edit(./.cafe/issues/issue-review-skill/review/iteration_001/checklist.md)" in allowed_tools
+    )
     assert "edit(./.cafe/issues/issue-review-skill/blackboard.json)" in allowed_tools
     assert "edit(./.cafe/issues/issue-review-skill/next_step.txt)" in allowed_tools
 
@@ -765,7 +790,9 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
     assert "next_step_file=./.cafe/issues/issue-review-skill/next_step.txt" in prompt
 
 
-def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-handoff"
     playbook = {
@@ -809,11 +836,15 @@ def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(tmp_pat
 
     executor.execute_step("develop", playbook["steps"]["develop"], state)
 
-    assert any("Latest workflow handoff from blackboard:" in prompt for prompt in agent_manager.prompts)
+    assert any(
+        "Latest workflow handoff from blackboard:" in prompt for prompt in agent_manager.prompts
+    )
     assert any("還要再實作 cafe skill rm" in prompt for prompt in agent_manager.prompts)
 
 
-def test_generic_workflow_step_prompt_keeps_skill_invocations_only(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_prompt_keeps_skill_invocations_only(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-skill-body"
     playbook = {
@@ -862,7 +893,9 @@ def test_generic_workflow_step_prompt_keeps_skill_invocations_only(tmp_path: Pat
     assert "Write PR content to:" not in prompt
 
 
-def test_generic_workflow_step_pr_prompt_overrides_external_state_guardrail(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_pr_prompt_overrides_external_state_guardrail(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-guardrail"
     playbook = {
@@ -906,10 +939,15 @@ def test_generic_workflow_step_pr_prompt_overrides_external_state_guardrail(tmp_
     prompt = agent_manager.prompts[-1]
     assert "Do not wait for, verify, or require a remote GitHub branch/PR" in prompt
     assert "Remote PR publish happens later in the host-side publish_output hook." in prompt
-    assert "Before updating the workflow baton, verify whether the requested state change has actually happened in files or external state relevant to this phase." not in prompt
+    assert (
+        "Before updating the workflow baton, verify whether the requested state change has actually happened in files or external state relevant to this phase."
+        not in prompt
+    )
 
 
-def test_generic_workflow_step_writes_pr_publish_request_contract(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_writes_pr_publish_request_contract(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-contract"
     playbook = {
@@ -954,13 +992,130 @@ def test_generic_workflow_step_writes_pr_publish_request_contract(tmp_path: Path
     publish_request = json.loads(
         (issue_dir / "pr" / "iteration_001" / "publish_request.json").read_text(encoding="utf-8")
     )
+    capability_request = json.loads(
+        (issue_dir / "pr" / "iteration_001" / "capability_request.json").read_text(encoding="utf-8")
+    )
     assert publish_request["capability"] == "cafe.pr.publish"
+    assert capability_request == publish_request
     assert publish_request["args"] == {
         "output": ".cafe/issues/issue-pr-contract/pr/iteration_001/output.md",
         "base": "v02",
     }
     assert publish_request["permissions"]["network"] == ["github.com", "api.github.com"]
     assert publish_request["permissions"]["writes"] == [".git", ".cafe/issues/issue-pr-contract"]
+
+
+def test_generic_workflow_step_writes_declared_capability_request_for_non_pr_step(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-capability-contract"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "publish": {
+                "skill": "develop",
+                "role": "developer",
+                "output_artifact": "code",
+                "allowed_tools": ["Read"],
+                "capability_requests": ["demo.unknown"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("publish")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-capability-contract",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("publish", playbook["steps"]["publish"], state)
+
+    capability_request = json.loads(
+        (issue_dir / "publish" / "iteration_001" / "capability_request.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert capability_request == {
+        "capability": "demo.unknown",
+        "args": {},
+        "permissions": {},
+    }
+    assert not (issue_dir / "publish" / "iteration_001" / "publish_request.json").exists()
+
+
+def test_generic_workflow_step_writes_multi_capability_request_contract(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-capability-contract"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "publish": {
+                "skill": "develop",
+                "role": "developer",
+                "output_artifact": "code",
+                "allowed_tools": ["Read"],
+                "capability_requests": ["demo.first", "demo.second"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("publish")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-capability-contract",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("publish", playbook["steps"]["publish"], state)
+
+    capability_request = json.loads(
+        (issue_dir / "publish" / "iteration_001" / "capability_request.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert capability_request == {
+        "requests": [
+            {"capability": "demo.first", "args": {}, "permissions": {}},
+            {"capability": "demo.second", "args": {}, "permissions": {}},
+        ]
+    }
+    assert not (issue_dir / "publish" / "iteration_001" / "publish_request.json").exists()
 
 
 def test_generic_workflow_step_collects_clarification_before_next_agent_run(
@@ -989,7 +1144,10 @@ def test_generic_workflow_step_collects_clarification_before_next_agent_run(
     }
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("spec")
-    def _write_questions_xml(*, response: str, streaming_output_file: str | None, **_: object) -> None:
+
+    def _write_questions_xml(
+        *, response: str, streaming_output_file: str | None, **_: object
+    ) -> None:
         if response != "need_clarification" or not streaming_output_file:
             return
         iteration_dir = Path(streaming_output_file).parent
@@ -1044,10 +1202,7 @@ def test_generic_workflow_step_collects_clarification_before_next_agent_run(
     assert second_result.response == "confirmed"
     # In non-interactive mode the UserInputCollector does not auto-answer
     # need_clarification — the workflow stops at user step.
-    assert any(
-        "No additional changes needed" not in prompt
-        for prompt in agent_manager.prompts
-    )
+    assert any("No additional changes needed" not in prompt for prompt in agent_manager.prompts)
 
 
 def test_initial_requirements_collection_does_not_auto_continue_clarification(
@@ -1101,7 +1256,9 @@ def test_initial_requirements_collection_does_not_auto_continue_clarification(
     assert reloaded.handoff_contract.to_step == "user"
 
 
-def test_generic_workflow_step_records_script_hook_events_to_blackboard(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_records_script_hook_events_to_blackboard(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-script-event"
     playbook = {
@@ -1177,7 +1334,9 @@ def test_generic_workflow_step_records_script_hook_events_to_blackboard(tmp_path
     assert script_event.data["status"] == "success"
 
 
-def test_generic_workflow_step_auto_continues_pause_statuses_in_interactive_mode(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_auto_continues_pause_statuses_in_interactive_mode(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-review"
     spec_dir = issue_dir / "spec" / "iteration_001"
@@ -1223,7 +1382,9 @@ def test_generic_workflow_step_auto_continues_pause_statuses_in_interactive_mode
     assert result.auto_continue is False
 
 
-def test_generic_workflow_step_keeps_missing_status_without_continue_prompt(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_keeps_missing_status_without_continue_prompt(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-no-status"
     playbook = {
@@ -1257,11 +1418,15 @@ def test_generic_workflow_step_keeps_missing_status_without_continue_prompt(tmp_
     assert "done without status" in result.response
     assert result.status_code is None
     assert len(executor.agent_manager.prompts) == 1
-    context_data = json.loads((issue_dir / "spec" / "iteration_001" / "iteration.json").read_text(encoding="utf-8"))
+    context_data = json.loads(
+        (issue_dir / "spec" / "iteration_001" / "iteration.json").read_text(encoding="utf-8")
+    )
     assert "status_code" not in context_data
 
 
-def test_generic_workflow_step_does_not_recover_from_unchanged_output(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_does_not_recover_from_unchanged_output(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-stale-output"
     playbook = {
@@ -1274,7 +1439,7 @@ def test_generic_workflow_step_does_not_recover_from_unchanged_output(tmp_path: 
                 "output_artifact": "code",
                 "allowed_tools": ["Read"],
                 "valid_intents": ["confirmed", "no_changes_needed"],
-                "on": {"await_agent": "review", "await_agent": "review"},
+                "on": {"await_agent": "review"},
             }
         },
     }
@@ -1308,7 +1473,9 @@ def test_generic_workflow_step_does_not_recover_from_unchanged_output(tmp_path: 
         executor.execute_step("develop", playbook["steps"]["develop"], state)
 
 
-def test_generic_workflow_step_restores_spec_runtime_allowed_tools(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_restores_spec_runtime_allowed_tools(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-spec-tools"
     playbook = {
@@ -1351,7 +1518,9 @@ def test_generic_workflow_step_restores_spec_runtime_allowed_tools(tmp_path: Pat
     assert "edit(./.cafe/issues/issue-spec-tools/spec/iteration_001/questions.xml)" in allowed_tools
 
 
-def test_generic_workflow_step_uses_baton_only_tools_on_baton_error(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_uses_baton_only_tools_on_baton_error(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-spec-baton-retry"
     playbook = {
@@ -1390,12 +1559,23 @@ def test_generic_workflow_step_uses_baton_only_tools_on_baton_error(tmp_path: Pa
     assert "ls" in allowed_tools
     assert "edit(./.cafe/issues/issue-spec-baton-retry/blackboard.json)" in allowed_tools
     assert "edit(./.cafe/issues/issue-spec-baton-retry/next_step.txt)" in allowed_tools
-    assert "edit(./.cafe/issues/issue-spec-baton-retry/spec/iteration_001/output.md)" not in allowed_tools
-    assert "edit(./.cafe/issues/issue-spec-baton-retry/spec/iteration_001/checklist.md)" not in allowed_tools
-    assert "edit(./.cafe/issues/issue-spec-baton-retry/spec/iteration_001/questions.xml)" not in allowed_tools
+    assert (
+        "edit(./.cafe/issues/issue-spec-baton-retry/spec/iteration_001/output.md)"
+        not in allowed_tools
+    )
+    assert (
+        "edit(./.cafe/issues/issue-spec-baton-retry/spec/iteration_001/checklist.md)"
+        not in allowed_tools
+    )
+    assert (
+        "edit(./.cafe/issues/issue-spec-baton-retry/spec/iteration_001/questions.xml)"
+        not in allowed_tools
+    )
 
 
-def test_generic_workflow_step_restores_develop_runtime_allowed_tools(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_restores_develop_runtime_allowed_tools(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-develop-tools"
     playbook = {
@@ -1406,7 +1586,16 @@ def test_generic_workflow_step_restores_develop_runtime_allowed_tools(tmp_path: 
                 "skill": "develop",
                 "role": "developer",
                 "output_artifact": "code",
-                "allowed_tools": ["Read", "Edit", "Write", "Grep", "Glob", "Bash", "WebFetch", "WebSearch"],
+                "allowed_tools": [
+                    "Read",
+                    "Edit",
+                    "Write",
+                    "Grep",
+                    "Glob",
+                    "Bash",
+                    "WebFetch",
+                    "WebSearch",
+                ],
                 "valid_intents": ["confirmed"],
                 "on": {"await_agent": "_done"},
             }
@@ -1447,7 +1636,9 @@ def test_generic_workflow_step_restores_develop_runtime_allowed_tools(tmp_path: 
     assert "web_search" in allowed_tools
 
 
-def test_generic_workflow_step_restores_review_runtime_allowed_tools(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_restores_review_runtime_allowed_tools(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-review-tools"
     playbook = {
@@ -1500,10 +1691,14 @@ def test_generic_workflow_step_restores_review_runtime_allowed_tools(tmp_path: P
     assert "bash(git show)" in allowed_tools
     assert "bash(git status)" in allowed_tools
     assert "edit(./.cafe/issues/issue-review-tools/review/iteration_001/output.md)" in allowed_tools
-    assert "edit(./.cafe/issues/issue-review-tools/review/iteration_001/checklist.md)" in allowed_tools
+    assert (
+        "edit(./.cafe/issues/issue-review-tools/review/iteration_001/checklist.md)" in allowed_tools
+    )
 
 
-def test_generic_workflow_step_restores_pr_runtime_allowed_tools(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_restores_pr_runtime_allowed_tools(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-tools"
     playbook = {
@@ -1515,7 +1710,16 @@ def test_generic_workflow_step_restores_pr_runtime_allowed_tools(tmp_path: Path,
                 "role": "developer",
                 "input_artifacts": ["spec", "plan", "review_feedback"],
                 "output_artifact": "pr_result",
-                "allowed_tools": ["Read", "Edit", "Write", "Grep", "Glob", "Bash", "WebFetch", "WebSearch"],
+                "allowed_tools": [
+                    "Read",
+                    "Edit",
+                    "Write",
+                    "Grep",
+                    "Glob",
+                    "Bash",
+                    "WebFetch",
+                    "WebSearch",
+                ],
                 "valid_intents": ["confirmed"],
                 "on": {"await_agent": "_done"},
             }
@@ -1619,7 +1823,9 @@ def test_generic_workflow_step_pr_does_not_require_status_code(tmp_path: Path, m
     assert not (issue_dir / "pr" / "status.json").exists()
 
 
-def test_generic_workflow_step_pr_does_not_parse_status_from_response(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_pr_does_not_parse_status_from_response(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-no-parse"
     playbook = {
@@ -1817,7 +2023,9 @@ def test_generic_workflow_step_pr_prompt_uses_baton_wording(tmp_path: Path, monk
     assert not any("Before returning a status code" in prompt for prompt in agent_manager.prompts)
 
 
-def test_generic_workflow_step_applies_phase_specific_model_per_step(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_applies_phase_specific_model_per_step(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-models"
     playbook = {
@@ -1881,7 +2089,9 @@ def test_generic_workflow_step_applies_phase_specific_model_per_step(tmp_path: P
     assert "claude-opus-4.6" in (agent_manager.preview_calls[1] or [])
 
 
-def test_generic_workflow_step_applies_phase_specific_model_from_clis_format(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_applies_phase_specific_model_from_clis_format(
+    tmp_path: Path, monkeypatch
+) -> None:
     # Regression: per-phase models declared in the new `clis:` list format must
     # reach the CLI command. Previously _resolve_step_model only understood the
     # old `role.<phase>.model` shape, so the clis list was silently ignored and
@@ -2003,6 +2213,7 @@ def test_generic_workflow_step_develop_confirmed(tmp_path: Path, monkeypatch) ->
 # ---------------------------------------------------------------------------
 # Tests for _get_allowed_directories merging (Task 3)
 # ---------------------------------------------------------------------------
+
 
 def _make_minimal_executor(tmp_path, **kwargs):
     """Build a GenericWorkflowStepExecutor with minimal config for dir-merge tests."""
@@ -2174,7 +2385,9 @@ def _write_plan_prereq_artifacts(issue_dir: Path) -> None:
     (spec_dir / "iteration.json").write_text('{"iteration": 1}', encoding="utf-8")
 
 
-def test_plan_non_interactive_ready_for_review_hands_off_to_user(tmp_path: Path, monkeypatch) -> None:
+def test_plan_non_interactive_ready_for_review_hands_off_to_user(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-plan-noninteractive-review"
     _write_plan_prereq_artifacts(issue_dir)
@@ -2201,7 +2414,9 @@ def test_plan_non_interactive_ready_for_review_hands_off_to_user(tmp_path: Path,
     assert reloaded.handoff_contract.to_step == "user"
 
 
-def test_plan_non_interactive_need_clarification_hands_off_to_user(tmp_path: Path, monkeypatch) -> None:
+def test_plan_non_interactive_need_clarification_hands_off_to_user(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-plan-noninteractive-clarify"
     _write_plan_prereq_artifacts(issue_dir)
@@ -2228,7 +2443,9 @@ def test_plan_non_interactive_need_clarification_hands_off_to_user(tmp_path: Pat
     assert reloaded.handoff_contract.intent == HandoffIntent.NEED_CLARIFICATION
 
 
-def test_develop_checklist_prefers_review_feedback_over_pr_result(tmp_path: Path, monkeypatch) -> None:
+def test_develop_checklist_prefers_review_feedback_over_pr_result(
+    tmp_path: Path, monkeypatch
+) -> None:
     """Develop correction checklist uses review_feedback when both artifacts exist."""
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-develop-feedback"
@@ -2306,7 +2523,11 @@ def test_update_iteration_history_preserves_model_and_stats_on_second_call(
 
     with patch.object(phase, "_append_iteration_index"):
         phase._update_iteration_history(
-            phase_specific_data={"response": "agent output", "permission_denials": [], "streaming_log": []},
+            phase_specific_data={
+                "response": "agent output",
+                "permission_denials": [],
+                "streaming_log": [],
+            },
             prompt="test prompt",
             agent_cli="claude",
             model="claude-haiku-4-5-20251001",
@@ -2339,6 +2560,7 @@ def test_update_iteration_history_preserves_model_and_stats_on_second_call(
 # ---------------------------------------------------------------------------
 # Tests for no_changes_needed playbook-driven routing (Issue #301)
 # ---------------------------------------------------------------------------
+
 
 def _develop_step_playbook_with_no_changes_target(no_changes_target: str | None) -> dict:
     """Build a minimal develop-step playbook with configurable no_changes_needed routing."""
@@ -2569,7 +2791,9 @@ def test_resolve_iteration_user_input_same_cli_session_returns_continue(tmp_path
     assert executor._resolve_iteration_user_input("spec") == "continue"
 
 
-def test_resolve_iteration_user_input_different_session_returns_full_candidate(tmp_path: Path) -> None:
+def test_resolve_iteration_user_input_different_session_returns_full_candidate(
+    tmp_path: Path,
+) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input"
     spec_dir = issue_dir / "spec"
     prev_iter = spec_dir / "iteration_001"
@@ -2603,7 +2827,9 @@ def test_resolve_iteration_user_input_loads_prewritten_user_input_file(tmp_path:
     spec_dir = issue_dir / "spec"
     current_iter = spec_dir / "iteration_002"
     current_iter.mkdir(parents=True)
-    (current_iter / "user_input.md").write_text("Answer from workflow --user-input", encoding="utf-8")
+    (current_iter / "user_input.md").write_text(
+        "Answer from workflow --user-input", encoding="utf-8"
+    )
     prev_iter = spec_dir / "iteration_001"
     prev_iter.mkdir(parents=True)
     (prev_iter / "iteration.json").write_text(
@@ -2625,10 +2851,7 @@ def test_resolve_iteration_user_input_loads_prewritten_user_input_file(tmp_path:
     executor.iteration = 2
     executor._step_agent_name = "Roger"
 
-    assert (
-        executor._resolve_iteration_user_input("spec")
-        == "Answer from workflow --user-input"
-    )
+    assert executor._resolve_iteration_user_input("spec") == "Answer from workflow --user-input"
 
 
 def test_resolve_iteration_user_input_interrupted_iteration_reuse(tmp_path: Path) -> None:

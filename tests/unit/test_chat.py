@@ -2,7 +2,6 @@
 
 import json
 import os
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -72,13 +71,17 @@ class TestLaunchChatSession:
     @patch("cafe.ui.chat.subprocess.run")
     @patch("cafe.ui.chat.ConfigManager")
     @patch("cafe.ui.chat.AgentManager")
-    def test_claude_cli_with_session_and_model(self, mock_agent_manager_cls, mock_config_manager_cls, mock_run):
+    def test_claude_cli_with_session_and_model(
+        self, mock_agent_manager_cls, mock_config_manager_cls, mock_run
+    ):
         """Test building CLI command for claude with session and model."""
         mock_config = MagicMock()
         mock_config.get.return_value = {"name": "David", "cli": "claude", "model": "sonnet"}
         mock_config_manager_cls.return_value = mock_config
 
-        agent_manager = self._make_agent_manager("David", "claude", session_id="sess-abc", model="sonnet")
+        agent_manager = self._make_agent_manager(
+            "David", "claude", session_id="sess-abc", model="sonnet"
+        )
         mock_agent_manager_cls.return_value = agent_manager
 
         mock_run.return_value = MagicMock(returncode=0)
@@ -91,7 +94,9 @@ class TestLaunchChatSession:
     @patch("cafe.ui.chat.subprocess.run")
     @patch("cafe.ui.chat.ConfigManager")
     @patch("cafe.ui.chat.AgentManager")
-    def test_copilot_cli_with_session(self, mock_agent_manager_cls, mock_config_manager_cls, mock_run):
+    def test_copilot_cli_with_session(
+        self, mock_agent_manager_cls, mock_config_manager_cls, mock_run
+    ):
         """Test building CLI command for copilot with session."""
         mock_config = MagicMock()
         mock_config.get.return_value = {"name": "Roger", "cli": "copilot"}
@@ -137,7 +142,9 @@ class TestLaunchChatSession:
         }
         mock_config_manager_cls.return_value = mock_config
 
-        agent_manager = self._make_agent_manager("David", "codex", session_id=None, model="gpt-5.3-codex")
+        agent_manager = self._make_agent_manager(
+            "David", "codex", session_id=None, model="gpt-5.3-codex"
+        )
         mock_agent_manager_cls.return_value = agent_manager
         mock_run.return_value = MagicMock(returncode=0)
 
@@ -152,26 +159,76 @@ class TestLaunchChatSession:
     @patch("cafe.ui.chat.subprocess.run")
     @patch("cafe.ui.chat.ConfigManager")
     @patch("cafe.ui.chat.AgentManager")
-    def test_gemini_cli_with_session_and_model(self, mock_agent_manager_cls, mock_config_manager_cls, mock_run):
-        """Test building CLI command for gemini with session and model."""
+    def test_chat_session_accepts_alignment_context_env(
+        self,
+        mock_agent_manager_cls,
+        mock_config_manager_cls,
+        mock_run,
+    ):
         mock_config = MagicMock()
-        mock_config.get.return_value = {"name": "Richard", "cli": "gemini", "model": "gemini-2.5-pro"}
+        mock_config.get.return_value = {"name": "Roger", "cli": "claude"}
         mock_config_manager_cls.return_value = mock_config
 
-        agent_manager = self._make_agent_manager("Richard", "gemini", session_id="sess-gem", model="gemini-2.5-pro")
+        agent_manager = self._make_agent_manager("Roger", "claude", session_id=None)
+        mock_agent_manager_cls.return_value = agent_manager
+        mock_run.return_value = MagicMock(returncode=0)
+
+        result = launch_chat_session(
+            "pm",
+            "issue123",
+            chat_mode="alignment",
+            extra_env={
+                "CAFE_ALIGNMENT_REQUEST_FILE": "/tmp/request.json",
+                "CAFE_ALIGNMENT_DECISION_FILE": "/tmp/decision.json",
+            },
+        )
+
+        assert result == 0
+        env = mock_run.call_args.kwargs["env"]
+        assert env["CAFE_CHAT_MODE"] == "alignment"
+        assert env["CAFE_ISSUE_NAME"] == "issue123"
+        assert env["CAFE_ALIGNMENT_REQUEST_FILE"] == "/tmp/request.json"
+        assert env["CAFE_ALIGNMENT_DECISION_FILE"] == "/tmp/decision.json"
+
+    @patch("cafe.ui.chat.subprocess.run")
+    @patch("cafe.ui.chat.ConfigManager")
+    @patch("cafe.ui.chat.AgentManager")
+    def test_gemini_cli_with_session_and_model(
+        self, mock_agent_manager_cls, mock_config_manager_cls, mock_run
+    ):
+        """Test building CLI command for gemini with session and model."""
+        mock_config = MagicMock()
+        mock_config.get.return_value = {
+            "name": "Richard",
+            "cli": "gemini",
+            "model": "gemini-2.5-pro",
+        }
+        mock_config_manager_cls.return_value = mock_config
+
+        agent_manager = self._make_agent_manager(
+            "Richard", "gemini", session_id="sess-gem", model="gemini-2.5-pro"
+        )
         mock_agent_manager_cls.return_value = agent_manager
 
         mock_run.return_value = MagicMock(returncode=0)
 
         launch_chat_session("reviewer", "issue123")
 
-        assert mock_run.call_args.args[0] == ["gemini", "--resume", "sess-gem", "--model", "gemini-2.5-pro"]
+        assert mock_run.call_args.args[0] == [
+            "gemini",
+            "--resume",
+            "sess-gem",
+            "--model",
+            "gemini-2.5-pro",
+        ]
         assert "env" in mock_run.call_args.kwargs
 
     @patch("cafe.ui.chat.subprocess.run")
     @patch("cafe.ui.chat.ConfigManager")
     @patch("cafe.ui.chat.AgentManager")
-    def test_cursor_agent_cli_with_session(self, mock_agent_manager_cls, mock_config_manager_cls, mock_run):
+    def test_cursor_agent_cli_with_session(
+        self, mock_agent_manager_cls, mock_config_manager_cls, mock_run
+    ):
         """Test building CLI command for cursor-agent with session (uses --resume flag)."""
         mock_config = MagicMock()
         mock_config.get.return_value = {"name": "David", "cli": "cursor-agent"}
@@ -190,7 +247,9 @@ class TestLaunchChatSession:
     @patch("builtins.print")
     @patch("cafe.ui.chat.ConfigManager")
     @patch("cafe.ui.chat.AgentManager")
-    def test_missing_cli_tool_prints_warning(self, mock_agent_manager_cls, mock_config_manager_cls, mock_print):
+    def test_missing_cli_tool_prints_warning(
+        self, mock_agent_manager_cls, mock_config_manager_cls, mock_print
+    ):
         """Test that a missing CLI tool prints a warning and does not raise."""
         mock_config = MagicMock()
         mock_config.get.return_value = {"name": "David", "cli": "claude"}
@@ -209,7 +268,9 @@ class TestLaunchChatSession:
     @patch("builtins.print")
     @patch("cafe.ui.chat.ConfigManager")
     @patch("cafe.ui.chat.AgentManager")
-    def test_no_agent_config_prints_warning(self, mock_agent_manager_cls, mock_config_manager_cls, mock_print):
+    def test_no_agent_config_prints_warning(
+        self, mock_agent_manager_cls, mock_config_manager_cls, mock_print
+    ):
         """Test that missing agent config prints a warning and does not raise."""
         mock_config = MagicMock()
         mock_config.get.return_value = None  # No agent config
@@ -223,7 +284,9 @@ class TestLaunchChatSession:
     @patch("cafe.ui.chat.subprocess.run")
     @patch("cafe.ui.chat.ConfigManager")
     @patch("cafe.ui.chat.AgentManager")
-    def test_passes_issue_name_to_agent_manager(self, mock_agent_manager_cls, mock_config_manager_cls, mock_run):
+    def test_passes_issue_name_to_agent_manager(
+        self, mock_agent_manager_cls, mock_config_manager_cls, mock_run
+    ):
         """Test that issue_name is passed to AgentManager for session resolution."""
         mock_config = MagicMock()
         mock_config.get.return_value = {"name": "David", "cli": "claude"}
@@ -308,7 +371,9 @@ class TestLaunchChatSession:
         mock_config.get.return_value = {"name": "Nick", "cli": "codex", "model": "gpt-5.4"}
         mock_config_manager_cls.return_value = mock_config
 
-        agent_manager = self._make_agent_manager("Nick", "codex", session_id="sess-codex", model="gpt-5.4")
+        agent_manager = self._make_agent_manager(
+            "Nick", "codex", session_id="sess-codex", model="gpt-5.4"
+        )
         mock_agent_manager_cls.return_value = agent_manager
         mock_run.return_value = MagicMock(returncode=0)
 
@@ -324,11 +389,52 @@ class TestLaunchChatSession:
             "issue123",
         )
 
+    @patch("cafe.ui.chat.subprocess.run")
+    @patch("cafe.ui.chat.ConfigManager")
+    @patch("cafe.ui.chat.AgentManager")
+    def test_codex_chat_accepts_initial_prompt(
+        self,
+        mock_agent_manager_cls,
+        mock_config_manager_cls,
+        mock_run,
+    ):
+        """Test Codex interactive launch receives an initial prompt."""
+        mock_config = MagicMock()
+        mock_config.get.return_value = {"name": "Nick", "cli": "codex", "model": "gpt-5.4"}
+        mock_config_manager_cls.return_value = mock_config
+
+        agent_manager = self._make_agent_manager(
+            "Nick", "codex", session_id="sess-codex", model="gpt-5.4"
+        )
+        mock_agent_manager_cls.return_value = agent_manager
+        mock_run.return_value = MagicMock(returncode=0)
+
+        result = launch_chat_session(
+            "developer",
+            "issue123",
+            initial_prompt="Please guide this alignment decision.",
+        )
+
+        assert result == 0
+        assert mock_run.call_args.args[0] == [
+            "codex",
+            "--model",
+            "gpt-5.4",
+            "resume",
+            "sess-codex",
+            "Please guide this alignment decision.",
+        ]
+        assert (
+            mock_run.call_args.kwargs["env"]["CAFE_CHAT_INITIAL_PROMPT"]
+            == "Please guide this alignment decision."
+        )
+
 
 def test_prepare_chat_environment_installs_chat_skills_only() -> None:
-    with patch("cafe.ui.chat.SkillLoader.discover"), patch(
-        "cafe.ui.chat.NativeSkillBridge.install_skill"
-    ) as mock_install:
+    with (
+        patch("cafe.ui.chat.SkillLoader.discover"),
+        patch("cafe.ui.chat.NativeSkillBridge.install_skill") as mock_install,
+    ):
         _prepare_chat_environment(
             agent_cli=AgentCLI.CODEX,
         )
@@ -339,10 +445,13 @@ def test_prepare_chat_environment_installs_chat_skills_only() -> None:
         "cafe-chat-develop-change",
         "cafe-chat-spec-revision",
         "cafe-chat-plan-revision",
+        "cafe-chat-alignment-decision",
     ]
 
 
-def test_latest_role_iteration_cli_infers_codex_for_legacy_fallback_metadata(tmp_path, monkeypatch) -> None:
+def test_latest_role_iteration_cli_infers_codex_for_legacy_fallback_metadata(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
     iteration_dir = issue_dir / "develop" / "iteration_001"
@@ -452,7 +561,9 @@ def test_launch_chat_session_uses_playbook_role_defaults(
     assert registered_config.cli == AgentCLI.CLAUDE
 
 
-def test_prepare_chat_handoff_state_creates_blackboard_and_clears_stale_baton(tmp_path, monkeypatch) -> None:
+def test_prepare_chat_handoff_state_creates_blackboard_and_clears_stale_baton(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
     next_step_path = get_chat_next_step_path(issue_dir)
@@ -472,7 +583,9 @@ def test_prepare_chat_handoff_state_creates_blackboard_and_clears_stale_baton(tm
     assert next_step_path.exists()
 
 
-def test_prepare_chat_handoff_state_preserves_user_clarification_baton(tmp_path, monkeypatch) -> None:
+def test_prepare_chat_handoff_state_preserves_user_clarification_baton(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
     store = BlackboardStore(issue_dir)

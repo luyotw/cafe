@@ -16,6 +16,7 @@ from typing import Any, Dict, Optional
 
 from cafe.core.active_issue import clear_marker_if_matches
 from cafe.core.blackboard import BlackboardStore, HandoffContract, HandoffIntent, HandoffOwner
+from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import (
     PhaseStatusCode,
@@ -111,9 +112,14 @@ class BlackboardWorkflowRuntime:
         return any(isinstance(event, dict) and event.get("type") == event_type for event in events)
 
     @staticmethod
-    def _pr_publish_receipt_satisfied(execution_result: Any) -> bool:
-        """True when PR publish left a host receipt or legacy ``pr_synced`` marker."""
-        if BlackboardWorkflowRuntime._has_event(execution_result, "pr_synced"):
+    def _capability_receipt_satisfied(execution_result: Any, capability_id: str) -> bool:
+        """True when a capability left a success receipt.
+
+        ``pr_synced`` remains a legacy success marker for ``cafe.pr.publish``.
+        """
+        if capability_id == CAPABILITY_PR_PUBLISH_ID and BlackboardWorkflowRuntime._has_event(
+            execution_result, "pr_synced"
+        ):
             return True
         events = getattr(execution_result, "events", None)
         if not isinstance(events, list):
@@ -123,11 +129,34 @@ class BlackboardWorkflowRuntime:
                 continue
             if event.get("type") != "capability_receipt":
                 continue
-            if event.get("capability") != "cafe.pr.publish":
+            if event.get("capability") != capability_id:
                 continue
             if event.get("success") is True:
                 return True
         return False
+
+    @staticmethod
+    def _step_declared_capability_ids(step_def: Dict) -> list[str]:
+        raw = step_def.get("capability_requests") or []
+        if not isinstance(raw, list):
+            return []
+        return [str(item).strip() for item in raw if str(item).strip()]
+
+    def _required_capability_ids(self, current_step: str) -> list[str]:
+        step_def = self.steps.get(current_step, {})
+        if current_step == "pr" and not self._pr_step_requires_publish_receipt(current_step):
+            return []
+        declared = self._step_declared_capability_ids(step_def)
+        if declared:
+            return declared
+        if current_step == "pr":
+            return [CAPABILITY_PR_PUBLISH_ID]
+        return []
+
+    def _is_baton_driven_step(self, current_step: str) -> bool:
+        return current_step in self.BATON_DRIVEN_STEPS or bool(
+            self._required_capability_ids(current_step)
+        )
 
     def _default_pause_intent(self, current_step: str, status_code: str) -> HandoffIntent:
         step_def = self.steps.get(current_step, {})
@@ -156,7 +185,9 @@ class BlackboardWorkflowRuntime:
             "to_step='user', and intent='need_clarification'."
         )
         if br.field == "to_step":
-            message += " The baton must target a valid next step and cannot point back to the same phase."
+            message += (
+                " The baton must target a valid next step and cannot point back to the same phase."
+            )
         return message
 
     def _same_step_baton_rejected(self, *, current_step: str) -> BatonRejected:
@@ -292,9 +323,7 @@ class BlackboardWorkflowRuntime:
             },
         )
 
-    def _load_agent_written_handoff_contract(
-        self, *, current_step: str
-    ) -> HandoffContract:
+    def _load_agent_written_handoff_contract(self, *, current_step: str) -> HandoffContract:
         """Load and normalize a baton written by a just-finished agent step.
 
         ``allow_legacy_text=True`` is kept so that sessions started by older
@@ -341,9 +370,7 @@ class BlackboardWorkflowRuntime:
             or f"BATON_{contract.intent.value.upper()}"
         )
 
-    def _load_step_handoff_contract(
-        self, *, current_step: str
-    ) -> Optional[HandoffContract]:
+    def _load_step_handoff_contract(self, *, current_step: str) -> Optional[HandoffContract]:
         contract = self._load_agent_written_handoff_contract(current_step=current_step)
         if contract.from_step != current_step:
             return None
@@ -361,7 +388,9 @@ class BlackboardWorkflowRuntime:
         return None
 
     @staticmethod
-    def _extract_status_like_tokens(*, response: str, explicit_status_code: Optional[str]) -> set[str]:
+    def _extract_status_like_tokens(
+        *, response: str, explicit_status_code: Optional[str]
+    ) -> set[str]:
         tokens = set(STATUS_TOKEN_PATTERN.findall(response or ""))
         haystack = f"{response or ''}\n{explicit_status_code or ''}"
         if explicit_status_code:
@@ -390,7 +419,9 @@ class BlackboardWorkflowRuntime:
         return None
 
     @staticmethod
-    def _normalize_execution_result(execution_result: Any) -> tuple[str, Dict[str, str], Optional[str], bool]:
+    def _normalize_execution_result(
+        execution_result: Any,
+    ) -> tuple[str, Dict[str, str], Optional[str], bool]:
         auto_continue = False
         explicit_status_code: Optional[str] = None
         if isinstance(execution_result, StepExecutionResult):
@@ -469,7 +500,9 @@ class BlackboardWorkflowRuntime:
 
         try:
             try:
-                execution_result = self.executor(current_step, step_def, self.blackboard, extra_prompt=extra_prompt)
+                execution_result = self.executor(
+                    current_step, step_def, self.blackboard, extra_prompt=extra_prompt
+                )
             except TypeError:
                 execution_result = self.executor(current_step, step_def, self.blackboard)
         except KeyboardInterrupt:
@@ -517,7 +550,9 @@ class BlackboardWorkflowRuntime:
         if validate_assignee_type:
             self._validate_assignee_type(current_step, step_def)
 
-        response, artifacts, explicit_status_code, auto_continue = self._normalize_execution_result(execution_result)
+        response, artifacts, explicit_status_code, auto_continue = self._normalize_execution_result(
+            execution_result
+        )
         return StepIterationFrame(
             execution_result=execution_result,
             response=response,
@@ -742,26 +777,44 @@ class BlackboardWorkflowRuntime:
             or status_code == PhaseStatusCode.NEED_CLARIFICATION.value
         )
 
-    def _pr_publish_receipt_recorded(self) -> bool:
+    def _capability_receipt_recorded(self, capability_id: str) -> bool:
         for receipt in getattr(self.blackboard, "capability_receipts", []):
             if (
                 isinstance(receipt, dict)
-                and receipt.get("capability") == "cafe.pr.publish"
+                and receipt.get("capability") == capability_id
                 and receipt.get("success") is True
             ):
                 return True
         for event in getattr(self.blackboard, "events", []):
             data = getattr(event, "data", {})
-            if getattr(event, "event_type", "") == "pr_synced":
+            if (
+                capability_id == CAPABILITY_PR_PUBLISH_ID
+                and getattr(event, "event_type", "") == "pr_synced"
+            ):
                 return True
             if (
                 getattr(event, "event_type", "") == "capability_receipt"
                 and isinstance(data, dict)
-                and data.get("capability") == "cafe.pr.publish"
+                and data.get("capability") == capability_id
                 and data.get("success") is True
             ):
                 return True
         return False
+
+    def _missing_capability_receipts(
+        self,
+        *,
+        current_step: str,
+        execution_result: Any,
+    ) -> list[str]:
+        missing: list[str] = []
+        for capability_id in self._required_capability_ids(current_step):
+            if self._capability_receipt_satisfied(execution_result, capability_id):
+                continue
+            if self._capability_receipt_recorded(capability_id):
+                continue
+            missing.append(capability_id)
+        return missing
 
     def _validate_reconciled_handoff(self, *, current_step: str) -> HandoffReconciliationResult:
         missing: list[str] = []
@@ -795,13 +848,10 @@ class BlackboardWorkflowRuntime:
             else:
                 validated.append("baton")
 
-            if (
-                current_step == "pr"
-                and contract.to_owner == HandoffOwner.DONE
-                and self._pr_step_requires_publish_receipt(current_step)
-                and not self._pr_publish_receipt_recorded()
-            ):
-                missing.append("capability_receipt")
+            if contract.to_owner in {HandoffOwner.AGENT, HandoffOwner.DONE}:
+                for capability_id in self._required_capability_ids(current_step):
+                    if not self._capability_receipt_recorded(capability_id):
+                        missing.append(f"capability_receipt:{capability_id}")
 
         iteration_dir = self._latest_iteration_dir(current_step)
         if iteration_dir is None:
@@ -823,7 +873,9 @@ class BlackboardWorkflowRuntime:
             except FileNotFoundError:
                 missing.append("checklist_complete")
 
-            if contract is not None and self._questions_required_for_reconciliation(contract, status_code):
+            if contract is not None and self._questions_required_for_reconciliation(
+                contract, status_code
+            ):
                 questions_path = iteration_dir / "questions.xml"
                 if validate_questions_xml(questions_path):
                     validated.append("questions")
@@ -895,7 +947,9 @@ class BlackboardWorkflowRuntime:
             data["end_time"] = self._now_iso()
             changed = True
         if changed:
-            iteration_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            iteration_file.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
 
     def _apply_reconciled_handoff(
         self,
@@ -1167,10 +1221,16 @@ class BlackboardWorkflowRuntime:
                     completed=False,
                 )
 
-            if next_step == "done":
-                if self._pr_step_requires_publish_receipt(current_step) and not self._pr_publish_receipt_satisfied(
-                    frame.execution_result
-                ):
+            require_capability_receipts = next_step != "user"
+            if current_step == "pr" and next_step != "done":
+                require_capability_receipts = False
+
+            if require_capability_receipts:
+                missing_capabilities = self._missing_capability_receipts(
+                    current_step=current_step,
+                    execution_result=frame.execution_result,
+                )
+                if missing_capabilities:
                     self.blackboard_store.update_handoff_contract(
                         self.blackboard,
                         from_step=current_step,
@@ -1187,7 +1247,12 @@ class BlackboardWorkflowRuntime:
                             "step": current_step,
                             "status_code": status_code,
                             "reason": "missing_capability_receipt",
-                            "required_event": "pr_synced",
+                            "required_event": (
+                                "pr_synced"
+                                if missing_capabilities == [CAPABILITY_PR_PUBLISH_ID]
+                                else "capability_receipt:" + ",".join(missing_capabilities)
+                            ),
+                            "missing_capabilities": missing_capabilities,
                         },
                     )
                     self.blackboard_store.set_current_step(self.blackboard, current_step)
@@ -1197,6 +1262,7 @@ class BlackboardWorkflowRuntime:
                         completed=False,
                     )
 
+            if next_step == "done":
                 return self._emit_complete(
                     current_step=current_step,
                     status_code=status_code,
@@ -1262,8 +1328,10 @@ class BlackboardWorkflowRuntime:
         step_visits: Counter[str] = Counter()
 
         for hop_count in range(1, max_transitions + 1):
-            if current_step in self.BATON_DRIVEN_STEPS:
-                return self._run_baton_driven_pr(current_step=current_step, max_transitions=max_transitions - hop_count + 1)
+            if self._is_baton_driven_step(current_step):
+                return self._run_baton_driven_pr(
+                    current_step=current_step, max_transitions=max_transitions - hop_count + 1
+                )
 
             step_def = self.steps[current_step]
             _baton_retry_extra_prompt: Optional[str] = None
@@ -1298,7 +1366,9 @@ class BlackboardWorkflowRuntime:
                         "runtime": runtime_label,
                     },
                 )
-                raise RuntimeError(f"Step '{current_step}' exceeded max_iterations={max_iterations}")
+                raise RuntimeError(
+                    f"Step '{current_step}' exceeded max_iterations={max_iterations}"
+                )
 
             for _baton_attempt in range(3):
                 try:
@@ -1347,7 +1417,8 @@ class BlackboardWorkflowRuntime:
                         post_contract is not None
                         and post_contract.to_owner == HandoffOwner.AGENT
                         and post_contract.to_step == current_step
-                        and post_contract.source not in {"bootstrap", "workflow.start_step_override"}
+                        and post_contract.source
+                        not in {"bootstrap", "workflow.start_step_override"}
                     ):
                         status_code_obj, goto_target, valid_codes = self._parse_legacy_status(
                             step_def=step_def,
@@ -1362,10 +1433,17 @@ class BlackboardWorkflowRuntime:
                             explicit_status_code=frame.explicit_status_code,
                         )
                         invalid_intents = {
-                            token for token in status_like_tokens if token not in allowed_status_codes
+                            token
+                            for token in status_like_tokens
+                            if token not in allowed_status_codes
                         }
                         has_default_transition = bool(step_def.get("on", {}).get("default"))
-                        if status_code_obj is None and not goto_target and not invalid_intents and not has_default_transition:
+                        if (
+                            status_code_obj is None
+                            and not goto_target
+                            and not invalid_intents
+                            and not has_default_transition
+                        ):
                             raise self._same_step_baton_rejected(current_step=current_step)
                     break
                 except BatonRejected as br:
@@ -1392,7 +1470,8 @@ class BlackboardWorkflowRuntime:
             else:
                 post_contract = None
             if post_contract is not None and not (
-                post_contract.to_owner == HandoffOwner.AGENT and post_contract.to_step == current_step
+                post_contract.to_owner == HandoffOwner.AGENT
+                and post_contract.to_step == current_step
             ):
                 status_code = (
                     post_contract.status_code
@@ -1434,9 +1513,7 @@ class BlackboardWorkflowRuntime:
                 response=frame.response,
                 explicit_status_code=frame.explicit_status_code,
             )
-            allowed_status_codes = {
-                code.value for code in (valid_codes or list(PhaseStatusCode))
-            }
+            allowed_status_codes = {code.value for code in (valid_codes or list(PhaseStatusCode))}
             if status_code_obj is None:
                 handoff_next_step: Optional[str] = None
                 handoff_transition_source = "terminal"
@@ -1552,9 +1629,9 @@ class BlackboardWorkflowRuntime:
                     continue
 
             if not frame.auto_continue and status_code in PAUSE_STATUS_CODES:
-                pause_intent = self._extract_handoff_intent(frame.execution_result) or self._default_pause_intent(
-                    current_step, status_code
-                )
+                pause_intent = self._extract_handoff_intent(
+                    frame.execution_result
+                ) or self._default_pause_intent(current_step, status_code)
                 return self._emit_pause(
                     current_step=current_step,
                     status_code=status_code,
@@ -1582,7 +1659,9 @@ class BlackboardWorkflowRuntime:
                 next_step, transition_source = self._resolve_next_step(
                     current_step=current_step,
                     response=(
-                        frame.response if goto_target is None else f"{frame.response}\nGOTO:{goto_target}"
+                        frame.response
+                        if goto_target is None
+                        else f"{frame.response}\nGOTO:{goto_target}"
                     ),
                     status_code=status_code,
                 )
@@ -1597,7 +1676,7 @@ class BlackboardWorkflowRuntime:
                     final_status_code=status_code,
                     completed=False,
                 )
-            if next_step in self.BATON_DRIVEN_STEPS:
+            if self._is_baton_driven_step(next_step):
                 self._emit_transition(
                     current_step=current_step,
                     next_step=next_step,
@@ -1636,7 +1715,9 @@ class BlackboardWorkflowRuntime:
                         contract_source=transition_contract_source,
                     )
 
-                raise RuntimeError(f"Unknown terminal target '{next_step}' from step '{current_step}'")
+                raise RuntimeError(
+                    f"Unknown terminal target '{next_step}' from step '{current_step}'"
+                )
 
             self._emit_transition(
                 current_step=current_step,
@@ -1667,7 +1748,7 @@ class BlackboardWorkflowRuntime:
         raise RuntimeError(f"Playbook run reached max transition limit ({max_transitions})")
 
     def _run_single_step(self, *, current_step: str) -> PlaybookRunResult:
-        if current_step in self.BATON_DRIVEN_STEPS:
+        if self._is_baton_driven_step(current_step):
             return self._run_baton_driven_pr(
                 current_step=current_step,
                 max_transitions=1,
@@ -1733,7 +1814,9 @@ class BlackboardWorkflowRuntime:
                 source="workflow.start_step_override",
             )
 
-        if current_step not in self.BATON_DRIVEN_STEPS:
-            return self._run_legacy_until_boundary(current_step=current_step, max_transitions=max_transitions)
+        if not self._is_baton_driven_step(current_step):
+            return self._run_legacy_until_boundary(
+                current_step=current_step, max_transitions=max_transitions
+            )
 
         return self._run_baton_driven_pr(current_step=current_step, max_transitions=max_transitions)

@@ -199,6 +199,61 @@ steps:
     assert alignment.affected_document_categories == ["roadmap", "positioning"]
 
 
+def test_load_supports_capability_requests(tmp_path: Path) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "pr")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "default",
+        """
+playbook:
+  id: default
+steps:
+  pr:
+    skill: pr
+    role: developer
+    capability_requests: [cafe.pr.publish]
+    on:
+      await_agent: _done
+""",
+    )
+
+    result = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    ).load_model("default")
+
+    assert result.model.steps["pr"].capability_requests == ["cafe.pr.publish"]
+
+
+def test_load_rejects_duplicate_capability_requests(tmp_path: Path) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "pr")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "default",
+        """
+playbook:
+  id: default
+steps:
+  pr:
+    skill: pr
+    role: developer
+    capability_requests: [cafe.pr.publish, cafe.pr.publish]
+    on:
+      await_agent: _done
+""",
+    )
+
+    with pytest.raises(ValueError, match="duplicate capability_requests"):
+        PlaybookLoader(
+            project_root=tmp_path / "project",
+            global_root=tmp_path / "global",
+            builtin_root=builtin_root,
+        ).load_model("default")
+
+
 def test_load_rejects_unknown_alignment_config_key(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
     _write_skill(builtin_root / "skills", "cafe-develop")

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from cafe.agents.manager import AgentManager
+from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
 from cafe.core.blackboard import (
     ArtifactEntry,
     ArtifactKind,
@@ -126,7 +127,9 @@ class GenericWorkflowStepExecutor(Phase):
 
     def _get_allowed_directories(self) -> List[str]:
         base = super()._get_allowed_directories()
-        merged = list(dict.fromkeys(base + self._config_allowed_directories + self._extra_allowed_directories))
+        merged = list(
+            dict.fromkeys(base + self._config_allowed_directories + self._extra_allowed_directories)
+        )
         return merged
 
     def execute(self) -> Any:
@@ -151,17 +154,25 @@ class GenericWorkflowStepExecutor(Phase):
         output_file = self._get_versioned_file_path(step_name, self.iteration, self.phase_dir)
         checklist_file = iteration_dir / "checklist.md"
         questions_xml_file = iteration_dir / "questions.xml"
+        capability_request_file = iteration_dir / "capability_request.json"
         publish_request_file = iteration_dir / "publish_request.json"
         self._current_output_file = output_file
 
         if self.iteration > 1:
             self._copy_previous_version(step_name, self.iteration, self.phase_dir)
         self._ensure_output_file_initialized(step_name, output_file)
-        if step_name == "pr":
-            self._write_publish_request(
+        capability_ids = self._effective_capability_ids(step_name, step_def)
+        if capability_ids:
+            self._write_capability_request(
                 output_file=output_file,
-                publish_request_file=publish_request_file,
+                capability_request_file=capability_request_file,
+                capability_ids=capability_ids,
             )
+            if step_name == "pr":
+                self._write_publish_request(
+                    output_file=output_file,
+                    publish_request_file=publish_request_file,
+                )
 
         skill_name = self._resolve_skill_name(step_def, self.iteration)
         valid_intents = self._resolve_valid_intents(step_def)
@@ -173,7 +184,9 @@ class GenericWorkflowStepExecutor(Phase):
             skill_names=self.SHARED_WORKFLOW_SKILLS,
             agent_cli=agent_cli,
         )
-        skill_invocation = self.generic_phase.prepare_skill(skill_name=skill_name, agent_cli=agent_cli)
+        skill_invocation = self.generic_phase.prepare_skill(
+            skill_name=skill_name, agent_cli=agent_cli
+        )
         context = self._build_context(
             step_name=step_name,
             step_def=step_def,
@@ -212,7 +225,9 @@ class GenericWorkflowStepExecutor(Phase):
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
             if extra_prompt:
                 resolved_user_input = (
-                    f"{extra_prompt}\n\n{resolved_user_input}" if resolved_user_input else extra_prompt
+                    f"{extra_prompt}\n\n{resolved_user_input}"
+                    if resolved_user_input
+                    else extra_prompt
                 )
             attempt_allowed_tools = (
                 self._build_baton_retry_allowed_tools()
@@ -248,6 +263,7 @@ class GenericWorkflowStepExecutor(Phase):
                 "iteration_dir": iteration_dir,
                 "output_file": output_file,
                 "questions_xml_file": questions_xml_file,
+                "capability_request_file": capability_request_file if capability_ids else None,
                 "publish_request_file": publish_request_file if step_name == "pr" else None,
                 "blackboard_state": blackboard_state,
                 "transform_runtime_context": (
@@ -268,20 +284,21 @@ class GenericWorkflowStepExecutor(Phase):
         agent_was_invoked = bool(last_prompt)
         if (
             require_status_code
-            and
-            agent_was_invoked
+            and agent_was_invoked
             and execution.status_code is not None
             and status_code is not None
             and self._should_validate_checklist(status_code)
         ):
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
-            response, validated_status, validation_passed = self._validate_and_retry_checklist_completion(
-                agent_name=agent_name,
-                prompt=last_prompt[0] if last_prompt else "",
-                user_input=resolved_user_input,
-                valid_intents=valid_intents,
-                allowed_tools=allowed_tools,
-                max_retries=3,
+            response, validated_status, validation_passed = (
+                self._validate_and_retry_checklist_completion(
+                    agent_name=agent_name,
+                    prompt=last_prompt[0] if last_prompt else "",
+                    user_input=resolved_user_input,
+                    valid_intents=valid_intents,
+                    allowed_tools=allowed_tools,
+                    max_retries=3,
+                )
             )
             if validation_passed and validated_status is not None:
                 status_code = validated_status
@@ -312,11 +329,7 @@ class GenericWorkflowStepExecutor(Phase):
 
         effective_status = status_code
 
-        events = [
-            event
-            for event in execution.events
-            if isinstance(event, dict)
-        ]
+        events = [event for event in execution.events if isinstance(event, dict)]
         store = BlackboardStore(self.issue_dir)
         for event in events:
             if event.get("type") != "script_hook":
@@ -415,7 +428,9 @@ class GenericWorkflowStepExecutor(Phase):
             if hasattr(execution_config.cli, "value")
             else str(execution_config.cli)
         )
-        current_session_id = execution_config.session_id if isinstance(execution_config.session_id, str) else None
+        current_session_id = (
+            execution_config.session_id if isinstance(execution_config.session_id, str) else None
+        )
 
         return resolve_resume_user_input(
             candidate=candidate,
@@ -493,7 +508,9 @@ class GenericWorkflowStepExecutor(Phase):
 
         raise ValueError(f"Unsupported playbook role '{role}' for workflow execution")
 
-    def _apply_step_agent_model(self, *, step_name: str, step_def: Dict[str, Any], agent_name: str) -> None:
+    def _apply_step_agent_model(
+        self, *, step_name: str, step_def: Dict[str, Any], agent_name: str
+    ) -> None:
         model = self._resolve_step_model(step_name=step_name, step_def=step_def)
         self.agent_manager.get_agent(agent_name).config.model = model
 
@@ -552,7 +569,9 @@ class GenericWorkflowStepExecutor(Phase):
                 continue
             if "(" in tool:
                 tool_name, remainder = tool.split("(", 1)
-                normalized_name = tool_name_map.get(tool_name, tool_name[:1].lower() + tool_name[1:])
+                normalized_name = tool_name_map.get(
+                    tool_name, tool_name[:1].lower() + tool_name[1:]
+                )
                 normalized.append(f"{normalized_name}({remainder}")
                 continue
             normalized.append(tool_name_map.get(tool, tool[:1].lower() + tool[1:]))
@@ -635,8 +654,7 @@ class GenericWorkflowStepExecutor(Phase):
         # 本 step 依 intent 定義的下一步（含 _done → done 正規化），給 agent 明確指向。
         step_on = step_def.get("on", {}) if isinstance(step_def.get("on"), dict) else {}
         step_transitions = {
-            str(k): ("done" if str(v) in ("_done", "done") else str(v))
-            for k, v in step_on.items()
+            str(k): ("done" if str(v) in ("_done", "done") else str(v)) for k, v in step_on.items()
         }
         context = {
             "agent_file": AgentManager.get_agent_file_path(agent_name, role_dir),
@@ -704,16 +722,17 @@ class GenericWorkflowStepExecutor(Phase):
         questions_display = self._display_path(questions_xml_file)
         spec_path = self._artifact_or_latest_path(blackboard_state, "spec", "spec")
         plan_path = self._artifact_or_latest_path(blackboard_state, "plan", "plan")
-        review_feedback = (
-            self._artifact_path(blackboard_state, "review_feedback")
-            or self._artifact_path(blackboard_state, "pr_result")
-        )
+        review_feedback = self._artifact_path(
+            blackboard_state, "review_feedback"
+        ) or self._artifact_path(blackboard_state, "pr_result")
 
         skill_name = canonical_skill_name(skill_name)
         if skill_name == "cafe-spec":
             prev_spec = None
             if self.iteration > 1:
-                prev_spec_file = self._get_versioned_file_path(step_name, self.iteration - 1, self.phase_dir)
+                prev_spec_file = self._get_versioned_file_path(
+                    step_name, self.iteration - 1, self.phase_dir
+                )
                 prev_spec = self._display_path(prev_spec_file)
             generate_spec_checklist(
                 iteration=self.iteration,
@@ -730,7 +749,9 @@ class GenericWorkflowStepExecutor(Phase):
                 raise ValueError("Plan step requires spec artifact")
             prev_plan = None
             if self.iteration > 1:
-                prev_plan_file = self._get_versioned_file_path(step_name, self.iteration - 1, self.phase_dir)
+                prev_plan_file = self._get_versioned_file_path(
+                    step_name, self.iteration - 1, self.phase_dir
+                )
                 prev_plan = self._display_path(prev_plan_file)
             generate_plan_checklist(
                 agent_name=agent_name,
@@ -778,7 +799,9 @@ class GenericWorkflowStepExecutor(Phase):
                 raise ValueError("PR step requires spec and plan artifacts")
             prev_pr = None
             if self.iteration > 1:
-                prev_pr_file = self._get_versioned_file_path(step_name, self.iteration - 1, self.phase_dir)
+                prev_pr_file = self._get_versioned_file_path(
+                    step_name, self.iteration - 1, self.phase_dir
+                )
                 prev_pr = self._display_path(prev_pr_file)
             generate_pr_checklist(
                 agent_name=agent_name,
@@ -847,7 +870,9 @@ class GenericWorkflowStepExecutor(Phase):
         return step_name != "pr"
 
     @staticmethod
-    def _resolve_handoff_intent(step_def: Dict[str, Any], status_code: PhaseStatusCode) -> Optional[str]:
+    def _resolve_handoff_intent(
+        step_def: Dict[str, Any], status_code: PhaseStatusCode
+    ) -> Optional[str]:
         if status_code in {
             PhaseStatusCode.READY_FOR_REVIEW,
             PhaseStatusCode.CONFIRM_OUTPUT,
@@ -1066,6 +1091,49 @@ class GenericWorkflowStepExecutor(Phase):
             return
         output_file.write_text("", encoding="utf-8")
 
+    @staticmethod
+    def _declared_capability_ids(step_def: Dict[str, Any]) -> List[str]:
+        raw = step_def.get("capability_requests") or []
+        if not isinstance(raw, list):
+            return []
+        return [str(item).strip() for item in raw if str(item).strip()]
+
+    def _effective_capability_ids(self, step_name: str, step_def: Dict[str, Any]) -> List[str]:
+        declared = self._declared_capability_ids(step_def)
+        if declared:
+            return declared
+        if step_name == "pr":
+            return [CAPABILITY_PR_PUBLISH_ID]
+        return []
+
+    def _write_capability_request(
+        self,
+        *,
+        output_file: Path,
+        capability_request_file: Path,
+        capability_ids: List[str],
+    ) -> None:
+        requests = [
+            self._build_capability_request(
+                output_file=output_file,
+                capability_id=capability_id,
+            )
+            for capability_id in capability_ids
+        ]
+        payload: Dict[str, Any]
+        if len(requests) == 1:
+            payload = requests[0]
+        else:
+            payload = {"requests": requests}
+        capability_request_file.write_text(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
     def _write_publish_request(
         self,
         *,
@@ -1074,7 +1142,10 @@ class GenericWorkflowStepExecutor(Phase):
     ) -> None:
         publish_request_file.write_text(
             json.dumps(
-                self._build_publish_request(output_file=output_file),
+                self._build_capability_request(
+                    output_file=output_file,
+                    capability_id=CAPABILITY_PR_PUBLISH_ID,
+                ),
                 ensure_ascii=False,
                 indent=2,
             ),
@@ -1082,10 +1153,28 @@ class GenericWorkflowStepExecutor(Phase):
         )
 
     def _build_publish_request(self, *, output_file: Path) -> Dict[str, Any]:
+        return self._build_capability_request(
+            output_file=output_file,
+            capability_id=CAPABILITY_PR_PUBLISH_ID,
+        )
+
+    def _build_capability_request(
+        self,
+        *,
+        output_file: Path,
+        capability_id: str,
+    ) -> Dict[str, Any]:
+        if capability_id != CAPABILITY_PR_PUBLISH_ID:
+            return {
+                "capability": capability_id,
+                "args": {},
+                "permissions": {},
+            }
+
         base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
         resolved_base = str(base_branch or self.git_ops.get_default_base_branch())
         return {
-            "capability": "cafe.pr.publish",
+            "capability": CAPABILITY_PR_PUBLISH_ID,
             "args": {
                 "output": self._repo_relative_path(output_file),
                 "base": resolved_base,

@@ -3,10 +3,10 @@
 from pathlib import Path
 
 from cafe.core.alignment import (
+    AgentAlignmentEvidence,
     AlignmentDecisionLevel,
     AlignmentPolicyConfig,
     AlignmentPolicyInput,
-    AgentAlignmentEvidence,
     evaluate_alignment_policy,
     merge_agent_alignment_evidence,
 )
@@ -42,6 +42,77 @@ mandate:
     return load_strategic_context(tmp_path)
 
 
+def _context_with_roadmap_mapped_strategy(tmp_path: Path):
+    (tmp_path / ".cafe").mkdir()
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "roadmap.md").write_text(
+        "# Roadmap\n\nNorth star and product direction.", encoding="utf-8"
+    )
+    (tmp_path / ".cafe" / "strategic_context.yaml").write_text(
+        """
+version: 1
+documents:
+  roadmap:
+    path: docs/roadmap.md
+    status: exists
+  product_direction:
+    path: docs/roadmap.md
+    status: exists
+  principles:
+    path: docs/roadmap.md
+    status: exists
+  positioning:
+    path: docs/positioning.md
+    status: missing
+mandate:
+  axes:
+    product_scope:
+      level: escalate
+      grounds: [roadmap]
+""",
+        encoding="utf-8",
+    )
+    return load_strategic_context(tmp_path)
+
+
+def _context_with_confirmed_strategy(tmp_path: Path):
+    (tmp_path / ".cafe").mkdir()
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "roadmap.md").write_text(
+        "# Roadmap\n\nCapability contract consolidation is in scope.",
+        encoding="utf-8",
+    )
+    (tmp_path / "docs" / "positioning.md").write_text(
+        "# Positioning\n\nCapability contracts protect trusted host boundaries.",
+        encoding="utf-8",
+    )
+    (tmp_path / ".cafe" / "strategic_context.yaml").write_text(
+        """
+version: 1
+documents:
+  roadmap:
+    path: docs/roadmap.md
+    status: exists
+  product_direction:
+    path: docs/roadmap.md
+    status: exists
+  principles:
+    path: docs/roadmap.md
+    status: exists
+  positioning:
+    path: docs/positioning.md
+    status: exists
+mandate:
+  axes:
+    product_scope:
+      level: escalate
+      grounds: [roadmap, principles]
+""",
+        encoding="utf-8",
+    )
+    return load_strategic_context(tmp_path)
+
+
 def test_explicit_alignment_request_forces_checkpoint(tmp_path: Path) -> None:
     result = evaluate_alignment_policy(
         AlignmentPolicyInput(step_name="plan", user_input="Please align first before planning."),
@@ -69,7 +140,9 @@ def test_mandate_escalation_trigger_forces_checkpoint(tmp_path: Path) -> None:
     )
 
     assert result.level == AlignmentDecisionLevel.MUST_ALIGN
-    assert any(rule.rule_id == "mandate_escalation:product_scope" for rule in result.triggered_rules)
+    assert any(
+        rule.rule_id == "mandate_escalation:product_scope" for rule in result.triggered_rules
+    )
 
 
 def test_out_of_mandate_overlap_forces_checkpoint(tmp_path: Path) -> None:
@@ -115,7 +188,9 @@ def test_chinese_roadmap_update_is_in_payload(tmp_path: Path) -> None:
 
 def test_missing_positioning_document_is_surfaced_when_relevant(tmp_path: Path) -> None:
     result = evaluate_alignment_policy(
-        AlignmentPolicyInput(step_name="draft", user_input="Draft positioning guidance for launch."),
+        AlignmentPolicyInput(
+            step_name="draft", user_input="Draft positioning guidance for launch."
+        ),
         strategic_context=_context(tmp_path),
         config=AlignmentPolicyConfig(pause_threshold=5, note_threshold=2),
     )
@@ -171,9 +246,125 @@ def test_configured_document_categories_apply_to_strategic_signals(tmp_path: Pat
     )
 
 
+def test_trusted_host_capability_contract_forces_checkpoint(tmp_path: Path) -> None:
+    issue_text = """
+    Replace PR-specific publish hooks with generic capability contracts.
+    CAFE should keep the long-term direction for host-side execution: agents
+    produce declarative requests and trusted host capabilities perform external
+    mutations. Preserve a strict trust boundary while broadening capability
+    request and receipt handling.
+    """
+
+    result = evaluate_alignment_policy(
+        AlignmentPolicyInput(step_name="spec", artifacts={"issue": issue_text}),
+        strategic_context=_context(tmp_path),
+        config=AlignmentPolicyConfig(
+            affected_document_categories=(
+                "roadmap",
+                "product_direction",
+                "principles",
+                "positioning",
+                "strategic_context",
+            ),
+            pause_threshold=5,
+            note_threshold=2,
+        ),
+    )
+
+    assert result.level == AlignmentDecisionLevel.MUST_ALIGN
+    assert result.payload is not None
+    rule_ids = {rule.rule_id for rule in result.triggered_rules}
+    assert "trusted_capability_boundary" in rule_ids
+    assert "external_mutation_risk" in rule_ids
+    affected_categories = {doc.category for doc in result.payload.affected_documents}
+    assert {
+        "roadmap",
+        "product_direction",
+        "principles",
+        "positioning",
+        "strategic_context",
+    } <= affected_categories
+
+
+def test_trusted_capability_uses_mapped_roadmap_docs_without_missing_false_positive(
+    tmp_path: Path,
+) -> None:
+    issue_text = """
+    Replace PR-specific publish hooks with generic capability contracts.
+    Keep trusted host-side execution and a strict trust boundary.
+    """
+
+    result = evaluate_alignment_policy(
+        AlignmentPolicyInput(step_name="spec", artifacts={"issue": issue_text}),
+        strategic_context=_context_with_roadmap_mapped_strategy(tmp_path),
+        config=AlignmentPolicyConfig(
+            affected_document_categories=(
+                "roadmap",
+                "product_direction",
+                "principles",
+                "positioning",
+                "strategic_context",
+            ),
+            pause_threshold=5,
+            note_threshold=2,
+        ),
+    )
+
+    assert result.level == AlignmentDecisionLevel.MUST_ALIGN
+    rule_ids = {rule.rule_id for rule in result.triggered_rules}
+    assert "strategic_document_missing:product_direction" not in rule_ids
+    assert "strategic_document_missing:principles" not in rule_ids
+    assert "strategic_document_missing:positioning" in rule_ids
+    assert result.payload is not None
+    docs = {doc.category: doc for doc in result.payload.affected_documents}
+    assert docs["product_direction"].path == "docs/roadmap.md"
+    assert docs["principles"].path == "docs/roadmap.md"
+    assert docs["positioning"].status == "missing"
+
+
+def test_confirmed_strategy_signal_does_not_force_document_update_requirement(
+    tmp_path: Path,
+) -> None:
+    spec_text = """
+    Issue #347 is limited to generic capability request validation, execution
+    receipt handling, and preserving existing PR publish behavior. Out of scope:
+    expanding the work into policy, strategy, or execution-surface changes
+    outside the confirmed capability-contract boundary.
+    """
+
+    result = evaluate_alignment_policy(
+        AlignmentPolicyInput(
+            step_name="spec",
+            user_input="Q1: select 1. Q2: select all. Q3: select 1.",
+            artifacts={"spec": spec_text},
+        ),
+        strategic_context=_context_with_confirmed_strategy(tmp_path),
+        config=AlignmentPolicyConfig(
+            affected_document_categories=(
+                "roadmap",
+                "product_direction",
+                "principles",
+                "positioning",
+                "strategic_context",
+            ),
+            pause_threshold=5,
+            note_threshold=2,
+        ),
+    )
+
+    assert result.level == AlignmentDecisionLevel.MUST_ALIGN
+    rule_ids = {rule.rule_id for rule in result.triggered_rules}
+    assert "trusted_capability_boundary" in rule_ids
+    assert "strategic_document_update_required" not in rule_ids
+    assert result.payload is not None
+    assert result.payload.strategic_document_update_requirements == ()
+
+
 def test_medium_risk_records_note_only(tmp_path: Path) -> None:
     result = evaluate_alignment_policy(
-        AlignmentPolicyInput(step_name="develop", user_input="Touch an external API wrapper boundary."),
+        AlignmentPolicyInput(
+            step_name="develop", user_input="Touch an external API wrapper boundary."
+        ),
         strategic_context=_context(tmp_path),
         config=AlignmentPolicyConfig(pause_threshold=5, note_threshold=2),
     )
@@ -207,7 +398,9 @@ def test_fingerprint_changes_when_affected_document_changes(tmp_path: Path) -> N
     first = evaluate_alignment_policy(input_data, strategic_context=context)
 
     (tmp_path / "docs" / "roadmap.md").write_text("roadmap v2", encoding="utf-8")
-    second = evaluate_alignment_policy(input_data, strategic_context=load_strategic_context(tmp_path))
+    second = evaluate_alignment_policy(
+        input_data, strategic_context=load_strategic_context(tmp_path)
+    )
 
     assert first.payload is not None
     assert second.payload is not None

@@ -111,7 +111,68 @@ def _pr_publish_requested(
         contract.from_step == "pr"
         and contract.to_owner == HandoffOwner.DONE
         and contract.to_step == "done"
-        and contract.intent == HandoffIntent.WORKFLOW_COMPLETE
+        and contract.intent in {HandoffIntent.AWAIT_AGENT, HandoffIntent.WORKFLOW_COMPLETE}
+    )
+
+
+def _declared_capability_ids(step_def: Any) -> list[str]:
+    if not isinstance(step_def, dict):
+        return []
+    raw = step_def.get("capability_requests") or []
+    if not isinstance(raw, list):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def _effective_capability_ids(*, step_name: str, step_def: Any) -> list[str]:
+    declared = _declared_capability_ids(step_def)
+    if declared:
+        return declared
+    if step_name == "pr":
+        return ["cafe.pr.publish"]
+    return []
+
+
+def _capability_execution_requested(
+    *,
+    phase: Any,
+    step_name: str,
+    step_def: Any,
+    status_code: Any,
+    context: Optional[dict[str, Any]] = None,
+) -> bool:
+    capability_ids = _effective_capability_ids(step_name=step_name, step_def=step_def)
+    if not capability_ids:
+        return False
+    if step_name == "pr" and "cafe.pr.publish" in capability_ids:
+        return _pr_publish_requested(
+            phase=phase,
+            step_name=step_name,
+            status_code=status_code,
+            context=context,
+        )
+    if _hook_status_value(status_code) == PhaseStatusCode.CONFIRMED.value:
+        return True
+
+    baton_file: Optional[Path] = None
+    if isinstance(context, dict):
+        next_step_path = context.get("next_step_path")
+        if next_step_path:
+            baton_file = Path(str(next_step_path))
+    if baton_file is None:
+        issue_dir = getattr(phase, "issue_dir", None)
+        if isinstance(issue_dir, Path):
+            baton_file = issue_dir / "next_step.txt"
+    if baton_file is None or not baton_file.exists():
+        return False
+    try:
+        contract = HandoffContract.from_dict(json.loads(baton_file.read_text(encoding="utf-8")))
+    except Exception:
+        return False
+    return (
+        contract.from_step == step_name
+        and contract.to_step != step_name
+        and contract.to_owner in {HandoffOwner.AGENT, HandoffOwner.DONE}
     )
 
 
@@ -158,7 +219,9 @@ class UserInputCollector(NoOpHook):
         return phase._get_versioned_file_path(step_name, phase.iteration - 1, phase.phase_dir)
 
     @staticmethod
-    def _display_previous_output(phase: Any, step_name: str, previous_output_file: Optional[Path]) -> None:
+    def _display_previous_output(
+        phase: Any, step_name: str, previous_output_file: Optional[Path]
+    ) -> None:
         if previous_output_file is None:
             return
         title_map = {
@@ -236,9 +299,7 @@ class UserInputCollector(NoOpHook):
                         "- Key background information\n"
                         "(Press Esc + Enter to finish)"
                     )
-                    user_input = prompt_multiline(
-                        development_guide_prompt
-                    ).strip()
+                    user_input = prompt_multiline(development_guide_prompt).strip()
                 else:
                     user_input = ""
                 phase.step_user_inputs[step_name] = user_input
@@ -296,8 +357,7 @@ class UserInputCollector(NoOpHook):
         previous_output_file = self._get_previous_output_file(phase, step_name)
         # Steps that declare confirm_output use delta view on READY_FOR_REVIEW (less noisy).
         if not (
-            step_on_declares(step_def, "confirm_output")
-            and previous_status == "ready_for_review"
+            step_on_declares(step_def, "confirm_output") and previous_status == "ready_for_review"
         ):
             self._display_previous_output(phase, step_name, previous_output_file)
 
@@ -308,12 +368,12 @@ class UserInputCollector(NoOpHook):
             prev_data = phase._load_previous_iteration_data() or {}
             # Show diff again after returning from chat/edit, but never print full output.
             if delta_displayed:
-                redisplay_callback = (
-                    lambda: self._display_previous_iteration_delta(phase, previous_output_file)
+                redisplay_callback = lambda: self._display_previous_iteration_delta(
+                    phase, previous_output_file
                 )
             else:
-                redisplay_callback = (
-                    lambda: self._display_previous_output(phase, step_name, previous_output_file)
+                redisplay_callback = lambda: self._display_previous_output(
+                    phase, step_name, previous_output_file
                 )
             choice = phase._ask_user_for_review_decision(
                 self._resolve_review_item_name(step_name),
@@ -457,9 +517,7 @@ class UserInputCollector(NoOpHook):
             iteration = getattr(phase, "iteration", None)
             if phase_dir is not None and iteration is not None:
                 current_input_file = (
-                    Path(phase_dir)
-                    / f"iteration_{int(iteration):03d}"
-                    / "user_input.md"
+                    Path(phase_dir) / f"iteration_{int(iteration):03d}" / "user_input.md"
                 )
 
         if current_input_file and current_input_file.exists():
@@ -567,9 +625,7 @@ class GitHubIssueFetcher(NoOpHook):
         )
         if content is not None:
             output_file.parent.mkdir(parents=True, exist_ok=True)
-            output_file.write_text(
-                f"# Initial Requirements\n\n{content}\n", encoding="utf-8"
-            )
+            output_file.write_text(f"# Initial Requirements\n\n{content}\n", encoding="utf-8")
             return HookResult(
                 context_updates={"user_input": content},
                 events=[
@@ -607,9 +663,7 @@ class GitHubIssueFetcher(NoOpHook):
             content = ""
 
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        output_file.write_text(
-            f"# Initial Requirements\n\n{content}\n", encoding="utf-8"
-        )
+        output_file.write_text(f"# Initial Requirements\n\n{content}\n", encoding="utf-8")
 
         return HookResult(
             context_updates={"user_input": content},
@@ -659,9 +713,7 @@ class GitHubIssueFetcher(NoOpHook):
         return method, int(raw_id) if raw_id else None
 
     @staticmethod
-    def _save_input_config(
-        config_file: Path, method: str, issue_id: Optional[int]
-    ) -> None:
+    def _save_input_config(config_file: Path, method: str, issue_id: Optional[int]) -> None:
         import yaml
 
         try:
@@ -724,11 +776,7 @@ class GitHubIssueFetcher(NoOpHook):
         if lines[0].startswith("# "):
             title = lines[0][2:].strip()
             body = lines[1].strip() if len(lines) > 1 else ""
-            content = (
-                f"**Issue Title:** {title}\n\n{body}"
-                if body
-                else f"**Issue Title:** {title}"
-            )
+            content = f"**Issue Title:** {title}\n\n{body}" if body else f"**Issue Title:** {title}"
         else:
             content = fetched_content
 
@@ -829,16 +877,18 @@ class GitHubPRCreator(NoOpHook):
             capability_receipt_hook_event,
             default_capability_definition_dirs,
             load_capability_registry,
-            run_pr_publish_capability,
+            run_capability_request,
         )
 
         phase = kwargs.get("phase")
         step_name = str(kwargs.get("step_name") or "")
+        step_def = kwargs.get("step_def") or {}
         if phase is None:
             return HookResult()
-        if not _pr_publish_requested(
+        if not _capability_execution_requested(
             phase=phase,
             step_name=step_name,
+            step_def=step_def,
             status_code=kwargs.get("status_code"),
             context=kwargs.get("context"),
         ):
@@ -850,22 +900,32 @@ class GitHubPRCreator(NoOpHook):
             return HookResult()
 
         repo_root = self._resolve_repo_root(phase)
+        capability_request_file = kwargs.get("capability_request_file")
         publish_request_file = kwargs.get("publish_request_file")
         blackboard_state = kwargs.get("blackboard_state")
         issue_dir = getattr(phase, "issue_dir", None)
+        fallback_capability = (
+            _effective_capability_ids(step_name=step_name, step_def=step_def)
+            or [CAPABILITY_PR_PUBLISH_ID]
+        )[0]
 
         def persist_receipt(receipt: dict[str, Any]) -> None:
             if isinstance(blackboard_state, BlackboardState) and isinstance(issue_dir, Path):
                 BlackboardStore(issue_dir).append_capability_receipt(blackboard_state, receipt)
 
         try:
-            request = self._load_publish_request(
-                publish_request_file=publish_request_file if isinstance(publish_request_file, Path) else None,
+            request_payload = self._load_publish_request(
+                publish_request_file=(
+                    capability_request_file
+                    if isinstance(capability_request_file, Path)
+                    else publish_request_file if isinstance(publish_request_file, Path) else None
+                ),
                 repo_root=repo_root,
             )
+            requests = self._normalize_capability_requests(request_payload)
         except RuntimeError:
             receipt = {
-                "capability": CAPABILITY_PR_PUBLISH_ID,
+                "capability": fallback_capability,
                 "correlation_id": uuid.uuid4().hex[:20],
                 "success": False,
                 "category": VALIDATION_ERROR,
@@ -880,55 +940,63 @@ class GitHubPRCreator(NoOpHook):
         try:
             registry = load_capability_registry(default_capability_definition_dirs(repo_root))
         except CapabilityRegistryError:
-            receipt = {
-                "capability": CAPABILITY_PR_PUBLISH_ID,
-                "correlation_id": uuid.uuid4().hex[:20],
-                "success": False,
-                "category": VALIDATION_ERROR,
-                "code": "registry_load_error",
-                "inputs": dict(request.get("args") or {}),
-                "outputs": {},
-                "finished_at": datetime.now().astimezone().isoformat(),
-            }
-            persist_receipt(receipt)
-            return HookResult(events=[capability_receipt_hook_event(receipt)])
-
-        run = run_pr_publish_capability(
-            repo_root=repo_root,
-            registry=registry,
-            publish_request=request,
-            pr_markdown_file=output_file,
-        )
-        persist_receipt(run.receipt)
-
-        events: list[dict[str, Any]] = [capability_receipt_hook_event(run.receipt)]
-        if run.pr_synced_event is not None:
-            events.insert(0, run.pr_synced_event)
-
-        if not run.receipt.get("success"):
-            category = run.receipt.get("category")
-            if category == SCRIPT_EXIT_ERROR:
-                details = (run.receipt.get("outputs") or {}).get("stderr") or ""
-                raise RuntimeError(f"PR sync script failed: {details}")
-            if category == TIMEOUT_ERROR:
-                raise RuntimeError("PR sync timed out")
+            events: list[dict[str, Any]] = []
+            for request in requests:
+                receipt = {
+                    "capability": str(request.get("capability") or fallback_capability),
+                    "correlation_id": uuid.uuid4().hex[:20],
+                    "success": False,
+                    "category": VALIDATION_ERROR,
+                    "code": "registry_load_error",
+                    "inputs": self._request_inputs_for_receipt(request),
+                    "outputs": {},
+                    "finished_at": datetime.now().astimezone().isoformat(),
+                }
+                persist_receipt(receipt)
+                events.append(capability_receipt_hook_event(receipt))
             return HookResult(events=events)
 
-        pr_url = str((run.receipt.get("outputs") or {}).get("pr_url") or "").strip()
-        pr_number = str((run.receipt.get("outputs") or {}).get("pr_number") or "").strip()
-        action = str((run.receipt.get("outputs") or {}).get("action") or "synced").strip()
-        return HookResult(
-            context_updates={
-                key: value
-                for key, value in {
-                    "pr_url": pr_url,
-                    "pr_number": pr_number,
-                    "pr_sync_action": action,
-                }.items()
-                if value
-            },
-            events=events,
-        )
+        events: list[dict[str, Any]] = []
+        context_updates: dict[str, str] = {}
+        for request in requests:
+            run = run_capability_request(
+                repo_root=repo_root,
+                registry=registry,
+                capability_request=request,
+                output_file=output_file,
+            )
+            persist_receipt(run.receipt)
+
+            if run.pr_synced_event is not None:
+                events.append(run.pr_synced_event)
+            events.append(capability_receipt_hook_event(run.receipt))
+
+            if not run.receipt.get("success"):
+                category = run.receipt.get("category")
+                if category == SCRIPT_EXIT_ERROR:
+                    details = (run.receipt.get("outputs") or {}).get("stderr") or ""
+                    raise RuntimeError(f"PR sync script failed: {details}")
+                if category == TIMEOUT_ERROR:
+                    raise RuntimeError("PR sync timed out")
+                continue
+
+            if run.receipt.get("capability") == CAPABILITY_PR_PUBLISH_ID:
+                pr_url = str((run.receipt.get("outputs") or {}).get("pr_url") or "").strip()
+                pr_number = str((run.receipt.get("outputs") or {}).get("pr_number") or "").strip()
+                action = str((run.receipt.get("outputs") or {}).get("action") or "synced").strip()
+                context_updates.update(
+                    {
+                        key: value
+                        for key, value in {
+                            "pr_url": pr_url,
+                            "pr_number": pr_number,
+                            "pr_sync_action": action,
+                        }.items()
+                        if value
+                    }
+                )
+
+        return HookResult(context_updates=context_updates, events=events)
 
     @staticmethod
     def _is_local_pr_mode(phase: Any) -> bool:
@@ -997,10 +1065,35 @@ class GitHubPRCreator(NoOpHook):
             raise RuntimeError(f"PR publish request is invalid JSON: {request_file}") from exc
         if not isinstance(payload, dict):
             raise RuntimeError("PR publish request must be a JSON object")
+        return payload
+
+    @staticmethod
+    def _normalize_capability_requests(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        raw_requests = payload.get("requests")
+        if raw_requests is None:
+            GitHubPRCreator._validate_capability_request_payload(payload)
+            return [dict(payload)]
+        if not isinstance(raw_requests, list) or not raw_requests:
+            raise RuntimeError("Capability requests must be a non-empty list")
+
+        requests: list[dict[str, Any]] = []
+        for raw_request in raw_requests:
+            if not isinstance(raw_request, dict):
+                raise RuntimeError("Capability request entries must be JSON objects")
+            GitHubPRCreator._validate_capability_request_payload(raw_request)
+            requests.append(dict(raw_request))
+        return requests
+
+    @staticmethod
+    def _validate_capability_request_payload(payload: dict[str, Any]) -> None:
         permissions = payload.get("permissions")
         if permissions is not None and not isinstance(permissions, dict):
             raise RuntimeError("PR publish request permissions must be an object")
-        return payload
+
+    @staticmethod
+    def _request_inputs_for_receipt(request: dict[str, Any]) -> dict[str, Any]:
+        args = request.get("args")
+        return dict(args) if isinstance(args, dict) else {}
 
 
 class PRCommentPoster(NoOpHook):
@@ -1112,7 +1205,7 @@ class LocalPRReviewer(NoOpHook):
             normalized = line
             for prefix in ("- [ ]", "- [x]", "-", "*"):
                 if normalized.startswith(prefix):
-                    normalized = normalized[len(prefix):].strip()
+                    normalized = normalized[len(prefix) :].strip()
                     break
             if normalized:
                 todos.append(f"- [ ] {normalized}")
@@ -1146,7 +1239,9 @@ class LocalPRReviewer(NoOpHook):
             )
 
         try:
-            base_branch = phase._get_issue_config_value(phase.issue_dir / "issue.yaml", "base_branch")
+            base_branch = phase._get_issue_config_value(
+                phase.issue_dir / "issue.yaml", "base_branch"
+            )
             resolved_base = str(base_branch or phase.git_ops.get_default_base_branch())
             diff_output = phase.git_ops.get_diff(resolved_base, "HEAD")
         except Exception:

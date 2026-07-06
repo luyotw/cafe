@@ -4,8 +4,6 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from cafe.core.hooks.native import (
     GitHubIssueFetcher,
     GitHubPRCreator,
@@ -70,7 +68,9 @@ def _record_previous_step_status(issue_dir: Path, step_name: str, status_code: s
     )
 
 
-def test_user_input_collector_confirms_ready_for_review_without_running_agent(tmp_path: Path) -> None:
+def test_user_input_collector_confirms_ready_for_review_without_running_agent(
+    tmp_path: Path,
+) -> None:
     phase_dir = tmp_path / "spec"
     prev_iter_dir = phase_dir / "iteration_002"
     prev_iter_dir.mkdir(parents=True, exist_ok=True)
@@ -82,8 +82,10 @@ def test_user_input_collector_confirms_ready_for_review_without_running_agent(tm
     phase._process_review_decision = MagicMock()
 
     hook = UserInputCollector()
-    with patch.object(hook, "_display_previous_output") as mock_display_output, \
-         patch.object(hook, "_display_previous_iteration_delta") as mock_display_delta:
+    with (
+        patch.object(hook, "_display_previous_output") as mock_display_output,
+        patch.object(hook, "_display_previous_iteration_delta") as mock_display_delta,
+    ):
         result = hook.run(
             stage="prepare_input",
             phase=phase,
@@ -122,8 +124,10 @@ def test_user_input_collector_brief_ready_for_review_uses_delta_when_confirm_out
     phase._process_review_decision = MagicMock()
 
     hook = UserInputCollector()
-    with patch.object(hook, "_display_previous_output") as mock_display_output, \
-         patch.object(hook, "_display_previous_iteration_delta") as mock_display_delta:
+    with (
+        patch.object(hook, "_display_previous_output") as mock_display_output,
+        patch.object(hook, "_display_previous_iteration_delta") as mock_display_delta,
+    ):
         hook.run(
             stage="prepare_input",
             phase=phase,
@@ -136,7 +140,9 @@ def test_user_input_collector_brief_ready_for_review_uses_delta_when_confirm_out
     mock_display_delta.assert_called_once()
 
 
-def test_user_input_collector_plan_ready_for_review_skips_full_output_display_when_delta_available(tmp_path: Path) -> None:
+def test_user_input_collector_plan_ready_for_review_skips_full_output_display_when_delta_available(
+    tmp_path: Path,
+) -> None:
     phase_dir = tmp_path / "plan"
     prev_prev_iter_dir = phase_dir / "iteration_001"
     prev_prev_iter_dir.mkdir(parents=True, exist_ok=True)
@@ -152,8 +158,10 @@ def test_user_input_collector_plan_ready_for_review_skips_full_output_display_wh
     phase._process_review_decision = MagicMock()
 
     hook = UserInputCollector()
-    with patch.object(hook, "_display_previous_output") as mock_display_output, \
-         patch.object(hook, "_display_previous_iteration_delta") as mock_display_delta:
+    with (
+        patch.object(hook, "_display_previous_output") as mock_display_output,
+        patch.object(hook, "_display_previous_iteration_delta") as mock_display_delta,
+    ):
         result = hook.run(
             stage="prepare_input",
             phase=phase,
@@ -168,7 +176,9 @@ def test_user_input_collector_plan_ready_for_review_skips_full_output_display_wh
     mock_display_delta.assert_called_once()
 
 
-def test_user_input_collector_plan_ready_for_review_falls_back_to_full_output_without_delta(tmp_path: Path) -> None:
+def test_user_input_collector_plan_ready_for_review_falls_back_to_full_output_without_delta(
+    tmp_path: Path,
+) -> None:
     phase_dir = tmp_path / "plan"
     prev_iter_dir = phase_dir / "iteration_001"
     prev_iter_dir.mkdir(parents=True, exist_ok=True)
@@ -180,8 +190,10 @@ def test_user_input_collector_plan_ready_for_review_falls_back_to_full_output_wi
     phase._process_review_decision = MagicMock()
 
     hook = UserInputCollector()
-    with patch.object(hook, "_display_previous_output") as mock_display_output, \
-         patch.object(hook, "_display_previous_iteration_delta") as mock_display_delta:
+    with (
+        patch.object(hook, "_display_previous_output") as mock_display_output,
+        patch.object(hook, "_display_previous_iteration_delta") as mock_display_delta,
+    ):
         mock_display_delta.return_value = False
         result = hook.run(
             stage="prepare_input",
@@ -218,8 +230,12 @@ def test_user_input_collector_loads_interactive_qa_for_need_clarification(tmp_pa
     phase = _FakePhase(phase_dir=phase_dir, iteration=2)
     hook = UserInputCollector()
 
-    with patch.object(hook, "_display_previous_output") as mock_display_output, \
-         patch("cafe.core.hooks.native.interactive_qa_flow", return_value="Q1: Question?\nA1: Answer") as mock_qa:
+    with (
+        patch.object(hook, "_display_previous_output") as mock_display_output,
+        patch(
+            "cafe.core.hooks.native.interactive_qa_flow", return_value="Q1: Question?\nA1: Answer"
+        ) as mock_qa,
+    ):
         result = hook.run(
             stage="prepare_input",
             phase=phase,
@@ -229,7 +245,9 @@ def test_user_input_collector_loads_interactive_qa_for_need_clarification(tmp_pa
         )
 
     assert result.context_updates["user_input"] == "Q1: Question?\nA1: Answer"
-    assert result.events == [{"type": "user_input_collected", "step": "spec", "source": "questions_xml"}]
+    assert result.events == [
+        {"type": "user_input_collected", "step": "spec", "source": "questions_xml"}
+    ]
     assert phase.step_user_inputs["spec"] == "Q1: Question?\nA1: Answer"
     mock_display_output.assert_called_once()
     mock_qa.assert_called_once()
@@ -245,9 +263,13 @@ def test_user_input_collector_falls_back_to_prompt_when_no_questions_xml(tmp_pat
     phase = _FakePhase(phase_dir=phase_dir, iteration=2)
     hook = UserInputCollector()
 
-    with patch.object(hook, "_display_previous_output"), \
-         patch("cafe.core.hooks.native.interactive_qa_flow") as mock_qa, \
-         patch("cafe.core.hooks.native.prompt_multiline", return_value="manual clarification") as mock_prompt:
+    with (
+        patch.object(hook, "_display_previous_output"),
+        patch("cafe.core.hooks.native.interactive_qa_flow") as mock_qa,
+        patch(
+            "cafe.core.hooks.native.prompt_multiline", return_value="manual clarification"
+        ) as mock_prompt,
+    ):
         result = hook.run(
             stage="prepare_input",
             phase=phase,
@@ -262,7 +284,9 @@ def test_user_input_collector_falls_back_to_prompt_when_no_questions_xml(tmp_pat
     mock_prompt.assert_called_once()
 
 
-def test_user_input_collector_falls_back_to_prompt_when_questions_xml_invalid(tmp_path: Path) -> None:
+def test_user_input_collector_falls_back_to_prompt_when_questions_xml_invalid(
+    tmp_path: Path,
+) -> None:
     phase_dir = tmp_path / "spec"
     prev_iter_dir = phase_dir / "iteration_001"
     prev_iter_dir.mkdir(parents=True, exist_ok=True)
@@ -276,9 +300,13 @@ def test_user_input_collector_falls_back_to_prompt_when_questions_xml_invalid(tm
     phase = _FakePhase(phase_dir=phase_dir, iteration=2)
     hook = UserInputCollector()
 
-    with patch.object(hook, "_display_previous_output"), \
-         patch("cafe.core.hooks.native.interactive_qa_flow") as mock_qa, \
-         patch("cafe.core.hooks.native.prompt_multiline", return_value="fallback answer") as mock_prompt:
+    with (
+        patch.object(hook, "_display_previous_output"),
+        patch("cafe.core.hooks.native.interactive_qa_flow") as mock_qa,
+        patch(
+            "cafe.core.hooks.native.prompt_multiline", return_value="fallback answer"
+        ) as mock_prompt,
+    ):
         result = hook.run(
             stage="prepare_input",
             phase=phase,
@@ -322,7 +350,9 @@ def test_user_input_collector_noninteractive_reads_existing_user_input_file(tmp_
     assert result.events[0]["source"] == "user_input_file"
 
 
-def test_user_input_collector_reuses_existing_user_input_file_without_reasking(tmp_path: Path) -> None:
+def test_user_input_collector_reuses_existing_user_input_file_without_reasking(
+    tmp_path: Path,
+) -> None:
     phase_dir = tmp_path / "spec"
     prev_iter_dir = phase_dir / "iteration_001"
     current_iter_dir = phase_dir / "iteration_002"
@@ -351,19 +381,25 @@ def test_user_input_collector_reuses_existing_user_input_file_without_reasking(t
         )
 
     assert result.context_updates["user_input"] == "Q1: Question?\nA1: Confirmed answer"
-    assert result.events == [{"type": "user_input_collected", "step": "spec", "source": "user_input_file"}]
+    assert result.events == [
+        {"type": "user_input_collected", "step": "spec", "source": "user_input_file"}
+    ]
     assert phase.step_user_inputs["spec"] == "Q1: Question?\nA1: Confirmed answer"
     mock_display_output.assert_not_called()
     mock_qa.assert_not_called()
 
 
-def test_user_input_collector_prompts_initial_plan_user_input_on_first_iteration(tmp_path: Path) -> None:
+def test_user_input_collector_prompts_initial_plan_user_input_on_first_iteration(
+    tmp_path: Path,
+) -> None:
     phase_dir = tmp_path / "plan"
     phase_dir.mkdir(parents=True, exist_ok=True)
     phase = _FakePhase(phase_dir=phase_dir, iteration=1)
     hook = UserInputCollector()
 
-    with patch("cafe.core.hooks.native.prompt_multiline", return_value="Follow strict TDD first") as mock_prompt:
+    with patch(
+        "cafe.core.hooks.native.prompt_multiline", return_value="Follow strict TDD first"
+    ) as mock_prompt:
         result = hook.run(
             stage="prepare_input",
             phase=phase,
@@ -373,14 +409,18 @@ def test_user_input_collector_prompts_initial_plan_user_input_on_first_iteration
         )
 
     assert result.context_updates["user_input"] == "Follow strict TDD first"
-    assert result.events == [{"type": "user_input_collected", "step": "plan", "source": "initial_prompt"}]
+    assert result.events == [
+        {"type": "user_input_collected", "step": "plan", "source": "initial_prompt"}
+    ]
     assert phase.step_user_inputs["plan"] == "Follow strict TDD first"
     prompt_text = mock_prompt.call_args.args[0]
     assert "Suggested content:" in prompt_text
     assert "Technical solution/direction" in prompt_text
 
 
-def test_user_input_collector_skips_initial_plan_prompt_in_noninteractive_mode(tmp_path: Path) -> None:
+def test_user_input_collector_skips_initial_plan_prompt_in_noninteractive_mode(
+    tmp_path: Path,
+) -> None:
     phase_dir = tmp_path / "plan"
     phase_dir.mkdir(parents=True, exist_ok=True)
     phase = _FakePhase(phase_dir=phase_dir, iteration=1)
@@ -397,7 +437,9 @@ def test_user_input_collector_skips_initial_plan_prompt_in_noninteractive_mode(t
         )
 
     assert result.context_updates["user_input"] == ""
-    assert result.events == [{"type": "user_input_collected", "step": "plan", "source": "initial_prompt"}]
+    assert result.events == [
+        {"type": "user_input_collected", "step": "plan", "source": "initial_prompt"}
+    ]
     assert phase.step_user_inputs["plan"] == ""
     mock_prompt.assert_not_called()
 
@@ -421,7 +463,10 @@ def test_github_issue_fetcher_uses_context_user_input_without_prompting(tmp_path
             context={"user_input": "Build a standalone myip command."},
         )
 
-    assert output_file.read_text(encoding="utf-8") == "# Initial Requirements\n\nBuild a standalone myip command.\n"
+    assert (
+        output_file.read_text(encoding="utf-8")
+        == "# Initial Requirements\n\nBuild a standalone myip command.\n"
+    )
     assert result.context_updates["user_input"] == "Build a standalone myip command."
     assert result.events == [
         {
@@ -454,7 +499,10 @@ def test_github_issue_fetcher_uses_phase_step_user_input_without_prompting(tmp_p
             output_file=output_file,
         )
 
-    assert output_file.read_text(encoding="utf-8") == "# Initial Requirements\n\nBuild a standalone myip command.\n"
+    assert (
+        output_file.read_text(encoding="utf-8")
+        == "# Initial Requirements\n\nBuild a standalone myip command.\n"
+    )
     assert result.context_updates["user_input"] == "Build a standalone myip command."
     assert result.events == [
         {
@@ -468,7 +516,9 @@ def test_github_issue_fetcher_uses_phase_step_user_input_without_prompting(tmp_p
     mock_fetch_issue.assert_not_called()
 
 
-def test_execute_step_skips_checklist_validation_when_confirmed_without_agent_run(tmp_path: Path) -> None:
+def test_execute_step_skips_checklist_validation_when_confirmed_without_agent_run(
+    tmp_path: Path,
+) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     issue_dir.mkdir(parents=True, exist_ok=True)
 
@@ -511,10 +561,14 @@ def test_execute_step_skips_checklist_validation_when_confirmed_without_agent_ru
 def test_pr_link_opener_opens_current_pr_url_when_confirmed() -> None:
     hook = PRLinkOpener()
 
-    with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops, \
-         patch("cafe.core.hooks.native.webbrowser.open") as mock_open, \
-         patch("cafe.core.hooks.native.sys.stdin.isatty", return_value=True):
-        mock_github_ops.return_value.get_current_pr_url.return_value = "https://github.com/test/repo/pull/123"
+    with (
+        patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
+        patch("cafe.core.hooks.native.webbrowser.open") as mock_open,
+        patch("cafe.core.hooks.native.sys.stdin.isatty", return_value=True),
+    ):
+        mock_github_ops.return_value.get_current_pr_url.return_value = (
+            "https://github.com/test/repo/pull/123"
+        )
 
         result = hook.run(stage="publish_output", status_code=PhaseStatusCode.CONFIRMED)
 
@@ -527,10 +581,14 @@ def test_pr_link_opener_opens_current_pr_url_when_confirmed() -> None:
 def test_pr_link_opener_skips_browser_in_non_interactive() -> None:
     hook = PRLinkOpener()
 
-    with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops, \
-         patch("cafe.core.hooks.native.webbrowser.open") as mock_open, \
-         patch("cafe.core.hooks.native.sys.stdin.isatty", return_value=False):
-        mock_github_ops.return_value.get_current_pr_url.return_value = "https://github.com/test/repo/pull/123"
+    with (
+        patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
+        patch("cafe.core.hooks.native.webbrowser.open") as mock_open,
+        patch("cafe.core.hooks.native.sys.stdin.isatty", return_value=False),
+    ):
+        mock_github_ops.return_value.get_current_pr_url.return_value = (
+            "https://github.com/test/repo/pull/123"
+        )
 
         result = hook.run(stage="publish_output", status_code=PhaseStatusCode.CONFIRMED)
 
@@ -541,8 +599,10 @@ def test_pr_link_opener_skips_browser_in_non_interactive() -> None:
 def test_pr_link_opener_noops_when_pr_url_unavailable() -> None:
     hook = PRLinkOpener()
 
-    with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops, \
-         patch("cafe.core.hooks.native.webbrowser.open") as mock_open:
+    with (
+        patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
+        patch("cafe.core.hooks.native.webbrowser.open") as mock_open,
+    ):
         mock_github_ops.return_value.get_current_pr_url.side_effect = Exception("no pr")
 
         result = hook.run(stage="publish_output", status_code=PhaseStatusCode.CONFIRMED)
@@ -554,10 +614,16 @@ def test_pr_link_opener_noops_when_pr_url_unavailable() -> None:
 def test_pr_link_opener_noops_when_browser_open_fails() -> None:
     hook = PRLinkOpener()
 
-    with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops, \
-         patch("cafe.core.hooks.native.webbrowser.open", side_effect=Exception("blocked")) as mock_open, \
-         patch("cafe.core.hooks.native.sys.stdin.isatty", return_value=True):
-        mock_github_ops.return_value.get_current_pr_url.return_value = "https://github.com/test/repo/pull/123"
+    with (
+        patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
+        patch(
+            "cafe.core.hooks.native.webbrowser.open", side_effect=Exception("blocked")
+        ) as mock_open,
+        patch("cafe.core.hooks.native.sys.stdin.isatty", return_value=True),
+    ):
+        mock_github_ops.return_value.get_current_pr_url.return_value = (
+            "https://github.com/test/repo/pull/123"
+        )
 
         result = hook.run(stage="publish_output", status_code=PhaseStatusCode.CONFIRMED)
 
@@ -627,7 +693,9 @@ def test_local_pr_reviewer_writes_feedback_todo_and_requests_changes(tmp_path: P
 
     assert result.override_status_code == PhaseStatusCode.NEEDS_CHANGES
     assert "- [ ] Please fix the failing test" in output_file.read_text(encoding="utf-8")
-    assert (output_file.parent / "user_input.md").read_text(encoding="utf-8") == "Please fix the failing test"
+    assert (output_file.parent / "user_input.md").read_text(
+        encoding="utf-8"
+    ) == "Please fix the failing test"
     assert result.events[0]["type"] == "local_pr_review_changes_requested"
 
 
@@ -645,10 +713,18 @@ def test_github_pr_creator_prepare_input_loads_unresolved_comments(tmp_path: Pat
         patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
         patch("cafe.core.hooks.native.get_processed_comment_ids_from_history", return_value=set()),
         patch("cafe.core.hooks.native.get_all_pr_comments", return_value=["raw-comments"]),
-        patch("cafe.core.hooks.native.filter_unresolved_comments", return_value=["unresolved-comment"]),
-        patch("cafe.core.hooks.native.format_comments_for_prompt", return_value="Comment #1\nPlease fix this"),
+        patch(
+            "cafe.core.hooks.native.filter_unresolved_comments", return_value=["unresolved-comment"]
+        ),
+        patch(
+            "cafe.core.hooks.native.format_comments_for_prompt",
+            return_value="Comment #1\nPlease fix this",
+        ),
     ):
-        mock_github_ops.return_value.get_pr_for_branch.return_value = {"number": 42, "url": "https://github.com/test/repo/pull/42"}
+        mock_github_ops.return_value.get_pr_for_branch.return_value = {
+            "number": 42,
+            "url": "https://github.com/test/repo/pull/42",
+        }
         result = hook.run(stage="prepare_input", phase=phase, step_name="pr")
 
     assert result.context_updates["pr_number"] == "42"
@@ -657,7 +733,9 @@ def test_github_pr_creator_prepare_input_loads_unresolved_comments(tmp_path: Pat
     assert result.events == [{"type": "pr_comments_loaded", "count": 1, "pr_number": "42"}]
 
 
-def test_github_pr_creator_prepare_input_uses_and_updates_last_seen_comments(tmp_path: Path) -> None:
+def test_github_pr_creator_prepare_input_uses_and_updates_last_seen_comments(
+    tmp_path: Path,
+) -> None:
     phase_dir = tmp_path / "pr"
     artifact_file = phase_dir / "artifacts" / "pr_last_seen_comments.json"
     artifact_file.parent.mkdir(parents=True, exist_ok=True)
@@ -678,9 +756,14 @@ def test_github_pr_creator_prepare_input_uses_and_updates_last_seen_comments(tmp
     with (
         patch("cafe.core.hooks.native.get_processed_comment_ids_from_history") as mock_processed,
         patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
-        patch("cafe.core.hooks.native.get_all_pr_comments", return_value=[comment]) as mock_comments,
+        patch(
+            "cafe.core.hooks.native.get_all_pr_comments", return_value=[comment]
+        ) as mock_comments,
         patch("cafe.core.hooks.native.filter_unresolved_comments", return_value=[comment]),
-        patch("cafe.core.hooks.native.format_comments_for_prompt", return_value="Comment #1\nPlease fix this"),
+        patch(
+            "cafe.core.hooks.native.format_comments_for_prompt",
+            return_value="Comment #1\nPlease fix this",
+        ),
     ):
         mock_github_ops.return_value.get_pr_for_branch.return_value = {
             "number": 250,
@@ -726,8 +809,7 @@ def test_github_pr_creator_publish_output_runs_sync_pr_script(tmp_path: Path) ->
     completed = MagicMock()
     completed.returncode = 0
     completed.stdout = (
-        '{"action":"created","pr_number":"42",'
-        '"pr_url":"https://github.com/test/repo/pull/42"}\n'
+        '{"action":"created","pr_number":"42",' '"pr_url":"https://github.com/test/repo/pull/42"}\n'
     )
     completed.stderr = ""
 
@@ -761,6 +843,110 @@ def test_github_pr_creator_publish_output_runs_sync_pr_script(tmp_path: Path) ->
     assert result.events[1]["type"] == "capability_receipt"
     assert result.events[1]["capability"] == "cafe.pr.publish"
     assert result.events[1]["success"] is True
+
+
+def test_github_pr_creator_publish_output_rejects_unknown_generic_capability_without_script(
+    tmp_path: Path,
+) -> None:
+    from cafe.core.blackboard import BlackboardStore
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "publish"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    capability_request_file = phase_dir / "iteration_001" / "capability_request.json"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Publish\n", encoding="utf-8")
+    capability_request_file.write_text(
+        json.dumps({"capability": "demo.unknown", "args": {}, "permissions": {}}),
+        encoding="utf-8",
+    )
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+    store = BlackboardStore(issue_dir)
+    blackboard_state = store.load_or_create("publish")
+
+    hook = GitHubPRCreator()
+    with patch("cafe.core.capabilities.subprocess.run") as mock_run:
+        result = hook.run(
+            stage="publish_output",
+            phase=phase,
+            step_name="publish",
+            step_def={"capability_requests": ["demo.unknown"]},
+            output_file=output_file,
+            capability_request_file=capability_request_file,
+            blackboard_state=blackboard_state,
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+
+    mock_run.assert_not_called()
+    assert result.events == [
+        {
+            "type": "capability_receipt",
+            "capability": "demo.unknown",
+            "success": False,
+            "correlation_id": result.events[0]["correlation_id"],
+            "category": "validation_error",
+            "code": "unknown_capability",
+        }
+    ]
+    loaded = store.load_or_create("publish")
+    assert loaded.capability_receipts[-1]["capability"] == "demo.unknown"
+    assert loaded.capability_receipts[-1]["success"] is False
+
+
+def test_github_pr_creator_publish_output_records_all_multi_capability_receipts(
+    tmp_path: Path,
+) -> None:
+    from cafe.core.blackboard import BlackboardStore
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "publish"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    capability_request_file = phase_dir / "iteration_001" / "capability_request.json"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Publish\n", encoding="utf-8")
+    capability_request_file.write_text(
+        json.dumps(
+            {
+                "requests": [
+                    {"capability": "demo.first", "args": {}, "permissions": {}},
+                    {"capability": "demo.second", "args": {}, "permissions": {}},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+    store = BlackboardStore(issue_dir)
+    blackboard_state = store.load_or_create("publish")
+
+    hook = GitHubPRCreator()
+    with patch("cafe.core.capabilities.subprocess.run") as mock_run:
+        result = hook.run(
+            stage="publish_output",
+            phase=phase,
+            step_name="publish",
+            step_def={"capability_requests": ["demo.first", "demo.second"]},
+            output_file=output_file,
+            capability_request_file=capability_request_file,
+            blackboard_state=blackboard_state,
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+
+    mock_run.assert_not_called()
+    assert [event["capability"] for event in result.events] == ["demo.first", "demo.second"]
+    assert [event["code"] for event in result.events] == [
+        "unknown_capability",
+        "unknown_capability",
+    ]
+    loaded = store.load_or_create("publish")
+    assert [receipt["capability"] for receipt in loaded.capability_receipts[-2:]] == [
+        "demo.first",
+        "demo.second",
+    ]
 
 
 def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_without_status_code(
@@ -808,8 +994,7 @@ def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_with
     completed = MagicMock()
     completed.returncode = 0
     completed.stdout = (
-        '{"action":"created","pr_number":"42",'
-        '"pr_url":"https://github.com/test/repo/pull/42"}\n'
+        '{"action":"created","pr_number":"42",' '"pr_url":"https://github.com/test/repo/pull/42"}\n'
     )
     completed.stderr = ""
 
@@ -825,10 +1010,81 @@ def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_with
             status_code=None,
         )
 
-    mock_run.assert_called_once()
+    assert mock_run.call_count == 2
+    assert mock_run.call_args_list[0].args[0][0] == "git"
+    assert mock_run.call_args_list[1].args[0][0] == "/bin/bash"
     assert result.events[0]["type"] == "pr_synced"
     assert result.events[0]["source"] == "capability"
     assert result.events[1]["type"] == "capability_receipt"
+
+
+def test_github_pr_creator_publish_output_runs_from_pr_done_await_agent_baton(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "pr"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    publish_request_file = phase_dir / "iteration_001" / "publish_request.json"
+    next_step_file = issue_dir / "next_step.txt"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Test PR\n\nBody\n", encoding="utf-8")
+    publish_request_file.write_text(
+        json.dumps(
+            {
+                "capability": "cafe.pr.publish",
+                "args": {
+                    "output": ".cafe/issues/demo/pr/iteration_001/output.md",
+                    "base": "develop",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    next_step_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": "pr",
+                "to_owner": "done",
+                "to_step": "done",
+                "intent": "await_agent",
+                "status_code": "confirmed",
+                "created_at": "2026-04-26T22:49:02.559908+08:00",
+                "source": "agent.test",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+
+    completed = MagicMock()
+    completed.returncode = 0
+    completed.stdout = (
+        '{"action":"updated","pr_number":"42",' '"pr_url":"https://github.com/test/repo/pull/42"}\n'
+    )
+    completed.stderr = ""
+
+    hook = GitHubPRCreator()
+    with patch("cafe.core.capabilities.subprocess.run", return_value=completed) as mock_run:
+        result = hook.run(
+            stage="publish_output",
+            phase=phase,
+            step_name="pr",
+            output_file=output_file,
+            publish_request_file=publish_request_file,
+            context={"next_step_path": str(next_step_file)},
+            status_code=None,
+        )
+
+    assert mock_run.call_count == 2
+    assert mock_run.call_args_list[0].args[0][0] == "git"
+    assert mock_run.call_args_list[1].args[0][0] == "/bin/bash"
+    assert result.events[0]["type"] == "pr_synced"
+    assert result.events[1]["type"] == "capability_receipt"
+    assert result.context_updates["pr_sync_action"] == "updated"
 
 
 def test_github_pr_creator_publish_output_runs_from_legacy_done_baton(
@@ -862,8 +1118,7 @@ def test_github_pr_creator_publish_output_runs_from_legacy_done_baton(
     completed = MagicMock()
     completed.returncode = 0
     completed.stdout = (
-        '{"action":"updated","pr_number":"42",'
-        '"pr_url":"https://github.com/test/repo/pull/42"}\n'
+        '{"action":"updated","pr_number":"42",' '"pr_url":"https://github.com/test/repo/pull/42"}\n'
     )
     completed.stderr = ""
 
@@ -879,7 +1134,9 @@ def test_github_pr_creator_publish_output_runs_from_legacy_done_baton(
             status_code=None,
         )
 
-    mock_run.assert_called_once()
+    assert mock_run.call_count == 2
+    assert mock_run.call_args_list[0].args[0][0] == "git"
+    assert mock_run.call_args_list[1].args[0][0] == "/bin/bash"
     assert result.events[0]["type"] == "pr_synced"
     assert result.events[0]["action"] == "updated"
     assert result.events[1]["type"] == "capability_receipt"
@@ -913,7 +1170,9 @@ def test_github_pr_creator_publish_output_skips_local_pr_mode(tmp_path: Path) ->
     assert result.events == []
 
 
-def test_github_pr_creator_publish_ignores_untrusted_script_field_in_request(tmp_path: Path) -> None:
+def test_github_pr_creator_publish_ignores_untrusted_script_field_in_request(
+    tmp_path: Path,
+) -> None:
     """Registry-resolved script is used; agent-supplied script path must not change dispatch."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     phase_dir = issue_dir / "pr"
@@ -942,8 +1201,7 @@ def test_github_pr_creator_publish_ignores_untrusted_script_field_in_request(tmp
     completed = MagicMock()
     completed.returncode = 0
     completed.stdout = (
-        '{"action":"created","pr_number":"42",'
-        '"pr_url":"https://github.com/test/repo/pull/42"}\n'
+        '{"action":"created","pr_number":"42",' '"pr_url":"https://github.com/test/repo/pull/42"}\n'
     )
     completed.stderr = ""
 
@@ -962,7 +1220,9 @@ def test_github_pr_creator_publish_ignores_untrusted_script_field_in_request(tmp
     assert cmd[1] == str(hook._resolve_sync_script(tmp_path))
 
 
-def test_pr_comment_poster_posts_todo_comment_only_when_confirmed_and_complete(tmp_path: Path) -> None:
+def test_pr_comment_poster_posts_todo_comment_only_when_confirmed_and_complete(
+    tmp_path: Path,
+) -> None:
     output_file = tmp_path / "output.md"
     output_file.write_text("## Todo List\n- [x] Fix comment\n", encoding="utf-8")
 
@@ -972,7 +1232,10 @@ def test_pr_comment_poster_posts_todo_comment_only_when_confirmed_and_complete(t
     hook = PRCommentPoster()
 
     with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops:
-        mock_github_ops.return_value.get_pr_for_branch.return_value = {"number": 42, "url": "https://github.com/test/repo/pull/42"}
+        mock_github_ops.return_value.get_pr_for_branch.return_value = {
+            "number": 42,
+            "url": "https://github.com/test/repo/pull/42",
+        }
         result = hook.run(
             stage="publish_output",
             phase=phase,
@@ -994,7 +1257,10 @@ def test_pr_comment_poster_skips_when_unchecked_items_exist(tmp_path: Path) -> N
     hook = PRCommentPoster()
 
     with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops:
-        mock_github_ops.return_value.get_pr_for_branch.return_value = {"number": 42, "url": "https://github.com/test/repo/pull/42"}
+        mock_github_ops.return_value.get_pr_for_branch.return_value = {
+            "number": 42,
+            "url": "https://github.com/test/repo/pull/42",
+        }
         result = hook.run(
             stage="publish_output",
             phase=phase,
