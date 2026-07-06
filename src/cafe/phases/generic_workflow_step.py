@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from cafe.agents.manager import AgentManager
-from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
 from cafe.core.blackboard import (
     ArtifactEntry,
     ArtifactKind,
@@ -16,8 +15,15 @@ from cafe.core.blackboard import (
     HandoffIntent,
     HandoffOwner,
 )
+from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
 from cafe.core.git import GitOperations
 from cafe.core.phase import Phase
+from cafe.core.resume_user_input import (
+    is_resume_iteration,
+    load_prior_run_context,
+    prior_cli_and_session,
+    resolve_resume_user_input,
+)
 from cafe.core.status_codes import (
     PhaseStatusCode,
     StatusCodeParser,
@@ -26,13 +32,7 @@ from cafe.core.status_codes import (
 )
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.phases.generic_phase import GenericPhase
-from cafe.core.resume_user_input import (
-    is_resume_iteration,
-    load_prior_run_context,
-    prior_cli_and_session,
-    resolve_resume_user_input,
-)
-from cafe.skills.loader import canonical_skill_name
+from cafe.skills.bridge import try_load_skill_reference
 from cafe.skills.checklist_composer import (
     generate_develop_checklist,
     generate_plan_checklist,
@@ -40,6 +40,7 @@ from cafe.skills.checklist_composer import (
     generate_review_checklist,
     generate_spec_checklist,
 )
+from cafe.skills.loader import canonical_skill_name
 from cafe.utils.git_utils import to_cwd_relative_path
 
 
@@ -727,6 +728,10 @@ class GenericWorkflowStepExecutor(Phase):
         ) or self._artifact_path(blackboard_state, "pr_result")
 
         skill_name = canonical_skill_name(skill_name)
+        skill_basic_principles = try_load_skill_reference(
+            skill_name,
+            "basic_principles.md",
+        )
         if skill_name == "cafe-spec":
             prev_spec = None
             if self.iteration > 1:
@@ -741,6 +746,7 @@ class GenericWorkflowStepExecutor(Phase):
                 prev_spec_file=prev_spec,
                 checklist_file_path=checklist_file,
                 questions_xml_file=questions_display,
+                basic_principles=skill_basic_principles,
             )
             return
 
@@ -761,6 +767,7 @@ class GenericWorkflowStepExecutor(Phase):
                 iteration=self.iteration,
                 prev_plan_file=prev_plan,
                 questions_xml_file=questions_display,
+                basic_principles=skill_basic_principles,
             )
             return
 
@@ -777,6 +784,7 @@ class GenericWorkflowStepExecutor(Phase):
                 feedback_file_path=review_feedback,
                 output_file=output_display,
                 questions_xml_file=questions_display,
+                basic_principles=skill_basic_principles,
             )
             return
 
@@ -791,6 +799,7 @@ class GenericWorkflowStepExecutor(Phase):
                 review_file_path=output_display,
                 base_branch=str(base_branch or self.git_ops.get_default_base_branch()),
                 checklist_file_path=checklist_file,
+                basic_principles=skill_basic_principles,
             )
             return
 
@@ -811,6 +820,7 @@ class GenericWorkflowStepExecutor(Phase):
                 checklist_file_path=checklist_file,
                 iteration=self.iteration,
                 prev_pr_file=prev_pr,
+                basic_principles=skill_basic_principles,
             )
             return
 
