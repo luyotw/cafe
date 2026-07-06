@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from cafe.core.blackboard import HandoffIntent
 from cafe.core.hooks import BUILTIN_HOOKS, HookResult
 from cafe.core.hooks.script_schema import validate_script_args_schema
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
-from cafe.core.blackboard import HandoffIntent
+from cafe.core.types import AgentCLI
 from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.skills.native_bridge import NativeSkillBridge
-from cafe.core.types import AgentCLI
-
 
 AgentExecutor = Callable[[str], str]
 
@@ -397,7 +397,12 @@ class GenericPhase:
         )
 
         if when_intents:
-            detected_status = self._detect_status_code(response=response or "", step_def=step_def)
+            detected_status = self._detect_status_code(
+                response=response or "",
+                step_def=step_def,
+                context=context,
+                step_name=hook_kwargs.get("step_name"),
+            )
             if detected_status not in when_intents:
                 return HookResult(
                     events=[
@@ -656,11 +661,63 @@ class GenericPhase:
         return cmd
 
     @staticmethod
-    def _detect_status_code(*, response: str, step_def: Dict[str, Any]) -> Optional[str]:
+    def _read_baton_intent(
+        *, next_step_path: Optional[str], step_name: Optional[str]
+    ) -> Optional[str]:
+        if not next_step_path:
+            return None
+
+        try:
+            raw = Path(next_step_path).read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+
+        if not raw:
+            return None
+
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+        if not isinstance(payload, dict):
+            return None
+
+        if (
+            step_name
+            and payload.get("from_step")
+            and str(payload.get("from_step", "")) != str(step_name)
+        ):
+            return None
+
+        intent = payload.get("intent")
+        if not isinstance(intent, str):
+            return None
+        return intent.strip() or None
+
+    @staticmethod
+    def _detect_status_code(
+        *,
+        response: str,
+        step_def: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+        step_name: Optional[str] = None,
+    ) -> Optional[str]:
         valid = [
             PhaseStatusCode(code)
             for code in step_def.get("valid_intents", [])
             if code in {item.value for item in PhaseStatusCode}
         ]
+
+        context = context or {}
+        valid_values = {status.value for status in (valid or list(PhaseStatusCode))}
+
+        next_step_intent = GenericPhase._read_baton_intent(
+            next_step_path=context.get("next_step_path"),
+            step_name=step_name,
+        )
+        if next_step_intent in valid_values:
+            return next_step_intent
+
         status_code = StatusCodeParser.extract(response, valid_codes=valid or list(PhaseStatusCode))
         return status_code.value if status_code is not None else None
