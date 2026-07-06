@@ -195,20 +195,20 @@ class TestCloseSquash:
         mock_git_ops.commit.assert_not_called()
         assert "no merge needed" in result.stdout.lower()
 
-    def test_squash_warns_in_pr_mode(
+    def test_squash_overrides_pr_mode(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr
     ):
-        """pr.auto_create: true 模式下 --squash 被忽略並印 warning，不報錯"""
+        """pr.auto_create: true 但明確 --squash → 仍在本地 squash-merge（優先於 PR 模式），不 pull。"""
         _write_issue(temp_repo_dir, auto_create=True)
 
         result = runner.invoke(app, ["close", "--squash"])
 
         assert result.exit_code == 0
-        assert "--squash is ignored" in result.stdout
-        mock_git_ops.merge_squash.assert_not_called()
-        mock_git_ops.pull.assert_called_once()
-        # PR mode uses safe delete (no squash happened).
-        mock_git_ops.delete_branch.assert_called_once_with("test-issue")
+        assert "--squash is ignored" not in result.stdout
+        mock_git_ops.merge_squash.assert_called_once_with("test-issue")
+        mock_git_ops.pull.assert_not_called()
+        # squash 後分支非 fast-forward，需 force delete。
+        mock_git_ops.delete_branch.assert_called_once_with("test-issue", force=True)
 
     def test_non_squash_local_review_unchanged(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr
