@@ -88,7 +88,21 @@ def load_strategic_context(project_root: Path | str = Path.cwd(), issue_name: Op
             out_of_mandate=(),
         )
 
-    raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    try:
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        # An unreadable or unparseable strategic context must not crash the
+        # workflow; degrade to the missing-file shape so the alignment policy
+        # surfaces it as a document update requirement instead.
+        return StrategicContext(
+            version=1,
+            project_root=root,
+            issue_name=issue_name,
+            playbook_id=None,
+            documents=_default_documents(root, config_path, config_exists=False),
+            axes={},
+            out_of_mandate=(),
+        )
     if not isinstance(raw, dict):
         raw = {}
     mandate = _as_dict(raw.get("mandate"))

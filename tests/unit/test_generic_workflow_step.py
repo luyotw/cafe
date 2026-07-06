@@ -25,6 +25,16 @@ from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 
 
+@pytest.fixture(autouse=True)
+def _default_strategic_context(tmp_path: Path):
+    """Alignment now runs by default on every step; give tests a configured
+    strategic context so benign steps stay quiet. Tests that exercise the
+    missing-context behavior delete this file explicitly."""
+    config = tmp_path / ".cafe" / "strategic_context.yaml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text("version: 1\n", encoding="utf-8")
+
+
 class FakeAgentManager:
     def __init__(self, response: str | list[str], on_execute=None) -> None:
         if isinstance(response, list):
@@ -3092,3 +3102,142 @@ def test_execute_step_same_session_resume_uses_continue_in_prompt_and_user_input
     assert "continue" in prompt
     user_input_file = spec_dir / "iteration_002" / "user_input.md"
     assert user_input_file.read_text(encoding="utf-8") == "continue"
+
+
+def _make_alignment_executor(tmp_path: Path, issue_name: str, step_def: dict, user_input: str):
+    issue_dir = tmp_path / ".cafe" / "issues" / issue_name
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {"develop": step_def},
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+    agent_manager = FakeAgentManager("confirmed")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name=issue_name,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+        step_user_inputs={"develop": user_input},
+    )
+    return issue_dir, playbook, state, agent_manager, executor
+
+
+def test_alignment_gate_runs_by_default_without_playbook_config(tmp_path: Path, monkeypatch) -> None:
+    """No `alignment:` block and no declared hook: the gate still pauses on policy triggers."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".cafe" / "strategic_context.yaml").write_text(
+        """
+version: 1
+mandate:
+  axes:
+    product_scope:
+      level: escalate
+      grounds: [roadmap]
+""",
+        encoding="utf-8",
+    )
+    step_def = {
+        "skill": "develop",
+        "role": "developer",
+        "output_artifact": "code",
+        "allowed_tools": ["Read"],
+        "on": {"await_agent": "_done", "alignment_checkpoint": "develop"},
+    }
+    issue_dir, playbook, state, agent_manager, executor = _make_alignment_executor(
+        tmp_path, "issue-align-default-on", step_def, "This changes roadmap scope."
+    )
+
+    result = executor.execute_step("develop", step_def, state)
+
+    assert result.status_code == "alignment_checkpoint"
+    assert agent_manager.prompts == []
+    assert (issue_dir / "develop" / "iteration_001" / "alignment_request.json").exists()
+
+
+def test_alignment_gate_requires_missing_strategic_context_once(tmp_path: Path, monkeypatch) -> None:
+    """Missing strategic_context.yaml pauses with a document requirement; a prior
+    unblocking decision suppresses the repeat requirement for the issue."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".cafe" / "strategic_context.yaml").unlink()
+    step_def = {
+        "skill": "develop",
+        "role": "developer",
+        "output_artifact": "code",
+        "allowed_tools": ["Read"],
+        "on": {"await_agent": "_done", "alignment_checkpoint": "develop"},
+    }
+    issue_dir, playbook, state, agent_manager, executor = _make_alignment_executor(
+        tmp_path, "issue-align-missing-ctx", step_def, "Fix a small bug."
+    )
+
+    result = executor.execute_step("develop", step_def, state)
+
+    assert result.status_code == "alignment_checkpoint"
+    payload = json.loads(
+        (issue_dir / "develop" / "iteration_001" / "alignment_request.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    categories = [
+        req["category"] for req in payload.get("strategic_document_update_requirements", [])
+    ]
+    assert "strategic_context" in categories
+
+    store = BlackboardStore(issue_dir)
+    store.record_event(
+        state,
+        "alignment_decision",
+        {"step": "develop", "decision": "proceed", "unblocks_execution": True},
+    )
+    issue_dir2, playbook2, state2, agent_manager2, executor2 = _make_alignment_executor(
+        tmp_path, "issue-align-missing-ctx", step_def, "Fix a small bug."
+    )
+    result2 = executor2.execute_step("develop", step_def, state2)
+
+    assert result2.status_code != "alignment_checkpoint"
+    assert agent_manager2.prompts
+
+
+def test_alignment_gate_explicit_opt_out_skips(tmp_path: Path, monkeypatch) -> None:
+    """`alignment: {enabled: false}` remains an explicit opt-out."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".cafe" / "strategic_context.yaml").write_text(
+        """
+version: 1
+mandate:
+  axes:
+    product_scope:
+      level: escalate
+      grounds: [roadmap]
+""",
+        encoding="utf-8",
+    )
+    step_def = {
+        "skill": "develop",
+        "role": "developer",
+        "output_artifact": "code",
+        "allowed_tools": ["Read"],
+        "alignment": {"enabled": False},
+        "on": {"await_agent": "_done"},
+    }
+    issue_dir, playbook, state, agent_manager, executor = _make_alignment_executor(
+        tmp_path, "issue-align-opt-out", step_def, "This changes roadmap scope."
+    )
+
+    result = executor.execute_step("develop", step_def, state)
+
+    assert result.status_code != "alignment_checkpoint"
+    assert agent_manager.prompts

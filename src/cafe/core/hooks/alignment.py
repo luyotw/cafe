@@ -28,9 +28,11 @@ class AlignmentCheckpointGate(NoOpHook):
             return HookResult()
 
         step_def = kwargs.get("step_def") or {}
+        # Alignment runs by default; the playbook `alignment:` block only tunes
+        # thresholds/categories or opts out explicitly.
         raw_alignment = step_def.get("alignment")
         if not isinstance(raw_alignment, dict):
-            return HookResult()
+            raw_alignment = {}
         if raw_alignment.get("enabled", True) is False:
             return HookResult()
         if raw_alignment.get("trigger_policy", "policy") == "disabled":
@@ -54,18 +56,32 @@ class AlignmentCheckpointGate(NoOpHook):
             output_file=kwargs.get("output_file"),
         )
         strategic_context = load_strategic_context(Path.cwd(), issue_name=getattr(phase, "issue_name", None))
+        # Unset categories default to every configured document category so the
+        # default-on gate has signal even without playbook tuning.
+        default_categories = tuple(strategic_context.documents.keys())
         config = AlignmentPolicyConfig(
             pause_threshold=int(raw_alignment.get("pause_threshold", 5)),
             note_threshold=int(raw_alignment.get("note_threshold", 2)),
-            affected_document_categories=tuple(raw_alignment.get("affected_document_categories", []) or []),
+            affected_document_categories=tuple(
+                raw_alignment.get("affected_document_categories") or default_categories
+            ),
             reuse_approved=bool(raw_alignment.get("reuse_approved", True)),
         )
+        # A missing strategic context file is itself an alignment problem:
+        # require the document instead of silently passing the gate. Raise it
+        # at most once per issue — every checkpoint payload lists the
+        # requirement, so any prior unblocking decision means a human saw it
+        # and chose to proceed.
+        required_categories: tuple[str, ...] = ()
+        if not strategic_context.document("strategic_context").exists and not self._issue_has_any_unblocking_decision(blackboard_state):
+            required_categories = ("strategic_context",)
         result = evaluate_alignment_policy(
             AlignmentPolicyInput(
                 step_name=step_name,
                 playbook_id=str(getattr(phase, "playbook", {}).get("playbook", {}).get("id", "")),
                 user_input=user_input,
                 artifacts=artifacts,
+                required_document_categories=required_categories,
             ),
             strategic_context=strategic_context,
             config=config,
@@ -177,12 +193,26 @@ class AlignmentCheckpointGate(NoOpHook):
 
     @staticmethod
     def _resolve_user_input(*, phase: Any, step_name: str, context: Dict[str, str]) -> str:
-        resolver = getattr(phase, "_get_resolved_iteration_user_input", None)
-        if callable(resolver):
-            try:
-                return str(resolver(step_name) or "")
-            except Exception:
-                pass
+        """Peek at the step's user input without consuming or caching it.
+
+        The gate runs before UserInputCollector; going through the phase's
+        caching resolver would pop ``step_user_inputs`` and poison the
+        resume/baton-retry resolution that happens later in the step.
+        """
+        step_inputs = getattr(phase, "step_user_inputs", None)
+        if isinstance(step_inputs, dict):
+            value = step_inputs.get(step_name)
+            if value:
+                return str(value)
+        try:
+            iteration_dir = phase._get_iteration_dir(phase.iteration)
+            user_input_file = Path(iteration_dir) / "user_input.md"
+            if user_input_file.exists():
+                content = user_input_file.read_text(encoding="utf-8")
+                if content.strip():
+                    return content
+        except Exception:
+            pass
         return str(context.get("user_input") or "")
 
     @staticmethod
@@ -208,6 +238,15 @@ class AlignmentCheckpointGate(NoOpHook):
                 continue
             data = event.data or {}
             if data.get("fingerprint") == fingerprint and data.get("unblocks_execution") is True:
+                return True
+        return False
+
+    @staticmethod
+    def _issue_has_any_unblocking_decision(blackboard_state: BlackboardState) -> bool:
+        for event in reversed(blackboard_state.events):
+            if event.event_type != "alignment_decision":
+                continue
+            if (event.data or {}).get("unblocks_execution") is True:
                 return True
         return False
 

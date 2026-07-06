@@ -334,12 +334,21 @@ class GenericPhase:
             published=published,
         )
 
+    # Hooks that run on every step regardless of playbook declaration.
+    # Alignment is a policy decision, not a playbook opt-in; steps opt out
+    # explicitly via `alignment: {enabled: false}` instead of omitting the hook.
+    DEFAULT_STAGE_HOOKS: Dict[str, tuple] = {"prepare_input": ("AlignmentCheckpointGate",)}
+
     def _run_hook_stage(
         self,
         stage: str,
         **kwargs: Any,
     ) -> HookResult:
-        hook_entries = kwargs["step_def"].get("hooks", {}).get(stage, [])
+        declared = kwargs["step_def"].get("hooks", {}).get(stage, [])
+        defaults = [
+            name for name in self.DEFAULT_STAGE_HOOKS.get(stage, ()) if name not in declared
+        ]
+        hook_entries = [*defaults, *declared]
         aggregate = HookResult()
 
         for hook_entry in hook_entries:
