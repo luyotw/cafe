@@ -931,6 +931,90 @@ def test_execute_script_hook_filters_notification_intent_from_baton_file(
     )
 
 
+def test_execute_script_hook_ignores_start_step_override_baton_intent(
+    tmp_path: Path,
+) -> None:
+    loader = _setup_loader(tmp_path)
+    calls_file = tmp_path / "calls.txt"
+    next_step = tmp_path / "next_step.txt"
+    next_step.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": "plan",
+                "to_owner": "agent",
+                "to_step": "plan",
+                "intent": "await_agent",
+                "status_code": "",
+                "created_at": "2026-07-06T00:00:01Z",
+                "source": "workflow.start_step_override",
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_skill_script(
+        loader,
+        skill_name="cafe-plan",
+        script_name="notify-slack.sh",
+        body=(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            "GROUP=\"\"\n"
+            "while [[ $# -gt 0 ]]; do\n"
+            "  case \"$1\" in\n"
+            "    --group) GROUP=\"$2\"; shift 2 ;;\n"
+            "    *) shift ;;\n"
+            "  esac\n"
+            "done\n"
+            f"echo \"$GROUP\" >> {str(calls_file)!r}\n"
+            "echo '{\"action\":\"posted\"}'\n"
+        ),
+    )
+    phase = GenericPhase(loader)
+
+    result = phase.execute(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/cafe-workflow-common"],
+        context={"next_step_path": str(next_step)},
+        step_def={
+            "hooks": {
+                "after_execute": [
+                    {
+                        "script": "notify-slack.sh",
+                        "args": {"group": "user"},
+                        "when_intents": ["need_clarification", "need_permission"],
+                    },
+                    {
+                        "script": "notify-slack.sh",
+                        "args": {"group": "milestone"},
+                        "when_intents": ["await_agent", "workflow_complete"],
+                    },
+                ]
+            },
+            "valid_intents": [
+                "await_agent",
+                "workflow_complete",
+                "need_clarification",
+                "need_permission",
+            ],
+        },
+        hook_context={"step_name": "plan"},
+        agent_executor=lambda prompt: "need_permission\nNeed permission to proceed.",
+    )
+
+    assert result.status_code is None
+    assert calls_file.read_text(encoding="utf-8").strip() == "user"
+    events = [item for item in result.events if item.get("type") == "script_hook"]
+    assert any(item["status"] == "success" and item["stdout"] for item in events)
+    assert any(
+        item["status"] == "skipped"
+        and item["reason"] == "intent_mismatch"
+        and item["when_intents"] == ["await_agent", "workflow_complete"]
+        for item in events
+    )
+
+
 def test_execute_script_hook_passes_timeout_to_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     loader = _setup_loader(tmp_path)
     _write_skill_script(

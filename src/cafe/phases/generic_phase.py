@@ -684,6 +684,15 @@ class GenericPhase:
             return None
 
         if (
+            payload.get("source") == "workflow.start_step_override"
+            and (
+                not step_name
+                or str(payload.get("to_step", payload.get("from_step", ""))) == str(step_name)
+            )
+        ):
+            return None
+
+        if (
             step_name
             and payload.get("from_step")
             and str(payload.get("from_step", "")) != str(step_name)
