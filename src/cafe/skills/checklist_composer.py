@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from cafe.agents.manager import AgentManager
-from cafe.skills.bridge import load_skill_reference
+from cafe.skills.bridge import load_skill_reference, try_load_skill_reference
 from cafe.skills.loader import canonical_skill_name
 from cafe.templates.manager import TemplateManager
 from cafe.utils.checklist_utils import generate_checklist_file, resolve_checklist_placeholders
@@ -22,6 +22,43 @@ def _resolve_xml_questions_instruction(skill_name: str, ref_name: str, questions
     """Pre-resolve questions_xml_file in the XML instruction reference."""
     template = _load_skill_checklist_reference(skill_name, ref_name)
     return template.replace("{questions_xml_file}", questions_xml_file)
+
+
+def generate_custom_skill_checklist(
+    skill_name: str,
+    agent_name: str,
+    role: str,
+    checklist_file_path: Path,
+    correction_mode: bool = False,
+    placeholders: Optional[dict] = None,
+) -> bool:
+    """Compose a checklist for a custom (non-builtin) phase skill from its references.
+
+    Convention mirrors cafe-develop: the skill ships
+    ``references/execution_steps_normal.md`` and optionally
+    ``references/execution_steps_correction.md`` (used when the step re-enters
+    with reviewer feedback). Returns False when the skill provides no checklist
+    reference so the caller can keep the empty-checklist fallback.
+    """
+    execution_steps = ""
+    if correction_mode:
+        execution_steps = try_load_skill_reference(skill_name, "execution_steps_correction.md")
+    if not execution_steps:
+        execution_steps = try_load_skill_reference(skill_name, "execution_steps_normal.md")
+    if not execution_steps:
+        return False
+
+    agent_file = AgentManager.get_agent_file_path(agent_name, role)
+    agent_guidelines = extract_agent_guidelines_checklist(agent_file)
+    checklist_content = f"{execution_steps}\n{agent_guidelines}"
+
+    resolved = {"agent_file": agent_file}
+    if placeholders:
+        resolved.update({key: value for key, value in placeholders.items() if value})
+
+    checklist_content = resolve_checklist_placeholders(checklist_content, resolved)
+    generate_checklist_file(checklist_file_path, checklist_content)
+    return True
 
 
 def generate_spec_checklist(

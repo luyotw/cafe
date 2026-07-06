@@ -34,6 +34,7 @@ from cafe.core.resume_user_input import (
 )
 from cafe.skills.loader import canonical_skill_name
 from cafe.skills.checklist_composer import (
+    generate_custom_skill_checklist,
     generate_develop_checklist,
     generate_plan_checklist,
     generate_pr_checklist,
@@ -812,6 +813,23 @@ class GenericWorkflowStepExecutor(Phase):
                 iteration=self.iteration,
                 prev_pr_file=prev_pr,
             )
+            return
+
+        if generate_custom_skill_checklist(
+            skill_name=skill_name,
+            agent_name=agent_name,
+            role=str(step_def.get("role", "developer")),
+            checklist_file_path=checklist_file,
+            correction_mode=review_feedback is not None,
+            placeholders={
+                "output_file": output_display,
+                "questions_xml_file": questions_display,
+                "spec_file_path": spec_path or "",
+                "plan_file_path": plan_path or "",
+                "develop_file": self._artifact_path(blackboard_state, "code") or "",
+                "feedback_file_path": review_feedback or "",
+            },
+        ):
             return
 
         checklist_file.write_text("", encoding="utf-8")
