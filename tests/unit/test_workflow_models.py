@@ -15,7 +15,6 @@ from cafe.core.blackboard import (
 )
 from cafe.core.workflow_models import BatonRejected
 
-
 # ---------------------------------------------------------------------------
 # BatonRejected 例外單元測試
 # ---------------------------------------------------------------------------
@@ -129,6 +128,51 @@ class TestLoadHandoffContractBatonRejected:
 
         with pytest.raises(BatonRejected):
             store.load_handoff_contract(state, allowed_steps=["develop", "review"], allow_legacy_text=True)
+
+    @pytest.mark.parametrize(
+        "missing_field",
+        ["version", "from_step", "to_owner", "to_step", "intent"],
+    )
+    def test_missing_required_field_raises_baton_rejected(
+        self,
+        tmp_path: Path,
+        missing_field: str,
+    ) -> None:
+        """缺少必要欄位時需直接拋 BatonRejected，不得走 legacy。"""
+        issue_dir = tmp_path / "issue-reject-missing"
+        issue_dir.mkdir(parents=True)
+        store = BlackboardStore(issue_dir)
+        state = store.load_or_create("develop")
+        payload = _base_payload()
+        payload.pop(missing_field)
+        _write_baton(issue_dir, payload)
+
+        with pytest.raises(BatonRejected) as exc_info:
+            store.load_handoff_contract(state, allowed_steps=["develop", "review"])
+
+        exc = exc_info.value
+        assert exc.field == missing_field
+        assert not exc.valid_values
+
+    def test_allow_legacy_text_json_scalar_raises_baton_rejected(self, tmp_path: Path) -> None:
+        """能 parse 的 JSON 非 object 時不可退回 legacy text。"""
+        issue_dir = tmp_path / "issue-reject-scalar"
+        issue_dir.mkdir(parents=True)
+        store = BlackboardStore(issue_dir)
+        state = store.load_or_create("develop")
+        (issue_dir / "next_step.txt").write_text('"review"', encoding="utf-8")
+
+        with pytest.raises(BatonRejected) as exc_info:
+            store.load_handoff_contract(
+                state,
+                allowed_steps=["develop", "review"],
+                allow_legacy_text=True,
+            )
+
+        exc = exc_info.value
+        assert exc.field == "payload"
+        assert exc.invalid_value == "str"
+        assert exc.valid_values == ["JSON object"]
 
     def test_allow_legacy_text_non_json_falls_back_to_legacy_step(self, tmp_path: Path) -> None:
         """JSON 解析失敗（非 enum 問題）且 allow_legacy_text=True 時走 legacy step 解析。"""

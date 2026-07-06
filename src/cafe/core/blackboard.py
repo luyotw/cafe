@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional
 
 from cafe.core.workflow_models import BatonRejected
 
-
 BLACKBOARD_FILENAME = "blackboard.json"
 BLACKBOARD_SCHEMA_VERSION = 1
 NEXT_STEP_FILENAME = "next_step.txt"
@@ -178,24 +177,52 @@ class HandoffContract:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "HandoffContract":
+        required_fields = ["version", "from_step", "to_owner", "to_step", "intent"]
+        for field in required_fields:
+            if field not in data:
+                raise BatonRejected(field=field, invalid_value="", valid_values=[])
+
         try:
-            intent_raw = str(data["intent"])
-            if intent_raw == "chat_handoff":
-                intent_raw = HandoffIntent.MANUAL_HANDOFF.value
-            return cls(
-                version=int(data["version"]),
-                from_step=str(data["from_step"]),
-                to_owner=HandoffOwner(str(data["to_owner"])),
-                to_step=str(data["to_step"]),
-                intent=HandoffIntent(intent_raw),
-                status_code=str(data.get("status_code", "")),
-                created_at=str(data.get("created_at", _now_iso())),
-                source=str(data.get("source", "unknown")),
-            )
-        except KeyError as exc:
-            raise ValueError(f"Baton contract missing required field: {exc}") from exc
+            version = int(data["version"])
+        except (TypeError, ValueError) as exc:
+            raise BatonRejected(
+                field="version",
+                invalid_value=str(data["version"]),
+                valid_values=["integer"],
+            ) from exc
+
+        to_owner_raw = str(data["to_owner"])
+        try:
+            to_owner = HandoffOwner(to_owner_raw)
         except ValueError as exc:
-            raise ValueError(f"Baton contract contains invalid enum value: {exc}") from exc
+            raise BatonRejected(
+                field="to_owner",
+                invalid_value=to_owner_raw,
+                valid_values=[owner.value for owner in HandoffOwner],
+            ) from exc
+
+        intent_raw = str(data["intent"])
+        if intent_raw == "chat_handoff":
+            intent_raw = HandoffIntent.MANUAL_HANDOFF.value
+        try:
+            intent = HandoffIntent(intent_raw)
+        except ValueError as exc:
+            raise BatonRejected(
+                field="intent",
+                invalid_value=intent_raw,
+                valid_values=[intent.value for intent in HandoffIntent],
+            ) from exc
+
+        return cls(
+            version=version,
+            from_step=str(data["from_step"]),
+            to_owner=to_owner,
+            to_step=str(data["to_step"]),
+            intent=intent,
+            status_code=str(data.get("status_code", "")),
+            created_at=str(data.get("created_at", _now_iso())),
+            source=str(data.get("source", "unknown")),
+        )
 
     @classmethod
     def from_legacy_step(
@@ -461,27 +488,33 @@ class BlackboardStore:
 
         try:
             payload = json.loads(raw)
-            if not isinstance(payload, dict):
-                raise ValueError("Baton payload must be a JSON object")
-            try:
-                contract = HandoffContract.from_dict(payload)
-            except ValueError as exc:
-                if "invalid enum value" in str(exc).lower():
-                    raise self._make_baton_rejected(payload) from exc
-                raise
-        except BatonRejected:
-            raise
-        except (json.JSONDecodeError, ValueError) as exc:
+        except json.JSONDecodeError as exc:
             if not allow_legacy_text:
                 raise ValueError(f"Invalid baton contract payload: {exc}") from exc
             legacy_step = raw.strip()
             if not legacy_step:
-                raise ValueError(f"Baton file is empty: {self.next_step_path}") from exc
-            contract = HandoffContract.from_legacy_step(
+                raise ValueError(f"Baton file is empty: {self.next_step_path}")
+            return HandoffContract.from_legacy_step(
                 step=legacy_step,
                 from_step=state.current_step,
                 source="legacy_text",
             )
+
+        if not isinstance(payload, dict):
+            raise BatonRejected(
+                field="payload",
+                invalid_value=type(payload).__name__,
+                valid_values=["JSON object"],
+            )
+
+        try:
+            contract = HandoffContract.from_dict(payload)
+        except BatonRejected:
+            raise
+        except ValueError as exc:
+            if not allow_legacy_text:
+                raise ValueError(f"Invalid baton contract payload: {exc}") from exc
+            raise
 
         if allowed_steps:
             contract.validate(allowed_steps=allowed_steps)

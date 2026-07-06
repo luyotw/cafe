@@ -2185,6 +2185,26 @@ def _make_invalid_target_baton_text(
     )
 
 
+def _make_missing_intent_baton_text(
+    issue_dir: Path, *, from_step: str = "spec", to_step: str = "done"
+) -> None:
+    """Write JSON baton payload missing `intent`. """
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": from_step,
+                "to_owner": "done" if to_step == "done" else "agent",
+                "to_step": to_step,
+                "status_code": "",
+                "created_at": "2026-05-14T10:00:00+08:00",
+                "source": "test",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_runtime_retries_once_on_baton_rejected_then_succeeds(tmp_path: Path) -> None:
     """第 1 次寫出無效 baton，第 2 次（retry 1）寫出合法 baton → workflow 正常繼續，blackboard 有 1 筆 baton_rejected 事件。"""
     issue_dir = tmp_path / ".cafe" / "issues" / "retry-1"
@@ -2278,6 +2298,89 @@ def test_runtime_retries_invalid_target_step_then_succeeds(tmp_path: Path) -> No
     assert len(rejected_events) == 1
     assert rejected_events[0].data["field"] == "to_step"
     assert rejected_events[0].data["invalid_value"] == "release"
+
+
+def test_runtime_retries_missing_required_field_then_succeeds(tmp_path: Path) -> None:
+    """若 structured JSON 缺欄位，runtime 應要求修正而非 fallback 到 legacy。"""
+    issue_dir = tmp_path / ".cafe" / "issues" / "retry-missing-field"
+    issue_dir.mkdir(parents=True)
+    captured_prompts: list[str | None] = []
+    call_count = [0]
+
+    def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
+        call_count[0] += 1
+        captured_prompts.append(kwargs.get("extra_prompt"))
+        if call_count[0] == 1:
+            _make_missing_intent_baton_text(issue_dir, from_step="spec", to_step="done")
+        else:
+            _make_valid_baton_text(
+                issue_dir, from_step="spec", to_step="done", intent="workflow_complete"
+            )
+        return StepExecutionResult(response="done", artifacts={}, status_code="")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_simple_playbook(),
+        executor=executor,
+    )
+    result = runtime.run(start_step="spec", max_transitions=5)
+
+    assert result.completed is True
+    assert len(captured_prompts) == 2
+    assert captured_prompts[0] is None
+    assert "field 'intent'" in (captured_prompts[1] or "")
+    assert "missing" in (captured_prompts[1] or "").lower()
+    bb = BlackboardStore(issue_dir).load_or_create("spec")
+    rejected_events = [e for e in bb.events if e.event_type == "baton_rejected"]
+    assert len(rejected_events) == 1
+    assert rejected_events[0].data["field"] == "intent"
+
+
+def test_runtime_rejects_no_status_legacy_text_as_status_transition(tmp_path: Path) -> None:
+    """Legacy plain-text next_step 在 legacy 相容邊界仍應被接受。"""
+    issue_dir = tmp_path / ".cafe" / "issues" / "legacy-status-text"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_intents": ["confirmed"],
+                "on": {"confirmed": "plan"},
+            },
+            "plan": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_intents": ["confirmed"],
+                "on": {"confirmed": "_done"},
+            },
+        },
+    }
+
+    visited_steps: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        visited_steps.append(step_name)
+        if step_name == "spec":
+            (issue_dir / "next_step.txt").write_text("plan", encoding="utf-8")
+            return StepExecutionResult(response="", artifacts={}, status_code="")
+        _make_valid_baton_text(
+            issue_dir, from_step="plan", to_step="done", intent="workflow_complete"
+        )
+        return StepExecutionResult(response="", artifacts={}, status_code="")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="spec", max_transitions=5)
+
+    assert result.completed is True
+    assert result.final_step == "plan"
+    assert visited_steps == ["spec", "plan"]
+    blackboard = BlackboardStore(issue_dir).load_or_create("plan")
+    assert blackboard.current_step == "done"
 
 
 def test_runtime_retries_same_phase_baton_then_succeeds(tmp_path: Path) -> None:
