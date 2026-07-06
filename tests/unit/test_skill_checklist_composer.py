@@ -89,6 +89,26 @@ GOLDEN_RUNNERS = {
         prev_plan_file=".cafe/issues/test/plan/iteration_001/output.md",
         template_mode="manual",
     ),
+    "spec_iter1_with_basic_principles": lambda path: generate_spec_checklist(
+        iteration=1,
+        agent_name="Roger",
+        current_spec_file=".cafe/issues/test/spec/iteration_001/output.md",
+        prev_spec_file=None,
+        checklist_file_path=path,
+        basic_principles="- Keep implementation minimal\n- Prefer existing utilities",
+        questions_xml_file=".cafe/issues/test/spec/iteration_001/questions.xml",
+        template_mode="manual",
+    ),
+    "plan_iter1_with_basic_principles": lambda path: generate_plan_checklist(
+        agent_name="Nick",
+        plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
+        spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+        checklist_file_path=path,
+        iteration=1,
+        template_mode="manual",
+        basic_principles="- Keep checklist output stable\n- Keep user impact explicit",
+        questions_xml_file=".cafe/issues/test/plan/iteration_001/questions.xml",
+    ),
     "develop_normal": lambda path: generate_develop_checklist(
         agent_name="Nick",
         spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
@@ -238,3 +258,91 @@ def test_spec_and_develop_xml_question_instruction_requires_need_clarification()
     develop_instruction = load_skill_reference("cafe-develop", "xml_questions_instruction.md")
     assert "intent=need_clarification" in spec_instruction
     assert "intent=need_clarification" in develop_instruction
+
+
+def test_generate_checklist_with_basic_principles_includes_checklist_section(tmp_path: Path) -> None:
+    checklist_path = tmp_path / "checklist.md"
+    generate_plan_checklist(
+        agent_name="David",
+        plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
+        spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+        checklist_file_path=checklist_path,
+        iteration=1,
+        template_mode="manual",
+        basic_principles="- Keep scope\n- Follow existing conventions",
+    )
+    content = checklist_path.read_text(encoding="utf-8")
+
+    assert "## Basic Principles" in content
+    assert "[ ] Keep scope" in content
+    assert "[ ] Follow existing conventions" in content
+
+
+def test_review_and_pr_checklists_include_basic_principles(tmp_path: Path) -> None:
+    review_path = tmp_path / "review_checklist.md"
+    pr_path = tmp_path / "pr_checklist.md"
+
+    generate_review_checklist(
+        agent_name="Alice",
+        spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+        review_file_path=".cafe/issues/test/review/iteration_001/output.md",
+        base_branch="develop",
+        checklist_file_path=review_path,
+        plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
+        basic_principles="- Review with repository scope",
+    )
+    generate_pr_checklist(
+        agent_name="Nick",
+        spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+        plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
+        pr_file=".cafe/issues/test/pr/iteration_001/output.md",
+        checklist_file_path=pr_path,
+        basic_principles="- Keep PR description factual",
+    )
+
+    review_content = review_path.read_text(encoding="utf-8")
+    pr_content = pr_path.read_text(encoding="utf-8")
+
+    assert "## Basic Principles" in review_content
+    assert "[ ] Review with repository scope" in review_content
+    assert "## Basic Principles" in pr_content
+    assert "[ ] Keep PR description factual" in pr_content
+
+
+def test_generate_checklist_ignores_non_bullet_basic_principles_lines(tmp_path: Path) -> None:
+    checklist_path = tmp_path / "checklist.md"
+    generate_develop_checklist(
+        agent_name="David",
+        spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+        plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
+        develop_file=None,
+        checklist_file_path=checklist_path,
+        correction_mode=False,
+        output_file=".cafe/issues/test/develop/iteration_001/output.md",
+        basic_principles=(
+            "- Valid list item\n"
+            "Not a list item\n"
+            "* wrong bullet marker\n"
+            "- Another valid list item"
+        ),
+    )
+
+    content = checklist_path.read_text(encoding="utf-8")
+
+    assert "Not a list item" not in content
+    assert "wrong bullet marker" not in content
+    assert "[ ] Valid list item" in content
+    assert "[ ] Another valid list item" in content
+
+
+def test_write_cafe_skill_spec_documents_basic_principles_reference() -> None:
+    spec = Path("src/cafe/data/skills/write-cafe-skill/references/skill-spec.md").read_text(
+        encoding="utf-8"
+    )
+    skill = Path("src/cafe/data/skills/write-cafe-skill/SKILL.md").read_text(encoding="utf-8")
+
+    assert "references/basic_principles.md" in spec
+    assert "## Basic Principles" in spec
+    assert "references/execution_steps_*.md" in spec
+    assert "agent 檔 guidelines" in spec
+    assert "references/basic_principles.md" in skill

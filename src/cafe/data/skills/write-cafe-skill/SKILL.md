@@ -65,6 +65,7 @@ version: 2.0.0
 - Add `references/` only for details that would otherwise bloat `SKILL.md`.
 - Each reference file should be focused and named by topic.
 - In `SKILL.md`, say exactly when to open each reference.
+- Put always-on workflow rules in `references/basic_principles.md` when they should become a checklist gate for every mode of that skill; keep mode-specific procedures in `references/execution_steps_*.md`.
 
 ## When To Add Scripts
 - Add `scripts/` when the same command or transformation would otherwise be rewritten repeatedly.

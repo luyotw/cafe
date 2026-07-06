@@ -299,6 +299,7 @@ def generate_review_checklist(
     pr_feedback_file_path: Optional[str] = None,
     plan_file_path: Optional[str] = None,
     pr_todo_list_file_path: Optional[str] = None,
+    basic_principles: Optional[str] = None,
 ) -> None:
     """Generate checklist file for review phase."""
     agent_file = AgentManager.get_agent_file_path(agent_name, "reviewer")
@@ -313,8 +314,18 @@ def generate_review_checklist(
 [ ] Check that ALL todo items are marked as completed [x]. If any unchecked items [ ] remain, return needs_changes
 """
 
+    basic_principles_checklist = ""
+    if basic_principles:
+        basic_principles_checklist = convert_to_checklist(
+            basic_principles,
+            "Basic Principles",
+        )
+
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
-    checklist_content = f"{execution_steps}\n{pr_todo_list_section}{agent_guidelines}"
+    checklist_content = f"{execution_steps}\n"
+    if basic_principles_checklist:
+        checklist_content += f"{basic_principles_checklist}\n"
+    checklist_content += f"{pr_todo_list_section}{agent_guidelines}"
 
     placeholders = {
         "agent_file": agent_file,
