@@ -175,14 +175,19 @@ class BlackboardWorkflowRuntime:
 
     @staticmethod
     def _baton_rejected_prompt(br: BatonRejected) -> str:
+        if br.invalid_value:
+            value_msg = f"invalid value '{br.invalid_value}'"
+        else:
+            value_msg = "required field missing from the payload"
         message = (
-            f"[BATON ERROR] Your baton was rejected because field '{br.field}' "
-            f"has invalid value '{br.invalid_value}'. "
+            f"[BATON ERROR] Your baton was rejected because field '{br.field}' has {value_msg}. "
             f"Valid values are: {br.valid_values}. "
-            "Please rewrite next_step.txt with a correct baton. "
+            "Please rewrite next_step.txt with a correct structured baton. "
             "Retry in baton-only mode: do not rewrite output.md, checklist.md, or questions.xml unless strictly required. "
             "If you are asking the user a question, use to_owner='user', "
-            "to_step='user', and intent='need_clarification'."
+            "to_step='user', and intent='need_clarification'. "
+            "If your step omits safe defaults, you may keep status_code and source empty; "
+            "other required keys must be present and valid."
         )
         if br.field == "to_step":
             message += (
