@@ -1,13 +1,14 @@
 """Tests for direct workflow step execution."""
 
-from collections.abc import Iterator
 import json
+from collections.abc import Iterator
 from pathlib import Path
-from types import MethodType
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import patch
+
 import pytest
 
+from cafe.agents.executor import AgentExecutionError
 from cafe.core.blackboard import (
     ArtifactEntry,
     ArtifactKind,
@@ -18,12 +19,10 @@ from cafe.core.blackboard import (
 from cafe.core.hooks import HookResult
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import AgentCLI, AgentConfig, TokenUsage
-from cafe.phases.generic_phase import GenericPhaseExecution
-from cafe.phases.generic_phase import GenericPhase
+from cafe.phases.generic_phase import GenericPhase, GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
-from cafe.agents.executor import AgentExecutionError
 
 
 class FakeAgentManager:
@@ -2494,6 +2493,135 @@ def test_develop_checklist_prefers_review_feedback_over_pr_result(
     assert call_kwargs["correction_mode"] is True
     assert "review" in call_kwargs["feedback_file_path"]
     assert "pr" not in call_kwargs["feedback_file_path"]
+
+
+def _write_skill_with_basic_principles(
+    tmp_path: Path,
+    *,
+    skill_name: str,
+    basic_principles: str,
+) -> None:
+    skill_dir = tmp_path / ".cafe" / "skills" / skill_name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {skill_name}\ndescription: test skill\n---\n",
+        encoding="utf-8",
+    )
+    references = skill_dir / "references"
+    references.mkdir(parents=True, exist_ok=True)
+    (references / "basic_principles.md").write_text(
+        basic_principles,
+        encoding="utf-8",
+    )
+
+
+def test_spec_checklist_loads_custom_basic_principles_reference(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-spec-basic-principles"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "spec": {
+                "skill": "spec",
+                "role": "developer",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+
+    _write_skill_with_basic_principles(
+        tmp_path,
+        skill_name="cafe-spec",
+        basic_principles="- Stay scoped\n- Keep behavior stable",
+    )
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-spec-basic-principles",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    executor.phase_dir = issue_dir / "spec"
+    executor.iteration = 1
+    output_file = issue_dir / "output.md"
+    checklist_file = issue_dir / "checklist.md"
+    questions_xml_file = issue_dir / "questions.xml"
+
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    with patch("cafe.phases.generic_workflow_step.generate_spec_checklist") as mock_gen:
+        executor._generate_checklist(
+            step_name="spec",
+            skill_name="spec",
+            agent_name="David",
+            step_def={"skill": "spec"},
+            blackboard_state=state,
+            checklist_file=checklist_file,
+            output_file=output_file,
+            questions_xml_file=questions_xml_file,
+        )
+
+    mock_gen.assert_called_once()
+    assert mock_gen.call_args.kwargs["basic_principles"] == "- Stay scoped\n- Keep behavior stable"
+
+
+def test_spec_checklist_omits_missing_basic_principles_reference(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-spec-no-basic-principles"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "spec": {
+                "skill": "spec",
+                "role": "developer",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-spec-no-basic-principles",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    executor.phase_dir = issue_dir / "spec"
+    executor.iteration = 1
+    output_file = issue_dir / "output.md"
+    checklist_file = issue_dir / "checklist.md"
+    questions_xml_file = issue_dir / "questions.xml"
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+
+    with patch("cafe.phases.generic_workflow_step.generate_spec_checklist") as mock_gen:
+        executor._generate_checklist(
+            step_name="spec",
+            skill_name="spec",
+            agent_name="David",
+            step_def={"skill": "spec"},
+            blackboard_state=state,
+            checklist_file=checklist_file,
+            output_file=output_file,
+            questions_xml_file=questions_xml_file,
+        )
+
+    mock_gen.assert_called_once()
+    assert mock_gen.call_args.kwargs["basic_principles"] == ""
 
 
 def test_update_iteration_history_preserves_model_and_stats_on_second_call(

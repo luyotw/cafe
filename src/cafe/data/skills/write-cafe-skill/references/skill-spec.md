@@ -157,6 +157,17 @@ Placeholder 是 activate 時的**純文字替換**（`{key}` → 值），不支
 **references/**
 - 只放「條件才需要讀」的細節，避免撐大 SKILL.md；一層深、依主題命名。
 - SKILL.md 內必須明說「何時」打開哪個 reference。
+- `references/execution_steps_*.md` 放程序性步驟：有順序，且可依 normal/correction、iteration 或其他模式拆分。
+- `references/basic_principles.md` 放常備規則：repo 慣例、風格、不變式、反覆出現的檢核點。內容使用 `- ` bullet list；runtime 會以 opt-in 方式轉成 checklist 的 `## Basic Principles` 段，且不分 normal/correction 模式一律附掛。沒有這個檔案時不阻塞，也不改變既有 checklist。
+- agent 檔 guidelines 放個人風格與角色偏好：跟 agent 走、跨 phase 生效，不應取代 workflow skill 的常備規則。
+
+三個管道的分工：
+
+| 管道 | 語意 | 模式 |
+| --- | --- | --- |
+| `references/execution_steps_*.md` | 程序：有順序、分 normal/correction 或 iteration | 分模式 |
+| `references/basic_principles.md` | 常備規則：repo 慣例、風格、不變式 | 不分模式、一律附掛 |
+| agent 檔 guidelines | 個人風格，跟 agent 走 | 跨 phase |
 
 **scripts/**
 - 用於重複執行的固定命令，或需要外網、憑證、GitHub/API mutation 的操作。
@@ -201,4 +212,5 @@ skill 文件內不要假設只有某一條 playbook 會用它。
 - [ ] 沒有重述 baton schema、chat handoff 格式或其他 shared 規則；引用句式符合 §7
 - [ ] `## Handoff` 為固定一行
 - [ ] references / scripts 有明確觸發條件；對外 mutation 走 host-side hook
+- [ ] 常備規則放 `references/basic_principles.md`，不要散落在多個 `execution_steps_*` 變體中重複維護
 - [ ] 若是共用規則，已更新 `cafe-workflow-common` 的 Where policies live 索引
