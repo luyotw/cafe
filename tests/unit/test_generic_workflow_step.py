@@ -17,6 +17,7 @@ from cafe.core.blackboard import (
     HandoffOwner,
 )
 from cafe.core.hooks import HookResult
+from cafe.core.resume_user_input import CONTINUE_USER_INPUT
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import AgentCLI, AgentConfig, TokenUsage
 from cafe.phases.generic_phase import GenericPhase, GenericPhaseExecution
@@ -672,7 +673,7 @@ def test_generic_workflow_step_resolve_resume_user_input_uses_execution_config(
     executor._step_agent_name = "David"
 
     resolved = executor._resolve_iteration_user_input("develop")
-    assert resolved == "continue"
+    assert resolved == CONTINUE_USER_INPUT
 
 
 def test_generic_workflow_step_resume_user_input_rejects_different_execution_cli(
@@ -3007,7 +3008,7 @@ def test_resolve_iteration_user_input_interrupted_iteration_reuse(tmp_path: Path
     executor.iteration = 1
     executor._step_agent_name = "Roger"
 
-    assert executor._resolve_iteration_user_input("spec") == "continue"
+    assert executor._resolve_iteration_user_input("spec") == CONTINUE_USER_INPUT
 
 
 def test_apply_resume_to_runtime_context_keeps_real_input(tmp_path: Path) -> None:

@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-CONTINUE_USER_INPUT = "continue"
+# Injected when a same-session resume has no real user input (e.g. the CLI was
+# interrupted by a rate limit and restarted). Phrased so agents read it as a
+# system resume marker, never as a user statement or approval.
+CONTINUE_USER_INPUT = "[系統] 前次執行中斷（例如 rate limit），請從上次進度繼續。這不是使用者發言，也不代表任何確認。"
 
-# Synthetic inputs the workflow generates when the user provided nothing;
-# only these may be collapsed to ``continue`` on a same-session resume.
-PLACEHOLDER_USER_INPUTS = ("", CONTINUE_USER_INPUT, "workflow execute")
+# Synthetic inputs the workflow generates when the user provided nothing; only
+# these may be collapsed to the resume marker on a same-session resume.
+# "continue" is kept for user_input.md files written by older builds.
+PLACEHOLDER_USER_INPUTS = ("", CONTINUE_USER_INPUT, "continue", "workflow execute")
 
 
 def resolve_resume_user_input(
