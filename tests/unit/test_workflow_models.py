@@ -429,7 +429,7 @@ def test_blackboard_rebuild_save_has_no_top_level_owner(tmp_path: Path) -> None:
 
 
 class TestLegacyKeyValueBaton:
-    """issue #357 的同族案例：agent 手寫多行 key=value baton。"""
+    """Sibling of issue #357: agent-written multi-line key=value batons."""
 
     def _store_and_state(self, tmp_path: Path):
         issue_dir = tmp_path / "issue-legacy-kv"

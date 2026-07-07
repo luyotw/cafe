@@ -580,7 +580,7 @@ class TestInteractiveMenuSettingsSubmenu:
 
     def test_settings_manage_allowed_directories_enters_submenu(self, tmp_path, monkeypatch):
         """測試從 Settings 選擇 Manage allowed directories 會進入子選單"""
-        # issue309 起子選單要求專案已初始化（.cafe/config.yaml 存在）
+        # Since issue309 the submenu requires an initialized project (.cafe/config.yaml).
         monkeypatch.chdir(tmp_path)
         (tmp_path / ".cafe").mkdir()
         (tmp_path / ".cafe" / "config.yaml").write_text("settings: {}\n", encoding="utf-8")
