@@ -126,6 +126,25 @@ def _build_initial_step_user_inputs(
     return {str(entry_point): normalized}
 
 
+def _resolve_initial_step_user_inputs(
+    playbook_data: Dict[str, Any],
+    user_input: Optional[str],
+    start_step: Optional[str],
+    resume_current_step: Optional[str],
+) -> tuple[Optional[Dict[str, str]], Optional[str]]:
+    """Decide where --user-input goes; return (step_user_inputs, remaining_user_input).
+
+    With an explicit --start-step, the input belongs to that step and is consumed
+    here. Otherwise, a blackboard parked at a user handoff defers the input to the
+    user-handoff resume branch; a cold start maps it to the entry point.
+    """
+    if user_input and start_step and start_step in playbook_data["steps"]:
+        return {str(start_step): user_input}, None
+    if user_input and resume_current_step in {"user", "done"}:
+        return None, user_input
+    return _build_initial_step_user_inputs(playbook_data, user_input), user_input
+
+
 def _validate_allowed_directories(config_manager: Any, add_dir: List[str]) -> None:
     """Validate config.yaml and CLI-provided allowed directories."""
     configured = config_manager.get_allowed_directories()
@@ -642,10 +661,12 @@ def workflow(
             playbook_id=str(playbook_data["playbook"]["id"]),
             allow_legacy_text=True,
         )
-        if user_input and resume_blackboard.current_step in {"user", "done"}:
-            initial_step_user_inputs = None
-        else:
-            initial_step_user_inputs = _build_initial_step_user_inputs(playbook_data, user_input)
+        initial_step_user_inputs, user_input = _resolve_initial_step_user_inputs(
+            playbook_data,
+            user_input,
+            start_step,
+            resume_blackboard.current_step,
+        )
 
         # Mutable holder so wrapped_executor can swap executors on fallback
         _executor_holder: Dict[str, Any] = {

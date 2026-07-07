@@ -3114,3 +3114,36 @@ def test_workflow_execute_invalid_marker_exits_with_guidance(tmp_path: Path, mon
 
     assert result.exit_code == 1
     assert "missing-issue" in result.stdout
+
+
+def test_resolve_initial_step_user_inputs_explicit_start_step_wins_over_user_park() -> None:
+    from cafe.ui.commands.workflow import _resolve_initial_step_user_inputs
+
+    playbook_data = {"entry_point": "build", "steps": {"build": {}, "review": {}}}
+    inputs, remaining = _resolve_initial_step_user_inputs(
+        playbook_data, "fix the geo mapping", "review", "user"
+    )
+    assert inputs == {"review": "fix the geo mapping"}
+    assert remaining is None
+
+
+def test_resolve_initial_step_user_inputs_user_park_defers_to_handoff_branch() -> None:
+    from cafe.ui.commands.workflow import _resolve_initial_step_user_inputs
+
+    playbook_data = {"entry_point": "build", "steps": {"build": {}, "review": {}}}
+    inputs, remaining = _resolve_initial_step_user_inputs(
+        playbook_data, "answer for the asking step", None, "user"
+    )
+    assert inputs is None
+    assert remaining == "answer for the asking step"
+
+
+def test_resolve_initial_step_user_inputs_cold_start_maps_entry_point() -> None:
+    from cafe.ui.commands.workflow import _resolve_initial_step_user_inputs
+
+    playbook_data = {"entry_point": "build", "steps": {"build": {}, "review": {}}}
+    inputs, remaining = _resolve_initial_step_user_inputs(
+        playbook_data, "initial requirement", None, "build"
+    )
+    assert inputs == {"build": "initial requirement"}
+    assert remaining == "initial requirement"
