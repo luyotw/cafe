@@ -20,9 +20,20 @@ def test_resolve_resume_user_input_first_start_returns_candidate() -> None:
     assert result == "Initial requirements"
 
 
-def test_resolve_resume_user_input_same_cli_and_session_returns_continue() -> None:
+def test_resolve_resume_user_input_same_session_keeps_real_input() -> None:
     result = resolve_resume_user_input(
         candidate="Please revise the spec",
+        prior_cli="codex",
+        prior_session_id="abc",
+        current_cli="codex",
+        current_session_id="abc",
+    )
+    assert result == "Please revise the spec"
+
+
+def test_resolve_resume_user_input_same_session_empty_input_returns_continue() -> None:
+    result = resolve_resume_user_input(
+        candidate="",
         prior_cli="codex",
         prior_session_id="abc",
         current_cli="codex",

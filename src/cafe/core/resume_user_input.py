@@ -6,6 +6,10 @@ from typing import Any, Dict, Optional
 
 CONTINUE_USER_INPUT = "continue"
 
+# Synthetic inputs the workflow generates when the user provided nothing;
+# only these may be collapsed to ``continue`` on a same-session resume.
+PLACEHOLDER_USER_INPUTS = ("", CONTINUE_USER_INPUT, "workflow execute")
+
 
 def resolve_resume_user_input(
     *,
@@ -15,7 +19,13 @@ def resolve_resume_user_input(
     current_cli: Optional[str],
     current_session_id: Optional[str],
 ) -> str:
-    """Return ``continue`` when resuming with the same CLI and session id."""
+    """Return ``continue`` only when resuming the same CLI session with no real input.
+
+    A candidate outside PLACEHOLDER_USER_INPUTS is the user's actual answer or
+    correction and must never be discarded, even on a same-session resume.
+    """
+    if candidate and candidate.strip() not in PLACEHOLDER_USER_INPUTS:
+        return candidate
     if not prior_cli or not prior_session_id:
         return candidate
     if not current_cli or not current_session_id:
