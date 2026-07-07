@@ -578,8 +578,12 @@ class TestInteractiveMenuSettingsSubmenu:
         assert "settings_to_crew" in prompt_calls
         assert "crew" in prompt_calls
 
-    def test_settings_manage_allowed_directories_enters_submenu(self):
+    def test_settings_manage_allowed_directories_enters_submenu(self, tmp_path, monkeypatch):
         """測試從 Settings 選擇 Manage allowed directories 會進入子選單"""
+        # issue309 起子選單要求專案已初始化（.cafe/config.yaml 存在）
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".cafe").mkdir()
+        (tmp_path / ".cafe" / "config.yaml").write_text("settings: {}\n", encoding="utf-8")
         detector = MagicMock(spec=MenuStateDetector)
         detector.detect_state.return_value = MenuState.NO_ACTIVE_ISSUE
         detector.get_current_issue_name.return_value = None
