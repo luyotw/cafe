@@ -426,3 +426,75 @@ def test_blackboard_rebuild_save_has_no_top_level_owner(tmp_path: Path) -> None:
     store.rebuild_from_iterations(initial_step="spec")
     raw = json.loads(store.file_path.read_text(encoding="utf-8"))
     assert "owner" not in raw
+
+
+class TestLegacyKeyValueBaton:
+    """issue #357 的同族案例：agent 手寫多行 key=value baton。"""
+
+    def _store_and_state(self, tmp_path: Path):
+        issue_dir = tmp_path / "issue-legacy-kv"
+        issue_dir.mkdir(parents=True)
+        store = BlackboardStore(issue_dir)
+        state = store.load_or_create("schema-comment")
+        return issue_dir, store, state
+
+    def test_multiline_key_value_with_free_text_parses_routing_fields(self, tmp_path: Path) -> None:
+        issue_dir, store, state = self._store_and_state(tmp_path)
+        (issue_dir / "next_step.txt").write_text(
+            "to_step=user\nto_owner=user\nintent=need_clarification\n"
+            "message=Schema comment updated. Please confirm schema and import 6 pending datasets, then reply to continue.\n",
+            encoding="utf-8",
+        )
+
+        contract = store.load_handoff_contract(
+            state,
+            allowed_steps=["build", "review", "schema-comment"],
+            allow_legacy_text=True,
+        )
+
+        assert contract.to_step == "user"
+        assert contract.to_owner == HandoffOwner.USER
+        assert contract.intent == HandoffIntent.NEED_CLARIFICATION
+        assert contract.from_step == "schema-comment"
+
+    def test_key_value_without_to_step_raises_baton_rejected(self, tmp_path: Path) -> None:
+        issue_dir, store, state = self._store_and_state(tmp_path)
+        (issue_dir / "next_step.txt").write_text(
+            "to_owner=agent\nsummary=long text without routing target\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(BatonRejected) as exc_info:
+            store.load_handoff_contract(
+                state,
+                allowed_steps=["build", "review"],
+                allow_legacy_text=True,
+            )
+        assert exc_info.value.field == "to_step"
+
+    def test_single_step_name_still_parses_as_legacy(self, tmp_path: Path) -> None:
+        issue_dir, store, state = self._store_and_state(tmp_path)
+        (issue_dir / "next_step.txt").write_text("review\n", encoding="utf-8")
+
+        contract = store.load_handoff_contract(
+            state,
+            allowed_steps=["build", "review"],
+            allow_legacy_text=True,
+        )
+        assert contract.to_step == "review"
+        assert contract.source == "legacy_text"
+
+    def test_invalid_intent_value_falls_back_to_step_derived_intent(self, tmp_path: Path) -> None:
+        issue_dir, store, state = self._store_and_state(tmp_path)
+        (issue_dir / "next_step.txt").write_text(
+            "to_step=review\nto_owner=agent\nintent=not_a_real_intent\n",
+            encoding="utf-8",
+        )
+
+        contract = store.load_handoff_contract(
+            state,
+            allowed_steps=["build", "review"],
+            allow_legacy_text=True,
+        )
+        assert contract.to_step == "review"
+        assert contract.intent == HandoffIntent.AWAIT_AGENT

@@ -465,6 +465,53 @@ class BlackboardStore:
             valid_values=[],
         )
 
+    def _contract_from_legacy_key_values(
+        self,
+        raw: str,
+        state: BlackboardState,
+    ) -> HandoffContract:
+        """Parse an agent-written multi-line ``key=value`` baton.
+
+        Agents that miss the structured-JSON requirement commonly fall back to
+        this shape. Free-text fields (``summary=``/``message=``) and lines
+        without ``=`` are ignored — only routing fields are honored, so a long
+        summary can never leak into ``to_step`` (sibling of issue #357).
+        """
+        fields: Dict[str, str] = {}
+        for line in raw.splitlines():
+            if "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            if key and key not in fields:
+                fields[key] = value.strip()
+        step = fields.get("to_step", "")
+        if not step or "\n" in step:
+            raise BatonRejected(
+                field="to_step",
+                invalid_value=raw[:80],
+                valid_values=[],
+            )
+        contract = HandoffContract.from_legacy_step(
+            step=step,
+            from_step=fields.get("from_step") or state.current_step,
+            status_code=fields.get("status_code", ""),
+            source="legacy_text",
+        )
+        intent_raw = fields.get("intent", "")
+        if intent_raw:
+            try:
+                contract.intent = HandoffIntent(intent_raw)
+            except ValueError:
+                pass
+        owner_raw = fields.get("to_owner", "")
+        if owner_raw:
+            try:
+                contract.to_owner = HandoffOwner(owner_raw)
+            except ValueError:
+                pass
+        return contract
+
     def load_handoff_contract(
         self,
         state: BlackboardState,
@@ -494,6 +541,8 @@ class BlackboardStore:
             legacy_step = raw.strip()
             if not legacy_step:
                 raise ValueError(f"Baton file is empty: {self.next_step_path}")
+            if "=" in legacy_step or "\n" in legacy_step:
+                return self._contract_from_legacy_key_values(legacy_step, state)
             return HandoffContract.from_legacy_step(
                 step=legacy_step,
                 from_step=state.current_step,
