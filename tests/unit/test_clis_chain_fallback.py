@@ -251,7 +251,7 @@ class TestClisChainFallbackBasic:
         active_file = Path(".cafe/issues/issue-1/active_clis.json")
         active_file.parent.mkdir(parents=True, exist_ok=True)
         active_file.write_text(
-            json.dumps({"David": {"cli": "gemini", "model": None, "updated_at": "2026-06-13T00:00:00+08:00"}}),
+            json.dumps({"David": {"cli": "gemini", "model": None, "configured_primary": "claude", "updated_at": "2026-06-13T00:00:00+08:00"}}),
             encoding="utf-8",
         )
 
@@ -323,6 +323,57 @@ class TestClisChainFallbackBasic:
         assert response == "fallback-ok"
         assert executed_clis == [AgentCLI.CLAUDE, AgentCLI.GEMINI]
 
+    def test_changed_crew_primary_overrides_stale_sticky_cli(self, tmp_path, monkeypatch) -> None:
+        """A crew.yaml primary change beats the recorded sticky CLI (was: sticky always won)."""
+        monkeypatch.chdir(tmp_path)
+        manager = AgentManager(issue_name="issue-1")
+        # Crew now lists codex first; the sticky record was written when copilot was primary.
+        manager.register_agent(
+            AgentConfig(
+                name="David",
+                cli=AgentCLI.CODEX,
+                model="gpt-5.5",
+                clis=[
+                    CliEntry(cli=AgentCLI.CODEX, model="gpt-5.5"),
+                    CliEntry(cli=AgentCLI.COPILOT),
+                ],
+            )
+        )
+        active_file = Path(".cafe/issues/issue-1/active_clis.json")
+        active_file.parent.mkdir(parents=True, exist_ok=True)
+        active_file.write_text(
+            json.dumps({"David": {"cli": "copilot", "model": None, "configured_primary": "copilot", "updated_at": "2026-07-07T00:00:00+08:00"}}),
+            encoding="utf-8",
+        )
+
+        execution = manager.get_execution_config("David", phase_name="build")
+        assert execution.cli == AgentCLI.CODEX
+
+    def test_legacy_record_without_configured_primary_does_not_override_primary(self, tmp_path, monkeypatch) -> None:
+        """Pre-fix records (no configured_primary) no longer demote the crew primary."""
+        monkeypatch.chdir(tmp_path)
+        manager = AgentManager(issue_name="issue-1")
+        manager.register_agent(
+            AgentConfig(
+                name="David",
+                cli=AgentCLI.CODEX,
+                model="gpt-5.5",
+                clis=[
+                    CliEntry(cli=AgentCLI.CODEX, model="gpt-5.5"),
+                    CliEntry(cli=AgentCLI.COPILOT),
+                ],
+            )
+        )
+        active_file = Path(".cafe/issues/issue-1/active_clis.json")
+        active_file.parent.mkdir(parents=True, exist_ok=True)
+        active_file.write_text(
+            json.dumps({"David": {"cli": "copilot", "model": None, "updated_at": "2026-07-07T00:00:00+08:00"}}),
+            encoding="utf-8",
+        )
+
+        execution = manager.get_execution_config("David", phase_name="build")
+        assert execution.cli == AgentCLI.CODEX
+
     def test_active_cli_without_model_does_not_inherit_base_model(self, tmp_path, monkeypatch) -> None:
         """Active CLI model=None keeps CLI-specific model resolution, not base model."""
         monkeypatch.chdir(tmp_path)
@@ -341,7 +392,7 @@ class TestClisChainFallbackBasic:
         active_file = Path(".cafe/issues/issue-1/active_clis.json")
         active_file.parent.mkdir(parents=True, exist_ok=True)
         active_file.write_text(
-            json.dumps({"David": {"cli": "gemini", "model": None, "updated_at": "2026-06-13T00:00:00+08:00"}}),
+            json.dumps({"David": {"cli": "gemini", "model": None, "configured_primary": "claude", "updated_at": "2026-06-13T00:00:00+08:00"}}),
             encoding="utf-8",
         )
 
@@ -389,11 +440,11 @@ class TestClisChainFallbackBasic:
         issue_1_dir.mkdir(parents=True, exist_ok=True)
         issue_2_dir.mkdir(parents=True, exist_ok=True)
         (issue_1_dir / "active_clis.json").write_text(
-            json.dumps({"David": {"cli": "gemini", "model": None, "updated_at": "2026-06-13T00:00:00+08:00"}}),
+            json.dumps({"David": {"cli": "gemini", "model": None, "configured_primary": "claude", "updated_at": "2026-06-13T00:00:00+08:00"}}),
             encoding="utf-8",
         )
         (issue_2_dir / "active_clis.json").write_text(
-            json.dumps({"David": {"cli": "gemini", "model": None, "updated_at": "2026-06-13T00:00:00+08:00"}}),
+            json.dumps({"David": {"cli": "gemini", "model": None, "configured_primary": "claude", "updated_at": "2026-06-13T00:00:00+08:00"}}),
             encoding="utf-8",
         )
 

@@ -112,7 +112,15 @@ class AgentManager:
 
         model = record.get("model")
         model_value = model if isinstance(model, str) else None
-        return cli, model_value, None
+
+        raw_primary = record.get("configured_primary")
+        configured_primary: Optional[AgentCLI] = None
+        if isinstance(raw_primary, str):
+            try:
+                configured_primary = AgentCLI(raw_primary)
+            except ValueError:
+                configured_primary = None
+        return cli, model_value, configured_primary
 
     def _configured_chain_for_agent(self, config: AgentConfig) -> list[CliEntry]:
         """Return configured CLI chain entries for this agent, with legacy fallback support."""
@@ -151,6 +159,11 @@ class AgentManager:
             output.append(entry)
         return output
 
+    def configured_primary_cli(self, config: AgentConfig) -> Optional[AgentCLI]:
+        """Return the crew-configured primary CLI (before any sticky reorder)."""
+        chain = self._normalize_chain(self._configured_chain_for_agent(config))
+        return chain[0].cli if chain else None
+
     def _resolve_execution_chain(
         self,
         config: AgentConfig,
@@ -163,6 +176,17 @@ class AgentManager:
             return chain
 
         preferred_cli = last_success[0]
+        recorded_primary = last_success[2]
+        # Sticky reorder is a within-config fallback preference: keep using the
+        # CLI that last succeeded so we don't thrash mid-issue. But an explicit
+        # crew.yaml edit that changes the configured primary must win. If the
+        # configured primary differs from what it was when this CLI was recorded
+        # (or the record predates this field), treat the sticky record as stale.
+        if chain and recorded_primary is not None and recorded_primary != chain[0].cli:
+            return chain
+        if chain and recorded_primary is None and preferred_cli != chain[0].cli:
+            return chain
+
         cli_values = [entry.cli for entry in chain]
         if preferred_cli not in cli_values:
             return chain

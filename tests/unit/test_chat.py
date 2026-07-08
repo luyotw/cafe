@@ -127,8 +127,9 @@ class TestLaunchChatSession:
         monkeypatch.chdir(tmp_path)
         issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
         issue_dir.mkdir(parents=True)
+        # configured_primary still claude → codex was a legit fallback, stay sticky.
         (issue_dir / "active_clis.json").write_text(
-            json.dumps({"David": {"cli": "codex", "model": "gpt-5.3-codex"}}),
+            json.dumps({"David": {"cli": "codex", "model": "gpt-5.3-codex", "configured_primary": "claude"}}),
             encoding="utf-8",
         )
 

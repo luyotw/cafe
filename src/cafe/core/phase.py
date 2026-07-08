@@ -327,6 +327,20 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         except Exception as e:
             logger.warning(f"Failed to append iteration index: {e}")
 
+    def _configured_primary_cli_value(self, agent_name: str) -> Optional[str]:
+        """Crew-configured primary CLI for this agent as a plain string, if resolvable."""
+        getter = getattr(self.agent_manager, "configured_primary_cli", None)
+        if not callable(getter):
+            return None
+        try:
+            config = self.agent_manager.get_agent(agent_name).config
+            primary = getter(config)
+        except Exception:
+            return None
+        if primary is None:
+            return None
+        return primary.value if hasattr(primary, "value") else str(primary)
+
     def _record_active_agent_cli(
         self,
         *,
@@ -351,9 +365,13 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 data = {}
 
             extra = phase_specific_data or {}
+            configured_primary = self._configured_primary_cli_value(agent_name)
             data[agent_name] = {
                 "cli": agent_cli,
                 "model": model,
+                # Crew primary at record time, so a later crew.yaml primary change
+                # invalidates this sticky record instead of being overridden by it.
+                "configured_primary": configured_primary,
                 "step_name": extra.get("step_name"),
                 "updated_at": datetime.now().astimezone().isoformat(),
             }

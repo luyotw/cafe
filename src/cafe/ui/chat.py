@@ -168,6 +168,16 @@ def _load_active_chat_cli(
     if configured and cli not in configured:
         return None
 
+    # An explicit crew.yaml primary change invalidates the sticky record:
+    # ignore it unless the recorded configured_primary still matches (or the
+    # sticky CLI already is the current primary). Mirrors AgentManager.
+    chain = normalize_role_config(role_config)
+    current_primary = chain[0].cli.value if chain else None
+    recorded_primary = record.get("configured_primary")
+    if current_primary is not None and cli != current_primary:
+        if not isinstance(recorded_primary, str) or recorded_primary != current_primary:
+            return None
+
     model = record.get("model")
     if not isinstance(model, str):
         step_name = record.get("step_name")
