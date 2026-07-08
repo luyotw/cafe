@@ -1008,6 +1008,183 @@ def test_runtime_resumes_from_blackboard_current_step(tmp_path: Path) -> None:
     assert executed_steps == ["plan"]
 
 
+def test_runtime_pauses_after_realigning_stale_current_step_from_handoff_contract(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-stale-current-step"
+    issue_dir.mkdir(parents=True)
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {"skill": "spec_first", "role": "pm", "on": {"await_agent": "plan"}},
+            "plan": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "current_step": "spec",
+                "playbook_id": "default",
+                "artifacts": {},
+                "events": [],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_baton(
+        issue_dir,
+        from_step="spec",
+        to_owner="agent",
+        to_step="plan",
+        intent="await_agent",
+        status_code="confirmed",
+    )
+    executed_steps: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        executed_steps.append(step_name)
+        return StepExecutionResult(response="confirmed", artifacts={}, status_code="confirmed")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+
+    result = runtime.run(max_transitions=5)
+
+    assert result.completed is False
+    assert result.final_step == "spec"
+    assert result.final_status_code == "BATON_POSITION_REALIGNED"
+    assert executed_steps == []
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    assert blackboard.current_step == "plan"
+    realigned_events = [
+        event for event in blackboard.events if event.event_type == "runtime_position_realigned"
+    ]
+    assert realigned_events[-1].data["previous_current_step"] == "spec"
+    assert realigned_events[-1].data["resolved_step"] == "plan"
+
+    next_runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    resumed = next_runtime.run(max_transitions=5)
+
+    assert resumed.completed is True
+    assert resumed.final_step == "plan"
+    assert executed_steps == ["plan"]
+
+
+def test_runtime_resumes_to_user_wait_from_handoff_contract(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-user-wait-contract"
+    issue_dir.mkdir(parents=True)
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {"skill": "develop", "role": "developer", "on": {"await_agent": "review"}},
+            "review": {"skill": "review", "role": "reviewer", "on": {"await_agent": "_done"}},
+        },
+    }
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "current_step": "develop",
+                "playbook_id": "default",
+                "artifacts": {},
+                "events": [],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_baton(
+        issue_dir,
+        from_step="develop",
+        to_owner="user",
+        to_step="user",
+        intent="need_clarification",
+        status_code="need_clarification",
+    )
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        raise AssertionError("user-owned baton should not execute an agent step")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+
+    result = runtime.run(max_transitions=5)
+
+    assert result.completed is False
+    assert result.final_step == "develop"
+    assert result.final_status_code == "need_clarification"
+    blackboard = BlackboardStore(issue_dir).load_or_create("develop")
+    assert blackboard.current_step == "user"
+
+
+def test_runtime_resumes_to_done_from_handoff_contract(tmp_path: Path) -> None:
+    cafe_dir = tmp_path / ".cafe"
+    issue_dir = cafe_dir / "issues" / "demo-done-contract"
+    issue_dir.mkdir(parents=True)
+    (cafe_dir / "active_issue").write_text("demo-done-contract\n", encoding="utf-8")
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "pr": {"skill": "pr", "role": "developer", "on": {"await_agent": "_done"}},
+        },
+    }
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "current_step": "pr",
+                "playbook_id": "default",
+                "artifacts": {},
+                "events": [],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_baton(
+        issue_dir,
+        from_step="pr",
+        to_owner="done",
+        to_step="done",
+        intent="workflow_complete",
+    )
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        raise AssertionError("done-owned baton should not execute an agent step")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+
+    result = runtime.run(max_transitions=5)
+
+    assert result.completed is True
+    assert result.final_step == "pr"
+    assert result.final_status_code == "BATON_WORKFLOW_COMPLETE"
+    blackboard = BlackboardStore(issue_dir).load_or_create("pr")
+    assert blackboard.current_step == "done"
+    assert not (cafe_dir / "active_issue").exists()
+
+
 def test_runtime_records_done_handoff_for_non_pr_terminal_transition(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "done-transition"
     playbook = {

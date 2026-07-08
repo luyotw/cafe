@@ -898,13 +898,14 @@ def workflow(
                 playbook=playbook_data,
                 executor=wrapped_executor,
             )
-            result = runner.run(start_step=effective_start_step, single_step=single_step)
+            result = runner.run(start_step=pending_start_step, single_step=single_step)
             latest_blackboard = BlackboardStore(issue_dir).load_or_create(
                 str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
                 playbook_id=str(playbook_data["playbook"]["id"]),
             )
             if (
                 not single_step
+                and result.final_status_code != "BATON_POSITION_REALIGNED"
                 and latest_blackboard.current_step == "pr"
                 and effective_start_step != "pr"
             ):
