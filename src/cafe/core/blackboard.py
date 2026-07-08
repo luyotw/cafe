@@ -542,12 +542,16 @@ class BlackboardStore:
             if not legacy_step:
                 raise ValueError(f"Baton file is empty: {self.next_step_path}")
             if "=" in legacy_step or "\n" in legacy_step:
-                return self._contract_from_legacy_key_values(legacy_step, state)
-            return HandoffContract.from_legacy_step(
-                step=legacy_step,
-                from_step=state.current_step,
-                source="legacy_text",
-            )
+                contract = self._contract_from_legacy_key_values(legacy_step, state)
+            else:
+                contract = HandoffContract.from_legacy_step(
+                    step=legacy_step,
+                    from_step=state.current_step,
+                    source="legacy_text",
+                )
+            if allowed_steps:
+                contract.validate(allowed_steps=allowed_steps)
+            return contract
 
         if not isinstance(payload, dict):
             raise BatonRejected(

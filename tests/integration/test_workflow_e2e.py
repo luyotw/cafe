@@ -84,6 +84,8 @@ def _run_until_settled(
         )
         if last_result.completed:
             return last_result
+        if last_result.final_status_code == "BATON_POSITION_REALIGNED":
+            return last_result
         if latest.current_step in {"user", "done"}:
             return last_result
         # Continue from blackboard's current_step (boundary handoff).
@@ -378,6 +380,159 @@ class TestUserHandoff:
         assert blackboard.current_step == "user"
         pause_events = [e for e in blackboard.events if e.event_type == "workflow_paused"]
         assert pause_events, "workflow_paused event should be recorded"
+
+    def test_contract_mismatch_realigns_before_resuming_agent_step(
+        self, tmp_path: Path
+    ) -> None:
+        """A valid baton/current_step mismatch pauses once before the target step runs."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "issue-contract-mismatch"
+        playbook = {
+            "playbook": {"id": "default"},
+            "steps": {
+                "spec": {
+                    "skill": "spec_first",
+                    "role": "pm",
+                    "on": {"await_agent": "plan"},
+                },
+                "plan": {
+                    "skill": "plan",
+                    "role": "developer",
+                    "on": {"await_agent": "_done"},
+                },
+            },
+        }
+        store = BlackboardStore(issue_dir)
+        blackboard = store.load_or_create("spec")
+        store.update_handoff_contract(
+            blackboard,
+            from_step="spec",
+            to_owner=HandoffOwner.AGENT,
+            to_step="plan",
+            intent=HandoffIntent.AWAIT_AGENT,
+            status_code="confirmed",
+            source="test.desync",
+        )
+        executed_steps: list[str] = []
+
+        def executor(
+            step_name: str, step_def: dict, state: BlackboardState
+        ) -> StepExecutionResult:
+            executed_steps.append(step_name)
+            return StepExecutionResult(
+                response="confirmed",
+                artifacts={str(step_def.get("output_artifact", step_name)): "output.md"},
+                status_code="confirmed",
+            )
+
+        first = BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            executor=executor,
+        ).run(max_transitions=10)
+
+        assert first.completed is False
+        assert first.final_status_code == "BATON_POSITION_REALIGNED"
+        assert executed_steps == []
+        blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+        assert blackboard.current_step == "plan"
+        assert any(
+            e.event_type == "runtime_position_realigned" for e in blackboard.events
+        )
+
+        second = BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            executor=executor,
+        ).run(max_transitions=10)
+
+        assert second.completed is True
+        assert second.final_step == "plan"
+        assert executed_steps == ["plan"]
+
+    def test_contract_owner_user_and_done_are_terminal_positions(
+        self, tmp_path: Path
+    ) -> None:
+        """Contract owner states should not execute an agent step while resuming."""
+        playbook = {
+            "playbook": {"id": "default"},
+            "steps": {
+                "develop": {
+                    "skill": "develop",
+                    "role": "developer",
+                    "on": {"await_agent": "review"},
+                },
+                "review": {
+                    "skill": "review",
+                    "role": "reviewer",
+                    "on": {"await_agent": "_done"},
+                },
+            },
+        }
+        executed_steps: list[str] = []
+
+        def executor(
+            step_name: str, step_def: dict, state: BlackboardState
+        ) -> StepExecutionResult:
+            executed_steps.append(step_name)
+            return StepExecutionResult(
+                response="confirmed",
+                artifacts={},
+                status_code="confirmed",
+            )
+
+        user_issue_dir = tmp_path / ".cafe" / "issues" / "issue-contract-user"
+        user_store = BlackboardStore(user_issue_dir)
+        user_blackboard = user_store.load_or_create("develop")
+        user_store.update_handoff_contract(
+            user_blackboard,
+            from_step="develop",
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.NEED_CLARIFICATION,
+            status_code="need_clarification",
+            source="test.user",
+        )
+
+        user_result = BlackboardWorkflowRuntime(
+            issue_dir=user_issue_dir,
+            playbook=playbook,
+            executor=executor,
+        ).run(max_transitions=10)
+
+        assert user_result.completed is False
+        assert user_result.final_step == "develop"
+        assert user_result.final_status_code == "need_clarification"
+        assert (
+            BlackboardStore(user_issue_dir).load_or_create("develop").current_step
+            == "user"
+        )
+
+        done_issue_dir = tmp_path / ".cafe" / "issues" / "issue-contract-done"
+        done_store = BlackboardStore(done_issue_dir)
+        done_blackboard = done_store.load_or_create("review")
+        done_store.update_handoff_contract(
+            done_blackboard,
+            from_step="review",
+            to_owner=HandoffOwner.DONE,
+            to_step="done",
+            intent=HandoffIntent.WORKFLOW_COMPLETE,
+            status_code="confirmed",
+            source="test.done",
+        )
+
+        done_result = BlackboardWorkflowRuntime(
+            issue_dir=done_issue_dir,
+            playbook=playbook,
+            executor=executor,
+        ).run(max_transitions=10)
+
+        assert done_result.completed is True
+        assert done_result.final_step == "review"
+        assert (
+            BlackboardStore(done_issue_dir).load_or_create("develop").current_step
+            == "done"
+        )
+        assert executed_steps == []
 
     def test_user_handoff_auto_continue_resumes_in_same_run(self, tmp_path: Path) -> None:
         """spec 先 need_clarification（auto_continue=True），再 confirmed → 不暫停，直接流向 plan。"""

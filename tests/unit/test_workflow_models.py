@@ -484,6 +484,20 @@ class TestLegacyKeyValueBaton:
         assert contract.to_step == "review"
         assert contract.source == "legacy_text"
 
+    def test_unknown_single_step_name_is_rejected_by_allowed_steps(self, tmp_path: Path) -> None:
+        issue_dir, store, state = self._store_and_state(tmp_path)
+        (issue_dir / "next_step.txt").write_text("no_such_step\n", encoding="utf-8")
+
+        with pytest.raises(BatonRejected) as exc_info:
+            store.load_handoff_contract(
+                state,
+                allowed_steps=["build", "review"],
+                allow_legacy_text=True,
+            )
+
+        assert exc_info.value.field == "to_step"
+        assert exc_info.value.invalid_value == "no_such_step"
+
     def test_invalid_intent_value_falls_back_to_step_derived_intent(self, tmp_path: Path) -> None:
         issue_dir, store, state = self._store_and_state(tmp_path)
         (issue_dir / "next_step.txt").write_text(

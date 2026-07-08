@@ -69,6 +69,12 @@ class HandoffReconciliationResult:
     validated_evidence: list[str] = field(default_factory=list)
 
 
+@dataclass
+class RuntimePositionResolution:
+    current_step: str
+    realignment_result: Optional[PlaybookRunResult] = None
+
+
 class BlackboardWorkflowRuntime:
     """Workflow runtime that prefers blackboard/baton-driven transitions."""
 
@@ -217,7 +223,7 @@ class BlackboardWorkflowRuntime:
                 f"Baton target mismatch before step '{current_step}': baton points to '{contract.to_step}'"
             )
 
-    def _resolve_runtime_position_from_handoff(self) -> str:
+    def _resolve_runtime_position_from_handoff(self) -> RuntimePositionResolution:
         """Use the structured baton as the runtime position source.
 
         ``blackboard.current_step`` remains persisted context for observability,
@@ -230,7 +236,7 @@ class BlackboardWorkflowRuntime:
                 allowed_steps=list(self.steps.keys()),
             )
         except BatonRejected:
-            return self.blackboard.current_step
+            return RuntimePositionResolution(current_step=self.blackboard.current_step)
         previous = self.blackboard.current_step
         if contract.to_owner == HandoffOwner.AGENT:
             resolved = contract.to_step
@@ -242,7 +248,7 @@ class BlackboardWorkflowRuntime:
         if previous != resolved:
             self.blackboard_store.record_event(
                 self.blackboard,
-                "runtime_position_resolved",
+                "runtime_position_realigned",
                 {
                     "previous_current_step": previous,
                     "from_step": contract.from_step,
@@ -253,7 +259,16 @@ class BlackboardWorkflowRuntime:
                 },
             )
             self.blackboard_store.set_current_step(self.blackboard, resolved)
-        return resolved
+            if contract.to_owner == HandoffOwner.AGENT:
+                return RuntimePositionResolution(
+                    current_step=resolved,
+                    realignment_result=PlaybookRunResult(
+                        final_step=previous,
+                        final_status_code="BATON_POSITION_REALIGNED",
+                        completed=False,
+                    ),
+                )
+        return RuntimePositionResolution(current_step=resolved)
 
     def _result_from_terminal_position(self, current_step: str) -> Optional[PlaybookRunResult]:
         if current_step not in {"user", "done"}:
@@ -1840,7 +1855,14 @@ class BlackboardWorkflowRuntime:
         single_step: bool = False,
     ) -> PlaybookRunResult:
         if single_step:
-            current_step = start_step or self._resolve_runtime_position_from_handoff()
+            resolution = (
+                RuntimePositionResolution(current_step=start_step)
+                if start_step is not None
+                else self._resolve_runtime_position_from_handoff()
+            )
+            if resolution.realignment_result is not None:
+                return resolution.realignment_result
+            current_step = resolution.current_step
             terminal_result = self._result_from_terminal_position(current_step)
             if terminal_result is not None:
                 return terminal_result
@@ -1865,7 +1887,14 @@ class BlackboardWorkflowRuntime:
             if reconciled is not None and self.blackboard.current_step not in self.steps:
                 return reconciled
 
-        current_step = start_step or self._resolve_runtime_position_from_handoff()
+        resolution = (
+            RuntimePositionResolution(current_step=start_step)
+            if start_step is not None
+            else self._resolve_runtime_position_from_handoff()
+        )
+        if resolution.realignment_result is not None:
+            return resolution.realignment_result
+        current_step = resolution.current_step
         terminal_result = self._result_from_terminal_position(current_step)
         if terminal_result is not None:
             return terminal_result

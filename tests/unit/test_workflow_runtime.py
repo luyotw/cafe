@@ -1008,7 +1008,7 @@ def test_runtime_resumes_from_blackboard_current_step(tmp_path: Path) -> None:
     assert executed_steps == ["plan"]
 
 
-def test_runtime_resumes_from_handoff_contract_when_current_step_is_stale(
+def test_runtime_pauses_after_realigning_stale_current_step_from_handoff_contract(
     tmp_path: Path,
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-stale-current-step"
@@ -1060,15 +1060,28 @@ def test_runtime_resumes_from_handoff_contract_when_current_step_is_stale(
 
     result = runtime.run(max_transitions=5)
 
-    assert result.completed is True
-    assert result.final_step == "plan"
-    assert executed_steps == ["plan"]
+    assert result.completed is False
+    assert result.final_step == "spec"
+    assert result.final_status_code == "BATON_POSITION_REALIGNED"
+    assert executed_steps == []
     blackboard = BlackboardStore(issue_dir).load_or_create("spec")
-    resolved_events = [
-        event for event in blackboard.events if event.event_type == "runtime_position_resolved"
+    assert blackboard.current_step == "plan"
+    realigned_events = [
+        event for event in blackboard.events if event.event_type == "runtime_position_realigned"
     ]
-    assert resolved_events[-1].data["previous_current_step"] == "spec"
-    assert resolved_events[-1].data["resolved_step"] == "plan"
+    assert realigned_events[-1].data["previous_current_step"] == "spec"
+    assert realigned_events[-1].data["resolved_step"] == "plan"
+
+    next_runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    resumed = next_runtime.run(max_transitions=5)
+
+    assert resumed.completed is True
+    assert resumed.final_step == "plan"
+    assert executed_steps == ["plan"]
 
 
 def test_runtime_resumes_to_user_wait_from_handoff_contract(tmp_path: Path) -> None:
