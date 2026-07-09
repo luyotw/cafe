@@ -95,3 +95,66 @@ def test_parallel_workflow_installs_do_not_write_global_home_skills(tmp_path: Pa
     assert not global_installed.exists()
     if global_home_skill.exists():
         assert global_home_skill.read_text(encoding="utf-8") == marker
+
+
+def test_install_skill_git_excludes_cli_dir(tmp_path: Path) -> None:
+    """CAFE-managed CLI injection dir is added to .git/info/exclude so it does
+    not make the worktree dirty (which would block chat-handoff consumption)."""
+    import subprocess
+
+    global_root = tmp_path / "global" / "skills"
+    home_dir = tmp_path / "home"
+    project = tmp_path / "repo"
+    (project / ".cafe").mkdir(parents=True)
+    subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True)
+    _write_plan_skill(project / ".cafe" / "skills", "Project plan")
+
+    bridge = _bridge_for_project(
+        tmp_path, project_root=project, global_root=global_root, home_dir=home_dir
+    )
+    bridge.install_skill("cafe-plan", AgentCLI.CODEX)
+
+    exclude = (project / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+    assert "/.codex/" in exclude.splitlines()
+
+    status = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=project, capture_output=True, text=True
+    ).stdout
+    assert ".codex" not in status  # the CLI dir must not show as untracked/dirty
+
+
+def test_install_skill_git_exclude_is_idempotent(tmp_path: Path) -> None:
+    """Re-installing does not append duplicate exclude entries."""
+    import subprocess
+
+    global_root = tmp_path / "global" / "skills"
+    home_dir = tmp_path / "home"
+    project = tmp_path / "repo"
+    (project / ".cafe").mkdir(parents=True)
+    subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True)
+    _write_plan_skill(project / ".cafe" / "skills", "Project plan")
+
+    bridge = _bridge_for_project(
+        tmp_path, project_root=project, global_root=global_root, home_dir=home_dir
+    )
+    bridge.install_skill("cafe-plan", AgentCLI.CODEX)
+    bridge.install_skill("cafe-plan", AgentCLI.CODEX)
+
+    exclude = (project / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+    assert exclude.splitlines().count("/.codex/") == 1
+
+
+def test_install_skill_no_git_is_noop(tmp_path: Path) -> None:
+    """Without a git repo, install still works and does not raise."""
+    global_root = tmp_path / "global" / "skills"
+    home_dir = tmp_path / "home"
+    project = tmp_path / "repo"
+    (project / ".cafe").mkdir(parents=True)
+    _write_plan_skill(project / ".cafe" / "skills", "Project plan")
+
+    bridge = _bridge_for_project(
+        tmp_path, project_root=project, global_root=global_root, home_dir=home_dir
+    )
+    # Must not raise even though there is no .git
+    bridge.install_skill("cafe-plan", AgentCLI.CODEX)
+    assert (project / ".codex" / "skills" / "cafe-plan" / "SKILL.md").exists()

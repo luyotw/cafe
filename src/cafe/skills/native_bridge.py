@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -92,11 +93,47 @@ class NativeSkillBridge:
         elif skills_root.exists() and not skills_root.is_dir():
             skills_root.unlink()
         skills_root.mkdir(parents=True, exist_ok=True)
+        self._ensure_cli_dir_git_excluded(cli)
 
         if target_dir.exists():
             shutil.rmtree(target_dir)
         shutil.copytree(source_dir, target_dir)
         return target_dir
+
+    def _ensure_cli_dir_git_excluded(self, cli: AgentCLI) -> None:
+        """Best-effort: add the CLI's top-level injection dir to git's local
+        excludes so these CAFE-managed native-skill dirs never count as
+        uncommitted changes.
+
+        An untracked dir like ``.codex/`` otherwise makes ``git status`` dirty,
+        which blocks chat-handoff consumption in the workflow runner. We write to
+        ``.git/info/exclude`` (worktree-local, does not touch the tracked
+        ``.gitignore``). Failures are swallowed — this is a convenience only.
+        """
+        top = Path(self.CLI_SKILL_DIRS[cli]).parts[0]  # e.g. ".codex"
+        entry = f"/{top}/"
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(self.project_root), "rev-parse", "--git-path", "info/exclude"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode != 0:
+                return
+            exclude_path = Path(result.stdout.strip())
+            if not exclude_path.is_absolute():
+                exclude_path = self.project_root / exclude_path
+            existing = exclude_path.read_text(encoding="utf-8") if exclude_path.exists() else ""
+            if any(line.strip() == entry for line in existing.splitlines()):
+                return
+            exclude_path.parent.mkdir(parents=True, exist_ok=True)
+            with exclude_path.open("a", encoding="utf-8") as handle:
+                if existing and not existing.endswith("\n"):
+                    handle.write("\n")
+                handle.write(f"# CAFE native-skill CLI dir (auto-excluded)\n{entry}\n")
+        except Exception:
+            return
 
     def install_skills(self, names: list[str], cli: AgentCLI) -> list[Path]:
         """Install a list of skills for one CLI."""
