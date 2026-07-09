@@ -3044,6 +3044,94 @@ def test_apply_resume_to_runtime_context_keeps_real_input(tmp_path: Path) -> Non
     )
 
 
+def test_apply_resume_to_runtime_context_adds_resume_input_artifacts(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input"
+    spec_dir = issue_dir / "spec"
+    prev_iter = spec_dir / "iteration_001"
+    prev_iter.mkdir(parents=True)
+    (prev_iter / "iteration.json").write_text(
+        json.dumps(
+            {
+                "cli": "codex",
+                "session_id": "session-1",
+                "end_time": "2026-05-23T00:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = spec_dir
+    executor.iteration = 2
+    executor._step_agent_name = "Roger"
+
+    updated = executor._apply_resume_to_runtime_context(
+        {"develop_file": ".cafe/issues/demo/develop/output.md"},
+        "spec",
+    )
+
+    assert (
+        updated["resume_input_artifacts"]
+        == "- develop_file: .cafe/issues/demo/develop/output.md"
+    )
+
+
+def test_apply_resume_to_runtime_context_omits_artifacts_on_fresh_run(tmp_path: Path) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input" / "spec"
+    executor.phase_dir.mkdir(parents=True)
+    executor.iteration = 1
+    executor._step_agent_name = "Roger"
+
+    updated = executor._apply_resume_to_runtime_context(
+        {"develop_file": ".cafe/issues/demo/develop/output.md"},
+        "spec",
+    )
+
+    assert "resume_input_artifacts" not in updated
+
+
+def test_apply_resume_to_runtime_context_lists_all_present_artifacts(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input"
+    spec_dir = issue_dir / "spec"
+    prev_iter = spec_dir / "iteration_001"
+    prev_iter.mkdir(parents=True)
+    (prev_iter / "iteration.json").write_text(
+        json.dumps(
+            {
+                "cli": "codex",
+                "session_id": "session-1",
+                "end_time": "2026-05-23T00:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = spec_dir
+    executor.iteration = 2
+    executor._step_agent_name = "Roger"
+
+    updated = executor._apply_resume_to_runtime_context(
+        {
+            "feedback_file": "review.md",
+            "plan_file": "plan.md",
+            "develop_file": "develop.md",
+            "spec_file": "spec.md",
+        },
+        "spec",
+    )
+
+    assert updated["resume_input_artifacts"] == "\n".join(
+        [
+            "- develop_file: develop.md",
+            "- spec_file: spec.md",
+            "- plan_file: plan.md",
+            "- feedback_file: review.md",
+        ]
+    )
+
+
 def test_execute_step_same_session_resume_keeps_real_input_in_prompt_and_user_input_md(
     tmp_path: Path,
     monkeypatch,
@@ -3107,6 +3195,81 @@ def test_execute_step_same_session_resume_keeps_real_input_in_prompt_and_user_in
     assert (
         user_input_file.read_text(encoding="utf-8")
         == "Long clarification that should appear in prompt"
+    )
+
+
+def test_execute_step_resume_includes_current_input_artifacts_in_prompt(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-artifacts"
+    develop_dir = issue_dir / "develop"
+    prev_iter = develop_dir / "iteration_001"
+    prev_iter.mkdir(parents=True)
+    (prev_iter / "iteration.json").write_text(
+        json.dumps(
+            {
+                "cli": "codex",
+                "session_id": "session-1",
+                "end_time": "2026-05-23T00:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    code_file = issue_dir / "develop" / "iteration_001" / "output.md"
+    code_file.write_text("Batch 2 scoped work", encoding="utf-8")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+    store.set_artifact(state, "code", str(code_file))
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "develop": {
+                "skill": "cafe-develop",
+                "role": "developer",
+                "input_artifacts": ["code"],
+                "output_artifact": "code",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "alignment": {"enabled": False},
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    manager = FakeAgentManager("confirmed")
+    manager.agent.config.session_id = "session-1"
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-resume-artifacts",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    executor.iteration = 2
+
+    executor.execute_step("develop", playbook["steps"]["develop"], state)
+
+    assert manager.prompts
+    prompt = manager.prompts[0]
+    assert "Current step input artifacts:" in prompt
+    assert (
+        "- develop_file: ./.cafe/issues/issue-resume-artifacts/develop/iteration_001/output.md"
+        in prompt
     )
 
 

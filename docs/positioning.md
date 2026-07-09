@@ -114,6 +114,10 @@ When a design touches trusted capabilities, host execution, GitHub mutation, bro
 - An agent-authored script is not automatically a trusted host-side script.
 - External mutations should be auditable, limitable, deniable, and explainable to the user.
 
+Runtime prompt assembly and resume-context fixes that only re-ground an agent on
+the current workflow artifacts do not by themselves change this capability
+contract positioning.
+
 This positioning lets CAFE evolve toward stronger automation while preventing capability contracts from becoming a privilege-escalation mechanism.
 
 ## Decision Principles

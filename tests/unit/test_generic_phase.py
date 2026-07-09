@@ -145,6 +145,46 @@ def test_build_prompt_includes_user_input_when_set(tmp_path: Path) -> None:
     assert "Please prioritize the auth module." in prompt
 
 
+def test_build_prompt_includes_resume_input_artifacts_when_set(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+    prompt = phase.build_prompt(
+        skill_name="cafe-develop",
+        skill_invocation="/develop",
+        shared_skill_invocations=["/cafe-workflow-common"],
+        context={
+            "blackboard_path": ".cafe/issues/demo/blackboard.json",
+            "next_step_path": ".cafe/issues/demo/next_step.txt",
+            "resume_input_artifacts": "- develop_file: .cafe/issues/demo/develop/output.md",
+        },
+        output_file=Path("out.md"),
+        checklist_file=Path("checklist.md"),
+    )
+
+    assert "Current step input artifacts:" in prompt
+    assert "- develop_file: .cafe/issues/demo/develop/output.md" in prompt
+
+
+def test_build_prompt_omits_resume_input_artifacts_when_unset(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+    prompt = phase.build_prompt(
+        skill_name="cafe-develop",
+        skill_invocation="/develop",
+        shared_skill_invocations=["/cafe-workflow-common"],
+        context={
+            "blackboard_path": ".cafe/issues/demo/blackboard.json",
+            "next_step_path": ".cafe/issues/demo/next_step.txt",
+            "handoff_summary": "Resume implementation.",
+            "user_input": "continue",
+        },
+        output_file=Path("out.md"),
+        checklist_file=Path("checklist.md"),
+    )
+
+    assert "Current step input artifacts:" not in prompt
+    assert "Latest workflow handoff from blackboard:" in prompt
+    assert "Current user input for this iteration:" in prompt
+
+
 def test_build_prompt_pr_phase_appends_publish_ordering_when_handoff_present(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     prompt = phase.build_prompt(

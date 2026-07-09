@@ -144,6 +144,10 @@ class GenericPhase:
                         "Remote PR publish happens later in the host-side publish_output hook.",
                     ]
                 )
+        if context and context.get("resume_input_artifacts"):
+            runtime_context.extend(
+                ["Current step input artifacts:", context["resume_input_artifacts"]]
+            )
         if context and context.get("user_input"):
             runtime_context.extend(["Current user input for this iteration:", context["user_input"]])
 
