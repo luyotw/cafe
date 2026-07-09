@@ -462,8 +462,11 @@ class AgentExecutor:
     # CLI-specific rate limit error patterns
     RATE_LIMIT_PATTERNS = {
         "claude": [
+            "rate_limit",
+            "api_error_status:429",
             "limit reached",
             "hit your limit",
+            "hit your session limit",
             "exceeded your usage",
             "you have exceeded your usage",
         ],
@@ -616,7 +619,11 @@ class AgentExecutor:
         if isinstance(result, str):
             parts.append(result)
 
-        if data.get("status") == "error":
+        api_error_status = data.get("api_error_status")
+        if api_error_status is not None:
+            parts.append(f"api_error_status:{api_error_status}")
+
+        if data.get("status") == "error" or data.get("is_error") is True:
             parts.append(json.dumps(data, ensure_ascii=False))
 
         return "\n".join(parts)

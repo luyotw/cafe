@@ -253,6 +253,50 @@ class TestAgentExecutorErrorHandling:
         assert exc_info.value.error_type == "model_not_found"
         assert "not available or not supported" in (exc_info.value.display_message or "")
 
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "rate_limit",
+            "api_error_status:429",
+            "You've hit your session limit; resets 11am (Asia/Taipei)",
+        ],
+    )
+    def test_claude_session_limit_errors_are_rate_limit(self, message: str) -> None:
+        """Claude's structured/session limit errors should trigger fallback."""
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE, model="sonnet")
+        executor = AgentExecutor(config)
+
+        error_type, display_message = executor._classify_execution_error("Claude", message)
+
+        assert error_type == "rate_limit"
+        assert "API rate limit reached" in (display_message or "")
+
+    def test_claude_stream_json_session_limit_result_is_rate_limit(self) -> None:
+        """Claude stream-json result events can report session quota with is_error=true."""
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE, model="sonnet")
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"system","session_id":"abc"}\n',
+            (
+                '{"type":"result","subtype":"success","is_error":true,'
+                '"api_error_status":429,'
+                '"result":"You\\u0027ve hit your session limit; resets 11am (Asia/Taipei)"}\n'
+            ),
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 1
+        mock_process.terminate.return_value = None
+
+        with patch("subprocess.Popen", return_value=mock_process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor.execute("Test prompt")
+
+        assert exc_info.value.error_type == "rate_limit"
+        assert "API rate limit reached" in (exc_info.value.display_message or "")
+
     def test_non_stream_invalid_model_stderr_is_model_not_found(self) -> None:
         """Copilot-style stderr model errors should be classified after non-zero exit."""
         config = AgentConfig(name="Roger", cli=AgentCLI.COPILOT, model="cafe-nonexistent-model-xyz")
