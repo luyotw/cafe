@@ -7,7 +7,7 @@ import pytest
 from cafe.core.types import AgentCLI
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.importer import import_skills
-from cafe.skills.loader import SkillLoader
+from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.skills.native_bridge import NativeSkillBridge
 
 
@@ -83,6 +83,11 @@ def test_builtin_catalog_includes_pr_skill(tmp_path: Path) -> None:
     items = loader.discover()
 
     assert any(item.name == "cafe-pr" and item.source == "builtin" for item in items)
+
+
+def test_write_cafe_phase_legacy_aliases_resolve_to_renamed_skill() -> None:
+    assert canonical_skill_name("write-cafe-skill") == "write-cafe-phase"
+    assert canonical_skill_name("write-skill") == "write-cafe-phase"
 
 
 def test_imported_project_skill_is_discovered_with_project_precedence(tmp_path: Path) -> None:

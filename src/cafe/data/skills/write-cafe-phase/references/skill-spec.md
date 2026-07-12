@@ -10,7 +10,7 @@
 | **Phase skill** | 內部 | 綁定 playbook 的一個 workflow step，由 runtime 注入 prompt 執行 | `cafe-spec`、`cafe-plan`、`cafe-develop`、`cafe-review`、`cafe-pr`、`cafe-draft`、`cafe-incident_triage` |
 | **Shared skill** | 內部 | 跨 phase 的共用規則或工具，被 runtime 自動附掛或被其他 skill 引用 | `cafe-workflow-common`、`cafe-github_sync`、`cafe-common-chat-handoff` |
 | **Chat skill** | 內部 | `cafe chat` 內處理特定變更類型，結尾走 common chat handoff | `cafe-chat-develop-change`、`cafe-chat-spec-revision`、`cafe-chat-plan-revision` |
-| **Driver / meta skill** | 外部 | 給終端上的人或外層 agent 用，不注入 workflow phase | `use-cafe-workflow`、`write-cafe-skill` |
+| **Driver / meta skill** | 外部 | 給終端上的人或外層 agent 用，不注入 workflow phase | `use-cafe-workflow`、`write-cafe-phase`、`write-cafe-playbook` |
 
 先判定類型，再套用對應章節的模板。一個 skill 只屬於一種類型。
 
@@ -53,7 +53,7 @@ version: 1.0.0
   phase skill 用 snake_case（`cafe-brief_first`、`cafe-incident_triage`）、
   shared / chat skill 用 kebab-case（`cafe-chat-develop-change`、`cafe-workflow-common`）。
 - **外部（driver / meta）skill 不加 `cafe-` 前綴**，但會被裝到使用者的通用 skill 目錄
-  （如 `~/.claude/skills/`），名稱必須自帶 CAFE 語境（`use-cafe-workflow`、`write-cafe-skill`），
+  （如 `~/.claude/skills/`），名稱必須自帶 CAFE 語境（`use-cafe-workflow`、`write-cafe-phase`、`write-cafe-playbook`），
   不要用泛用動詞片語（`write-skill`、`review` 這類名字幾乎必撞）。
 - `description`：必寫「何時使用」。phase skill 可用中文動詞片語（如「審查程式碼品質與風險」）；
   shared / meta skill 用英文 "Use this skill when ..."。
@@ -214,3 +214,132 @@ skill 文件內不要假設只有某一條 playbook 會用它。
 - [ ] references / scripts 有明確觸發條件；對外 mutation 走 host-side hook
 - [ ] 常備規則放 `references/basic_principles.md`，不要散落在多個 `execution_steps_*` 變體中重複維護
 - [ ] 若是共用規則，已更新 `cafe-workflow-common` 的 Where policies live 索引
+- [ ] plan → execute pair 使用 `output_artifact: plan` → `input_artifacts: [plan]`，execute 的 `## Context` 包含 `{plan_file}`
+- [ ] 若 phase 同時 execute 舊 plan 並產生下一份 plan，已依 §15 區分 `{plan_file}` 與 `{output_file}`、先完成舊 checklist、處理 `not_required` 分支
+- [ ] implementation tasks 位於 plan artifact 並使用 `- [ ]`／`- [x]`；沒有另建重複的 plan-derived checklist
+
+## 14. Plan → Execute phase pair 的 artifact contract
+
+當一個 phase 負責確認解法、下一個 phase 負責實作時，預設沿用 default playbook 的 `plan` → `develop` contract。這是 artifact 與 ownership convention，不限軟體開發；影片後製、資料處理、內容生產等 domain 也一樣。
+
+### Playbook binding
+
+```yaml
+steps:
+  domain_plan:
+    type: skill
+    skill: cafe-domain_plan
+    output_artifact: plan
+    # ...role, tools, hooks, transitions...
+
+  domain_execute:
+    type: skill
+    skill: cafe-domain_execute
+    input_artifacts: [plan]
+    output_artifact: domain_result
+    # ...role, tools, hooks, transitions...
+```
+
+- artifact key 必須是 **`plan`**，runtime 才會提供 `{plan_file}`。skill／step 可以使用 domain 名稱，但不要把 artifact key 改成 `postproduction_plan`、`migration_plan` 等自訂名後仍期待 `{plan_file}` 自動存在。
+- 若確實需要新的 artifact key 與 placeholder，必須先擴充 `generic_workflow_step.py` 的 context contract、更新 §5 與測試；不得只在 skill 裡自行發明 placeholder。
+- playbook 尚未建立時，可以先寫 skill，但交付時必須明說 pair 尚未 wired，並列出以上 binding；不得宣稱 runtime 已會自動傳遞 plan。
+
+### Plan phase output
+
+plan phase 的 `{output_file}` 是下一個 execute phase 的 implementation plan，不是只有分類、建議或散文摘要。至少包含：
+
+- `## Test List`：列出穩定 invariants 與 end-to-end validation；不適用的 unit／integration 類別要明寫為 0 的原因。
+- `## Development Task Breakdown`（或 domain 等價標題）：依 dependency order 使用 `- [ ]`，每項有穩定 ID、inputs、action、output、validation 與 dependencies。
+- 明確的 source of truth、negative space／排除項、依賴或外部服務決策、Definition of Done。
+- user 確認狀態與需要另外授權的外部 mutation／費用。
+
+plan phase 只規劃與取得確認：
+
+- 不執行 implementation task，不提前把 task 勾成 `- [x]`。
+- user 確認前把 baton 寫入 `user`；確認後才交給 execute step。
+- scope、分類、依賴、外部服務或 cost 改變時，必須更新 plan 並重新確認。
+
+### Execute skill contract
+
+execute skill 必須宣告：
+
+```markdown
+## Context
+- Implementation Plan: {plan_file}
+```
+
+並遵守：
+
+- 先讀 `{plan_file}`，依 task dependency order 實作；不得靠搜尋目錄猜測另一份 plan。
+- 每完成一項，就直接在同一份 `{plan_file}` 將 `- [ ]` 改成 `- [x]`；不得複製 task list 到 sidecar 再各自漂移。
+- 新增／修改的測試與 QA 必須對應 plan 的 Test List。scope 或 invariant 改變時，退回 plan phase更新與重新確認。
+- 完成前確認所有 implementation tasks 都為 `- [x]`、Test List invariants 全部通過、輸出與 evidence 已記錄。
+
+### Plan tasks vs runtime checklist
+
+兩者都要保留，不能互相取代：
+
+| 機制 | 來源 | 生命週期 | 用途 |
+| --- | --- | --- | --- |
+| Plan task checkboxes | plan artifact 的 task breakdown | 跨 plan → execute phases | 要實作什麼；execute 直接更新 `[ ]` → `[x]` |
+| Runtime `checklist.md` | `references/execution_steps_*` 加上 opt-in `references/basic_principles.md` | 單一 phase iteration | agent 是否遵守該 phase 的程序與不變式 |
+
+不要額外產生 `implementation_checklist.md`、`execute_checklist.md` 等重複 plan tasks 的 sidecar。只有當 artifact 本身不是 implementation plan，且 playbook 明確定義不同 contract 時，才另設 domain artifact。
+
+## 15. Forward-only plan chain convention
+
+當一個 phase 的 **user-confirmed output** 才能決定下一個 phase 要執行的精確工作時，不必另外插入只負責抄寫 checklist 的 planning phase。讓目前 phase 在完成自身驗收後，直接產生下一份 implementation plan。
+
+典型例子：
+
+- 逐字稿確認後，transcribe phase 產出 audio-repair plan。
+- audio repair 依 incoming plan 執行、由 user 確認音訊後，產出只含殘留嘴型問題的 lipsync plan。
+- 若沒有殘留問題，audio repair 產出 `not_required` plan，playbook 直接跳過 lipsync。
+
+### Serial `plan` binding
+
+```yaml
+steps:
+  discover_and_plan:
+    type: skill
+    skill: cafe-domain_discover
+    output_artifact: plan
+
+  execute_and_plan_next:
+    type: skill
+    skill: cafe-domain_execute
+    input_artifacts: [plan]
+    output_artifact: plan
+
+  execute_next:
+    type: skill
+    skill: cafe-domain_next_execute
+    input_artifacts: [plan]
+    output_artifact: domain_result
+```
+
+CAFE 在 step 啟動時先從 artifact state 解析 incoming `plan`，再為本 iteration 建立獨立 `{output_file}`，完成後才把新的 `plan` 註冊為 latest artifact。因此 bridge skill 中：
+
+- `{plan_file}` 永遠是本 phase 要執行並勾選的 incoming implementation plan。
+- `{output_file}` 永遠是下一個 phase 的新 implementation plan。
+- 兩者不得是同一檔案；不得把 incoming plan 改寫成另一個 domain 的 plan。
+- incoming plan 的 checkbox 仍由本 phase 原地更新為 `- [x]`；execution report 存在 domain workspace，並由 next plan 引用，不占用 `{output_file}`。
+
+### Bridge phase order
+
+1. 驗證 incoming `{plan_file}` 已 confirmed，依 dependency order 執行並更新 checkboxes。
+2. 產生 preview／結果，留在本 phase 與 user 反覆修正，直到 user 明確接受。
+3. 根據已接受結果判斷下一 phase 是否有工作。
+4. 有工作時，把 scope、sources、Test List、費用／外部服務授權與 `- [ ]` task breakdown 寫入 `{output_file}`，取得 user 確認後標為 `confirmed`。
+5. 沒有工作時，寫入狀態為 `not_required` 的 plan，說明 skip reason，且不得留下未勾選 implementation tasks；baton 直接路由到可選 phase 之後的 step。
+
+### Ownership and loops
+
+- plan producer 必須在交棒前完成 scope confirmation；execute phase 不重新搜尋素材或重新判斷要做哪些項目。
+- user 對目前 phase 結果的修正留在目前 phase。只要 confirmed source of truth 與目標不變，可更新 execution parameters 或在 user 明確確認後補上同 domain 漏項。
+- 不要只為了修改 checklist 建立正常的 backward transition。只有 user 推翻已確認 transcript、source media、需求或其他 source of truth 時，才人工 reopen upstream phase。
+- next plan 尚未 confirmed 時 baton 指向 `user`；不得先執行下一 phase、呼叫付費 API 或消耗 credits。
+
+### When not to produce a checklist for the next phase
+
+若下一 phase 只是讀取前一結果後進行新的分析、規劃或固定程序，而不是執行上游已決定的工作，就不需要 plan checklist。一般 report、manifest 或 source path 足夠；不要為每個相鄰 step 都機械式產生 `plan`。
