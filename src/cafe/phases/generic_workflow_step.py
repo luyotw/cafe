@@ -12,6 +12,7 @@ from cafe.core.blackboard import (
     ArtifactKind,
     BlackboardState,
     BlackboardStore,
+    HandoffContract,
     HandoffIntent,
     HandoffOwner,
 )
@@ -938,10 +939,10 @@ class GenericWorkflowStepExecutor(Phase):
     def _agent_wrote_baton(self, step_name: str) -> bool:
         """Check whether the agent already wrote a valid baton (next_step.txt).
 
-        A baton is considered agent-written when it exists, parses as valid
-        JSON, ``from_step`` matches the current step, and the baton targets a
-        *different* step (from_step != to_step).  Bootstrap batons where
-        from_step == to_step (self-pointing) are NOT considered agent-written.
+        A baton is considered agent-written when it exists, parses as a valid
+        contract, targets a different step (from_step != to_step), and is
+        attributed to the current step (or defaults to it under the new strict
+        contract).
         """
         baton_path = self.issue_dir / "next_step.txt"
         if not baton_path.exists():
@@ -950,11 +951,16 @@ class GenericWorkflowStepExecutor(Phase):
             payload = json.loads(baton_path.read_text(encoding="utf-8"))
             if not isinstance(payload, dict):
                 return False
-            from_step = str(payload.get("from_step", ""))
-            to_step = str(payload.get("to_step", ""))
-            # Must be from current step AND targeting a different step
-            return from_step == step_name and from_step != to_step
-        except (json.JSONDecodeError, ValueError, OSError):
+            contract = HandoffContract.from_dict_with_current_step(
+                payload,
+                current_step=step_name,
+            )
+            return (
+                contract.from_step == step_name
+                and contract.from_step != contract.to_step
+                and contract.to_step
+            )
+        except Exception:
             return False
 
     def _write_status_transition_handoff(

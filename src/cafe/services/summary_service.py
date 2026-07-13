@@ -150,7 +150,12 @@ class SummaryService:
 
         try:
             payload = json.loads(next_step_file.read_text(encoding="utf-8"))
-            contract = HandoffContract.from_dict(payload)
+            if not isinstance(payload, dict):
+                return state.current_step, None
+            contract = HandoffContract.from_dict_with_current_step(
+                payload,
+                current_step=state.current_step,
+            )
         except Exception:
             return state.current_step, None
 

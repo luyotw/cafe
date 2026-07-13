@@ -51,13 +51,9 @@ def _base_payload(**overrides) -> dict:
     """最小合法 payload，方便各測試覆寫特定欄位。"""
     base = {
         "version": 1,
-        "from_step": "develop",
         "to_owner": "agent",
         "to_step": "review",
         "intent": "await_agent",
-        "status_code": "",
-        "created_at": "2026-05-14T10:00:00+08:00",
-        "source": "test",
     }
     base.update(overrides)
     return base
@@ -131,7 +127,7 @@ class TestLoadHandoffContractBatonRejected:
 
     @pytest.mark.parametrize(
         "missing_field",
-        ["version", "from_step", "to_owner", "to_step", "intent"],
+        ["version", "to_owner", "to_step", "intent"],
     )
     def test_missing_required_field_raises_baton_rejected(
         self,
@@ -153,6 +149,28 @@ class TestLoadHandoffContractBatonRejected:
         exc = exc_info.value
         assert exc.field == missing_field
         assert not exc.valid_values
+
+    def test_minimal_payload_without_legacy_keys_is_supported(self, tmp_path: Path) -> None:
+        """最小四欄位 payload 可被正常載入，不依賴 legacy 額外欄位。"""
+        issue_dir = tmp_path / "issue-minimal-payload"
+        issue_dir.mkdir(parents=True)
+        store = BlackboardStore(issue_dir)
+        state = store.load_or_create("develop")
+        payload = {
+            "version": 1,
+            "to_owner": "agent",
+            "to_step": "review",
+            "intent": "await_agent",
+        }
+        _write_baton(issue_dir, payload)
+
+        contract = store.load_handoff_contract(state, allowed_steps=["develop", "review"])
+
+        assert contract.to_owner == HandoffOwner.AGENT
+        assert contract.to_step == "review"
+        assert contract.intent == HandoffIntent.AWAIT_AGENT
+        assert contract.from_step == "develop"
+        assert contract.status_code == ""
 
     def test_allow_legacy_text_json_scalar_raises_baton_rejected(self, tmp_path: Path) -> None:
         """能 parse 的 JSON 非 object 時不可退回 legacy text。"""

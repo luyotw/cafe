@@ -335,11 +335,11 @@ def test_generate_checklist_ignores_non_bullet_basic_principles_lines(tmp_path: 
     assert "[ ] Another valid list item" in content
 
 
-def test_write_cafe_skill_spec_documents_basic_principles_reference() -> None:
-    spec = Path("src/cafe/data/skills/write-cafe-skill/references/skill-spec.md").read_text(
+def test_write_cafe_phase_spec_documents_basic_principles_reference() -> None:
+    spec = Path("src/cafe/data/skills/write-cafe-phase/references/skill-spec.md").read_text(
         encoding="utf-8"
     )
-    skill = Path("src/cafe/data/skills/write-cafe-skill/SKILL.md").read_text(encoding="utf-8")
+    skill = Path("src/cafe/data/skills/write-cafe-phase/SKILL.md").read_text(encoding="utf-8")
 
     assert "references/basic_principles.md" in spec
     assert "## Basic Principles" in spec

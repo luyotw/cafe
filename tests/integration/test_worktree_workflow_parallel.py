@@ -72,13 +72,9 @@ def _write_agent_baton(
 ) -> None:
     payload = {
         "version": 1,
-        "from_step": from_step,
         "to_owner": to_owner,
         "to_step": to_step,
         "intent": intent,
-        "status_code": "",
-        "created_at": "2026-05-25T12:00:00+08:00",
-        "source": from_step,
     }
     (issue_dir / "next_step.txt").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
@@ -250,8 +246,8 @@ def test_parallel_worktrees_keep_issue_state_isolated(
 
     baton_a = json.loads((issue_a / "next_step.txt").read_text(encoding="utf-8"))
     baton_b = json.loads((issue_b / "next_step.txt").read_text(encoding="utf-8"))
-    assert baton_a["from_step"] == "spec"
-    assert baton_b["from_step"] == "spec"
+    assert baton_a["to_step"] == "user"
+    assert baton_b["to_step"] == "user"
     assert (issue_a / "spec" / "iteration_001" / "output.md").read_text(encoding="utf-8") == "# alpha\n"
     assert (issue_b / "spec" / "iteration_001" / "output.md").read_text(encoding="utf-8") == "# beta\n"
     assert (issue_a / "blackboard.json").resolve() != (issue_b / "blackboard.json").resolve()

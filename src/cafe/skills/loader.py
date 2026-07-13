@@ -22,7 +22,8 @@ _logger = logging.getLogger(__name__)
 _SKILL_ALIASES: Dict[str, str] = {
     "spec_first": "cafe-spec",
     "spec_revise": "cafe-spec",
-    "write-skill": "write-cafe-skill",
+    "write-skill": "write-cafe-phase",
+    "write-cafe-skill": "write-cafe-phase",
     **{
         name: f"cafe-{name}"
         for name in (

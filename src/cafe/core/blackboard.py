@@ -155,29 +155,47 @@ class HandoffContract:
     """Structured baton contract persisted in next_step.txt."""
 
     version: int
-    from_step: str
     to_owner: HandoffOwner
     to_step: str
     intent: HandoffIntent
-    status_code: str
-    created_at: str
-    source: str
+    from_step: str = ""
+    status_code: str = ""
+    created_at: str = field(default_factory=_now_iso)
+    source: str = "unknown"
+
+    def to_next_step_dict(self) -> Dict[str, Any]:
+        """Return the strict persisted next_step.txt contract."""
+        return {
+            "version": self.version,
+            "to_owner": self.to_owner.value,
+            "to_step": self.to_step,
+            "intent": self.intent.value,
+        }
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "version": self.version,
-            "from_step": self.from_step,
             "to_owner": self.to_owner.value,
             "to_step": self.to_step,
             "intent": self.intent.value,
             "status_code": self.status_code,
             "created_at": self.created_at,
             "source": self.source,
+            "from_step": self.from_step,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "HandoffContract":
-        required_fields = ["version", "from_step", "to_owner", "to_step", "intent"]
+        return cls.from_dict_with_current_step(data, current_step=None)
+
+    @classmethod
+    def from_dict_with_current_step(
+        cls,
+        data: Dict[str, Any],
+        *,
+        current_step: str | None,
+    ) -> "HandoffContract":
+        required_fields = ["version", "to_owner", "to_step", "intent"]
         for field in required_fields:
             if field not in data:
                 raise BatonRejected(field=field, invalid_value="", valid_values=[])
@@ -215,7 +233,7 @@ class HandoffContract:
 
         return cls(
             version=version,
-            from_step=str(data["from_step"]),
+            from_step=str(data.get("from_step", current_step or "")),
             to_owner=to_owner,
             to_step=str(data["to_step"]),
             intent=intent,
@@ -341,7 +359,9 @@ class BlackboardState:
             capability_receipts=receipts,
             handoff_summary=str(data.get("handoff_summary", "")),
             handoff_contract=(
-                HandoffContract.from_dict(dict(data["handoff_contract"]))
+                HandoffContract.from_dict_with_current_step(
+                    dict(data["handoff_contract"]), current_step=str(data.get("current_step", initial_step))
+                )
                 if isinstance(data.get("handoff_contract"), dict)
                 else None
             ),
@@ -560,14 +580,40 @@ class BlackboardStore:
                 valid_values=["JSON object"],
             )
 
+        payload_has_from_step = "from_step" in payload
+        payload_has_status_code = "status_code" in payload
         try:
-            contract = HandoffContract.from_dict(payload)
+            contract = HandoffContract.from_dict_with_current_step(
+                payload,
+                current_step=state.current_step,
+            )
         except BatonRejected:
             raise
         except ValueError as exc:
             if not allow_legacy_text:
                 raise ValueError(f"Invalid baton contract payload: {exc}") from exc
             raise
+
+        prior_contract = state.handoff_contract
+        same_blackboard_handoff = (
+            prior_contract is not None
+            and contract.to_owner == prior_contract.to_owner
+            and contract.to_step == prior_contract.to_step
+            and contract.intent == prior_contract.intent
+        )
+
+        if prior_contract is not None and same_blackboard_handoff:
+            if contract.source == "unknown":
+                prior_source = str(prior_contract.source)
+                if prior_source:
+                    contract.source = prior_source
+            if not payload_has_status_code and prior_contract.status_code:
+                contract.status_code = prior_contract.status_code
+            if not payload_has_from_step and prior_contract.from_step:
+                contract.from_step = prior_contract.from_step
+
+        if not contract.from_step:
+            contract.from_step = state.current_step
 
         if allowed_steps:
             contract.validate(allowed_steps=allowed_steps)
@@ -577,7 +623,7 @@ class BlackboardStore:
         """Persist baton contract to next_step.txt and blackboard."""
         self.issue_dir.mkdir(parents=True, exist_ok=True)
         self.next_step_path.write_text(
-            json.dumps(contract.to_dict(), ensure_ascii=False, indent=2),
+            json.dumps(contract.to_next_step_dict(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         state.handoff_contract = contract
