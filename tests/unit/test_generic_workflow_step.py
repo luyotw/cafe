@@ -28,9 +28,9 @@ from cafe.skills.native_bridge import NativeSkillBridge
 
 @pytest.fixture(autouse=True)
 def _default_strategic_context(tmp_path: Path):
-    """Alignment now runs by default on every step; give tests a configured
-    strategic context so benign steps stay quiet. Tests that exercise the
-    missing-context behavior delete this file explicitly."""
+    """Give tests a configured strategic context so steps that opt into the
+    alignment gate stay quiet unless a test sets up a real trigger. Tests that
+    exercise the missing-context behavior delete this file explicitly."""
     config = tmp_path / ".cafe" / "strategic_context.yaml"
     config.parent.mkdir(parents=True, exist_ok=True)
     config.write_text("version: 1\n", encoding="utf-8")
@@ -3346,8 +3346,10 @@ def _make_alignment_executor(tmp_path: Path, issue_name: str, step_def: dict, us
     return issue_dir, playbook, state, agent_manager, executor
 
 
-def test_alignment_gate_runs_by_default_without_playbook_config(tmp_path: Path, monkeypatch) -> None:
-    """No `alignment:` block and no declared hook: the gate still pauses on policy triggers."""
+def test_alignment_gate_skipped_without_alignment_block(tmp_path: Path, monkeypatch) -> None:
+    """Opt-in gate: a step with no `alignment:` block does not pause, even when
+    policy triggers (e.g. roadmap-scope changes) would otherwise fire — the agent
+    runs normally instead."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".cafe" / "strategic_context.yaml").write_text(
         """
@@ -3368,14 +3370,14 @@ mandate:
         "on": {"await_agent": "_done", "alignment_checkpoint": "develop"},
     }
     issue_dir, playbook, state, agent_manager, executor = _make_alignment_executor(
-        tmp_path, "issue-align-default-on", step_def, "This changes roadmap scope."
+        tmp_path, "issue-align-optin-skip", step_def, "This changes roadmap scope."
     )
 
     result = executor.execute_step("develop", step_def, state)
 
-    assert result.status_code == "alignment_checkpoint"
-    assert agent_manager.prompts == []
-    assert (issue_dir / "develop" / "iteration_001" / "alignment_request.json").exists()
+    assert result.status_code != "alignment_checkpoint"
+    assert agent_manager.prompts != []
+    assert not (issue_dir / "develop" / "iteration_001" / "alignment_request.json").exists()
 
 
 def test_alignment_gate_requires_missing_strategic_context_once(tmp_path: Path, monkeypatch) -> None:
@@ -3388,6 +3390,7 @@ def test_alignment_gate_requires_missing_strategic_context_once(tmp_path: Path, 
         "role": "developer",
         "output_artifact": "code",
         "allowed_tools": ["Read"],
+        "alignment": {},  # opt into the gate (empty block = enabled with defaults)
         "on": {"await_agent": "_done", "alignment_checkpoint": "develop"},
     }
     issue_dir, playbook, state, agent_manager, executor = _make_alignment_executor(
