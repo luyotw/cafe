@@ -284,13 +284,9 @@ def test_generic_workflow_step_agent_written_baton_preserved(tmp_path: Path, mon
             json.dumps(
                 {
                     "version": 1,
-                    "from_step": "spec",
                     "to_owner": "agent",
                     "to_step": "plan",
                     "intent": "await_agent",
-                    "status_code": "confirmed",
-                    "created_at": "2026-05-14T10:00:00+08:00",
-                    "source": "spec.agent",
                 }
             ),
             encoding="utf-8",
@@ -319,6 +315,52 @@ def test_generic_workflow_step_agent_written_baton_preserved(tmp_path: Path, mon
     assert reloaded.handoff_contract.to_step == "plan"
     assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
+
+
+def test_generic_workflow_step_status_transition_writes_strict_baton_payload(tmp_path: Path, monkeypatch) -> None:
+    """Status-driven handoff write emits only the strict four-field baton payload."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-status-baton-payload"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": {"1": "spec_first", "default": "spec_first"},
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "plan"},
+            },
+            "plan": {
+                "skill": "spec_first",
+                "role": "pm",
+                "output_artifact": "plan",
+            },
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-status-baton-payload",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+
+    result = executor.execute_step("spec", playbook["steps"]["spec"], state)
+    assert result.status_code == "confirmed"
+    payload = json.loads((issue_dir / "next_step.txt").read_text(encoding="utf-8"))
+
+    assert payload == {
+        "version": 1,
+        "to_owner": "agent",
+        "to_step": "plan",
+        "intent": "await_agent",
+    }
 
 
 def test_generic_workflow_step_writes_review_pause_contract(tmp_path: Path, monkeypatch) -> None:

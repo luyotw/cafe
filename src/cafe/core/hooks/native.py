@@ -101,7 +101,13 @@ def _pr_publish_requested(
 
     try:
         raw_baton = baton_file.read_text(encoding="utf-8").strip()
-        contract = HandoffContract.from_dict(json.loads(raw_baton))
+        payload = json.loads(raw_baton)
+        if not isinstance(payload, dict):
+            return False
+        contract = HandoffContract.from_dict_with_current_step(
+            payload,
+            current_step=step_name,
+        )
     except json.JSONDecodeError:
         return raw_baton == "done"
     except Exception:
@@ -166,7 +172,13 @@ def _capability_execution_requested(
     if baton_file is None or not baton_file.exists():
         return False
     try:
-        contract = HandoffContract.from_dict(json.loads(baton_file.read_text(encoding="utf-8")))
+        payload = json.loads(baton_file.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return False
+        contract = HandoffContract.from_dict_with_current_step(
+            payload,
+            current_step=step_name,
+        )
     except Exception:
         return False
     return (

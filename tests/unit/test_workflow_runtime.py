@@ -527,6 +527,90 @@ def test_runtime_single_step_executes_pr_without_legacy_runner(tmp_path: Path) -
     assert blackboard.artifacts["pr_result"].path == "p1"
 
 
+def test_runtime_preserves_strict_done_baton_metadata_after_reload(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-pr-strict-done"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "issue.yaml").write_text("pr:\n  auto_create: false\n", encoding="utf-8")
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "pr": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        (issue_dir / "next_step.txt").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "to_owner": "done",
+                    "to_step": "done",
+                    "intent": "workflow_complete",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return StepExecutionResult(response="done", artifacts={"pr_result": "p1"})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="pr", single_step=True)
+
+    assert result.completed is True
+    assert result.final_step == "pr"
+    assert result.final_status_code == "BATON_WORKFLOW_COMPLETE"
+
+    reloaded = BlackboardStore(issue_dir).load_or_create("done")
+    assert reloaded.current_step == "done"
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.from_step == "pr"
+    assert reloaded.handoff_contract.source == "baton"
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.DONE
+
+
+def test_runtime_done_baton_status_overrides_phase_parser_status(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-pr-status"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "issue.yaml").write_text("pr:\n  auto_create: false\n", encoding="utf-8")
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "pr": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        (issue_dir / "next_step.txt").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "to_owner": "done",
+                    "to_step": "done",
+                    "intent": "await_agent",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return StepExecutionResult(
+            response="done",
+            artifacts={"pr_result": "p1"},
+            status_code="need_clarification",
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="pr", single_step=True)
+
+    assert result.completed is True
+    assert result.final_status_code == "BATON_AWAIT_AGENT"
+
+
 def test_runtime_single_step_legacy_transition_uses_single_step_labels(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-single-transition"
     playbook = {
@@ -1910,7 +1994,6 @@ def test_runtime_normalizes_legacy_baton_written_by_pr_agent(tmp_path: Path) -> 
     assert calls == ["pr", "develop"]
     assert result.completed is True
     baton = json.loads((issue_dir / "next_step.txt").read_text(encoding="utf-8"))
-    assert baton["from_step"] == "develop"
     assert baton["to_step"] == "done"
 
 

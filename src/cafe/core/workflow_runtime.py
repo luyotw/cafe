@@ -416,7 +416,9 @@ class BlackboardWorkflowRuntime:
         if contract.source == "legacy_text":
             contract.from_step = current_step
             contract.source = "workflow.legacy_baton_normalized"
-            self.blackboard_store.write_handoff_contract(self.blackboard, contract)
+        elif contract.source == "unknown":
+            contract.source = "baton"
+        self.blackboard_store.write_handoff_contract(self.blackboard, contract)
         return contract
 
     def _pr_step_requires_publish_receipt(self, current_step: str) -> bool:
@@ -801,7 +803,7 @@ class BlackboardWorkflowRuntime:
         if post_contract.to_owner == HandoffOwner.AGENT and post_contract.to_step == current_step:
             return None
 
-        resolved_status_code = post_contract.status_code or status_code
+        resolved_status_code = post_contract.status_code or f"BATON_{post_contract.intent.value.upper()}"
         if post_contract.to_owner == HandoffOwner.USER:
             result = self._emit_pause(
                 current_step=current_step,
@@ -1246,7 +1248,6 @@ class BlackboardWorkflowRuntime:
                     else:
                         status_code = (
                             contract.status_code
-                            or str(getattr(frame.execution_result, "status_code", "") or "")
                             or f"BATON_{contract.intent.value.upper()}"
                         )
                     break
@@ -1553,7 +1554,6 @@ class BlackboardWorkflowRuntime:
             ):
                 status_code = (
                     post_contract.status_code
-                    or frame.explicit_status_code
                     or f"BATON_{post_contract.intent.value.upper()}"
                 )
                 last_status_code = status_code

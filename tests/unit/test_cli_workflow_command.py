@@ -1657,8 +1657,11 @@ def test_workflow_command_start_step_rebuilds_stale_text_baton(tmp_path: Path, m
     assert "Invalid baton contract payload" not in result.stdout
 
     baton = json.loads((issue_dir / "next_step.txt").read_text(encoding="utf-8"))
-    assert baton["from_step"] == "spec"
+    assert set(baton) == {"version", "to_owner", "to_step", "intent"}
     assert baton["to_step"] in {"spec", "user"}
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    assert blackboard.handoff_contract is not None
+    assert blackboard.handoff_contract.from_step == "spec"
 
 
 def test_workflow_command_prints_guidance_for_invalid_runtime_baton(
