@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands instead of manually performing each phase.
-version: 1.3.0
+version: 1.4.0
 ---
 
 # Use CAFE Workflow
@@ -10,13 +10,14 @@ version: 1.3.0
 - Let CAFE run the spec, plan, develop, review, and PR phases through `cafe make`.
 - Prefer non-interactive commands so the workflow can run unattended and resume cleanly.
 - Treat CAFE artifacts, blackboard state, and baton handoffs as the source of workflow progress.
-- Ground Q&A and PR review in **`.cafe/strategic_context.yaml`**—the single file for strategic documents, decision authority, and per-issue overrides. If referenced documents do not exist yet, **help the user create them before** `cafe make`.
+- Ground Q&A and PR review in **`.cafe/strategic_context.yaml`**—the single file for strategic documents, decision authority, and user-authorized per-issue overrides. If referenced documents do not exist yet, **help the user create them before** `cafe make`.
 
 ## Strategic Context (one file: `.cafe/strategic_context.yaml`)
 
 All higher-scope material lives in **one** project-root file. It answers:
 1. **Which strategic documents exist** (roadmap, positioning, department norms, …) and their paths.
-2. **How much the agent may decide** on each concern (axes + levels)—default for the repo, with optional per-issue overrides.
+2. **How much the agent may decide** on each concern (axes + levels)—default for the repo, with optional per-issue overrides only when explicitly requested by the user.
+3. **Which phase confirmations require the user** and which may be confirmed by the workflow driver.
 
 Do not split this into `mandate.yaml` or other parallel config files.
 
@@ -34,8 +35,21 @@ Do not split this into `mandate.yaml` or other parallel config files.
 ### Kickoff (required before first `cafe make`)
 
 1. Inventory existing docs; co-create any that are `missing`.
-2. Confirm with the user: active playbook, **preset** (`issue-scoped` | `product-led` | `technical-led` | `full-stack` | `custom`), **axes** for that playbook (examples only—user may rename/add), **level** per axis (`agent` | `propose` | `escalate`), and **out_of_mandate** (billing, legal, production access, …).
-3. Write everything to `.cafe/strategic_context.yaml`. For this issue only, add an entry under `issues.<issue-name>` when it differs from the repo default.
+2. Confirm with the user: active playbook, **preset** (`issue-scoped` | `product-led` | `technical-led` | `full-stack` | `custom`), **axes** for that playbook (examples only—user may rename/add), **level** per axis (`agent` | `propose` | `escalate`), **confirmation_contract**, and **out_of_mandate** (billing, legal, production access, …).
+3. Write repo-wide `documents` and `mandate` updates to `.cafe/strategic_context.yaml`. Do **not** create, edit, or delete `issues.<issue-name>` unless the user explicitly asks for an issue-specific strategic override.
+
+### Issue overrides are opt-in only
+
+The `issues:` section is protected. Unless the user explicitly asks to add,
+change, or remove an issue-level override, do not write to this section.
+
+- Do not create `issues.<issue-name>` just because the current task looks
+  narrower than the repo default.
+- Do not store workflow progress, baton state, phase outputs, review notes, or
+  temporary scope summaries in `issues:`.
+- If an issue appears to need different authority than `mandate`, ask the user
+  before writing the override; otherwise keep the repo-wide mandate and let the
+  alignment gate escalate normally.
 
 **Levels:** `agent` = decide within strategic docs + issue artifacts; `propose` = recommend then continue per playbook; `escalate` = must ask the user.
 
@@ -70,28 +84,46 @@ mandate:
   out_of_mandate:
     - pricing
     - production deploy approval
+  confirmation_contract:
+    user_required:
+      - spec
+      - plan
+    agent_confirmable: []
+    notes: |
+      Default software workflow only emits confirm_output for spec and plan.
+      Other steps proceed by normal workflow transitions; list a step under
+      agent_confirmable only when a custom playbook intentionally pauses it
+      with confirm_output and the driver may approve it without the user.
   notes: |
     Default for this repo. User confirmed 2026-05-23.
 
-issues:
-  issue301:
-    playbook_id: default
-    axes:
-      product_scope: { level: escalate }
-      technical: { level: agent }
-    notes: |
-      This issue only: stay within v0.2 roadmap scope.
+# Optional and protected. Include only when the user explicitly asks for an
+# issue-specific strategic override.
+# issues:
+#   issue301:
+#     playbook_id: default
+#     axes:
+#       product_scope: { level: escalate }
+#       technical: { level: agent }
+#     confirmation_contract:
+#       user_required: [spec, plan]
+#       agent_confirmable: []
+#     notes: |
+#       This issue only: stay within v0.2 roadmap scope.
 ```
 
 - **`documents`** — strategic layer; agent reads these paths for direction.
 - **`mandate`** — repo-wide default authority.
-- **`issues.<name>`** — optional; only fields that differ from `mandate`. Omit when the default applies.
+- **`confirmation_contract`** — driver policy for `confirm_output` approvals; it is not currently parsed by CAFE runtime. Use active playbook step names, not role names. Resolve by field-wise merge: start with `mandate.confirmation_contract`, then replace only the `user_required`, `agent_confirmable`, or `notes` fields present under `issues.<name>.confirmation_contract`. If a step appears in both lists, `user_required` wins. A missing issue-level list inherits the mandate list; an explicit empty list means none for that issue.
+- **`issues.<name>`** — optional and protected. Only write it when the user explicitly requests an issue-specific strategic override; otherwise omit it even if the current issue seems narrower than the repo default.
 
 Re-read `.cafe/strategic_context.yaml` and linked documents before answering questions, reviewing PRs, or merging.
 
 ### Apply
 
 **Answering questions:** Resolve `issues.<current-issue>` over `mandate` over documents. Classify by axis → level → strategic docs + issue spec/plan. Contradicting or extending a strategic document = escalate. `missing` document = go back to co-creation, do not invent strategy.
+
+**Phase confirmation:** Resolve `confirmation_contract` before answering any `confirm_output` handoff. A step in `user_required` must stop for the real user; a step in `agent_confirmable` may be confirmed by the workflow driver only after checking the latest output and required input artifacts against the confirmed spec, plan, and mandate. A step missing from both lists defaults to `user_required`.
 
 **PR review:** Blocking findings only for in-mandate axes backed by `exists`/`draft` documents. Merge/close/`cafe close` only when those blockers are resolved.
 
@@ -107,7 +139,7 @@ Re-read `.cafe/strategic_context.yaml` and linked documents before answering que
    cafe prepare <issue-name> --no-interactive --input-method=github --issue-id=<number> --rigor=medium --spec-template=auto --plan-template=default --auto-create-pr
    ```
 5. If the prepare command creates or reports a worktree, `cd` into that worktree before running workflow commands.
-6. **Strategic Context:** inventory, co-create missing documents, confirm mandate with user, write `.cafe/strategic_context.yaml` (including `issues.<issue-name>` if needed), then run the first `cafe make`.
+6. **Strategic Context:** inventory, co-create missing documents, confirm mandate and confirmation contract with user, write repo-wide `.cafe/strategic_context.yaml` updates, and leave `issues:` untouched unless the user explicitly requested an issue-specific override. Then run the first `cafe make`.
 
 ## Running Work
 1. Start the workflow with the user's requirement. Point agents at the single config when useful:
@@ -130,6 +162,54 @@ Re-read `.cafe/strategic_context.yaml` and linked documents before answering que
    ```bash
    cafe workflow --execute --start-step <step> --single-step
    ```
+
+## Phase Confirmation Contract
+
+The confirmation contract guides who may approve a paused `confirm_output`
+handoff. It is separate from the mandate axes: mandate says what the driver may
+decide, while the confirmation contract says who must press approval when the
+playbook asks for output confirmation.
+
+Default for current software workflows:
+
+- `user_required`: `spec`, `plan`
+- `agent_confirmable`: empty
+
+Current built-in software playbooks emit `confirm_output` for requirements and
+planning gates, not for develop/review/PR completion. Develop/review/PR continue
+through their normal playbook transitions and the existing PR review-and-ship
+rules; do not add them to `agent_confirmable` unless a custom playbook explicitly
+pauses those steps with `confirm_output`.
+
+For custom playbooks, write active playbook step names in the contract. Do not
+use role names such as `developer`, because the playbook already maps steps to
+roles.
+
+When CAFE pauses with `intent=confirm_output`:
+
+1. Identify `from_step` from the blackboard handoff contract.
+2. Resolve `issues.<issue>.confirmation_contract` over
+   `mandate.confirmation_contract` by field-wise merge. Missing issue fields
+   inherit mandate fields; explicit empty lists override inherited lists.
+3. If `from_step` is in `user_required`, stop and ask the user to approve or
+   request changes. Do not auto-confirm from strategic docs alone.
+4. If `from_step` is in `agent_confirmable`, read the latest step output and
+   its required input artifacts. Confirm only when the output is complete,
+   in-mandate, and consistent with the confirmed upstream artifacts.
+5. If the step is not listed, treat it as `user_required`.
+
+Agent-confirmable does not mean the phase agent approves itself. It means the
+workflow driver may resume non-interactively after verification, for example:
+
+```bash
+cafe make --user-input "confirmed"
+```
+
+Use a correction instead of `confirmed` when the output is close but needs a
+bounded revision that follows directly from confirmed context. Stop for the user
+when approval would change requirements, implementation direction, public
+positioning, business/legal/pricing decisions, production access, destructive
+operations, or any ambiguous tradeoff.
 
 ## Alignment Checkpoints
 
