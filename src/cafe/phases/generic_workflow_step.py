@@ -476,6 +476,23 @@ class GenericWorkflowStepExecutor(Phase):
             updated["user_input"] = resolved
         else:
             updated.pop("user_input", None)
+
+        # On resume, surface current input artifact paths so the agent
+        # re-grounds on the current scope instead of inferring from prior work.
+        previous_data = self._load_previous_iteration_data()
+        current_data = self._load_current_iteration_data()
+        if is_resume_iteration(
+            iteration=self.iteration,
+            previous_iteration_data=previous_data,
+            current_iteration_data=current_data,
+        ):
+            artifact_lines = []
+            for key in ("develop_file", "spec_file", "plan_file", "feedback_file"):
+                if updated.get(key):
+                    artifact_lines.append(f"- {key}: {updated[key]}")
+            if artifact_lines:
+                updated["resume_input_artifacts"] = "\n".join(artifact_lines)
+
         return updated
 
     def _detect_written_output_files(self) -> List[Path]:

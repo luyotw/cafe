@@ -28,11 +28,12 @@ class AlignmentCheckpointGate(NoOpHook):
             return HookResult()
 
         step_def = kwargs.get("step_def") or {}
-        # Alignment runs by default; the playbook `alignment:` block only tunes
-        # thresholds/categories or opts out explicitly.
+        # Alignment is opt-in: a step runs the gate only when it declares an
+        # `alignment:` block. Omitting the block disables the gate; a playbook
+        # that wants gating must add `alignment:` (and may tune it further).
         raw_alignment = step_def.get("alignment")
         if not isinstance(raw_alignment, dict):
-            raw_alignment = {}
+            return HookResult()
         if raw_alignment.get("enabled", True) is False:
             return HookResult()
         if raw_alignment.get("trigger_policy", "policy") == "disabled":
@@ -56,8 +57,8 @@ class AlignmentCheckpointGate(NoOpHook):
             output_file=kwargs.get("output_file"),
         )
         strategic_context = load_strategic_context(Path.cwd(), issue_name=getattr(phase, "issue_name", None))
-        # Unset categories default to every configured document category so the
-        # default-on gate has signal even without playbook tuning.
+        # Unset categories default to every configured document category so an
+        # opted-in gate has signal even without further category tuning.
         default_categories = tuple(strategic_context.documents.keys())
         config = AlignmentPolicyConfig(
             pause_threshold=int(raw_alignment.get("pause_threshold", 5)),

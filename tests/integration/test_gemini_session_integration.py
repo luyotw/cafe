@@ -172,7 +172,7 @@ class TestGeminiSessionIntegration:
         assert response1 == "Fallback response"
 
         (issue_dir / "active_clis.json").write_text(
-            '{"PM_Agent": {"cli": "gemini", "model": "gemini-pro", "updated_at": "2026-06-13T00:00:00+08:00"}}',
+            '{"PM_Agent": {"cli": "gemini", "model": "gemini-pro", "configured_primary": "claude", "updated_at": "2026-06-13T00:00:00+08:00"}}',
             encoding="utf-8",
         )
 
