@@ -65,6 +65,76 @@ class TestCheckAgentCLIsAvailable:
             assert "claude" in missing_clis
             assert "gemini" in missing_clis
 
+    def test_available_fallback_chain_does_not_fail_preflight(self) -> None:
+        """測試 fallback chain 有可用 CLI 時不阻擋 workflow."""
+        config_manager = MagicMock(spec=ConfigManager)
+        config_manager.get.side_effect = lambda key, default: {
+            "agents.pm": {"name": "Roger", "cli": "copilot"},
+            "agents.developer": {
+                "name": "David",
+                "clis": [{"cli": "claude"}, {"cli": "codex"}],
+            },
+            "agents.reviewer": {"name": "Richard", "cli": "copilot"},
+        }.get(key, default)
+
+        from cafe.ui.cli import _check_agent_clis_available
+
+        with patch("shutil.which") as mock_which:
+            mock_which.side_effect = lambda cli: (
+                f"/usr/local/bin/{cli}" if cli in {"copilot", "codex"} else None
+            )
+
+            missing_clis = _check_agent_clis_available(config_manager)
+
+            assert missing_clis == []
+
+    def test_active_step_phase_chain_drives_transition_preflight(self, tmp_path: Path) -> None:
+        """active step 有 explicit phase chain 時，只用該 chain 做 transition preflight."""
+        phase_config = tmp_path / ".cafe" / "phases.yaml"
+        phase_config.parent.mkdir()
+        phase_config.write_text(
+            """
+develop:
+  clis:
+    - cli: claude
+    - cli: codex
+""",
+            encoding="utf-8",
+        )
+
+        config_manager = MagicMock(spec=ConfigManager)
+        config_manager.config_dir = str(phase_config.parent)
+        config_manager.get.side_effect = lambda key, default: {
+            "agents.pm": {"name": "Roger", "cli": "gemini"},
+            "agents.developer": {"name": "David", "cli": "copilot"},
+            "agents.reviewer": {"name": "Richard", "cli": "cursor-agent"},
+        }.get(key, default)
+
+        from cafe.ui.cli import _check_agent_clis_available
+
+        checked_clis: list[str] = []
+
+        def which_side_effect(cli: str) -> str | None:
+            checked_clis.append(cli)
+            return f"/usr/local/bin/{cli}" if cli == "codex" else None
+
+        with (
+            patch("shutil.which", side_effect=which_side_effect),
+            patch("cafe.ui.cli_shared.console.print") as mock_print,
+        ):
+            missing_clis = _check_agent_clis_available(
+                config_manager,
+                active_step="develop",
+                phase_config_local_path=phase_config,
+            )
+
+        assert missing_clis == []
+        assert checked_clis == ["claude", "codex"]
+        warning_text = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
+        assert phase_config.as_posix() in warning_text
+        assert "step=develop" in warning_text
+        assert "field=clis" in warning_text
+
     def test_reads_correct_config_keys(self) -> None:
         """測試從 `.cafe/config.yaml` 正確讀取所有 agent  CLI 配置."""
         # Setup

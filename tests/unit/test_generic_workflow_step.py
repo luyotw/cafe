@@ -258,6 +258,40 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert reloaded.handoff_contract.source == "workflow.status_transition_adapter"
 
 
+def test_resolve_agent_name_uses_phase_config_name(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".cafe").mkdir(exist_ok=True)
+    (tmp_path / ".cafe" / "phases.yaml").write_text(
+        """
+develop:
+  name: PhaseDavid
+  role: developer
+""",
+        encoding="utf-8",
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-1"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {"develop": {"skill": "develop", "role": "developer"}},
+    }
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-1",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("await_agent"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    with (
+        patch("cafe.phases.generic_workflow_step.get_repo_root", return_value=tmp_path),
+        patch("cafe.phases.generic_workflow_step.get_git_toplevel", return_value=tmp_path),
+    ):
+        assert executor._resolve_agent_name("develop", playbook["steps"]["develop"]) == "PhaseDavid"
+
+
 def test_generic_workflow_step_agent_written_baton_preserved(tmp_path: Path, monkeypatch) -> None:
     """When the agent writes a baton directly, the status-driven write is skipped."""
     monkeypatch.chdir(tmp_path)
@@ -875,6 +909,14 @@ def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(
         state,
         "還要再實作 cafe skill rm，支援批次刪除、interactive 多選與 confirm。",
     )
+    hidden_payload = "SHOULD_NOT_APPEAR_IN_BOUNDED_DIGEST" * 10_000
+    store.log_event(
+        state,
+        "plan",
+        "plan_confirmed",
+        "Plan confirmed; continue to development.",
+        {"full_prompt": hidden_payload},
+    )
     agent_manager = FakeAgentManager("confirmed")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
@@ -892,6 +934,17 @@ def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(
         "Latest workflow handoff from blackboard:" in prompt for prompt in agent_manager.prompts
     )
     assert any("還要再實作 cafe skill rm" in prompt for prompt in agent_manager.prompts)
+    prompt = agent_manager.prompts[-1]
+    assert "Bounded blackboard digest:" in prompt
+    assert '"event_type": "plan_confirmed"' in prompt
+    assert hidden_payload not in prompt
+    assert len(prompt) < 20_000
+    installed_skill = (
+        tmp_path / ".codex" / "skills" / "cafe-plan" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    expected_output = "./.cafe/issues/issue-handoff/develop/iteration_001/output.md"
+    assert f"Write plan to: {expected_output}" in installed_skill
+    assert "{output_file}" not in installed_skill
 
 
 def test_generic_workflow_step_prompt_keeps_skill_invocations_only(

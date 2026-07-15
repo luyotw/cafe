@@ -53,14 +53,26 @@ class GenericPhase:
         if hook_registry:
             self.hook_registry.update(hook_registry)
 
-    def prepare_skill(self, *, skill_name: str, agent_cli: AgentCLI) -> str:
+    def prepare_skill(
+        self,
+        *,
+        skill_name: str,
+        agent_cli: AgentCLI,
+        context: Optional[Dict[str, str]] = None,
+    ) -> str:
         """Install one skill for the target CLI and return its invocation syntax."""
-        self.skill_bridge.install_skill(skill_name, agent_cli)
+        self.skill_bridge.install_skill(skill_name, agent_cli, context=context)
         return self.skill_bridge.get_invocation(skill_name, agent_cli)
 
-    def prepare_skills(self, *, skill_names: list[str], agent_cli: AgentCLI) -> list[str]:
+    def prepare_skills(
+        self,
+        *,
+        skill_names: list[str],
+        agent_cli: AgentCLI,
+        context: Optional[Dict[str, str]] = None,
+    ) -> list[str]:
         """Install a list of skills for the target CLI and return invocation syntax."""
-        self.skill_bridge.install_skills(skill_names, agent_cli)
+        self.skill_bridge.install_skills(skill_names, agent_cli, context=context)
         return [self.skill_bridge.get_invocation(name, agent_cli) for name in skill_names]
 
     def build_prompt(
@@ -125,6 +137,16 @@ class GenericPhase:
         runtime_context.append(
             "- stay within this prompt's listed shared skills + phase skill; do not invoke external workflow-driving skills (e.g. use-cafe-workflow)"
         )
+
+        if context and context.get("blackboard_digest"):
+            runtime_context.extend(
+                [
+                    "Bounded blackboard digest:",
+                    context["blackboard_digest"],
+                    "Use this digest for initial workflow grounding. Do not read the full blackboard file; it is an unbounded audit history and may exceed the agent context window.",
+                    "If a concrete conflict requires older history, query only the specific field or event needed, and do not print event data payloads wholesale.",
+                ]
+            )
 
         if context and context.get("handoff_summary"):
             runtime_context.extend(

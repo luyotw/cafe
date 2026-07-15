@@ -43,7 +43,8 @@ from cafe.skills.checklist_composer import (
     generate_spec_checklist,
 )
 from cafe.skills.loader import canonical_skill_name
-from cafe.utils.git_utils import to_cwd_relative_path
+from cafe.utils.git_utils import get_repo_root, to_cwd_relative_path, get_git_toplevel
+from cafe.utils.phase_config import load_phase_step_model
 
 
 def align_pr_baton_after_execution(
@@ -93,6 +94,9 @@ class GenericWorkflowStepExecutor(Phase):
     """Execute one playbook step without shelling out to legacy CLI commands."""
 
     SHARED_WORKFLOW_SKILLS = ["cafe-workflow-common", "cafe-github_sync"]
+    BLACKBOARD_DIGEST_EVENT_LIMIT = 5
+    BLACKBOARD_DIGEST_ARTIFACT_LIMIT = 20
+    BLACKBOARD_DIGEST_TEXT_LIMIT = 240
 
     def __init__(
         self,
@@ -179,23 +183,26 @@ class GenericWorkflowStepExecutor(Phase):
 
         skill_name = self._resolve_skill_name(step_def, self.iteration)
         valid_intents = self._resolve_valid_intents(step_def)
-        agent_name = self._resolve_agent_name(step_def)
+        agent_name = self._resolve_agent_name(step_name, step_def)
         self._step_agent_name = agent_name
         self._apply_step_agent_model(step_name=step_name, step_def=step_def, agent_name=agent_name)
         agent_cli = self.agent_manager.get_agent(agent_name).config.cli
-        shared_skill_invocations = self.generic_phase.prepare_skills(
-            skill_names=self.SHARED_WORKFLOW_SKILLS,
-            agent_cli=agent_cli,
-        )
-        skill_invocation = self.generic_phase.prepare_skill(
-            skill_name=skill_name, agent_cli=agent_cli
-        )
         context = self._build_context(
             step_name=step_name,
             step_def=step_def,
             blackboard_state=blackboard_state,
             agent_name=agent_name,
             output_file=output_file,
+        )
+        shared_skill_invocations = self.generic_phase.prepare_skills(
+            skill_names=self.SHARED_WORKFLOW_SKILLS,
+            agent_cli=agent_cli,
+            context=context,
+        )
+        skill_invocation = self.generic_phase.prepare_skill(
+            skill_name=skill_name,
+            agent_cli=agent_cli,
+            context=context,
         )
         self._generate_checklist(
             step_name=step_name,
@@ -516,8 +523,42 @@ class GenericWorkflowStepExecutor(Phase):
                 return str(numbered[0][1])
         raise ValueError("Step is missing skill configuration")
 
-    def _resolve_agent_name(self, step_def: Dict[str, Any]) -> str:
+    def _resolve_phase_config_paths(self) -> tuple[Optional[Path], Optional[Path]]:
+        local_path = None
+        repo_path = None
+        try:
+            repo_root = get_repo_root()
+            worktree_root = get_git_toplevel()
+            repo_path = repo_root / ".cafe" / "phases.yaml"
+            if self.issue_name:
+                local_path = worktree_root / ".cafe" / "phases.yaml"
+        except Exception:
+            pass
+        return local_path, repo_path
+
+    def _resolve_step_phase_config(self, step_name: str):
+        local_path, repo_path = self._resolve_phase_config_paths()
+        return load_phase_step_model(
+            step_name=step_name,
+            local_path=local_path,
+            repo_path=repo_path,
+        )
+
+    def _resolve_agent_name(self, step_name: str, step_def: Dict[str, Any]) -> str:
         role = str(step_def.get("role", "developer"))
+        try:
+            phase_resolution = self._resolve_step_phase_config(step_name)
+            if phase_resolution.role and phase_resolution.role != role:
+                raise ValueError(
+                    f"phase config role mismatch for '{step_name}': expected '{role}', got '{phase_resolution.role}'"
+                )
+            if phase_resolution.name:
+                return phase_resolution.name
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid phase config for '{step_name}' in '{step_name}': {exc}"
+            ) from exc
+
         agent_name = self.role_agent_map.get(role)
         if agent_name:
             return agent_name
@@ -535,6 +576,21 @@ class GenericWorkflowStepExecutor(Phase):
         self.agent_manager.get_agent(agent_name).config.model = model
 
     def _resolve_step_model(self, *, step_name: str, step_def: Dict[str, Any]) -> Optional[str]:
+        # Phase-level config (worktree/repo/local) is authoritative for a step.
+        try:
+            phase_resolution = self._resolve_step_phase_config(step_name)
+            expected_role = str(step_def.get("role", "developer"))
+            if phase_resolution.role and phase_resolution.role != expected_role:
+                raise ValueError(
+                    f"phase config role mismatch for '{step_name}': expected '{expected_role}', got '{phase_resolution.role}'"
+                )
+            if phase_resolution.model:
+                return phase_resolution.model
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid phase config for '{step_name}' in '{step_name}': {exc}"
+            )
+
         role = str(step_def.get("role", "developer"))
         config = self.role_configs.get(role, {})
         if not isinstance(config, dict):
@@ -679,6 +735,7 @@ class GenericWorkflowStepExecutor(Phase):
         context = {
             "agent_file": AgentManager.get_agent_file_path(agent_name, role_dir),
             "handoff_summary": getattr(blackboard_state, "handoff_summary", ""),
+            "blackboard_digest": self._build_blackboard_digest(blackboard_state),
             "blackboard_path": self._display_path(self.issue_dir / "blackboard.json"),
             "next_step_path": self._display_path(self.issue_dir / "next_step.txt"),
             "output_file": self._display_path(output_file),
@@ -725,6 +782,50 @@ class GenericWorkflowStepExecutor(Phase):
             )
 
         return context
+
+    @classmethod
+    def _build_blackboard_digest(cls, state: BlackboardState) -> str:
+        """Serialize a small execution projection without unbounded event payloads."""
+
+        def bounded(value: Any) -> str:
+            text = str(value)
+            if len(text) <= cls.BLACKBOARD_DIGEST_TEXT_LIMIT:
+                return text
+            return f"{text[: cls.BLACKBOARD_DIGEST_TEXT_LIMIT]}…"
+
+        artifact_items = sorted(state.artifacts.items())
+        selected_artifacts = artifact_items[-cls.BLACKBOARD_DIGEST_ARTIFACT_LIMIT :]
+        artifacts = {
+            name: {
+                "version": entry.version,
+                "updated_by": entry.updated_by,
+                "path": bounded(entry.path),
+            }
+            for name, entry in selected_artifacts
+        }
+        recent_events = [
+            {
+                "timestamp": event.timestamp,
+                "step": event.step,
+                "event_type": event.event_type,
+                "message": bounded(event.message),
+            }
+            for event in state.events[-cls.BLACKBOARD_DIGEST_EVENT_LIMIT :]
+        ]
+        digest = {
+            "current_step": state.current_step,
+            "playbook_id": state.playbook_id,
+            "handoff_contract": (
+                state.handoff_contract.to_dict()
+                if state.handoff_contract is not None
+                else None
+            ),
+            "artifacts": artifacts,
+            "omitted_artifact_count": max(0, len(artifact_items) - len(selected_artifacts)),
+            "recent_events": recent_events,
+            "omitted_event_count": max(0, len(state.events) - len(recent_events)),
+        }
+        return json.dumps(digest, ensure_ascii=False, indent=2)
 
     def _generate_checklist(
         self,

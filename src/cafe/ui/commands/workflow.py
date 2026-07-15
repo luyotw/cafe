@@ -710,6 +710,19 @@ def workflow(
             console.print(f"[dim]Executing[/dim] step={step_name} iteration={iteration:03d}")
             if dry_run:
                 return dry_executor(step_name, step_def, blackboard_state, extra_prompt=extra_prompt)
+            step_role = step_def.get("role") if isinstance(step_def, dict) else None
+            missing_clis = _check_agent_clis_available(
+                config_manager,
+                active_step=step_name,
+                active_role=step_role if isinstance(step_role, str) else None,
+            )
+            if missing_clis:
+                console.print(
+                    f"[red]Error: No executable CLI candidates for step={step_name} field=clis[/red]"
+                )
+                for cli in missing_clis:
+                    console.print(f"  [red]✗[/red] {cli}")
+                raise typer.Exit(1)
             step_executor = _executor_holder["executor"]
             assert step_executor is not None
             try:
@@ -764,10 +777,17 @@ def workflow(
                     active_step=active_step,
                 )
             if not dry_run and active_step in {"user", "done"}:
-                incomplete_step = _find_incomplete_workflow_step(
-                    issue_dir=issue_dir,
-                    playbook_data=playbook_data,
+                handoff_contract = getattr(blackboard, "handoff_contract", None)
+                waiting_for_alignment = (
+                    handoff_contract is not None
+                    and handoff_contract.intent == HandoffIntent.ALIGNMENT_CHECKPOINT
                 )
+                incomplete_step = None
+                if not waiting_for_alignment:
+                    incomplete_step = _find_incomplete_workflow_step(
+                        issue_dir=issue_dir,
+                        playbook_data=playbook_data,
+                    )
                 if incomplete_step is not None:
                     pending_start_step = incomplete_step
                     store = BlackboardStore(issue_dir)
@@ -784,11 +804,13 @@ def workflow(
                         f"[yellow]Resuming unfinished iteration[/yellow] step={incomplete_step}"
                     )
                     continue
-                external_step = _find_external_resume_step(
-                    issue_dir=issue_dir,
-                    playbook_data=playbook_data,
-                    git_ops=git,
-                )
+                external_step = None
+                if not waiting_for_alignment:
+                    external_step = _find_external_resume_step(
+                        issue_dir=issue_dir,
+                        playbook_data=playbook_data,
+                        git_ops=git,
+                    )
                 if external_step is not None:
                     pending_start_step = external_step
                     store = BlackboardStore(issue_dir)

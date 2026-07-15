@@ -66,11 +66,12 @@ def _load_chat_role_config(
 ) -> Optional[dict]:
     """Load role config from crew.yaml first, then config.yaml."""
     try:
-        cafe_dir = Path(getattr(config_manager, "config_dir"))
-        crew_data = CrewManager(cafe_dir=cafe_dir).load()
-        role_config = crew_data.get(role)
-        if isinstance(role_config, dict):
-            return role_config
+        config_dir = getattr(config_manager, "config_dir", None)
+        if isinstance(config_dir, (str, Path)):
+            crew_data = CrewManager(cafe_dir=Path(config_dir)).load()
+            role_config = crew_data.get(role)
+            if isinstance(role_config, dict):
+                return role_config
     except Exception:
         pass
 
@@ -186,6 +187,20 @@ def _load_active_chat_cli(
             cli,
             step_name if isinstance(step_name, str) else None,
         )
+
+    recorded_chain = record.get("chain")
+    if isinstance(recorded_chain, list):
+        # Accept legacy stored chains as list of dicts or list of strings
+        def _extract_cli_value(item):
+            if isinstance(item, dict):
+                return item.get("cli")
+            return item
+
+        recorded_chain_values = [_extract_cli_value(i) for i in recorded_chain]
+        current_chain = [entry.cli.value for entry in normalize_role_config(role_config)]
+        if recorded_chain_values != current_chain:
+            return None
+
     return cli, model if isinstance(model, str) else None
 
 

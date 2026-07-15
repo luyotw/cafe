@@ -757,6 +757,126 @@ class TestStreamingExecution:
         assert "Hello" in captured.out
         assert "world" in captured.out
 
+    def test_streaming_stops_when_develop_read_only_budget_is_exhausted(self) -> None:
+        config = AgentConfig(name="David", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"thread.started","thread_id":"thread-budget"}\n',
+            *[
+                '{"type":"item.completed","item":{"type":"command_execution","command":"rg -n test src"}}\n'
+                for _ in range(3)
+            ],
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process), patch(
+            "sys.platform", "win32"
+        ):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor._execute_with_streaming(
+                    cmd=["codex", "exec", "prompt"],
+                    cli_name="Codex",
+                    parse_stream_json=True,
+                    max_read_only_commands=3,
+                )
+
+        assert exc_info.value.error_type == "read_only_budget_exceeded"
+        assert executor.config.session_id == "thread-budget"
+        mock_process.terminate.assert_called_once()
+
+    def test_streaming_read_only_budget_resets_after_each_file_change(self) -> None:
+        config = AgentConfig(name="David", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"thread.started","thread_id":"thread-edit"}\n',
+            '{"type":"item.completed","item":{"type":"command_execution","command":"cat plan.md"}}\n',
+            '{"type":"item.completed","item":{"type":"file_change","changes":[{"path":"tests/test_phase.py"}]}}\n',
+            '{"type":"item.completed","item":{"type":"command_execution","command":"rg -n test src"}}\n',
+            '{"type":"item.completed","item":{"type":"file_change","changes":[{"path":"src/cafe/phase.py"}]}}\n',
+            '{"type":"item.completed","item":{"type":"command_execution","command":"git diff --check"}}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process), patch(
+            "sys.platform", "win32"
+        ):
+            executor._execute_with_streaming(
+                cmd=["codex", "exec", "prompt"],
+                cli_name="Codex",
+                parse_stream_json=True,
+                max_read_only_commands=2,
+            )
+
+        mock_process.terminate.assert_not_called()
+
+    def test_streaming_stops_after_post_edit_read_only_budget(self) -> None:
+        config = AgentConfig(name="David", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"thread.started","thread_id":"thread-post-edit"}\n',
+            '{"type":"item.completed","item":{"type":"file_change","changes":[{"path":"tests/test_phase.py"}]}}\n',
+            *[
+                '{"type":"item.completed","item":{"type":"command_execution","command":"rg -n test src"}}\n'
+                for _ in range(2)
+            ],
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process), patch(
+            "sys.platform", "win32"
+        ):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor._execute_with_streaming(
+                    cmd=["codex", "exec", "prompt"],
+                    cli_name="Codex",
+                    parse_stream_json=True,
+                    max_read_only_commands=2,
+                )
+
+        assert exc_info.value.error_type == "read_only_budget_exceeded"
+        mock_process.terminate.assert_called_once()
+
+    def test_streaming_read_only_budget_detects_shell_redirection_edit(self) -> None:
+        config = AgentConfig(name="David", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"thread.started","thread_id":"thread-shell-edit"}\n',
+            (
+                '{"type":"item.completed","item":{"type":"command_execution",'
+                '"command":"/bin/zsh -lc \\"cat > tests/test_phase.py\\""}}\n'
+            ),
+            *[
+                '{"type":"item.completed","item":{"type":"command_execution","command":"rg -n test src"}}\n'
+                for _ in range(5)
+            ],
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process), patch(
+            "sys.platform", "win32"
+        ):
+            executor._execute_with_streaming(
+                cmd=["codex", "exec", "prompt"],
+                cli_name="Codex",
+                parse_stream_json=True,
+                max_read_only_commands=10,
+                max_initial_read_only_commands=1,
+            )
+
+        mock_process.terminate.assert_not_called()
+
     def test_execute_with_streaming_handles_error(self) -> None:
         """測試 streaming 執行失敗時拋出錯誤"""
         config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)

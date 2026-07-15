@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands instead of manually performing each phase.
-version: 1.4.0
+version: 1.4.1
 ---
 
 # Use CAFE Workflow
@@ -35,8 +35,9 @@ Do not split this into `mandate.yaml` or other parallel config files.
 ### Kickoff (required before first `cafe make`)
 
 1. Inventory existing docs; co-create any that are `missing`.
-2. Confirm with the user: active playbook, **preset** (`issue-scoped` | `product-led` | `technical-led` | `full-stack` | `custom`), **axes** for that playbook (examples only—user may rename/add), **level** per axis (`agent` | `propose` | `escalate`), **confirmation_contract**, and **out_of_mandate** (billing, legal, production access, …).
-3. Write repo-wide `documents` and `mandate` updates to `.cafe/strategic_context.yaml`. Do **not** create, edit, or delete `issues.<issue-name>` unless the user explicitly asks for an issue-specific strategic override.
+2. Before preparing the issue, confirm with the user: active playbook, **preset** (`issue-scoped` | `product-led` | `technical-led` | `full-stack` | `custom`), **axes** for that playbook (examples only—user may rename/add), **level** per axis (`agent` | `propose` | `escalate`), **confirmation_contract**, **out_of_mandate** (billing, legal, production access, …), and whether to create a Git worktree.
+3. Recommend creating a worktree by default at `.cafe/worktrees/<issue-name>`. Include this recommendation in the kickoff confirmation; if the user confirms the recommended kickoff without changing the worktree choice, treat worktree creation as approved. If the user declines, prepare on a feature branch in the current checkout.
+4. Write repo-wide `documents` and `mandate` updates to `.cafe/strategic_context.yaml`. Do **not** create, edit, or delete `issues.<issue-name>` unless the user explicitly asks for an issue-specific strategic override.
 
 ### Issue overrides are opt-in only
 
@@ -130,16 +131,19 @@ Re-read `.cafe/strategic_context.yaml` and linked documents before answering que
 ## Initial Setup
 1. Check the repo state with `git status --short --branch`.
 2. If CAFE is not initialized, run `cafe init --preset <preset>` instead of interactive `cafe init`.
-3. Prepare the issue non-interactively:
+3. Complete the kickoff confirmation, including the worktree choice, before running `cafe prepare`.
+4. Prepare the issue non-interactively. Worktree mode is the default:
    ```bash
-   cafe prepare <issue-name> --no-interactive --input-method=manual --rigor=medium --spec-template=auto --plan-template=default
+   cafe prepare <issue-name> --no-interactive --input-method=manual --rigor=medium --spec-template=auto --plan-template=default --worktree .cafe/worktrees/<issue-name>
    ```
-4. For a GitHub-backed issue, use:
+5. For a GitHub-backed issue, use:
    ```bash
-   cafe prepare <issue-name> --no-interactive --input-method=github --issue-id=<number> --rigor=medium --spec-template=auto --plan-template=default --auto-create-pr
+   cafe prepare <issue-name> --no-interactive --input-method=github --issue-id=<number> --rigor=medium --spec-template=auto --plan-template=default --auto-create-pr --worktree .cafe/worktrees/<issue-name>
    ```
-5. If the prepare command creates or reports a worktree, `cd` into that worktree before running workflow commands.
-6. **Strategic Context:** inventory, co-create missing documents, confirm mandate and confirmation contract with user, write repo-wide `.cafe/strategic_context.yaml` updates, and leave `issues:` untouched unless the user explicitly requested an issue-specific override. Then run the first `cafe make`.
+6. If the user declined worktree mode, omit `--worktree`; otherwise do not silently fall back to the main checkout when worktree creation fails.
+7. If the prepare command creates or reports a worktree, `cd` into that worktree before running workflow commands.
+8. If the issue was accidentally prepared without the confirmed worktree before its first `cafe make`, recreate or repair the preparation so `issue.yaml` records `worktree_path`, then continue from the worktree without discarding issue configuration.
+9. **Strategic Context:** inventory, co-create missing documents, confirm mandate and confirmation contract with user, write repo-wide `.cafe/strategic_context.yaml` updates, and leave `issues:` untouched unless the user explicitly requested an issue-specific override. Then run the first `cafe make`.
 
 ## Running Work
 1. Start the workflow with the user's requirement. Point agents at the single config when useful:
