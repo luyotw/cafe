@@ -710,6 +710,19 @@ def workflow(
             console.print(f"[dim]Executing[/dim] step={step_name} iteration={iteration:03d}")
             if dry_run:
                 return dry_executor(step_name, step_def, blackboard_state, extra_prompt=extra_prompt)
+            step_role = step_def.get("role") if isinstance(step_def, dict) else None
+            missing_clis = _check_agent_clis_available(
+                config_manager,
+                active_step=step_name,
+                active_role=step_role if isinstance(step_role, str) else None,
+            )
+            if missing_clis:
+                console.print(
+                    f"[red]Error: No executable CLI candidates for step={step_name} field=clis[/red]"
+                )
+                for cli in missing_clis:
+                    console.print(f"  [red]✗[/red] {cli}")
+                raise typer.Exit(1)
             step_executor = _executor_holder["executor"]
             assert step_executor is not None
             try:

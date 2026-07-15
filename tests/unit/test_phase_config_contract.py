@@ -41,6 +41,32 @@ build:
         load_phase_step_model(step_name="build", local_path=config)
 
 
+def test_phase_config_malformed_yaml_error_has_validation_context(tmp_path):
+    config = tmp_path / "phases.yaml"
+    config.write_text("build:\n  clis:\n    - cli: [codex\n", encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_phase_step_model(step_name="build", local_path=config)
+
+    message = str(exc_info.value)
+    assert config.as_posix() in message
+    assert "step='unknown'" in message
+    assert "field='document'" in message
+
+
+def test_phase_config_root_type_error_has_validation_context(tmp_path):
+    config = tmp_path / "phases.yaml"
+    config.write_text("- spec\n", encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_phase_step_model(step_name="build", local_path=config)
+
+    message = str(exc_info.value)
+    assert config.as_posix() in message
+    assert "step='unknown'" in message
+    assert "field='root'" in message
+
+
 def test_model_from_cli_clis_prefers_first_model_entry():
     assert model_from_cli_clis((("claude", "opus"), ("gemini", "sonnet"))) == "opus"
 
@@ -98,9 +124,14 @@ def test_phase_config_rejects_non_string_top_level_keys(tmp_path):
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="top-level keys must be strings"):
+    with pytest.raises(ValueError, match="top-level keys must be strings") as exc_info:
         load_phase_step_model(
             step_name="123",
             local_path=config_path,
             repo_path=None,
         )
+
+    message = str(exc_info.value)
+    assert config_path.as_posix() in message
+    assert "step='unknown'" in message
+    assert "field='step'" in message

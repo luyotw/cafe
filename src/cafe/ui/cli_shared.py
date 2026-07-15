@@ -105,7 +105,14 @@ def _get_github_helpers():
     return get_all_pr_comments, filter_unresolved_comments
 
 
-def check_agent_clis_available(config_manager: ConfigManager) -> List[str]:
+def check_agent_clis_available(
+    config_manager: ConfigManager,
+    *,
+    active_step: Optional[str] = None,
+    active_role: Optional[str] = None,
+    phase_config_local_path: Optional[Path] = None,
+    phase_config_repo_path: Optional[Path] = None,
+) -> List[str]:
     """Check if all configured agent CLIs are installed."""
     try:
         config_dir = getattr(config_manager, "config_dir", None)
@@ -123,12 +130,6 @@ def check_agent_clis_available(config_manager: ConfigManager) -> List[str]:
         val = config_manager.get(f"agents.{role}", {})
         return val if isinstance(val, dict) else {"cli": default_cli}
 
-    role_configs = [
-        _role_config("pm", "copilot"),
-        _role_config("developer", "copilot"),
-        _role_config("reviewer", "copilot"),
-    ]
-
     def _configured_chain(config: dict) -> list[str]:
         chain = [entry.cli.value for entry in normalize_role_config(config)]
         if chain:
@@ -136,19 +137,81 @@ def check_agent_clis_available(config_manager: ConfigManager) -> List[str]:
         cli = config.get("cli")
         return [cli] if isinstance(cli, str) and cli else ["copilot"]
 
-    missing_clis = []
-    for role_config in role_configs:
-        chain = _configured_chain(role_config)
+    def _check_chain(chain: list[str], *, context: Optional[str] = None) -> List[str]:
         available = [cli for cli in chain if shutil.which(cli) is not None]
         if available:
             missing_in_chain = [cli for cli in chain if cli not in available]
             if missing_in_chain:
-                console.print(
-                    "[yellow]Warning:[/yellow] Some configured fallback CLIs are not installed: "
-                    + ", ".join(dict.fromkeys(missing_in_chain))
-                )
-            continue
+                warning = "[yellow]Warning:[/yellow] Some configured fallback CLIs are not installed: "
+                if context is not None:
+                    warning = f"[yellow]Warning:[/yellow] Some configured CLIs are not installed ({context}): "
+                console.print(warning + ", ".join(dict.fromkeys(missing_in_chain)))
+            return []
+
+        missing_clis = []
         for cli in chain:
+            if cli not in missing_clis:
+                missing_clis.append(cli)
+        return missing_clis
+
+    def _resolve_phase_config_paths() -> tuple[Optional[Path], Optional[Path]]:
+        if phase_config_local_path is not None or phase_config_repo_path is not None:
+            return phase_config_local_path, phase_config_repo_path
+        try:
+            repo_root = get_repo_root()
+            worktree_root = get_git_toplevel()
+            return worktree_root / ".cafe" / "phases.yaml", repo_root / ".cafe" / "phases.yaml"
+        except Exception:
+            if isinstance(config_dir, (str, Path)):
+                return Path(config_dir) / "phases.yaml", None
+        return None, None
+
+    if active_step is not None and active_step not in {"user", "done"}:
+        local_path, repo_path = _resolve_phase_config_paths()
+        phase_resolution = load_phase_step_model(
+            step_name=active_step,
+            local_path=local_path,
+            repo_path=repo_path,
+        )
+        if phase_resolution.clis:
+            source_paths = {
+                "worktree": local_path.as_posix() if local_path is not None else None,
+                "repo": repo_path.as_posix() if repo_path is not None else None,
+            }
+            phase_config_file = (
+                source_paths.get(phase_resolution.clis_source or "")
+                or phase_resolution.clis_source
+                or phase_resolution.source
+                or "phase-config"
+            )
+            return _check_chain(
+                [cli for cli, _model in phase_resolution.clis],
+                context=f"file={phase_config_file} step={active_step} field=clis",
+            )
+
+        target_role = active_role or phase_resolution.role or {
+            "spec": "pm",
+            "plan": "developer",
+            "develop": "developer",
+            "review": "reviewer",
+            "pr": "developer",
+        }.get(active_step)
+        if target_role:
+            return _check_chain(
+                _configured_chain(_role_config(target_role, "copilot")),
+                context=f"step={active_step} field=clis",
+            )
+
+    role_configs = [
+        _role_config("pm", "copilot"),
+        _role_config("developer", "copilot"),
+        _role_config("reviewer", "copilot"),
+    ]
+
+    missing_clis = []
+    for role_config in role_configs:
+        chain = _configured_chain(role_config)
+        for cli in _check_chain(chain):
             if cli not in missing_clis:
                 missing_clis.append(cli)
 

@@ -25,6 +25,9 @@ class PhaseStepModelResolution:
     model: Optional[str]
     source: Optional[str]
     chain: tuple[str, ...]
+    name_source: Optional[str] = None
+    role_source: Optional[str] = None
+    clis_source: Optional[str] = None
 
 
 def _as_stripped_scalar(value: object, *, field: str, step: str, source: str) -> Optional[str]:
@@ -43,17 +46,33 @@ def _as_stripped_scalar(value: object, *, field: str, step: str, source: str) ->
     return model_value
 
 
+def _validation_error(source: str, *, step: str, field: str, detail: str) -> ValueError:
+    return ValueError(
+        f"invalid phase config in '{source}': step='{step}': field='{field}': {detail}"
+    )
+
+
 def _load_yaml_file(path: Path) -> Mapping:
     """Load YAML from `path` and validate top-level mapping shape."""
     try:
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
     except Exception as exc:  # pragma: no cover - defensive parse guard
-        raise ValueError(f"invalid phase config in '{path}': failed to parse YAML: {exc}") from exc
+        raise _validation_error(
+            path.as_posix(),
+            step="unknown",
+            field="document",
+            detail=f"failed to parse YAML: {exc}",
+        ) from exc
 
     if payload is None:
         return {}
     if not isinstance(payload, Mapping):
-        raise ValueError(f"invalid phase config in '{path}': expected top-level mapping")
+        raise _validation_error(
+            path.as_posix(),
+            step="unknown",
+            field="root",
+            detail="expected top-level mapping",
+        )
     return payload
 
 
@@ -61,14 +80,24 @@ def _validate_phase_doc(payload: Mapping, source: str) -> None:
     """Validate the whole YAML document, including inactive step keys."""
     for step_key, step_config in payload.items():
         if not isinstance(step_key, str):
-            raise ValueError(f"invalid phase config in '{source}': top-level keys must be strings")
+            raise _validation_error(
+                source,
+                step="unknown",
+                field="step",
+                detail="top-level keys must be strings",
+            )
         step_name = step_key.strip()
         if not step_name:
-            raise ValueError(f"invalid phase config in '{source}': field='step': step name cannot be empty")
+            raise _validation_error(
+                source,
+                step="unknown",
+                field="step",
+                detail="step name cannot be empty",
+            )
 
         if not isinstance(step_config, Mapping):
             raise ValueError(
-                f"invalid phase config for step '{step_name}' in '{source}': expected mapping"
+                f"invalid phase config for step '{step_name}' in '{source}': field='{step_name}': expected mapping"
             )
 
         if not step_config:
@@ -249,6 +278,9 @@ def load_phase_step_model(
     resolved_clis: Optional[tuple[tuple[str, Optional[str]], ...]] = None
     resolved_model: Optional[str] = None
     resolved_source: Optional[str] = None
+    resolved_name_source: Optional[str] = None
+    resolved_role_source: Optional[str] = None
+    resolved_clis_source: Optional[str] = None
 
     for source_label in chain:
         payload = payloads[source_label]
@@ -259,14 +291,17 @@ def load_phase_step_model(
         )
         if resolved_name is None and name is not None:
             resolved_name = name
+            resolved_name_source = source_label
             resolved_source = source_label
         if resolved_role is None and role is not None:
             resolved_role = role
+            resolved_role_source = source_label
             if resolved_source is None:
                 resolved_source = source_label
         if resolved_clis is None and clis is not None:
             resolved_clis = clis
             resolved_model = model
+            resolved_clis_source = source_label
             if resolved_source is None:
                 resolved_source = source_label
 
@@ -277,4 +312,7 @@ def load_phase_step_model(
         model=resolved_model,
         source=resolved_source,
         chain=tuple(chain),
+        name_source=resolved_name_source,
+        role_source=resolved_role_source,
+        clis_source=resolved_clis_source,
     )
