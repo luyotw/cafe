@@ -93,6 +93,9 @@ class GenericWorkflowStepExecutor(Phase):
     """Execute one playbook step without shelling out to legacy CLI commands."""
 
     SHARED_WORKFLOW_SKILLS = ["cafe-workflow-common", "cafe-github_sync"]
+    BLACKBOARD_DIGEST_EVENT_LIMIT = 5
+    BLACKBOARD_DIGEST_ARTIFACT_LIMIT = 20
+    BLACKBOARD_DIGEST_TEXT_LIMIT = 240
 
     def __init__(
         self,
@@ -183,19 +186,22 @@ class GenericWorkflowStepExecutor(Phase):
         self._step_agent_name = agent_name
         self._apply_step_agent_model(step_name=step_name, step_def=step_def, agent_name=agent_name)
         agent_cli = self.agent_manager.get_agent(agent_name).config.cli
-        shared_skill_invocations = self.generic_phase.prepare_skills(
-            skill_names=self.SHARED_WORKFLOW_SKILLS,
-            agent_cli=agent_cli,
-        )
-        skill_invocation = self.generic_phase.prepare_skill(
-            skill_name=skill_name, agent_cli=agent_cli
-        )
         context = self._build_context(
             step_name=step_name,
             step_def=step_def,
             blackboard_state=blackboard_state,
             agent_name=agent_name,
             output_file=output_file,
+        )
+        shared_skill_invocations = self.generic_phase.prepare_skills(
+            skill_names=self.SHARED_WORKFLOW_SKILLS,
+            agent_cli=agent_cli,
+            context=context,
+        )
+        skill_invocation = self.generic_phase.prepare_skill(
+            skill_name=skill_name,
+            agent_cli=agent_cli,
+            context=context,
         )
         self._generate_checklist(
             step_name=step_name,
@@ -662,6 +668,7 @@ class GenericWorkflowStepExecutor(Phase):
         context = {
             "agent_file": AgentManager.get_agent_file_path(agent_name, role_dir),
             "handoff_summary": getattr(blackboard_state, "handoff_summary", ""),
+            "blackboard_digest": self._build_blackboard_digest(blackboard_state),
             "blackboard_path": self._display_path(self.issue_dir / "blackboard.json"),
             "next_step_path": self._display_path(self.issue_dir / "next_step.txt"),
             "output_file": self._display_path(output_file),
@@ -708,6 +715,50 @@ class GenericWorkflowStepExecutor(Phase):
             )
 
         return context
+
+    @classmethod
+    def _build_blackboard_digest(cls, state: BlackboardState) -> str:
+        """Serialize a small execution projection without unbounded event payloads."""
+
+        def bounded(value: Any) -> str:
+            text = str(value)
+            if len(text) <= cls.BLACKBOARD_DIGEST_TEXT_LIMIT:
+                return text
+            return f"{text[: cls.BLACKBOARD_DIGEST_TEXT_LIMIT]}…"
+
+        artifact_items = sorted(state.artifacts.items())
+        selected_artifacts = artifact_items[-cls.BLACKBOARD_DIGEST_ARTIFACT_LIMIT :]
+        artifacts = {
+            name: {
+                "version": entry.version,
+                "updated_by": entry.updated_by,
+                "path": bounded(entry.path),
+            }
+            for name, entry in selected_artifacts
+        }
+        recent_events = [
+            {
+                "timestamp": event.timestamp,
+                "step": event.step,
+                "event_type": event.event_type,
+                "message": bounded(event.message),
+            }
+            for event in state.events[-cls.BLACKBOARD_DIGEST_EVENT_LIMIT :]
+        ]
+        digest = {
+            "current_step": state.current_step,
+            "playbook_id": state.playbook_id,
+            "handoff_contract": (
+                state.handoff_contract.to_dict()
+                if state.handoff_contract is not None
+                else None
+            ),
+            "artifacts": artifacts,
+            "omitted_artifact_count": max(0, len(artifact_items) - len(selected_artifacts)),
+            "recent_events": recent_events,
+            "omitted_event_count": max(0, len(state.events) - len(recent_events)),
+        }
+        return json.dumps(digest, ensure_ascii=False, indent=2)
 
     def _generate_checklist(
         self,

@@ -24,6 +24,16 @@ class AgentManager:
     CAFE_DIR = ".cafe"
     AGENTS_DIR = "agents"
     FALLBACKABLE_ERROR_TYPES = ("rate_limit", "cli_not_found", "cli_unavailable", "model_not_found")
+    DEVELOP_READ_ONLY_COMMAND_LIMIT = 20
+    DEVELOP_READ_ONLY_RETRY_LIMIT = 3
+    DEVELOP_READ_ONLY_RETRY_PROMPT = (
+        "The runtime stopped your previous attempt because it exhausted the read-only "
+        "progress budget without making the next file edit. Do not restart discovery or reread "
+        "the spec, plan, skills, or unchanged source files. Your FIRST tool action must be "
+        "a file edit that adds the first relevant failing test (or the first implementation "
+        "edit only when the approved plan requires no new test). Use the context already in "
+        "this session."
+    )
 
     def __init__(self, session_manager: Optional[SessionManager] = None, issue_name: Optional[str] = None) -> None:
         """Initialize agent manager.
@@ -199,9 +209,19 @@ class AgentManager:
         reordered.insert(0, preferred_entry)
         return self._normalize_chain(reordered)
 
-    def _session_id_for_cli(self, agent_name: str, cli: AgentCLI) -> Optional[str]:
+    def _session_id_for_cli(
+        self,
+        agent_name: str,
+        cli: AgentCLI,
+        phase_name: Optional[str] = None,
+    ) -> Optional[str]:
         """Load a persisted session ID for agent+CLI, if available."""
-        saved = self.session_manager.load_session(agent_name, cli, self.issue_name)
+        saved = self.session_manager.load_session(
+            agent_name,
+            cli,
+            self.issue_name,
+            phase_name,
+        )
         if not saved:
             return None
 
@@ -210,6 +230,7 @@ class AgentManager:
     def get_last_successful_cli_and_session(
         self,
         agent_name: str,
+        phase_name: Optional[str] = None,
     ) -> tuple[Optional[AgentCLI], Optional[str]]:
         """Return last successful CLI and its session for this agent, if available."""
         try:
@@ -226,7 +247,7 @@ class AgentManager:
         if active_cli not in configured:
             return None, None
 
-        return active_cli, self._session_id_for_cli(agent_name, active_cli)
+        return active_cli, self._session_id_for_cli(agent_name, active_cli, phase_name)
 
     def get_execution_config(
         self,
@@ -240,7 +261,11 @@ class AgentManager:
             return base
 
         primary = chain[0]
-        primary_session_id = self._session_id_for_cli(agent_name, primary.cli)
+        primary_session_id = self._session_id_for_cli(
+            agent_name,
+            primary.cli,
+            phase_name,
+        )
         primary_model = primary.resolve_model(phase_name)
         if primary_model is None:
             primary_model = primary.model
@@ -354,19 +379,43 @@ class AgentManager:
 
         # Track if we've already retried for session conflict
         retried = False
+        read_only_budget_retried = False
+        attempt_prompt = prompt
+        read_only_command_limit = (
+            self.DEVELOP_READ_ONLY_COMMAND_LIMIT if phase_name == "develop" else None
+        )
+        initial_read_only_command_limit = None
 
         while True:
             try:
+                execute_kwargs = {}
+                if read_only_command_limit is not None:
+                    execute_kwargs["max_read_only_commands"] = read_only_command_limit
+                if initial_read_only_command_limit is not None:
+                    execute_kwargs["max_initial_read_only_commands"] = (
+                        initial_read_only_command_limit
+                    )
                 agent_response = executor.execute(
-                    prompt,
+                    attempt_prompt,
                     allowed_tools,
                     allowed_directories,
                     streaming_output_file,
+                    **execute_kwargs,
                 )
                 break  # Success, exit loop
             except AgentExecutionError as e:
                 # Handle session conflict (only retry once)
-                if hasattr(e, 'error_type') and e.error_type == "SESSION_CONFLICT" and not retried:
+                if (
+                    getattr(e, "error_type", None) == "read_only_budget_exceeded"
+                    and not read_only_budget_retried
+                ):
+                    read_only_budget_retried = True
+                    attempt_prompt = self.DEVELOP_READ_ONLY_RETRY_PROMPT
+                    initial_read_only_command_limit = self.DEVELOP_READ_ONLY_RETRY_LIMIT
+                    print(
+                        "⚠️  Resuming the develop session once with an immediate-edit instruction..."
+                    )
+                elif hasattr(e, 'error_type') and e.error_type == "SESSION_CONFLICT" and not retried:
                     retried = True
                     # Clear session ID to force creation of new session on next execution
                     print(f"⚠️  Session conflict detected, will create new session on retry...")
@@ -407,7 +456,11 @@ class AgentManager:
         # Save session ID if it was created during execution
         if actual_session_id:
             self.session_manager.save_session(
-                agent_name, actual_cli, actual_session_id, self.issue_name
+                agent_name,
+                actual_cli,
+                actual_session_id,
+                self.issue_name,
+                phase_name,
             )
 
         # Accumulate token usage
@@ -528,7 +581,11 @@ class AgentManager:
             print(f"Trying {entry.cli.value}...")
 
             # Create a new executor for the fallback CLI, reusing its session if one exists.
-            fallback_session_id = self._session_id_for_cli(config.name, entry.cli)
+            fallback_session_id = self._session_id_for_cli(
+                config.name,
+                entry.cli,
+                phase_name,
+            )
             backup_config = AgentConfig(
                 name=config.name,
                 cli=entry.cli,
@@ -538,11 +595,17 @@ class AgentManager:
             backup_executor = AgentExecutor(backup_config)
 
             try:
+                execute_kwargs = {}
+                if phase_name == "develop":
+                    execute_kwargs["max_read_only_commands"] = (
+                        self.DEVELOP_READ_ONLY_COMMAND_LIMIT
+                    )
                 agent_response = backup_executor.execute(
                     prompt,
                     allowed_tools,
                     allowed_directories,
                     streaming_output_file,
+                    **execute_kwargs,
                 )
                 if agent_response.cli is None:
                     agent_response.cli = entry.cli

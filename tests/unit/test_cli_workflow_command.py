@@ -2635,6 +2635,90 @@ def test_workflow_command_resumes_incomplete_iteration_before_user_phase(
     assert executed_steps == ["spec"]
 
 
+def test_workflow_alignment_decision_precedes_incomplete_iteration_resume(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    executed_steps: list[str] = []
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-align-incomplete"
+    develop_iteration = issue_dir / "develop" / "iteration_002"
+    develop_iteration.mkdir(parents=True, exist_ok=True)
+    (develop_iteration / "iteration.json").write_text(
+        json.dumps(
+            {
+                "iteration": 2,
+                "step_name": "develop",
+                "timestamp": "2026-07-15T11:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (develop_iteration / "alignment_request.json").write_text(
+        json.dumps(
+            {
+                "fingerprint": "fp-incomplete",
+                "from_step": "develop",
+                "recommended_resume_target": "develop",
+                "strategic_document_update_requirements": [],
+                "allowed_decisions": ["approve"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="develop",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
+        status_code="alignment_checkpoint",
+        source="test",
+    )
+
+    class FakeExecutor:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
+            executed_steps.append(step_name)
+            return _result(
+                status_code="ready_for_review",
+                step_name=step_name,
+                step_def=step_def,
+            )
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+        patch("cafe.ui.cli._find_incomplete_workflow_step") as mock_find_incomplete,
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-align-incomplete"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "default",
+                "--execute",
+                "--single-step",
+                "--user-input",
+                '{"decision":"approve"}',
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "Alignment decision recorded approve -> develop" in result.stdout
+    assert "Resuming unfinished iteration" not in result.stdout
+    assert executed_steps == ["develop"]
+    mock_find_incomplete.assert_not_called()
+
+
 def test_find_external_resume_step_returns_pr_when_new_pr_comments_exist(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-238"
     (issue_dir / "pr").mkdir(parents=True, exist_ok=True)

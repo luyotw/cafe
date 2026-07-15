@@ -60,6 +60,7 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
         context={
             "who": "team",
             "blackboard_path": ".cafe/issues/demo/blackboard.json",
+            "blackboard_digest": '{"current_step":"plan","recent_events":[]}',
             "handoff_summary": "Implement cafe skill rm with interactive multi-select and confirmation.",
             "next_step_path": ".cafe/issues/demo/next_step.txt",
         },
@@ -86,7 +87,10 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
     assert "Implement cafe skill rm" in prompt
     assert "verify whether the requested state change has actually happened" in prompt
     assert "do not treat an old artifact or a closed external object as completion" in prompt
-    assert "Blackboard digest:" not in prompt
+    assert "Bounded blackboard digest:" in prompt
+    assert '{"current_step":"plan","recent_events":[]}' in prompt
+    assert "Do not read the full blackboard file" in prompt
+    assert "query only the specific field or event" in prompt
 
 
 def test_build_prompt_uses_baton_wording_when_status_code_not_required(tmp_path: Path) -> None:
@@ -432,6 +436,36 @@ def test_prepare_skill_installs_skill_and_returns_cli_invocation(tmp_path: Path)
 
     assert invocation == "$cafe-plan"
     assert (project_root / ".codex" / "skills" / "cafe-plan" / "SKILL.md").exists()
+
+
+def test_prepare_skill_renders_iteration_context_without_mutating_source(
+    tmp_path: Path,
+) -> None:
+    loader = _setup_loader(tmp_path)
+    source_file = loader.get_skill_dir("cafe-plan") / "SKILL.md"
+    source_before = source_file.read_text(encoding="utf-8")
+    project_root = tmp_path / "project"
+    project_root.mkdir(parents=True, exist_ok=True)
+    phase = GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(
+            loader,
+            project_root=project_root,
+            home_dir=tmp_path / "home",
+        ),
+    )
+
+    phase.prepare_skill(
+        skill_name="cafe-plan",
+        agent_cli=AgentCLI.CODEX,
+        context={"who": "David"},
+    )
+
+    installed_file = project_root / ".codex" / "skills" / "cafe-plan" / "SKILL.md"
+    installed = installed_file.read_text(encoding="utf-8")
+    assert "Hello David" in installed
+    assert "{who}" not in installed
+    assert source_file.read_text(encoding="utf-8") == source_before
 
 
 def test_prepare_skills_installs_shared_and_phase_skills(tmp_path: Path) -> None:

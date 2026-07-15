@@ -875,6 +875,14 @@ def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(
         state,
         "還要再實作 cafe skill rm，支援批次刪除、interactive 多選與 confirm。",
     )
+    hidden_payload = "SHOULD_NOT_APPEAR_IN_BOUNDED_DIGEST" * 10_000
+    store.log_event(
+        state,
+        "plan",
+        "plan_confirmed",
+        "Plan confirmed; continue to development.",
+        {"full_prompt": hidden_payload},
+    )
     agent_manager = FakeAgentManager("confirmed")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
@@ -892,6 +900,17 @@ def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(
         "Latest workflow handoff from blackboard:" in prompt for prompt in agent_manager.prompts
     )
     assert any("還要再實作 cafe skill rm" in prompt for prompt in agent_manager.prompts)
+    prompt = agent_manager.prompts[-1]
+    assert "Bounded blackboard digest:" in prompt
+    assert '"event_type": "plan_confirmed"' in prompt
+    assert hidden_payload not in prompt
+    assert len(prompt) < 20_000
+    installed_skill = (
+        tmp_path / ".codex" / "skills" / "cafe-plan" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    expected_output = "./.cafe/issues/issue-handoff/develop/iteration_001/output.md"
+    assert f"Write plan to: {expected_output}" in installed_skill
+    assert "{output_file}" not in installed_skill
 
 
 def test_generic_workflow_step_prompt_keeps_skill_invocations_only(

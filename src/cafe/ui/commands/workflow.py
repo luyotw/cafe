@@ -764,10 +764,17 @@ def workflow(
                     active_step=active_step,
                 )
             if not dry_run and active_step in {"user", "done"}:
-                incomplete_step = _find_incomplete_workflow_step(
-                    issue_dir=issue_dir,
-                    playbook_data=playbook_data,
+                handoff_contract = getattr(blackboard, "handoff_contract", None)
+                waiting_for_alignment = (
+                    handoff_contract is not None
+                    and handoff_contract.intent == HandoffIntent.ALIGNMENT_CHECKPOINT
                 )
+                incomplete_step = None
+                if not waiting_for_alignment:
+                    incomplete_step = _find_incomplete_workflow_step(
+                        issue_dir=issue_dir,
+                        playbook_data=playbook_data,
+                    )
                 if incomplete_step is not None:
                     pending_start_step = incomplete_step
                     store = BlackboardStore(issue_dir)
@@ -784,11 +791,13 @@ def workflow(
                         f"[yellow]Resuming unfinished iteration[/yellow] step={incomplete_step}"
                     )
                     continue
-                external_step = _find_external_resume_step(
-                    issue_dir=issue_dir,
-                    playbook_data=playbook_data,
-                    git_ops=git,
-                )
+                external_step = None
+                if not waiting_for_alignment:
+                    external_step = _find_external_resume_step(
+                        issue_dir=issue_dir,
+                        playbook_data=playbook_data,
+                        git_ops=git,
+                    )
                 if external_step is not None:
                     pending_start_step = external_step
                     store = BlackboardStore(issue_dir)
