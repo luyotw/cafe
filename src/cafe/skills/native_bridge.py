@@ -77,7 +77,12 @@ class NativeSkillBridge:
         except (SkillDiscoveryError, FileNotFoundError):
             return name
 
-    def install_skill(self, name: str, cli: AgentCLI) -> Path:
+    def install_skill(
+        self,
+        name: str,
+        cli: AgentCLI,
+        context: dict[str, str] | None = None,
+    ) -> Path:
         """Install one resolved skill into the project-local CLI-native directory.
 
         Using the worktree-local skill directory avoids cross-process races when
@@ -98,6 +103,12 @@ class NativeSkillBridge:
         if target_dir.exists():
             shutil.rmtree(target_dir)
         shutil.copytree(source_dir, target_dir)
+        if context:
+            skill_file = target_dir / "SKILL.md"
+            rendered = skill_file.read_text(encoding="utf-8")
+            for key, value in context.items():
+                rendered = rendered.replace(f"{{{key}}}", str(value))
+            skill_file.write_text(rendered, encoding="utf-8")
         return target_dir
 
     def _ensure_cli_dir_git_excluded(self, cli: AgentCLI) -> None:
@@ -135,7 +146,12 @@ class NativeSkillBridge:
         except Exception:
             return
 
-    def install_skills(self, names: list[str], cli: AgentCLI) -> list[Path]:
+    def install_skills(
+        self,
+        names: list[str],
+        cli: AgentCLI,
+        context: dict[str, str] | None = None,
+    ) -> list[Path]:
         """Install a list of skills for one CLI."""
         installed: list[Path] = []
         seen: set[str] = set()
@@ -143,7 +159,7 @@ class NativeSkillBridge:
             if name in seen:
                 continue
             seen.add(name)
-            installed.append(self.install_skill(name, cli))
+            installed.append(self.install_skill(name, cli, context=context))
         return installed
 
     def get_invocation(self, name: str, cli: AgentCLI) -> str:

@@ -228,6 +228,7 @@ class SessionData(BaseModel):
     session_id: str
     created_at: datetime
     last_used_at: datetime
+    phase_name: Optional[str] = None
 
 
 class SessionConfig(BaseModel):

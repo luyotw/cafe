@@ -90,7 +90,9 @@ class TestGeminiSessionIntegration:
             mock_process_1.wait.return_value = 0
             mock_popen.return_value = mock_process_1
 
-            response1, _, _, _, _, _ = agent_manager.execute("PM_Agent", "First prompt")
+            response1, _, _, _, _, _ = agent_manager.execute(
+                "PM_Agent", "First prompt", phase_name="spec"
+            )
             assert response1 == "First response"
 
             # Verify session_id was saved
@@ -109,7 +111,9 @@ class TestGeminiSessionIntegration:
             mock_process_2.wait.return_value = 0
             mock_popen.return_value = mock_process_2
 
-            response2, _, _, _, _, _ = agent_manager.execute("PM_Agent", "What did I say?")
+            response2, _, _, _, _, _ = agent_manager.execute(
+                "PM_Agent", "What did I say?", phase_name="spec"
+            )
             assert "First prompt" in response2 or "You said" in response2
 
             # Verify second call included --resume parameter
@@ -167,12 +171,14 @@ class TestGeminiSessionIntegration:
 
         with patch("subprocess.Popen", side_effect=first_run_side_effect), \
              patch("sys.platform", "win32"):
-            response1, _, _, _, _, _ = agent_manager.execute("PM_Agent", "First prompt")
+            response1, _, _, _, _, _ = agent_manager.execute(
+                "PM_Agent", "First prompt", phase_name="spec"
+            )
 
         assert response1 == "Fallback response"
 
         (issue_dir / "active_clis.json").write_text(
-            '{"PM_Agent": {"cli": "gemini", "model": "gemini-pro", "updated_at": "2026-06-13T00:00:00+08:00"}}',
+            '{"PM_Agent": {"cli": "gemini", "model": "gemini-pro", "configured_primary": "claude", "step_name": "spec", "updated_at": "2026-06-13T00:00:00+08:00"}}',
             encoding="utf-8",
         )
 
@@ -191,7 +197,9 @@ class TestGeminiSessionIntegration:
 
         with patch("subprocess.Popen", side_effect=second_run_side_effect), \
              patch("sys.platform", "win32"):
-            response2, _, _, _, _, _ = agent_manager.execute("PM_Agent", "Second prompt")
+            response2, _, _, _, _, _ = agent_manager.execute(
+                "PM_Agent", "Second prompt", phase_name="spec"
+            )
 
         assert response2 == "Second response"
         assert len(second_call_commands) == 1

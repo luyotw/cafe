@@ -432,8 +432,12 @@ class TestClisChainFallbackBasic:
         manager_issue_1.register_agent(config)
         manager_issue_2.register_agent(config)
 
-        manager_issue_1.session_manager.save_session("David", AgentCLI.GEMINI, "session-issue-1", "issue-1")
-        manager_issue_2.session_manager.save_session("David", AgentCLI.GEMINI, "session-issue-2", "issue-2")
+        manager_issue_1.session_manager.save_session(
+            "David", AgentCLI.GEMINI, "session-issue-1", "issue-1", "develop"
+        )
+        manager_issue_2.session_manager.save_session(
+            "David", AgentCLI.GEMINI, "session-issue-2", "issue-2", "develop"
+        )
 
         issue_1_dir = Path(".cafe/issues/issue-1")
         issue_2_dir = Path(".cafe/issues/issue-2")

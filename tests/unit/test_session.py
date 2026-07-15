@@ -39,6 +39,22 @@ class TestSessionManager:
         expected_path = Path(".cafe/issues") / "myip" / "sessions" / "David_claude.json"
         assert session_file == expected_path
 
+    def test_get_session_file_with_issue_and_phase_name(self, tmp_path: Path) -> None:
+        """Workflow sessions are isolated by phase within the same issue."""
+        manager = SessionManager(str(tmp_path / "sessions"))
+
+        session_file = manager.get_session_file(
+            "David", AgentCLI.CODEX, "issue365", "develop"
+        )
+
+        expected = (
+            Path(".cafe/issues")
+            / "issue365"
+            / "sessions"
+            / "David_codex_develop.json"
+        )
+        assert session_file == expected
+
     def test_load_session_returns_none_when_file_not_exists(self, tmp_path: Path) -> None:
         """測試當 session 檔案不存在時, load_session 回傳 None"""
         manager = SessionManager(str(tmp_path / "sessions"))
@@ -149,6 +165,30 @@ class TestSessionManager:
         assert issue2_session is not None
         assert issue1_session.session_id == "session-issue1"
         assert issue2_session.session_id == "session-issue2"
+
+    def test_issue_sessions_are_isolated_by_phase(self, tmp_path: Path) -> None:
+        manager = SessionManager(str(tmp_path / "sessions"))
+
+        manager.save_session(
+            "David", AgentCLI.CODEX, "plan-session", "issue365", "plan"
+        )
+        manager.save_session(
+            "David", AgentCLI.CODEX, "develop-session", "issue365", "develop"
+        )
+
+        plan_session = manager.load_session(
+            "David", AgentCLI.CODEX, "issue365", "plan"
+        )
+        develop_session = manager.load_session(
+            "David", AgentCLI.CODEX, "issue365", "develop"
+        )
+
+        assert plan_session is not None
+        assert develop_session is not None
+        assert plan_session.session_id == "plan-session"
+        assert plan_session.phase_name == "plan"
+        assert develop_session.session_id == "develop-session"
+        assert develop_session.phase_name == "develop"
 
     def test_load_session_handles_invalid_json(self, tmp_path: Path) -> None:
         """測試載入無效 JSON 檔案時回傳 None"""

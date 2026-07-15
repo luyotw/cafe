@@ -153,7 +153,9 @@ class AgentExecutor:
         prompt: str,
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
-        streaming_output_file: Optional[str] = None
+        streaming_output_file: Optional[str] = None,
+        max_read_only_commands: Optional[int] = None,
+        max_initial_read_only_commands: Optional[int] = None,
     ) -> AgentResponse:
         """Execute the agent with given prompt.
 
@@ -162,6 +164,8 @@ class AgentExecutor:
             allowed_tools: List of allowed tools (using Claude naming convention)
             allowed_directories: List of allowed directories (e.g., [".cafe", "src"])
             streaming_output_file: Optional file path to write streaming output line-by-line
+            max_read_only_commands: Optional command budget between mutations
+            max_initial_read_only_commands: Optional stricter budget before the first mutation
 
         Returns:
             AgentResponse with response text, token usage, and permission denials
@@ -252,6 +256,8 @@ class AgentExecutor:
                     json_content_extractor=json_content_extractor,
                     streaming_output_file=streaming_output_file,
                     env=env,
+                    max_read_only_commands=max_read_only_commands,
+                    max_initial_read_only_commands=max_initial_read_only_commands,
                 )
             else:
                 # Only use response parser for stream-json formats
@@ -277,6 +283,8 @@ class AgentExecutor:
                     json_content_extractor=json_content_extractor,
                     streaming_output_file=streaming_output_file,
                     env=env,
+                    max_read_only_commands=max_read_only_commands,
+                    max_initial_read_only_commands=max_initial_read_only_commands,
                 )
 
             # Extract session ID if needed
@@ -757,6 +765,57 @@ class AgentExecutor:
 
         return permission_denials
 
+    @staticmethod
+    def _classify_stream_activity(data: dict) -> Optional[str]:
+        """Classify Codex stream events for the no-progress guard."""
+        if data.get("type") != "item.completed":
+            return None
+        item = data.get("item")
+        if not isinstance(item, dict):
+            return None
+
+        item_type = str(item.get("type", ""))
+        if item_type in {"file_change", "file_write", "edit", "write"}:
+            return "mutation"
+        if item_type != "command_execution":
+            return None
+
+        lowered = str(item.get("command", "")).lower()
+        mutation_patterns = (
+            r"\bapply_patch\b",
+            r"\bsed\b[^\n]*\s-i(?:\s|$)",
+            r"\bperl\b[^\n]*\s-pi(?:\s|$)",
+            r"\b(?:touch|mkdir|rm|mv|cp|tee)\b",
+            r"\bgit\s+(?:add|commit|mv|rm|apply)\b",
+        )
+        if any(re.search(pattern, lowered) for pattern in mutation_patterns):
+            return "mutation"
+
+        # Codex may report shell-based writes only as command_execution events
+        # instead of emitting a separate file_change event. Detect output
+        # redirection to workspace paths while ignoring diagnostic redirects.
+        first_line = lowered.splitlines()[0] if lowered else ""
+        redirection_targets = re.findall(
+            r"(?:^|[\s;&|])(?:\d*)>>?\s*[\"']?([^\s;|\"']+)",
+            first_line,
+        )
+        for target in redirection_targets:
+            if target in {"&1", "&2"} or target.isdigit():
+                continue
+            if target.startswith(("/dev/", "/tmp/")):
+                continue
+            return "mutation"
+
+        test_patterns = (
+            r"\bpytest\b",
+            r"\bpython(?:3)?\s+-m\s+(?:pytest|unittest)\b",
+            r"\b(?:tox|nox|jest|vitest)\b",
+            r"\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b",
+        )
+        if any(re.search(pattern, lowered) for pattern in test_patterns):
+            return None
+        return "read_only"
+
     def _execute_with_streaming(
         self,
         cmd: List[str],
@@ -766,6 +825,8 @@ class AgentExecutor:
         parse_stream_json: bool = False,
         json_content_extractor: Optional[Callable[[dict], Optional[str]]] = None,
         streaming_output_file: Optional[str] = None,
+        max_read_only_commands: Optional[int] = None,
+        max_initial_read_only_commands: Optional[int] = None,
     ) -> AgentResponse:
         """Execute command with streaming output.
 
@@ -777,6 +838,8 @@ class AgentExecutor:
             json_content_extractor: Optional function to extract content from parsed JSON.
                                    If None and parse_stream_json=True, uses default Claude extractor.
             streaming_output_file: Optional file path to write streaming output line-by-line
+            max_read_only_commands: Optional command budget between mutations
+            max_initial_read_only_commands: Optional stricter budget before the first mutation
 
         Returns:
             AgentResponse with response text, token usage, and permission denials
@@ -857,6 +920,8 @@ class AgentExecutor:
         session_id = None
         model: Optional[str] = None
         permission_denials: List[PermissionDenial] = []
+        read_only_command_count = 0
+        mutation_seen = False
 
         # Add idle timeout to prevent hanging when process stops outputting
         import select
@@ -971,6 +1036,46 @@ class AgentExecutor:
                                 and not session_id
                             ):
                                 session_id = data["thread_id"]
+
+                            if max_read_only_commands is not None:
+                                activity = self._classify_stream_activity(data)
+                                if activity == "mutation":
+                                    mutation_seen = True
+                                    read_only_command_count = 0
+                                elif activity == "read_only":
+                                    read_only_command_count += 1
+                                    active_limit = max_read_only_commands
+                                    if (
+                                        not mutation_seen
+                                        and max_initial_read_only_commands is not None
+                                    ):
+                                        active_limit = max_initial_read_only_commands
+                                    if read_only_command_count >= active_limit:
+                                        if session_id:
+                                            self.config.session_id = session_id
+                                        print(
+                                            "\n⚠️  Read-only progress budget exhausted "
+                                            f"({read_only_command_count}/{active_limit}); "
+                                            "terminating this agent attempt before it can loop."
+                                        )
+                                        process.terminate()
+                                        try:
+                                            process.wait(timeout=2)
+                                        except subprocess.TimeoutExpired:
+                                            process.kill()
+                                            process.wait(timeout=2)
+                                        if streaming_file_handle:
+                                            streaming_file_handle.close()
+                                        err = AgentExecutionError(
+                                            "Read-only progress budget exhausted without a file edit.",
+                                            error_type="read_only_budget_exceeded",
+                                            display_message=(
+                                                "Develop agent exhausted its read-only progress budget "
+                                                "without making the next file edit."
+                                            ),
+                                        )
+                                        err.cli_command_args = cmd[1:]
+                                        raise err
 
                             # Extract token usage (usually in final message)
                             if "usage" in data:

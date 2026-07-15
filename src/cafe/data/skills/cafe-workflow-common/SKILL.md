@@ -1,7 +1,7 @@
 ---
 name: cafe-workflow-common
-description: Use this skill at the start of any CAFE workflow phase to load the latest workflow handoff from blackboard, identify the current baton state, and ground the phase in the shared workflow context before reading phase-specific artifacts.
-version: 1.2.0
+description: Use this skill at the start of any CAFE workflow phase to load the bounded workflow digest, identify the current baton state, and ground the phase in shared context before reading phase-specific artifacts.
+version: 1.3.0
 ---
 
 # Workflow Common
@@ -11,9 +11,11 @@ version: 1.2.0
 - Treat the blackboard as the primary handoff surface between user turns, chat turns, and workflow phases.
 
 ## First Steps
-1. Read the latest shared workflow blackboard from the runtime-provided path.
-2. Identify the latest handoff summary, relevant recent events, and current workflow step.
-3. Only after grounding yourself in the blackboard, continue into phase-specific artifacts and instructions.
+1. Read the runtime-provided **Bounded blackboard digest** and latest handoff summary.
+2. Identify the current workflow step, baton, artifact pointers, and recent event summaries from that digest.
+3. Continue into phase-specific artifacts and instructions after this bounded grounding pass.
+
+The full `blackboard.json` is an unbounded audit history. Do **not** read or print the whole file during normal phase startup. If a concrete conflict requires older history, query only the exact field or matching event summaries needed. Read a full event payload only when the bounded summary is insufficient to resolve a specific disagreement.
 
 ## How workflow transitions work
 
@@ -129,7 +131,8 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 ## What Not To Do
 - Do not re-explain the shared workflow model in every phase artifact.
 - Do not invent a new handoff format outside the baton mechanism.
-- Do not skip the blackboard read just because the phase prompt also includes artifact paths.
+- Do not read the full `blackboard.json` as an initial discovery step; use the runtime-provided bounded digest.
+- Do not repeat the same blackboard query when neither the baton nor relevant files have changed.
 - Do not write `blackboard.json` — only write `next_step.txt`. The runtime updates the blackboard based on your baton.
 - Do not use status codes in your response text as the primary transition mechanism — write the baton instead.
 - Do not invoke high-level workflow-driving skills (for example `use-cafe-workflow`) inside a running phase. Follow only the shared skills and phase skill already listed by the runtime prompt.
@@ -152,9 +155,9 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 
 Follow these in addition to **Shared Rules** whenever you are in **develop** or **review**.
 
-- The runtime prompt includes concrete paths to the blackboard and baton; read them before writing your baton.
+- The runtime prompt includes the bounded digest plus concrete paths to the blackboard and baton. Use the digest and read the small baton file before writing a new baton; keep the full blackboard path for selective diagnostics only.
 - **Reasonable feedback:** if the other role's request is technically sound, implement or accept it and write a baton targeting the next step (e.g. develop → review, review → pr).
-- **Disagreement:** if you reject the other role's position, first read their full `output.md` and the dispute summary in blackboard `events` before deciding; then write technical reasoning in this iteration's `output.md`. Write a baton routing back to the other engineering step.
+- **Disagreement:** if you reject the other role's position, first read their full `output.md` and selectively query the matching dispute event summaries before deciding. Read a matching event's full payload only if its summary lacks the necessary technical detail. Then write technical reasoning in this iteration's `output.md` and a baton routing back to the other engineering step.
 - **First pushback from develop:** write a baton with `to_owner: "agent"`, `to_step: "review"`, `intent: "manual_handoff"`.
 - **Round limit:** the same disagreement may go back and forth at most **three** times between develop and review. If the blackboard already shows three rounds without convergence, do **not** write a baton targeting the other engineering step again.
 - **User arbitration:** if you still disagree after the limit (or the issue is product-level), capture both sides in `questions.xml` and write a baton with `to_owner: "user"`, `intent: "need_clarification"`.
