@@ -166,6 +166,10 @@ class GenericPhase:
                         "Remote PR publish happens later in the host-side publish_output hook.",
                     ]
                 )
+        if context and context.get("resume_input_artifacts"):
+            runtime_context.extend(
+                ["Current step input artifacts:", context["resume_input_artifacts"]]
+            )
         if context and context.get("user_input"):
             runtime_context.extend(["Current user input for this iteration:", context["user_input"]])
 
@@ -357,8 +361,9 @@ class GenericPhase:
         )
 
     # Hooks that run on every step regardless of playbook declaration.
-    # Alignment is a policy decision, not a playbook opt-in; steps opt out
-    # explicitly via `alignment: {enabled: false}` instead of omitting the hook.
+    # The alignment gate is registered on every step, but it is opt-in: it only
+    # fires when the step declares an `alignment:` block (omitting the block, or
+    # `alignment: {enabled: false}`, disables it).
     DEFAULT_STAGE_HOOKS: Dict[str, tuple] = {"prepare_input": ("AlignmentCheckpointGate",)}
 
     def _run_hook_stage(
