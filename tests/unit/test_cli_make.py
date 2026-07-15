@@ -65,6 +65,29 @@ class TestCheckAgentCLIsAvailable:
             assert "claude" in missing_clis
             assert "gemini" in missing_clis
 
+    def test_available_fallback_chain_does_not_fail_preflight(self) -> None:
+        """測試 fallback chain 有可用 CLI 時不阻擋 workflow."""
+        config_manager = MagicMock(spec=ConfigManager)
+        config_manager.get.side_effect = lambda key, default: {
+            "agents.pm": {"name": "Roger", "cli": "copilot"},
+            "agents.developer": {
+                "name": "David",
+                "clis": [{"cli": "claude"}, {"cli": "codex"}],
+            },
+            "agents.reviewer": {"name": "Richard", "cli": "copilot"},
+        }.get(key, default)
+
+        from cafe.ui.cli import _check_agent_clis_available
+
+        with patch("shutil.which") as mock_which:
+            mock_which.side_effect = lambda cli: (
+                f"/usr/local/bin/{cli}" if cli in {"copilot", "codex"} else None
+            )
+
+            missing_clis = _check_agent_clis_available(config_manager)
+
+            assert missing_clis == []
+
     def test_reads_correct_config_keys(self) -> None:
         """測試從 `.cafe/config.yaml` 正確讀取所有 agent  CLI 配置."""
         # Setup

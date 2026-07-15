@@ -43,7 +43,8 @@ from cafe.skills.checklist_composer import (
     generate_spec_checklist,
 )
 from cafe.skills.loader import canonical_skill_name
-from cafe.utils.git_utils import to_cwd_relative_path
+from cafe.utils.git_utils import get_repo_root, to_cwd_relative_path, get_git_toplevel
+from cafe.utils.phase_config import load_phase_step_model
 
 
 def align_pr_baton_after_execution(
@@ -182,7 +183,7 @@ class GenericWorkflowStepExecutor(Phase):
 
         skill_name = self._resolve_skill_name(step_def, self.iteration)
         valid_intents = self._resolve_valid_intents(step_def)
-        agent_name = self._resolve_agent_name(step_def)
+        agent_name = self._resolve_agent_name(step_name, step_def)
         self._step_agent_name = agent_name
         self._apply_step_agent_model(step_name=step_name, step_def=step_def, agent_name=agent_name)
         agent_cli = self.agent_manager.get_agent(agent_name).config.cli
@@ -505,8 +506,42 @@ class GenericWorkflowStepExecutor(Phase):
                 return str(numbered[0][1])
         raise ValueError("Step is missing skill configuration")
 
-    def _resolve_agent_name(self, step_def: Dict[str, Any]) -> str:
+    def _resolve_phase_config_paths(self) -> tuple[Optional[Path], Optional[Path]]:
+        local_path = None
+        repo_path = None
+        try:
+            repo_root = get_repo_root()
+            worktree_root = get_git_toplevel()
+            repo_path = repo_root / ".cafe" / "phases.yaml"
+            if self.issue_name:
+                local_path = worktree_root / ".cafe" / "phases.yaml"
+        except Exception:
+            pass
+        return local_path, repo_path
+
+    def _resolve_step_phase_config(self, step_name: str):
+        local_path, repo_path = self._resolve_phase_config_paths()
+        return load_phase_step_model(
+            step_name=step_name,
+            local_path=local_path,
+            repo_path=repo_path,
+        )
+
+    def _resolve_agent_name(self, step_name: str, step_def: Dict[str, Any]) -> str:
         role = str(step_def.get("role", "developer"))
+        try:
+            phase_resolution = self._resolve_step_phase_config(step_name)
+            if phase_resolution.role and phase_resolution.role != role:
+                raise ValueError(
+                    f"phase config role mismatch for '{step_name}': expected '{role}', got '{phase_resolution.role}'"
+                )
+            if phase_resolution.name:
+                return phase_resolution.name
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid phase config for '{step_name}' in '{step_name}': {exc}"
+            ) from exc
+
         agent_name = self.role_agent_map.get(role)
         if agent_name:
             return agent_name
@@ -524,6 +559,21 @@ class GenericWorkflowStepExecutor(Phase):
         self.agent_manager.get_agent(agent_name).config.model = model
 
     def _resolve_step_model(self, *, step_name: str, step_def: Dict[str, Any]) -> Optional[str]:
+        # Phase-level config (worktree/repo/local) is authoritative for a step.
+        try:
+            phase_resolution = self._resolve_step_phase_config(step_name)
+            expected_role = str(step_def.get("role", "developer"))
+            if phase_resolution.role and phase_resolution.role != expected_role:
+                raise ValueError(
+                    f"phase config role mismatch for '{step_name}': expected '{expected_role}', got '{phase_resolution.role}'"
+                )
+            if phase_resolution.model:
+                return phase_resolution.model
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid phase config for '{step_name}' in '{step_name}': {exc}"
+            )
+
         role = str(step_def.get("role", "developer"))
         config = self.role_configs.get(role, {})
         if not isinstance(config, dict):

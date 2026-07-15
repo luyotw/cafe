@@ -366,12 +366,14 @@ def _setup_agents(
     config_manager: ConfigManager,
     issue_name: Optional[str] = None,
     phase_name: Optional[str] = None,
+    cafe_dir: Optional[Path] = None,
 ) -> AgentManager:
     """Setup agent manager with default agents."""
     return _shared_setup_agents(
         config_manager=config_manager,
         issue_name=issue_name,
         phase_name=phase_name,
+        cafe_dir=cafe_dir,
     )
 
 

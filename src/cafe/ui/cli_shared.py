@@ -31,6 +31,8 @@ from cafe.services.delta_display import DeltaDisplay
 from cafe.skills.loader import SkillLoader
 from cafe.utils.config import ConfigError, ConfigManager
 from cafe.utils.crew import CrewManager, normalize_role_config
+from cafe.utils.phase_config import load_phase_step_model
+from cafe.utils.git_utils import get_repo_root, get_git_toplevel
 
 VALID_CONTENT_TYPES = [
     "context",
@@ -106,26 +108,49 @@ def _get_github_helpers():
 def check_agent_clis_available(config_manager: ConfigManager) -> List[str]:
     """Check if all configured agent CLIs are installed."""
     try:
-        crew_data = CrewManager(cafe_dir=Path(config_manager.config_dir)).load()
+        config_dir = getattr(config_manager, "config_dir", None)
+        crew_data = (
+            CrewManager(cafe_dir=Path(config_dir)).load()
+            if isinstance(config_dir, (str, Path))
+            else {}
+        )
     except (AttributeError, TypeError):
         crew_data = {}
 
-    def _role_cli(role: str, default_cli: str) -> str:
+    def _role_config(role: str, default_cli: str) -> dict:
         if crew_data and role in crew_data and isinstance(crew_data[role], dict):
-            return crew_data[role].get("cli", default_cli)
+            return crew_data[role]
         val = config_manager.get(f"agents.{role}", {})
-        return val.get("cli", default_cli) if isinstance(val, dict) else default_cli
+        return val if isinstance(val, dict) else {"cli": default_cli}
 
-    pm_config = {"cli": _role_cli("pm", "copilot")}
-    dev_config = {"cli": _role_cli("developer", "copilot")}
-    reviewer_config = {"cli": _role_cli("reviewer", "copilot")}
+    role_configs = [
+        _role_config("pm", "copilot"),
+        _role_config("developer", "copilot"),
+        _role_config("reviewer", "copilot"),
+    ]
 
-    required_clis = [pm_config["cli"], dev_config["cli"], reviewer_config["cli"]]
+    def _configured_chain(config: dict) -> list[str]:
+        chain = [entry.cli.value for entry in normalize_role_config(config)]
+        if chain:
+            return chain
+        cli = config.get("cli")
+        return [cli] if isinstance(cli, str) and cli else ["copilot"]
 
     missing_clis = []
-    for cli in required_clis:
-        if shutil.which(cli) is None and cli not in missing_clis:
-            missing_clis.append(cli)
+    for role_config in role_configs:
+        chain = _configured_chain(role_config)
+        available = [cli for cli in chain if shutil.which(cli) is not None]
+        if available:
+            missing_in_chain = [cli for cli in chain if cli not in available]
+            if missing_in_chain:
+                console.print(
+                    "[yellow]Warning:[/yellow] Some configured fallback CLIs are not installed: "
+                    + ", ".join(dict.fromkeys(missing_in_chain))
+                )
+            continue
+        for cli in chain:
+            if cli not in missing_clis:
+                missing_clis.append(cli)
 
     return missing_clis
 
@@ -165,31 +190,137 @@ def setup_agents(
             return crew_data[role]
         return config_manager.get(f"agents.{role}", {"name": default_name, "cli": "copilot"})
 
+    def _resolve_phase_config_paths() -> tuple[Optional[Path], Optional[Path]]:
+        local_path = None
+        repo_path = None
+        try:
+            repo_root = get_repo_root()
+            worktree_root = get_git_toplevel()
+            local_path = worktree_root / ".cafe" / "phases.yaml"
+            repo_path = repo_root / ".cafe" / "phases.yaml"
+        except Exception:
+            fallback_cafe_dir = Path(cafe_dir) if cafe_dir else Path(config_manager.config_dir)
+            local_path = fallback_cafe_dir / "phases.yaml"
+        return local_path, repo_path
+
+    def _resolve_phase_overrides() -> tuple[Optional[str], Optional[list[dict[str, str]]], Optional[str]]:
+        if not issue_name or not phase_name:
+            return None, None, None
+        try:
+            local_path, repo_path = _resolve_phase_config_paths()
+            resolved = load_phase_step_model(
+                step_name=phase_name,
+                local_path=local_path,
+                repo_path=repo_path,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid phase config for step '{phase_name}': {exc}"
+            ) from exc
+        if not resolved.clis:
+            return resolved.name, None, resolved.role
+
+        clis_payload = []
+        for cli_name, model in resolved.clis:
+            entry = {"cli": cli_name}
+            if model is not None:
+                entry["model"] = model
+            clis_payload.append(entry)
+        return resolved.name, clis_payload, resolved.role
+
+    phase_name_override, phase_clis, phase_role = _resolve_phase_overrides()
+
+    def _resolve_phase_target_role() -> Optional[str]:
+        if phase_role is not None:
+            return phase_role
+        if not phase_name:
+            return None
+        try:
+            playbook_name = config_manager.get("settings.playbook", None)
+            if not playbook_name:
+                playbook_name = config_manager.get("playbook", "default")
+            playbook = PlaybookLoader(project_root=get_git_toplevel()).load(str(playbook_name))
+            step_def = playbook.get("steps", {}).get(phase_name, {})
+            if isinstance(step_def, dict):
+                role = step_def.get("role")
+                if isinstance(role, str) and role.strip():
+                    return role.strip()
+        except Exception:
+            pass
+        return {
+            "spec": "pm",
+            "plan": "developer",
+            "develop": "developer",
+            "review": "reviewer",
+            "pr": "developer",
+        }.get(phase_name)
+
+    phase_target_role = _resolve_phase_target_role()
+
+    def _resolve_phase_model() -> Optional[str]:
+        if not phase_name or not issue_name:
+            return None
+
+        try:
+            local_path, repo_path = _resolve_phase_config_paths()
+            resolution = load_phase_step_model(
+                step_name=phase_name,
+                local_path=local_path,
+                repo_path=repo_path,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid phase config for step '{phase_name}': {exc}"
+            ) from exc
+        return resolution.model
+
     pm_config = _role_config("pm", "Roger")
     dev_config = _role_config("developer", "David")
     reviewer_config = _role_config("reviewer", "Richard")
 
-    def _build_agent_config(role_config: dict, default_name: str) -> AgentConfig:
-        chain = normalize_role_config(role_config)
-
-        # Seed models_config from raw models: dict for backward compat
-        # (manager._try_backup_agents reads it; callers may also inspect it)
-        raw_models = role_config.get("models", {}) or {}
+    def _build_models_config(config: dict) -> Dict[str, Dict[str, str]]:
+        raw_models = config.get("models", {}) or {}
         models_config: Dict[str, Dict[str, str]] = {}
         if isinstance(raw_models, dict):
             for cli_name, phase_map in raw_models.items():
                 if isinstance(phase_map, dict):
                     models_config[cli_name] = {k: str(v) for k, v in phase_map.items()}
+        return models_config
 
-        if chain:
-            primary = chain[0]
+    def _build_agent_config(role_config: dict, role: str, default_name: str) -> AgentConfig:
+        active_chain = normalize_role_config(role_config)
+        agent_name = role_config.get("name", default_name)
+        phase_model = _resolve_phase_model() if phase_name else None
+
+        phase_applies_to_role = phase_target_role == role
+
+        if phase_target_role is not None and not phase_applies_to_role:
+            active_chain = normalize_role_config(role_config)
+            agent_name = str(role_config.get("name", default_name))
+        elif phase_applies_to_role and (phase_clis is not None or phase_name_override is not None):
+            merged_config = dict(role_config)
+            if phase_clis is not None:
+                merged_config["clis"] = phase_clis
+            if phase_name_override is not None:
+                merged_config["name"] = phase_name_override
+            agent_name = str(merged_config.get("name", default_name))
+            active_chain = normalize_role_config(merged_config)
+
+        models_config = _build_models_config(role_config)
+
+        if active_chain:
+            primary = active_chain[0]
             cli = primary.cli
-            model = primary.resolve_model(phase_name)
-            backup_clis = [e.cli for e in chain[1:]]
-            # Merge chain entries into models_config (chain takes priority)
-            for entry in chain:
+            if phase_clis is not None and phase_model is not None and phase_applies_to_role:
+                model = phase_model
+            else:
+                model = primary.resolve_model(phase_name)
+            backup_clis = [e.cli for e in active_chain[1:]]
+            for entry in active_chain:
                 if entry.phase_models:
                     models_config[entry.cli.value] = dict(entry.phase_models)
+            if model is None and phase_model is not None and phase_applies_to_role:
+                model = phase_model
         else:
             # No valid CLI in role config; fall back to copilot with no model
             cli = AgentCLI.COPILOT
@@ -197,17 +328,17 @@ def setup_agents(
             backup_clis = []
 
         return AgentConfig(
-            name=role_config.get("name", default_name),
+            name=agent_name,
             cli=cli,
             model=model,
-            clis=chain,
+            clis=active_chain,
             backup_clis=backup_clis,
             models_config=models_config,
         )
 
-    agent_manager.register_agent(_build_agent_config(pm_config, "Roger"))
-    agent_manager.register_agent(_build_agent_config(dev_config, "David"))
-    agent_manager.register_agent(_build_agent_config(reviewer_config, "Richard"))
+    agent_manager.register_agent(_build_agent_config(pm_config, "pm", "Roger"))
+    agent_manager.register_agent(_build_agent_config(dev_config, "developer", "David"))
+    agent_manager.register_agent(_build_agent_config(reviewer_config, "reviewer", "Richard"))
 
     return agent_manager
 

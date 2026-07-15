@@ -111,6 +111,48 @@ class TestSetupAgentsPhaseAware:
         agent_manager = _setup_agents(config_manager)
         assert agent_manager.agents["David"].config.model == "claude-3-sonnet-20240229"
 
+    def test_setup_agents_uses_phase_config_model_if_available(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        """Phase config in `.cafe/phases.yaml` overrides role model during setup."""
+        monkeypatch.chdir(tmp_path)
+        config_file = tmp_path / "config.yaml"
+        config_manager = ConfigManager(str(config_file))
+
+        custom_config = {
+            "agents": {
+                "developer": {
+                    "name": "David",
+                    "cli": "copilot",
+                    "model": "claude-3-sonnet-20240229",
+                },
+                "pm": {"name": "Roger", "cli": "copilot"},
+                "reviewer": {"name": "Richard", "cli": "copilot"},
+            }
+        }
+        config_manager.save_config(custom_config)
+        (tmp_path / ".cafe").mkdir(exist_ok=True)
+        (tmp_path / ".cafe" / "phases.yaml").write_text(
+            """
+spec:
+  clis:
+    - cli: copilot
+      model: claude-3-haiku-20240307
+""",
+            encoding="utf-8",
+        )
+
+        agent_manager = _setup_agents(
+            config_manager,
+            issue_name="issue-365",
+            phase_name="spec",
+            cafe_dir=tmp_path / ".cafe",
+        )
+        assert agent_manager.agents["Roger"].config.model == "claude-3-haiku-20240307"
+        assert agent_manager.agents["David"].config.model == "claude-3-sonnet-20240229"
+
 
 class TestSetupAgentsClisChain:
     """Test that setup_agents populates clis chain via normalize_role_config."""

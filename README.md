@@ -233,8 +233,26 @@ developer:
       develop: sonnet
     - cli: codex             # First fallback
       model: o4-mini
-    - cli: cursor-agent      # Second fallback
+  - cli: cursor-agent      # Second fallback
 ```
+
+### Phase Configuration
+
+Project-level phase overrides live in `.cafe/phases.yaml` with the step name as the top-level key.
+
+```yaml
+build:
+  name: Build step
+  role: developer
+  clis:
+    - cli: claude
+      model: gpt-5
+    - cli: gemini
+```
+
+The highest precedence source is worktree-local `.cafe/phases.yaml` in the active
+worktree, then repository `.cafe/phases.yaml`. Missing or malformed entries are rejected with
+field-level validation errors.
 
 ### Project Settings
 

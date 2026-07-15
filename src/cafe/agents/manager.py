@@ -92,7 +92,10 @@ class AgentManager:
         executor = AgentExecutor(config_with_session)
         self.agents[config.name] = executor
 
-    def _load_active_cli_from_file(self, agent_name: str) -> Optional[tuple[AgentCLI, Optional[str], Optional[str]]]:
+    def _load_active_cli_from_file(
+        self,
+        agent_name: str,
+    ) -> Optional[tuple[AgentCLI, Optional[str], Optional[AgentCLI], Optional[tuple[str, ...]]]]:
         """Load the last successful CLI for this agent from active_clis.json."""
         if self.issue_name is None:
             return None
@@ -130,7 +133,24 @@ class AgentManager:
                 configured_primary = AgentCLI(raw_primary)
             except ValueError:
                 configured_primary = None
-        return cli, model_value, configured_primary
+
+        raw_chain = record.get("chain")
+        chain: Optional[tuple[str, ...]] = None
+        if isinstance(raw_chain, list):
+            chain_entries: list[str] = []
+            for item in raw_chain:
+                if isinstance(item, str) and item:
+                    chain_entries.append(item)
+                elif isinstance(item, dict):
+                    cli_name = item.get("cli")
+                    if not isinstance(cli_name, str) or not cli_name:
+                        continue
+                    model_value = item.get("model")
+                    model_text = str(model_value).strip() if isinstance(model_value, str) else ""
+                    chain_entries.append(f"{cli_name}:{model_text}")
+            chain = tuple(chain_entries) if chain_entries else None
+
+        return cli, (model if isinstance(model, str) else None), configured_primary, chain
 
     def _configured_chain_for_agent(self, config: AgentConfig) -> list[CliEntry]:
         """Return configured CLI chain entries for this agent, with legacy fallback support."""
@@ -177,16 +197,23 @@ class AgentManager:
     def _resolve_execution_chain(
         self,
         config: AgentConfig,
+        phase_name: Optional[str] = None,
     ) -> list[CliEntry]:
         """Build execution chain with fallback preference from last successful CLI."""
         chain = self._normalize_chain(self._configured_chain_for_agent(config))
+
+        configured_chain = tuple(
+            f"{entry.cli.value}:{entry.resolve_model(phase_name) or ''}" for entry in chain
+        )
 
         last_success = self._load_active_cli_from_file(config.name)
         if not last_success:
             return chain
 
-        preferred_cli = last_success[0]
-        recorded_primary = last_success[2]
+        preferred_cli, _, recorded_primary, recorded_chain = last_success
+        if recorded_chain is not None and recorded_chain != configured_chain:
+            return chain
+
         # Sticky reorder is a within-config fallback preference: keep using the
         # CLI that last succeeded so we don't thrash mid-issue. But an explicit
         # crew.yaml edit that changes the configured primary must win. If the
@@ -242,7 +269,7 @@ class AgentManager:
         if not active_info:
             return None, None
 
-        active_cli, _active_model, _ = active_info
+        active_cli = active_info[0]
         configured = [entry.cli for entry in self._normalize_chain(self._configured_chain_for_agent(config))]
         if active_cli not in configured:
             return None, None
@@ -256,7 +283,7 @@ class AgentManager:
     ) -> AgentConfig:
         """Return an AgentConfig adjusted for the effective CLI continuation target."""
         base = self.get_agent(agent_name).config
-        chain = self._resolve_execution_chain(base)
+        chain = self._resolve_execution_chain(base, phase_name=phase_name)
         if not chain:
             return base
 

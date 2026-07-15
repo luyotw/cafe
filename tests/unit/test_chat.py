@@ -129,7 +129,19 @@ class TestLaunchChatSession:
         issue_dir.mkdir(parents=True)
         # configured_primary still claude → codex was a legit fallback, stay sticky.
         (issue_dir / "active_clis.json").write_text(
-            json.dumps({"David": {"cli": "codex", "model": "gpt-5.3-codex", "configured_primary": "claude"}}),
+            json.dumps(
+                {
+                    "David": {
+                        "cli": "codex",
+                        "model": "gpt-5.3-codex",
+                        "configured_primary": "claude",
+                        "chain": [
+                            {"cli": "claude", "model": "sonnet"},
+                            {"cli": "codex", "model": "gpt-5.3-codex"},
+                        ],
+                    }
+                }
+            ),
             encoding="utf-8",
         )
 

@@ -258,6 +258,40 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert reloaded.handoff_contract.source == "workflow.status_transition_adapter"
 
 
+def test_resolve_agent_name_uses_phase_config_name(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".cafe").mkdir(exist_ok=True)
+    (tmp_path / ".cafe" / "phases.yaml").write_text(
+        """
+develop:
+  name: PhaseDavid
+  role: developer
+""",
+        encoding="utf-8",
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-1"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {"develop": {"skill": "develop", "role": "developer"}},
+    }
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-1",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("await_agent"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    with (
+        patch("cafe.phases.generic_workflow_step.get_repo_root", return_value=tmp_path),
+        patch("cafe.phases.generic_workflow_step.get_git_toplevel", return_value=tmp_path),
+    ):
+        assert executor._resolve_agent_name("develop", playbook["steps"]["develop"]) == "PhaseDavid"
+
+
 def test_generic_workflow_step_agent_written_baton_preserved(tmp_path: Path, monkeypatch) -> None:
     """When the agent writes a baton directly, the status-driven write is skipped."""
     monkeypatch.chdir(tmp_path)

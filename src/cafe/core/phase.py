@@ -8,7 +8,7 @@ import inspect
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -347,6 +347,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         agent_name: str,
         agent_cli: Optional[str],
         model: Optional[str],
+        execution_chain: Optional[Iterable[Any]] = None,
         phase_specific_data: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Remember the last successful CLI for handoff resolution."""
@@ -366,12 +367,59 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
 
             extra = phase_specific_data or {}
             configured_primary = self._configured_primary_cli_value(agent_name)
+            execution_chain_snapshot = []
+            if execution_chain is not None:
+                for entry in execution_chain:
+                    if isinstance(entry, str):
+                        entry_text = entry.strip()
+                        if not entry_text:
+                            continue
+                        cli_text, _, model_text = entry_text.partition(":")
+                        if not cli_text:
+                            continue
+                        normalized_model = model_text if model_text else None
+                        execution_chain_snapshot.append(
+                            {
+                                "cli": cli_text,
+                                "model": normalized_model or None,
+                            }
+                        )
+                        continue
+                    if isinstance(entry, AgentCLI):
+                        cli_name = entry.value
+                        execution_chain_snapshot.append({"cli": cli_name, "model": None})
+                        continue
+                    if isinstance(entry, dict):
+                        cli_name = entry.get("cli")
+                        model_value = entry.get("model")
+                        if isinstance(cli_name, str):
+                            execution_chain_snapshot.append(
+                                {
+                                    "cli": cli_name,
+                                    "model": str(model_value).strip() if isinstance(model_value, str) else None,
+                                }
+                            )
+                        continue
+                    cli_name = getattr(entry, "cli", None)
+                    if cli_name is None or not hasattr(cli_name, "value"):
+                        continue
+                    model_value = getattr(entry, "model", None)
+                    resolved_phase = getattr(entry, "resolve_model", None)
+                    if callable(resolved_phase):
+                        model_value = resolved_phase(phase_specific_data.get("step_name")) if hasattr(phase_specific_data, "get") else None
+                    execution_chain_snapshot.append(
+                        {
+                            "cli": str(cli_name.value),
+                            "model": str(model_value).strip() if isinstance(model_value, str) else None,
+                        }
+                    )
             data[agent_name] = {
                 "cli": agent_cli,
                 "model": model,
                 # Crew primary at record time, so a later crew.yaml primary change
                 # invalidates this sticky record instead of being overridden by it.
                 "configured_primary": configured_primary,
+                "chain": execution_chain_snapshot,
                 "step_name": extra.get("step_name"),
                 "updated_at": datetime.now().astimezone().isoformat(),
             }
@@ -779,6 +827,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 agent_name=agent_name,
                 agent_cli=agent_cli,
                 model=model,
+                execution_chain=getattr(execution_config, "clis", None),
                 phase_specific_data=phase_specific_data,
             )
 

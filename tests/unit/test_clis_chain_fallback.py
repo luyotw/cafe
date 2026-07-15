@@ -349,6 +349,82 @@ class TestClisChainFallbackBasic:
         execution = manager.get_execution_config("David", phase_name="build")
         assert execution.cli == AgentCLI.CODEX
 
+    def test_stale_chain_signature_is_ignored(self, tmp_path, monkeypatch) -> None:
+        """A stale chain fingerprint does not promote a non-configured sticky CLI."""
+        monkeypatch.chdir(tmp_path)
+        manager = AgentManager(issue_name="issue-1")
+        manager.register_agent(
+            AgentConfig(
+                name="David",
+                cli=AgentCLI.CODEX,
+                model="gpt-5.5",
+                clis=[
+                    CliEntry(cli=AgentCLI.CODEX, model="gpt-5.5"),
+                    CliEntry(cli=AgentCLI.GEMINI),
+                ],
+            )
+        )
+        active_file = Path(".cafe/issues/issue-1/active_clis.json")
+        active_file.parent.mkdir(parents=True, exist_ok=True)
+        active_file.write_text(
+            json.dumps(
+                {
+                    "David": {
+                        "cli": "gemini",
+                        "model": None,
+                        "configured_primary": "codex",
+                        "chain": ["copilot", "gemini"],
+                        "updated_at": "2026-06-13T00:00:00+08:00",
+                    }
+                },
+            ),
+            encoding="utf-8",
+        )
+
+        execution = manager.get_execution_config("David", phase_name="develop")
+        assert execution.cli == AgentCLI.CODEX
+        assert execution.model == "gpt-5.5"
+
+    def test_chain_signature_includes_models_for_sticky_invalidation(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A model change in the effective chain resets sticky CLI promotion."""
+        monkeypatch.chdir(tmp_path)
+        manager = AgentManager(issue_name="issue-1")
+        manager.register_agent(
+            AgentConfig(
+                name="David",
+                cli=AgentCLI.CODEX,
+                model="old-codex",
+                clis=[
+                    CliEntry(cli=AgentCLI.CODEX, model="old-codex"),
+                    CliEntry(cli=AgentCLI.GEMINI, model=None),
+                ],
+            )
+        )
+        active_file = Path(".cafe/issues/issue-1/active_clis.json")
+        active_file.parent.mkdir(parents=True, exist_ok=True)
+        active_file.write_text(
+            json.dumps(
+                {
+                    "David": {
+                        "cli": "gemini",
+                        "model": None,
+                        "configured_primary": "codex",
+                        "chain": [
+                            {"cli": "codex", "model": "legacy-codex"},
+                            {"cli": "gemini", "model": None},
+                        ],
+                        "updated_at": "2026-06-13T00:00:00+08:00",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        execution = manager.get_execution_config("David", phase_name="develop")
+        assert execution.cli == AgentCLI.CODEX
+
     def test_legacy_record_without_configured_primary_does_not_override_primary(self, tmp_path, monkeypatch) -> None:
         """Pre-fix records (no configured_primary) no longer demote the crew primary."""
         monkeypatch.chdir(tmp_path)
