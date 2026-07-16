@@ -60,6 +60,21 @@ version: 1.0.0
 - `version`：semver，一律加上；行為變更時 bump。
 - frontmatter 在 activate 時會被剝除，不要把指令寫在 frontmatter 裡。
 
+### Driver diagnosis 與 declarative repair 邊界
+
+- `use-cafe-workflow` 可以做 bounded self-diagnosis，但不能把診斷擴張成無界的 CAFE
+  refactor。它先排除 project config、暫時性 provider/network、CLI/model mismatch、stale
+  install 與 agent 未遵守有效契約，再分類問題。
+- `write-cafe-playbook` 只擁有 writable source-of-truth playbook YAML；
+  `write-cafe-phase` 只擁有 writable source-of-truth phase/shared/chat skill 與其 supporting
+  resources。兩者都不得直接修改 generated artifact、installed package 或 global CLI skill copy。
+- driver/meta skill（包含 `use-cafe-workflow`）、CAFE CLI/runtime Python、workflow state
+  machinery 與 host infrastructure 不屬於上述 declarative repair layer。不要建立隱含的
+  `write-cafe-driver` fallback，也不要調整 declarative contract 來掩蓋 runtime defect。
+- 遇到 driver 或 CAFE core defect 時，driver 應保存 sanitized evidence、read-only 搜尋 open
+  與 closed upstream issues、告知 user，並建議 follow 或新開 issue；沒有 user 明確授權不得
+  自動 create、comment 或 close issue。
+
 ## 4. Phase skill 標準結構
 
 段落順序固定如下；不適用的段落整段省略，不要留空段。

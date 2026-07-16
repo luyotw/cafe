@@ -1,7 +1,7 @@
 ---
 name: write-cafe-playbook
-description: Use this skill when creating, restructuring, or reviewing a CAFE playbook YAML under src/cafe/data/playbooks or .cafe/playbooks. Covers step graphs, roles, artifacts, plan/checklist handoffs, forward plan chains, user review loops, conditional skips, hooks, tools, and strict validation. Use it whenever a user asks to write or update a CAFE playbook, even if they only describe a workflow or phase sequence.
-version: 1.0.1
+description: Use this skill when creating, restructuring, reviewing, or repairing a CAFE playbook YAML under src/cafe/data/playbooks or .cafe/playbooks. Covers step graphs, roles, artifacts, plan/checklist handoffs, forward plan chains, user review loops, conditional skips, hooks, tools, and strict validation. Use it whenever a user asks to write or update a CAFE playbook, or use-cafe-workflow identifies a playbook declarative defect.
+version: 1.1.0
 ---
 
 # Write CAFE Playbook
@@ -9,6 +9,7 @@ version: 1.0.1
 ## Purpose
 - Turn a confirmed workflow and its phase skills into a runtime-valid CAFE playbook.
 - Make ownership, artifact flow, user gates, optional phases, and recovery paths explicit before execution.
+- Own and repair the playbook declarative layer without crossing into phase, driver, or CAFE runtime implementation.
 
 ## Not This Skill
 - Writing or restructuring a phase/shared/chat skill — use `write-cafe-phase` first.
@@ -25,6 +26,27 @@ version: 1.0.1
 - Build an artifact matrix before writing YAML. Distinguish ordinary result/report handoffs from true plan → execute pairs.
 - If one phase executes an incoming plan and its user-confirmed result determines the next phase, use a serial `plan` bridge instead of adding a checklist-only phase.
 - Stop and fix the skill contracts with `write-cafe-phase` when a downstream phase would otherwise rediscover scope, guess source files, or implement work without a confirmed plan.
+
+## Declarative Repair Boundary
+
+- Accept a repair classification from `use-cafe-workflow` only when the evidence
+  points to the playbook graph or declarations: steps, transitions, roles,
+  artifacts, intents, allowed tools, hooks, prepare metadata, or confirmation
+  gates.
+- Edit the writable source of truth: `.cafe/playbooks/<id>.yaml` for a project
+  playbook, or `src/cafe/data/playbooks/<id>.yaml` only when the current
+  authorized repository is CAFE. Do not repair installed package contents,
+  generated issue artifacts, or global skill copies.
+- If the missing behavior belongs in a phase/shared/chat skill, return the
+  classification to the driver for `write-cafe-phase`. If documented playbook
+  declarations are valid but the CLI/runtime interprets them incorrectly,
+  return a CAFE core-defect diagnosis instead of changing YAML to mask it.
+- Do not edit driver/meta skills such as `use-cafe-workflow`, CAFE runtime
+  Python, workflow state machinery, or host infrastructure. This skill is not a
+  general CAFE self-modifier.
+- Keep the repair minimal, rerun all validation and simulation commands below,
+  and report whether the confirmation-gate set changed so the driver can
+  reconfirm any stale issue stop contract.
 
 ## Design Rules
 - Put builtin playbooks at `src/cafe/data/playbooks/<id>.yaml`; put project playbooks at `.cafe/playbooks/<id>.yaml`. Keep filename stem and `playbook.id` identical.

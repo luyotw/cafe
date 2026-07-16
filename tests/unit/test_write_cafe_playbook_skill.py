@@ -38,3 +38,16 @@ def test_write_cafe_playbook_skill_preserves_core_contracts() -> None:
     assert "confirmation-gates" in skill
     assert "no unreachable steps" in reference
     assert "write-cafe-phase" in skill
+
+
+def test_write_cafe_playbook_repairs_only_its_declarative_layer() -> None:
+    skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    normalized = " ".join(skill.split())
+
+    assert "## Declarative Repair Boundary" in skill
+    assert ".cafe/playbooks/<id>.yaml" in skill
+    assert "src/cafe/data/playbooks/<id>.yaml" in skill
+    assert "return the classification to the driver for `write-cafe-phase`" in normalized
+    assert "return a CAFE core-defect diagnosis" in normalized
+    assert "Do not edit driver/meta skills such as `use-cafe-workflow`" in normalized
+    assert "This skill is not a general CAFE self-modifier" in normalized

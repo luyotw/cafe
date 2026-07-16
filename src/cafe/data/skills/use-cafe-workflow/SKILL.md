@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
-description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands instead of manually performing each phase.
-version: 1.5.1
+description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
+version: 1.6.0
 ---
 
 # Use CAFE Workflow
@@ -388,6 +388,69 @@ instead of opening the interactive menu unless the user asks for chat.
 - Use `cafe show <step> questions` when the workflow is waiting for clarification.
 - Use `cafe show <step> checklist` to see what the agent still must complete.
 - Read `.cafe/issues/<issue>/blackboard.json` only when command output is insufficient to understand the current handoff.
+
+## Bounded Self-Diagnosis And Declarative Repair
+
+When workflow behavior looks wrong, diagnose only far enough to classify the
+failure and choose a safe disposition. Keep the investigation bounded to the
+failing command, active playbook and step, supplied artifacts, blackboard and
+baton state, relevant sanitized logs, and the installed CAFE version. Do not
+turn a workflow incident into open-ended framework refactoring.
+
+### Classify before editing
+
+1. Reproduce the failure with read-only inspection or a focused
+   `--single-step` run when retrying is safe.
+2. Rule out project configuration errors, malformed project artifacts, stale
+   installed skill copies, CLI/model mismatch, transient provider or network
+   failures, rate limits, and an agent failing to follow an otherwise valid
+   contract.
+3. Choose one disposition:
+   - **Playbook declarative defect:** a step graph, artifact binding, intent,
+     hook/tool declaration, or planned confirmation gate is wrong.
+   - **Phase declarative defect:** a phase/shared/chat skill contract,
+     placeholder, routing rule, or supporting skill resource is wrong.
+   - **Driver or CAFE core defect:** `use-cafe-workflow` itself, CAFE CLI/runtime
+     Python, workflow state machinery, or host execution behaves incorrectly.
+   - **Unconfirmed or transient:** evidence does not yet distinguish a product
+     defect from environment, project, provider, or agent behavior.
+
+### Repair only the owned declarative layer
+
+- For a playbook declarative defect, activate `write-cafe-playbook` and edit
+  only the writable source-of-truth playbook under `.cafe/playbooks/`, or under
+  `src/cafe/data/playbooks/` when the current authorized repository is CAFE.
+- For a phase declarative defect, activate `write-cafe-phase` and edit only the
+  writable source-of-truth phase/shared/chat skill under `.cafe/skills/`, or
+  under `src/cafe/data/skills/` when the current authorized repository is CAFE.
+- Never patch generated artifacts, installed package contents, or global CLI
+  skill copies as the source fix. After changing bundled authoring skills in
+  the CAFE repository, use `cafe skill sync-global` to update installed copies.
+- Run each writer skill's strict validation after repair. If planned
+  confirmation gates change, rerun `cafe playbook confirmation-gates <id>` and
+  reconfirm the issue stop contract before the next `cafe make`.
+- Do not use either writer skill to modify `use-cafe-workflow`, CAFE runtime
+  code, workflow state machinery, or host infrastructure. Do not invent or
+  require a `write-cafe-driver` skill.
+
+### Escalate driver and core defects
+
+Do not self-modify a driver or CAFE core defect. Stop before an unsafe or
+contract-bypassing workaround, inform the user, and recommend following or
+opening an issue at <https://github.com/luyotw/cafe/issues>.
+
+Before recommending a new issue, search open and closed issues read-only and
+link an existing match when one exists. Otherwise prepare a sanitized issue
+draft containing the CAFE version, CLI/model, playbook/step/intent, exact
+command, expected and actual behavior, minimal reproduction, relevant logs,
+and any safe workaround. Never include credentials or private project data,
+and never create, comment on, or close an upstream issue without explicit user
+authorization.
+
+For an unconfirmed or transient failure, retry or ask one focused diagnostic
+question instead of labeling it a CAFE defect. Continue through a workaround
+only when it is reversible, within mandate, preserves the kickoff stop contract,
+and the user has been informed.
 
 ## Operating Rules
 - Prefer `cafe make` over legacy per-step commands (removed in issue #315). For a single step use `cafe workflow --start-step <step> --execute`.

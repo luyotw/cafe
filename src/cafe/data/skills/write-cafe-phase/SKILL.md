@@ -1,7 +1,7 @@
 ---
 name: write-cafe-phase
-description: Use this skill when creating or updating a CAFE workflow phase or its supporting shared/chat skill under src/cafe/data/skills or .cafe/skills. Covers phase scope, SKILL.md structure, placeholders, plan handoffs, and runtime conventions. Not for generic skill files, playbook YAML, or driver skills like use-cafe-workflow.
-version: 2.3.0
+description: Use this skill when creating, updating, or repairing a CAFE workflow phase or its supporting shared/chat skill under src/cafe/data/skills or .cafe/skills. Covers phase scope, SKILL.md structure, placeholders, plan handoffs, and runtime conventions, including declarative defects identified by use-cafe-workflow. Not for generic skill files, playbook YAML, driver skills, or CAFE core/runtime defects.
+version: 2.4.0
 ---
 
 # Write CAFE Phase Skill
@@ -9,6 +9,7 @@ version: 2.3.0
 ## Purpose
 - Create or update one CAFE **workflow** skill: a phase skill bound to a playbook step, a shared skill attached across phases, or a chat skill used inside `cafe chat`.
 - Keep the skill concise, scoped, and consistent with CAFE's workflow model.
+- Own and repair the phase/shared/chat declarative layer without crossing into driver or CAFE runtime implementation.
 
 ## Not This Skill
 - Generic (non-CAFE) skill authoring for Claude Code or other CLIs — use your own skill-writing skill.
@@ -28,6 +29,26 @@ version: 2.3.0
 - If the new behavior belongs across multiple phases, prefer one shared/common skill instead of repeating the rule in each phase skill.
 - If one phase decides and another phase implements, treat them as a plan → execute pair instead of inventing an ad hoc handoff file.
 - If a phase's user-confirmed result determines the exact work of the next phase, let that phase end by producing the next confirmed plan; do not make the next phase rediscover scope.
+
+## Declarative Repair Boundary
+
+- Accept a repair classification from `use-cafe-workflow` only when the evidence
+  points to a phase/shared/chat skill contract, placeholder, routing rule,
+  reference, asset, or skill-owned supporting resource.
+- Edit the writable source of truth: `.cafe/skills/<skill-name>/` for a project
+  skill, or `src/cafe/data/skills/<skill-name>/` only when the current authorized
+  repository is CAFE. Do not repair installed package contents, runtime-created
+  prompts, generated issue artifacts, or global CLI skill copies.
+- If the defect is a playbook graph or binding error, return the classification
+  to the driver for `write-cafe-playbook`. If the declared skill contract is
+  valid but CAFE injects, activates, or executes it incorrectly, return a CAFE
+  core-defect diagnosis rather than changing the skill to mask runtime behavior.
+- Do not edit driver/meta skills such as `use-cafe-workflow`, CAFE runtime
+  Python, workflow state machinery, or host infrastructure. This skill is not a
+  general CAFE self-modifier.
+- Keep the repair minimal and rerun the affected skill and playbook validation.
+  If routing or planned confirmation behavior changes, report the new gate set
+  so the driver can reconfirm any stale issue stop contract.
 
 ## Planned User Confirmation Gates
 - When a phase output needs planned user approval, the phase skill must route the output to `user` and the bound playbook step must declare `on.confirm_output`. Neither side alone is a complete contract.

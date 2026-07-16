@@ -12,9 +12,11 @@ def test_use_cafe_workflow_skill_guides_alignment_checkpoint_delegation() -> Non
     skill = (
         PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "use-cafe-workflow" / "SKILL.md"
     ).read_text(encoding="utf-8")
+    normalized = " ".join(skill.split())
 
     assert "## Alignment Checkpoints" in skill
-    assert "resolve the checkpoint on behalf of the user" in skill
+    assert "apply the stop contract first" in normalized
+    assert "may resolve the checkpoint only when the saved reactive policy allows it" in normalized
     assert "explicit JSON decision payload" in skill
     assert "Plain text must not be used for alignment approval" in skill
     assert "Do not write `strategic_documents_updated`" in skill
@@ -80,3 +82,25 @@ def test_use_cafe_workflow_skill_protects_issue_overrides() -> None:
     assert "Do not create `issues.<issue-name>` just because" in skill
     assert "Do not store workflow progress, baton state, phase outputs" in skill
     assert "leave `issues:` untouched unless the user explicitly requested" in skill
+
+
+def test_use_cafe_workflow_bounds_diagnosis_and_repairs_only_declarative_layers() -> None:
+    skill = (
+        PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "use-cafe-workflow" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(skill.split())
+
+    assert "## Bounded Self-Diagnosis And Declarative Repair" in skill
+    assert "Playbook declarative defect" in skill
+    assert "Phase declarative defect" in skill
+    assert "Driver or CAFE core defect" in skill
+    assert "activate `write-cafe-playbook`" in normalized
+    assert "activate `write-cafe-phase`" in normalized
+    assert "Do not invent or require a `write-cafe-driver` skill" in normalized
+    assert "search open and closed issues read-only" in normalized
+    assert "https://github.com/luyotw/cafe/issues" in skill
+    assert (
+        "never create, comment on, or close an upstream issue without explicit user" in normalized
+    )
+    assert "stale installed skill copies" in normalized
+    assert "unconfirmed or transient failure" in normalized
