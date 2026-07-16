@@ -12,6 +12,7 @@ from rich.console import Console
 from cafe.core.playbook import confirmation_gate_steps
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook, format_dot, format_text_report
+from cafe.skills.global_installer import GlobalSkillSyncSummary, sync_global_skills
 from cafe.skills.importer import SkillImportSummary, import_skills, preview_importable_skills
 from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.skills.remover import SkillRemoveSummary, remove_skills
@@ -246,6 +247,30 @@ def _print_skill_import_summary(summary: SkillImportSummary) -> None:
             console.print(f"[red]failed:[/red] {item.name} ({item.reason})")
 
 
+def _print_global_skill_sync_summary(summary: GlobalSkillSyncSummary) -> None:
+    """Print user-level CLI skill installation and update results."""
+    console.print(
+        f"[green]Synced {len(summary.results)} installation(s)[/green]: "
+        f"{summary.installed_count} installed, {summary.updated_count} updated, "
+        f"{summary.unchanged_count} unchanged"
+    )
+    if summary.failed_count:
+        console.print(f"[red]{summary.failed_count} failed[/red]")
+
+    for item in summary.results:
+        if item.status == "failed":
+            console.print(
+                f"[red]failed:[/red] {item.cli}/{item.skill} -> "
+                f"{item.destination} ({item.reason})"
+            )
+        else:
+            style = "dim" if item.status == "unchanged" else "green"
+            console.print(
+                f"[{style}]{item.status}:[/{style}] "
+                f"{item.cli}/{item.skill} -> {item.destination}"
+            )
+
+
 def _print_skill_remove_summary(summary: SkillRemoveSummary) -> None:
     """Print skill removal result summary."""
     console.print(f"[green]Removed {summary.removed_count} skill(s)[/green]")
@@ -297,6 +322,33 @@ def skill_import(
         raise typer.Exit(1)
 
     _print_skill_import_summary(summary)
+
+
+@skill_app.command(name="sync-global")
+def skill_sync_global(
+    skills: Optional[list[str]] = typer.Argument(
+        None,
+        help="Bundled skill names; defaults to the CAFE workflow helper skills",
+    ),
+    cli_names: Optional[list[str]] = typer.Option(
+        None,
+        "--cli",
+        help="Target CLI; repeat for multiple (claude, codex, copilot, cursor, gemini)",
+    ),
+) -> None:
+    """Install or update bundled CAFE helper skills in user-level CLI directories."""
+    try:
+        summary = sync_global_skills(
+            skill_names=skills or None,
+            cli_names=cli_names or None,
+        )
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+    _print_global_skill_sync_summary(summary)
+    if summary.failed_count:
+        raise typer.Exit(1)
 
 
 @skill_app.command(name="rm")

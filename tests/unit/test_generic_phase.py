@@ -539,8 +539,18 @@ def test_native_skill_bridge_keeps_global_dir_separate(tmp_path: Path) -> None:
         home_dir=tmp_path / "home",
     )
 
-    assert bridge.get_native_skills_dir(AgentCLI.CODEX) == project_root / ".codex" / "skills"
-    assert bridge.get_global_native_skills_dir(AgentCLI.CODEX) == tmp_path / "home" / ".codex" / "skills"
+    assert bridge.get_native_skills_dir(AgentCLI.CODEX) == (
+        project_root / ".codex" / "skills"
+    )
+    assert bridge.get_global_native_skills_dir(AgentCLI.CODEX) == (
+        tmp_path / "home" / ".codex" / "skills"
+    )
+    assert bridge.get_native_skills_dir(AgentCLI.CURSOR) == (
+        project_root / ".cursor-agent" / "skills"
+    )
+    assert bridge.get_global_native_skills_dir(AgentCLI.CURSOR) == (
+        tmp_path / "home" / ".cursor" / "skills"
+    )
     assert bridge.get_installed_skill_name("plan") == "cafe-plan"
 
 

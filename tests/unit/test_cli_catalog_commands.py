@@ -68,6 +68,47 @@ def test_playbook_confirmation_gates_are_derived_from_confirm_output(
     assert "Reactive clarification, permission, and alignment pauses" in research_result.stdout
 
 
+def test_skill_sync_global_installs_bundled_helper_skills(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    home_dir = tmp_path / "home"
+
+    with patch(
+        "cafe.skills.global_installer._default_home_dir",
+        return_value=home_dir,
+    ):
+        result = runner.invoke(app, ["skill", "sync-global"])
+
+    assert result.exit_code == 0
+    assert "Synced 15 installation(s)" in result.stdout
+    assert (home_dir / ".claude/skills/use-cafe-workflow/SKILL.md").is_file()
+    assert (home_dir / ".codex/skills/write-cafe-playbook/SKILL.md").is_file()
+    assert (home_dir / ".copilot/skills/write-cafe-phase/SKILL.md").is_file()
+    assert (home_dir / ".cursor/skills/use-cafe-workflow/SKILL.md").is_file()
+    assert (home_dir / ".gemini/skills/write-cafe-playbook/SKILL.md").is_file()
+
+
+def test_skill_sync_global_can_limit_target_clis(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    home_dir = tmp_path / "home"
+
+    with patch(
+        "cafe.skills.global_installer._default_home_dir",
+        return_value=home_dir,
+    ):
+        result = runner.invoke(
+            app,
+            ["skill", "sync-global", "--cli", "codex", "--cli", "cursor"],
+        )
+
+    assert result.exit_code == 0
+    assert "Synced 6 installation(s)" in result.stdout
+    assert (home_dir / ".codex/skills/use-cafe-workflow/SKILL.md").is_file()
+    assert (home_dir / ".cursor/skills/use-cafe-workflow/SKILL.md").is_file()
+    assert not (home_dir / ".claude").exists()
+
+
 def test_playbook_validate_reports_warning_and_strict_failure(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     skill_dir = tmp_path / ".cafe" / "skills" / "cafe-develop"

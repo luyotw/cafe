@@ -278,6 +278,32 @@ allowed_directories:
 For a one-off run, append directories with `cafe make --add-dir scripts --add-dir docs`.
 Configured and CLI-provided directories must exist before the workflow starts.
 
+### Global Workflow Helper Skills
+
+Install or update CAFE's bundled workflow helper skills for every supported agent CLI:
+
+```bash
+cafe skill sync-global
+```
+
+The default sync copies `use-cafe-workflow`, `write-cafe-playbook`, and
+`write-cafe-phase`, including their references and scripts, to:
+
+- `~/.claude/skills/`
+- `~/.codex/skills/`
+- `~/.copilot/skills/`
+- `~/.cursor/skills/`
+- `~/.gemini/skills/`
+
+The command is safe to rerun: it reports each destination as installed,
+updated, or unchanged. Limit the sync to selected CLIs with repeatable options:
+
+```bash
+cafe skill sync-global --cli codex --cli cursor
+```
+
+Pass bundled skill names as positional arguments to override the default set.
+
 ### Presets
 
 Built-in presets provide ready-made crew configurations:
@@ -330,6 +356,7 @@ CAFE provides additional commands for managing issues and viewing execution deta
 #### Project Setup
 - `cafe init` - Initialize CAFE (crew + settings + default agents/templates). Use `--preset` for non-interactive init
 - `cafe setup` - Configure project settings (playbook, rigor, auto-update) in config.yaml
+- `cafe skill sync-global` - Install or update bundled workflow helper skills for supported agent CLIs
 - `cafe crew list` - Display resolved crew configuration (role → CLI chain → models)
 - `cafe crew set-primary` - Set primary CLI for all roles (interactive or `--preset`/`--cli`/`--phase-model` flags)
 - `cafe crew set-fallback` - Edit per-role fallback chains (interactive or `--role --add/--remove` flags)

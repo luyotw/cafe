@@ -45,6 +45,11 @@ class NativeSkillBridge:
         AgentCLI.COPILOT: ".copilot/skills",
     }
 
+    GLOBAL_CLI_SKILL_DIRS = {
+        **CLI_SKILL_DIRS,
+        AgentCLI.CURSOR: ".cursor/skills",
+    }
+
     def __init__(
         self,
         skill_loader: SkillLoader,
@@ -62,7 +67,7 @@ class NativeSkillBridge:
 
     def get_global_native_skills_dir(self, cli: AgentCLI) -> Path:
         """Return the user-level native skills directory for one CLI."""
-        return self.home_dir / self.CLI_SKILL_DIRS[cli]
+        return self.home_dir / self.GLOBAL_CLI_SKILL_DIRS[cli]
 
     def get_installed_skill_name(self, name: str) -> str:
         """Return the installed skill folder/invocation name.
