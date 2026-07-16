@@ -11,6 +11,7 @@ import typer
 import yaml
 
 from cafe.core.active_issue import clear_marker_if_matches, write_marker
+from cafe.utils.issue_config import resolve_issue_id
 
 VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
 
@@ -778,20 +779,24 @@ def _backup_issue_directory(issue_dir: Path, issue_name: str) -> Path:
     return archive_path
 
 
-def _resolve_squash_message(issue_dir: Path, issue_name: str, override: Optional[str]) -> str:
+def _resolve_squash_message(
+    issue_name: str,
+    override: Optional[str],
+    issue_config_file: Optional[Path] = None,
+    github_ops: Any = None,
+) -> str:
     """Resolve the commit message for a squash merge.
 
-    Resolution order (later wins is reversed: explicit override first):
+    Resolution order:
     1. ``override`` (the ``-m`` / ``--message`` value) if provided.
-    2. The H1 title from the latest PR artifact:
-       ``<issue_dir>/pr/iteration_*/output.md`` first line starting with ``# ``,
-       picking the iteration with the highest number.
+    2. GitHub issue title from ``issue.yaml``'s issue id, when available.
     3. Fallback to ``issue_name``.
 
     Args:
-        issue_dir: Path to the issue data directory (e.g. .cafe/issues/<issue>).
         issue_name: Issue name, used as the final fallback.
         override: Explicit message from --message, or None.
+        issue_config_file: Optional path to ``issue.yaml`` for GitHub issue id lookup.
+        github_ops: Optional GitHubOps instance. A new one is created when needed.
 
     Returns:
         The resolved commit message.
@@ -799,40 +804,30 @@ def _resolve_squash_message(issue_dir: Path, issue_name: str, override: Optional
     if override is not None and override.strip():
         return override.strip()
 
-    pr_dir = issue_dir / "pr"
-    if pr_dir.is_dir():
-        # Pick the iteration with the largest numeric suffix, since later
-        # iterations refine the PR title we want as the squash commit message.
-        iteration_dirs = [d for d in pr_dir.glob("iteration_*") if d.is_dir()]
-
-        def _iteration_number(path: Path) -> int:
-            suffix = path.name[len("iteration_"):]
+    if issue_config_file is not None:
+        issue_id = resolve_issue_id(issue_config_file)
+        if issue_id:
             try:
-                return int(suffix)
-            except ValueError:
-                return -1
-
-        for iteration_dir in sorted(iteration_dirs, key=_iteration_number, reverse=True):
-            output_md = iteration_dir / "output.md"
-            if not output_md.is_file():
-                continue
-            try:
-                content = output_md.read_text(encoding="utf-8")
-            except OSError:
-                continue
-            for line in content.splitlines():
-                # The first Markdown H1 line is the PR title.
-                if line.startswith("# "):
-                    title = line[2:].strip()
-                    if title:
-                        return title
-                    break
-            break
+                ops = github_ops if github_ops is not None else GitHubOps()
+                issue = ops.get_issue(issue_id)
+            except GitHubError:
+                issue = None
+            if isinstance(issue, dict):
+                title = issue.get("title")
+                if isinstance(title, str) and title.strip():
+                    return title.strip()
 
     return issue_name
 
 
-def _perform_squash_merge(git_ops, feature_branch, issue_dir, issue_name, message):
+def _perform_squash_merge(
+    git_ops,
+    feature_branch,
+    issue_name,
+    message,
+    issue_config_file: Optional[Path] = None,
+    github_ops: Any = None,
+):
     """Run a squash merge and commit the result.
 
     Stages the feature branch via ``git merge --squash``, then commits with a
@@ -842,9 +837,10 @@ def _perform_squash_merge(git_ops, feature_branch, issue_dir, issue_name, messag
     Args:
         git_ops: GitOperations instance bound to the base-branch checkout.
         feature_branch: Branch to squash-merge.
-        issue_dir: Issue data directory used to resolve the PR title.
         issue_name: Issue name, used as the fallback commit message.
         message: Optional --message override.
+        issue_config_file: Optional issue config used for GitHub issue title lookup.
+        github_ops: Optional GitHubOps instance reused from the PR check.
     """
     console.print("[dim]Squash-merging feature branch into base branch...[/dim]")
     git_ops.merge_squash(feature_branch)
@@ -859,7 +855,12 @@ def _perform_squash_merge(git_ops, feature_branch, issue_dir, issue_name, messag
         )
         return
 
-    commit_message = _resolve_squash_message(issue_dir, issue_name, message)
+    commit_message = _resolve_squash_message(
+        issue_name,
+        message,
+        issue_config_file=issue_config_file,
+        github_ops=github_ops,
+    )
     git_ops.commit(commit_message)
     console.print(
         f"[green]✓ Squash-merged feature branch: {feature_branch} ({commit_message})[/green]"
@@ -907,6 +908,7 @@ def close(
             raise typer.Exit(1)
 
         # 3. Check for open/draft PRs
+        github_ops = None
         try:
             github_ops = GitHubOps()
             pr = github_ops.get_pr_for_branch(current_branch)
@@ -933,7 +935,7 @@ def close(
             pass
 
         # 4. Load issue config
-        issue_config_file = Path(f".cafe/issues/{current_branch}/issue.yaml")
+        issue_config_file = Path(f".cafe/issues/{current_branch}/issue.yaml").resolve()
         if not issue_config_file.exists():
             console.print(f"[red]Error: Issue config not found: {issue_config_file}[/red]")
             console.print(
@@ -1004,9 +1006,6 @@ def close(
 
             # Step 3: Merge or pull changes based on pr.auto_create config
             pr_auto_create = config_data.get("pr", {}).get("auto_create", True)
-            # In worktree mode the issue data still lives in the worktree at this
-            # point (the sync to repo root happens later, in Step 5), so resolve
-            # the squash PR title from the worktree issue dir.
             worktree_abs = Path(worktree_path).resolve()
             worktree_issue_dir = worktree_abs / ".cafe" / "issues" / feature_branch
             try:
@@ -1014,7 +1013,12 @@ def close(
                     # Explicit --squash always squash-merges locally into the base
                     # branch, even when pr.auto_create is true.
                     _perform_squash_merge(
-                        git_ops, feature_branch, worktree_issue_dir, issue_name, message
+                        git_ops,
+                        feature_branch,
+                        issue_name,
+                        message,
+                        issue_config_file=issue_config_file,
+                        github_ops=github_ops,
                     )
                 elif pr_auto_create is False:
                     # Local review mode: merge feature branch into base branch
@@ -1138,14 +1142,17 @@ def close(
 
             # Step 2: Merge or pull changes based on pr.auto_create config
             pr_auto_create = config_data.get("pr", {}).get("auto_create", True)
-            # In normal mode the issue data lives in the repo root.
-            normal_issue_dir = Path.cwd() / ".cafe" / "issues" / feature_branch
             try:
                 if squash:
                     # Explicit --squash always squash-merges locally into the base
                     # branch, even when pr.auto_create is true.
                     _perform_squash_merge(
-                        git_ops, feature_branch, normal_issue_dir, issue_name, message
+                        git_ops,
+                        feature_branch,
+                        issue_name,
+                        message,
+                        issue_config_file=issue_config_file,
+                        github_ops=github_ops,
                     )
                 elif pr_auto_create is False:
                     # Local review mode: merge feature branch into base branch

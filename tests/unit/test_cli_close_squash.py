@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from cafe.ui.cli import app
 from cafe.ui.commands.lifecycle import _resolve_squash_message
+from cafe.utils.github import GitHubError
 
 runner = CliRunner()
 
@@ -60,7 +61,14 @@ def cleanup_archive(temp_repo_dir):
         shutil.rmtree(archive_base)
 
 
-def _write_issue(temp_repo_dir, *, auto_create=False, name="test-issue", worktree_path=None):
+def _write_issue(
+    temp_repo_dir,
+    *,
+    auto_create=False,
+    name="test-issue",
+    worktree_path=None,
+    issue_id=None,
+):
     issue_dir = temp_repo_dir / ".cafe" / "issues" / name
     issue_dir.mkdir(parents=True)
     config = {
@@ -68,6 +76,8 @@ def _write_issue(temp_repo_dir, *, auto_create=False, name="test-issue", worktre
         "feature_branch": name,
         "pr": {"auto_create": auto_create},
     }
+    if issue_id is not None:
+        config["spec"] = {"issue_id": str(issue_id)}
     if worktree_path is not None:
         config["worktree_path"] = str(worktree_path)
     with open(issue_dir / "issue.yaml", "w", encoding="utf-8") as f:
@@ -84,63 +94,95 @@ class TestResolveSquashMessage:
     """Unit tests for the squash commit message resolver."""
 
     def test_override_wins(self, tmp_path):
-        """有 --message 覆寫時直接使用，忽略 PR title 與 issue name"""
-        issue_dir = tmp_path / "issue"
-        pr_iter = issue_dir / "pr" / "iteration_001"
-        pr_iter.mkdir(parents=True)
-        (pr_iter / "output.md").write_text("# PR Title\n\nbody", encoding="utf-8")
+        """有 --message 覆寫時直接使用，忽略 GitHub issue title 與 issue name"""
+        issue_config_file = tmp_path / "issue.yaml"
+        issue_config_file.write_text("spec:\n  issue_id: '23'\n", encoding="utf-8")
+        github_ops = MagicMock()
 
-        result = _resolve_squash_message(issue_dir, "my-issue", "Custom message")
-        assert result == "Custom message"
-
-    def test_pr_title_used_when_no_override(self, tmp_path):
-        """無覆寫時取 PR artifact 的 H1 標題"""
-        issue_dir = tmp_path / "issue"
-        pr_iter = issue_dir / "pr" / "iteration_001"
-        pr_iter.mkdir(parents=True)
-        (pr_iter / "output.md").write_text(
-            "# Add awesome feature\n\n## Summary\nstuff", encoding="utf-8"
+        result = _resolve_squash_message(
+            "my-issue",
+            "Custom message",
+            issue_config_file=issue_config_file,
+            github_ops=github_ops,
         )
+        assert result == "Custom message"
+        github_ops.get_issue.assert_not_called()
 
-        result = _resolve_squash_message(issue_dir, "my-issue", None)
+    def test_github_issue_title_used_when_no_override(self, tmp_path):
+        """無覆寫時優先取 GitHub issue title"""
+        issue_config_file = tmp_path / "issue.yaml"
+        issue_config_file.write_text("spec:\n  issue_id: '23'\n", encoding="utf-8")
+        github_ops = MagicMock()
+        github_ops.get_issue.return_value = {"title": "Add awesome feature"}
+
+        result = _resolve_squash_message(
+            "my-issue",
+            None,
+            issue_config_file=issue_config_file,
+            github_ops=github_ops,
+        )
         assert result == "Add awesome feature"
+        github_ops.get_issue.assert_called_once_with("23")
 
-    def test_fallback_to_issue_name(self, tmp_path):
-        """找不到 PR artifact 時 fallback 到 issue_name"""
-        issue_dir = tmp_path / "issue"
-        issue_dir.mkdir(parents=True)
+    def test_fallback_to_issue_name_without_issue_id(self, tmp_path):
+        """issue.yaml 沒有 issue id 時 fallback 到 issue_name"""
+        issue_config_file = tmp_path / "issue.yaml"
+        issue_config_file.write_text("pr:\n  auto_create: false\n", encoding="utf-8")
+        github_ops = MagicMock()
 
-        result = _resolve_squash_message(issue_dir, "my-issue", None)
+        result = _resolve_squash_message(
+            "my-issue",
+            None,
+            issue_config_file=issue_config_file,
+            github_ops=github_ops,
+        )
+        assert result == "my-issue"
+        github_ops.get_issue.assert_not_called()
+
+    def test_fallback_to_issue_name_when_github_title_empty(self, tmp_path):
+        """GitHub issue title 是空白時 fallback 到 issue_name"""
+        issue_config_file = tmp_path / "issue.yaml"
+        issue_config_file.write_text("issue_id: '23'\n", encoding="utf-8")
+        github_ops = MagicMock()
+        github_ops.get_issue.return_value = {"title": "   "}
+
+        result = _resolve_squash_message(
+            "my-issue",
+            None,
+            issue_config_file=issue_config_file,
+            github_ops=github_ops,
+        )
         assert result == "my-issue"
 
-    def test_fallback_when_no_h1_in_output(self, tmp_path):
-        """output.md 沒有 H1 時 fallback 到 issue_name"""
-        issue_dir = tmp_path / "issue"
-        pr_iter = issue_dir / "pr" / "iteration_001"
-        pr_iter.mkdir(parents=True)
-        (pr_iter / "output.md").write_text("no heading here\njust text", encoding="utf-8")
+    def test_fallback_to_issue_name_when_github_lookup_fails(self, tmp_path):
+        """GitHub issue 查詢失敗時不阻斷 close，fallback 到 issue_name"""
+        issue_config_file = tmp_path / "issue.yaml"
+        issue_config_file.write_text("issue_id: '23'\n", encoding="utf-8")
+        github_ops = MagicMock()
+        github_ops.get_issue.side_effect = GitHubError("issue not found")
 
-        result = _resolve_squash_message(issue_dir, "my-issue", None)
+        result = _resolve_squash_message(
+            "my-issue",
+            None,
+            issue_config_file=issue_config_file,
+            github_ops=github_ops,
+        )
         assert result == "my-issue"
-
-    def test_picks_highest_iteration(self, tmp_path):
-        """多個 iteration 時取編號最大的那個的標題"""
-        issue_dir = tmp_path / "issue"
-        for n, title in [(1, "First title"), (2, "Second title"), (10, "Tenth title")]:
-            pr_iter = issue_dir / "pr" / f"iteration_{n:03d}"
-            pr_iter.mkdir(parents=True)
-            (pr_iter / "output.md").write_text(f"# {title}\n", encoding="utf-8")
-
-        result = _resolve_squash_message(issue_dir, "my-issue", None)
-        assert result == "Tenth title"
 
     def test_empty_override_falls_through(self, tmp_path):
-        """空白 override 視同未提供，改用 issue_name"""
-        issue_dir = tmp_path / "issue"
-        issue_dir.mkdir(parents=True)
+        """空白 override 視同未提供，繼續取 GitHub issue title"""
+        issue_config_file = tmp_path / "issue.yaml"
+        issue_config_file.write_text("spec:\n  issue_id: '23'\n", encoding="utf-8")
+        github_ops = MagicMock()
+        github_ops.get_issue.return_value = {"title": "Issue title"}
 
-        result = _resolve_squash_message(issue_dir, "my-issue", "   ")
-        assert result == "my-issue"
+        result = _resolve_squash_message(
+            "my-issue",
+            "   ",
+            issue_config_file=issue_config_file,
+            github_ops=github_ops,
+        )
+        assert result == "Issue title"
 
 
 # --------------------------------------------------------------------------- #
@@ -154,11 +196,9 @@ class TestCloseSquash:
     def test_squash_merge_commits_and_force_deletes(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr
     ):
-        """squash 模式: merge_squash + commit(PR title) + force delete"""
-        issue_dir = _write_issue(temp_repo_dir, auto_create=False)
-        pr_iter = issue_dir / "pr" / "iteration_002"
-        pr_iter.mkdir(parents=True)
-        (pr_iter / "output.md").write_text("# Squash this work\n\nbody", encoding="utf-8")
+        """squash 模式: merge_squash + commit(GitHub issue title) + force delete"""
+        _write_issue(temp_repo_dir, auto_create=False, issue_id=23)
+        mock_github_ops_no_pr.get_issue.return_value = {"title": "Squash this work"}
 
         result = runner.invoke(app, ["close", "--squash"])
 
@@ -166,6 +206,7 @@ class TestCloseSquash:
         mock_git_ops.merge_squash.assert_called_once_with("test-issue")
         mock_git_ops.merge.assert_not_called()
         mock_git_ops.commit.assert_called_once_with("Squash this work")
+        mock_github_ops_no_pr.get_issue.assert_called_once_with("23")
         # Squash-merged branch must be force-deleted.
         mock_git_ops.delete_branch.assert_called_once_with("test-issue", force=True)
 
@@ -179,6 +220,19 @@ class TestCloseSquash:
 
         assert result.exit_code == 0
         mock_git_ops.commit.assert_called_once_with("My custom commit")
+        mock_github_ops_no_pr.get_issue.assert_not_called()
+
+    def test_squash_falls_back_to_issue_name_without_github_issue_title(
+        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr
+    ):
+        """squash 模式: 沒有 GitHub issue title 可用時 commit 訊息 fallback 到 issue name"""
+        _write_issue(temp_repo_dir, auto_create=False)
+
+        result = runner.invoke(app, ["close", "--squash"])
+
+        assert result.exit_code == 0
+        mock_git_ops.commit.assert_called_once_with("test-issue")
+        mock_github_ops_no_pr.get_issue.assert_not_called()
 
     def test_squash_empty_diff_skips_commit(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr
@@ -223,21 +277,24 @@ class TestCloseSquash:
         mock_git_ops.merge_squash.assert_not_called()
         mock_git_ops.delete_branch.assert_called_once_with("test-issue")
 
-    def test_squash_worktree_mode_reads_worktree_pr_title(
+    def test_squash_worktree_mode_uses_github_issue_title(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr
     ):
-        """worktree 模式 squash: 從 worktree 內 issue 目錄讀 PR title"""
+        """worktree 模式 squash: 從 issue id 查 GitHub issue title"""
         (temp_repo_dir / ".git").mkdir()
         worktree_path = temp_repo_dir / "worktrees" / "wt-issue"
         worktree_issue_dir = worktree_path / ".cafe" / "issues" / "wt-issue"
         worktree_issue_dir.mkdir(parents=True)
-        # PR title only exists inside the worktree at merge time.
-        pr_iter = worktree_issue_dir / "pr" / "iteration_001"
-        pr_iter.mkdir(parents=True)
-        (pr_iter / "output.md").write_text("# Worktree squash title\n", encoding="utf-8")
 
         # Repo-root issue config (read first to learn worktree_path).
-        _write_issue(temp_repo_dir, auto_create=False, name="wt-issue", worktree_path=worktree_path)
+        _write_issue(
+            temp_repo_dir,
+            auto_create=False,
+            name="wt-issue",
+            worktree_path=worktree_path,
+            issue_id=456,
+        )
+        mock_github_ops_no_pr.get_issue.return_value = {"title": "Worktree squash title"}
 
         mock_git_ops.get_current_branch.return_value = "wt-issue"
 
