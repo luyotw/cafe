@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands instead of manually performing each phase.
-version: 1.5.0
+version: 1.5.1
 ---
 
 # Use CAFE Workflow
@@ -10,16 +10,20 @@ version: 1.5.0
 - Let CAFE run the spec, plan, develop, review, and PR phases through `cafe make`.
 - Prefer non-interactive commands so the workflow can run unattended and resume cleanly.
 - Treat CAFE artifacts, blackboard state, and baton handoffs as the source of workflow progress.
+- Do not start a CAFE workflow until the user has confirmed the kickoff
+  contract: playbook, driver authority, user handoff stops, and worktree
+  behavior.
 - Ground Q&A and PR review in **`.cafe/strategic_context.yaml`**—the single file for strategic documents, decision authority, and user-authorized per-issue overrides. If referenced documents do not exist yet, **help the user create them before** `cafe make`.
 
 ## Kickoff Stop Contract (first blocking gate)
 
 Before `cafe prepare`, any repository mutation, or the first `cafe make`, agree
-with the user which planned confirmation gates must stop for them. Do not reuse
-a repo default or another issue's contract silently. When resuming the same
-issue, validate and honor its confirmed issue contract; reconfirm only if it is
-missing, invalid, or stale. If the user already made the choice in the current
-request, restate it for confirmation instead of asking again.
+with the user which planned confirmation gates must stop for them and how
+reactive user handoffs will be handled. Do not reuse a repo default or another
+issue's contract silently. When resuming the same issue, validate and honor its
+confirmed issue contract; reconfirm only if it is missing, invalid, or stale. If
+the user already made the choice in the current request, restate it for
+confirmation instead of asking again.
 
 ### Derive candidates from the active playbook
 
@@ -42,8 +46,20 @@ request, restate it for confirmation instead of asking again.
 
 `need_clarification`, `need_permission`, and `alignment_checkpoint` are reactive
 safety interruptions. They may still baton to the user when triggered, but they
-are not scheduled kickoff candidates. `manual_handoff` is routing, not a planned
-confirmation gate.
+are not scheduled kickoff candidates. Still name the reactive policy in the
+kickoff contract:
+- `need_clarification` stops for the real user unless the exact answer has
+  already been supplied in the current thread.
+- `need_permission` stops for the real user unless the exact permission has
+  already been supplied in the current thread.
+- `alignment_checkpoint` stops for the real user unless the kickoff contract
+  explicitly authorizes the driver to resolve clear, in-mandate alignment
+  decisions.
+
+`manual_handoff` is routing, not a planned confirmation gate. Any runtime baton
+with `to_owner=user`, or terminal output such as `Workflow is waiting for user
+input`, that is not covered by the confirmed kickoff contract is a hard stop for
+the driver.
 
 The two contract lists must be disjoint and their union must equal the derived
 candidate set. Reject unknown steps, missing candidates, overlaps, role names,
@@ -64,6 +80,10 @@ confirmation_contract:
   driver_confirmable: []
   confirmed_by: user
   confirmed_at: 2026-07-16
+reactive_user_handoffs:
+  need_clarification: user_required
+  need_permission: user_required
+  alignment_checkpoint: driver_resolvable_when_clear
 ```
 
 The values above are an example derived from the `default` playbook, not global
@@ -96,7 +116,7 @@ Do not split this into `mandate.yaml` or other parallel config files.
 ### Kickoff (required before first `cafe make`)
 
 1. Inventory existing docs; co-create any that are `missing`.
-2. Before preparing the issue, confirm with the user: active playbook, the kickoff stop contract above, **preset** (`issue-scoped` | `product-led` | `technical-led` | `full-stack` | `custom`), **axes** for that playbook (examples only—user may rename/add), **level** per axis (`agent` | `propose` | `escalate`), **out_of_mandate** (billing, legal, production access, …), and whether to create a Git worktree.
+2. Before preparing the issue, confirm with the user: active playbook, the kickoff stop contract above, reactive user-handoff policy, **preset** (`issue-scoped` | `product-led` | `technical-led` | `full-stack` | `custom`), **axes** for that playbook (examples only—user may rename/add), **level** per axis (`agent` | `propose` | `escalate`), **out_of_mandate** (billing, legal, production access, …), and whether to create a Git worktree.
 3. Recommend creating a worktree by default at `.cafe/worktrees/<issue-name>`. Include this recommendation in the kickoff confirmation; if the user confirms the recommended kickoff without changing the worktree choice, treat worktree creation as approved. If the user declines, prepare on a feature branch in the current checkout.
 4. Write repo-wide `documents` and `mandate` updates to `.cafe/strategic_context.yaml`. Do **not** create, edit, or delete `issues.<issue-name>` unless the user explicitly asks for an issue-specific strategic override.
 
@@ -174,8 +194,9 @@ Re-read `.cafe/strategic_context.yaml` and linked documents before answering que
 **PR review:** Blocking findings only for in-mandate axes backed by `exists`/`draft` documents. Merge/close/`cafe close` only when those blockers are resolved.
 
 ## Initial Setup
-1. Resolve the active playbook, derive its confirmation gates, and complete the
-   kickoff stop contract as the first blocking interaction with the user.
+1. Resolve the active playbook, derive its confirmation gates and reactive
+   user-handoff policy, and complete the kickoff stop contract as the first
+   blocking interaction with the user.
 2. Check the repo state with `git status --short --branch`.
 3. If CAFE is not initialized, run `cafe init --preset <preset>` instead of interactive `cafe init`.
 4. Complete the rest of kickoff confirmation, including the worktree choice, before running `cafe prepare`.
@@ -202,7 +223,10 @@ Re-read `.cafe/strategic_context.yaml` and linked documents before answering que
    ```bash
    cafe make
    ```
-3. If the workflow is paused for user input and the answer is known, resume non-interactively:
+3. If the workflow is paused for user input, apply the stop contract before
+   resuming. Resume non-interactively only when the exact answer/permission was
+   already supplied by the user in the current thread, or the pause is allowed
+   by the confirmed issue contract and passes the verification rules below:
    ```bash
    cafe make --user-input "<answer>"
    ```
@@ -217,25 +241,42 @@ Re-read `.cafe/strategic_context.yaml` and linked documents before answering que
 
 ## Applying The Stop Contract
 
-The kickoff contract controls who may approve a paused `confirm_output`
-handoff. It is separate from the mandate axes: mandate says what the driver may
-decide, while the stop contract says who must approve output at a planned gate.
-The contract is driver policy and is not parsed or auto-approved by CAFE
-runtime.
+The kickoff contract controls who may answer any user-owned pause. It is
+separate from the mandate axes: mandate says what the driver may decide, while
+the stop contract says who must approve output at a planned gate or answer a
+reactive user handoff. The contract is driver policy and is not parsed or
+auto-approved by CAFE runtime.
 
-When CAFE pauses with `intent=confirm_output`:
+When CAFE pauses for the user, including `to_owner=user`,
+`intent=confirm_output`, `intent=need_clarification`,
+`intent=need_permission`, `intent=alignment_checkpoint`, or terminal output
+such as `Workflow is waiting for user input`:
 
-1. Identify `from_step` from the blackboard handoff contract.
-2. Read `confirmation_contract` from the active issue's `issue.yaml` and verify
-   its `playbook_id` and exact candidate partition against
+1. Identify `from_step`, `to_owner`, and `intent` from the blackboard handoff
+   contract, latest `next_step.txt`, or terminal output.
+2. Read `confirmation_contract` and `reactive_user_handoffs` from the active
+   issue's `issue.yaml`; verify `confirmation_contract.playbook_id` and its
+   exact candidate partition against
    `cafe playbook confirmation-gates <playbook-id>`.
-3. If `from_step` is in `user_required`, stop and ask the user to approve or
-   request changes. Do not auto-confirm from strategic docs alone.
-4. If `from_step` is in `driver_confirmable`, read the latest step output and
-   its required input artifacts. Confirm only when the output is complete,
-   in-mandate, and consistent with the confirmed upstream artifacts.
-5. If the contract is missing, stale, invalid, or omits the step, stop for the
-   user and repair the contract before continuing.
+3. If the contract is missing, stale, invalid, or omits the current pause
+   policy, stop for the user and repair the contract before continuing.
+4. For `confirm_output`: if `from_step` is in `user_required`, stop and ask the
+   user to approve or request changes. If `from_step` is in
+   `driver_confirmable`, read the latest step output and required input
+   artifacts. Confirm only when the output is complete, in-mandate, and
+   consistent with the confirmed upstream artifacts.
+5. For `need_clarification`: stop unless the exact answer has already been
+   supplied by the user in the current thread. Do not infer an answer merely
+   from strategic docs.
+6. For `need_permission`: stop unless the exact permission has already been
+   supplied by the user in the current thread. Never grant production access,
+   destructive actions, or external side effects on the user's behalf.
+7. For `alignment_checkpoint`: apply the saved reactive policy. Continue only
+   when the policy explicitly allows driver resolution and the decision follows
+   directly from confirmed strategic docs, issue acceptance criteria, and
+   existing mandate. Otherwise stop for the user.
+8. For any other `to_owner=user` pause, stop for the real user. Unknown user
+   handoffs are not driver-confirmable by default.
 
 Driver-confirmable does not mean the phase agent approves itself. It means the
 workflow driver may resume non-interactively after verification, for example:
@@ -252,10 +293,11 @@ operations, or any ambiguous tradeoff.
 
 ## Alignment Checkpoints
 
-When CAFE pauses with `intent=alignment_checkpoint`, the workflow driver should
-try to resolve the checkpoint on behalf of the user when the decision is clear
-from confirmed project context. Do not automatically hand off every checkpoint
-to the user.
+When CAFE pauses with `intent=alignment_checkpoint`, apply the stop contract
+first. The workflow driver may resolve the checkpoint only when the saved
+reactive policy allows it and the decision is clear from confirmed project
+context. Do not automatically hand off every checkpoint to the user, but do not
+bypass the kickoff contract either.
 
 ### Inspect
 
