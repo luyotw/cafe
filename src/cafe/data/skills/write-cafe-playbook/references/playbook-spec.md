@@ -102,6 +102,13 @@ Every declared intent must have a resolvable key. `cafe playbook simulate` repor
 
 ## 5. User Gates And Loops
 
+`on.confirm_output` is the first-class declaration of a planned kickoff
+confirmation gate. The workflow driver derives the user's stop-contract
+candidates from steps that declare this key. Use it only when the user can
+meaningfully approve the completed output before the normal path continues.
+Reactive `need_clarification`, `need_permission`, and `alignment_checkpoint`
+pauses are safety interruptions, not scheduled confirmation candidates.
+
 Use a self-loop when the user is reviewing the current phase's output:
 
 ```yaml

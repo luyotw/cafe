@@ -9,13 +9,13 @@ from typing import Any, Dict, List, Literal, Optional, Union
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from cafe.core.status_codes import PLAYBOOK_INTENT_KEYS, PhaseStatusCode
 from cafe.core.prepare_fields import (
     PrepareField,
     assert_prepare_semantics_match,
     resolve_prepare_fields,
     validate_field_semantics,
 )
+from cafe.core.status_codes import PLAYBOOK_INTENT_KEYS, PhaseStatusCode
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 from cafe.templates.manager import TemplateManager
@@ -323,6 +323,19 @@ def resolve_prepare_config(model: PlaybookDefinition) -> PrepareConfig:
     return default_prepare_config()
 
 
+def confirmation_gate_steps(model: PlaybookDefinition) -> tuple[str, ...]:
+    """Return ordered steps that declare a planned user confirmation gate.
+
+    ``on.confirm_output`` is the playbook-level declaration that a completed
+    step may hand its output to the user for approval. Other user-owned intents
+    such as clarification, permission, and alignment checkpoints are reactive
+    safety interruptions rather than kickoff confirmation choices.
+    """
+    return tuple(
+        step_name for step_name, step in model.steps.items() if "confirm_output" in step.on
+    )
+
+
 class PlaybookDefinition(BaseModel):
     """Top-level playbook definition."""
 
@@ -622,7 +635,8 @@ def _collect_tool_warnings(step_name: str, allowed_tools: List[str]) -> List[str
         tool_name = normalized.split("(", 1)[0].strip()
         if tool_name in broad_tools:
             warnings.append(
-                f"Step '{step_name}': redundant allowed_tools entry '{normalized}' because '{tool_name}' already allows it"
+                f"Step '{step_name}': redundant allowed_tools entry '{normalized}' "
+                f"because '{tool_name}' already allows it"
             )
 
     return warnings

@@ -346,3 +346,23 @@ def test_write_cafe_phase_spec_documents_basic_principles_reference() -> None:
     assert "references/execution_steps_*.md" in spec
     assert "agent 檔 guidelines" in spec
     assert "references/basic_principles.md" in skill
+
+
+def test_write_cafe_phase_requires_playbook_declared_confirmation_gates() -> None:
+    spec = Path("src/cafe/data/skills/write-cafe-phase/references/skill-spec.md").read_text(
+        encoding="utf-8"
+    )
+    skill = Path("src/cafe/data/skills/write-cafe-phase/SKILL.md").read_text(encoding="utf-8")
+    normalized_spec = " ".join(spec.split())
+    normalized_skill = " ".join(skill.split())
+
+    assert "## Planned User Confirmation Gates" in skill
+    assert "the bound playbook step must declare `on.confirm_output`" in normalized_skill
+    assert "Neither side alone is a complete contract" in normalized_skill
+    assert "cafe playbook confirmation-gates <id>" in skill
+    assert "The stop contract is step-level" in normalized_skill
+    assert "Planned user confirmation gate" in spec
+    assert "skill-only pause" in spec
+    assert "playbook-only gate" in spec
+    assert "`confirm_output: <current-step>`" in normalized_spec
+    assert "`need_clarification`、`need_permission`、`alignment_checkpoint`" in spec

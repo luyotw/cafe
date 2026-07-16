@@ -1,7 +1,7 @@
 ---
 name: write-cafe-playbook
 description: Use this skill when creating, restructuring, or reviewing a CAFE playbook YAML under src/cafe/data/playbooks or .cafe/playbooks. Covers step graphs, roles, artifacts, plan/checklist handoffs, forward plan chains, user review loops, conditional skips, hooks, tools, and strict validation. Use it whenever a user asks to write or update a CAFE playbook, even if they only describe a workflow or phase sequence.
-version: 1.0.0
+version: 1.0.1
 ---
 
 # Write CAFE Playbook
@@ -45,7 +45,9 @@ version: 1.0.0
 4. Define transitions for success, user review, clarification, permission, no-work skips, and exceptional goto paths.
 5. Write the YAML using the template and field rules in `references/playbook-spec.md`.
 6. Run `cafe skill validate --strict` so the referenced skills and placeholders are valid.
-7. Run `cafe playbook validate <id> --strict`, then inspect `cafe playbook show <id>`.
+7. Run `cafe playbook validate <id> --strict`, inspect `cafe playbook show <id>`,
+   and run `cafe playbook confirmation-gates <id>` to verify the planned user
+   confirmation candidates.
 8. Run `cafe playbook simulate <id> --dot`; fix unreachable steps, missing intent handlers, dead ends, and unintended directed cycles.
 9. Add a focused schema or artifact assertion when using serial `plan` bridges or nontrivial skip branches.
 

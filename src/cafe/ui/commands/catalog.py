@@ -9,12 +9,16 @@ import typer
 import yaml
 from rich.console import Console
 
+from cafe.core.playbook import confirmation_gate_steps
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook, format_dot, format_text_report
 from cafe.skills.importer import SkillImportSummary, import_skills, preview_importable_skills
 from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.skills.remover import SkillRemoveSummary, remove_skills
-from cafe.ui.inquirer_prompts import prompt_checkbox, prompt_confirm  # noqa: F401 — kept for type resolution; actual calls go through cli for test-patch compat
+from cafe.ui.inquirer_prompts import (  # noqa: F401 — kept for type resolution; actual calls go through cli for test-patch compat
+    prompt_checkbox,
+    prompt_confirm,
+)
 
 # Late-import proxies for test-patch compatibility (tests patch cafe.ui.cli.prompt_confirm etc.)
 
@@ -85,7 +89,14 @@ def playbook_show(
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
 
-    console.print(yaml.dump(loaded.as_dict(), allow_unicode=True, default_flow_style=False, sort_keys=False))
+    console.print(
+        yaml.dump(
+            loaded.as_dict(),
+            allow_unicode=True,
+            default_flow_style=False,
+            sort_keys=False,
+        )
+    )
     console.print(f"\n[dim]source={loaded.source} path={loaded.path}[/dim]")
     for warning in loaded.warnings:
         console.print(f"[yellow]warning:[/yellow] {warning}")
@@ -109,10 +120,39 @@ def playbook_validate(
             console.print(f"[yellow]warning:[/yellow] {warning}")
 
 
+@playbook_app.command(name="confirmation-gates")
+def playbook_confirmation_gates(
+    name: str = typer.Argument(..., help="Playbook name"),
+) -> None:
+    """List planned user confirmation candidates declared by a playbook."""
+    try:
+        loaded = _build_playbook_loader().load_model(name)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+    gates = confirmation_gate_steps(loaded.model)
+    console.print(f"Playbook: {loaded.model.playbook.id}")
+    console.print("Confirmation gates (steps declaring on.confirm_output):")
+    if gates:
+        for step_name in gates:
+            console.print(f"  - {step_name}")
+    else:
+        console.print("  (none)")
+    console.print(
+        "[dim]Reactive clarification, permission, and alignment pauses are not "
+        "kickoff confirmation candidates.[/dim]"
+    )
+
+
 @playbook_app.command(name="simulate")
 def playbook_simulate(
     name: str = typer.Argument(..., help="Playbook name"),
-    dot: bool = typer.Option(False, "--dot", help="Append a DOT graph of transitions after the summary"),
+    dot: bool = typer.Option(
+        False,
+        "--dot",
+        help="Append a DOT graph of transitions after the summary",
+    ),
 ) -> None:
     """Statically trace playbook transitions (read-only; no agents, hooks, or shell helpers)."""
     loader = _build_playbook_loader()

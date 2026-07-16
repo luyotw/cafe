@@ -4,7 +4,6 @@ from pathlib import Path
 
 from cafe.skills.loader import SkillLoader
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SKILL_ROOT = PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "write-cafe-playbook"
 
@@ -26,6 +25,7 @@ def test_write_cafe_playbook_skill_preserves_core_contracts() -> None:
     reference = (SKILL_ROOT / "references" / "playbook-spec.md").read_text(
         encoding="utf-8"
     )
+    normalized_reference = " ".join(reference.split())
 
     assert "cafe playbook validate <id> --strict" in skill
     assert "cafe playbook simulate <id> --dot" in skill
@@ -34,5 +34,7 @@ def test_write_cafe_playbook_skill_preserves_core_contracts() -> None:
     assert "Serial Plan Bridge" in reference
     assert "not_required" in reference
     assert "UserInputCollector" in reference
+    assert "planned kickoff confirmation gate" in normalized_reference
+    assert "confirmation-gates" in skill
     assert "no unreachable steps" in reference
     assert "write-cafe-phase" in skill

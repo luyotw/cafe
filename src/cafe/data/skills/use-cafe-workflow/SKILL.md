@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands instead of manually performing each phase.
-version: 1.4.1
+version: 1.5.0
 ---
 
 # Use CAFE Workflow
@@ -12,12 +12,73 @@ version: 1.4.1
 - Treat CAFE artifacts, blackboard state, and baton handoffs as the source of workflow progress.
 - Ground Q&A and PR review in **`.cafe/strategic_context.yaml`**—the single file for strategic documents, decision authority, and user-authorized per-issue overrides. If referenced documents do not exist yet, **help the user create them before** `cafe make`.
 
+## Kickoff Stop Contract (first blocking gate)
+
+Before `cafe prepare`, any repository mutation, or the first `cafe make`, agree
+with the user which planned confirmation gates must stop for them. Do not reuse
+a repo default or another issue's contract silently. When resuming the same
+issue, validate and honor its confirmed issue contract; reconfirm only if it is
+missing, invalid, or stale. If the user already made the choice in the current
+request, restate it for confirmation instead of asking again.
+
+### Derive candidates from the active playbook
+
+1. Resolve the active playbook from the user's request or `.cafe/config.yaml`.
+2. Run:
+   ```bash
+   cafe playbook confirmation-gates <playbook-id>
+   ```
+3. Treat exactly the reported steps as candidates. The command derives them
+   from `steps.<step>."on".confirm_output`, the playbook declaration for a
+   planned output-confirmation baton to the user.
+4. Present the candidates by step name and purpose, recommend that every
+   candidate stop for the user, and ask the user to assign each one to exactly
+   one of:
+   - `user_required`: the driver must stop for the real user;
+   - `driver_confirmable`: the driver may verify the output and continue.
+5. Do not continue until the user explicitly accepts the assignment. If there
+   are no candidates, still confirm that the workflow has no scheduled
+   confirmation stops.
+
+`need_clarification`, `need_permission`, and `alignment_checkpoint` are reactive
+safety interruptions. They may still baton to the user when triggered, but they
+are not scheduled kickoff candidates. `manual_handoff` is routing, not a planned
+confirmation gate.
+
+The two contract lists must be disjoint and their union must equal the derived
+candidate set. Reject unknown steps, missing candidates, overlaps, role names,
+and steps that merely exist in the playbook without declaring
+`on.confirm_output`. If the active playbook or its gate set changes, reconfirm
+the contract before the next `cafe make`.
+
+### Persist after prepare
+
+Keep the agreed assignment in driver context until `cafe prepare` creates the
+issue. Then persist it in the active issue's
+`.cafe/issues/<issue-name>/issue.yaml` before the first `cafe make`:
+
+```yaml
+playbook_id: default
+confirmation_contract:
+  user_required: [spec, plan]
+  driver_confirmable: []
+  confirmed_by: user
+  confirmed_at: 2026-07-16
+```
+
+The values above are an example derived from the `default` playbook, not global
+defaults. In worktree mode, write the contract to the issue file inside the
+worktree, which is the runtime copy. A legacy
+`mandate.confirmation_contract.agent_confirmable` value in
+`.cafe/strategic_context.yaml` is only a kickoff proposal: rename it to
+`driver_confirmable`, compare it with the active playbook, and get fresh user
+confirmation before persisting the issue contract.
+
 ## Strategic Context (one file: `.cafe/strategic_context.yaml`)
 
 All higher-scope material lives in **one** project-root file. It answers:
 1. **Which strategic documents exist** (roadmap, positioning, department norms, …) and their paths.
 2. **How much the agent may decide** on each concern (axes + levels)—default for the repo, with optional per-issue overrides only when explicitly requested by the user.
-3. **Which phase confirmations require the user** and which may be confirmed by the workflow driver.
 
 Do not split this into `mandate.yaml` or other parallel config files.
 
@@ -35,7 +96,7 @@ Do not split this into `mandate.yaml` or other parallel config files.
 ### Kickoff (required before first `cafe make`)
 
 1. Inventory existing docs; co-create any that are `missing`.
-2. Before preparing the issue, confirm with the user: active playbook, **preset** (`issue-scoped` | `product-led` | `technical-led` | `full-stack` | `custom`), **axes** for that playbook (examples only—user may rename/add), **level** per axis (`agent` | `propose` | `escalate`), **confirmation_contract**, **out_of_mandate** (billing, legal, production access, …), and whether to create a Git worktree.
+2. Before preparing the issue, confirm with the user: active playbook, the kickoff stop contract above, **preset** (`issue-scoped` | `product-led` | `technical-led` | `full-stack` | `custom`), **axes** for that playbook (examples only—user may rename/add), **level** per axis (`agent` | `propose` | `escalate`), **out_of_mandate** (billing, legal, production access, …), and whether to create a Git worktree.
 3. Recommend creating a worktree by default at `.cafe/worktrees/<issue-name>`. Include this recommendation in the kickoff confirmation; if the user confirms the recommended kickoff without changing the worktree choice, treat worktree creation as approved. If the user declines, prepare on a feature branch in the current checkout.
 4. Write repo-wide `documents` and `mandate` updates to `.cafe/strategic_context.yaml`. Do **not** create, edit, or delete `issues.<issue-name>` unless the user explicitly asks for an issue-specific strategic override.
 
@@ -85,16 +146,6 @@ mandate:
   out_of_mandate:
     - pricing
     - production deploy approval
-  confirmation_contract:
-    user_required:
-      - spec
-      - plan
-    agent_confirmable: []
-    notes: |
-      Default software workflow only emits confirm_output for spec and plan.
-      Other steps proceed by normal workflow transitions; list a step under
-      agent_confirmable only when a custom playbook intentionally pauses it
-      with confirm_output and the driver may approve it without the user.
   notes: |
     Default for this repo. User confirmed 2026-05-23.
 
@@ -106,16 +157,12 @@ mandate:
 #     axes:
 #       product_scope: { level: escalate }
 #       technical: { level: agent }
-#     confirmation_contract:
-#       user_required: [spec, plan]
-#       agent_confirmable: []
 #     notes: |
 #       This issue only: stay within v0.2 roadmap scope.
 ```
 
 - **`documents`** — strategic layer; agent reads these paths for direction.
 - **`mandate`** — repo-wide default authority.
-- **`confirmation_contract`** — driver policy for `confirm_output` approvals; it is not currently parsed by CAFE runtime. Use active playbook step names, not role names. Resolve by field-wise merge: start with `mandate.confirmation_contract`, then replace only the `user_required`, `agent_confirmable`, or `notes` fields present under `issues.<name>.confirmation_contract`. If a step appears in both lists, `user_required` wins. A missing issue-level list inherits the mandate list; an explicit empty list means none for that issue.
 - **`issues.<name>`** — optional and protected. Only write it when the user explicitly requests an issue-specific strategic override; otherwise omit it even if the current issue seems narrower than the repo default.
 
 Re-read `.cafe/strategic_context.yaml` and linked documents before answering questions, reviewing PRs, or merging.
@@ -124,26 +171,27 @@ Re-read `.cafe/strategic_context.yaml` and linked documents before answering que
 
 **Answering questions:** Resolve `issues.<current-issue>` over `mandate` over documents. Classify by axis → level → strategic docs + issue spec/plan. Contradicting or extending a strategic document = escalate. `missing` document = go back to co-creation, do not invent strategy.
 
-**Phase confirmation:** Resolve `confirmation_contract` before answering any `confirm_output` handoff. A step in `user_required` must stop for the real user; a step in `agent_confirmable` may be confirmed by the workflow driver only after checking the latest output and required input artifacts against the confirmed spec, plan, and mandate. A step missing from both lists defaults to `user_required`.
-
 **PR review:** Blocking findings only for in-mandate axes backed by `exists`/`draft` documents. Merge/close/`cafe close` only when those blockers are resolved.
 
 ## Initial Setup
-1. Check the repo state with `git status --short --branch`.
-2. If CAFE is not initialized, run `cafe init --preset <preset>` instead of interactive `cafe init`.
-3. Complete the kickoff confirmation, including the worktree choice, before running `cafe prepare`.
-4. Prepare the issue non-interactively. Worktree mode is the default:
+1. Resolve the active playbook, derive its confirmation gates, and complete the
+   kickoff stop contract as the first blocking interaction with the user.
+2. Check the repo state with `git status --short --branch`.
+3. If CAFE is not initialized, run `cafe init --preset <preset>` instead of interactive `cafe init`.
+4. Complete the rest of kickoff confirmation, including the worktree choice, before running `cafe prepare`.
+5. Prepare the issue non-interactively. Worktree mode is the default:
    ```bash
    cafe prepare <issue-name> --no-interactive --input-method=manual --rigor=medium --spec-template=auto --plan-template=default --worktree .cafe/worktrees/<issue-name>
    ```
-5. For a GitHub-backed issue, use:
+6. For a GitHub-backed issue, use:
    ```bash
    cafe prepare <issue-name> --no-interactive --input-method=github --issue-id=<number> --rigor=medium --spec-template=auto --plan-template=default --auto-create-pr --worktree .cafe/worktrees/<issue-name>
    ```
-6. If the user declined worktree mode, omit `--worktree`; otherwise do not silently fall back to the main checkout when worktree creation fails.
-7. If the prepare command creates or reports a worktree, `cd` into that worktree before running workflow commands.
-8. If the issue was accidentally prepared without the confirmed worktree before its first `cafe make`, recreate or repair the preparation so `issue.yaml` records `worktree_path`, then continue from the worktree without discarding issue configuration.
-9. **Strategic Context:** inventory, co-create missing documents, confirm mandate and confirmation contract with user, write repo-wide `.cafe/strategic_context.yaml` updates, and leave `issues:` untouched unless the user explicitly requested an issue-specific override. Then run the first `cafe make`.
+7. If the user declined worktree mode, omit `--worktree`; otherwise do not silently fall back to the main checkout when worktree creation fails.
+8. If the prepare command creates or reports a worktree, `cd` into that worktree before running workflow commands.
+9. Persist the agreed stop contract and active `playbook_id` in the issue file of the active checkout. Re-run `cafe playbook confirmation-gates <playbook-id>` and verify the two lists form an exact partition before continuing.
+10. If the issue was accidentally prepared without the confirmed worktree before its first `cafe make`, recreate or repair the preparation so `issue.yaml` records `worktree_path`, then continue from the worktree without discarding issue configuration.
+11. **Strategic Context:** inventory, co-create missing documents, confirm mandate with user, write repo-wide `.cafe/strategic_context.yaml` updates, and leave `issues:` untouched unless the user explicitly requested an issue-specific strategic override. Then run the first `cafe make`.
 
 ## Running Work
 1. Start the workflow with the user's requirement. Point agents at the single config when useful:
@@ -167,42 +215,29 @@ Re-read `.cafe/strategic_context.yaml` and linked documents before answering que
    cafe workflow --execute --start-step <step> --single-step
    ```
 
-## Phase Confirmation Contract
+## Applying The Stop Contract
 
-The confirmation contract guides who may approve a paused `confirm_output`
+The kickoff contract controls who may approve a paused `confirm_output`
 handoff. It is separate from the mandate axes: mandate says what the driver may
-decide, while the confirmation contract says who must press approval when the
-playbook asks for output confirmation.
-
-Default for current software workflows:
-
-- `user_required`: `spec`, `plan`
-- `agent_confirmable`: empty
-
-Current built-in software playbooks emit `confirm_output` for requirements and
-planning gates, not for develop/review/PR completion. Develop/review/PR continue
-through their normal playbook transitions and the existing PR review-and-ship
-rules; do not add them to `agent_confirmable` unless a custom playbook explicitly
-pauses those steps with `confirm_output`.
-
-For custom playbooks, write active playbook step names in the contract. Do not
-use role names such as `developer`, because the playbook already maps steps to
-roles.
+decide, while the stop contract says who must approve output at a planned gate.
+The contract is driver policy and is not parsed or auto-approved by CAFE
+runtime.
 
 When CAFE pauses with `intent=confirm_output`:
 
 1. Identify `from_step` from the blackboard handoff contract.
-2. Resolve `issues.<issue>.confirmation_contract` over
-   `mandate.confirmation_contract` by field-wise merge. Missing issue fields
-   inherit mandate fields; explicit empty lists override inherited lists.
+2. Read `confirmation_contract` from the active issue's `issue.yaml` and verify
+   its `playbook_id` and exact candidate partition against
+   `cafe playbook confirmation-gates <playbook-id>`.
 3. If `from_step` is in `user_required`, stop and ask the user to approve or
    request changes. Do not auto-confirm from strategic docs alone.
-4. If `from_step` is in `agent_confirmable`, read the latest step output and
+4. If `from_step` is in `driver_confirmable`, read the latest step output and
    its required input artifacts. Confirm only when the output is complete,
    in-mandate, and consistent with the confirmed upstream artifacts.
-5. If the step is not listed, treat it as `user_required`.
+5. If the contract is missing, stale, invalid, or omits the step, stop for the
+   user and repair the contract before continuing.
 
-Agent-confirmable does not mean the phase agent approves itself. It means the
+Driver-confirmable does not mean the phase agent approves itself. It means the
 workflow driver may resume non-interactively after verification, for example:
 
 ```bash

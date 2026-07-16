@@ -2,6 +2,9 @@
 
 from pathlib import Path
 
+from cafe.core.playbook import confirmation_gate_steps
+from cafe.playbooks.loader import PlaybookLoader
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -18,20 +21,52 @@ def test_use_cafe_workflow_skill_guides_alignment_checkpoint_delegation() -> Non
     assert "stop and ask the user" in skill
 
 
-def test_use_cafe_workflow_skill_guides_phase_confirmation_contract() -> None:
+def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_stop_contract() -> None:
     skill = (
         PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "use-cafe-workflow" / "SKILL.md"
     ).read_text(encoding="utf-8")
+    normalized = " ".join(skill.split())
 
-    assert "## Phase Confirmation Contract" in skill
-    assert "driver policy for `confirm_output` approvals" in skill
-    assert "it is not currently parsed by CAFE runtime" in skill
-    assert "- `user_required`: `spec`, `plan`" in skill
-    assert "- `agent_confirmable`: empty" in skill
-    assert "not for develop/review/PR completion" in skill
-    assert "field-wise merge" in skill
-    assert "If a step appears in both lists, `user_required` wins" in skill
-    assert "A step missing from both lists defaults to `user_required`" in skill
+    assert "## Kickoff Stop Contract (first blocking gate)" in skill
+    assert "Before `cafe prepare`, any repository mutation, or the first `cafe make`" in skill
+    assert "cafe playbook confirmation-gates <playbook-id>" in skill
+    assert '`steps.<step>."on".confirm_output`' in skill
+    assert "Do not reuse a repo default or another issue's contract silently" in normalized
+    assert "their union must equal the derived" in normalized
+    assert "driver_confirmable" in skill
+    assert (
+        "`need_clarification`, `need_permission`, and `alignment_checkpoint` are reactive"
+        in normalized
+    )
+    assert ".cafe/issues/<issue-name>/issue.yaml" in skill
+    assert "is not parsed or auto-approved by CAFE" in normalized
+
+
+def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() -> None:
+    loader = PlaybookLoader(project_root=PROJECT_ROOT)
+
+    actual = {
+        playbook_id: confirmation_gate_steps(loader.load_model(playbook_id).model)
+        for playbook_id in (
+            "default",
+            "simple",
+            "tdd",
+            "editorial",
+            "hotfix",
+            "incident",
+            "research",
+        )
+    }
+
+    assert actual == {
+        "default": ("spec", "plan"),
+        "simple": ("spec",),
+        "tdd": ("spec", "plan"),
+        "editorial": ("brief",),
+        "hotfix": (),
+        "incident": (),
+        "research": (),
+    }
 
 
 def test_use_cafe_workflow_skill_protects_issue_overrides() -> None:

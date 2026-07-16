@@ -1,7 +1,7 @@
 ---
 name: write-cafe-phase
 description: Use this skill when creating or updating a CAFE workflow phase or its supporting shared/chat skill under src/cafe/data/skills or .cafe/skills. Covers phase scope, SKILL.md structure, placeholders, plan handoffs, and runtime conventions. Not for generic skill files, playbook YAML, or driver skills like use-cafe-workflow.
-version: 2.2.0
+version: 2.3.0
 ---
 
 # Write CAFE Phase Skill
@@ -29,6 +29,13 @@ version: 2.2.0
 - If one phase decides and another phase implements, treat them as a plan → execute pair instead of inventing an ad hoc handoff file.
 - If a phase's user-confirmed result determines the exact work of the next phase, let that phase end by producing the next confirmed plan; do not make the next phase rediscover scope.
 
+## Planned User Confirmation Gates
+- When a phase output needs planned user approval, the phase skill must route the output to `user` and the bound playbook step must declare `on.confirm_output`. Neither side alone is a complete contract.
+- Treat the active playbook's `on.confirm_output` declarations as the source of kickoff stop-contract candidates. Do not hardcode `user_required` or `driver_confirmable` policy inside a phase skill.
+- Keep `need_clarification`, `need_permission`, and `alignment_checkpoint` as reactive safety interruptions; they are not scheduled confirmation candidates.
+- The stop contract is step-level. If one phase contains multiple approval moments that must allow different user/driver ownership, split them into separate playbook steps instead of inventing pseudo-step gate names.
+- After adding or removing a planned gate, run `cafe playbook confirmation-gates <id>`, report the changed candidate set, and require the workflow driver to reconfirm any stale issue contract before the next `cafe make`.
+
 ## Scope Rules
 - Define one coherent unit of work.
 - Prefer moderate detail: enough procedure to prevent drift, not exhaustive documentation.
@@ -51,6 +58,7 @@ version: 2.2.0
 - `description` must say when to use the skill, not just what it contains.
 - If the skill is part of workflow execution, assume runtime will provide file paths such as blackboard, artifacts, output file, checklist, and baton path.
 - For a plan → execute pair, wire the playbook artifact contract before using `{plan_file}`; a skill body alone does not make the handoff work.
+- For planned output approval, wire `on.confirm_output` in the playbook before claiming the phase participates in the kickoff stop contract; routing text in the skill alone is insufficient.
 - Do not duplicate global workflow handoff rules across many phase skills. Put those rules in a shared skill.
 - Do not create extra docs like `README.md`, `CHANGELOG.md`, or design notes inside the skill folder.
 
@@ -58,12 +66,13 @@ version: 2.2.0
 1. Write the frontmatter first.
 2. Write a short title and purpose section.
 3. For a plan → execute pair or forward plan chain, define every `output_artifact: plan` → `input_artifacts: [plan]` binding and each implementation plan shape before writing the skills.
-4. Add only the always-needed workflow steps to `SKILL.md`.
-5. If detailed material is only needed conditionally, move it to `references/` and say exactly when to read it.
-6. If the task needs deterministic or repeated command execution, add a script under `scripts/` instead of embedding a long fragile command.
-7. If the task needs external network access, credentials, GitHub/API mutation, or other operations likely to be blocked by agent sandboxing, put the operation behind a skill script and document whether workflow hooks should call that script host-side.
-8. Add a concrete output template only when output shape matters.
-9. Re-read the draft and cut anything that is obvious model knowledge or duplicated elsewhere.
+4. For every planned user approval, add the phase routing decision and verify the bound playbook step declares `on.confirm_output`.
+5. Add only the always-needed workflow steps to `SKILL.md`.
+6. If detailed material is only needed conditionally, move it to `references/` and say exactly when to read it.
+7. If the task needs deterministic or repeated command execution, add a script under `scripts/` instead of embedding a long fragile command.
+8. If the task needs external network access, credentials, GitHub/API mutation, or other operations likely to be blocked by agent sandboxing, put the operation behind a skill script and document whether workflow hooks should call that script host-side.
+9. Add a concrete output template only when output shape matters.
+10. Re-read the draft and cut anything that is obvious model knowledge or duplicated elsewhere.
 
 ## SKILL.md Checklist
 - `name` matches the folder name.
@@ -76,6 +85,7 @@ version: 2.2.0
 - The skill does not rely on hidden context that runtime will not provide.
 - A plan → execute pair uses `plan` as the artifact key, the execute skill declares `{plan_file}` in `## Context`, and no sidecar duplicates the plan task list.
 - A bridge phase that consumes one plan and produces the next clearly distinguishes incoming `{plan_file}` from next-plan `{output_file}`, completes the incoming checklist before handoff, and supports a `not_required` next plan.
+- Every planned output-confirmation route has a matching playbook `on.confirm_output` declaration; reactive user interruptions are not mislabeled as kickoff candidates.
 
 ## When To Add References
 - Add `references/` only for details that would otherwise bloat `SKILL.md`.
@@ -96,6 +106,7 @@ version: 2.2.0
 - Add `references/` or `scripts/` only if they are justified by the workflow.
 - If updating an existing skill, preserve the valid parts and only change the sections needed for the new behavior.
 - If a plan → execute pair or forward plan chain is being wired into an existing playbook, update and validate the playbook in the same change. If no playbook exists yet, report every required `plan` artifact binding explicitly and do not claim the chain is connected.
+- If planned confirmation behavior changes in an existing playbook, update it in the same change, run `cafe playbook confirmation-gates <id>`, and report that existing issue stop contracts may be stale.
 
 ## Final Review
 - Check that the skill is easy to trigger from its description alone.
@@ -104,3 +115,4 @@ version: 2.2.0
 - Check that shared rules are not copied into multiple phase skills.
 - Check that execution reads and updates the same implementation plan passed by `{plan_file}`, while runtime checklist rules remain in `execution_steps_*` and `basic_principles.md`.
 - Check that user review loops stay in the phase responsible for the output; do not add routine backward transitions merely to regenerate a checklist. Reopen upstream only when a previously confirmed source of truth is invalidated.
+- Check that every planned user approval is visible in `cafe playbook confirmation-gates <id>` and that distinct approval ownership choices are represented by distinct playbook steps.

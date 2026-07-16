@@ -7,7 +7,6 @@ from typer.testing import CliRunner
 
 from cafe.ui.cli import app
 
-
 runner = CliRunner()
 
 
@@ -49,6 +48,24 @@ steps:
     assert result.exit_code == 0
     assert "id: custom" in result.stdout
     assert "source=project" in result.stdout
+
+
+def test_playbook_confirmation_gates_are_derived_from_confirm_output(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    default_result = runner.invoke(app, ["playbook", "confirmation-gates", "default"])
+    research_result = runner.invoke(app, ["playbook", "confirmation-gates", "research"])
+
+    assert default_result.exit_code == 0
+    assert "steps declaring on.confirm_output" in default_result.stdout
+    assert "  - spec" in default_result.stdout
+    assert "  - plan" in default_result.stdout
+    assert "  - develop" not in default_result.stdout
+    assert research_result.exit_code == 0
+    assert "(none)" in research_result.stdout
+    assert "Reactive clarification, permission, and alignment pauses" in research_result.stdout
 
 
 def test_playbook_validate_reports_warning_and_strict_failure(tmp_path: Path, monkeypatch) -> None:
@@ -200,7 +217,9 @@ def test_skill_import_skips_mismatched_frontmatter_name(tmp_path: Path, monkeypa
     assert not (tmp_path / ".cafe" / "skills" / "alpha").exists()
 
 
-def test_skill_import_prompts_before_overwriting_existing_skill(tmp_path: Path, monkeypatch) -> None:
+def test_skill_import_prompts_before_overwriting_existing_skill(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     existing_dir = tmp_path / ".cafe" / "skills" / "alpha"
     existing_dir.mkdir(parents=True, exist_ok=True)
@@ -249,7 +268,9 @@ def test_skill_import_overwrites_existing_skill_when_confirmed(tmp_path: Path, m
     assert (existing_dir / "SKILL.md").read_text(encoding="utf-8").endswith("New body\n")
 
 
-def test_skill_import_cancelled_when_initial_confirmation_declined(tmp_path: Path, monkeypatch) -> None:
+def test_skill_import_cancelled_when_initial_confirmation_declined(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".cafe").mkdir(parents=True, exist_ok=True)
     source_dir = tmp_path / "incoming-skills" / "alpha"
