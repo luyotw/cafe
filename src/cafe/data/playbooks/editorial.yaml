@@ -1,7 +1,7 @@
 playbook:
   id: editorial
   name: "Editorial Workflow（撰稿 → 審閱 → 發佈）"
-  locale: en-US
+  conversation_locale: en-US
 
 roles:
   editor:

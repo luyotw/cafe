@@ -113,9 +113,13 @@ def test_use_cafe_workflow_uses_playbook_conversation_locale() -> None:
     normalized = " ".join(skill.split())
 
     assert "## Conversation Locale (resolve before kickoff)" in skill
-    assert "playbook.locale" in skill
+    assert "playbook.conversation_locale" in skill
     assert "cafe playbook confirmation-gates <playbook-id>" in skill
-    assert "read its `Locale:` line" in normalized
+    assert "`Conversation locale:` line" in normalized
     assert "For `auto`, use the language of the user's current request" in normalized
-    assert "Do not copy the locale into `issue.yaml`" in normalized
+    assert "Conversation locale: en-US (from playbook: default)" in normalized
+    assert "This is not a confirmation gate" in normalized
+    assert "asking why a language was used is not an override" in normalized
+    assert "Never claim that this skill lacks a conversation locale rule" in normalized
+    assert "Do not copy the conversation locale into `issue.yaml`" in normalized
     assert "commands, paths, playbook/step names, intents, artifact keys" in normalized

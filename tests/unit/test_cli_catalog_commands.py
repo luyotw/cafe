@@ -47,7 +47,7 @@ steps:
 
     assert result.exit_code == 0
     assert "id: custom" in result.stdout
-    assert "locale: auto" in result.stdout
+    assert "conversation_locale: auto" in result.stdout
     assert "source=project" in result.stdout
 
 
@@ -60,7 +60,7 @@ def test_playbook_confirmation_gates_are_derived_from_confirm_output(
     research_result = runner.invoke(app, ["playbook", "confirmation-gates", "research"])
 
     assert default_result.exit_code == 0
-    assert "Locale: en-US" in default_result.stdout
+    assert "Conversation locale: en-US" in default_result.stdout
     assert "steps declaring on.confirm_output" in default_result.stdout
     assert "  - spec" in default_result.stdout
     assert "  - plan" in default_result.stdout

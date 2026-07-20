@@ -134,7 +134,7 @@ def playbook_confirmation_gates(
 
     gates = confirmation_gate_steps(loaded.model)
     console.print(f"Playbook: {loaded.model.playbook.id}")
-    console.print(f"Locale: {loaded.model.playbook.locale}")
+    console.print(f"Conversation locale: {loaded.model.playbook.conversation_locale}")
     console.print("Confirmation gates (steps declaring on.confirm_output):")
     if gates:
         for step_name in gates:

@@ -26,7 +26,7 @@ SCRIPT_HOOK_STAGES = {"before_execute", "after_execute"}
 
 RigorLevel = Literal["low", "medium", "high"]
 InputMethodDefault = Literal["manual", "github"]
-LOCALE_PATTERN = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
+CONVERSATION_LOCALE_PATTERN = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
 
 
 class PlaybookMeta(BaseModel):
@@ -36,17 +36,17 @@ class PlaybookMeta(BaseModel):
 
     id: str
     name: Optional[str] = None
-    locale: str = "auto"
+    conversation_locale: str = "auto"
 
-    @field_validator("locale")
+    @field_validator("conversation_locale")
     @classmethod
-    def _validate_locale(cls, value: str) -> str:
+    def _validate_conversation_locale(cls, value: str) -> str:
         token = value.strip()
         if token.lower() == "auto":
             return "auto"
-        if not LOCALE_PATTERN.fullmatch(token):
+        if not CONVERSATION_LOCALE_PATTERN.fullmatch(token):
             raise ValueError(
-                "playbook.locale must be 'auto' or a BCP 47 language tag "
+                "playbook.conversation_locale must be 'auto' or a BCP 47 language tag "
                 "such as 'zh-TW' or 'en'"
             )
         return token

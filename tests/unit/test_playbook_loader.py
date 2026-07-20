@@ -83,14 +83,16 @@ steps:
     assert result.model.steps["spec"].role == "reviewer"
 
 
-def test_playbook_locale_supports_bcp47_and_defaults_to_auto(tmp_path: Path) -> None:
+def test_playbook_conversation_locale_supports_bcp47_and_defaults_to_auto(
+    tmp_path: Path,
+) -> None:
     builtin_root = tmp_path / "builtin"
     _write_skill(builtin_root / "skills", "spec_first")
     _write_playbook(
         builtin_root / "playbooks",
         "localized",
         """
-playbook: {id: localized, locale: zh-TW}
+playbook: {id: localized, conversation_locale: zh-TW}
 steps:
   spec:
     role: pm
@@ -118,18 +120,18 @@ steps:
         builtin_root=builtin_root,
     )
 
-    assert loader.load_model("localized").model.playbook.locale == "zh-TW"
-    assert loader.load_model("legacy").model.playbook.locale == "auto"
+    assert loader.load_model("localized").model.playbook.conversation_locale == "zh-TW"
+    assert loader.load_model("legacy").model.playbook.conversation_locale == "auto"
 
 
-def test_playbook_locale_rejects_non_bcp47_value(tmp_path: Path) -> None:
+def test_playbook_conversation_locale_rejects_non_bcp47_value(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
     _write_skill(builtin_root / "skills", "spec_first")
     _write_playbook(
         builtin_root / "playbooks",
-        "invalid-locale",
+        "invalid-conversation-locale",
         """
-playbook: {id: invalid-locale, locale: zh_TW}
+playbook: {id: invalid-conversation-locale, conversation_locale: zh_TW}
 steps:
   spec:
     role: pm
@@ -144,8 +146,34 @@ steps:
         builtin_root=builtin_root,
     )
 
-    with pytest.raises(ValueError, match="playbook.locale"):
-        loader.load_model("invalid-locale")
+    with pytest.raises(ValueError, match="playbook.conversation_locale"):
+        loader.load_model("invalid-conversation-locale")
+
+
+def test_playbook_rejects_ambiguous_locale_field(tmp_path: Path) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "spec_first")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "legacy-locale",
+        """
+playbook: {id: legacy-locale, locale: en-US}
+steps:
+  spec:
+    role: pm
+    skill: spec_first
+    on:
+      await_agent: _done
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="locale"):
+        loader.load_model("legacy-locale")
 
 
 def test_load_supports_iteration_aware_skill_and_defaults(tmp_path: Path) -> None:
@@ -632,7 +660,7 @@ def test_builtin_playbooks_declare_en_us_conversation_locale() -> None:
         "incident",
         "research",
     ):
-        assert loader.load_model(playbook_id).model.playbook.locale == "en-US"
+        assert loader.load_model(playbook_id).model.playbook.conversation_locale == "en-US"
 
 
 def test_builtin_hotfix_and_simple_playbooks_load() -> None:

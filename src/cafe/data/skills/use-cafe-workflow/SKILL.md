@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.7.0
+version: 1.8.0
 ---
 
 # Use CAFE Workflow
@@ -19,26 +19,36 @@ version: 1.7.0
 
 ## Conversation Locale (resolve before kickoff)
 
-The active playbook's `playbook.locale` is the source of truth for the
+The active playbook's `playbook.conversation_locale` is the source of truth for the
 workflow driver's conversation with the user. Resolve it before presenting the
 kickoff contract or asking the first workflow question:
 
 1. Resolve the active playbook from the user's request or `.cafe/config.yaml`.
-2. Run `cafe playbook confirmation-gates <playbook-id>` and read its `Locale:`
-   line together with the confirmation-gate candidates.
-3. For a BCP 47 language tag such as `zh-TW` or `en`, write all substantive
-   driver-to-user messages in that locale. For `auto`, use the language of the
+2. Run `cafe playbook confirmation-gates <playbook-id>` and read its
+   `Conversation locale:` line together with the confirmation-gate candidates.
+3. Resolve the effective conversation locale. A BCP 47 language tag such as
+   `zh-TW` or `en-US` is already effective. For `auto`, use the language of the
    user's current request.
-4. Apply the resolved locale to kickoff, clarification and permission
+4. Before the substantive kickoff contract, display the effective value and
+   its source as an informational line, for example:
+   `Conversation locale: en-US (from playbook: default)`. This is not a
+   confirmation gate; do not ask the user to approve a configured locale.
+5. Apply the effective locale to kickoff, clarification and permission
    questions, alignment checkpoints, progress/error reports, and completion
    messages. Keep commands, paths, playbook/step names, intents, artifact keys,
    payload fields, and quoted source text unchanged.
-5. A language explicitly requested by the user in the current thread may
-   override the playbook locale for that thread. Do not mutate the playbook
-   merely to record a conversational override.
+6. A direct language instruction from the user, such as "use Traditional
+   Chinese for this thread", may override the configured locale for that
+   thread. Merely writing in another language or asking why a language was used
+   is not an override. Do not mutate the playbook merely to record a
+   conversational override.
+7. If the user asks about the language choice, report the configured value,
+   effective value, and source. Never claim that this skill lacks a conversation
+   locale rule.
 
-Do not copy the locale into `issue.yaml`; re-resolve it from the active
-playbook when starting or resuming a workflow and whenever the playbook changes.
+Do not copy the conversation locale into `issue.yaml`; re-resolve it from the
+active playbook when starting or resuming a workflow and whenever the playbook
+changes.
 
 ## Kickoff Stop Contract (first blocking gate)
 

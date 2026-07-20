@@ -19,7 +19,7 @@ Use this reference while designing or validating a CAFE playbook. The runtime sc
 playbook:
   id: example
   name: "Example Workflow"
-  locale: zh-TW
+  conversation_locale: zh-TW
 
 roles:
   developer:
@@ -69,18 +69,24 @@ entry_point: plan_work
 
 ### Conversation locale
 
-`playbook.locale` controls the natural language used by the outer workflow
-driver when it talks with the user. Use a BCP 47 language tag such as `zh-TW`,
-`en`, or `pt-BR`. Use `auto` only when the driver should inherit the language of
-the user's current request; omitted locale values resolve to `auto` for backward
-compatibility with existing custom playbooks.
+`playbook.conversation_locale` controls the natural language used by the outer
+workflow driver when it talks with the user. Use a BCP 47 language tag such as
+`zh-TW`, `en`, or `pt-BR`. Use `auto` only when the driver should inherit the
+language of the user's current request; omitted conversation locale values
+resolve to `auto` for backward compatibility with existing custom playbooks.
 
-The locale applies to kickoff, clarification/permission questions, alignment
-checkpoints, progress/error reports, and completion messages. It does not
-translate commands, paths, playbook or step names, intents, artifact keys,
-structured payload fields, or quoted source text. A user's explicit language
-request in the current thread may override the configured locale without
-rewriting the playbook.
+The configured conversation locale is authoritative and does not require a
+separate user confirmation. The workflow driver must display the effective
+locale and its playbook source as informational kickoff context. A direct
+language instruction from the user may override it for the current thread;
+merely writing in another language or asking about the language choice is not
+an override.
+
+The conversation locale applies to kickoff, clarification/permission questions,
+alignment checkpoints, progress/error reports, and completion messages. It does
+not translate commands, paths, playbook or step names, intents, artifact keys,
+structured payload fields, quoted source text, or the language of workflow
+artifacts.
 
 ## 3. Step Fields
 
@@ -230,8 +236,8 @@ assert steps["bridge"]["output_artifact"] == "plan"
 ## 10. Acceptance Checklist
 
 - [ ] Filename stem equals `playbook.id`.
-- [ ] `playbook.locale` is `auto` or a valid BCP 47 language tag and matches the
-      intended driver-to-user conversation language.
+- [ ] `playbook.conversation_locale` is `auto` or a valid BCP 47 language tag
+      and matches the intended driver-to-user conversation language.
 - [ ] Every skill resolves and passes strict skill validation.
 - [ ] Every role and `chat_role` is declared.
 - [ ] Every step is reachable from `entry_point`.

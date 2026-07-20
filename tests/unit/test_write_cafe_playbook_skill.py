@@ -61,8 +61,10 @@ def test_write_cafe_playbook_defines_conversation_locale_contract() -> None:
     normalized_skill = " ".join(skill.split())
     normalized_reference = " ".join(reference.split())
 
-    assert "playbook.locale" in skill
+    assert "playbook.conversation_locale" in skill
     assert "BCP 47 language tag" in normalized_skill
     assert "### Conversation locale" in reference
-    assert "omitted locale values resolve to `auto`" in normalized_reference
+    assert "omitted conversation locale values resolve to `auto`" in normalized_reference
+    assert "does not require a separate user confirmation" in normalized_reference
+    assert "asking about the language choice is not an override" in normalized_reference
     assert "does not translate commands, paths, playbook or step names" in normalized_reference
