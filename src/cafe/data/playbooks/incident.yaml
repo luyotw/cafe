@@ -1,6 +1,7 @@
 playbook:
   id: incident
   name: "Incident Response Workflow（偵測 → 分類 → 緩解 → 事後檢討）"
+  locale: en-US
 
 roles:
   ops:

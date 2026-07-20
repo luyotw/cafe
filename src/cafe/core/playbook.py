@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
@@ -25,6 +26,7 @@ SCRIPT_HOOK_STAGES = {"before_execute", "after_execute"}
 
 RigorLevel = Literal["low", "medium", "high"]
 InputMethodDefault = Literal["manual", "github"]
+LOCALE_PATTERN = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
 
 
 class PlaybookMeta(BaseModel):
@@ -34,6 +36,20 @@ class PlaybookMeta(BaseModel):
 
     id: str
     name: Optional[str] = None
+    locale: str = "auto"
+
+    @field_validator("locale")
+    @classmethod
+    def _validate_locale(cls, value: str) -> str:
+        token = value.strip()
+        if token.lower() == "auto":
+            return "auto"
+        if not LOCALE_PATTERN.fullmatch(token):
+            raise ValueError(
+                "playbook.locale must be 'auto' or a BCP 47 language tag "
+                "such as 'zh-TW' or 'en'"
+            )
+        return token
 
 
 class PlaybookRole(BaseModel):

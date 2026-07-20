@@ -51,3 +51,18 @@ def test_write_cafe_playbook_repairs_only_its_declarative_layer() -> None:
     assert "return a CAFE core-defect diagnosis" in normalized
     assert "Do not edit driver/meta skills such as `use-cafe-workflow`" in normalized
     assert "This skill is not a general CAFE self-modifier" in normalized
+
+
+def test_write_cafe_playbook_defines_conversation_locale_contract() -> None:
+    skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    reference = (SKILL_ROOT / "references" / "playbook-spec.md").read_text(
+        encoding="utf-8"
+    )
+    normalized_skill = " ".join(skill.split())
+    normalized_reference = " ".join(reference.split())
+
+    assert "playbook.locale" in skill
+    assert "BCP 47 language tag" in normalized_skill
+    assert "### Conversation locale" in reference
+    assert "omitted locale values resolve to `auto`" in normalized_reference
+    assert "does not translate commands, paths, playbook or step names" in normalized_reference

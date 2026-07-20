@@ -1,6 +1,7 @@
 playbook:
   id: research
   name: "Research Workflow（問題 → 搜尋整理 → 綜合 → 報告）"
+  locale: en-US
 
 roles:
   researcher:

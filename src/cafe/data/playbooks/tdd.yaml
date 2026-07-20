@@ -1,6 +1,7 @@
 playbook:
   id: tdd
   name: "Test-Driven Development Workflow"
+  locale: en-US
 
 roles:
   pm:

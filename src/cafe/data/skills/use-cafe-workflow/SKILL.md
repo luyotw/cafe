@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.6.0
+version: 1.7.0
 ---
 
 # Use CAFE Workflow
@@ -13,7 +13,32 @@ version: 1.6.0
 - Do not start a CAFE workflow until the user has confirmed the kickoff
   contract: playbook, driver authority, user handoff stops, and worktree
   behavior.
+- Resolve the active playbook's conversation locale before the kickoff and use
+  it for every driver-to-user message.
 - Ground Q&A and PR review in **`.cafe/strategic_context.yaml`**—the single file for strategic documents, decision authority, and user-authorized per-issue overrides. If referenced documents do not exist yet, **help the user create them before** `cafe make`.
+
+## Conversation Locale (resolve before kickoff)
+
+The active playbook's `playbook.locale` is the source of truth for the
+workflow driver's conversation with the user. Resolve it before presenting the
+kickoff contract or asking the first workflow question:
+
+1. Resolve the active playbook from the user's request or `.cafe/config.yaml`.
+2. Run `cafe playbook confirmation-gates <playbook-id>` and read its `Locale:`
+   line together with the confirmation-gate candidates.
+3. For a BCP 47 language tag such as `zh-TW` or `en`, write all substantive
+   driver-to-user messages in that locale. For `auto`, use the language of the
+   user's current request.
+4. Apply the resolved locale to kickoff, clarification and permission
+   questions, alignment checkpoints, progress/error reports, and completion
+   messages. Keep commands, paths, playbook/step names, intents, artifact keys,
+   payload fields, and quoted source text unchanged.
+5. A language explicitly requested by the user in the current thread may
+   override the playbook locale for that thread. Do not mutate the playbook
+   merely to record a conversational override.
+
+Do not copy the locale into `issue.yaml`; re-resolve it from the active
+playbook when starting or resuming a workflow and whenever the playbook changes.
 
 ## Kickoff Stop Contract (first blocking gate)
 
@@ -27,7 +52,7 @@ confirmation instead of asking again.
 
 ### Derive candidates from the active playbook
 
-1. Resolve the active playbook from the user's request or `.cafe/config.yaml`.
+1. Resolve the active playbook and its conversation locale as described above.
 2. Run:
    ```bash
    cafe playbook confirmation-gates <playbook-id>

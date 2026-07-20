@@ -1,7 +1,7 @@
 ---
 name: write-cafe-playbook
-description: Use this skill when creating, restructuring, reviewing, or repairing a CAFE playbook YAML under src/cafe/data/playbooks or .cafe/playbooks. Covers step graphs, roles, artifacts, plan/checklist handoffs, forward plan chains, user review loops, conditional skips, hooks, tools, and strict validation. Use it whenever a user asks to write or update a CAFE playbook, or use-cafe-workflow identifies a playbook declarative defect.
-version: 1.1.0
+description: Use this skill when creating, restructuring, reviewing, or repairing a CAFE playbook YAML under src/cafe/data/playbooks or .cafe/playbooks. Covers conversation locale, step graphs, roles, artifacts, plan/checklist handoffs, forward plan chains, user review loops, conditional skips, hooks, tools, and strict validation. Use it whenever a user asks to write or update a CAFE playbook, or use-cafe-workflow identifies a playbook declarative defect.
+version: 1.2.0
 ---
 
 # Write CAFE Playbook
@@ -50,6 +50,10 @@ version: 1.1.0
 
 ## Design Rules
 - Put builtin playbooks at `src/cafe/data/playbooks/<id>.yaml`; put project playbooks at `.cafe/playbooks/<id>.yaml`. Keep filename stem and `playbook.id` identical.
+- Set `playbook.locale` to a BCP 47 language tag such as `zh-TW` or `en` when
+  the workflow driver should use a fixed conversation language. Use `auto` only
+  when the current user's language should be inherited. Locale controls
+  driver-to-user prose, not commands, identifiers, payload keys, or quoted text.
 - Define only roles the steps actually use. Choose an existing agent and CLI that are available for that role.
 - Give every step an explicit skill, role, artifact contract, allowed tools, hooks, valid intents, and complete `"on"` map.
 - Use `output_artifact: plan` and downstream `input_artifacts: [plan]` whenever the upstream output is an implementation checklist. The execute skill must read `{plan_file}` and update the same checkboxes.
@@ -61,7 +65,8 @@ version: 1.1.0
 - For non-development workflows, explicitly decide `commands.prepare`; normally disable spec/plan setup prompts instead of inheriting irrelevant defaults.
 
 ## Writing Process
-1. Inventory skills, expected outputs, user gates, paid operations, and source-of-truth files.
+1. Inventory the conversation locale, skills, expected outputs, user gates,
+   paid operations, and source-of-truth files.
 2. Write the happy-path step order and mark every optional phase and terminal step.
 3. Create an artifact matrix with producer, artifact key, consumer, and whether the artifact is a result or implementation plan.
 4. Define transitions for success, user review, clarification, permission, no-work skips, and exceptional goto paths.
@@ -80,6 +85,8 @@ version: 1.1.0
 
 ## Final Review
 - Every step is reachable from `entry_point`, and every terminal path reaches `_done` or an intentional user pause.
+- `playbook.locale` is `auto` or a valid BCP 47 language tag, and its user-facing
+  effect is documented without implying that technical identifiers are translated.
 - Every declared `valid_intents` outcome has a matching transition key.
 - User review loops stay in the current phase; normal workflow progress remains forward-only.
 - Every implementation plan has exactly one producer and an execute consumer reading `plan`.

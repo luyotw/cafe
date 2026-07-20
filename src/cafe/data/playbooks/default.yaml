@@ -1,6 +1,7 @@
 playbook:
   id: default
   name: "Standard Development Workflow"
+  locale: en-US
 
 roles:
   pm:

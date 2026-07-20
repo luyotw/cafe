@@ -104,3 +104,18 @@ def test_use_cafe_workflow_bounds_diagnosis_and_repairs_only_declarative_layers(
     )
     assert "stale installed skill copies" in normalized
     assert "unconfirmed or transient failure" in normalized
+
+
+def test_use_cafe_workflow_uses_playbook_conversation_locale() -> None:
+    skill = (
+        PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "use-cafe-workflow" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(skill.split())
+
+    assert "## Conversation Locale (resolve before kickoff)" in skill
+    assert "playbook.locale" in skill
+    assert "cafe playbook confirmation-gates <playbook-id>" in skill
+    assert "read its `Locale:` line" in normalized
+    assert "For `auto`, use the language of the user's current request" in normalized
+    assert "Do not copy the locale into `issue.yaml`" in normalized
+    assert "commands, paths, playbook/step names, intents, artifact keys" in normalized

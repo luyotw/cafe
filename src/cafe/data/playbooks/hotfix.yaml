@@ -1,6 +1,7 @@
 playbook:
   id: hotfix
   name: "Hotfix Workflow"
+  locale: en-US
 
 roles:
   developer:

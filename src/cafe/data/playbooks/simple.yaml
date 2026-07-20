@@ -1,6 +1,7 @@
 playbook:
   id: simple
   name: "Simple Workflow"
+  locale: en-US
 
 roles:
   pm:
