@@ -191,7 +191,7 @@ class InteractiveMenu:
         return [
             {"name": "Continue workflow", "value": "make"},
             {"name": "Chat with agent", "value": "chat"},
-            {"name": "Show status", "value": "summary"},
+            {"name": "Show status", "value": "status"},
             {"name": "Reset iteration", "value": "reset"},
             {"name": "Close current issue", "value": "close"},
             {"name": "Remove issues", "value": "rm"},
@@ -304,8 +304,8 @@ class InteractiveMenu:
             self._handle_chat()
         elif selection == "make":
             _run_command(["make"])
-        elif selection == "summary":
-            _run_command(["summary"])
+        elif selection == "status":
+            _run_command(["status"])
         elif selection == "reset":
             _run_command(["reset"])
         elif selection == "rm":

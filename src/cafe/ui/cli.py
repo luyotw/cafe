@@ -723,7 +723,7 @@ app.command(name="rm")(issues_commands.remove_issue)
 
 app.command()(workflow_commands.make)
 app.command()(workflow_commands.show)
-app.command()(workflow_commands.summary)
+app.command()(workflow_commands.status)
 app.command()(workflow_commands.workflow)
 
 app.command(name="audit")(audit_commands.audit)
@@ -741,6 +741,7 @@ remove_issue = issues_commands.remove_issue
 
 make = workflow_commands.make
 show = workflow_commands.show
+status = workflow_commands.status
 summary = workflow_commands.summary
 workflow = workflow_commands.workflow
 

@@ -418,7 +418,7 @@ instead of opening the interactive menu unless the user asks for chat.
 - Keep `--add-dir` values relative to the current worktree and make sure the directories exist before running CAFE.
 
 ## Inspecting Progress
-- Use `cafe summary` for the phase timeline.
+- Use `cafe status` for the phase timeline.
 - Use `cafe show <step> output` to inspect the latest step result.
 - Use `cafe show <step> questions` when the workflow is waiting for clarification.
 - Use `cafe show <step> checklist` to see what the agent still must complete.

@@ -130,6 +130,18 @@ class TestVersionCommand:
         assert re.search(r"CAFE version \d+\.\d+\.\d+", result.stdout)
 
 
+class TestStatusCommand:
+    """Test status command registration."""
+
+    def test_status_command_shows_help(self) -> None:
+        """Test `cafe status --help` renders command help."""
+        result = runner.invoke(app, ["status", "--help"])
+
+        assert result.exit_code == 0
+        assert "Display a comprehensive timeline" in result.stdout
+        assert "cafe status" in result.stdout
+
+
 class TestConfigCommand:
     """Test config command."""
 

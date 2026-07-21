@@ -403,7 +403,7 @@ def show(
         raise typer.Exit(1)
 
 
-def summary() -> None:
+def status() -> None:
     """Display a comprehensive timeline of all workflow phases and iterations.
 
     Shows the start time, end time, duration, and current status for each phase
@@ -411,7 +411,7 @@ def summary() -> None:
 
     \b
     Examples:
-        cafe summary
+        cafe status
     """
     from cafe.services.summary_service import SummaryService
     from cafe.services.timeline_builder import TimelineBuilder
@@ -450,6 +450,11 @@ def summary() -> None:
     except Exception as e:
         console.print(f"[red]Error: Failed to display summary: {e}[/red]")
         raise typer.Exit(1)
+
+
+def summary() -> None:
+    """Backward-compatible alias for the previous `cafe summary` command."""
+    status()
 
 
 def _is_baton_contract_error(error: Exception) -> bool:

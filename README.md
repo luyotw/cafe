@@ -369,7 +369,7 @@ CAFE provides additional commands for managing issues and viewing execution deta
 - `cafe close` - Close current feature and return to base branch (syncs changes, removes worktree)
 
 #### Monitoring & Control
-- `cafe summary` - Display a comprehensive timeline of all workflow phases, iterations, and execution statistics
+- `cafe status` - Display a comprehensive timeline of all workflow phases, iterations, and execution statistics
 - `cafe show` - Display iteration file contents (spec, plan, output, checklist, questions, error logs, etc.)
 - `cafe chat <pm|developer|reviewer>` - Open interactive chat with a specific role agent (extremely useful for confirming details or making changes outside the spec)
 - `cafe reset` - Rollback the previous iteration (CAFE's basic execution unit), useful for redoing work or reverting a mistaken confirm (note: does not revert git changes)

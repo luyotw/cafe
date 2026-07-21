@@ -262,7 +262,7 @@ class TestInteractiveMenuIssueMenu:
         values = [c["value"] for c in choices]
         assert "make" in values
         assert "chat" in values
-        assert "summary" in values
+        assert "status" in values
         assert "reset" in values
         assert "rm" in values
         assert "close" in values
@@ -296,8 +296,8 @@ class TestInteractiveMenuIssueMenu:
         call_cmd = mock_run.call_args[0][0]
         assert "make" in call_cmd
 
-    def test_issue_menu_dispatches_summary_command(self):
-        """測試選擇 Show status 時執行 cafe summary"""
+    def test_issue_menu_dispatches_status_command(self):
+        """測試選擇 Show status 時執行 cafe status"""
         detector = MagicMock(spec=MenuStateDetector)
         detector.detect_state.side_effect = [
             MenuState.ACTIVE_ISSUE,
@@ -312,12 +312,12 @@ class TestInteractiveMenuIssueMenu:
             patch("cafe.ui.menu.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
-            mock_prompt.side_effect = ["summary", "exit"]
+            mock_prompt.side_effect = ["status", "exit"]
             menu.run()
 
         mock_run.assert_called_once()
         call_cmd = mock_run.call_args[0][0]
-        assert "summary" in call_cmd
+        assert "status" in call_cmd
 
     def test_issue_menu_dispatches_close_command(self):
         """測試選擇 Close current issue 時執行 cafe close"""
