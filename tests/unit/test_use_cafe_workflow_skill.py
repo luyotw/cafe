@@ -15,7 +15,7 @@ def test_use_cafe_workflow_skill_guides_alignment_checkpoint_delegation() -> Non
     normalized = " ".join(skill.split())
 
     assert "## Alignment Checkpoints" in skill
-    assert "apply the stop contract first" in normalized
+    assert "apply the user-handoff rules first" in normalized
     assert "may resolve the checkpoint only when the saved reactive policy allows it" in normalized
     assert "explicit JSON decision payload" in skill
     assert "Plain text must not be used for alignment approval" in skill
@@ -23,13 +23,13 @@ def test_use_cafe_workflow_skill_guides_alignment_checkpoint_delegation() -> Non
     assert "stop and ask the user" in skill
 
 
-def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_stop_contract() -> None:
+def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() -> None:
     skill = (
         PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "use-cafe-workflow" / "SKILL.md"
     ).read_text(encoding="utf-8")
     normalized = " ".join(skill.split())
 
-    assert "## Kickoff Stop Contract (first blocking gate)" in skill
+    assert "## Kickoff Contract (first blocking gate)" in skill
     assert "Before `cafe prepare`, any repository mutation, or the first `cafe make`" in skill
     assert "cafe playbook confirmation-gates <playbook-id>" in skill
     assert '`steps.<step>."on".confirm_output`' in skill
@@ -112,13 +112,13 @@ def test_use_cafe_workflow_uses_playbook_conversation_locale() -> None:
     ).read_text(encoding="utf-8")
     normalized = " ".join(skill.split())
 
-    assert "## Conversation Locale (resolve before kickoff)" in skill
+    assert "## Conversation Locale" in skill
     assert "playbook.conversation_locale" in skill
     assert "cafe playbook confirmation-gates <playbook-id>" in skill
     assert "`Conversation locale:` line" in normalized
     assert "For `auto`, use the language of the user's current request" in normalized
-    assert "Conversation locale: en-US (from playbook: default)" in normalized
-    assert "This is not a confirmation gate" in normalized
+    assert "conversation_locale: en-US (from playbook: default)" in normalized
+    assert "required kickoff field, not a confirmation gate" in normalized
     assert "asking why a language was used is not an override" in normalized
     assert "Never claim that this skill lacks a conversation locale rule" in normalized
     assert "Do not copy the conversation locale into `issue.yaml`" in normalized
