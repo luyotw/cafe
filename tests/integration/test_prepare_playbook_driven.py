@@ -138,6 +138,65 @@ class TestPreparePlaybookDriven:
         assert config_data["spec"]["template"] == "auto"
         assert config_data["plan"]["template"] == "default"
 
+    def test_no_pr_playbook_rejects_non_interactive_pr_flags(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        """A playbook without a pr step must reject legacy PR config flags."""
+        prepare_block = """
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+"""
+        _write_custom_playbook(temp_repo_dir, "no-pr", prepare_block)
+        _write_config_with_playbook(temp_repo_dir, "no-pr")
+
+        result = runner.invoke(
+            app,
+            [
+                "prepare",
+                "no-pr-issue",
+                "--no-interactive",
+                "--input-method=github",
+                "--issue-id=28",
+                "--auto-create-pr",
+                "--post-pr-todo-list",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "--auto-create-pr" in result.stdout
+        config_file = temp_repo_dir / ".cafe" / "issues" / "no-pr-issue" / "issue.yaml"
+        assert not config_file.exists()
+
+    def test_no_pr_playbook_without_pr_flags_omits_pr_config(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        """A playbook without a pr step can prepare without PR config."""
+        prepare_block = """
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+"""
+        _write_custom_playbook(temp_repo_dir, "no-pr", prepare_block)
+        _write_config_with_playbook(temp_repo_dir, "no-pr")
+
+        result = runner.invoke(
+            app,
+            [
+                "prepare",
+                "no-pr-issue",
+                "--no-interactive",
+                "--input-method=github",
+                "--issue-id=28",
+            ],
+        )
+
+        assert result.exit_code == 0
+        config_file = temp_repo_dir / ".cafe" / "issues" / "no-pr-issue" / "issue.yaml"
+        config_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        assert config_data["spec"]["input_method"] == "github"
+        assert "pr" not in config_data
+
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.cli.prompt_text")
     def test_hotfix_playbook_skips_spec_plan_config(

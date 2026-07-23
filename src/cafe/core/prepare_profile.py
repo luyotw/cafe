@@ -39,10 +39,26 @@ class PrepareProfile:
 
     prepare: PrepareConfig
     is_github_repo: bool
+    step_names: frozenset[str] = frozenset()
 
     @classmethod
     def from_playbook(cls, model: PlaybookDefinition, is_github_repo: bool) -> PrepareProfile:
-        return cls(prepare=resolve_prepare_config(model), is_github_repo=is_github_repo)
+        return cls(
+            prepare=resolve_prepare_config(model),
+            is_github_repo=is_github_repo,
+            step_names=frozenset(model.steps),
+        )
+
+    def supports_pr_config(
+        self,
+        parsed_fields: Optional[ParsedPrepareFields] = None,
+    ) -> bool:
+        """Return whether prepare may write PR-related issue config."""
+        if "pr" in self.step_names:
+            return True
+        if parsed_fields is None:
+            return False
+        return any((field.write or "").startswith("pr.") for field in parsed_fields.fields)
 
     def should_prompt_spec_plan_config(self, base_should_prompt: bool) -> bool:
         return base_should_prompt and self.prepare.prompt_for_spec_plan_config
@@ -72,11 +88,11 @@ class PrepareProfile:
         spec["sync_github"] = sync.when_issue_id_present if has_issue_id else sync.when_manual_input
         plan["sync_github"] = sync.when_issue_id_present if has_issue_id else sync.when_manual_input
 
-        if self.is_github_repo and quick.pr.auto_create_on_github_repo:
+        if self.supports_pr_config() and self.is_github_repo and quick.pr.auto_create_on_github_repo:
             pr["auto_create"] = True
             if quick.pr.post_todo_list_when_auto_create:
                 pr["post_todo_list"] = True
-        else:
+        elif self.supports_pr_config():
             pr["auto_create"] = False
 
         return PrepareIssueConfig(spec=spec, plan=plan, pr=pr)

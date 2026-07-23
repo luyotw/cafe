@@ -124,6 +124,7 @@ def _run_legacy_prepare_prompts(
         console.print(f"  • Input method: {spec_config['input_method']}")
         if profile.is_github_repo:
             console.print(f"  • Sync to GitHub: {spec_config.get('sync_github', False)}")
+        if profile.supports_pr_config() and profile.is_github_repo:
             console.print(f"  • Auto create PR: {pr_config.get('auto_create', False)}")
             console.print(f"  • Post PR todo list: {pr_config.get('post_todo_list', False)}")
         console.print()
@@ -184,15 +185,16 @@ def _run_legacy_prepare_prompts(
         console.print("[yellow]⚠️  No plan templates found. Using default template.[/yellow]")
         console.print("[dim]    Tip: Use 'cafe template add <source> <name>' to add templates.[/dim]")
 
-    config_file = Path(".cafe") / "issues" / issue_name / "issue.yaml"
-    auto_create_pr_result = prompt_and_save_auto_create(config_file, "pr.auto_create")
-    pr_config["auto_create"] = auto_create_pr_result
-    if auto_create_pr_result:
-        console.print()
-        pr_config["post_todo_list"] = prompt_confirm(
-            "Post organized PR comments as todo list to PR?",
-            default=True,
-        )
+    if profile.supports_pr_config():
+        config_file = Path(".cafe") / "issues" / issue_name / "issue.yaml"
+        auto_create_pr_result = prompt_and_save_auto_create(config_file, "pr.auto_create")
+        pr_config["auto_create"] = auto_create_pr_result
+        if auto_create_pr_result:
+            console.print()
+            pr_config["post_todo_list"] = prompt_confirm(
+                "Post organized PR comments as todo list to PR?",
+                default=True,
+            )
     return spec_config, plan_config, pr_config, issue_id
 
 

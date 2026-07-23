@@ -20,7 +20,18 @@ def _write_skill(root: Path, name: str) -> None:
     )
 
 
-def _minimal_playbook_yaml(*, prepare_block: str = "") -> str:
+def _minimal_playbook_yaml(*, prepare_block: str = "", include_pr_step: bool = False) -> str:
+    pr_step = (
+        """
+  pr:
+    role: developer
+    skill: spec_first
+    "on":
+      await_agent: _done
+"""
+        if include_pr_step
+        else ""
+    )
     return f"""
 playbook: {{id: test}}
 steps:
@@ -29,6 +40,7 @@ steps:
     skill: spec_first
     "on":
       await_agent: _done
+{pr_step}
 {prepare_block}
 """
 
@@ -105,7 +117,9 @@ class TestPrepareProfileQuickSetup:
 
     def test_github_repo_sets_pr_defaults_from_metadata(self) -> None:
         profile = PrepareProfile.from_playbook(
-            PlaybookDefinition.model_validate(yaml.safe_load(_minimal_playbook_yaml())),
+            PlaybookDefinition.model_validate(
+                yaml.safe_load(_minimal_playbook_yaml(include_pr_step=True))
+            ),
             is_github_repo=True,
         )
         result = profile.quick_setup_issue_config(issue_id=None)
@@ -114,12 +128,22 @@ class TestPrepareProfileQuickSetup:
 
     def test_non_github_repo_skips_pr_auto_create(self) -> None:
         profile = PrepareProfile.from_playbook(
-            PlaybookDefinition.model_validate(yaml.safe_load(_minimal_playbook_yaml())),
+            PlaybookDefinition.model_validate(
+                yaml.safe_load(_minimal_playbook_yaml(include_pr_step=True))
+            ),
             is_github_repo=False,
         )
         result = profile.quick_setup_issue_config(issue_id=None)
         assert result.pr["auto_create"] is False
         assert "post_todo_list" not in result.pr
+
+    def test_playbook_without_pr_step_omits_pr_config(self) -> None:
+        profile = PrepareProfile.from_playbook(
+            PlaybookDefinition.model_validate(yaml.safe_load(_minimal_playbook_yaml())),
+            is_github_repo=True,
+        )
+        result = profile.quick_setup_issue_config(issue_id=None)
+        assert result.pr == {}
 
 
 class TestPrepareProfileNonInteractive:

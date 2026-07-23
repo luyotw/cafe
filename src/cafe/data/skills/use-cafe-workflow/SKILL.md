@@ -258,7 +258,7 @@ Re-read `.cafe/strategic_context.yaml` and linked documents before answering que
    ```
 6. For a GitHub-backed issue, use:
    ```bash
-   cafe prepare <issue-name> --no-interactive --input-method=github --issue-id=<number> --rigor=medium --spec-template=auto --plan-template=default --auto-create-pr --worktree .cafe/worktrees/<issue-name>
+   cafe prepare <issue-name> --no-interactive --input-method=github --issue-id=<number> --rigor=medium --spec-template=auto --plan-template=default --worktree .cafe/worktrees/<issue-name>
    ```
 7. If the user declined worktree mode, omit `--worktree`; otherwise do not silently fall back to the main checkout when worktree creation fails.
 8. If the prepare command creates or reports a worktree, `cd` into that worktree before running workflow commands.

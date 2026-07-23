@@ -21,6 +21,7 @@ from cafe.ui.prepare_field_renderer import (
     NonInteractiveCliAnswers,
     NonInteractiveResolverDeps,
     PrepareNonInteractiveContext,
+    PrepareNonInteractiveError,
     PrepareNonInteractiveRequiredFieldError,
     PrepareNonInteractiveTemplateError,
     PreparePromptContext,
@@ -45,6 +46,23 @@ def _profile(*, is_github_repo: bool = True) -> PrepareProfile:
     loader = PlaybookLoader()
     loaded = loader.load_model("default")
     return PrepareProfile.from_playbook(loaded.model, is_github_repo=is_github_repo)
+
+
+def _no_pr_profile(*, is_github_repo: bool = True) -> PrepareProfile:
+    model = PlaybookDefinition.model_validate(
+        {
+            "playbook": {"id": "no-pr"},
+            "steps": {
+                "build": {
+                    "type": "skill",
+                    "skill": "cafe-develop",
+                    "role": "developer",
+                    "on": {"await_agent": "_done"},
+                }
+            },
+        }
+    )
+    return PrepareProfile.from_playbook(model, is_github_repo=is_github_repo)
 
 
 def _default_fields():
@@ -448,6 +466,55 @@ commands:
             deps=_resolver_deps(),
         )
         assert with_pr.pr == {"auto_create": True, "post_todo_list": False}
+
+    def test_pr_flags_rejected_when_playbook_has_no_pr_config(self) -> None:
+        profile = _no_pr_profile()
+
+        with pytest.raises(PrepareNonInteractiveError, match="require a playbook"):
+            resolve_non_interactive_issue_config(
+                profile,
+                NonInteractiveCliAnswers(
+                    input_method="manual",
+                    auto_create_pr=True,
+                    post_pr_todo_list=True,
+                ),
+                parsed_fields=None,
+                deps=_resolver_deps(),
+            )
+
+    def test_pr_flags_allowed_when_no_pr_step_declares_pr_fields(self) -> None:
+        profile = _no_pr_profile()
+        parsed = ParsedPrepareFields(
+            fields=parse_prepare_fields(
+                [
+                    {
+                        "id": "auto",
+                        "type": "boolean",
+                        "label": "Auto PR",
+                        "write": "pr.auto_create",
+                    },
+                    {
+                        "id": "todo",
+                        "type": "boolean",
+                        "label": "Todo",
+                        "write": "pr.post_todo_list",
+                    },
+                ]
+            )
+        )
+
+        config = resolve_non_interactive_issue_config(
+            profile,
+            NonInteractiveCliAnswers(
+                input_method="manual",
+                auto_create_pr=True,
+                post_pr_todo_list=False,
+            ),
+            parsed_fields=parsed,
+            deps=_resolver_deps(),
+        )
+
+        assert config.pr == {"auto_create": True, "post_todo_list": False}
 
 
 class TestPromptCustomFields:

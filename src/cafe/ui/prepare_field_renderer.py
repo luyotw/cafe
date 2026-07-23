@@ -307,9 +307,17 @@ def resolve_non_interactive_issue_config(
     if answers.sync_plan_github is not None:
         set_write_value(config, "plan.sync_github", answers.sync_plan_github)
 
-    if profile.is_github_repo and answers.auto_create_pr:
+    supports_pr_config = profile.supports_pr_config(parsed_fields)
+    if not supports_pr_config and (
+        answers.auto_create_pr or answers.post_pr_todo_list is not None
+    ):
+        raise PrepareNonInteractiveError(
+            "--auto-create-pr and --post-pr-todo-list require a playbook with a "
+            "pr step or explicit pr.* prepare fields"
+        )
+    if supports_pr_config and profile.is_github_repo and answers.auto_create_pr:
         set_write_value(config, "pr.auto_create", True)
-    if answers.post_pr_todo_list is not None:
+    if supports_pr_config and answers.post_pr_todo_list is not None:
         set_write_value(config, "pr.post_todo_list", answers.post_pr_todo_list)
 
     return config
@@ -365,7 +373,7 @@ def apply_quick_defaults(
             continue
         set_write_value(config, field.write, field.default)
 
-    if ctx.is_github_repo and "auto_create" not in config.pr:
+    if ctx.profile.supports_pr_config(parsed) and ctx.is_github_repo and "auto_create" not in config.pr:
         auto_field = next(
             (field for field in parsed.fields if field.write == "pr.auto_create"),
             None,
