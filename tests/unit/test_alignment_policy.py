@@ -254,6 +254,34 @@ def test_spec_boilerplate_and_negated_positioning_change_do_not_pause(
     assert result.payload is None
 
 
+def test_plan_confirmation_and_preserved_trust_boundary_do_not_pause(
+    tmp_path: Path,
+) -> None:
+    result = evaluate_alignment_policy(
+        AlignmentPolicyInput(
+            step_name="plan",
+            user_input=(
+                "計畫已確認。此計畫符合既有 roadmap 與產品定位；"
+                "依已授權的 driver confirmation 繼續進入 develop。"
+            ),
+            artifacts={
+                "current_output": """
+這符合 roadmap 的 repo-first 與可復原 execution state，
+並且不擴張 trusted host capability boundary。
+""",
+                "spec": """
+- 不新增外部系統操作、權限或可信任能力。
+- 不改變人員判斷、外部操作或受信任權限邊界。
+""",
+            },
+        ),
+        strategic_context=_context(tmp_path),
+    )
+
+    assert result.level == AlignmentDecisionLevel.NO_ALIGNMENT
+    assert result.payload is None
+
+
 def test_chinese_product_direction_change_still_forces_checkpoint(tmp_path: Path) -> None:
     result = evaluate_alignment_policy(
         AlignmentPolicyInput(step_name="spec", user_input="這次需要調整產品方向與路線圖。"),
@@ -377,7 +405,7 @@ def test_trusted_capability_uses_mapped_roadmap_docs_without_missing_false_posit
     assert docs["positioning"].status == "missing"
 
 
-def test_confirmed_strategy_signal_does_not_force_document_update_requirement(
+def test_confirmed_capability_boundary_scope_does_not_pause(
     tmp_path: Path,
 ) -> None:
     spec_text = """
@@ -407,12 +435,8 @@ def test_confirmed_strategy_signal_does_not_force_document_update_requirement(
         ),
     )
 
-    assert result.level == AlignmentDecisionLevel.MUST_ALIGN
-    rule_ids = {rule.rule_id for rule in result.triggered_rules}
-    assert "trusted_capability_boundary" in rule_ids
-    assert "strategic_document_update_required" not in rule_ids
-    assert result.payload is not None
-    assert result.payload.strategic_document_update_requirements == ()
+    assert result.level == AlignmentDecisionLevel.ALIGNMENT_NOTE
+    assert not any(rule.rule_id == "trusted_capability_boundary" for rule in result.triggered_rules)
 
 
 def test_medium_risk_records_note_only(tmp_path: Path) -> None:

@@ -234,10 +234,11 @@ _STRATEGIC_CHANGE_ACTION_RE = re.compile(
         |defin(?:e|es|ed|ing)
         |draft(?:s|ed|ing)?
         |introduc(?:e|es|ed|ing)
+        |replac(?:e|es|ed|ing)
         |add(?:s|ed|ing)?
         |remov(?:e|es|ed|ing)
     )\b
-    |改變|變更|擴大|擴張|拓展|重新定義|修訂|更新|修改|調整|決定|釐清|定義|草擬|新增|移除
+    |改變|變更|擴大|擴張|拓展|重新定義|修訂|更新|修改|調整|決定|釐清|定義|草擬|導入|替換|取代|新增|移除
     """,
     re.IGNORECASE | re.VERBOSE,
 )
@@ -253,6 +254,11 @@ _STRATEGIC_TARGET_RES: tuple[re.Pattern[str], ...] = (
         re.IGNORECASE,
     ),
     re.compile(r"路線圖|產品.{0,24}(?:方向|策略|範圍)|定位|治理|原則|商業模式|使用者信任|北極星"),
+)
+
+_TRUSTED_CAPABILITY_TARGET_RES: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(re.escape(keyword), re.IGNORECASE)
+    for keyword in TRUSTED_CAPABILITY_BOUNDARY_KEYWORDS
 )
 
 _NEGATED_ACTION_PREFIX_RE = re.compile(
@@ -497,6 +503,18 @@ def _matches_axis_escalation(text: str, axis_name: str) -> bool:
 
 
 def _matches_strategic_change_intent(text: str) -> bool:
+    return _matches_actionable_change_intent(text, _STRATEGIC_TARGET_RES)
+
+
+def _matches_trusted_capability_change_intent(text: str) -> bool:
+    """Return whether trusted host authority or execution boundaries would change."""
+    return _matches_actionable_change_intent(text, _TRUSTED_CAPABILITY_TARGET_RES)
+
+
+def _matches_actionable_change_intent(
+    text: str,
+    target_patterns: Sequence[re.Pattern[str]],
+) -> bool:
     for action in _STRATEGIC_CHANGE_ACTION_RE.finditer(text):
         line_start = text.rfind("\n", 0, action.start()) + 1
         line_end = text.find("\n", action.end())
@@ -513,7 +531,7 @@ def _matches_strategic_change_intent(text: str) -> bool:
         window_start = max(line_start, action.start() - 120)
         window_end = min(line_end, action.end() + 120)
         window = text[window_start:window_end]
-        if any(pattern.search(window) for pattern in _STRATEGIC_TARGET_RES):
+        if any(pattern.search(window) for pattern in target_patterns):
             return True
     return False
 
@@ -562,7 +580,7 @@ def _score_signals(
     strategic_context: StrategicContext,
 ) -> list[TriggeredRule]:
     rules: list[TriggeredRule] = []
-    trusted_boundary = _matches_keywords(text, TRUSTED_CAPABILITY_BOUNDARY_KEYWORDS)
+    trusted_boundary = _matches_trusted_capability_change_intent(text)
     strategic_change = _matches_strategic_change_intent(text)
     if trusted_boundary:
         rules.append(
@@ -627,7 +645,7 @@ def _should_include_configured_documents(
         return True
     if any(rule.risk_level == "high" for rule in triggered_rules):
         return True
-    if _matches_keywords(text, TRUSTED_CAPABILITY_BOUNDARY_KEYWORDS):
+    if _matches_trusted_capability_change_intent(text):
         return True
     return _matches_keywords(
         text,
