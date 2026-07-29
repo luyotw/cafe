@@ -264,16 +264,35 @@ _TRUSTED_CAPABILITY_TARGET_RES: tuple[re.Pattern[str], ...] = tuple(
 _NEGATED_ACTION_PREFIX_RE = re.compile(
     r"""
     (?:
-        \b(?:do|does|did|will|would|should|must|can)\s+not\s+
-        |\b(?:don't|doesn't|didn't|won't|wouldn't|shouldn't|mustn't|can't)\s+
-        |\bwithout\s+
-        |\bno\s+
-        |\bnot\s+
+        \b(?:do|does|did|will|would|should|must|can)\s+not
+        |\b(?:don't|doesn't|didn't|won't|wouldn't|shouldn't|mustn't|can't)
+        |\bwithout
+        |\bno
+        |\bnot
         |不(?:會|再|要|應|得|需)?
         |無需
         |毋須
         |避免
-    )$
+    )\s*$
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+_NEGATED_SCOPE_CLAUSE_RE = re.compile(
+    r"""
+    (?:
+        \b(?:do|does|did|will|would|should|must|can)\s+not\s+
+        |\b(?:don't|doesn't|didn't|won't|wouldn't|shouldn't|mustn't|can't)\s+
+    )
+    (?:
+        add|include|introduce|expand|broaden|cover|implement|enable|allow
+        |require|grant|involve|touch|change|modify|update|revise|create|extend|turn
+    )(?:s|ed|ing)?
+    \b
+    |\b(?:without|excluding|exclude|omitting|omit)\b
+    |(?:不要|不得|不應|不需|無需|毋須|避免)
+    (?:新增|加入|納入|包含|擴大|擴張|拓展|實作|啟用|允許|要求|授權|涉及|觸及|變更|修改|延伸)
+    |排除|不包含|不納入
     """,
     re.IGNORECASE | re.VERBOSE,
 )
@@ -498,20 +517,30 @@ def _matches_keywords_outside_non_scope(
     """Match policy signals only where the request says work is in scope."""
     for keyword in keywords:
         normalized = keyword.lower()
-        for match in re.finditer(re.escape(normalized), text):
+        for match in _iter_keyword_matches(text, normalized):
             if not _is_non_scope_context(text, match.start()):
                 return True
     return False
 
 
+def _iter_keyword_matches(text: str, keyword: str) -> Iterable[re.Match[str]]:
+    """Yield whole keyword matches without treating word prefixes as signals."""
+    escaped = re.escape(keyword)
+    if keyword and keyword[0].isascii() and keyword[-1].isascii():
+        return re.finditer(rf"(?<![\w-]){escaped}(?![\w-])", text)
+    return re.finditer(escaped, text)
+
+
 def _is_non_scope_context(text: str, position: int) -> bool:
-    """Return whether a position belongs to a Markdown non-scope section."""
+    """Return whether a position belongs to an explicit non-scope context."""
     line_start = text.rfind("\n", 0, position) + 1
     line_end = text.find("\n", position)
     if line_end == -1:
         line_end = len(text)
     current_line = text[line_start:line_end].strip().lower()
     if any(marker in current_line for marker in _NON_SCOPE_LINE_MARKERS):
+        return True
+    if _has_negated_scope_intent(text, position):
         return True
 
     prior_lines = text[:line_start].splitlines()
@@ -524,6 +553,23 @@ def _is_non_scope_context(text: str, position: int) -> bool:
         if re.match(r"^(?:#{1,6}\s+|[-*]\s+\*\*[^*]+:\*\*)", normalized):
             return False
     return False
+
+
+def _clause_bounds(text: str, position: int) -> tuple[int, int]:
+    boundaries = "\n.!?;。！？；"
+    start = max(text.rfind(boundary, 0, position) for boundary in boundaries) + 1
+    ends = [
+        candidate
+        for boundary in boundaries
+        if (candidate := text.find(boundary, position)) != -1
+    ]
+    return start, min(ends) if ends else len(text)
+
+
+def _has_negated_scope_intent(text: str, position: int) -> bool:
+    clause_start, _ = _clause_bounds(text, position)
+    clause_prefix = text[clause_start:position][-320:]
+    return bool(_NEGATED_SCOPE_CLAUSE_RE.search(clause_prefix))
 
 
 def _matches_axis_escalation(text: str, axis_name: str) -> bool:
@@ -554,20 +600,17 @@ def _matches_actionable_change_intent(
     target_patterns: Sequence[re.Pattern[str]],
 ) -> bool:
     for action in _STRATEGIC_CHANGE_ACTION_RE.finditer(text):
-        line_start = text.rfind("\n", 0, action.start()) + 1
-        line_end = text.find("\n", action.end())
-        if line_end == -1:
-            line_end = len(text)
-        line = text[line_start:line_end]
-        line_prefix = text[line_start : action.start()].rstrip()
+        clause_start, clause_end = _clause_bounds(text, action.start())
+        clause = text[clause_start:clause_end]
+        line_prefix = text[clause_start : action.start()].rstrip()
         nearby_prefix = line_prefix[-32:]
-        if any(marker in line.lower() for marker in _NON_SCOPE_LINE_MARKERS):
+        if any(marker in clause.lower() for marker in _NON_SCOPE_LINE_MARKERS):
             continue
         if _NEGATED_ACTION_PREFIX_RE.search(nearby_prefix):
             continue
 
-        window_start = max(line_start, action.start() - 120)
-        window_end = min(line_end, action.end() + 120)
+        window_start = max(clause_start, action.start() - 120)
+        window_end = min(clause_end, action.end() + 120)
         window = text[window_start:window_end]
         if any(pattern.search(window) for pattern in target_patterns):
             return True
@@ -598,17 +641,30 @@ def _mentions_document_update(text: str, keywords: Sequence[str]) -> bool:
         r"(?:update|updates|revision|revisions|change|changes|modification|modifications)"
     )
     chinese_verbs = "(?:更新|修訂|修改|調整|建立|新增)"
+    english_between = r"[^.\n!?;。！？；]{0,48}"
+    chinese_between = r"[^.\n!?;。！？；]{0,24}"
 
     for keyword in keywords:
         escaped = re.escape(keyword.lower())
-        if re.search(rf"\b{english_verbs}\b[^\n]{{0,48}}\b{escaped}\b", text):
-            return True
-        if re.search(rf"\b{escaped}\b[^\n]{{0,48}}\b{english_nouns}\b", text):
-            return True
-        if re.search(rf"{chinese_verbs}.{{0,24}}{escaped}", text):
-            return True
-        if re.search(rf"{escaped}.{{0,24}}{chinese_verbs}", text):
-            return True
+        for keyword_match in _iter_keyword_matches(text, keyword.lower()):
+            if _is_non_scope_context(text, keyword_match.start()):
+                continue
+            clause_start, clause_end = _clause_bounds(text, keyword_match.start())
+            clause = text[clause_start:clause_end]
+            if re.search(
+                rf"\b{english_verbs}\b{english_between}\b{escaped}\b",
+                clause,
+            ):
+                return True
+            if re.search(
+                rf"\b{escaped}\b{english_between}\b{english_nouns}\b",
+                clause,
+            ):
+                return True
+            if re.search(rf"{chinese_verbs}{chinese_between}{escaped}", clause):
+                return True
+            if re.search(rf"{escaped}{chinese_between}{chinese_verbs}", clause):
+                return True
     return False
 
 
