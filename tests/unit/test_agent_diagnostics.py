@@ -3,6 +3,7 @@
 from cafe.agents.diagnostics import (
     ERROR_EXCERPT_LIMIT,
     build_failed_attempt,
+    is_transient_same_cli_error,
     sanitize_error_excerpt,
 )
 from cafe.agents.executor import AgentExecutionError
@@ -61,3 +62,14 @@ def test_sanitized_excerpt_handles_empty_and_overlong_error_text() -> None:
     excerpt = sanitize_error_excerpt(AgentExecutionError("x" * (ERROR_EXCERPT_LIMIT + 50)))
 
     assert len(excerpt) == ERROR_EXCERPT_LIMIT
+
+
+def test_classified_auth_error_is_not_retried_for_raw_socket_text() -> None:
+    """Retry policy follows the classified display message over noisy raw stderr."""
+    error = AgentExecutionError(
+        "authentication failed: HTTP 403; socket connection was closed unexpectedly",
+        error_type="cli_unavailable",
+        display_message="Claude authentication failed. Check your credentials.",
+    )
+
+    assert not is_transient_same_cli_error(error)

@@ -87,6 +87,15 @@ def _manager() -> AgentManager:
     return manager
 
 
+def _stream_error_process(line: str) -> MagicMock:
+    process = MagicMock()
+    process.stdout.readline.side_effect = [line, ""]
+    process.stderr.read.return_value = ""
+    process.wait.return_value = 1
+    process.terminate.return_value = None
+    return process
+
+
 def _success(text: str) -> AgentResponse:
     return AgentResponse(response=text, token_usage=TokenUsage())
 
@@ -161,3 +170,38 @@ def test_all_failed_journey_persists_sanitized_history_without_raw_secrets(tmp_p
     )
     assert "raw-primary-secret" not in persisted_text
     assert "raw-fallback-secret" not in persisted_text
+
+
+def test_real_stream_error_path_redacts_durable_streaming_log(tmp_path: Path) -> None:
+    """CLI process error events never leave their raw credentials in streaming.jsonl."""
+    manager = AgentManager()
+    manager.register_agent(
+        AgentConfig(
+            name="David",
+            cli=AgentCLI.CLAUDE,
+            clis=[CliEntry(cli=AgentCLI.CLAUDE), CliEntry(cli=AgentCLI.CODEX)],
+        )
+    )
+    executor = _build_executor(tmp_path, manager)
+    primary_process = _stream_error_process(
+        '{"type":"assistant","error":"Failed to authenticate: HTTP 403; '
+        'socket connection was closed unexpectedly; token=raw-primary-secret",'
+        '"message":{"content":[{"type":"text",'
+        '"text":"Failed to authenticate: HTTP 403; socket connection was closed unexpectedly; '
+        'token=raw-primary-secret"}]}}\n'
+    )
+    fallback_process = _stream_error_process(
+        '{"type":"error","message":"rate limit; token=raw-fallback-secret"}\n'
+    )
+
+    with patch(
+        "subprocess.Popen",
+        side_effect=[primary_process, fallback_process],
+    ), patch("sys.platform", "win32"), pytest.raises(CriticalPhaseError):
+        _run_iteration(executor)
+
+    streaming_path = executor.phase_dir / "iteration_001" / "streaming.jsonl"
+    streaming_text = streaming_path.read_text(encoding="utf-8")
+    assert "raw-primary-secret" not in streaming_text
+    assert "raw-fallback-secret" not in streaming_text
+    assert "error_excerpt" in streaming_text

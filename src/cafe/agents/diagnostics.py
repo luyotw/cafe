@@ -36,8 +36,7 @@ def is_transient_same_cli_error(error: BaseException) -> bool:
     if getattr(error, "error_type", None) != "cli_unavailable":
         return False
     display_message = getattr(error, "display_message", None)
-    display_text = display_message if isinstance(display_message, str) else ""
-    text = " ".join(part for part in (str(error), display_text) if part)
+    text = display_message if isinstance(display_message, str) and display_message else str(error)
     return bool(_TRANSIENT_CLI_UNAVAILABLE.search(text))
 
 
