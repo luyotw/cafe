@@ -21,6 +21,55 @@ def _write_playbook(root: Path, name: str, content: str) -> None:
     (root / f"{name}.yaml").write_text(content, encoding="utf-8")
 
 
+def test_playbook_rejects_human_task_outcome_outside_declared_steps(tmp_path: Path) -> None:
+    """A task cannot nominate a continuation absent from its own playbook."""
+    builtin_root = tmp_path / "builtin"
+    skill_dir = builtin_root / "skills" / "reviewer"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: reviewer
+description: reviewer
+workflow:
+  human_tasks:
+    - id: review-output
+      pattern: confirm_output
+      prompt: Review output
+      input_schema: decision
+      decisions:
+        - id: confirm
+          label: Approve
+---
+""",
+        encoding="utf-8",
+    )
+    _write_playbook(
+        builtin_root / "playbooks",
+        "invalid-human-task",
+        """
+playbook: {id: invalid-human-task}
+steps:
+  review:
+    role: reviewer
+    skill: reviewer
+    human_tasks:
+      - trigger: confirm_output
+        task_id: review-output
+        outcomes: {confirm: unknown}
+    on: {confirm_output: review, await_agent: _done}
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="human task outcome"):
+        loader.load_model("invalid-human-task")
+
+
 def test_load_uses_project_override(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
     global_root = tmp_path / "global"

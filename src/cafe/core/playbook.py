@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from cafe.core.human_tasks import HumanTaskBinding
 from cafe.core.prepare_fields import (
     PrepareField,
     assert_prepare_semantics_match,
@@ -127,6 +128,7 @@ class StepConfig(BaseModel):
     handoff_label: Optional[str] = None
     chat_role: Optional[str] = None
     alignment: Optional[StepAlignmentConfig] = None
+    human_tasks: tuple[HumanTaskBinding, ...] = ()
     on: Dict[str, str]
 
     @model_validator(mode="after")
@@ -134,6 +136,16 @@ class StepConfig(BaseModel):
         if "input_artifacts" in self.model_fields_set and self.input_artifacts is None:
             raise ValueError("input_artifacts must be a list when specified")
         return self
+
+    @field_validator("human_tasks")
+    @classmethod
+    def _validate_human_task_bindings(
+        cls, value: tuple[HumanTaskBinding, ...]
+    ) -> tuple[HumanTaskBinding, ...]:
+        triggers = [binding.trigger for binding in value]
+        if len(set(triggers)) != len(triggers):
+            raise ValueError("human task triggers must be unique per step")
+        return value
 
     @field_validator("on")
     @classmethod
@@ -462,6 +474,7 @@ def validate_playbook(
         _validate_step_chat_role(step_name, step, model.roles)
         _validate_step_skills(step_name, step, skill_loader)
         _validate_step_required_prompt_inputs(step_name, step, skill_loader)
+        _validate_step_human_tasks(step_name, step, steps, skill_loader)
         _validate_script_hook_stages(step_name, step.hooks)
         _validate_targets(step_name, step.allowed_goto, steps, "allowed_goto")
         _validate_transition_targets(step_name, step.on, steps)
@@ -658,6 +671,36 @@ def _validate_step_required_prompt_inputs(
                     f"required prompt input {mapping.placeholder!r} expects one of "
                     f"[{candidates}], but input_artifacts declares "
                     f"{sorted(declared_artifacts)}"
+                )
+
+
+def _validate_step_human_tasks(
+    step_name: str,
+    step: StepConfig,
+    steps: Dict[str, StepConfig],
+    skill_loader: SkillLoader,
+) -> None:
+    """Ensure every policy binding names a skill task and declared destinations."""
+    if not step.human_tasks:
+        return
+    selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
+    contracts = [skill_loader.get_workflow_contract(skill) for skill in selectors]
+    for binding in step.human_tasks:
+        if binding.trigger != "initial" and binding.trigger not in step.on:
+            raise ValueError(
+                f"Step '{step_name}' human task trigger {binding.trigger!r} "
+                "is not declared in its transitions"
+            )
+        for skill_name, contract in zip(selectors, contracts):
+            if not any(policy.id == binding.task_id for policy in contract.human_tasks):
+                raise ValueError(
+                    f"Step '{step_name}', skill {canonical_skill_name(str(skill_name))!r}: "
+                    f"unknown human task {binding.task_id!r}"
+                )
+        for target in [*binding.outcomes.values(), *binding.allowed_targets]:
+            if target != DONE_TARGET and target not in steps:
+                raise ValueError(
+                    f"Step '{step_name}' has invalid human task outcome target {target!r}"
                 )
 
 
