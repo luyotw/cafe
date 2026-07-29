@@ -495,6 +495,13 @@ def _reset_baton_for_explicit_start_step(
     """Make an explicit --start-step runnable even when the persisted baton is stale."""
     store = BlackboardStore(issue_dir)
     store.set_current_step(blackboard, active_step)
+    store.set_handoff_summary(
+        blackboard,
+        (
+            f"Explicit workflow start requested for {active_step}; "
+            "the prior handoff is superseded."
+        ),
+    )
     store.update_handoff_contract(
         blackboard,
         from_step=active_step,
@@ -750,8 +757,9 @@ def workflow(
             return result
 
         pending_start_step = start_step
+        explicit_start_step_pending = start_step is not None
         while True:
-            has_explicit_start_step = pending_start_step is not None
+            has_explicit_start_step = explicit_start_step_pending
             if dry_run:
                 pending_start_step = pending_start_step or str(
                     playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))
@@ -775,12 +783,14 @@ def workflow(
             )
 
             active_step = pending_start_step or blackboard.current_step
-            if not dry_run and has_explicit_start_step and active_step not in {"user", "done"}:
-                _reset_baton_for_explicit_start_step(
-                    issue_dir=issue_dir,
-                    blackboard=blackboard,
-                    active_step=active_step,
-                )
+            if not dry_run and has_explicit_start_step:
+                if active_step not in {"user", "done"}:
+                    _reset_baton_for_explicit_start_step(
+                        issue_dir=issue_dir,
+                        blackboard=blackboard,
+                        active_step=active_step,
+                    )
+                explicit_start_step_pending = False
             if not dry_run and active_step in {"user", "done"}:
                 handoff_contract = getattr(blackboard, "handoff_contract", None)
                 waiting_for_alignment = (
