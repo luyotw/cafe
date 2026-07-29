@@ -6,6 +6,11 @@ import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from cafe.agents.diagnostics import (
+    build_failed_attempt,
+    is_transient_same_cli_error,
+    sanitize_error_excerpt,
+)
 from cafe.agents.executor import AgentExecutor, AgentExecutionError
 from cafe.core.session import SessionManager
 from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, CliEntry, TokenUsage
@@ -50,6 +55,7 @@ class AgentManager:
         self._last_model: Optional[str] = None  # Track latest model used
         self._last_cli: Optional[AgentCLI] = None
         self._last_session_id: Optional[str] = None
+        self._failed_attempts: List[Dict[str, object]] = []
         self.show_prompt = False  # CLI can set this to True to show prompts
         self._use_mock = os.getenv("CAFE_MOCK_AGENTS", "").lower() in ("true", "1", "yes")
 
@@ -383,6 +389,7 @@ class AgentManager:
             AgentNotFoundError: If agent not found
             AgentExecutionError: If all agents (primary + backups) fail
         """
+        self._failed_attempts = []
         base_executor = self.get_agent(agent_name)
 
         try:
@@ -407,6 +414,8 @@ class AgentManager:
         # Track if we've already retried for session conflict
         retried = False
         read_only_budget_retried = False
+        transient_retry_done = False
+        primary_attempt = 1
         attempt_prompt = prompt
         read_only_command_limit = (
             self.DEVELOP_READ_ONLY_COMMAND_LIMIT if phase_name == "develop" else None
@@ -431,6 +440,12 @@ class AgentManager:
                 )
                 break  # Success, exit loop
             except AgentExecutionError as e:
+                self._record_failed_attempt(
+                    cli=executor.config.cli,
+                    chain_role="primary",
+                    attempt=primary_attempt,
+                    error=e,
+                )
                 # Handle session conflict (only retry once)
                 if (
                     getattr(e, "error_type", None) == "read_only_budget_exceeded"
@@ -442,13 +457,22 @@ class AgentManager:
                     print(
                         "⚠️  Resuming the develop session once with an immediate-edit instruction..."
                     )
+                    primary_attempt += 1
                 elif hasattr(e, 'error_type') and e.error_type == "SESSION_CONFLICT" and not retried:
                     retried = True
                     # Clear session ID to force creation of new session on next execution
                     print(f"⚠️  Session conflict detected, will create new session on retry...")
                     executor.config.session_id = None
+                    primary_attempt += 1
 
                     # Loop will retry (with no session ID, a new one will be created)
+                elif is_transient_same_cli_error(e) and not transient_retry_done:
+                    transient_retry_done = True
+                    primary_attempt += 1
+                    print(
+                        f"⚠️  {executor.config.cli.value} connection closed unexpectedly, "
+                        "retrying once..."
+                    )
                 elif hasattr(e, 'error_type') and e.error_type in self.FALLBACKABLE_ERROR_TYPES:
                     # Try backup agents
                     agent_response = self._try_backup_agents(
@@ -597,7 +621,9 @@ class AgentManager:
 
         # Track tried CLIs to avoid duplicates
         tried_clis = {config.cli}
-        failed_agents: List[str] = [f"{primary_cli_name} ({primary_error})"]
+        failed_agents: List[str] = [
+            f"{primary_cli_name} ({sanitize_error_excerpt(primary_error)})"
+        ]
 
         for entry in fallback_entries:
             if entry.cli in tried_clis:
@@ -621,34 +647,55 @@ class AgentManager:
             )
             backup_executor = AgentExecutor(backup_config)
 
-            try:
-                execute_kwargs = {}
-                if phase_name == "develop":
-                    execute_kwargs["max_read_only_commands"] = (
-                        self.DEVELOP_READ_ONLY_COMMAND_LIMIT
+            backup_attempt = 1
+            transient_retry_done = False
+            while True:
+                try:
+                    execute_kwargs = {}
+                    if phase_name == "develop":
+                        execute_kwargs["max_read_only_commands"] = (
+                            self.DEVELOP_READ_ONLY_COMMAND_LIMIT
+                        )
+                    agent_response = backup_executor.execute(
+                        prompt,
+                        allowed_tools,
+                        allowed_directories,
+                        streaming_output_file,
+                        **execute_kwargs,
                     )
-                agent_response = backup_executor.execute(
-                    prompt,
-                    allowed_tools,
-                    allowed_directories,
-                    streaming_output_file,
-                    **execute_kwargs,
-                )
-                if agent_response.cli is None:
-                    agent_response.cli = entry.cli
-                if agent_response.session_id is None:
-                    agent_response.session_id = backup_executor.config.session_id
-                if agent_response.model is None:
-                    agent_response.model = backup_model
-                print(f"✅ Successfully completed with {entry.cli.value}")
-                return agent_response
-            except AgentExecutionError as backup_error:
-                if hasattr(backup_error, 'error_type') and backup_error.error_type in self.FALLBACKABLE_ERROR_TYPES:
-                    failed_agents.append(f"{entry.cli.value} ({backup_error})")
-                    print(f"❌ {entry.cli.value} failed ({self._fallback_reason(backup_error)}), trying next agent...")
-                    self._print_fallback_error_detail(backup_error)
-                    continue
-                else:
+                    if agent_response.cli is None:
+                        agent_response.cli = entry.cli
+                    if agent_response.session_id is None:
+                        agent_response.session_id = backup_executor.config.session_id
+                    if agent_response.model is None:
+                        agent_response.model = backup_model
+                    print(f"✅ Successfully completed with {entry.cli.value}")
+                    return agent_response
+                except AgentExecutionError as backup_error:
+                    self._record_failed_attempt(
+                        cli=entry.cli,
+                        chain_role="fallback",
+                        attempt=backup_attempt,
+                        error=backup_error,
+                    )
+                    if is_transient_same_cli_error(backup_error) and not transient_retry_done:
+                        transient_retry_done = True
+                        backup_attempt += 1
+                        print(
+                            f"⚠️  {entry.cli.value} connection closed unexpectedly, "
+                            "retrying once..."
+                        )
+                        continue
+                    if (
+                        hasattr(backup_error, 'error_type')
+                        and backup_error.error_type in self.FALLBACKABLE_ERROR_TYPES
+                    ):
+                        failed_agents.append(
+                            f"{entry.cli.value} ({sanitize_error_excerpt(backup_error)})"
+                        )
+                        print(f"❌ {entry.cli.value} failed ({self._fallback_reason(backup_error)}), trying next agent...")
+                        self._print_fallback_error_detail(backup_error)
+                        break
                     raise
 
         # All agents (primary + all fallbacks) failed, compose error message
@@ -657,7 +704,33 @@ class AgentManager:
             f"All agents failed. Tried: {tried_list}. "
             f"Please wait for transient failures to clear or add more backup agents.",
             error_type=getattr(primary_error, "error_type", None) or "agent_unavailable",
+            display_message=(
+                f"All agents failed. Tried: {tried_list}. "
+                "Please wait for transient failures to clear or add more backup agents."
+            ),
         )
+
+    def _record_failed_attempt(
+        self,
+        *,
+        cli: AgentCLI,
+        chain_role: str,
+        attempt: int,
+        error: AgentExecutionError,
+    ) -> None:
+        """Append one safe diagnostic record for the current execute call."""
+        self._failed_attempts.append(
+            build_failed_attempt(
+                cli=cli,
+                chain_role=chain_role,
+                attempt=attempt,
+                error=error,
+            )
+        )
+
+    def get_failed_attempts(self) -> List[Dict[str, object]]:
+        """Return a defensive copy of this execution's failed CLI attempts."""
+        return [dict(attempt) for attempt in self._failed_attempts]
 
     @staticmethod
     def _fallback_reason(error: AgentExecutionError) -> str:

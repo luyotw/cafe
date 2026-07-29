@@ -782,6 +782,20 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
 
         # Track model separately (use latest value, don't accumulate)
         model: Optional[str] = None
+        failed_attempts: List[Dict[str, Any]] = []
+
+        def get_failed_attempts() -> List[Dict[str, Any]]:
+            """Read optional manager diagnostics without breaking legacy test doubles."""
+            getter = getattr(self.agent_manager, "get_failed_attempts", None)
+            if not callable(getter):
+                return []
+            try:
+                attempts = getter()
+            except Exception:
+                return []
+            if not isinstance(attempts, list):
+                return []
+            return [dict(attempt) for attempt in attempts if isinstance(attempt, dict)]
 
         try:
             execute_kwargs = {
@@ -804,6 +818,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 prompt,
                 **execute_kwargs,
             )
+            failed_attempts = get_failed_attempts()
 
             actual_agent_cli = getattr(self.agent_manager, "get_last_cli", lambda: None)()
             if (
@@ -839,7 +854,10 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             from cafe.agents.executor import AgentExecutionError
             from cafe.core.types import CriticalPhaseError
 
-            display_error = getattr(e, "display_message", None) or str(e)
+            from cafe.agents.diagnostics import sanitize_error_excerpt
+
+            failed_attempts = get_failed_attempts()
+            display_error = sanitize_error_excerpt(e)
             print(f"⚠️  Agent execution failed: {display_error}")
 
             # 4a. Check if it's a critical error - fail immediately without recovery
@@ -862,13 +880,26 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                         context_data["status_code"] = None
                     else:
                         context_data.pop("status_code", None)
-                    context_data["error"] = str(e)
+                    context_data["error"] = display_error
                     context_data["display_error"] = display_error
                     context_data["error_type"] = e.error_type
                     context_data["is_critical"] = True
+                    if failed_attempts:
+                        context_data["failed_attempts"] = failed_attempts
 
                     with open(context_file, "w", encoding="utf-8") as f:
                         json.dump(context_data, f, ensure_ascii=False, indent=2)
+
+                error_file = iteration_dir / "error.json"
+                error_data = {
+                    "error": display_error,
+                    "error_type": e.error_type,
+                    "is_critical": True,
+                    "timestamp": datetime.now().astimezone().isoformat(),
+                    "failed_attempts": failed_attempts,
+                }
+                with open(error_file, "w", encoding="utf-8") as f:
+                    json.dump(error_data, f, ensure_ascii=False, indent=2)
 
                 # Create a CriticalError wrapper to signal this should stop the workflow
                 raise CriticalPhaseError(
@@ -895,14 +926,15 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             iteration_dir.mkdir(parents=True, exist_ok=True)
             error_file = iteration_dir / "error.json"
             error_data = {
-                "error": str(e),
-                "error_type": type(e).__name__,
+                "error": display_error,
+                "error_type": getattr(e, "error_type", None) or type(e).__name__,
                 "is_critical": isinstance(e, CriticalPhaseError),
                 "timestamp": datetime.now().astimezone().isoformat(),
                 "written_files": [str(f) for f in written_files],
                 "changed_written_files": [str(f) for f in changed_written_files],
                 "recovered_response": bool(recovered_response),
                 "recovered_status": recovered_status_code.value if recovered_status_code else None,
+                "failed_attempts": failed_attempts,
             }
             with open(error_file, "w", encoding="utf-8") as f:
                 json.dump(error_data, f, ensure_ascii=False, indent=2)
@@ -922,7 +954,9 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 phase_specific_data["response"] = response
                 phase_specific_data["permission_denials"] = []
                 phase_specific_data["recovered_from_error"] = True
-                phase_specific_data["original_error"] = str(e)
+                phase_specific_data["original_error"] = display_error
+                if failed_attempts:
+                    phase_specific_data["failed_attempts"] = failed_attempts
 
                 # Update history（Including recovered response and status）
                 # Record actual CLI arguments if possible (if error object has them)
@@ -963,7 +997,9 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                         history_data["status_code"] = None
                     else:
                         history_data.pop("status_code", None)
-                    history_data["error"] = str(e)
+                    history_data["error"] = display_error
+                    if failed_attempts:
+                        history_data["failed_attempts"] = failed_attempts
 
                     # Record error type (if any)
                     if isinstance(e, AgentExecutionError) and hasattr(e, "error_type"):
@@ -987,12 +1023,15 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         if no_response_status:
             # Agent returned empty response - save and return NO_RESPONSE
             # Note: streaming.jsonl is already written in real-time by executor
+            history_data = {
+                "response": response,
+                "permission_denials": [denial.model_dump() for denial in permission_denials],
+                "streaming_log": streaming_log,
+            }
+            if failed_attempts:
+                history_data["failed_attempts"] = failed_attempts
             self._update_iteration_history(
-                phase_specific_data={
-                    "response": response,
-                    "permission_denials": [denial.model_dump() for denial in permission_denials],
-                    "streaming_log": streaming_log
-                },
+                phase_specific_data=history_data,
                 prompt=prompt,
                 agent_cli=agent_cli,
                 agent_session_id=agent_session_id,
@@ -1007,12 +1046,15 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             return response, no_response_status
 
         if not require_status_code:
+            history_data = {
+                "response": response,
+                "permission_denials": [denial.model_dump() for denial in permission_denials],
+                "streaming_log": streaming_log,
+            }
+            if failed_attempts:
+                history_data["failed_attempts"] = failed_attempts
             self._update_iteration_history(
-                phase_specific_data={
-                    "response": response,
-                    "permission_denials": [denial.model_dump() for denial in permission_denials],
-                    "streaming_log": streaming_log,
-                },
+                phase_specific_data=history_data,
                 prompt=prompt,
                 agent_cli=agent_cli,
                 agent_session_id=agent_session_id,
@@ -1067,6 +1109,8 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             "permission_denials": [denial.model_dump() for denial in permission_denials],
             "streaming_log": streaming_log
         }
+        if failed_attempts:
+            phase_data["failed_attempts"] = failed_attempts
 
         # Note: streaming.jsonl is already written in real-time by executor
         self._update_iteration_history(

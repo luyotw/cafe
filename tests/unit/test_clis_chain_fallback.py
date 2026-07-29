@@ -26,6 +26,13 @@ def _cli_unavailable() -> AgentExecutionError:
     return AgentExecutionError("subscription disabled", error_type="cli_unavailable")
 
 
+def _transient_cli_unavailable() -> AgentExecutionError:
+    return AgentExecutionError(
+        "socket connection was closed unexpectedly",
+        error_type="cli_unavailable",
+    )
+
+
 def _model_not_found() -> AgentExecutionError:
     return AgentExecutionError("bad model", error_type="model_not_found")
 
@@ -177,6 +184,126 @@ class TestClisChainFallbackBasic:
 
         assert response == "codex ok"
         assert call_count == 2
+
+    def test_primary_transient_error_retries_once_before_fallback(self) -> None:
+        """A known transient primary error gets one same-CLI retry before fallback."""
+        manager = _make_manager([
+            CliEntry(cli=AgentCLI.CLAUDE),
+            CliEntry(cli=AgentCLI.GEMINI),
+        ])
+        errors = [_transient_cli_unavailable(), _transient_cli_unavailable()]
+
+        def side_effect(*args, **kwargs):
+            if errors:
+                raise errors.pop(0)
+            return _ok("gemini response")
+
+        with patch(
+            "cafe.agents.executor.AgentExecutor.execute",
+            side_effect=side_effect,
+        ) as execute:
+            response, *_ = manager.execute("David", "unchanged prompt")
+
+        assert response == "gemini response"
+        assert execute.call_count == 3
+        assert manager.get_failed_attempts() == [
+            {
+                "cli": "claude",
+                "chain_role": "primary",
+                "attempt": 1,
+                "error_type": "cli_unavailable",
+                "error_excerpt": "socket connection was closed unexpectedly",
+            },
+            {
+                "cli": "claude",
+                "chain_role": "primary",
+                "attempt": 2,
+                "error_type": "cli_unavailable",
+                "error_excerpt": "socket connection was closed unexpectedly",
+            },
+        ]
+
+    def test_fallback_transient_error_retries_once_without_reordering_chain(self) -> None:
+        """Each fallback gets one bounded retry before the next configured CLI."""
+        manager = _make_manager([
+            CliEntry(cli=AgentCLI.CLAUDE),
+            CliEntry(cli=AgentCLI.GEMINI),
+            CliEntry(cli=AgentCLI.COPILOT),
+        ])
+        errors = [_rate_limit(), _transient_cli_unavailable(), _transient_cli_unavailable()]
+
+        def side_effect(*args, **kwargs):
+            if errors:
+                raise errors.pop(0)
+            return _ok("copilot response")
+
+        with patch(
+            "cafe.agents.executor.AgentExecutor.execute",
+            side_effect=side_effect,
+        ) as execute:
+            response, *_ = manager.execute("David", "unchanged prompt")
+
+        assert response == "copilot response"
+        assert execute.call_count == 4
+        assert [record["cli"] for record in manager.get_failed_attempts()] == [
+            "claude",
+            "gemini",
+            "gemini",
+        ]
+        assert [record["attempt"] for record in manager.get_failed_attempts()] == [1, 1, 2]
+
+    @pytest.mark.parametrize(
+        ("error", "expected_type"),
+        [
+            (_rate_limit(), "rate_limit"),
+            (_cli_not_found(), "cli_not_found"),
+            (_model_not_found(), "model_not_found"),
+            (_cli_unavailable(), "cli_unavailable"),
+            (AgentExecutionError("HTTP 403", error_type="cli_unavailable"), "cli_unavailable"),
+        ],
+    )
+    def test_non_transient_errors_do_not_receive_same_cli_retry(
+        self,
+        error: AgentExecutionError,
+        expected_type: str,
+    ) -> None:
+        """Fallbackable, non-transient errors preserve the existing one-call behavior."""
+        manager = _make_manager([
+            CliEntry(cli=AgentCLI.CLAUDE),
+            CliEntry(cli=AgentCLI.GEMINI),
+        ])
+
+        with patch(
+            "cafe.agents.executor.AgentExecutor.execute",
+            side_effect=[error, _ok("fallback response")],
+        ) as execute:
+            response, *_ = manager.execute("David", "prompt")
+
+        assert response == "fallback response"
+        assert execute.call_count == 2
+        assert manager.get_failed_attempts()[0]["error_type"] == expected_type
+
+    def test_failed_attempt_diagnostics_reset_for_each_execute(self) -> None:
+        """A later execution cannot inherit diagnostics from an earlier failure."""
+        manager = _make_manager([CliEntry(cli=AgentCLI.CLAUDE)])
+
+        with patch(
+            "cafe.agents.executor.AgentExecutor.execute",
+            side_effect=[_transient_cli_unavailable(), _ok("retried")],
+        ):
+            response, *_ = manager.execute("David", "prompt")
+
+        assert response == "retried"
+        assert len(manager.get_failed_attempts()) == 1
+
+        with patch(
+            "cafe.agents.executor.AgentExecutor.execute",
+            return_value=_ok("clean execution"),
+        ):
+            response, *_ = manager.execute("David", "another prompt")
+
+        assert response == "clean execution"
+        assert manager.get_failed_attempts() == []
 
     def test_model_not_found_also_triggers_fallback(self) -> None:
         """Bad model configuration on one CLI should try the next configured CLI."""
