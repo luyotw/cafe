@@ -211,6 +211,61 @@ def test_routine_low_risk_work_does_not_pause(tmp_path: Path) -> None:
     assert result.payload is None
 
 
+def test_routine_scope_wording_does_not_trigger_product_alignment(tmp_path: Path) -> None:
+    result = evaluate_alignment_policy(
+        AlignmentPolicyInput(
+            step_name="spec",
+            user_input=(
+                "Implement the remaining operational scope, preserve existing fallback "
+                "behavior, and cover it with regression tests."
+            ),
+        ),
+        strategic_context=_context(tmp_path),
+    )
+
+    assert result.level == AlignmentDecisionLevel.NO_ALIGNMENT
+    assert result.payload is None
+
+
+def test_spec_boilerplate_and_negated_positioning_change_do_not_pause(
+    tmp_path: Path,
+) -> None:
+    result = evaluate_alignment_policy(
+        AlignmentPolicyInput(
+            step_name="spec",
+            user_input=("四項全選：保存安全摘要、同一 CLI 重試一次、保持相容，並加入回歸測試。"),
+            artifacts={
+                "current_output": """
+## 範圍與紅線
+
+- 本次不做產品方向擴張。
+- 不改變產品定位、治理原則或受信任權限邊界。
+
+## Principles 對應
+
+這是既有 workflow reliability 行為的修正。
+"""
+            },
+        ),
+        strategic_context=_context(tmp_path),
+    )
+
+    assert result.level == AlignmentDecisionLevel.NO_ALIGNMENT
+    assert result.payload is None
+
+
+def test_chinese_product_direction_change_still_forces_checkpoint(tmp_path: Path) -> None:
+    result = evaluate_alignment_policy(
+        AlignmentPolicyInput(step_name="spec", user_input="這次需要調整產品方向與路線圖。"),
+        strategic_context=_context(tmp_path),
+    )
+
+    assert result.level == AlignmentDecisionLevel.MUST_ALIGN
+    assert any(
+        rule.rule_id == "mandate_escalation:product_scope" for rule in result.triggered_rules
+    )
+
+
 def test_configured_document_categories_do_not_trigger_by_themselves(tmp_path: Path) -> None:
     result = evaluate_alignment_policy(
         AlignmentPolicyInput(step_name="develop", user_input="Fix a typo in a unit test helper."),

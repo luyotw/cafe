@@ -217,6 +217,71 @@ TRUSTED_CAPABILITY_BOUNDARY_KEYWORDS: tuple[str, ...] = (
     "信任邊界",
 )
 
+_STRATEGIC_CHANGE_ACTION_RE = re.compile(
+    r"""
+    \b(?:
+        chang(?:e|es|ed|ing)
+        |expand(?:s|ed|ing)?
+        |broaden(?:s|ed|ing)?
+        |shift(?:s|ed|ing)?
+        |redefin(?:e|es|ed|ing)
+        |revis(?:e|es|ed|ing)
+        |updat(?:e|es|ed|ing)
+        |modif(?:y|ies|ied|ying)
+        |alter(?:s|ed|ing)?
+        |decid(?:e|es|ed|ing)
+        |clarif(?:y|ies|ied|ying)
+        |defin(?:e|es|ed|ing)
+        |draft(?:s|ed|ing)?
+        |introduc(?:e|es|ed|ing)
+        |add(?:s|ed|ing)?
+        |remov(?:e|es|ed|ing)
+    )\b
+    |改變|變更|擴大|擴張|拓展|重新定義|修訂|更新|修改|調整|決定|釐清|定義|草擬|新增|移除
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+_STRATEGIC_TARGET_RES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\broadmap(?:\s+scope)?\b", re.IGNORECASE),
+    re.compile(
+        r"\bproduct(?:\s+[\w-]+){0,4}\s+(?:direction|strategy|scope)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:positioning|governance|principles?|business model|user trust|north star)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"路線圖|產品.{0,24}(?:方向|策略|範圍)|定位|治理|原則|商業模式|使用者信任|北極星"),
+)
+
+_NEGATED_ACTION_PREFIX_RE = re.compile(
+    r"""
+    (?:
+        \b(?:do|does|did|will|would|should|must|can)\s+not\s+
+        |\b(?:don't|doesn't|didn't|won't|wouldn't|shouldn't|mustn't|can't)\s+
+        |\bwithout\s+
+        |\bno\s+
+        |\bnot\s+
+        |不(?:會|再|要|應|得|需)?
+        |無需
+        |毋須
+        |避免
+    )$
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+_NON_SCOPE_LINE_MARKERS: tuple[str, ...] = (
+    "out of scope",
+    "non-goal",
+    "non-goals",
+    "範圍外",
+    "非目標",
+    "本次不做",
+    "不包含",
+)
+
 
 def evaluate_alignment_policy(
     input_data: AlignmentPolicyInput,
@@ -246,7 +311,7 @@ def evaluate_alignment_policy(
     for axis_name, axis in strategic_context.axes.items():
         if axis.level != "escalate":
             continue
-        if _matches_keywords(text, AXIS_KEYWORDS.get(axis_name, (axis_name,))):
+        if _matches_axis_escalation(text, axis_name):
             triggered.append(
                 TriggeredRule(
                     f"mandate_escalation:{axis_name}",
@@ -417,6 +482,42 @@ def _matches_keywords(text: str, keywords: Sequence[str]) -> bool:
     return any(keyword.lower() in text for keyword in keywords)
 
 
+def _matches_axis_escalation(text: str, axis_name: str) -> bool:
+    """Return whether the request has actionable impact on an escalated axis.
+
+    Product artifacts routinely mention headings such as "scope" and
+    "principles", including explicit statements that positioning is unchanged.
+    Those mentions are context, not a product-direction decision. Require a
+    non-negated change/decision action near a strategic product target before
+    forcing a product-scope checkpoint.
+    """
+    if axis_name == "product_scope":
+        return _matches_strategic_change_intent(text)
+    return _matches_keywords(text, AXIS_KEYWORDS.get(axis_name, (axis_name,)))
+
+
+def _matches_strategic_change_intent(text: str) -> bool:
+    for action in _STRATEGIC_CHANGE_ACTION_RE.finditer(text):
+        line_start = text.rfind("\n", 0, action.start()) + 1
+        line_end = text.find("\n", action.end())
+        if line_end == -1:
+            line_end = len(text)
+        line = text[line_start:line_end]
+        line_prefix = text[line_start : action.start()].rstrip()
+        nearby_prefix = line_prefix[-32:]
+        if any(marker in line.lower() for marker in _NON_SCOPE_LINE_MARKERS):
+            continue
+        if _NEGATED_ACTION_PREFIX_RE.search(nearby_prefix):
+            continue
+
+        window_start = max(line_start, action.start() - 120)
+        window_end = min(line_end, action.end() + 120)
+        window = text[window_start:window_end]
+        if any(pattern.search(window) for pattern in _STRATEGIC_TARGET_RES):
+            return True
+    return False
+
+
 def _detect_document_categories(text: str) -> list[str]:
     categories: list[str] = []
     for category, keywords in DOCUMENT_KEYWORDS.items():
@@ -461,7 +562,9 @@ def _score_signals(
     strategic_context: StrategicContext,
 ) -> list[TriggeredRule]:
     rules: list[TriggeredRule] = []
-    if _matches_keywords(text, TRUSTED_CAPABILITY_BOUNDARY_KEYWORDS):
+    trusted_boundary = _matches_keywords(text, TRUSTED_CAPABILITY_BOUNDARY_KEYWORDS)
+    strategic_change = _matches_strategic_change_intent(text)
+    if trusted_boundary:
         rules.append(
             TriggeredRule(
                 "trusted_capability_boundary",
@@ -470,21 +573,7 @@ def _score_signals(
                 5,
             )
         )
-    if _matches_keywords(
-        text,
-        (
-            "product",
-            "roadmap",
-            "governance",
-            "positioning",
-            "principles",
-            "產品",
-            "路線圖",
-            "治理",
-            "定位",
-            "原則",
-        ),
-    ):
+    if strategic_change:
         rules.append(
             TriggeredRule(
                 "product_or_governance_impact",
@@ -513,17 +602,18 @@ def _score_signals(
                 "architecture_scope_risk", "Architecture scope risk detected.", "medium", 2
             )
         )
-    for category in affected_categories:
-        doc = strategic_context.document(category)
-        if doc.status in {"missing", "draft"}:
-            rules.append(
-                TriggeredRule(
-                    f"strategic_document_{doc.status}:{category}",
-                    f"Relevant strategic document '{category}' is {doc.status}.",
-                    "medium",
-                    3,
+    if strategic_change or trusted_boundary or _explicit_alignment_requested(text):
+        for category in affected_categories:
+            doc = strategic_context.document(category)
+            if doc.status in {"missing", "draft"}:
+                rules.append(
+                    TriggeredRule(
+                        f"strategic_document_{doc.status}:{category}",
+                        f"Relevant strategic document '{category}' is {doc.status}.",
+                        "medium",
+                        3,
+                    )
                 )
-            )
     return rules
 
 
