@@ -86,9 +86,11 @@ class HumanTaskPolicy(BaseModel):
     pattern: HumanTaskPattern
     prompt: str
     input_schema: HumanTaskInputSchema
+    required: bool = True
     correction_guidance: str = "Provide a complete response using the requested format."
     decisions: tuple[HumanTaskDecision, ...] = ()
     questions: tuple[HumanTaskQuestion, ...] = ()
+    questions_from_xml: bool = False
     allowed_targets: tuple[str, ...] = ()
 
     @field_validator("id", "prompt", "correction_guidance")
@@ -119,14 +121,16 @@ class HumanTaskPolicy(BaseModel):
             raise ValueError("question ids must be unique")
         if self.input_schema == "decision" and not self.decisions:
             raise ValueError("decision policies require at least one decision")
-        if self.input_schema == "answers" and not self.questions:
-            raise ValueError("answer policies require at least one question")
+        if self.input_schema == "answers" and not self.questions and not self.questions_from_xml:
+            raise ValueError("answer policies require inline questions or questions_from_xml")
         if self.input_schema == "target" and not self.allowed_targets:
             raise ValueError("target policies require at least one allowed target")
         if self.input_schema != "decision" and self.decisions:
             raise ValueError("only decision policies may declare decisions")
         if self.input_schema != "answers" and self.questions:
             raise ValueError("only answer policies may declare questions")
+        if self.input_schema != "answers" and self.questions_from_xml:
+            raise ValueError("only answer policies may use questions_from_xml")
         return self
 
 
@@ -226,6 +230,8 @@ def resolve_human_task_policy(
 def validate_human_task_completion(
     policy: HumanTaskPolicy,
     raw_payload: str | Mapping[str, Any],
+    *,
+    questions: Optional[Sequence[HumanTaskQuestion]] = None,
 ) -> HumanTaskCompletion | HumanTaskRejection:
     """Normalize interactive or command input without changing workflow state."""
     payload = _parse_payload(policy, raw_payload)
@@ -236,9 +242,9 @@ def validate_human_task_completion(
         return _reject(policy, "This response belongs to a different human task.")
     if policy.input_schema == "feedback":
         feedback = str(payload.get("feedback") or "").strip()
-        if not feedback:
+        if not feedback and policy.required:
             return _reject(policy, "Feedback is required before this task can continue.")
-        return HumanTaskCompletion(task_id=policy.id, feedback=feedback)
+        return HumanTaskCompletion(task_id=policy.id, feedback=feedback or None)
     if policy.input_schema == "decision":
         decision = str(payload.get("decision") or "").strip()
         valid = {item.id: item for item in policy.decisions}
@@ -257,15 +263,22 @@ def validate_human_task_completion(
     raw_answers = payload.get("answers")
     if not isinstance(raw_answers, Mapping):
         return _reject(policy, "Answers must be an object keyed by question id.")
+    questions_to_validate = tuple(questions) if questions is not None else policy.questions
+    if policy.questions_from_xml and not questions_to_validate:
+        return _reject(policy, "The workflow has no valid clarification questions to answer.")
     answers: dict[str, tuple[str, ...]] = {}
-    for question in policy.questions:
+    for question in questions_to_validate:
         provided = raw_answers.get(question.id)
         values = _answer_values(provided)
         if not values:
             return _reject(policy, f"Answer the required question {question.id!r}.")
         if not question.multiple and len(values) != 1:
             return _reject(policy, f"Question {question.id!r} accepts one answer.")
-        if question.options and any(value not in question.options for value in values):
+        if (
+            question.options
+            and not policy.questions_from_xml
+            and any(value not in question.options for value in values)
+        ):
             return _reject(policy, f"Question {question.id!r} has an unsupported answer.")
         answers[question.id] = values
     return HumanTaskCompletion(task_id=policy.id, answers=answers)
@@ -288,7 +301,7 @@ def resolve_human_task_continuation(
     allowed = set(binding.allowed_targets or policy.allowed_targets)
     if allowed and target not in allowed:
         return _reject(policy, "The selected continuation is not permitted by this task.")
-    if target not in set(playbook_steps):
+    if target != "_done" and target not in set(playbook_steps):
         return _reject(policy, "The selected continuation is not declared by this playbook.")
     return target
 

@@ -26,6 +26,7 @@ from cafe.ui.cli_shared import (
     parse_alignment_decision_payload,
     resolve_iteration_number as _resolve_iteration_number,
 )
+from cafe.ui.human_tasks import apply_human_task_payload
 from cafe.agents.executor import AgentExecutionError
 from cafe.utils.config import ConfigError, validate_directories_exist
 
@@ -883,6 +884,29 @@ def workflow(
                                 pending_start_step = selected_step
                                 continue
                             return
+                        if contract.intent in {
+                            HandoffIntent.CONFIRM_OUTPUT,
+                            HandoffIntent.NEED_CLARIFICATION,
+                            HandoffIntent.NO_CHANGES_NEEDED,
+                        }:
+                            result = apply_human_task_payload(
+                                issue_dir=issue_dir,
+                                playbook_data=playbook_data,
+                                blackboard=blackboard,
+                                from_step=from_step,
+                                trigger=contract.intent.value,
+                                raw_payload=user_input,
+                                source="command",
+                            )
+                            if result.rejection is not None:
+                                console.print(f"[yellow]{result.rejection.message}[/yellow]")
+                                console.print(
+                                    f"[dim]{result.rejection.correction_guidance}[/dim]"
+                                )
+                                return
+                            user_input = None
+                            pending_start_step = result.target
+                            continue
                         store = BlackboardStore(issue_dir)
                         from_step_dir = issue_dir / from_step
                         iteration_dirs = sorted(from_step_dir.glob("iteration_*")) if from_step_dir.exists() else []

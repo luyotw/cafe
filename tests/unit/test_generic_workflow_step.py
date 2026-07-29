@@ -826,6 +826,38 @@ def test_generic_workflow_step_resume_user_input_rejects_different_execution_cli
     assert resolved == "workflow execute"
 
 
+def test_first_iteration_declared_initial_task_uses_empty_optional_input(
+    tmp_path: Path,
+) -> None:
+    """Optional first-run input follows the declaration, not a plan step name."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-initial-task"
+    playbook = {
+        "playbook": {"id": "custom"},
+        "roles": {"writer": {"default_agent": "David"}},
+        "steps": {
+            "draft": {
+                "skill": "cafe-plan",
+                "role": "writer",
+                "human_tasks": [{"trigger": "initial", "task_id": "optional-guide"}],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-initial-task",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"writer": "David"},
+    )
+    executor.phase_dir = issue_dir / "draft"
+    executor.iteration = 1
+
+    assert executor._load_iteration_user_input_candidate("draft") == ""
+
+
 def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill(
     tmp_path: Path, monkeypatch
 ) -> None:

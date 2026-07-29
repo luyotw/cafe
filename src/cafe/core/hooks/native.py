@@ -6,18 +6,17 @@ import json
 import sys
 import uuid
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
-
-from datetime import datetime
 
 from cafe.core.blackboard import BlackboardState, HandoffContract, HandoffIntent, HandoffOwner
 from cafe.core.hooks import HookResult, NoOpHook
 from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
 from cafe.core.status_codes import PhaseStatusCode, step_on_declares
 from cafe.skills.loader import SkillLoader
-from cafe.ui.interactive_qa import interactive_qa_flow
 from cafe.ui.inquirer_prompts import prompt_multiline
+from cafe.ui.interactive_qa import interactive_qa_flow
 from cafe.utils.github import (
     GitHubError,
     GitHubOps,
@@ -236,12 +235,7 @@ class UserInputCollector(NoOpHook):
     ) -> None:
         if previous_output_file is None:
             return
-        title_map = {
-            "spec": "requirements specification",
-            "plan": "plan",
-        }
-        title = title_map.get(step_name, f"{step_name} output")
-        print(f"\nLoading latest {title} file: {previous_output_file}\n")
+        print(f"\nLoading latest {step_name} output: {previous_output_file}\n")
         if previous_output_file.exists():
             print("=" * 60)
             print(previous_output_file.read_text(encoding="utf-8"))
@@ -269,20 +263,13 @@ class UserInputCollector(NoOpHook):
 
     @staticmethod
     def _resolve_review_item_name(step_name: str) -> str:
-        return {
-            "spec": "Requirements specification",
-            "plan": "Implementation plan",
-        }.get(step_name, step_name)
+        """Use the playbook step identifier instead of development-flow labels."""
+        return step_name
 
     @staticmethod
-    def _resolve_phase_specific_data(step_name: str, agent_name: str) -> dict[str, str]:
-        if not agent_name:
-            return {}
-        if step_name == "spec":
-            return {"pm_agent": agent_name}
-        if step_name == "plan":
-            return {"dev_agent": agent_name}
-        return {"agent_name": agent_name}
+    def _resolve_phase_specific_data(agent_name: str) -> dict[str, str]:
+        """Keep review helpers supplied with a generic optional agent name."""
+        return {"agent_name": agent_name} if agent_name else {}
 
     def run(self, **kwargs: Any) -> HookResult:
         stage = kwargs.get("stage")
@@ -298,41 +285,26 @@ class UserInputCollector(NoOpHook):
         agent_name = str(kwargs.get("agent_name") or "")
         role = str(step_def.get("role", "developer"))
 
-        # Restore plan phase iteration-1 initial user input (development guide).
-        if step_name == "plan" and getattr(phase, "iteration", 0) == 1:
-            if step_name not in phase.step_user_inputs:
-                if getattr(phase, "interactive", False):
-                    development_guide_prompt = (
-                        "Please enter development guide (can be left empty)\n"
-                        "Suggested content:\n"
-                        "- Technical solution/direction\n"
-                        "- Related code locations\n"
-                        "- Technical constraints or dependencies\n"
-                        "- Key background information\n"
-                        "(Press Esc + Enter to finish)"
-                    )
-                    user_input = prompt_multiline(development_guide_prompt).strip()
-                else:
-                    user_input = ""
-                phase.step_user_inputs[step_name] = user_input
-            return HookResult(
-                context_updates={"user_input": phase.step_user_inputs.get(step_name, "")},
-                events=[
-                    {
-                        "type": "user_input_collected",
-                        "step": step_name,
-                        "source": "initial_prompt",
-                    }
-                ],
-            )
-
-        previous_status = _get_previous_iteration_status(phase)
-        if previous_status == "no_changes_needed" and step_name == "develop":
-            return self._handle_develop_no_changes_user_input(
+        if getattr(phase, "iteration", 0) == 1:
+            initial = self._collect_declared_human_task(
                 phase=phase,
                 step_name=step_name,
-                agent_name=agent_name,
+                step_def=step_def,
+                trigger="initial",
             )
+            if initial is not None:
+                return initial
+
+        previous_status = _get_previous_iteration_status(phase)
+        if previous_status == "no_changes_needed":
+            result = self._collect_declared_human_task(
+                phase=phase,
+                step_name=step_name,
+                step_def=step_def,
+                trigger="no_changes_needed",
+            )
+            if result is not None:
+                return result
 
         if previous_status not in {"need_clarification", "ready_for_review"}:
             return HookResult()
@@ -380,13 +352,11 @@ class UserInputCollector(NoOpHook):
             prev_data = phase._load_previous_iteration_data() or {}
             # Show diff again after returning from chat/edit, but never print full output.
             if delta_displayed:
-                redisplay_callback = lambda: self._display_previous_iteration_delta(
-                    phase, previous_output_file
-                )
+                def redisplay_callback() -> None:
+                    self._display_previous_iteration_delta(phase, previous_output_file)
             else:
-                redisplay_callback = lambda: self._display_previous_output(
-                    phase, step_name, previous_output_file
-                )
+                def redisplay_callback() -> None:
+                    self._display_previous_output(phase, step_name, previous_output_file)
             choice = phase._ask_user_for_review_decision(
                 self._resolve_review_item_name(step_name),
                 agent_name=agent_name,
@@ -399,7 +369,7 @@ class UserInputCollector(NoOpHook):
                 choice,
                 prev_data,
                 self._resolve_review_item_name(step_name),
-                self._resolve_phase_specific_data(step_name, agent_name),
+                self._resolve_phase_specific_data(agent_name),
             )
             if choice == "confirm":
                 return HookResult(
@@ -450,94 +420,89 @@ class UserInputCollector(NoOpHook):
         )
 
     @staticmethod
-    def _ask_develop_no_changes_decision(phase: Any, agent_name: str) -> str:
-        """Ask whether the user agrees with the developer's no-changes-needed decision."""
-        from InquirerPy.separator import Separator
-
-        from cafe.ui.chat import launch_chat_session
-        from cafe.ui.inquirer_prompts import prompt_list, prompt_multiline
-
-        print(f"\n{'=' * 60}")
-        print(f"Developer ({agent_name}) believes no changes are needed.")
-        print(f"{'=' * 60}\n")
-
-        develop_dir = phase.issue_dir / "develop"
-        develop_file = develop_dir / f"iteration_{phase.iteration - 1:03d}" / "output.md"
-        if develop_file.exists():
-            print(f"Developer's response: {develop_file}\n")
-            print(develop_file.read_text(encoding="utf-8"))
-            print(f"\n{'=' * 60}\n")
-
-        while True:
-            choices = [
-                {"name": "Agree - Skip review and proceed to PR", "value": "c"},
-                {"name": "Disagree - Provide feedback for developer", "value": "m"},
-                Separator(),
-                {"name": f"Chat with {agent_name}", "value": "chat"},
-            ]
-            choice = prompt_list("Do you agree with the developer?", choices, default=None)
-            if choice == "chat":
-                launch_chat_session("developer", phase.issue_name)
-                continue
-            if choice == "c":
-                return "confirm"
-            feedback = prompt_multiline("Please provide feedback for the developer")
-            if feedback.strip():
-                print("\n✅ Received your feedback...\n")
-                return feedback
-            print("\n⚠️  No feedback entered, please try again.")
-
-    def _handle_develop_no_changes_user_input(
-        self,
+    def _collect_declared_human_task(
         *,
         phase: Any,
         step_name: str,
-        agent_name: str,
-    ) -> HookResult:
-        if not getattr(phase, "interactive", False):
-            choice = self._load_no_changes_non_interactive_input(phase)
-            phase.user_input = ""
-            if not choice:
-                return HookResult(
-                    continue_pipeline=False,
-                    events=[{"type": "no_changes_missing_user_input", "step": step_name}],
-                )
-        else:
-            choice = self._ask_develop_no_changes_decision(phase, agent_name)
-
-        if choice.strip().lower() in {"confirm", "confirmed", "c", "agree"}:
-            return HookResult(
-                continue_pipeline=False,
-                override_status_code=PhaseStatusCode.MANUAL_HANDOFF,
-                events=[{"type": "no_changes_user_confirmed", "step": step_name}],
-            )
-
-        phase.step_user_inputs[step_name] = choice
-        return HookResult(
-            context_updates={"user_input": choice},
-            events=[{"type": "no_changes_user_feedback", "step": step_name}],
+        step_def: dict[str, Any],
+        trigger: str,
+    ) -> Optional[HookResult]:
+        """Collect a policy-declared initial or resumed response when available."""
+        from cafe.core.human_tasks import HumanTaskCompletion, HumanTaskPolicyError
+        from cafe.ui.human_tasks import (
+            collect_human_task_payload,
+            resolve_step_human_task,
+            validate_step_human_task_completion,
         )
 
-    @staticmethod
-    def _load_no_changes_non_interactive_input(phase: Any) -> str:
-        current_input_file: Optional[Path] = None
-        get_iteration_dir = getattr(phase, "_get_iteration_dir", None)
-        if callable(get_iteration_dir):
-            current_input_file = get_iteration_dir(phase.iteration) / "user_input.md"
+        try:
+            policy, _binding = resolve_step_human_task(
+                playbook_data={"steps": {step_name: step_def}},
+                step_name=step_name,
+                trigger=trigger,
+            )
+        except HumanTaskPolicyError:
+            return None
+
+        if getattr(phase, "interactive", False):
+            payload = collect_human_task_payload(policy)
         else:
-            phase_dir = getattr(phase, "phase_dir", None)
-            iteration = getattr(phase, "iteration", None)
-            if phase_dir is not None and iteration is not None:
-                current_input_file = (
-                    Path(phase_dir) / f"iteration_{int(iteration):03d}" / "user_input.md"
-                )
+            payload = str(getattr(phase, "user_input", "") or "").strip()
+            if not payload:
+                iteration_dir = phase._get_iteration_dir(getattr(phase, "iteration", 1))
+                input_file = iteration_dir / "user_input.md"
+                if input_file.exists():
+                    payload = input_file.read_text(encoding="utf-8").strip()
+            if not payload and trigger == "initial":
+                payload = {"task": policy.id, "feedback": ""}
 
-        if current_input_file and current_input_file.exists():
-            file_input = current_input_file.read_text(encoding="utf-8").strip()
-            if file_input:
-                return file_input
+        _policy, _binding, result = validate_step_human_task_completion(
+            playbook_data={"steps": {step_name: step_def}},
+            step_name=step_name,
+            trigger=trigger,
+            raw_payload=payload or {},
+        )
+        if not isinstance(result, HumanTaskCompletion):
+            return HookResult(
+                continue_pipeline=False,
+                events=[
+                    {
+                        "type": "human_task_rejected",
+                        "step": step_name,
+                        "trigger": trigger,
+                        "task_id": policy.id,
+                        "reason": result.message,
+                    }
+                ],
+            )
 
-        return str(getattr(phase, "user_input", "") or "").strip()
+        if result.decision in {"confirm", "approve", "agree"}:
+            return HookResult(
+                continue_pipeline=False,
+                override_status_code=PhaseStatusCode.CONFIRMED,
+                events=[
+                    {
+                        "type": "human_task_completed",
+                        "step": step_name,
+                        "trigger": trigger,
+                        "task_id": policy.id,
+                    }
+                ],
+            )
+
+        user_input = result.agent_input()
+        phase.step_user_inputs[step_name] = user_input
+        return HookResult(
+            context_updates={"user_input": user_input},
+            events=[
+                {
+                    "type": "human_task_completed",
+                    "step": step_name,
+                    "trigger": trigger,
+                    "task_id": policy.id,
+                }
+            ],
+        )
 
 
 class NoChangesNeededHandler(NoOpHook):
@@ -551,7 +516,8 @@ class NoChangesNeededHandler(NoOpHook):
             return HookResult()
 
         step_name = str(kwargs.get("step_name") or "")
-        if step_name != "develop":
+        step_def = kwargs.get("step_def")
+        if not _declares_no_changes_task(step_def):
             return HookResult()
 
         response = str(kwargs.get("response") or "")
@@ -577,8 +543,7 @@ class NoChangesNeededHandler(NoOpHook):
         if not has_reasoning:
             continuation = (
                 "Your response returned no_changes_needed.\n\n"
-                "You MUST provide your reasoning and explain why the reviewer's "
-                "feedback is incorrect or unnecessary.\n\n"
+                "You MUST provide the reasoning that supports this outcome.\n\n"
                 f"Please:\n1. Write your detailed reasoning to {output_display}\n"
                 "2. Return no_changes_needed again\n\n"
                 "Do NOT return any other status code until you have written your reasoning."
@@ -594,6 +559,19 @@ class NoChangesNeededHandler(NoOpHook):
             override_status_code=PhaseStatusCode.NO_CHANGES_NEEDED,
             events=[{"type": "no_changes_awaiting_user", "step": step_name}],
         )
+
+
+def _declares_no_changes_task(step_def: Any) -> bool:
+    """Return whether this step explicitly opts into a no-changes user gate."""
+    if not isinstance(step_def, dict):
+        return False
+    tasks = step_def.get("human_tasks")
+    if not isinstance(tasks, (list, tuple)):
+        return False
+    return any(
+        isinstance(task, dict) and task.get("trigger") == "no_changes_needed"
+        for task in tasks
+    )
 
 
 class GitHubIssueFetcher(NoOpHook):
@@ -881,11 +859,11 @@ class GitHubPRCreator(NoOpHook):
     def _publish_output(self, **kwargs: Any) -> HookResult:
         from cafe.core.blackboard import BlackboardStore
         from cafe.core.capabilities import (
+            CAPABILITY_PR_PUBLISH_ID,
             SCRIPT_EXIT_ERROR,
             TIMEOUT_ERROR,
             VALIDATION_ERROR,
             CapabilityRegistryError,
-            CAPABILITY_PR_PUBLISH_ID,
             capability_receipt_hook_event,
             default_capability_definition_dirs,
             load_capability_registry,
