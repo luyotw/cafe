@@ -155,6 +155,38 @@ def test_out_of_mandate_overlap_forces_checkpoint(tmp_path: Path) -> None:
     assert any(rule.rule_id == "out_of_mandate" for rule in result.triggered_rules)
 
 
+def test_out_of_mandate_terms_in_non_scope_section_do_not_pause(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    result = evaluate_alignment_policy(
+        AlignmentPolicyInput(
+            step_name="spec",
+            user_input=(
+                "All four functional DoD items are confirmed. Keep the custom "
+                "artifact, checklist, template catalog, and default workflow parity."
+            ),
+            artifacts={
+                "current_output": """
+## Implementation Scope
+
+- **Out of scope:**
+  - Do not turn this into a broader workflow-product redesign.
+  - Any new external-system access, deployment approval, pricing change,
+    or release tagging.
+
+- **Future considerations:**
+  - Authoring aids for declaration validation.
+"""
+            },
+        ),
+        strategic_context=context,
+    )
+
+    assert result.level == AlignmentDecisionLevel.NO_ALIGNMENT
+    assert not any(rule.rule_id == "out_of_mandate" for rule in result.triggered_rules)
+
+
 def test_required_strategic_document_update_is_in_payload(tmp_path: Path) -> None:
     result = evaluate_alignment_policy(
         AlignmentPolicyInput(
@@ -435,7 +467,7 @@ def test_confirmed_capability_boundary_scope_does_not_pause(
         ),
     )
 
-    assert result.level == AlignmentDecisionLevel.ALIGNMENT_NOTE
+    assert result.level == AlignmentDecisionLevel.NO_ALIGNMENT
     assert not any(rule.rule_id == "trusted_capability_boundary" for rule in result.triggered_rules)
 
 
