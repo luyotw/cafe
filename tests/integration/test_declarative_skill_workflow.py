@@ -16,7 +16,9 @@ from cafe.skills.native_bridge import NativeSkillBridge
 class _AgentManager:
     def __init__(self) -> None:
         self.prompts: list[str] = []
-        self.agent = SimpleNamespace(config=SimpleNamespace(cli=AgentCLI.CODEX, session_id=None, model=None))
+        self.agent = SimpleNamespace(
+            config=SimpleNamespace(cli=AgentCLI.CODEX, session_id=None, model=None)
+        )
 
     def get_agent(self, _name: str):
         return self.agent

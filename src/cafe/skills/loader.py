@@ -233,13 +233,13 @@ class SkillLoader:
                 for section in variant.sections
                 if section.reference is not None
             )
-            for reference in references:
-                reference_path = skill_dir / "references" / reference
-                if not reference_path.is_file():
-                    raise ValueError(
-                        f"Invalid workflow contract for skill {skill_dir.name}: "
-                        f"workflow reference not found: {reference}"
-                    )
+        for reference in references:
+            reference_path = skill_dir / "references" / reference
+            if not reference_path.is_file():
+                raise ValueError(
+                    f"Invalid workflow contract for skill {skill_dir.name}: "
+                    f"workflow reference not found: {reference}"
+                )
         if contract.output_templates is not None:
             template_dir = skill_dir / "assets" / "templates"
             if not template_dir.is_dir():

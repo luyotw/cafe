@@ -72,6 +72,33 @@ def test_activate_replaces_placeholders(tmp_path: Path) -> None:
     assert "Hello World" in text
 
 
+def test_prompt_only_workflow_rejects_missing_reference(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    skill_dir = project_root / ".cafe" / "skills" / "prompt-only"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: prompt-only
+description: Prompt-only workflow contract.
+workflow:
+  prompt_references:
+    optional_instruction: missing.md
+---
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+
+    loader.discover()
+
+    with pytest.raises(ValueError, match="workflow reference not found: missing.md"):
+        loader.get_workflow_contract("prompt-only")
+
+
 def test_builtin_catalog_includes_pr_skill(tmp_path: Path) -> None:
     builtin_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
     loader = SkillLoader(

@@ -188,7 +188,10 @@ def test_custom_contract_composes_selected_variant_and_explicit_role_guidance(
     )
     loader = SkillLoader(project_root=tmp_path)
     loader.discover()
-    monkeypatch.setattr("cafe.skills.checklist_composer.AgentManager.get_agent_file_path", lambda *_: "agent.md")
+    monkeypatch.setattr(
+        "cafe.skills.checklist_composer.AgentManager.get_agent_file_path",
+        lambda *_: "agent.md",
+    )
     output = tmp_path / "checklist.md"
 
     assert compose_declared_checklist(

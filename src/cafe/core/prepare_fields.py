@@ -301,7 +301,8 @@ def validate_field_semantics(
                 manager = spec_manager if step_name == "spec" else plan_manager
             if step_name not in {"spec", "plan"} and step_name not in (template_managers or {}):
                 raise ValueError(
-                    f"field {field.id!r} targets step {step_name!r} without a declared template catalog"
+                    f"field {field.id!r} targets step {step_name!r} "
+                    "without a declared template catalog"
                 )
             _validate_template_default(manager, str(field.default), field)
 

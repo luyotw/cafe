@@ -41,7 +41,9 @@ class TestTemplateManager:
         )
 
         assert manager.list_templates() == [("evidence", "system")]
-        assert manager.get_template_path("evidence") == skill_dir / "assets" / "templates" / "evidence.md"
+        assert manager.get_template_path("evidence") == (
+            skill_dir / "assets" / "templates" / "evidence.md"
+        )
 
     def test_add_template_copies_file(self, tmp_path: Path) -> None:
         """Test that adding a template copies the file to the global directory."""

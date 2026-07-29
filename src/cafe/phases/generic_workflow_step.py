@@ -920,7 +920,12 @@ class GenericWorkflowStepExecutor(Phase):
             artifacts=input_artifacts,
             feedback=feedback,
             template_mode=self._resolved_template_mode(step_name, step_def),
-            template_file=self._resolved_template_file(step_name, step_def, canonical_name, contract),
+            template_file=self._resolved_template_file(
+                step_name,
+                step_def,
+                canonical_name,
+                contract,
+            ),
         )
 
     def _resolved_template_mode(self, step_name: str, step_def: Dict[str, Any]) -> str:
