@@ -169,9 +169,8 @@ GOLDEN_RUNNERS = {
 
 
 # These are the normal workflow cases.  Keep the legacy-wrapper snapshots below
-# as compatibility coverage for their extra arguments, but exercise the
-# production declarative composer against the same snapshots as the source of
-# truth for normal phase execution.
+# as compatibility coverage for their extra arguments. Production cases use
+# the same snapshots, with explicit expected omissions for optional artifacts.
 PRODUCTION_GOLDEN_CASES = {
     "spec_iter1": {
         "skill": "cafe-spec",
@@ -263,6 +262,9 @@ PRODUCTION_GOLDEN_CASES = {
             "output_file": ".cafe/issues/test/review/iteration_001/output.md",
             "base_branch": "develop",
         },
+        "omitted_optional_lines": (
+            "[ ] Read PR feedback in (not available) (if exists) to see user feedback and requests",
+        ),
     },
     "pr_iter1": {
         "skill": "cafe-pr",
@@ -308,8 +310,10 @@ def test_golden_checklist_matches_fixture(case_name: str, tmp_path: Path) -> Non
     try:
         output_path = tmp_path / f"{case_name}.md"
         GOLDEN_RUNNERS[case_name](output_path)
-        expected = (FIXTURES_DIR / f"{case_name}.md").read_text(encoding="utf-8")
-        actual = output_path.read_text(encoding="utf-8")
+        expected = _normalized_checklist(
+            (FIXTURES_DIR / f"{case_name}.md").read_text(encoding="utf-8")
+        )
+        actual = _normalized_checklist(output_path.read_text(encoding="utf-8"))
         if actual != expected:
             for i, (a, e) in enumerate(zip(actual.splitlines(), expected.splitlines())):
                 if a != e:
@@ -346,9 +350,10 @@ def test_production_composer_golden_checklist_matches_fixture(
             template_mode="manual",
         )
         actual = _normalized_checklist(output_path.read_text(encoding="utf-8"))
-        expected = _normalized_checklist(
-            (FIXTURES_DIR / f"{case_name}.md").read_text(encoding="utf-8")
-        )
+        expected = (FIXTURES_DIR / f"{case_name}.md").read_text(encoding="utf-8")
+        for line in case.get("omitted_optional_lines", ()):
+            expected = expected.replace(f"{line}\n", "")
+        expected = _normalized_checklist(expected)
         assert actual == expected
     finally:
         AgentManager.get_agent_file_path = saved

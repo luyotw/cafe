@@ -69,4 +69,3 @@
 [ ] Do NOT provide code solutions, only identify issues
 [ ] Update blackboard and next-step baton to hand off to the next workflow target
 [ ] Keep the response brief; workflow transitions are controlled by the baton
-

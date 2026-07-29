@@ -261,14 +261,13 @@ def resolve_non_interactive_issue_config(
             issue_id=answers.issue_id if answers.input_method == "github" else None,
             profile=profile,
         )
-        if not explicit_legacy_defaults:
-            for field in visible_fields_for_non_interactive(parsed_fields, ctx):
-                if (
-                    field.default is not None
-                    and field.write is not None
-                    and field.write not in field_defaults
-                ):
-                    field_defaults[field.write] = field.default
+        for field in visible_fields_for_non_interactive(parsed_fields, ctx):
+            if (
+                field.default is not None
+                and field.write is not None
+                and field.write not in field_defaults
+            ):
+                field_defaults[field.write] = field.default
 
     default_rigor = (
         defaults.rigor

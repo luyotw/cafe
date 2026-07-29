@@ -203,9 +203,13 @@ class GenericWorkflowStepExecutor(Phase):
             agent_name=agent_name,
             output_file=output_file,
         )
-        self._template_allowed_directories = []
-        if template_file := context.get("template_file"):
-            self._template_allowed_directories.append(str(Path(template_file).parent))
+        contract = self._get_skill_loader().get_workflow_contract(skill_name)
+        self._template_allowed_directories = self._template_allowed_directories_for(
+            step_name=step_name,
+            step_def=step_def,
+            skill_name=skill_name,
+            contract=contract,
+        )
         shared_skill_invocations = self.generic_phase.prepare_skills(
             skill_names=self.SHARED_WORKFLOW_SKILLS,
             agent_cli=agent_cli,
@@ -770,8 +774,9 @@ class GenericWorkflowStepExecutor(Phase):
 
         skill_name = self._resolve_skill_name(step_def, self.iteration)
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
+        input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
         try:
-            declared_inputs = resolve_prompt_inputs(contract, blackboard_state.artifacts)
+            declared_inputs = resolve_prompt_inputs(contract, input_artifacts)
         except DeclaredArtifactError as exc:
             raise ValueError(
                 f"Step {step_name!r}, skill {canonical_skill_name(skill_name)!r}: {exc}"
@@ -782,10 +787,6 @@ class GenericWorkflowStepExecutor(Phase):
                 for placeholder, path in declared_inputs.items()
             }
         )
-        for mapping in contract.prompt_inputs:
-            if not mapping.required and mapping.placeholder not in context:
-                context[mapping.placeholder] = "(not available)"
-
         self._add_template_context(
             context=context,
             step_name=step_name,
@@ -804,6 +805,21 @@ class GenericWorkflowStepExecutor(Phase):
             )
 
         return context
+
+    @staticmethod
+    def _step_input_artifacts(
+        step_def: Dict[str, Any], blackboard_state: BlackboardState
+    ) -> Dict[str, Any]:
+        """Return only artifact records declared as inputs for this workflow step."""
+        declared = step_def.get("input_artifacts")
+        if declared is None:
+            return dict(blackboard_state.artifacts)
+        allowed = {str(name) for name in declared}
+        return {
+            name: artifact
+            for name, artifact in blackboard_state.artifacts.items()
+            if name in allowed
+        }
 
     @classmethod
     def _build_blackboard_digest(cls, state: BlackboardState) -> str:
@@ -863,8 +879,9 @@ class GenericWorkflowStepExecutor(Phase):
     ) -> None:
         canonical_name = canonical_skill_name(skill_name)
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
+        input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
         try:
-            declared_inputs = resolve_prompt_inputs(contract, blackboard_state.artifacts)
+            declared_inputs = resolve_prompt_inputs(contract, input_artifacts)
         except DeclaredArtifactError as exc:
             raise ValueError(f"Step {step_name!r}, skill {canonical_name!r}: {exc}") from exc
 
@@ -890,8 +907,7 @@ class GenericWorkflowStepExecutor(Phase):
             }
         )
         feedback = bool(
-            blackboard_state.artifacts.get("review_feedback")
-            or blackboard_state.artifacts.get("pr_result")
+            input_artifacts.get("review_feedback") or input_artifacts.get("pr_result")
         )
         compose_declared_checklist(
             skill_name=canonical_name,
@@ -901,7 +917,7 @@ class GenericWorkflowStepExecutor(Phase):
             checklist_file_path=checklist_file,
             iteration=self.iteration,
             context=context,
-            artifacts=blackboard_state.artifacts,
+            artifacts=input_artifacts,
             feedback=feedback,
             template_mode=self._resolved_template_mode(step_name, step_def),
             template_file=self._resolved_template_file(step_name, step_def, canonical_name, contract),
@@ -939,6 +955,39 @@ class GenericWorkflowStepExecutor(Phase):
                 f"from catalog {contract.output_templates.catalog!r}"
             )
         return self._display_path(template_file)
+
+    def _template_allowed_directories_for(
+        self,
+        *,
+        step_name: str,
+        step_def: Dict[str, Any],
+        skill_name: str,
+        contract: SkillWorkflowContract,
+    ) -> List[str]:
+        """Grant read access to the catalog templates a step can select."""
+        if contract.output_templates is None:
+            return []
+        manager = TemplateManager(
+            template_type=contract.output_templates.catalog,
+            skill_name=skill_name,
+            skill_loader=self._get_skill_loader(),
+        )
+        selection = self._resolved_template_mode(step_name, step_def)
+        if selection == "auto":
+            return list(
+                dict.fromkeys(
+                    str(path.parent)
+                    for name, _source in manager.list_templates()
+                    if (path := manager.get_template_path(name)) is not None
+                )
+            )
+        template_file = manager.get_template_path(selection)
+        if template_file is None:
+            raise ValueError(
+                f"Step {step_name!r} selected unknown template {selection!r} "
+                f"from catalog {contract.output_templates.catalog!r}"
+            )
+        return [str(template_file.parent)]
 
     def _add_template_context(
         self,

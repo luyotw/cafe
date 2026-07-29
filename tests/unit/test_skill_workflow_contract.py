@@ -71,6 +71,21 @@ def test_workflow_contract_rejects_runtime_owned_input_placeholders(placeholder:
 
 
 @pytest.mark.parametrize(
+    "placeholder",
+    ["output_file", "checklist_file", "questions_xml_file", "next_step_path"],
+)
+def test_workflow_contract_rejects_runtime_owned_context_reference_placeholders(
+    placeholder: str,
+) -> None:
+    """Checklist references cannot replace values supplied by the runtime."""
+    data = _contract_data()
+    data["checklist"]["context_references"] = {placeholder: "xml_questions.md"}
+
+    with pytest.raises(ValidationError, match="runtime-owned"):
+        SkillWorkflowContract.model_validate(data)
+
+
+@pytest.mark.parametrize(
     "mutate",
     [
         lambda data: data["prompt_inputs"].append(
@@ -167,3 +182,48 @@ def test_custom_contract_composes_selected_variant_and_explicit_role_guidance(
         artifacts={"research": "research.md"},
     )
     assert output.read_text(encoding="utf-8") == "[ ] Revise research.md\n"
+
+
+def test_custom_contract_omits_optional_input_checklist_lines_when_absent(
+    tmp_path, monkeypatch
+) -> None:
+    """Optional artifacts do not create fake paths or unresolved instructions."""
+    monkeypatch.chdir(tmp_path)
+    skill_dir = tmp_path / ".cafe" / "skills" / "synthesis"
+    (skill_dir / "references").mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: synthesis\ndescription: synthesis\n---\n", encoding="utf-8"
+    )
+    (skill_dir / "references" / "execution.md").write_text(
+        "[ ] Read optional review {review_file}\n[ ] Write the result\n",
+        encoding="utf-8",
+    )
+    contract = SkillWorkflowContract.model_validate(
+        {
+            "prompt_inputs": [
+                {"artifacts": ["review"], "placeholder": "review_file", "required": False}
+            ],
+            "checklist": {
+                "variants": [{"sections": [{"reference": "execution.md"}]}],
+                "include_role_guidance": False,
+            },
+        }
+    )
+    loader = SkillLoader(project_root=tmp_path)
+    loader.discover()
+    monkeypatch.setattr(
+        "cafe.skills.checklist_composer.AgentManager.get_agent_file_path", lambda *_: "agent.md"
+    )
+    output = tmp_path / "checklist.md"
+
+    assert compose_declared_checklist(
+        skill_name="synthesis",
+        contract=contract,
+        agent_name="Ada",
+        role="researcher",
+        checklist_file_path=output,
+        iteration=1,
+        context={},
+        artifacts={},
+    )
+    assert output.read_text(encoding="utf-8") == "[ ] Write the result\n"

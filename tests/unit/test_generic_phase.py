@@ -508,6 +508,48 @@ def test_prepare_skill_renders_iteration_context_without_mutating_source(
     assert source_file.read_text(encoding="utf-8") == source_before
 
 
+def test_prepare_skill_omits_absent_optional_input_lines(tmp_path: Path) -> None:
+    """Absent optional artifacts do not leave fake or unresolved prompt instructions."""
+    loader = _setup_loader(tmp_path)
+    source_file = loader.get_skill_dir("cafe-plan") / "SKILL.md"
+    source_file.write_text(
+        """---
+name: cafe-plan
+description: desc
+workflow:
+  prompt_inputs:
+    - artifacts: [optional_notes]
+      placeholder: notes_file
+      required: false
+---
+
+Read optional notes: {notes_file}
+Write the plan.
+""",
+        encoding="utf-8",
+    )
+    loader.discover()
+    project_root = tmp_path / "project"
+    project_root.mkdir(parents=True, exist_ok=True)
+    phase = GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(
+            loader,
+            project_root=project_root,
+            home_dir=tmp_path / "home",
+        ),
+    )
+
+    phase.prepare_skill(skill_name="cafe-plan", agent_cli=AgentCLI.CODEX, context={})
+
+    installed = (project_root / ".codex" / "skills" / "cafe-plan" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Read optional notes" not in installed
+    assert "{notes_file}" not in installed
+    assert "Write the plan." in installed
+
+
 def test_prepare_skills_installs_shared_and_phase_skills(tmp_path: Path) -> None:
     loader = _setup_loader(tmp_path)
     project_root = tmp_path / "project"

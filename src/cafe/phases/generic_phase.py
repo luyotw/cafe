@@ -61,7 +61,22 @@ class GenericPhase:
         context: Optional[Dict[str, str]] = None,
     ) -> str:
         """Install one skill for the target CLI and return its invocation syntax."""
-        self.skill_bridge.install_skill(skill_name, agent_cli, context=context)
+        installed_dir = self.skill_bridge.install_skill(skill_name, agent_cli, context=context)
+        contract = self.skill_loader.get_workflow_contract(skill_name)
+        absent_optional_inputs = {
+            mapping.placeholder
+            for mapping in contract.prompt_inputs
+            if not mapping.required and mapping.placeholder not in (context or {})
+        }
+        if absent_optional_inputs:
+            skill_file = installed_dir / "SKILL.md"
+            rendered = skill_file.read_text(encoding="utf-8")
+            rendered = "".join(
+                line
+                for line in rendered.splitlines(keepends=True)
+                if not any(f"{{{placeholder}}}" in line for placeholder in absent_optional_inputs)
+            )
+            skill_file.write_text(rendered, encoding="utf-8")
         return self.skill_bridge.get_invocation(skill_name, agent_cli)
 
     def prepare_skills(
@@ -72,8 +87,10 @@ class GenericPhase:
         context: Optional[Dict[str, str]] = None,
     ) -> list[str]:
         """Install a list of skills for the target CLI and return invocation syntax."""
-        self.skill_bridge.install_skills(skill_names, agent_cli, context=context)
-        return [self.skill_bridge.get_invocation(name, agent_cli) for name in skill_names]
+        return [
+            self.prepare_skill(skill_name=name, agent_cli=agent_cli, context=context)
+            for name in skill_names
+        ]
 
     def build_prompt(
         self,

@@ -118,6 +118,26 @@ def _reference_context(
     return resolved
 
 
+def _omit_absent_optional_input_lines(
+    content: str,
+    contract: SkillWorkflowContract,
+    placeholders: Mapping[str, str],
+) -> str:
+    """Remove checklist instructions that require an unavailable optional input."""
+    absent = {
+        mapping.placeholder
+        for mapping in contract.prompt_inputs
+        if not mapping.required and mapping.placeholder not in placeholders
+    }
+    if not absent:
+        return content
+    return "".join(
+        line
+        for line in content.splitlines(keepends=True)
+        if not any(f"{{{placeholder}}}" in line for placeholder in absent)
+    )
+
+
 def compose_declared_checklist(
     *,
     skill_name: str,
@@ -174,9 +194,6 @@ def compose_declared_checklist(
         parts.append(extract_agent_guidelines_checklist(agent_file))
 
     placeholders = {key: str(value) for key, value in context.items() if value is not None}
-    for mapping in contract.prompt_inputs:
-        if not mapping.required and mapping.placeholder not in placeholders:
-            placeholders[mapping.placeholder] = "(not available)"
     placeholders["agent_file"] = agent_file
     placeholders.update(
         _reference_context(
@@ -185,7 +202,10 @@ def compose_declared_checklist(
             context=placeholders,
         )
     )
-    content = resolve_checklist_placeholders("\n".join(part for part in parts if part), placeholders)
+    content = _omit_absent_optional_input_lines(
+        "\n".join(part for part in parts if part), contract, placeholders
+    )
+    content = resolve_checklist_placeholders(content, placeholders)
     unresolved = sorted(set(_PLACEHOLDER_PATTERN.findall(content)))
     if unresolved:
         raise ValueError(f"Unresolved checklist placeholders for {skill_name}: {', '.join(unresolved)}")

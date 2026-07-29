@@ -8,7 +8,6 @@ from typing import Any, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-
 RUNTIME_OWNED_PROMPT_PLACEHOLDERS = frozenset(
     {
         "agent_file",
@@ -53,6 +52,14 @@ def _safe_reference(value: str) -> str:
     return token
 
 
+def _safe_placeholder(value: str, *, field_name: str) -> str:
+    """Validate a skill-owned placeholder without allowing runtime overrides."""
+    token = _safe_token(value, field_name=field_name)
+    if token in RUNTIME_OWNED_PROMPT_PLACEHOLDERS:
+        raise ValueError(f"{field_name} {token!r} is runtime-owned")
+    return token
+
+
 class PromptInputContract(BaseModel):
     """One artifact mapping exposed under a skill-selected placeholder."""
 
@@ -75,10 +82,7 @@ class PromptInputContract(BaseModel):
     @field_validator("placeholder")
     @classmethod
     def _validate_placeholder(cls, value: str) -> str:
-        value = _safe_token(value, field_name="placeholder")
-        if value in RUNTIME_OWNED_PROMPT_PLACEHOLDERS:
-            raise ValueError(f"placeholder {value!r} is runtime-owned")
-        return value
+        return _safe_placeholder(value, field_name="placeholder")
 
 
 class ChecklistWhen(BaseModel):
@@ -153,7 +157,9 @@ class ChecklistVariant(BaseModel):
 
     @field_validator("sections")
     @classmethod
-    def _validate_sections(cls, value: Tuple[ChecklistSection, ...]) -> Tuple[ChecklistSection, ...]:
+    def _validate_sections(
+        cls, value: Tuple[ChecklistSection, ...]
+    ) -> Tuple[ChecklistSection, ...]:
         if not value:
             raise ValueError("checklist variant requires at least one section")
         return value
@@ -172,13 +178,17 @@ class ChecklistContract(BaseModel):
     @classmethod
     def _validate_context_references(cls, value: dict[str, str]) -> dict[str, str]:
         return {
-            _safe_token(placeholder, field_name="context reference placeholder"): _safe_reference(ref)
+            _safe_placeholder(
+                placeholder, field_name="context reference placeholder"
+            ): _safe_reference(ref)
             for placeholder, ref in value.items()
         }
 
     @field_validator("variants")
     @classmethod
-    def _validate_variants(cls, value: Tuple[ChecklistVariant, ...]) -> Tuple[ChecklistVariant, ...]:
+    def _validate_variants(
+        cls, value: Tuple[ChecklistVariant, ...]
+    ) -> Tuple[ChecklistVariant, ...]:
         if not value:
             raise ValueError("checklist requires at least one variant")
         return value

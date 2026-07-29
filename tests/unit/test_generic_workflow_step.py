@@ -2536,6 +2536,108 @@ def test_workflow_allows_selected_global_template_directory(tmp_path: Path, monk
     )
 
 
+def test_workflow_allows_auto_catalog_template_directories(tmp_path: Path, monkeypatch) -> None:
+    """Auto selection grants read access to each catalog candidate directory."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-auto-global-template"
+    research_file = tmp_path / "research.md"
+    research_file.write_text("evidence", encoding="utf-8")
+    global_template = (
+        tmp_path.parent
+        / f"{tmp_path.name}-auto-global-cafe"
+        / "templates"
+        / "synthesis"
+        / "evidence.md"
+    )
+    global_template.parent.mkdir(parents=True)
+    global_template.write_text("# Global evidence\n", encoding="utf-8")
+    playbook = {
+        "playbook": {"id": "custom"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "synthesis": {
+                "skill": "synthesis",
+                "role": "developer",
+                "template": "auto",
+                "output_artifact": "report",
+                "allowed_tools": ["Read"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("synthesis")
+    store.set_artifact(state, "research_notes", str(research_file))
+    agent_manager = FakeAgentManager("await_agent")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-auto-global-template",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    with (
+        patch(
+            "cafe.phases.generic_workflow_step.TemplateManager.list_templates",
+            return_value=[("evidence", "global")],
+        ),
+        patch(
+            "cafe.phases.generic_workflow_step.TemplateManager.get_template_path",
+            return_value=global_template,
+        ),
+    ):
+        executor.execute_step("synthesis", playbook["steps"]["synthesis"], state)
+
+    assert any(
+        Path(directory).resolve() == global_template.parent.resolve()
+        for directory in agent_manager.allowed_directories_calls[-1]
+    )
+
+
+def test_workflow_limits_prompt_inputs_to_step_artifacts(tmp_path: Path) -> None:
+    """A skill cannot receive a blackboard artifact undeclared by its step."""
+    executor = _make_minimal_executor(tmp_path)
+    state = BlackboardStore(executor.issue_dir).load_or_create("synthesis")
+    BlackboardStore(executor.issue_dir).set_artifact(
+        state, "research_notes", str(tmp_path / "research.md")
+    )
+    step_def = {"skill": "synthesis", "role": "developer", "input_artifacts": []}
+
+    with pytest.raises(ValueError, match="evidence_file"):
+        executor._build_context(
+            step_name="synthesis",
+            step_def=step_def,
+            blackboard_state=state,
+            agent_name="David",
+            output_file=tmp_path / "output.md",
+        )
+
+
+def test_workflow_limits_checklist_inputs_to_step_artifacts(tmp_path: Path) -> None:
+    """Checklist generation uses the same declared artifact boundary as the prompt."""
+    executor = _make_minimal_executor(tmp_path)
+    state = BlackboardStore(executor.issue_dir).load_or_create("synthesis")
+    BlackboardStore(executor.issue_dir).set_artifact(
+        state, "research_notes", str(tmp_path / "research.md")
+    )
+    step_def = {"skill": "synthesis", "role": "developer", "input_artifacts": []}
+
+    with pytest.raises(ValueError, match="evidence_file"):
+        executor._generate_checklist(
+            step_name="synthesis",
+            skill_name="synthesis",
+            agent_name="David",
+            step_def=step_def,
+            blackboard_state=state,
+            checklist_file=tmp_path / "checklist.md",
+            output_file=tmp_path / "output.md",
+            questions_xml_file=tmp_path / "questions.xml",
+        )
+
+
 def _plan_step_playbook() -> dict:
     return {
         "playbook": {"id": "default"},
