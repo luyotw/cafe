@@ -282,6 +282,7 @@ _NON_SCOPE_LINE_MARKERS: tuple[str, ...] = (
     "out of scope",
     "non-goal",
     "non-goals",
+    "not doing",
     "範圍外",
     "非目標",
     "本次不做",
@@ -331,7 +332,9 @@ def evaluate_alignment_policy(
                     affected_categories.append(category)
 
     matched_out_of_mandate = [
-        item for item in strategic_context.out_of_mandate if item and item.lower() in text
+        item
+        for item in strategic_context.out_of_mandate
+        if item and _matches_keywords_outside_non_scope(text, (item,))
     ]
     if matched_out_of_mandate:
         triggered.append(
@@ -488,6 +491,41 @@ def _matches_keywords(text: str, keywords: Sequence[str]) -> bool:
     return any(keyword.lower() in text for keyword in keywords)
 
 
+def _matches_keywords_outside_non_scope(
+    text: str,
+    keywords: Sequence[str],
+) -> bool:
+    """Match policy signals only where the request says work is in scope."""
+    for keyword in keywords:
+        normalized = keyword.lower()
+        for match in re.finditer(re.escape(normalized), text):
+            if not _is_non_scope_context(text, match.start()):
+                return True
+    return False
+
+
+def _is_non_scope_context(text: str, position: int) -> bool:
+    """Return whether a position belongs to a Markdown non-scope section."""
+    line_start = text.rfind("\n", 0, position) + 1
+    line_end = text.find("\n", position)
+    if line_end == -1:
+        line_end = len(text)
+    current_line = text[line_start:line_end].strip().lower()
+    if any(marker in current_line for marker in _NON_SCOPE_LINE_MARKERS):
+        return True
+
+    prior_lines = text[:line_start].splitlines()
+    for prior_line in reversed(prior_lines[-60:]):
+        normalized = prior_line.strip().lower()
+        if not normalized:
+            continue
+        if any(marker in normalized for marker in _NON_SCOPE_LINE_MARKERS):
+            return True
+        if re.match(r"^(?:#{1,6}\s+|[-*]\s+\*\*[^*]+:\*\*)", normalized):
+            return False
+    return False
+
+
 def _matches_axis_escalation(text: str, axis_name: str) -> bool:
     """Return whether the request has actionable impact on an escalated axis.
 
@@ -600,19 +638,19 @@ def _score_signals(
                 3,
             )
         )
-    if _matches_keywords(
+    if _matches_keywords_outside_non_scope(
         text, ("external mutation", "external api", "publish", "deploy", "host-side")
     ):
         rules.append(
             TriggeredRule("external_mutation_risk", "External mutation risk detected.", "medium", 2)
         )
-    if _matches_keywords(text, ("large", "ambiguous", "unclear", "broad")):
+    if _matches_keywords_outside_non_scope(text, ("large", "ambiguous", "unclear", "broad")):
         rules.append(
             TriggeredRule(
                 "large_ambiguous_issue", "Large or ambiguous issue signal detected.", "low", 1
             )
         )
-    if _matches_keywords(
+    if _matches_keywords_outside_non_scope(
         text, ("architecture outside", "outside obvious scope", "cross-module architecture")
     ):
         rules.append(
