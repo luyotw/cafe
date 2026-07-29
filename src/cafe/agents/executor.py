@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 from cafe.agents.cli import AbstractCLI, ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
+from cafe.agents.diagnostics import sanitize_error_excerpt
 from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, PermissionDenial, TokenUsage
 from cafe.utils.git_utils import get_repo_root, to_git_ignore_path, to_relative_path
 
@@ -943,6 +944,27 @@ class AgentExecutor:
             except Exception as e:
                 print(f"⚠️  Failed to open streaming output file: {e}")
 
+        def persist_safe_stream_error(error: AgentExecutionError) -> None:
+            """Replace any streamed error payload with one safe durable record."""
+            nonlocal streaming_file_handle
+            if streaming_file_handle is None:
+                return
+            try:
+                safe_record = {
+                    "type": "error",
+                    "error_type": error.error_type,
+                    "error_excerpt": sanitize_error_excerpt(error),
+                }
+                streaming_file_handle.seek(0)
+                streaming_file_handle.truncate()
+                streaming_file_handle.write(json.dumps(safe_record, ensure_ascii=False) + "\n")
+                streaming_file_handle.flush()
+            except Exception as write_error:
+                print(f"⚠️  Failed to sanitize streaming error output: {write_error}")
+            finally:
+                streaming_file_handle.close()
+                streaming_file_handle = None
+
         try:
             if process.stdout:
                 while True:
@@ -1010,6 +1032,7 @@ class AgentExecutor:
                                         display_message=display_message,
                                     )
                                     err.cli_command_args = cmd[1:]
+                                    persist_safe_stream_error(err)
                                     raise err
 
                             # Check for error field (e.g., "invalid_request" for prompt too long)
@@ -1025,6 +1048,7 @@ class AgentExecutor:
                                 err = AgentExecutionError(f"{cli_name} invalid request: {error_text}")
                                 err.error_type = "invalid_request"
                                 err.cli_command_args = cmd[1:]
+                                persist_safe_stream_error(err)
                                 raise err
 
                             # Extract session_id (from init message for Gemini, or any message for Claude)
@@ -1160,6 +1184,7 @@ class AgentExecutor:
                                     display_message=display_message,
                                 )
                                 err.cli_command_args = cmd[1:]
+                                persist_safe_stream_error(err)
                                 raise err
 
                             # Non-JSON line, just print it
@@ -1257,6 +1282,7 @@ class AgentExecutor:
                 )
                 # Attach actual CLI arguments for Phase to write to iteration history on error
                 err.cli_command_args = cmd[1:]
+                persist_safe_stream_error(err)
                 raise err
 
         # Append stderr to streaming output file (for debugging token usage parsing)
