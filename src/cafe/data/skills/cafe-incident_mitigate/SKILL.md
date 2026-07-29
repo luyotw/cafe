@@ -1,7 +1,13 @@
 ---
 name: cafe-incident_mitigate
 description: 緩解與復原（維運應變流程）
-version: 1.0.0
+version: 1.0.1
+workflow:
+  human_tasks:
+    - id: clarification-feedback
+      pattern: revision_feedback
+      prompt: Provide the incident details needed to continue mitigation.
+      input_schema: feedback
 ---
 
 # Incident Mitigate

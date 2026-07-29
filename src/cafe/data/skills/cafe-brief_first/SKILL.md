@@ -1,7 +1,26 @@
 ---
 name: cafe-brief_first
 description: 建立初版內容大綱與撰稿需求（編輯流程）
-version: 1.0.0
+version: 1.0.1
+workflow:
+  human_tasks:
+    - id: editorial-output-review
+      pattern: confirm_output
+      prompt: Approve the editorial brief or request a revision.
+      input_schema: decision
+      decisions:
+        - id: approve
+          label: Approve brief
+        - id: revise
+          label: Request brief revision
+          requires_feedback: true
+    - id: editorial-clarification
+      pattern: answer_questions
+      prompt: Answer the editorial clarification questions.
+      input_schema: answers
+      questions:
+        - id: audience
+          prompt: Who is the intended audience?
 ---
 
 # Editorial Brief

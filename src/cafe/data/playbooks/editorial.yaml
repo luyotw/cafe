@@ -24,11 +24,20 @@ steps:
     chat_role: editor
     assignee_type: agent
     output_artifact: brief
+    human_tasks:
+      - trigger: confirm_output
+        task_id: editorial-output-review
+        outcomes: {approve: draft, revise: brief}
+      - trigger: need_clarification
+        task_id: editorial-clarification
+        outcomes: {submit: brief}
     valid_intents:
       - confirmed
       - need_clarification
       - ready_for_review
     allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
+    hooks:
+      prepare_input: [UserInputCollector]
     "on":
       await_agent: draft
       need_clarification: brief
@@ -43,6 +52,10 @@ steps:
     assignee_type: agent
     input_artifacts: [brief]
     output_artifact: manuscript
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: draft}
     valid_intents:
       - confirmed
       - need_clarification

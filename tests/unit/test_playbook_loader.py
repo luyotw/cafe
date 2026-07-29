@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.ui.human_tasks import resolve_step_human_task
 
 
 def _write_skill(root: Path, name: str) -> None:
@@ -803,3 +804,22 @@ def test_builtin_non_software_playbooks_define_non_default_handoff_metadata() ->
     assert editorial.steps["draft"].chat_role == "writer"
     assert "implementation" not in (research.steps["question"].handoff_label or "").lower()
     assert "requirements" not in (editorial.steps["draft"].handoff_label or "").lower()
+
+
+def test_builtin_user_handoffs_resolve_nonempty_declared_policies() -> None:
+    """Builtin user pauses must not fall back to implicit development behavior."""
+    loader = PlaybookLoader()
+    triggers = {"confirm_output", "need_clarification", "no_changes_needed"}
+
+    for playbook_id in ("default", "simple", "tdd", "hotfix", "editorial", "incident", "research"):
+        playbook = loader.load(playbook_id)
+        for step_name, step in playbook["steps"].items():
+            for trigger in triggers.intersection(step.get("on", {})):
+                policy, binding = resolve_step_human_task(
+                    playbook_data=playbook,
+                    step_name=step_name,
+                    trigger=trigger,
+                )
+
+                assert policy.prompt
+                assert binding.task_id == policy.id

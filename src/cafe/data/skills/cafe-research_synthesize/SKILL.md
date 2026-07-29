@@ -1,7 +1,13 @@
 ---
 name: cafe-research_synthesize
 description: 綜合發現與交叉驗證（非軟體研究流程）
-version: 1.0.0
+version: 1.0.1
+workflow:
+  human_tasks:
+    - id: clarification-feedback
+      pattern: revision_feedback
+      prompt: Provide the clarification needed to continue synthesis.
+      input_schema: feedback
 ---
 
 # Research Synthesize

@@ -1,7 +1,13 @@
 ---
 name: cafe-research_collect
 description: 搜尋、整理與記錄來源（非軟體研究流程）
-version: 1.0.0
+version: 1.0.1
+workflow:
+  human_tasks:
+    - id: clarification-feedback
+      pattern: revision_feedback
+      prompt: Provide the clarification needed to continue evidence collection.
+      input_schema: feedback
 ---
 
 # Research Collect

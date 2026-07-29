@@ -53,6 +53,13 @@ steps:
     assignee_type: agent
     input_artifacts: []
     output_artifact: spec
+    human_tasks:
+      - trigger: confirm_output
+        task_id: output-review
+        outcomes: {confirm: develop, revise: spec}
+      - trigger: need_clarification
+        task_id: clarification-answers
+        outcomes: {submit: spec}
     allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
     hooks:
       prepare_input: [GitHubIssueFetcher, UserInputCollector]
@@ -70,6 +77,10 @@ steps:
     assignee_type: agent
     input_artifacts: [spec]
     output_artifact: code
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: develop}
     allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
     hooks:
       prepare_input: [UserInputCollector]

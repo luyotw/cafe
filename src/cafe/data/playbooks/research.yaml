@@ -18,6 +18,10 @@ steps:
     chat_role: researcher
     assignee_type: agent
     output_artifact: research_question_brief
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: question}
     valid_intents:
       - confirmed
       - need_clarification
@@ -35,6 +39,10 @@ steps:
     assignee_type: agent
     input_artifacts: [research_question_brief]
     output_artifact: research_notes
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: collect}
     valid_intents:
       - confirmed
       - need_clarification
@@ -53,6 +61,10 @@ steps:
     assignee_type: agent
     input_artifacts: [research_question_brief, research_notes]
     output_artifact: research_synthesis
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: synthesize}
     valid_intents:
       - confirmed
       - need_clarification
@@ -71,6 +83,10 @@ steps:
     assignee_type: agent
     input_artifacts: [research_question_brief, research_notes, research_synthesis]
     output_artifact: research_report_doc
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: report}
     valid_intents:
       - confirmed
       - need_clarification

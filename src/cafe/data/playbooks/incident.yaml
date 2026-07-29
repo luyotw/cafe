@@ -16,6 +16,10 @@ steps:
     role: ops
     assignee_type: agent
     output_artifact: incident_signal
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: detect}
     valid_intents:
       - confirmed
       - need_clarification
@@ -31,6 +35,10 @@ steps:
     assignee_type: agent
     input_artifacts: [incident_signal]
     output_artifact: incident_plan
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: triage}
     valid_intents:
       - confirmed
       - need_clarification
@@ -47,6 +55,10 @@ steps:
     assignee_type: agent
     input_artifacts: [incident_signal, incident_plan]
     output_artifact: incident_recovery
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: mitigate}
     valid_intents:
       - confirmed
       - need_clarification
@@ -63,6 +75,10 @@ steps:
     assignee_type: agent
     input_artifacts: [incident_signal, incident_plan, incident_recovery]
     output_artifact: incident_learning
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: postmortem}
     valid_intents:
       - confirmed
       - need_clarification
