@@ -452,6 +452,7 @@ def validate_playbook(
         _validate_step_role(step_name, step, model.roles)
         _validate_step_chat_role(step_name, step, model.roles)
         _validate_step_skills(step_name, step, skill_loader)
+        _validate_step_required_prompt_inputs(step_name, step, skill_loader)
         _validate_script_hook_stages(step_name, step.hooks)
         _validate_targets(step_name, step.allowed_goto, steps, "allowed_goto")
         _validate_transition_targets(step_name, step.on, steps)
@@ -482,7 +483,7 @@ def _validate_prepare_metadata(
     prepare = resolve_prepare_config(model)
     spec_manager = TemplateManager(template_type="spec")
     plan_manager = TemplateManager(template_type="plan")
-    template_managers = _declared_template_managers(model, skill_loader)
+    template_managers = declared_template_managers(model, skill_loader)
 
     _validate_prepare_template(
         spec_manager,
@@ -543,7 +544,7 @@ def _validate_prepare_metadata(
         assert_prepare_semantics_match(model.commands.prepare, parsed_fields)
 
 
-def _declared_template_managers(
+def declared_template_managers(
     model: PlaybookDefinition,
     skill_loader: SkillLoader,
 ) -> Dict[str, TemplateManager]:
@@ -624,6 +625,29 @@ def _validate_step_skills(step_name: str, step: StepConfig, skill_loader: SkillL
             skill_loader.get_skill_dir(skill_name)
         except (SkillDiscoveryError, FileNotFoundError) as exc:
             raise ValueError(f"Step '{step_name}' references unknown skill '{skill_name}'") from exc
+
+
+def _validate_step_required_prompt_inputs(
+    step_name: str,
+    step: StepConfig,
+    skill_loader: SkillLoader,
+) -> None:
+    """Reject a step whose artifact graph cannot satisfy a required mapping."""
+    if "input_artifacts" not in step.model_fields_set:
+        return
+    selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
+    declared_artifacts = set(step.input_artifacts)
+    for skill_name in selectors:
+        contract = skill_loader.get_workflow_contract(skill_name)
+        for mapping in contract.prompt_inputs:
+            if mapping.required and not declared_artifacts.intersection(mapping.artifacts):
+                candidates = ", ".join(mapping.artifacts)
+                raise ValueError(
+                    f"Step {step_name!r}, skill {canonical_skill_name(skill_name)!r}: "
+                    f"required prompt input {mapping.placeholder!r} expects one of "
+                    f"[{candidates}], but input_artifacts declares "
+                    f"{sorted(declared_artifacts)}"
+                )
 
 
 def _validate_script_hook_stages(step_name: str, hooks: StepHooks) -> None:

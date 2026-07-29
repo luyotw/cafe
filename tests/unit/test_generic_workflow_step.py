@@ -116,6 +116,7 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
         "cafe-github_sync": "Shared GitHub sync helper.\n",
         "cafe-review": "Review the latest changes.\n",
         "cafe-pr": "Write PR content to: {output_file}\n",
+        "synthesis": "Synthesize {evidence_file}.\n",
     }.items():
         skill_dir = skill_root / name
         skill_dir.mkdir(parents=True, exist_ok=True)
@@ -125,10 +126,22 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
                 "workflow:\n  prompt_inputs:\n"
                 "    - artifacts: [code]\n      placeholder: develop_file\n      required: false\n"
             )
+        if name == "synthesis":
+            workflow = (
+                "workflow:\n  prompt_inputs:\n"
+                "    - artifacts: [research_notes]\n"
+                "      placeholder: evidence_file\n"
+                "      required: true\n"
+                "  output_templates:\n"
+                "    catalog: synthesis\n"
+            )
         (skill_dir / "SKILL.md").write_text(
             f"---\nname: {name}\ndescription: desc\n{workflow}---\n\n{body}",
             encoding="utf-8",
         )
+    synthesis_templates = skill_root / "synthesis" / "assets" / "templates"
+    synthesis_templates.mkdir(parents=True, exist_ok=True)
+    (synthesis_templates / "evidence.md").write_text("# Evidence\n", encoding="utf-8")
     loader = SkillLoader(
         project_root=tmp_path,
         global_root=tmp_path / "global",
@@ -2468,6 +2481,61 @@ def test_workflow_legacy_behavior_unchanged_when_no_config(tmp_path: Path, monke
     assert agent_manager.allowed_directories_calls[-1] == [".cafe"]
 
 
+def test_workflow_allows_selected_global_template_directory(tmp_path: Path, monkeypatch) -> None:
+    """A selected template outside the worktree remains readable by the agent."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-global-template"
+    research_file = tmp_path / "research.md"
+    research_file.write_text("evidence", encoding="utf-8")
+    global_template = (
+        tmp_path.parent
+        / f"{tmp_path.name}-global-cafe"
+        / "templates"
+        / "synthesis"
+        / "evidence.md"
+    )
+    global_template.parent.mkdir(parents=True)
+    global_template.write_text("# Global evidence\n", encoding="utf-8")
+    playbook = {
+        "playbook": {"id": "custom"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "synthesis": {
+                "skill": "synthesis",
+                "role": "developer",
+                "template": "evidence",
+                "output_artifact": "report",
+                "allowed_tools": ["Read"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("synthesis")
+    store.set_artifact(state, "research_notes", str(research_file))
+    agent_manager = FakeAgentManager("await_agent")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-global-template",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    with patch(
+        "cafe.phases.generic_workflow_step.TemplateManager.get_template_path",
+        return_value=global_template,
+    ):
+        executor.execute_step("synthesis", playbook["steps"]["synthesis"], state)
+
+    assert any(
+        Path(directory).resolve() == global_template.parent.resolve()
+        for directory in agent_manager.allowed_directories_calls[-1]
+    )
+
+
 def _plan_step_playbook() -> dict:
     return {
         "playbook": {"id": "default"},
@@ -3261,6 +3329,35 @@ def test_apply_resume_to_runtime_context_lists_all_present_artifacts(tmp_path: P
             "- feedback_file: review.md",
         ]
     )
+
+
+def test_apply_resume_to_runtime_context_lists_declared_custom_artifacts(tmp_path: Path) -> None:
+    """Resume context preserves a custom skill's declared placeholder name."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-custom-artifacts"
+    phase_dir = issue_dir / "synthesize"
+    previous = phase_dir / "iteration_001"
+    previous.mkdir(parents=True)
+    (previous / "iteration.json").write_text(
+        json.dumps({"cli": "codex", "session_id": "session-1"}), encoding="utf-8"
+    )
+    current = phase_dir / "iteration_002"
+    current.mkdir()
+    (current / "iteration.json").write_text(
+        json.dumps({"cli": "codex", "session_id": "session-1"}), encoding="utf-8"
+    )
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.playbook = {
+        "steps": {"synthesize": {"skill": "synthesis", "role": "developer"}}
+    }
+    executor.phase_dir = phase_dir
+    executor.iteration = 2
+    executor._step_agent_name = "David"
+
+    updated = executor._apply_resume_to_runtime_context(
+        {"evidence_file": "research-notes.md"}, "synthesize"
+    )
+
+    assert updated["resume_input_artifacts"] == "- evidence_file: research-notes.md"
 
 
 def test_execute_step_same_session_resume_keeps_real_input_in_prompt_and_user_input_md(

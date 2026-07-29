@@ -151,6 +151,41 @@ class TestWriteTargetMapping:
         assert config.steps == {"synthesis": {"template": "evidence"}}
 
 
+def test_non_interactive_prepare_persists_custom_template_field_default() -> None:
+    """A declared custom catalog default is retained outside the spec/plan aliases."""
+    field_defs = [
+        {
+            "id": "synthesis_template",
+            "type": "template",
+            "label": "Synthesis template",
+            "write": "synthesis.template",
+            "default": "evidence",
+        }
+    ]
+    profile = PrepareProfile(
+        prepare=PrepareConfig.model_validate({"fields": field_defs}),
+        is_github_repo=True,
+        step_names=frozenset({"synthesis"}),
+    )
+    parsed = ParsedPrepareFields(fields=parse_prepare_fields(field_defs))
+    synthesis_manager = MagicMock()
+    synthesis_manager.template_exists.return_value = True
+    deps = NonInteractiveResolverDeps(
+        spec_template_manager=MagicMock(),
+        plan_template_manager=MagicMock(),
+        template_managers={"synthesis": synthesis_manager},
+    )
+
+    config = resolve_non_interactive_issue_config(
+        profile,
+        NonInteractiveCliAnswers(input_method="manual"),
+        parsed_fields=parsed,
+        deps=deps,
+    )
+
+    assert config.steps == {"synthesis": {"template": "evidence"}}
+
+
 class TestQuickDefaults:
     def test_matches_profile_quick_setup_for_github_issue(self) -> None:
         parsed = _default_fields()

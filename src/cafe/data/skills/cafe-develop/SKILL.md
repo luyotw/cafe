@@ -6,16 +6,16 @@ workflow:
   prompt_inputs:
     - artifacts: [spec]
       placeholder: spec_file
-      required: true
+      required: false
     - artifacts: [spec]
       placeholder: spec_file_path
-      required: true
+      required: false
     - artifacts: [plan]
       placeholder: plan_file
-      required: true
+      required: false
     - artifacts: [plan]
       placeholder: plan_file_path
-      required: true
+      required: false
     - artifacts: [review_feedback, pr_result]
       placeholder: feedback_file_path
       required: false

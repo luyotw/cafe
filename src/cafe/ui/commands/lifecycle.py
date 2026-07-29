@@ -204,7 +204,14 @@ def _run_field_driven_prepare_prompts(
     *,
     display: Any,
     github_ops: Any,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, dict[str, Any]], Optional[int]]:
+    template_managers: Optional[dict[str, Any]] = None,
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, dict[str, Any]],
+    Optional[int],
+]:
     """Run interactive prepare prompts from declarative PrepareField definitions."""
     from cafe.ui.prepare_field_renderer import RendererDeps, run_field_driven_prepare_flow
 
@@ -216,6 +223,7 @@ def _run_field_driven_prepare_prompts(
         select_template=select_template,
         spec_template_manager=TemplateManager(template_type="spec"),
         plan_template_manager=TemplateManager(template_type="plan"),
+        template_managers=template_managers or {},
         console=console,
         display=display,
         github_ops=github_ops,
@@ -496,11 +504,13 @@ def prepare(
 
             display = Display()
             github_ops = GitHubOps()
+            from cafe.core.playbook import declared_template_managers
             from cafe.skills.loader import SkillLoader
 
+            skill_loader = SkillLoader()
             parsed_fields = profile.resolved_prepare_fields(
                 playbook_path=loaded_playbook.path,
-                skill_loader=SkillLoader(),
+                skill_loader=skill_loader,
             )
             issue_id: Optional[int] = None
             if parsed_fields is None:
@@ -516,12 +526,17 @@ def prepare(
                     parsed_fields,
                     display=display,
                     github_ops=github_ops,
+                    template_managers=declared_template_managers(
+                        loaded_playbook.model,
+                        skill_loader,
+                    ),
                 )
                 if len(field_result) == 4:
                     spec_config, plan_config, pr_config, issue_id = field_result
                 else:
                     spec_config, plan_config, pr_config, step_configs, issue_id = field_result
         elif not interactive:
+            from cafe.core.playbook import declared_template_managers
             from cafe.skills.loader import SkillLoader
             from cafe.ui.prepare_field_renderer import (
                 NonInteractiveCliAnswers,
@@ -531,13 +546,18 @@ def prepare(
                 resolve_non_interactive_issue_config,
             )
 
+            skill_loader = SkillLoader()
             parsed_fields = profile.resolved_prepare_fields(
                 playbook_path=loaded_playbook.path,
-                skill_loader=SkillLoader(),
+                skill_loader=skill_loader,
             )
             resolver_deps = NonInteractiveResolverDeps(
                 spec_template_manager=TemplateManager(template_type="spec"),
                 plan_template_manager=TemplateManager(template_type="plan"),
+                template_managers=declared_template_managers(
+                    loaded_playbook.model,
+                    skill_loader,
+                ),
             )
             try:
                 resolved_config = resolve_non_interactive_issue_config(

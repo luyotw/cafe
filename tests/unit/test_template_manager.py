@@ -113,6 +113,13 @@ class TestTemplateManager:
         with pytest.raises(ValueError, match="Invalid template name"):
             manager.add_template(str(source_file), "")
 
+    def test_get_template_path_rejects_path_components(self) -> None:
+        """Named template selection cannot escape the catalog with traversal."""
+        manager = TemplateManager(template_type="plan", skill_name="cafe-plan")
+
+        with pytest.raises(ValueError, match="Invalid template name"):
+            manager.get_template_path("../../SKILL.md")
+
     def test_add_template_raises_file_exists_error_if_duplicate(self, tmp_path: Path) -> None:
         """Test that adding a duplicate template raises FileExistsError."""
         fake_home = tmp_path / "home"

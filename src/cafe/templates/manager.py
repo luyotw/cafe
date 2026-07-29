@@ -183,6 +183,9 @@ class TemplateManager:
         Returns:
             Path to the template file, or None if not found
         """
+        if not template_name or "/" in template_name or "\\" in template_name:
+            raise ValueError(f"Invalid template name: {template_name}")
+
         # Ensure .md extension
         if not template_name.endswith(".md"):
             template_name = f"{template_name}.md"

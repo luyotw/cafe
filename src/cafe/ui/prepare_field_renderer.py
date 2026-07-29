@@ -67,6 +67,7 @@ class NonInteractiveResolverDeps:
 
     spec_template_manager: TemplateManager
     plan_template_manager: TemplateManager
+    template_managers: dict[str, TemplateManager] = field(default_factory=dict)
 
 
 @dataclass
@@ -253,15 +254,20 @@ def resolve_non_interactive_issue_config(
     defaults = profile.non_interactive_defaults()
     explicit_legacy_defaults = "non_interactive_defaults" in profile.prepare.model_fields_set
     field_defaults: dict[str, Any] = {}
-    if parsed_fields is not None and not explicit_legacy_defaults:
+    ctx: Optional[PrepareNonInteractiveContext] = None
+    if parsed_fields is not None:
         ctx = PrepareNonInteractiveContext(
             is_github_repo=profile.is_github_repo,
             issue_id=answers.issue_id if answers.input_method == "github" else None,
             profile=profile,
         )
-        for field in visible_fields_for_non_interactive(parsed_fields, ctx):
-            if field.write in {"spec.rigor", "spec.template", "plan.template"}:
-                if field.default is not None and field.write not in field_defaults:
+        if not explicit_legacy_defaults:
+            for field in visible_fields_for_non_interactive(parsed_fields, ctx):
+                if (
+                    field.default is not None
+                    and field.write is not None
+                    and field.write not in field_defaults
+                ):
                     field_defaults[field.write] = field.default
 
     default_rigor = (
@@ -307,6 +313,25 @@ def resolve_non_interactive_issue_config(
         set_write_value(config, "plan.template", plan_template)
     if answers.sync_plan_github is not None:
         set_write_value(config, "plan.sync_github", answers.sync_plan_github)
+
+    if parsed_fields is not None:
+        assert ctx is not None
+        for field in visible_fields_for_non_interactive(parsed_fields, ctx):
+            if field.type != "template" or field.write is None:
+                continue
+            section, _key = field.write.split(".", 1)
+            if section in {"spec", "plan"}:
+                continue
+            template_name = field_defaults.get(field.write)
+            if template_name is None:
+                continue
+            manager = deps.template_managers.get(section)
+            if manager is None:
+                raise PrepareNonInteractiveError(
+                    f"prepare field {field.id!r} targets undeclared template step {section!r}"
+                )
+            _validate_template_name(manager, field.label, str(template_name))
+            set_write_value(config, field.write, template_name)
 
     supports_pr_config = profile.supports_pr_config(parsed_fields)
     if not supports_pr_config and (

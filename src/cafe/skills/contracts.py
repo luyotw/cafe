@@ -9,6 +9,30 @@ from typing import Any, Optional, Tuple
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
+RUNTIME_OWNED_PROMPT_PLACEHOLDERS = frozenset(
+    {
+        "agent_file",
+        "base_branch",
+        "blackboard_digest",
+        "blackboard_path",
+        "checklist_file",
+        "commits",
+        "handoff_summary",
+        "iteration",
+        "next_step_path",
+        "output_file",
+        "previous_output_file",
+        "questions_xml_file",
+        "resume_input_artifacts",
+        "step_transitions",
+        "template_catalog",
+        "template_file",
+        "user_input",
+        "valid_to_steps",
+    }
+)
+
+
 def _safe_token(value: str, *, field_name: str) -> str:
     token = value.strip()
     if not token or "/" in token or "\\" in token or token in {".", ".."}:
@@ -51,7 +75,10 @@ class PromptInputContract(BaseModel):
     @field_validator("placeholder")
     @classmethod
     def _validate_placeholder(cls, value: str) -> str:
-        return _safe_token(value, field_name="placeholder")
+        value = _safe_token(value, field_name="placeholder")
+        if value in RUNTIME_OWNED_PROMPT_PLACEHOLDERS:
+            raise ValueError(f"placeholder {value!r} is runtime-owned")
+        return value
 
 
 class ChecklistWhen(BaseModel):

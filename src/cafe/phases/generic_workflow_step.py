@@ -134,11 +134,17 @@ class GenericWorkflowStepExecutor(Phase):
         self._resolved_iteration_user_input: Optional[str] = None
         self._config_allowed_directories: List[str] = list(config_allowed_directories or [])
         self._extra_allowed_directories: List[str] = list(extra_allowed_directories or [])
+        self._template_allowed_directories: List[str] = []
 
     def _get_allowed_directories(self) -> List[str]:
         base = super()._get_allowed_directories()
         merged = list(
-            dict.fromkeys(base + self._config_allowed_directories + self._extra_allowed_directories)
+            dict.fromkeys(
+                base
+                + self._config_allowed_directories
+                + self._extra_allowed_directories
+                + self._template_allowed_directories
+            )
         )
         return merged
 
@@ -197,6 +203,9 @@ class GenericWorkflowStepExecutor(Phase):
             agent_name=agent_name,
             output_file=output_file,
         )
+        self._template_allowed_directories = []
+        if template_file := context.get("template_file"):
+            self._template_allowed_directories.append(str(Path(template_file).parent))
         shared_skill_invocations = self.generic_phase.prepare_skills(
             skill_names=self.SHARED_WORKFLOW_SKILLS,
             agent_cli=agent_cli,
@@ -497,13 +506,26 @@ class GenericWorkflowStepExecutor(Phase):
             current_iteration_data=current_data,
         ):
             artifact_lines = []
-            for key in ("develop_file", "spec_file", "plan_file", "feedback_file"):
+            declared = self._declared_prompt_input_placeholders(step_name)
+            fallback_keys = ("develop_file", "spec_file", "plan_file", "feedback_file")
+            keys = list(dict.fromkeys(declared + fallback_keys))
+            for key in keys:
                 if updated.get(key):
                     artifact_lines.append(f"- {key}: {updated[key]}")
             if artifact_lines:
                 updated["resume_input_artifacts"] = "\n".join(artifact_lines)
 
         return updated
+
+    def _declared_prompt_input_placeholders(self, step_name: str) -> tuple[str, ...]:
+        """Return declared prompt-input keys for the current step in contract order."""
+        steps = self.playbook.get("steps", {})
+        step_def = steps.get(step_name) if isinstance(steps, dict) else None
+        if not isinstance(step_def, dict):
+            return ()
+        skill_name = self._resolve_skill_name(step_def, self.iteration)
+        contract = self._get_skill_loader().get_workflow_contract(skill_name)
+        return tuple(mapping.placeholder for mapping in contract.prompt_inputs)
 
     def _detect_written_output_files(self) -> List[Path]:
         if self._current_output_file and self._current_output_file.exists():
@@ -760,6 +782,9 @@ class GenericWorkflowStepExecutor(Phase):
                 for placeholder, path in declared_inputs.items()
             }
         )
+        for mapping in contract.prompt_inputs:
+            if not mapping.required and mapping.placeholder not in context:
+                context[mapping.placeholder] = "(not available)"
 
         self._add_template_context(
             context=context,

@@ -58,6 +58,19 @@ def test_workflow_contract_parses_declared_inputs_checklists_and_templates() -> 
 
 
 @pytest.mark.parametrize(
+    "placeholder",
+    ["output_file", "checklist_file", "questions_xml_file", "next_step_path"],
+)
+def test_workflow_contract_rejects_runtime_owned_input_placeholders(placeholder: str) -> None:
+    """Skill inputs cannot replace locations that the runtime exclusively owns."""
+    data = _contract_data()
+    data["prompt_inputs"][0]["placeholder"] = placeholder
+
+    with pytest.raises(ValidationError, match="runtime-owned"):
+        SkillWorkflowContract.model_validate(data)
+
+
+@pytest.mark.parametrize(
     "mutate",
     [
         lambda data: data["prompt_inputs"].append(
