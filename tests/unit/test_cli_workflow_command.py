@@ -21,6 +21,7 @@ from cafe.ui.cli_shared import (
     _build_workflow_step_executor,
     apply_alignment_decision_from_payload,
 )
+from cafe.ui.commands.workflow import _reset_baton_for_explicit_start_step
 from cafe.utils.config import ConfigManager
 
 runner = CliRunner()
@@ -1662,6 +1663,37 @@ def test_workflow_command_start_step_rebuilds_stale_text_baton(tmp_path: Path, m
     blackboard = BlackboardStore(issue_dir).load_or_create("spec")
     assert blackboard.handoff_contract is not None
     assert blackboard.handoff_contract.from_step == "spec"
+
+
+def test_explicit_start_step_supersedes_stale_handoff_summary(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-stale-summary"
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.set_handoff_summary(blackboard, "Alignment checkpoint required before spec")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
+        source="test",
+    )
+
+    _reset_baton_for_explicit_start_step(
+        issue_dir=issue_dir,
+        blackboard=blackboard,
+        active_step="spec",
+    )
+
+    reloaded = store.load_or_create("spec", playbook_id="default")
+    assert reloaded.current_step == "spec"
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
+    assert reloaded.handoff_contract.to_step == "spec"
+    assert reloaded.handoff_summary == (
+        "Explicit workflow start requested for spec; the prior handoff is superseded."
+    )
 
 
 def test_workflow_command_prints_guidance_for_invalid_runtime_baton(
