@@ -1,5 +1,7 @@
 """Tests for safe, durable agent-attempt diagnostics."""
 
+import pytest
+
 from cafe.agents.diagnostics import (
     ERROR_EXCERPT_LIMIT,
     build_failed_attempt,
@@ -84,3 +86,26 @@ def test_generic_unavailable_display_keeps_pure_socket_close_retryable() -> None
     )
 
     assert is_transient_same_cli_error(error)
+
+
+@pytest.mark.parametrize(
+    "unavailable_signal",
+    [
+        "disabled Claude subscription access",
+        "use an Anthropic API key instead",
+        "failed to authenticate",
+        "authentication_failed",
+        "API Error: 403",
+    ],
+)
+def test_generic_unavailable_display_never_retries_account_signals(
+    unavailable_signal: str,
+) -> None:
+    """Account and policy failures remain non-transient despite socket noise."""
+    error = AgentExecutionError(
+        f"{unavailable_signal}; socket connection was closed unexpectedly",
+        error_type="cli_unavailable",
+        display_message="Claude CLI unavailable.",
+    )
+
+    assert not is_transient_same_cli_error(error)

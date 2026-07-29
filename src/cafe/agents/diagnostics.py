@@ -12,7 +12,8 @@ _TRANSIENT_CLI_UNAVAILABLE = re.compile(
 )
 _GENERIC_CLI_UNAVAILABLE_DISPLAY = re.compile(r"^\S+ CLI unavailable\.$", re.IGNORECASE)
 _NON_TRANSIENT_CLI_UNAVAILABLE = re.compile(
-    r"(?:failed\s+to\s+authenticate|authentication[_\s-]*failed|\b403\b|"
+    r"(?:failed\s+to\s+authenticate|authentication[_\s-]*failed|"
+    r"use\s+an\s+anthropic\s+api\s+key\s+instead|\b403\b|"
     r"subscription|organization|org[\s-]*policy|access\s+is\s+disabled)",
     re.IGNORECASE,
 )
