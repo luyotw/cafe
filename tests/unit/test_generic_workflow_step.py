@@ -111,18 +111,37 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
     for name, body in {
         "cafe-spec": "## Role\nRead your agent file: {agent_file}\n\n## Context\n{blackboard_digest}\n",
         "cafe-plan": "Write plan to: {output_file}\n",
-        "cafe-develop": "Implement the current request.\n",
+        "cafe-develop": "Implement the current request. {develop_file}\n",
         "cafe-workflow-common": "Read blackboard first.\n",
         "cafe-github_sync": "Shared GitHub sync helper.\n",
         "cafe-review": "Review the latest changes.\n",
         "cafe-pr": "Write PR content to: {output_file}\n",
+        "synthesis": "Synthesize {evidence_file}.\n",
     }.items():
         skill_dir = skill_root / name
         skill_dir.mkdir(parents=True, exist_ok=True)
+        workflow = ""
+        if name == "cafe-develop":
+            workflow = (
+                "workflow:\n  prompt_inputs:\n"
+                "    - artifacts: [code]\n      placeholder: develop_file\n      required: false\n"
+            )
+        if name == "synthesis":
+            workflow = (
+                "workflow:\n  prompt_inputs:\n"
+                "    - artifacts: [research_notes]\n"
+                "      placeholder: evidence_file\n"
+                "      required: true\n"
+                "  output_templates:\n"
+                "    catalog: synthesis\n"
+            )
         (skill_dir / "SKILL.md").write_text(
-            f"---\nname: {name}\ndescription: desc\n---\n\n{body}",
+            f"---\nname: {name}\ndescription: desc\n{workflow}---\n\n{body}",
             encoding="utf-8",
         )
+    synthesis_templates = skill_root / "synthesis" / "assets" / "templates"
+    synthesis_templates.mkdir(parents=True, exist_ok=True)
+    (synthesis_templates / "evidence.md").write_text("# Evidence\n", encoding="utf-8")
     loader = SkillLoader(
         project_root=tmp_path,
         global_root=tmp_path / "global",
@@ -2462,6 +2481,163 @@ def test_workflow_legacy_behavior_unchanged_when_no_config(tmp_path: Path, monke
     assert agent_manager.allowed_directories_calls[-1] == [".cafe"]
 
 
+def test_workflow_allows_selected_global_template_directory(tmp_path: Path, monkeypatch) -> None:
+    """A selected template outside the worktree remains readable by the agent."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-global-template"
+    research_file = tmp_path / "research.md"
+    research_file.write_text("evidence", encoding="utf-8")
+    global_template = (
+        tmp_path.parent
+        / f"{tmp_path.name}-global-cafe"
+        / "templates"
+        / "synthesis"
+        / "evidence.md"
+    )
+    global_template.parent.mkdir(parents=True)
+    global_template.write_text("# Global evidence\n", encoding="utf-8")
+    playbook = {
+        "playbook": {"id": "custom"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "synthesis": {
+                "skill": "synthesis",
+                "role": "developer",
+                "template": "evidence",
+                "output_artifact": "report",
+                "allowed_tools": ["Read"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("synthesis")
+    store.set_artifact(state, "research_notes", str(research_file))
+    agent_manager = FakeAgentManager("await_agent")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-global-template",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    with patch(
+        "cafe.phases.generic_workflow_step.TemplateManager.get_template_path",
+        return_value=global_template,
+    ):
+        executor.execute_step("synthesis", playbook["steps"]["synthesis"], state)
+
+    assert any(
+        Path(directory).resolve() == global_template.parent.resolve()
+        for directory in agent_manager.allowed_directories_calls[-1]
+    )
+
+
+def test_workflow_allows_auto_catalog_template_directories(tmp_path: Path, monkeypatch) -> None:
+    """Auto selection grants read access to each catalog candidate directory."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-auto-global-template"
+    research_file = tmp_path / "research.md"
+    research_file.write_text("evidence", encoding="utf-8")
+    global_template = (
+        tmp_path.parent
+        / f"{tmp_path.name}-auto-global-cafe"
+        / "templates"
+        / "synthesis"
+        / "evidence.md"
+    )
+    global_template.parent.mkdir(parents=True)
+    global_template.write_text("# Global evidence\n", encoding="utf-8")
+    playbook = {
+        "playbook": {"id": "custom"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "synthesis": {
+                "skill": "synthesis",
+                "role": "developer",
+                "template": "auto",
+                "output_artifact": "report",
+                "allowed_tools": ["Read"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("synthesis")
+    store.set_artifact(state, "research_notes", str(research_file))
+    agent_manager = FakeAgentManager("await_agent")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-auto-global-template",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    with (
+        patch(
+            "cafe.phases.generic_workflow_step.TemplateManager.list_templates",
+            return_value=[("evidence", "global")],
+        ),
+        patch(
+            "cafe.phases.generic_workflow_step.TemplateManager.get_template_path",
+            return_value=global_template,
+        ),
+    ):
+        executor.execute_step("synthesis", playbook["steps"]["synthesis"], state)
+
+    assert any(
+        Path(directory).resolve() == global_template.parent.resolve()
+        for directory in agent_manager.allowed_directories_calls[-1]
+    )
+
+
+def test_workflow_limits_prompt_inputs_to_step_artifacts(tmp_path: Path) -> None:
+    """A skill cannot receive a blackboard artifact undeclared by its step."""
+    executor = _make_minimal_executor(tmp_path)
+    state = BlackboardStore(executor.issue_dir).load_or_create("synthesis")
+    BlackboardStore(executor.issue_dir).set_artifact(
+        state, "research_notes", str(tmp_path / "research.md")
+    )
+    step_def = {"skill": "synthesis", "role": "developer", "input_artifacts": []}
+
+    with pytest.raises(ValueError, match="evidence_file"):
+        executor._build_context(
+            step_name="synthesis",
+            step_def=step_def,
+            blackboard_state=state,
+            agent_name="David",
+            output_file=tmp_path / "output.md",
+        )
+
+
+def test_workflow_limits_checklist_inputs_to_step_artifacts(tmp_path: Path) -> None:
+    """Checklist generation uses the same declared artifact boundary as the prompt."""
+    executor = _make_minimal_executor(tmp_path)
+    state = BlackboardStore(executor.issue_dir).load_or_create("synthesis")
+    BlackboardStore(executor.issue_dir).set_artifact(
+        state, "research_notes", str(tmp_path / "research.md")
+    )
+    step_def = {"skill": "synthesis", "role": "developer", "input_artifacts": []}
+
+    with pytest.raises(ValueError, match="evidence_file"):
+        executor._generate_checklist(
+            step_name="synthesis",
+            skill_name="synthesis",
+            agent_name="David",
+            step_def=step_def,
+            blackboard_state=state,
+            checklist_file=tmp_path / "checklist.md",
+            output_file=tmp_path / "output.md",
+            questions_xml_file=tmp_path / "questions.xml",
+        )
+
+
 def _plan_step_playbook() -> dict:
     return {
         "playbook": {"id": "default"},
@@ -2582,23 +2758,45 @@ def test_develop_checklist_prefers_review_feedback_over_pr_result(
     store.set_artifact(state, "review_feedback", str(review_file))
     store.set_artifact(state, "pr_result", str(pr_file))
 
-    with patch("cafe.phases.generic_workflow_step.generate_develop_checklist") as mock_gen:
-        executor = GenericWorkflowStepExecutor(
-            issue_dir=issue_dir,
-            issue_name="issue-develop-feedback",
-            playbook=playbook,
-            generic_phase=_build_loader(tmp_path),
-            agent_manager=FakeAgentManager("confirmed"),
-            git_ops=FakeGitOperations(),
-            role_agent_map={"developer": "David"},
-        )
-        executor.execute_step("develop", playbook["steps"]["develop"], state)
+    skill_dir = tmp_path / ".cafe" / "skills" / "cafe-develop"
+    (skill_dir / "references").mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: cafe-develop
+description: test skill
+workflow:
+  prompt_inputs:
+    - artifacts: [review_feedback, pr_result]
+      placeholder: feedback_file
+      required: false
+  checklist:
+    variants:
+      - when: {feedback: true}
+        sections: [{reference: execution.md}]
+    include_role_guidance: false
+---
+""",
+        encoding="utf-8",
+    )
+    (skill_dir / "references" / "execution.md").write_text(
+        "[ ] Use {feedback_file}\n", encoding="utf-8"
+    )
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-develop-feedback",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    executor.execute_step("develop", playbook["steps"]["develop"], state)
 
-    mock_gen.assert_called_once()
-    call_kwargs = mock_gen.call_args.kwargs
-    assert call_kwargs["correction_mode"] is True
-    assert "review" in call_kwargs["feedback_file_path"]
-    assert "pr" not in call_kwargs["feedback_file_path"]
+    checklist = (issue_dir / "develop" / "iteration_001" / "checklist.md").read_text(
+        encoding="utf-8"
+    )
+    assert "review/iteration_001/output.md" in checklist
+    assert "pr/iteration_001/output.md" not in checklist
 
 
 def _write_skill_with_basic_principles(
@@ -2610,7 +2808,17 @@ def _write_skill_with_basic_principles(
     skill_dir = tmp_path / ".cafe" / "skills" / skill_name
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(
-        f"---\nname: {skill_name}\ndescription: test skill\n---\n",
+        f"""---
+name: {skill_name}
+description: test skill
+workflow:
+  checklist:
+    variants:
+      - when: {{}}
+        sections: [{{optional_checklist: basic_principles.md}}]
+    include_role_guidance: false
+---
+""",
         encoding="utf-8",
     )
     references = skill_dir / "references"
@@ -2662,20 +2870,20 @@ def test_spec_checklist_loads_custom_basic_principles_reference(
     questions_xml_file = issue_dir / "questions.xml"
 
     state = BlackboardStore(issue_dir).load_or_create("spec")
-    with patch("cafe.phases.generic_workflow_step.generate_spec_checklist") as mock_gen:
-        executor._generate_checklist(
-            step_name="spec",
-            skill_name="spec",
-            agent_name="David",
-            step_def={"skill": "spec"},
-            blackboard_state=state,
-            checklist_file=checklist_file,
-            output_file=output_file,
-            questions_xml_file=questions_xml_file,
-        )
+    executor._generate_checklist(
+        step_name="spec",
+        skill_name="spec",
+        agent_name="David",
+        step_def={"skill": "spec"},
+        blackboard_state=state,
+        checklist_file=checklist_file,
+        output_file=output_file,
+        questions_xml_file=questions_xml_file,
+    )
 
-    mock_gen.assert_called_once()
-    assert mock_gen.call_args.kwargs["basic_principles"] == "- Stay scoped\n- Keep behavior stable"
+    checklist = checklist_file.read_text(encoding="utf-8")
+    assert "Stay scoped" in checklist
+    assert "Keep behavior stable" in checklist
 
 
 def test_spec_checklist_omits_missing_basic_principles_reference(
@@ -2714,20 +2922,18 @@ def test_spec_checklist_omits_missing_basic_principles_reference(
     questions_xml_file = issue_dir / "questions.xml"
     state = BlackboardStore(issue_dir).load_or_create("spec")
 
-    with patch("cafe.phases.generic_workflow_step.generate_spec_checklist") as mock_gen:
-        executor._generate_checklist(
-            step_name="spec",
-            skill_name="spec",
-            agent_name="David",
-            step_def={"skill": "spec"},
-            blackboard_state=state,
-            checklist_file=checklist_file,
-            output_file=output_file,
-            questions_xml_file=questions_xml_file,
-        )
+    executor._generate_checklist(
+        step_name="spec",
+        skill_name="spec",
+        agent_name="David",
+        step_def={"skill": "spec"},
+        blackboard_state=state,
+        checklist_file=checklist_file,
+        output_file=output_file,
+        questions_xml_file=questions_xml_file,
+    )
 
-    mock_gen.assert_called_once()
-    assert mock_gen.call_args.kwargs["basic_principles"] == ""
+    assert checklist_file.read_text(encoding="utf-8") == ""
 
 
 def test_update_iteration_history_preserves_model_and_stats_on_second_call(
@@ -3225,6 +3431,35 @@ def test_apply_resume_to_runtime_context_lists_all_present_artifacts(tmp_path: P
             "- feedback_file: review.md",
         ]
     )
+
+
+def test_apply_resume_to_runtime_context_lists_declared_custom_artifacts(tmp_path: Path) -> None:
+    """Resume context preserves a custom skill's declared placeholder name."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-custom-artifacts"
+    phase_dir = issue_dir / "synthesize"
+    previous = phase_dir / "iteration_001"
+    previous.mkdir(parents=True)
+    (previous / "iteration.json").write_text(
+        json.dumps({"cli": "codex", "session_id": "session-1"}), encoding="utf-8"
+    )
+    current = phase_dir / "iteration_002"
+    current.mkdir()
+    (current / "iteration.json").write_text(
+        json.dumps({"cli": "codex", "session_id": "session-1"}), encoding="utf-8"
+    )
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.playbook = {
+        "steps": {"synthesize": {"skill": "synthesis", "role": "developer"}}
+    }
+    executor.phase_dir = phase_dir
+    executor.iteration = 2
+    executor._step_agent_name = "David"
+
+    updated = executor._apply_resume_to_runtime_context(
+        {"evidence_file": "research-notes.md"}, "synthesize"
+    )
+
+    assert updated["resume_input_artifacts"] == "- evidence_file: research-notes.md"
 
 
 def test_execute_step_same_session_resume_keeps_real_input_in_prompt_and_user_input_md(

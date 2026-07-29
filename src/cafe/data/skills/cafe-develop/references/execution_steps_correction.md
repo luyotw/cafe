@@ -1,16 +1,14 @@
 ## Checklist
 
 [ ] Read {agent_file} to understand your role and native language
-[ ] Carefully read {spec_file_path} and {plan_file_path}
-[ ] Read feedback todo list in {feedback_file_path}
+{correction_plan_context}[ ] Read feedback todo list in {feedback_file}
 [ ] Address each issue raised in the feedback
-[ ] Mark completed items in {feedback_file_path} if applicable (change - [ ] to - [x])
+[ ] Mark completed items in {feedback_file} if applicable (change - [ ] to - [x])
 [ ] Commit changes with descriptive messages
 [ ] Confirm: Maximized code reuse by looking for existing patterns and utilities
 [ ] Confirm: Commit messages strictly match existing format, language, and structure
 [ ] Confirm: All issues are fixed
-[ ] Read the plan **Test List** in {plan_file_path}; new or changed tests still map to listed items and follow `src/cafe/data/skills/cafe-plan/references/test_invariants_policy.md`
-[ ] Confirm: Corrected tests do not reintroduce brittle bindings (UI copy, CSS classes, DOM structure, internal state shape) unless the spec explicitly allows them
+{correction_plan_test_list}[ ] Confirm: Corrected tests do not reintroduce brittle bindings (UI copy, CSS classes, DOM structure, internal state shape) unless the spec explicitly allows them
 [ ] Confirm: All tests pass and are not fragile
 [ ] Update blackboard and next-step baton to hand off to the next workflow target
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, List, Literal, Optional, Tuple
 
 from cafe.core.prepare_fields import ParsedPrepareFields, PrepareField, PrepareFieldChoice
@@ -67,6 +67,7 @@ class NonInteractiveResolverDeps:
 
     spec_template_manager: TemplateManager
     plan_template_manager: TemplateManager
+    template_managers: dict[str, TemplateManager] = field(default_factory=dict)
 
 
 @dataclass
@@ -91,6 +92,7 @@ class RendererDeps:
     select_template: Callable[..., Optional[str]]
     spec_template_manager: TemplateManager
     plan_template_manager: TemplateManager
+    template_managers: dict[str, TemplateManager] = field(default_factory=dict)
     console: Any = None
     display: Any = None
     github_ops: Any = None
@@ -252,16 +254,20 @@ def resolve_non_interactive_issue_config(
     defaults = profile.non_interactive_defaults()
     explicit_legacy_defaults = "non_interactive_defaults" in profile.prepare.model_fields_set
     field_defaults: dict[str, Any] = {}
-    if parsed_fields is not None and not explicit_legacy_defaults:
+    ctx: Optional[PrepareNonInteractiveContext] = None
+    if parsed_fields is not None:
         ctx = PrepareNonInteractiveContext(
             is_github_repo=profile.is_github_repo,
             issue_id=answers.issue_id if answers.input_method == "github" else None,
             profile=profile,
         )
         for field in visible_fields_for_non_interactive(parsed_fields, ctx):
-            if field.write in {"spec.rigor", "spec.template", "plan.template"}:
-                if field.default is not None and field.write not in field_defaults:
-                    field_defaults[field.write] = field.default
+            if (
+                field.default is not None
+                and field.write is not None
+                and field.write not in field_defaults
+            ):
+                field_defaults[field.write] = field.default
 
     default_rigor = (
         defaults.rigor
@@ -307,6 +313,25 @@ def resolve_non_interactive_issue_config(
     if answers.sync_plan_github is not None:
         set_write_value(config, "plan.sync_github", answers.sync_plan_github)
 
+    if parsed_fields is not None:
+        assert ctx is not None
+        for field in visible_fields_for_non_interactive(parsed_fields, ctx):
+            if field.type != "template" or field.write is None:
+                continue
+            section, _key = field.write.split(".", 1)
+            if section in {"spec", "plan"}:
+                continue
+            template_name = field_defaults.get(field.write)
+            if template_name is None:
+                continue
+            manager = deps.template_managers.get(section)
+            if manager is None:
+                raise PrepareNonInteractiveError(
+                    f"prepare field {field.id!r} targets undeclared template step {section!r}"
+                )
+            _validate_template_name(manager, field.label, str(template_name))
+            set_write_value(config, field.write, template_name)
+
     supports_pr_config = profile.supports_pr_config(parsed_fields)
     if not supports_pr_config and (
         answers.auto_create_pr or answers.post_pr_todo_list is not None
@@ -340,10 +365,9 @@ def parse_enum_selection(selection: str, choices: List[PrepareFieldChoice]) -> s
 
 
 def set_write_value(config: PrepareIssueConfig, write: str, value: Any) -> None:
-    """Write one answer into spec/plan/pr blocks."""
+    """Write one answer into a legacy or arbitrary declared step block."""
     section, key = write.split(".", 1)
-    target = {"spec": config.spec, "plan": config.plan, "pr": config.pr}[section]
-    target[key] = value
+    config.section(section)[key] = value
 
 
 def empty_issue_config() -> PrepareIssueConfig:
@@ -407,7 +431,7 @@ def format_quick_summary(
         if field.write is None or field.type == "setup_mode":
             continue
         section, key = field.write.split(".", 1)
-        value = {"spec": config.spec, "plan": config.plan, "pr": config.pr}[section].get(key)
+        value = config.section(section).get(key)
         if value is None:
             continue
         lines.append(f"{field.label}: {value}")
@@ -462,11 +486,10 @@ def _prompt_enum_field(field: PrepareField, ctx: PreparePromptContext, deps: Ren
 
 
 def _prompt_template_field(field: PrepareField, deps: RendererDeps) -> Optional[str]:
-    manager = (
-        deps.spec_template_manager
-        if field.write and field.write.startswith("spec.")
-        else deps.plan_template_manager
-    )
+    step_name = field.write.split(".", 1)[0] if field.write else "plan"
+    manager = deps.template_managers.get(step_name)
+    if manager is None:
+        manager = deps.spec_template_manager if step_name == "spec" else deps.plan_template_manager
     templates_with_source = manager.list_templates()
     template_names = [name for name, _ in templates_with_source]
     if not template_names:
@@ -582,6 +605,7 @@ def run_field_driven_prepare_flow(
         spec_config.spec.update(quick_config.spec)
         spec_config.plan.update(quick_config.plan)
         spec_config.pr.update(quick_config.pr)
+        spec_config.steps.update(quick_config.steps)
         if deps.console is not None:
             deps.console.print()
             deps.console.print("[green]✓ Quick setup applied with recommended defaults:[/green]")
@@ -594,6 +618,7 @@ def run_field_driven_prepare_flow(
     spec_config.spec.update(custom_config.spec)
     spec_config.plan.update(custom_config.plan)
     spec_config.pr.update(custom_config.pr)
+    spec_config.steps.update(custom_config.steps)
     if not profile.is_github_repo:
         spec_config.pr.setdefault("auto_create", False)
     return spec_config, issue_id

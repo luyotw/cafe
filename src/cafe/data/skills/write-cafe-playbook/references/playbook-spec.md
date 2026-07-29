@@ -98,6 +98,7 @@ artifacts.
 | `assignee_type` | Use `agent`; other values are currently reserved and warn |
 | `input_artifacts` | Artifact keys already produced by earlier or conditional paths |
 | `output_artifact` | The key registered when `{output_file}` exists |
+| `template` | Optional default selected from the step skill's declared output-template catalog |
 | `valid_intents` | Supported `PhaseStatusCode` tokens the phase may return |
 | `allowed_tools` | Least broad set that still allows the skill to complete |
 | `hooks` | Runtime-supported prepare/execute/publish hooks only |
@@ -206,7 +207,10 @@ Prefer an explicit forward skip:
 - `PermissionRetryHandler` belongs on execution phases that may hit permission boundaries.
 - Use specialized hooks only when their implementation exists and their lifecycle stage is valid.
 - Non-software playbooks should normally set `commands.prepare.prompt_for_spec_plan_config: false`; otherwise they inherit development-oriented preparation prompts.
-- Declarative prepare fields support only the write targets defined in `src/cafe/core/prepare_fields.py`. Do not invent domain write targets in YAML.
+- Declarative prepare fields support the fixed legacy targets plus
+  `<step>.template` when that step skill declares `workflow.output_templates`.
+  The selected value persists in the same named step block in `issue.yaml`.
+  Do not invent other domain write targets in YAML.
 
 ## 9. Validation Sequence
 

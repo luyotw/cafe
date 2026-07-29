@@ -110,7 +110,7 @@ steps:
     handoff_label: "Continue implementation"
     chat_role: developer
     assignee_type: agent
-    input_artifacts: [spec, plan]
+    input_artifacts: [spec, plan, review_feedback, pr_result]
     output_artifact: code
     allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
     hooks:
@@ -150,7 +150,7 @@ steps:
     handoff_label: "Refresh PR output"
     chat_role: developer
     assignee_type: agent
-    input_artifacts: [spec, code, review_feedback]
+    input_artifacts: [spec, plan, code, review_feedback]
     output_artifact: pr_result
     allowed_tools: [Read, Edit, Write, Grep, Glob]
     allowed_goto: [develop, review]

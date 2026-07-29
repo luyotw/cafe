@@ -1,6 +1,7 @@
 """Integration tests for field-driven cafe prepare interactive prompts."""
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -179,3 +180,29 @@ commands:
         assert result.exit_code == 0
         mock_legacy.assert_called_once()
         mock_field.assert_not_called()
+
+
+def test_field_driven_prepare_passes_declared_custom_template_managers() -> None:
+    """Lifecycle wiring keeps custom step catalogs available to the renderer."""
+    from cafe.ui.commands.lifecycle import _run_field_driven_prepare_prompts
+
+    custom_manager = MagicMock()
+    rendered_config = SimpleNamespace(spec={}, plan={}, pr={}, steps={})
+    with (
+        patch("cafe.ui.commands.lifecycle.TemplateManager") as manager_cls,
+        patch("cafe.ui.prepare_field_renderer.run_field_driven_prepare_flow") as run_flow,
+    ):
+        manager_cls.side_effect = [MagicMock(), MagicMock()]
+        run_flow.return_value = (rendered_config, None)
+
+        _run_field_driven_prepare_prompts(
+            MagicMock(),
+            MagicMock(),
+            display=MagicMock(),
+            github_ops=MagicMock(),
+            template_managers={"synthesis": custom_manager},
+        )
+
+    assert run_flow.call_args.kwargs["deps"].template_managers == {
+        "synthesis": custom_manager
+    }

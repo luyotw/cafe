@@ -8,14 +8,17 @@ from pathlib import Path
 import pytest
 
 from cafe.agents.manager import AgentManager
+from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.bridge import load_skill_reference
 from cafe.skills.checklist_composer import (
+    compose_declared_checklist,
     generate_develop_checklist,
     generate_plan_checklist,
     generate_pr_checklist,
     generate_review_checklist,
     generate_spec_checklist,
 )
+from cafe.skills.loader import SkillLoader
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "checklists"
 
@@ -24,6 +27,9 @@ REQUIRED_SKILL_REFERENCES = {
         "execution_steps_iteration_1.md",
         "important_notes_iteration_4_plus.md",
         "dod_instruction.md",
+        "dod_instruction_composed.md",
+        "dod_instruction_after_notes_composed.md",
+        "important_notes_iteration_4_plus_composed.md",
         "xml_questions_instruction.md",
     ],
     "spec_revise": ["execution_steps_iteration_n.md"],
@@ -35,13 +41,27 @@ REQUIRED_SKILL_REFERENCES = {
     "develop": [
         "execution_steps_normal.md",
         "execution_steps_correction.md",
+        "normal_plan_context.md",
+        "normal_plan_verification.md",
+        "correction_plan_context.md",
+        "correction_plan_test_list.md",
         "xml_questions_instruction.md",
     ],
-    "review": ["execution_steps.md"],
+    "review": [
+        "execution_steps.md",
+        "feedback_instruction.md",
+        "spec_read_instruction.md",
+        "plan_read_instruction.md",
+        "spec_comparison_instruction.md",
+    ],
     "pr": [
         "execution_steps_iteration_1.md",
         "execution_steps_iteration_n.md",
         "comments_organization_steps.md",
+        "spec_read_instruction.md",
+        "plan_read_instruction.md",
+        "pr_spec_context.md",
+        "pr_plan_context.md",
     ],
 }
 
@@ -165,6 +185,130 @@ GOLDEN_RUNNERS = {
 }
 
 
+# These are the normal workflow cases.  Keep the legacy-wrapper snapshots below
+# as compatibility coverage for their extra arguments. Production cases use
+# the same snapshots, with explicit expected omissions for optional artifacts.
+PRODUCTION_GOLDEN_CASES = {
+    "spec_iter1": {
+        "skill": "cafe-spec",
+        "agent": "Roger",
+        "role": "pm",
+        "iteration": 1,
+        "context": {
+            "output_file": ".cafe/issues/test/spec/iteration_001/output.md",
+            "previous_output_file": "",
+            "questions_xml_file": ".cafe/issues/test/spec/iteration_001/questions.xml",
+        },
+    },
+    "spec_iter2": {
+        "skill": "cafe-spec",
+        "agent": "Roger",
+        "role": "pm",
+        "iteration": 2,
+        "context": {
+            "output_file": ".cafe/issues/test/spec/iteration_002/output.md",
+            "previous_output_file": ".cafe/issues/test/spec/iteration_001/output.md",
+        },
+    },
+    "spec_iter4": {
+        "skill": "cafe-spec",
+        "agent": "Roger",
+        "role": "pm",
+        "iteration": 4,
+        "context": {
+            "output_file": ".cafe/issues/test/spec/iteration_004/output.md",
+            "previous_output_file": ".cafe/issues/test/spec/iteration_003/output.md",
+            "iteration": "4",
+        },
+    },
+    "plan_iter1": {
+        "skill": "cafe-plan",
+        "agent": "Nick",
+        "role": "developer",
+        "iteration": 1,
+        "context": {
+            "spec_file": ".cafe/issues/test/spec/iteration_001/output.md",
+            "output_file": ".cafe/issues/test/plan/iteration_001/output.md",
+            "previous_output_file": "",
+            "questions_xml_file": ".cafe/issues/test/plan/iteration_001/questions.xml",
+        },
+    },
+    "plan_iter2": {
+        "skill": "cafe-plan",
+        "agent": "Nick",
+        "role": "developer",
+        "iteration": 2,
+        "context": {
+            "spec_file": ".cafe/issues/test/spec/iteration_001/output.md",
+            "output_file": ".cafe/issues/test/plan/iteration_002/output.md",
+            "previous_output_file": ".cafe/issues/test/plan/iteration_001/output.md",
+        },
+    },
+    "develop_normal": {
+        "skill": "cafe-develop",
+        "agent": "Nick",
+        "role": "developer",
+        "iteration": 1,
+        "context": {
+            "spec_file": ".cafe/issues/test/spec/iteration_001/output.md",
+            "plan_file": ".cafe/issues/test/plan/iteration_001/output.md",
+            "output_file": ".cafe/issues/test/develop/iteration_001/output.md",
+        },
+    },
+    "develop_correction": {
+        "skill": "cafe-develop",
+        "agent": "Nick",
+        "role": "developer",
+        "iteration": 1,
+        "feedback": True,
+        "context": {
+            "spec_file": ".cafe/issues/test/spec/iteration_001/output.md",
+            "plan_file": ".cafe/issues/test/plan/iteration_001/output.md",
+            "feedback_file": ".cafe/issues/test/review/iteration_001/output.md",
+            "output_file": ".cafe/issues/test/develop/iteration_001/output.md",
+        },
+    },
+    "review": {
+        "skill": "cafe-review",
+        "agent": "Alice",
+        "role": "reviewer",
+        "iteration": 1,
+        "context": {
+            "spec_file": ".cafe/issues/test/spec/iteration_001/output.md",
+            "plan_file": ".cafe/issues/test/plan/iteration_001/output.md",
+            "output_file": ".cafe/issues/test/review/iteration_001/output.md",
+            "base_branch": "develop",
+        },
+        "omitted_optional_lines": (
+            "[ ] Read PR feedback in (not available) (if exists) to see user feedback and requests",
+        ),
+    },
+    "pr_iter1": {
+        "skill": "cafe-pr",
+        "agent": "Nick",
+        "role": "developer",
+        "iteration": 1,
+        "context": {
+            "spec_file": ".cafe/issues/test/spec/iteration_001/output.md",
+            "plan_file": ".cafe/issues/test/plan/iteration_001/output.md",
+            "output_file": ".cafe/issues/test/pr/iteration_001/output.md",
+        },
+    },
+    "pr_iter2": {
+        "skill": "cafe-pr",
+        "agent": "Nick",
+        "role": "developer",
+        "iteration": 2,
+        "context": {
+            "spec_file": ".cafe/issues/test/spec/iteration_001/output.md",
+            "plan_file": ".cafe/issues/test/plan/iteration_001/output.md",
+            "output_file": ".cafe/issues/test/pr/iteration_002/output.md",
+            "previous_output_file": ".cafe/issues/test/pr/iteration_001/output.md",
+        },
+    },
+}
+
+
 def _builtin_agent_path(cls, name, role, **_kw: object) -> str:
     """Always resolve to builtin agent files (ignores local overrides)."""
     return f"src/cafe/data/agents/{role}/{name}.md"
@@ -191,6 +335,103 @@ def test_golden_checklist_matches_fixture(case_name: str, tmp_path: Path) -> Non
             )
     finally:
         AgentManager.get_agent_file_path = saved
+
+
+@pytest.mark.parametrize("case_name", sorted(PRODUCTION_GOLDEN_CASES))
+def test_production_composer_golden_checklist_matches_fixture(
+    case_name: str, tmp_path: Path
+) -> None:
+    """The workflow runtime's declarative composer preserves golden output."""
+    case = PRODUCTION_GOLDEN_CASES[case_name]
+    saved = AgentManager.get_agent_file_path
+    AgentManager.get_agent_file_path = classmethod(_builtin_agent_path)  # type: ignore[assignment]
+    try:
+        output_path = tmp_path / f"production-{case_name}.md"
+        assert compose_declared_checklist(
+            skill_name=case["skill"],
+            contract=SkillLoader().get_workflow_contract(case["skill"]),
+            agent_name=case["agent"],
+            role=case["role"],
+            checklist_file_path=output_path,
+            iteration=case["iteration"],
+            context=case["context"],
+            artifacts={},
+            feedback=case.get("feedback", False),
+            template_mode="manual",
+        )
+        actual = output_path.read_text(encoding="utf-8")
+        expected = (FIXTURES_DIR / f"{case_name}.md").read_text(encoding="utf-8")
+        for line in case.get("omitted_optional_lines", ()):
+            expected = expected.replace(f"{line}\n", "")
+        assert actual == expected
+    finally:
+        AgentManager.get_agent_file_path = saved
+
+
+@pytest.mark.parametrize(
+    ("playbook_id", "step_name", "available_artifacts"),
+    [
+        ("hotfix", "review", {"code": "code.md"}),
+        ("hotfix", "pr", {"code": "code.md", "review_feedback": "review.md"}),
+        ("simple", "pr", {"spec": "spec.md", "code": "code.md"}),
+        (
+            "tdd",
+            "pr",
+            {
+                "spec": "spec.md",
+                "plan": "plan.md",
+                "code": "code.md",
+                "review_feedback": "review.md",
+            },
+        ),
+    ],
+)
+def test_short_builtin_playbook_checklists_compose_with_declared_artifact_scope(
+    playbook_id: str,
+    step_name: str,
+    available_artifacts: dict[str, str],
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Shipped short workflows omit unavailable optional checklist instructions."""
+    step = PlaybookLoader().load_model(playbook_id).model.steps[step_name]
+    scope = set(step.input_artifacts or [])
+    context = {
+        "output_file": "output.md",
+        "base_branch": "main",
+        **{
+            f"{artifact}_file": path
+            for artifact, path in available_artifacts.items()
+            if artifact in scope and artifact in {"spec", "plan", "review_feedback"}
+        },
+    }
+    monkeypatch.setattr(
+        "cafe.skills.checklist_composer.AgentManager.get_agent_file_path",
+        lambda *_: "agent.md",
+    )
+    checklist = tmp_path / f"{playbook_id}-{step_name}.md"
+    assert compose_declared_checklist(
+        skill_name=step.skill,
+        contract=SkillLoader().get_workflow_contract(step.skill),
+        agent_name="Ada",
+        role=step.role,
+        checklist_file_path=checklist,
+        iteration=1,
+        context=context,
+        artifacts={
+            name: available_artifacts[name]
+            for name in scope
+            if name in available_artifacts
+        },
+    )
+
+    content = checklist.read_text(encoding="utf-8")
+    assert "{spec_file}" not in content
+    assert "{plan_file}" not in content
+    if "spec" not in scope:
+        assert "Read the requirements specification" not in content
+    if "plan" not in scope:
+        assert "Read the implementation plan" not in content
 
 
 @pytest.mark.parametrize(

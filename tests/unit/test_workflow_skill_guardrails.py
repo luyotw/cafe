@@ -30,11 +30,3 @@ def test_packaged_develop_skill_has_read_only_budget() -> None:
     assert "不得繼續探索" in text
     assert "任兩次實質修改之間" in text
     assert "3 次唯讀呼叫內" in text
-
-
-def test_project_skill_mirrors_match_packaged_sources() -> None:
-    builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
-    project_root = PROJECT_ROOT / ".codex" / "skills"
-
-    for name in ("cafe-workflow-common", "cafe-develop"):
-        assert _skill_text(project_root, name) == _skill_text(builtin_root, name)

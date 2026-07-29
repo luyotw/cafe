@@ -55,6 +55,15 @@ def test_prepare_field_schema_rejects_invalid_type() -> None:
         parse_prepare_fields([invalid])
 
 
+def test_prepare_field_schema_accepts_declared_custom_step_template_target() -> None:
+    field = dict(MINIMAL_FIELD, id="report_template", type="template", write="synthesis.template")
+    field.pop("choices")
+
+    parsed = parse_prepare_fields([field])
+
+    assert parsed[0].write == "synthesis.template"
+
+
 def _write_skill(root: Path, name: str) -> None:
     skill_dir = root / name
     skill_dir.mkdir(parents=True, exist_ok=True)

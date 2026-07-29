@@ -3,6 +3,16 @@
 This file records behaviors removed or re-homed when retiring legacy per-phase Python classes.
 Related issues: #290 (SpecPhase), #291–#294 (sibling retirements).
 
+## Issue 344 — Declarative skill workflow metadata
+
+Prompt inputs, checklist variants, role-guidance opt-in, and template catalogs
+are now declared in skill frontmatter rather than dispatched by phase name.
+`tests/unit/test_skill_workflow_contract.py` owns parser/resolution/composition
+contracts, and `tests/integration/test_declarative_skill_workflow.py` covers a
+custom non-development synthesis step. Legacy checklist helper functions remain
+as compatibility adapters for historic fixture tests; production execution uses
+the contract-driven composer exclusively.
+
 ## Issue 290 — Retire SpecPhase
 
 GitHub: issue #290

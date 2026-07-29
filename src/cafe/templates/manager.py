@@ -2,21 +2,32 @@
 
 import shutil
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from cafe.utils.config import get_global_cafe_dir
+
+if TYPE_CHECKING:
+    from cafe.skills.loader import SkillLoader
 
 
 class TemplateManager:
     """Manage plan and spec templates."""
 
-    def __init__(self, template_type: str = "plan"):
+    def __init__(
+        self,
+        template_type: str = "plan",
+        *,
+        skill_name: Optional[str] = None,
+        skill_loader: Optional["SkillLoader"] = None,
+    ) -> None:
         """Initialize template manager.
 
         Args:
             template_type: Type of template to manage ('plan' or 'spec')
         """
         self.template_type = template_type
+        self.skill_name = skill_name
+        self.skill_loader = skill_loader
 
     def _builtin_dir(self) -> Path:
         """Builtin template directory under the owning skill's assets/.
@@ -25,16 +36,16 @@ class TemplateManager:
         skill, plan → plan skill). The owning skill's directory name matches
         the template type.
         """
-        from cafe.skills.loader import canonical_skill_name
+        from cafe.skills.loader import SkillLoader, canonical_skill_name
 
-        return (
-            Path(__file__).parent.parent
-            / "data"
-            / "skills"
-            / canonical_skill_name(self.template_type)
-            / "assets"
-            / "templates"
-        )
+        owner = self.skill_name or canonical_skill_name(self.template_type)
+        loader = self.skill_loader or SkillLoader()
+        try:
+            return loader.get_skill_dir(owner) / "assets" / "templates"
+        except Exception:
+            # Keep the historic package lookup as a compatibility fallback for
+            # callers that construct a manager outside a discovered project.
+            return Path(__file__).parent.parent / "data" / "skills" / owner / "assets" / "templates"
 
     def add_template(self, source_path: str, template_name: str) -> Path:
         """Add a new template from a file to global directory.
@@ -172,6 +183,9 @@ class TemplateManager:
         Returns:
             Path to the template file, or None if not found
         """
+        if not template_name or "/" in template_name or "\\" in template_name:
+            raise ValueError(f"Invalid template name: {template_name}")
+
         # Ensure .md extension
         if not template_name.endswith(".md"):
             template_name = f"{template_name}.md"

@@ -115,6 +115,41 @@ def test_omitted_prepare_section_resolves_defaults(tmp_path: Path) -> None:
     assert resolved.model_dump() == expected.model_dump()
 
 
+def test_required_skill_inputs_must_be_declared_by_the_playbook_step(tmp_path: Path) -> None:
+    """A strict load rejects a step that cannot supply its skill's required artifact."""
+    loader = _loader(tmp_path)
+    skill_dir = tmp_path / "builtin" / "skills" / "requires-brief"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: requires-brief\n"
+        "description: requires a brief\n"
+        "workflow:\n"
+        "  prompt_inputs:\n"
+        "    - artifacts: [brief]\n"
+        "      placeholder: brief_file\n"
+        "      required: true\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    _write_playbook(
+        loader._roots()[0],
+        "missing-input",
+        """
+playbook: {id: missing-input}
+steps:
+  synthesize:
+    role: pm
+    skill: requires-brief
+    input_artifacts: []
+    "on": {await_agent: _done}
+""",
+    )
+
+    with pytest.raises(ValueError, match="synthesize.*brief"):
+        loader.load_model("missing-input", strict=True)
+
+
 def test_invalid_rigor_rejected_with_field_path() -> None:
     data = yaml.safe_load(
         _minimal_playbook_yaml(

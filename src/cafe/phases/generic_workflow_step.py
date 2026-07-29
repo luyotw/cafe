@@ -33,17 +33,15 @@ from cafe.core.status_codes import (
 )
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.phases.generic_phase import GenericPhase
-from cafe.skills.bridge import try_load_skill_reference
-from cafe.skills.checklist_composer import (
-    generate_custom_skill_checklist,
-    generate_develop_checklist,
-    generate_plan_checklist,
-    generate_pr_checklist,
-    generate_review_checklist,
-    generate_spec_checklist,
+from cafe.skills.checklist_composer import compose_declared_checklist
+from cafe.skills.contracts import (
+    DeclaredArtifactError,
+    SkillWorkflowContract,
+    resolve_prompt_inputs,
 )
-from cafe.skills.loader import canonical_skill_name
-from cafe.utils.git_utils import get_repo_root, to_cwd_relative_path, get_git_toplevel
+from cafe.skills.loader import SkillLoader, canonical_skill_name
+from cafe.templates.manager import TemplateManager
+from cafe.utils.git_utils import get_git_toplevel, get_repo_root, to_cwd_relative_path
 from cafe.utils.phase_config import load_phase_step_model
 
 
@@ -98,6 +96,11 @@ class GenericWorkflowStepExecutor(Phase):
     BLACKBOARD_DIGEST_ARTIFACT_LIMIT = 20
     BLACKBOARD_DIGEST_TEXT_LIMIT = 240
 
+    def _get_skill_loader(self) -> SkillLoader:
+        """Return the GenericPhase loader, with a standalone-test fallback."""
+        generic_phase = getattr(self, "generic_phase", None)
+        return getattr(generic_phase, "skill_loader", None) or SkillLoader()
+
     def __init__(
         self,
         *,
@@ -131,11 +134,17 @@ class GenericWorkflowStepExecutor(Phase):
         self._resolved_iteration_user_input: Optional[str] = None
         self._config_allowed_directories: List[str] = list(config_allowed_directories or [])
         self._extra_allowed_directories: List[str] = list(extra_allowed_directories or [])
+        self._template_allowed_directories: List[str] = []
 
     def _get_allowed_directories(self) -> List[str]:
         base = super()._get_allowed_directories()
         merged = list(
-            dict.fromkeys(base + self._config_allowed_directories + self._extra_allowed_directories)
+            dict.fromkeys(
+                base
+                + self._config_allowed_directories
+                + self._extra_allowed_directories
+                + self._template_allowed_directories
+            )
         )
         return merged
 
@@ -193,6 +202,13 @@ class GenericWorkflowStepExecutor(Phase):
             blackboard_state=blackboard_state,
             agent_name=agent_name,
             output_file=output_file,
+        )
+        contract = self._get_skill_loader().get_workflow_contract(skill_name)
+        self._template_allowed_directories = self._template_allowed_directories_for(
+            step_name=step_name,
+            step_def=step_def,
+            skill_name=skill_name,
+            contract=contract,
         )
         shared_skill_invocations = self.generic_phase.prepare_skills(
             skill_names=self.SHARED_WORKFLOW_SKILLS,
@@ -494,13 +510,26 @@ class GenericWorkflowStepExecutor(Phase):
             current_iteration_data=current_data,
         ):
             artifact_lines = []
-            for key in ("develop_file", "spec_file", "plan_file", "feedback_file"):
+            declared = self._declared_prompt_input_placeholders(step_name)
+            fallback_keys = ("develop_file", "spec_file", "plan_file", "feedback_file")
+            keys = list(dict.fromkeys(declared + fallback_keys))
+            for key in keys:
                 if updated.get(key):
                     artifact_lines.append(f"- {key}: {updated[key]}")
             if artifact_lines:
                 updated["resume_input_artifacts"] = "\n".join(artifact_lines)
 
         return updated
+
+    def _declared_prompt_input_placeholders(self, step_name: str) -> tuple[str, ...]:
+        """Return declared prompt-input keys for the current step in contract order."""
+        steps = self.playbook.get("steps", {})
+        step_def = steps.get(step_name) if isinstance(steps, dict) else None
+        if not isinstance(step_def, dict):
+            return ()
+        skill_name = self._resolve_skill_name(step_def, self.iteration)
+        contract = self._get_skill_loader().get_workflow_contract(skill_name)
+        return tuple(mapping.placeholder for mapping in contract.prompt_inputs)
 
     def _detect_written_output_files(self) -> List[Path]:
         if self._current_output_file and self._current_output_file.exists():
@@ -743,36 +772,30 @@ class GenericWorkflowStepExecutor(Phase):
             "step_transitions": ", ".join(f"{i}→{s}" for i, s in step_transitions.items()),
         }
 
-        for artifact_name in step_def.get("input_artifacts", []):
-            entry = blackboard_state.artifacts.get(str(artifact_name))
-            if not entry:
-                continue
-            artifact_path = self._display_path(Path(entry.path))
-            if artifact_name == "spec":
-                context["spec_file"] = artifact_path
-            elif artifact_name == "plan":
-                context["plan_file"] = artifact_path
-            elif artifact_name == "code":
-                context["develop_file"] = artifact_path
-            elif artifact_name == "review_feedback":
-                context["feedback_file"] = artifact_path
-            elif artifact_name == "pr_result":
-                context["feedback_file"] = artifact_path
+        skill_name = self._resolve_skill_name(step_def, self.iteration)
+        contract = self._get_skill_loader().get_workflow_contract(skill_name)
+        input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
+        try:
+            declared_inputs = resolve_prompt_inputs(contract, input_artifacts)
+        except DeclaredArtifactError as exc:
+            raise ValueError(
+                f"Step {step_name!r}, skill {canonical_skill_name(skill_name)!r}: {exc}"
+            ) from exc
+        context.update(
+            {
+                placeholder: self._display_path(Path(path))
+                for placeholder, path in declared_inputs.items()
+            }
+        )
+        self._add_template_context(
+            context=context,
+            step_name=step_name,
+            step_def=step_def,
+            skill_name=skill_name,
+            contract=contract,
+        )
 
-        if "spec_file" not in context:
-            latest_spec = self._get_latest_versioned_file("spec", self.issue_dir / "spec")
-            if latest_spec:
-                context["spec_file"] = self._display_path(latest_spec)
-        if "plan_file" not in context:
-            latest_plan = self._get_latest_versioned_file("plan", self.issue_dir / "plan")
-            if latest_plan:
-                context["plan_file"] = self._display_path(latest_plan)
-        if step_name == "develop" and "feedback_file" not in context:
-            pr_feedback = blackboard_state.artifacts.get("pr_result")
-            if pr_feedback:
-                context["feedback_file"] = self._display_path(Path(pr_feedback.path))
-
-        if canonical_skill_name(self._resolve_skill_name(step_def, self.iteration)) == "cafe-pr":
+        if canonical_skill_name(skill_name) == "cafe-pr":
             base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
             resolved_base = str(base_branch or self.git_ops.get_default_base_branch())
             context["base_branch"] = resolved_base
@@ -782,6 +805,21 @@ class GenericWorkflowStepExecutor(Phase):
             )
 
         return context
+
+    @staticmethod
+    def _step_input_artifacts(
+        step_def: Dict[str, Any], blackboard_state: BlackboardState
+    ) -> Dict[str, Any]:
+        """Return only artifact records declared as inputs for this workflow step."""
+        declared = step_def.get("input_artifacts")
+        if declared is None:
+            return dict(blackboard_state.artifacts)
+        allowed = {str(name) for name in declared}
+        return {
+            name: artifact
+            for name, artifact in blackboard_state.artifacts.items()
+            if name in allowed
+        }
 
     @classmethod
     def _build_blackboard_digest(cls, state: BlackboardState) -> str:
@@ -839,129 +877,139 @@ class GenericWorkflowStepExecutor(Phase):
         output_file: Path,
         questions_xml_file: Path,
     ) -> None:
-        output_display = self._display_path(output_file)
-        questions_display = self._display_path(questions_xml_file)
-        spec_path = self._artifact_or_latest_path(blackboard_state, "spec", "spec")
-        plan_path = self._artifact_or_latest_path(blackboard_state, "plan", "plan")
-        review_feedback = self._artifact_path(
-            blackboard_state, "review_feedback"
-        ) or self._artifact_path(blackboard_state, "pr_result")
+        canonical_name = canonical_skill_name(skill_name)
+        contract = self._get_skill_loader().get_workflow_contract(skill_name)
+        input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
+        try:
+            declared_inputs = resolve_prompt_inputs(contract, input_artifacts)
+        except DeclaredArtifactError as exc:
+            raise ValueError(f"Step {step_name!r}, skill {canonical_name!r}: {exc}") from exc
 
-        skill_name = canonical_skill_name(skill_name)
-        skill_basic_principles = try_load_skill_reference(
-            skill_name,
-            "basic_principles.md",
+        previous_output = ""
+        if self.iteration > 1:
+            previous_output = self._display_path(
+                self._get_versioned_file_path(step_name, self.iteration - 1, self.phase_dir)
+            )
+        context = {
+            placeholder: self._display_path(Path(path))
+            for placeholder, path in declared_inputs.items()
+        }
+        context.update(
+            {
+                "output_file": self._display_path(output_file),
+                "questions_xml_file": self._display_path(questions_xml_file),
+                "iteration": str(self.iteration),
+                "previous_output_file": previous_output,
+                "base_branch": str(
+                    self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
+                    or self.git_ops.get_default_base_branch()
+                ),
+            }
         )
-        if skill_name == "cafe-spec":
-            prev_spec = None
-            if self.iteration > 1:
-                prev_spec_file = self._get_versioned_file_path(
-                    step_name, self.iteration - 1, self.phase_dir
-                )
-                prev_spec = self._display_path(prev_spec_file)
-            generate_spec_checklist(
-                iteration=self.iteration,
-                agent_name=agent_name,
-                current_spec_file=output_display,
-                prev_spec_file=prev_spec,
-                checklist_file_path=checklist_file,
-                questions_xml_file=questions_display,
-                basic_principles=skill_basic_principles,
-            )
-            return
-
-        if skill_name == "cafe-plan":
-            if not spec_path:
-                raise ValueError("Plan step requires spec artifact")
-            prev_plan = None
-            if self.iteration > 1:
-                prev_plan_file = self._get_versioned_file_path(
-                    step_name, self.iteration - 1, self.phase_dir
-                )
-                prev_plan = self._display_path(prev_plan_file)
-            generate_plan_checklist(
-                agent_name=agent_name,
-                plan_file_path=output_display,
-                spec_file_path=spec_path,
-                checklist_file_path=checklist_file,
-                iteration=self.iteration,
-                prev_plan_file=prev_plan,
-                questions_xml_file=questions_display,
-                basic_principles=skill_basic_principles,
-            )
-            return
-
-        if skill_name == "cafe-develop":
-            if not spec_path or not plan_path:
-                raise ValueError("Develop step requires spec and plan artifacts")
-            generate_develop_checklist(
-                agent_name=agent_name,
-                spec_file_path=spec_path,
-                plan_file_path=plan_path,
-                develop_file=None,
-                checklist_file_path=checklist_file,
-                correction_mode=review_feedback is not None,
-                feedback_file_path=review_feedback,
-                output_file=output_display,
-                questions_xml_file=questions_display,
-                basic_principles=skill_basic_principles,
-            )
-            return
-
-        if skill_name == "cafe-review":
-            if not spec_path:
-                raise ValueError("Review step requires spec artifact")
-            base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
-            generate_review_checklist(
-                agent_name=agent_name,
-                spec_file_path=spec_path,
-                plan_file_path=plan_path,
-                review_file_path=output_display,
-                base_branch=str(base_branch or self.git_ops.get_default_base_branch()),
-                checklist_file_path=checklist_file,
-                basic_principles=skill_basic_principles,
-            )
-            return
-
-        if skill_name == "cafe-pr":
-            if not spec_path or not plan_path:
-                raise ValueError("PR step requires spec and plan artifacts")
-            prev_pr = None
-            if self.iteration > 1:
-                prev_pr_file = self._get_versioned_file_path(
-                    step_name, self.iteration - 1, self.phase_dir
-                )
-                prev_pr = self._display_path(prev_pr_file)
-            generate_pr_checklist(
-                agent_name=agent_name,
-                spec_file_path=spec_path,
-                plan_file_path=plan_path,
-                pr_file=output_display,
-                checklist_file_path=checklist_file,
-                iteration=self.iteration,
-                prev_pr_file=prev_pr,
-                basic_principles=skill_basic_principles,
-            )
-            return
-
-        if generate_custom_skill_checklist(
-            skill_name=skill_name,
+        feedback = bool(
+            input_artifacts.get("review_feedback") or input_artifacts.get("pr_result")
+        )
+        compose_declared_checklist(
+            skill_name=canonical_name,
+            contract=contract,
             agent_name=agent_name,
             role=str(step_def.get("role", "developer")),
             checklist_file_path=checklist_file,
-            correction_mode=review_feedback is not None,
-            placeholders={
-                "output_file": output_display,
-                "questions_xml_file": questions_display,
-                "spec_file_path": spec_path or "",
-                "plan_file_path": plan_path or "",
-                "develop_file": self._artifact_path(blackboard_state, "code") or "",
-                "feedback_file_path": review_feedback or "",
-            },
-        ):
-            return
+            iteration=self.iteration,
+            context=context,
+            artifacts=input_artifacts,
+            feedback=feedback,
+            template_mode=self._resolved_template_mode(step_name, step_def),
+            template_file=self._resolved_template_file(
+                step_name,
+                step_def,
+                canonical_name,
+                contract,
+            ),
+        )
 
-        checklist_file.write_text("", encoding="utf-8")
+    def _resolved_template_mode(self, step_name: str, step_def: Dict[str, Any]) -> str:
+        """Return the issue selection, playbook default, or auto for a declared catalog."""
+        issue_value = self._get_issue_config_value(
+            self.issue_dir / "issue.yaml", f"{step_name}.template"
+        )
+        return str(issue_value if issue_value is not None else step_def.get("template", "auto"))
+
+    def _resolved_template_file(
+        self,
+        step_name: str,
+        step_def: Dict[str, Any],
+        skill_name: str,
+        contract: SkillWorkflowContract,
+    ) -> Optional[str]:
+        """Resolve a named selection through the owning skill's catalog."""
+        if contract.output_templates is None:
+            return None
+        selection = self._resolved_template_mode(step_name, step_def)
+        if selection == "auto":
+            return None
+        manager = TemplateManager(
+            template_type=contract.output_templates.catalog,
+            skill_name=skill_name,
+            skill_loader=self._get_skill_loader(),
+        )
+        template_file = manager.get_template_path(selection)
+        if template_file is None:
+            raise ValueError(
+                f"Step {step_name!r} selected unknown template {selection!r} "
+                f"from catalog {contract.output_templates.catalog!r}"
+            )
+        return self._display_path(template_file)
+
+    def _template_allowed_directories_for(
+        self,
+        *,
+        step_name: str,
+        step_def: Dict[str, Any],
+        skill_name: str,
+        contract: SkillWorkflowContract,
+    ) -> List[str]:
+        """Grant read access to the catalog templates a step can select."""
+        if contract.output_templates is None:
+            return []
+        manager = TemplateManager(
+            template_type=contract.output_templates.catalog,
+            skill_name=skill_name,
+            skill_loader=self._get_skill_loader(),
+        )
+        selection = self._resolved_template_mode(step_name, step_def)
+        if selection == "auto":
+            return list(
+                dict.fromkeys(
+                    str(path.parent)
+                    for name, _source in manager.list_templates()
+                    if (path := manager.get_template_path(name)) is not None
+                )
+            )
+        template_file = manager.get_template_path(selection)
+        if template_file is None:
+            raise ValueError(
+                f"Step {step_name!r} selected unknown template {selection!r} "
+                f"from catalog {contract.output_templates.catalog!r}"
+            )
+        return [str(template_file.parent)]
+
+    def _add_template_context(
+        self,
+        *,
+        context: Dict[str, str],
+        step_name: str,
+        step_def: Dict[str, Any],
+        skill_name: str,
+        contract: SkillWorkflowContract,
+    ) -> None:
+        """Expose only the declared template catalog or resolved selected file."""
+        if contract.output_templates is None:
+            return
+        context["template_catalog"] = contract.output_templates.catalog
+        template_file = self._resolved_template_file(step_name, step_def, skill_name, contract)
+        if template_file is not None:
+            context["template_file"] = template_file
 
     def _write_artifact_record(
         self,

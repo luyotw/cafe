@@ -18,7 +18,7 @@ from cafe.core.prepare_fields import (
 )
 from cafe.core.status_codes import PLAYBOOK_INTENT_KEYS, PhaseStatusCode
 from cafe.skills.exceptions import SkillDiscoveryError
-from cafe.skills.loader import SkillLoader
+from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.templates.manager import TemplateManager
 
 DONE_TARGET = "_done"
@@ -111,8 +111,12 @@ class StepConfig(BaseModel):
     skill: SkillSelector
     role: str
     assignee_type: Literal["agent", "human", "auto"] = "agent"
-    input_artifacts: List[str] = Field(default_factory=list)
+    # ``None`` means the legacy playbook omitted this field and therefore
+    # intentionally receives every recorded artifact. An explicit empty list
+    # remains the opt-in isolated scope.
+    input_artifacts: Optional[List[str]] = None
     output_artifact: Optional[str] = None
+    template: Optional[str] = None
     allowed_tools: List[str] = Field(default_factory=list)
     capability_requests: List[str] = Field(default_factory=list)
     valid_intents: List[str] = Field(default_factory=list)
@@ -124,6 +128,12 @@ class StepConfig(BaseModel):
     chat_role: Optional[str] = None
     alignment: Optional[StepAlignmentConfig] = None
     on: Dict[str, str]
+
+    @model_validator(mode="after")
+    def _validate_input_artifact_scope(self) -> "StepConfig":
+        if "input_artifacts" in self.model_fields_set and self.input_artifacts is None:
+            raise ValueError("input_artifacts must be a list when specified")
+        return self
 
     @field_validator("on")
     @classmethod
@@ -451,6 +461,7 @@ def validate_playbook(
         _validate_step_role(step_name, step, model.roles)
         _validate_step_chat_role(step_name, step, model.roles)
         _validate_step_skills(step_name, step, skill_loader)
+        _validate_step_required_prompt_inputs(step_name, step, skill_loader)
         _validate_script_hook_stages(step_name, step.hooks)
         _validate_targets(step_name, step.allowed_goto, steps, "allowed_goto")
         _validate_transition_targets(step_name, step.on, steps)
@@ -460,7 +471,11 @@ def validate_playbook(
                 f"Step '{step_name}': assignee_type={step.assignee_type} (reserved for v0.3)"
             )
 
-    _validate_prepare_metadata(model, skill_loader=skill_loader, playbook_path=path)
+    _validate_prepare_metadata(
+        model,
+        skill_loader=skill_loader,
+        playbook_path=path,
+    )
 
     if warnings and strict:
         raise ValueError("\n".join(warnings))
@@ -477,6 +492,7 @@ def _validate_prepare_metadata(
     prepare = resolve_prepare_config(model)
     spec_manager = TemplateManager(template_type="spec")
     plan_manager = TemplateManager(template_type="plan")
+    template_managers = declared_template_managers(model, skill_loader)
 
     _validate_prepare_template(
         spec_manager,
@@ -529,11 +545,48 @@ def _validate_prepare_metadata(
         prepare,
         spec_manager=spec_manager,
         plan_manager=plan_manager,
+        template_managers=template_managers,
         enforce_legacy_setup_modes=has_explicit_legacy_prepare_metadata,
     )
 
     if has_explicit_legacy_prepare_metadata:
         assert_prepare_semantics_match(model.commands.prepare, parsed_fields)
+
+
+def declared_template_managers(
+    model: PlaybookDefinition,
+    skill_loader: SkillLoader,
+) -> Dict[str, TemplateManager]:
+    """Resolve template catalogs from each step's selected skill contract."""
+    managers: Dict[str, TemplateManager] = {}
+    for step_name, step in model.steps.items():
+        selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
+        contracts = [skill_loader.get_workflow_contract(skill) for skill in selectors]
+        catalogs = {
+            contract.output_templates.catalog
+            for contract in contracts
+            if contract.output_templates is not None
+        }
+        if len(catalogs) > 1:
+            raise ValueError(
+                f"Step {step_name!r} selects skills with incompatible template catalogs"
+            )
+        if not catalogs:
+            if step.template is not None:
+                raise ValueError(
+                    f"Step {step_name!r} declares a template without a skill template catalog"
+                )
+            continue
+        skill_name = canonical_skill_name(str(selectors[0]))
+        manager = TemplateManager(
+            template_type=next(iter(catalogs)),
+            skill_name=skill_name,
+            skill_loader=skill_loader,
+        )
+        if step.template is not None:
+            _validate_prepare_template(manager, step.template, f"steps.{step_name}.template")
+        managers[step_name] = manager
+    return managers
 
 
 def _validate_prepare_template(
@@ -583,6 +636,29 @@ def _validate_step_skills(step_name: str, step: StepConfig, skill_loader: SkillL
             skill_loader.get_skill_dir(skill_name)
         except (SkillDiscoveryError, FileNotFoundError) as exc:
             raise ValueError(f"Step '{step_name}' references unknown skill '{skill_name}'") from exc
+
+
+def _validate_step_required_prompt_inputs(
+    step_name: str,
+    step: StepConfig,
+    skill_loader: SkillLoader,
+) -> None:
+    """Reject a step whose artifact graph cannot satisfy a required mapping."""
+    if "input_artifacts" not in step.model_fields_set:
+        return
+    selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
+    declared_artifacts = set(step.input_artifacts or [])
+    for skill_name in selectors:
+        contract = skill_loader.get_workflow_contract(skill_name)
+        for mapping in contract.prompt_inputs:
+            if mapping.required and not declared_artifacts.intersection(mapping.artifacts):
+                candidates = ", ".join(mapping.artifacts)
+                raise ValueError(
+                    f"Step {step_name!r}, skill {canonical_skill_name(skill_name)!r}: "
+                    f"required prompt input {mapping.placeholder!r} expects one of "
+                    f"[{candidates}], but input_artifacts declares "
+                    f"{sorted(declared_artifacts)}"
+                )
 
 
 def _validate_script_hook_stages(step_name: str, hooks: StepHooks) -> None:
