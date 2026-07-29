@@ -173,6 +173,7 @@ class ChecklistContract(BaseModel):
     context_references: dict[str, str] = Field(default_factory=dict)
     variants: Tuple[ChecklistVariant, ...]
     include_role_guidance: bool = False
+    compact_agent_guidance: bool = False
 
     @field_validator("context_references")
     @classmethod
@@ -230,6 +231,13 @@ class SkillWorkflowContract(BaseModel):
         placeholders = [item.placeholder for item in self.prompt_inputs]
         if len(set(placeholders)) != len(placeholders):
             raise ValueError("prompt input placeholders must be unique")
+        if self.checklist is not None:
+            overlap = set(placeholders) & set(self.checklist.context_references)
+            if overlap:
+                raise ValueError(
+                    "checklist context reference placeholders must not overlap prompt input "
+                    f"placeholders: {', '.join(sorted(overlap))}"
+                )
         return self
 
 

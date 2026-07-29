@@ -667,15 +667,50 @@ def test_builtin_hotfix_and_simple_playbooks_load() -> None:
     loader = PlaybookLoader()
 
     hotfix = loader.load_model("hotfix").model
+    tdd = loader.load_model("tdd").model
     simple = loader.load_model("simple").model
 
     assert hotfix.entry_point == "develop"
     assert list(hotfix.steps.keys()) == ["develop", "review", "pr"]
     assert hotfix.steps["review"].max_iterations == 1
+    assert hotfix.steps["develop"].input_artifacts == ["review_feedback", "pr_result"]
+    assert tdd.steps["develop"].input_artifacts == [
+        "spec",
+        "plan",
+        "review_feedback",
+        "pr_result",
+    ]
 
     assert simple.entry_point == "spec"
     assert list(simple.steps.keys()) == ["spec", "develop", "pr"]
     assert simple.steps["develop"].on["await_agent"] == "pr"
+
+
+def test_legacy_playbook_omits_input_artifact_scope_after_loading(tmp_path: Path) -> None:
+    """An omitted field remains distinguishable from explicit input_artifacts: []."""
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "spec_first")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "legacy",
+        """
+playbook: {id: legacy}
+steps:
+  draft:
+    role: pm
+    skill: spec_first
+    on:
+      await_agent: _done
+""",
+    )
+
+    loaded = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    ).load("legacy")
+
+    assert "input_artifacts" not in loaded["steps"]["draft"]
 
 
 def test_builtin_non_software_playbooks_define_non_default_handoff_metadata() -> None:

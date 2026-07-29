@@ -111,7 +111,10 @@ class StepConfig(BaseModel):
     skill: SkillSelector
     role: str
     assignee_type: Literal["agent", "human", "auto"] = "agent"
-    input_artifacts: List[str] = Field(default_factory=list)
+    # ``None`` means the legacy playbook omitted this field and therefore
+    # intentionally receives every recorded artifact. An explicit empty list
+    # remains the opt-in isolated scope.
+    input_artifacts: Optional[List[str]] = None
     output_artifact: Optional[str] = None
     template: Optional[str] = None
     allowed_tools: List[str] = Field(default_factory=list)
@@ -636,7 +639,7 @@ def _validate_step_required_prompt_inputs(
     if "input_artifacts" not in step.model_fields_set:
         return
     selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
-    declared_artifacts = set(step.input_artifacts)
+    declared_artifacts = set(step.input_artifacts or [])
     for skill_name in selectors:
         contract = skill_loader.get_workflow_contract(skill_name)
         for mapping in contract.prompt_inputs:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -27,6 +26,9 @@ REQUIRED_SKILL_REFERENCES = {
         "execution_steps_iteration_1.md",
         "important_notes_iteration_4_plus.md",
         "dod_instruction.md",
+        "dod_instruction_composed.md",
+        "dod_instruction_after_notes_composed.md",
+        "important_notes_iteration_4_plus_composed.md",
         "xml_questions_instruction.md",
     ],
     "spec_revise": ["execution_steps_iteration_n.md"],
@@ -38,9 +40,13 @@ REQUIRED_SKILL_REFERENCES = {
     "develop": [
         "execution_steps_normal.md",
         "execution_steps_correction.md",
+        "normal_plan_context.md",
+        "normal_plan_verification.md",
+        "correction_plan_context.md",
+        "correction_plan_test_list.md",
         "xml_questions_instruction.md",
     ],
-    "review": ["execution_steps.md"],
+    "review": ["execution_steps.md", "feedback_instruction.md"],
     "pr": [
         "execution_steps_iteration_1.md",
         "execution_steps_iteration_n.md",
@@ -297,11 +303,6 @@ def _builtin_agent_path(cls, name, role, **_kw: object) -> str:
     return f"src/cafe/data/agents/{role}/{name}.md"
 
 
-def _normalized_checklist(content: str) -> str:
-    """Ignore formatting-only blank-line differences across legacy wrappers."""
-    return re.sub(r"\n{2,}", "\n\n", content).rstrip() + "\n"
-
-
 @pytest.mark.parametrize("case_name", json.loads((FIXTURES_DIR / "manifest.json").read_text(encoding="utf-8")))
 def test_golden_checklist_matches_fixture(case_name: str, tmp_path: Path) -> None:
     """Composed checklists stay equivalent to the pre-migration golden snapshots."""
@@ -310,10 +311,8 @@ def test_golden_checklist_matches_fixture(case_name: str, tmp_path: Path) -> Non
     try:
         output_path = tmp_path / f"{case_name}.md"
         GOLDEN_RUNNERS[case_name](output_path)
-        expected = _normalized_checklist(
-            (FIXTURES_DIR / f"{case_name}.md").read_text(encoding="utf-8")
-        )
-        actual = _normalized_checklist(output_path.read_text(encoding="utf-8"))
+        expected = (FIXTURES_DIR / f"{case_name}.md").read_text(encoding="utf-8")
+        actual = output_path.read_text(encoding="utf-8")
         if actual != expected:
             for i, (a, e) in enumerate(zip(actual.splitlines(), expected.splitlines())):
                 if a != e:
@@ -349,11 +348,10 @@ def test_production_composer_golden_checklist_matches_fixture(
             feedback=case.get("feedback", False),
             template_mode="manual",
         )
-        actual = _normalized_checklist(output_path.read_text(encoding="utf-8"))
+        actual = output_path.read_text(encoding="utf-8")
         expected = (FIXTURES_DIR / f"{case_name}.md").read_text(encoding="utf-8")
         for line in case.get("omitted_optional_lines", ()):
             expected = expected.replace(f"{line}\n", "")
-        expected = _normalized_checklist(expected)
         assert actual == expected
     finally:
         AgentManager.get_agent_file_path = saved

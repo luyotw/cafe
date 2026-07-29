@@ -118,26 +118,6 @@ def _reference_context(
     return resolved
 
 
-def _omit_absent_optional_input_lines(
-    content: str,
-    contract: SkillWorkflowContract,
-    placeholders: Mapping[str, str],
-) -> str:
-    """Remove checklist instructions that require an unavailable optional input."""
-    absent = {
-        mapping.placeholder
-        for mapping in contract.prompt_inputs
-        if not mapping.required and mapping.placeholder not in placeholders
-    }
-    if not absent:
-        return content
-    return "".join(
-        line
-        for line in content.splitlines(keepends=True)
-        if not any(f"{{{placeholder}}}" in line for placeholder in absent)
-    )
-
-
 def compose_declared_checklist(
     *,
     skill_name: str,
@@ -191,20 +171,32 @@ def compose_declared_checklist(
     }
     agent_file = AgentManager.get_agent_file_path(agent_name, role_dirs.get(role, "developer"))
     if contract.checklist.include_role_guidance:
-        parts.append(extract_agent_guidelines_checklist(agent_file))
+        guidelines = extract_agent_guidelines_checklist(agent_file)
+        if guidelines:
+            if contract.checklist.compact_agent_guidance:
+                parts.append(guidelines)
+            else:
+                # References traditionally own their terminal spacing. Add the
+                # missing separator only when the preceding section has not
+                # already supplied a blank line.
+                separator = "" if parts and parts[-1].endswith("\n\n") else "\n"
+                parts.append(f"{separator}{guidelines}")
 
     placeholders = {key: str(value) for key, value in context.items() if value is not None}
     placeholders["agent_file"] = agent_file
-    placeholders.update(
-        _reference_context(
-            skill_name=skill_name,
-            references=contract.checklist.context_references,
-            context=placeholders,
+    reference_context = _reference_context(
+        skill_name=skill_name,
+        references=contract.checklist.context_references,
+        context=placeholders,
+    )
+    overlap = set(placeholders) & set(reference_context)
+    if overlap:
+        raise ValueError(
+            "Checklist context references would overwrite placeholders for "
+            f"{skill_name}: {', '.join(sorted(overlap))}"
         )
-    )
-    content = _omit_absent_optional_input_lines(
-        "\n".join(part for part in parts if part), contract, placeholders
-    )
+    placeholders.update(reference_context)
+    content = "\n".join(part for part in parts if part)
     content = resolve_checklist_placeholders(content, placeholders)
     unresolved = sorted(set(_PLACEHOLDER_PATTERN.findall(content)))
     if unresolved:
@@ -483,6 +475,16 @@ def generate_develop_checklist(
     if output_file:
         placeholders["output_file"] = output_file
 
+    for placeholder, reference in {
+        "normal_plan_context": "normal_plan_context.md",
+        "normal_plan_verification": "normal_plan_verification.md",
+        "correction_plan_context": "correction_plan_context.md",
+        "correction_plan_test_list": "correction_plan_test_list.md",
+    }.items():
+        placeholders[placeholder] = resolve_checklist_placeholders(
+            _load_skill_checklist_reference("develop", reference), placeholders
+        )
+
     checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)
     generate_checklist_file(checklist_file_path, checklist_content)
 
@@ -536,8 +538,12 @@ def generate_review_checklist(
         "pr_feedback_file_path": pr_feedback_file_path or "(not available)",
         "feedback_file": pr_feedback_file_path or "(not available)",
     }
+    placeholders["feedback_instruction"] = resolve_checklist_placeholders(
+        _load_skill_checklist_reference("review", "feedback_instruction.md"), placeholders
+    )
 
     checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)
+    checklist_content = checklist_content.rstrip() + "\n"
     generate_checklist_file(checklist_file_path, checklist_content)
 
 

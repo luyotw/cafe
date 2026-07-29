@@ -3,8 +3,7 @@
 [ ] Read {agent_file} to understand your role and native language
 [ ] Read the requirements specification {spec_file}
 [ ] Read the implementation plan {plan_file}
-[ ] Read PR feedback in {feedback_file} (if exists) to see user feedback and requests
-[ ] Prioritize user feedback from PR comments over spec requirements if there are conflicts
+{feedback_instruction}[ ] Prioritize user feedback from PR comments over spec requirements if there are conflicts
 
 ## Git Status and Security Check
 [ ] Check if there are new commits (use `git log {base_branch}..HEAD`). If no commits exist, development is incomplete - hand off to `develop`

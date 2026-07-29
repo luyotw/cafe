@@ -508,8 +508,8 @@ def test_prepare_skill_renders_iteration_context_without_mutating_source(
     assert source_file.read_text(encoding="utf-8") == source_before
 
 
-def test_prepare_skill_omits_absent_optional_input_lines(tmp_path: Path) -> None:
-    """Absent optional artifacts do not leave fake or unresolved prompt instructions."""
+def test_prepare_skill_keeps_optional_instruction_lines_when_input_is_absent(tmp_path: Path) -> None:
+    """The runtime never deletes arbitrary skill-owned instruction lines."""
     loader = _setup_loader(tmp_path)
     source_file = loader.get_skill_dir("cafe-plan") / "SKILL.md"
     source_file.write_text(
@@ -545,8 +545,7 @@ Write the plan.
     installed = (project_root / ".codex" / "skills" / "cafe-plan" / "SKILL.md").read_text(
         encoding="utf-8"
     )
-    assert "Read optional notes" not in installed
-    assert "{notes_file}" not in installed
+    assert "Read optional notes: {notes_file}" in installed
     assert "Write the plan." in installed
 
 

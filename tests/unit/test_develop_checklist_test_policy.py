@@ -13,20 +13,27 @@ BRITTLE_KEYWORDS = (
 )
 
 
-def _assert_develop_steps_include_test_policy(reference_name: str) -> None:
-    content = load_skill_reference("cafe-develop", reference_name)
+def _assert_develop_steps_include_test_policy(*reference_names: str) -> None:
+    content = "\n".join(
+        load_skill_reference("cafe-develop", reference_name)
+        for reference_name in reference_names
+    )
     lower = content.lower()
     assert any(kw.lower() in lower for kw in TEST_LIST_KEYWORDS), (
-        f"develop/{reference_name} must mention plan Test List"
+        f"develop/{', '.join(reference_names)} must mention plan Test List"
     )
     assert sum(1 for kw in BRITTLE_KEYWORDS if kw.lower() in lower) >= 2, (
-        f"develop/{reference_name} must warn about brittle test bindings"
+        f"develop/{', '.join(reference_names)} must warn about brittle test bindings"
     )
 
 
 def test_develop_normal_execution_steps_reference_test_policy() -> None:
-    _assert_develop_steps_include_test_policy("execution_steps_normal.md")
+    _assert_develop_steps_include_test_policy(
+        "execution_steps_normal.md", "normal_plan_verification.md"
+    )
 
 
 def test_develop_correction_execution_steps_reference_test_policy() -> None:
-    _assert_develop_steps_include_test_policy("execution_steps_correction.md")
+    _assert_develop_steps_include_test_policy(
+        "execution_steps_correction.md", "correction_plan_test_list.md"
+    )
