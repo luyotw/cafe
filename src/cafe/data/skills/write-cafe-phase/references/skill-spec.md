@@ -49,6 +49,41 @@ version: 1.0.0
 ---
 ```
 
+### Workflow metadata contract
+
+Phase skills may declare workflow-facing behavior in frontmatter. Runtime-owned
+paths and blackboard state remain outside this block; a declaration only states
+how the skill consumes them:
+
+```yaml
+workflow:
+  prompt_inputs:
+    - artifacts: [research_notes]
+      placeholder: evidence_file
+      required: true
+  checklist:
+    context_references:
+      xml_questions_instruction: xml_questions_instruction.md
+    variants:
+      - when: {iteration: 1}
+        sections: [{reference: execution_first.md}]
+      - when: {artifact_present: [editor_feedback]}
+        sections: [{reference: execution_feedback.md}]
+    include_role_guidance: true
+  output_templates:
+    catalog: research-report
+```
+
+- `prompt_inputs` are resolved in listed candidate order. Required inputs stop
+  before agent invocation with the placeholder and candidates named; absent
+  optional inputs are omitted.
+- Checklist references must remain under `references/`; variants are evaluated
+  in declaration order using bounded iteration, artifact-presence, or feedback
+  selectors. Role guidance is included only when explicitly requested.
+- A template catalog is the owning skill's `assets/templates/` directory. A
+  selection is read from `<step>.template` in `issue.yaml`; `auto` leaves the
+  catalog available without selecting a file.
+
 - `name`：小寫。**內部 skill 一律 `cafe-` 開頭**，後段依類型沿用既有慣例：
   phase skill 用 snake_case（`cafe-brief_first`、`cafe-incident_triage`）、
   shared / chat skill 用 kebab-case（`cafe-chat-develop-change`、`cafe-workflow-common`）。
@@ -118,8 +153,9 @@ Write <artifact> to: {output_file}
 ## 5. Placeholder 契約
 
 Placeholder 是 activate 時的**純文字替換**（`{key}` → 值），不支援條件或運算。
-**只能使用下表的 key**；用了 runtime 沒提供的 key，`{x}` 會原樣漏進 agent prompt
-（既有反例：`cafe-spec` skill 曾用沒人提供的 `{blackboard_digest}`）。
+除了 runtime-owned key 外，skill 可用 `workflow.prompt_inputs` 宣告任意自己的
+placeholder 名稱。不要依賴 artifact 名稱或新增 Python mapping；未宣告 placeholder
+不會被 runtime 猜測或補成 development-phase 的檔案。
 
 | Placeholder | 提供時機 |
 | --- | --- |
@@ -128,13 +164,12 @@ Placeholder 是 activate 時的**純文字替換**（`{key}` → 值），不支
 | `{handoff_summary}` | 所有 phase step |
 | `{blackboard_path}`、`{next_step_path}` | 所有 phase step |
 | `{valid_to_steps}`、`{step_transitions}` | 所有 phase step |
-| `{spec_file}` | step 的 `input_artifacts` 含 `spec`，或 issue 目錄已有最新 spec |
-| `{plan_file}` | step 的 `input_artifacts` 含 `plan`，或 issue 目錄已有最新 plan |
-| `{develop_file}` | `input_artifacts` 含 `code` |
-| `{feedback_file}` | `input_artifacts` 含 `review_feedback` 或 `pr_result` |
-| `{commits}`、`{base_branch}` | 僅 `cafe-pr` skill |
+| skill-declared input | `workflow.prompt_inputs` 解析到記錄的 artifact |
+| `{template_file}`、`{template_catalog}` | skill 宣告 `output_templates` 時提供 |
+| `{commits}`、`{base_branch}` | runtime-owned Git context（需要時提供） |
 
-新增 placeholder 必須同步修改 `generic_workflow_step.py` 的 `_build_context()`，並更新本表。
+新增 artifact placeholder 必須修改 skill metadata 與此契約說明，不得新增
+`generic_workflow_step.py` 的 skill-name 分支。
 
 ## 6. Handoff 與 baton：單一權威在 cafe-workflow-common
 

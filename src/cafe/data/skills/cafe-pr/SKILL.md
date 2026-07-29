@@ -2,6 +2,37 @@
 name: cafe-pr
 description: "整理提交內容並產出 pull request 標題與描述"
 version: 1.0.0
+workflow:
+  prompt_inputs:
+    - artifacts: [spec]
+      placeholder: spec_file
+      required: true
+    - artifacts: [spec]
+      placeholder: spec_file_path
+      required: true
+    - artifacts: [plan]
+      placeholder: plan_file
+      required: true
+    - artifacts: [plan]
+      placeholder: plan_file_path
+      required: true
+    - artifacts: [code]
+      placeholder: develop_file
+      required: false
+    - artifacts: [review_feedback]
+      placeholder: feedback_file
+      required: false
+  checklist:
+    variants:
+      - when: {iteration: 1}
+        sections:
+          - reference: execution_steps_iteration_1.md
+          - optional_checklist: basic_principles.md
+      - when: {min_iteration: 2}
+        sections:
+          - reference: execution_steps_iteration_n.md
+          - optional_checklist: basic_principles.md
+    include_role_guidance: true
 ---
 
 # PR

@@ -2,6 +2,39 @@
 name: cafe-develop
 description: "依計畫進行程式開發與測試"
 version: 1.3.0
+workflow:
+  prompt_inputs:
+    - artifacts: [spec]
+      placeholder: spec_file
+      required: true
+    - artifacts: [spec]
+      placeholder: spec_file_path
+      required: true
+    - artifacts: [plan]
+      placeholder: plan_file
+      required: true
+    - artifacts: [plan]
+      placeholder: plan_file_path
+      required: true
+    - artifacts: [review_feedback, pr_result]
+      placeholder: feedback_file_path
+      required: false
+    - artifacts: [review_feedback, pr_result]
+      placeholder: feedback_file
+      required: false
+  checklist:
+    context_references:
+      xml_questions_instruction: xml_questions_instruction.md
+    variants:
+      - when: {feedback: true}
+        sections:
+          - reference: execution_steps_correction.md
+          - optional_checklist: basic_principles.md
+      - when: {}
+        sections:
+          - reference: execution_steps_normal.md
+          - optional_checklist: basic_principles.md
+    include_role_guidance: true
 ---
 
 # Develop

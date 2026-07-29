@@ -2,6 +2,32 @@
 name: cafe-plan
 description: "產出可執行的開發計畫"
 version: 1.0.0
+workflow:
+  prompt_inputs:
+    - artifacts: [spec]
+      placeholder: spec_file
+      required: true
+    - artifacts: [spec]
+      placeholder: spec_file_path
+      required: true
+  checklist:
+    context_references:
+      xml_questions_instruction: xml_questions_instruction.md
+    variants:
+      - when: {iteration: 1}
+        sections:
+          - reference: execution_steps_iteration_1.md
+          - template_catalog: true
+          - optional_checklist: basic_principles.md
+      - when: {min_iteration: 2}
+        sections:
+          - reference: execution_steps_iteration_n.md
+          - template_catalog: true
+          - optional_checklist: basic_principles.md
+    include_role_guidance: true
+  output_templates:
+    catalog: plan
+    follow_instruction: Follow template structure when writing plan
 ---
 
 # Plan

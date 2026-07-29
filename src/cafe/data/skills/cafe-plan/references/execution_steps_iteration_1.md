@@ -1,8 +1,8 @@
 ## Checklist
 
 [ ] Read {agent_file} to understand your role and native language
-[ ] Read the development guide in {plan_file_path}
-[ ] Read the requirements document {spec_file_path}
+[ ] Read the development guide in {output_file}
+[ ] Read the requirements document {spec_file}
 [ ] Plan implementation steps (planning, not implementation)
 [ ] Fill required sections **Negative space**, **Layering map**, and **Dependency ADR** (explicit "none" / "no new dependencies" if applicable — empty placeholders are incomplete)
 [ ] If `.cafe/strategic_context.yaml` has `documents.principles.path` with `status: exists`, read that file and ground Negative space and Dependency ADR; otherwise leave principles cross-refs blank

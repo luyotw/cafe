@@ -2,6 +2,32 @@
 name: cafe-spec
 description: "收集、整理或修訂需求規格（依 iteration 切換行為）"
 version: 1.0.0
+workflow:
+  checklist:
+    context_references:
+      xml_questions_instruction: xml_questions_instruction.md
+    variants:
+      - when: {iteration: 1}
+        sections:
+          - reference: execution_steps_iteration_1.md
+          - template_catalog: true
+          - optional_checklist: basic_principles.md
+          - reference: dod_instruction.md
+      - when: {min_iteration: 2, max_iteration: 3}
+        sections:
+          - reference: execution_steps_iteration_n.md
+          - optional_checklist: basic_principles.md
+          - reference: dod_instruction.md
+      - when: {min_iteration: 4}
+        sections:
+          - reference: execution_steps_iteration_n.md
+          - optional_checklist: basic_principles.md
+          - reference: important_notes_iteration_4_plus.md
+          - reference: dod_instruction.md
+    include_role_guidance: true
+  output_templates:
+    catalog: spec
+    follow_instruction: Follow template structure when writing analysis results
 ---
 
 # Spec

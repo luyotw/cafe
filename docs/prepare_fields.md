@@ -11,7 +11,7 @@ Each prepare question is declared as one field object:
 | `id` | yes | Stable identifier (for example `input_method`, `quick_rigor`) |
 | `type` | yes | `enum`, `boolean`, `template`, `text`, or `setup_mode` |
 | `label` | yes | User-facing label |
-| `write` | yes* | Issue config target (`spec.rigor`, `plan.template`, `pr.auto_create`, …) |
+| `write` | yes* | Issue config target (`spec.rigor`, `plan.template`, `pr.auto_create`, or `<step>.template`) |
 | `help` | no | Optional help text |
 | `default` | no | Default value when applicable |
 | `choices` | yes for `enum` / `setup_mode` | `{ value, label, description? }` entries |
@@ -23,6 +23,7 @@ Allowed `write` targets:
 - `spec.rigor`, `spec.template`, `spec.sync_github`, `spec.input_method`, `spec.issue_id`
 - `plan.template`, `plan.sync_github`
 - `pr.auto_create`, `pr.post_todo_list`
+- `<step>.template` for a playbook step whose selected skill declares an `output_templates` catalog
 
 `setup_mode` fields describe the setup-mode chooser and must not declare `write`.
 
@@ -126,3 +127,25 @@ That asset fully describes the current default prepare flow, including setup mod
 - `PrepareProfile.resolved_prepare_fields()` (read-only contract access; does not drive UI)
 
 Omitting both `fields` and `fields_ref` preserves backward-compatible behavior.
+
+## Custom step template fields
+
+A custom output catalog belongs to its skill. A playbook may expose the selected
+template during prepare by writing to that step's own issue-config block:
+
+```yaml
+commands:
+  prepare:
+    fields:
+      - id: synthesis_template
+        type: template
+        label: Synthesis template
+        write: synthesis.template
+        default: auto
+```
+
+`cafe playbook validate` rejects this field unless the `synthesis` step's skill
+declares an output-template catalog. The selected value is persisted as
+`synthesis.template` in `issue.yaml`; runtime resolves it through that skill's
+bundled catalog, with local and global template overrides retaining normal
+precedence. `auto` exposes the catalog without forcing a particular file.

@@ -2,6 +2,33 @@
 name: cafe-review
 description: "審查程式碼品質與風險"
 version: 1.0.0
+workflow:
+  prompt_inputs:
+    - artifacts: [spec]
+      placeholder: spec_file
+      required: true
+    - artifacts: [spec]
+      placeholder: spec_file_path
+      required: true
+    - artifacts: [plan]
+      placeholder: plan_file
+      required: false
+    - artifacts: [plan]
+      placeholder: plan_file_path
+      required: false
+    - artifacts: [code]
+      placeholder: develop_file
+      required: false
+    - artifacts: [review_feedback, pr_result]
+      placeholder: feedback_file
+      required: false
+  checklist:
+    variants:
+      - when: {}
+        sections:
+          - reference: execution_steps.md
+          - optional_checklist: basic_principles.md
+    include_role_guidance: true
 ---
 
 # Review

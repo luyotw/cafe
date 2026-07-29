@@ -1,9 +1,9 @@
 ## Checklist
 
 [ ] Read {agent_file} to understand your role and native language
-[ ] Read the requirements specification {spec_file_path}
-[ ] Read the implementation plan {plan_file_path}
-[ ] Read PR feedback in {pr_feedback_file_path} (if exists) to see user feedback and requests
+[ ] Read the requirements specification {spec_file}
+[ ] Read the implementation plan {plan_file}
+[ ] Read PR feedback in {feedback_file} (if exists) to see user feedback and requests
 [ ] Prioritize user feedback from PR comments over spec requirements if there are conflicts
 
 ## Git Status and Security Check
@@ -24,7 +24,7 @@
 
 ## Implementation Completeness Check
 [ ] Check for unfinished items in implementation plan
-[ ] Compare implementation against {spec_file_path}
+[ ] Compare implementation against {spec_file}
 [ ] Verify all acceptance criteria are met
 [ ] Confirm: Verified all requirements are met, nothing missed
 
@@ -61,7 +61,7 @@
 
 ## Final Steps
 [ ] Confirm: No code was modified
-[ ] Write review findings to {review_file_path} in todo list format (same format as PR phase)
+[ ] Write review findings to {output_file} in todo list format (same format as PR phase)
 [ ] Use this structure: ## Todo List / ### [Category] / - [ ] item or - [x] item
 [ ] Group issues by category (e.g., "Commit Message Style", "Code Quality", "Testing")
 [ ] Each issue should be a checkbox item with file path and line number

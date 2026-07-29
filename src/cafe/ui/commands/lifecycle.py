@@ -204,7 +204,7 @@ def _run_field_driven_prepare_prompts(
     *,
     display: Any,
     github_ops: Any,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], Optional[int]]:
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, dict[str, Any]], Optional[int]]:
     """Run interactive prepare prompts from declarative PrepareField definitions."""
     from cafe.ui.prepare_field_renderer import RendererDeps, run_field_driven_prepare_flow
 
@@ -221,7 +221,7 @@ def _run_field_driven_prepare_prompts(
         github_ops=github_ops,
     )
     config, issue_id = run_field_driven_prepare_flow(parsed, profile, deps=deps)
-    return config.spec, config.plan, config.pr, issue_id
+    return config.spec, config.plan, config.pr, config.steps, issue_id
 
 
 def prepare(
@@ -484,6 +484,7 @@ def prepare(
         spec_config = {}
         plan_config = {}
         pr_config = {}
+        step_configs: dict[str, dict[str, Any]] = {}
 
         if profile.should_prompt_spec_plan_config(should_prompt_for_config):
             console.print()
@@ -510,12 +511,16 @@ def prepare(
                     issue_name=issue_name,
                 )
             else:
-                spec_config, plan_config, pr_config, issue_id = _run_field_driven_prepare_prompts(
+                field_result = _run_field_driven_prepare_prompts(
                     profile,
                     parsed_fields,
                     display=display,
                     github_ops=github_ops,
                 )
+                if len(field_result) == 4:
+                    spec_config, plan_config, pr_config, issue_id = field_result
+                else:
+                    spec_config, plan_config, pr_config, step_configs, issue_id = field_result
         elif not interactive:
             from cafe.skills.loader import SkillLoader
             from cafe.ui.prepare_field_renderer import (
@@ -572,6 +577,7 @@ def prepare(
             spec_config = resolved_config.spec
             plan_config = resolved_config.plan
             pr_config = resolved_config.pr
+            step_configs = resolved_config.steps
         # else: issue_name was provided as argument but not --no-interactive
         #       Don't save any config (old behavior for backward compatibility)
 
@@ -604,6 +610,10 @@ def prepare(
         # Add pr config if present
         if pr_config:
             config_data["pr"] = pr_config
+
+        for step_name, step_config in step_configs.items():
+            if step_config:
+                config_data[step_name] = step_config
 
         # Add worktree_path if using worktree mode
         if use_worktree:
@@ -1490,8 +1500,9 @@ def reset(
 
         # 2. If phase not provided, find the last phase with iterations based on end_time or timestamp
         if phase is None:
-            from cafe.services.summary_service import SummaryService
             from datetime import datetime
+
+            from cafe.services.summary_service import SummaryService
 
             service = SummaryService()
             latest_phase = None

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from cafe.agents.manager import AgentManager
 from cafe.skills.bridge import load_skill_reference, try_load_skill_reference
+from cafe.skills.contracts import ChecklistVariant, SkillWorkflowContract
 from cafe.skills.loader import canonical_skill_name
 from cafe.templates.manager import TemplateManager
 from cafe.utils.checklist_utils import generate_checklist_file, resolve_checklist_placeholders
@@ -22,6 +24,173 @@ def _resolve_xml_questions_instruction(skill_name: str, ref_name: str, questions
     """Pre-resolve questions_xml_file in the XML instruction reference."""
     template = _load_skill_checklist_reference(skill_name, ref_name)
     return template.replace("{questions_xml_file}", questions_xml_file)
+
+
+_PLACEHOLDER_PATTERN = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _variant_matches(
+    variant: ChecklistVariant,
+    *,
+    iteration: int,
+    artifacts: Mapping[str, Any],
+    feedback: bool,
+) -> bool:
+    """Return whether one bounded, declared checklist selector applies."""
+    when = variant.when
+    if when.iteration is not None and when.iteration != iteration:
+        return False
+    if when.min_iteration is not None and iteration < when.min_iteration:
+        return False
+    if when.max_iteration is not None and iteration > when.max_iteration:
+        return False
+    if when.feedback is not None and when.feedback != feedback:
+        return False
+    return all(bool(artifacts.get(name)) for name in when.artifact_present)
+
+
+def select_checklist_variant(
+    contract: SkillWorkflowContract,
+    *,
+    iteration: int,
+    artifacts: Mapping[str, Any],
+    feedback: bool,
+) -> ChecklistVariant:
+    """Select the first matching, declaration-ordered checklist variant."""
+    if contract.checklist is None:
+        raise ValueError("Skill does not declare checklist composition")
+    for variant in contract.checklist.variants:
+        if _variant_matches(variant, iteration=iteration, artifacts=artifacts, feedback=feedback):
+            return variant
+    raise ValueError(f"No checklist variant matches iteration {iteration}")
+
+
+def _template_instruction(
+    *,
+    skill_name: str,
+    contract: SkillWorkflowContract,
+    template_mode: str,
+    template_file: Optional[str],
+) -> str:
+    """Render the existing template-choice guidance from a declared catalog."""
+    if contract.output_templates is None:
+        return ""
+    catalog = contract.output_templates.catalog
+    if template_mode == "auto":
+        manager = TemplateManager(template_type=catalog, skill_name=skill_name)
+        template_lines = [
+            f"  - `{name}`: {path}"
+            for name, _source in manager.list_templates()
+            if (path := manager.get_template_path(name)) is not None
+        ]
+        if not template_lines:
+            return ""
+        template_list = "\n".join(template_lines)
+        label = contract.output_templates.label or catalog
+        return (
+            f"[ ] Pick a most suitable {label} template and read it. Available templates:\n"
+            f"{template_list}\n"
+            f"[ ] {contract.output_templates.follow_instruction}\n"
+        )
+    if template_file:
+        return (
+            f"[ ] Read {template_file} as reference for output format and structure\n"
+            f"[ ] {contract.output_templates.follow_instruction}\n"
+        )
+    return ""
+
+
+def _reference_context(
+    *,
+    skill_name: str,
+    references: Mapping[str, str],
+    context: Mapping[str, str],
+) -> dict[str, str]:
+    """Render declared context references only when their inputs are available."""
+    resolved: dict[str, str] = {}
+    for placeholder, reference in references.items():
+        content = _load_skill_checklist_reference(skill_name, reference)
+        names = _PLACEHOLDER_PATTERN.findall(content)
+        if all(context.get(name) for name in names):
+            resolved[placeholder] = resolve_checklist_placeholders(content, dict(context))
+        else:
+            resolved[placeholder] = ""
+    return resolved
+
+
+def compose_declared_checklist(
+    *,
+    skill_name: str,
+    contract: SkillWorkflowContract,
+    agent_name: str,
+    role: str,
+    checklist_file_path: Path,
+    iteration: int,
+    context: Mapping[str, str],
+    artifacts: Mapping[str, Any],
+    feedback: bool = False,
+    template_mode: str = "auto",
+    template_file: Optional[str] = None,
+) -> bool:
+    """Compose a skill-declared checklist without phase-name behavior branches."""
+    if contract.checklist is None:
+        checklist_file_path.write_text("", encoding="utf-8")
+        return False
+
+    variant = select_checklist_variant(
+        contract,
+        iteration=iteration,
+        artifacts=artifacts,
+        feedback=feedback,
+    )
+    parts: list[str] = []
+    for section in variant.sections:
+        if section.reference:
+            parts.append(_load_skill_checklist_reference(skill_name, section.reference))
+        elif section.optional_checklist:
+            optional = try_load_skill_reference(skill_name, section.optional_checklist)
+            if optional:
+                parts.append(convert_to_checklist(optional, "Basic Principles"))
+        elif section.template_catalog:
+            parts.append(
+                _template_instruction(
+                    skill_name=skill_name,
+                    contract=contract,
+                    template_mode=template_mode,
+                    template_file=template_file,
+                )
+            )
+
+    role_dirs = {
+        "pm": "pm",
+        "reviewer": "reviewer",
+        "writer": "writer",
+        "editor": "editor",
+        "researcher": "researcher",
+        "ops": "ops",
+    }
+    agent_file = AgentManager.get_agent_file_path(agent_name, role_dirs.get(role, "developer"))
+    if contract.checklist.include_role_guidance:
+        parts.append(extract_agent_guidelines_checklist(agent_file))
+
+    placeholders = {key: str(value) for key, value in context.items() if value is not None}
+    for mapping in contract.prompt_inputs:
+        if not mapping.required and mapping.placeholder not in placeholders:
+            placeholders[mapping.placeholder] = "(not available)"
+    placeholders["agent_file"] = agent_file
+    placeholders.update(
+        _reference_context(
+            skill_name=skill_name,
+            references=contract.checklist.context_references,
+            context=placeholders,
+        )
+    )
+    content = resolve_checklist_placeholders("\n".join(part for part in parts if part), placeholders)
+    unresolved = sorted(set(_PLACEHOLDER_PATTERN.findall(content)))
+    if unresolved:
+        raise ValueError(f"Unresolved checklist placeholders for {skill_name}: {', '.join(unresolved)}")
+    generate_checklist_file(checklist_file_path, content)
+    return True
 
 
 def generate_custom_skill_checklist(
@@ -131,6 +300,8 @@ def generate_spec_checklist(
     placeholders = {
         "agent_file": agent_file,
         "current_spec_file": current_spec_file,
+        "output_file": current_spec_file,
+        "previous_output_file": prev_spec_file or "",
         "iteration": str(iteration),
     }
     if prev_spec_file:
@@ -210,7 +381,10 @@ def generate_plan_checklist(
     placeholders = {
         "agent_file": agent_file,
         "plan_file_path": plan_file_path,
+        "output_file": plan_file_path,
         "spec_file_path": spec_file_path,
+        "spec_file": spec_file_path,
+        "previous_output_file": prev_plan_file or "",
     }
 
     if iteration > 1:
@@ -276,13 +450,16 @@ def generate_develop_checklist(
     placeholders = {
         "agent_file": agent_file,
         "spec_file_path": spec_file_path,
+        "spec_file": spec_file_path,
         "plan_file_path": plan_file_path,
+        "plan_file": plan_file_path,
         "xml_questions_instruction": xml_questions_instruction,
     }
     if develop_file:
         placeholders["develop_file"] = develop_file
     if feedback_file_path:
         placeholders["feedback_file_path"] = feedback_file_path
+        placeholders["feedback_file"] = feedback_file_path
     if output_file:
         placeholders["output_file"] = output_file
 
@@ -330,10 +507,14 @@ def generate_review_checklist(
     placeholders = {
         "agent_file": agent_file,
         "spec_file_path": spec_file_path,
+        "spec_file": spec_file_path,
         "plan_file_path": plan_file_path or "(not available)",
+        "plan_file": plan_file_path or "(not available)",
         "review_file_path": review_file_path,
+        "output_file": review_file_path,
         "base_branch": base_branch,
         "pr_feedback_file_path": pr_feedback_file_path or "(not available)",
+        "feedback_file": pr_feedback_file_path or "(not available)",
     }
 
     checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)
@@ -375,8 +556,12 @@ def generate_pr_checklist(
     placeholders = {
         "agent_file": agent_file,
         "spec_file_path": spec_file_path,
+        "spec_file": spec_file_path,
         "plan_file_path": plan_file_path,
+        "plan_file": plan_file_path,
         "pr_file": pr_file,
+        "output_file": pr_file,
+        "previous_output_file": prev_pr_file or "",
     }
 
     if iteration > 1:

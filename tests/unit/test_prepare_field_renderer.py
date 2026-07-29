@@ -143,6 +143,13 @@ class TestWriteTargetMapping:
         assert config.plan["template"] == "default"
         assert config.pr["auto_create"] is True
 
+    def test_maps_custom_step_template_selection(self) -> None:
+        config = PrepareIssueConfig(spec={}, plan={}, pr={})
+
+        set_write_value(config, "synthesis.template", "evidence")
+
+        assert config.steps == {"synthesis": {"template": "evidence"}}
+
 
 class TestQuickDefaults:
     def test_matches_profile_quick_setup_for_github_issue(self) -> None:

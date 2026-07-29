@@ -34,6 +34,7 @@ ALLOWED_FIELD_TYPES = frozenset({"enum", "boolean", "template", "text", "setup_m
 ALLOWED_SHOW_WHEN_KEYS = frozenset({"github_repo", "issue_id_present", "setup_mode"})
 ALLOWED_SETUP_MODES = frozenset({"quick", "custom"})
 ALLOWED_STATIC_SUFFIXES = frozenset({".yaml", ".yml", ".json"})
+STEP_TEMPLATE_WRITE_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*\.template$")
 
 SKILL_FIELDS_REF_PATTERN = re.compile(r"^skill://([^/]+)/assets/(.+)$")
 
@@ -94,7 +95,7 @@ class PrepareField(BaseModel):
     def _validate_write(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value
-        if value not in ALLOWED_WRITE_TARGETS:
+        if value not in ALLOWED_WRITE_TARGETS and not STEP_TEMPLATE_WRITE_PATTERN.fullmatch(value):
             raise ValueError(
                 f"unknown write target {value!r}; "
                 f"must be one of {sorted(ALLOWED_WRITE_TARGETS)}"
@@ -280,6 +281,7 @@ def validate_field_semantics(
     *,
     spec_manager: TemplateManager,
     plan_manager: TemplateManager,
+    template_managers: Optional[Dict[str, TemplateManager]] = None,
     enforce_legacy_setup_modes: bool = True,
 ) -> None:
     """Apply semantic validation to loaded prepare fields."""
@@ -293,7 +295,14 @@ def validate_field_semantics(
         validate_show_when(field.show_when, field_id=field.id)
 
         if field.type == "template" and field.default is not None:
-            manager = spec_manager if field.write and field.write.startswith("spec.") else plan_manager
+            step_name = field.write.split(".", 1)[0] if field.write else "plan"
+            manager = (template_managers or {}).get(step_name)
+            if manager is None:
+                manager = spec_manager if step_name == "spec" else plan_manager
+            if step_name not in {"spec", "plan"} and step_name not in (template_managers or {}):
+                raise ValueError(
+                    f"field {field.id!r} targets step {step_name!r} without a declared template catalog"
+                )
             _validate_template_default(manager, str(field.default), field)
 
         if field.write == "spec.rigor":

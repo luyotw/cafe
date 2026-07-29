@@ -111,7 +111,7 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
     for name, body in {
         "cafe-spec": "## Role\nRead your agent file: {agent_file}\n\n## Context\n{blackboard_digest}\n",
         "cafe-plan": "Write plan to: {output_file}\n",
-        "cafe-develop": "Implement the current request.\n",
+        "cafe-develop": "Implement the current request. {develop_file}\n",
         "cafe-workflow-common": "Read blackboard first.\n",
         "cafe-github_sync": "Shared GitHub sync helper.\n",
         "cafe-review": "Review the latest changes.\n",
@@ -119,8 +119,14 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
     }.items():
         skill_dir = skill_root / name
         skill_dir.mkdir(parents=True, exist_ok=True)
+        workflow = ""
+        if name == "cafe-develop":
+            workflow = (
+                "workflow:\n  prompt_inputs:\n"
+                "    - artifacts: [code]\n      placeholder: develop_file\n      required: false\n"
+            )
         (skill_dir / "SKILL.md").write_text(
-            f"---\nname: {name}\ndescription: desc\n---\n\n{body}",
+            f"---\nname: {name}\ndescription: desc\n{workflow}---\n\n{body}",
             encoding="utf-8",
         )
     loader = SkillLoader(
@@ -2582,23 +2588,45 @@ def test_develop_checklist_prefers_review_feedback_over_pr_result(
     store.set_artifact(state, "review_feedback", str(review_file))
     store.set_artifact(state, "pr_result", str(pr_file))
 
-    with patch("cafe.phases.generic_workflow_step.generate_develop_checklist") as mock_gen:
-        executor = GenericWorkflowStepExecutor(
-            issue_dir=issue_dir,
-            issue_name="issue-develop-feedback",
-            playbook=playbook,
-            generic_phase=_build_loader(tmp_path),
-            agent_manager=FakeAgentManager("confirmed"),
-            git_ops=FakeGitOperations(),
-            role_agent_map={"developer": "David"},
-        )
-        executor.execute_step("develop", playbook["steps"]["develop"], state)
+    skill_dir = tmp_path / ".cafe" / "skills" / "cafe-develop"
+    (skill_dir / "references").mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: cafe-develop
+description: test skill
+workflow:
+  prompt_inputs:
+    - artifacts: [review_feedback, pr_result]
+      placeholder: feedback_file
+      required: false
+  checklist:
+    variants:
+      - when: {feedback: true}
+        sections: [{reference: execution.md}]
+    include_role_guidance: false
+---
+""",
+        encoding="utf-8",
+    )
+    (skill_dir / "references" / "execution.md").write_text(
+        "[ ] Use {feedback_file}\n", encoding="utf-8"
+    )
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-develop-feedback",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    executor.execute_step("develop", playbook["steps"]["develop"], state)
 
-    mock_gen.assert_called_once()
-    call_kwargs = mock_gen.call_args.kwargs
-    assert call_kwargs["correction_mode"] is True
-    assert "review" in call_kwargs["feedback_file_path"]
-    assert "pr" not in call_kwargs["feedback_file_path"]
+    checklist = (issue_dir / "develop" / "iteration_001" / "checklist.md").read_text(
+        encoding="utf-8"
+    )
+    assert "review/iteration_001/output.md" in checklist
+    assert "pr/iteration_001/output.md" not in checklist
 
 
 def _write_skill_with_basic_principles(
@@ -2610,7 +2638,17 @@ def _write_skill_with_basic_principles(
     skill_dir = tmp_path / ".cafe" / "skills" / skill_name
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(
-        f"---\nname: {skill_name}\ndescription: test skill\n---\n",
+        f"""---
+name: {skill_name}
+description: test skill
+workflow:
+  checklist:
+    variants:
+      - when: {{}}
+        sections: [{{optional_checklist: basic_principles.md}}]
+    include_role_guidance: false
+---
+""",
         encoding="utf-8",
     )
     references = skill_dir / "references"
@@ -2662,20 +2700,20 @@ def test_spec_checklist_loads_custom_basic_principles_reference(
     questions_xml_file = issue_dir / "questions.xml"
 
     state = BlackboardStore(issue_dir).load_or_create("spec")
-    with patch("cafe.phases.generic_workflow_step.generate_spec_checklist") as mock_gen:
-        executor._generate_checklist(
-            step_name="spec",
-            skill_name="spec",
-            agent_name="David",
-            step_def={"skill": "spec"},
-            blackboard_state=state,
-            checklist_file=checklist_file,
-            output_file=output_file,
-            questions_xml_file=questions_xml_file,
-        )
+    executor._generate_checklist(
+        step_name="spec",
+        skill_name="spec",
+        agent_name="David",
+        step_def={"skill": "spec"},
+        blackboard_state=state,
+        checklist_file=checklist_file,
+        output_file=output_file,
+        questions_xml_file=questions_xml_file,
+    )
 
-    mock_gen.assert_called_once()
-    assert mock_gen.call_args.kwargs["basic_principles"] == "- Stay scoped\n- Keep behavior stable"
+    checklist = checklist_file.read_text(encoding="utf-8")
+    assert "Stay scoped" in checklist
+    assert "Keep behavior stable" in checklist
 
 
 def test_spec_checklist_omits_missing_basic_principles_reference(
@@ -2714,20 +2752,18 @@ def test_spec_checklist_omits_missing_basic_principles_reference(
     questions_xml_file = issue_dir / "questions.xml"
     state = BlackboardStore(issue_dir).load_or_create("spec")
 
-    with patch("cafe.phases.generic_workflow_step.generate_spec_checklist") as mock_gen:
-        executor._generate_checklist(
-            step_name="spec",
-            skill_name="spec",
-            agent_name="David",
-            step_def={"skill": "spec"},
-            blackboard_state=state,
-            checklist_file=checklist_file,
-            output_file=output_file,
-            questions_xml_file=questions_xml_file,
-        )
+    executor._generate_checklist(
+        step_name="spec",
+        skill_name="spec",
+        agent_name="David",
+        step_def={"skill": "spec"},
+        blackboard_state=state,
+        checklist_file=checklist_file,
+        output_file=output_file,
+        questions_xml_file=questions_xml_file,
+    )
 
-    mock_gen.assert_called_once()
-    assert mock_gen.call_args.kwargs["basic_principles"] == ""
+    assert checklist_file.read_text(encoding="utf-8") == ""
 
 
 def test_update_iteration_history_preserves_model_and_stats_on_second_call(

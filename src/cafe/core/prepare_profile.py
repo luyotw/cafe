@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -17,11 +17,19 @@ class PrepareRigorError(ValueError):
 
 @dataclass(frozen=True)
 class PrepareIssueConfig:
-    """Resolved spec/plan/pr blocks for ``issue.yaml``."""
+    """Resolved step configuration blocks for ``issue.yaml``."""
 
     spec: Dict[str, Any]
     plan: Dict[str, Any]
     pr: Dict[str, Any]
+    steps: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+    def section(self, step_name: str) -> Dict[str, Any]:
+        """Return a mutable issue-config section, retaining legacy views."""
+        legacy = {"spec": self.spec, "plan": self.plan, "pr": self.pr}
+        if step_name in legacy:
+            return legacy[step_name]
+        return self.steps.setdefault(step_name, {})
 
 
 @dataclass(frozen=True)

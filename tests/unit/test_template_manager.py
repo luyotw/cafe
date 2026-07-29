@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from cafe.templates.manager import TemplateManager
+from cafe.skills.loader import SkillLoader
 
 
 class TestTemplateManager:
@@ -19,6 +20,28 @@ class TestTemplateManager:
         # Should NOT create project-level directory
         project_template_dir = config_dir / "templates" / "plan"
         assert not project_template_dir.exists()
+
+    def test_custom_skill_catalog_uses_own_bundled_templates(self, tmp_path: Path) -> None:
+        """An arbitrary declared catalog is discovered through its owning skill."""
+        skill_dir = tmp_path / ".cafe" / "skills" / "research-report"
+        (skill_dir / "assets" / "templates").mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: research-report\ndescription: report\n---\n", encoding="utf-8"
+        )
+        (skill_dir / "assets" / "templates" / "evidence.md").write_text(
+            "# Evidence\n", encoding="utf-8"
+        )
+        loader = SkillLoader(project_root=tmp_path)
+        loader.discover()
+
+        manager = TemplateManager(
+            template_type="research-report",
+            skill_name="research-report",
+            skill_loader=loader,
+        )
+
+        assert manager.list_templates() == [("evidence", "system")]
+        assert manager.get_template_path("evidence") == skill_dir / "assets" / "templates" / "evidence.md"
 
     def test_add_template_copies_file(self, tmp_path: Path) -> None:
         """Test that adding a template copies the file to the global directory."""
