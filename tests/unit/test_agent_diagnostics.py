@@ -73,3 +73,14 @@ def test_classified_auth_error_is_not_retried_for_raw_socket_text() -> None:
     )
 
     assert not is_transient_same_cli_error(error)
+
+
+def test_generic_unavailable_display_keeps_pure_socket_close_retryable() -> None:
+    """A generic classified unavailable message must not hide a pure disconnect."""
+    error = AgentExecutionError(
+        "socket connection was closed unexpectedly",
+        error_type="cli_unavailable",
+        display_message="Claude CLI unavailable.",
+    )
+
+    assert is_transient_same_cli_error(error)

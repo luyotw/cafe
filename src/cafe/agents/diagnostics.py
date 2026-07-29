@@ -10,6 +10,12 @@ _TRANSIENT_CLI_UNAVAILABLE = re.compile(
     r"(?:socket\s+)?connection\s+was\s+closed\s+unexpectedly",
     re.IGNORECASE,
 )
+_GENERIC_CLI_UNAVAILABLE_DISPLAY = re.compile(r"^\S+ CLI unavailable\.$", re.IGNORECASE)
+_NON_TRANSIENT_CLI_UNAVAILABLE = re.compile(
+    r"(?:failed\s+to\s+authenticate|authentication[_\s-]*failed|\b403\b|"
+    r"subscription|organization|org[\s-]*policy|access\s+is\s+disabled)",
+    re.IGNORECASE,
+)
 _BEARER_CREDENTIAL = re.compile(r"\bbearer\s+[^\s,;]+", re.IGNORECASE)
 _KEY_VALUE_CREDENTIAL = re.compile(
     r"\b(api[_-]?key|token|password|secret|authorization)\s*[:=]\s*[^\s,;]+",
@@ -36,8 +42,17 @@ def is_transient_same_cli_error(error: BaseException) -> bool:
     if getattr(error, "error_type", None) != "cli_unavailable":
         return False
     display_message = getattr(error, "display_message", None)
-    text = display_message if isinstance(display_message, str) and display_message else str(error)
-    return bool(_TRANSIENT_CLI_UNAVAILABLE.search(text))
+    if isinstance(display_message, str) and display_message:
+        if _TRANSIENT_CLI_UNAVAILABLE.search(display_message):
+            return True
+        if not _GENERIC_CLI_UNAVAILABLE_DISPLAY.fullmatch(display_message.strip()):
+            return False
+
+    raw_text = str(error)
+    return bool(
+        _TRANSIENT_CLI_UNAVAILABLE.search(raw_text)
+        and not _NON_TRANSIENT_CLI_UNAVAILABLE.search(raw_text)
+    )
 
 
 def build_failed_attempt(

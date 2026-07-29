@@ -96,6 +96,14 @@ def _stream_error_process(line: str) -> MagicMock:
     return process
 
 
+def _stream_success_process(text: str) -> MagicMock:
+    process = MagicMock()
+    process.stdout.readline.side_effect = [json.dumps({"content": text}) + "\n", ""]
+    process.stderr.read.return_value = ""
+    process.wait.return_value = 0
+    return process
+
+
 def _success(text: str) -> AgentResponse:
     return AgentResponse(response=text, token_usage=TokenUsage())
 
@@ -205,3 +213,29 @@ def test_real_stream_error_path_redacts_durable_streaming_log(tmp_path: Path) ->
     assert "raw-primary-secret" not in streaming_text
     assert "raw-fallback-secret" not in streaming_text
     assert "error_excerpt" in streaming_text
+
+
+def test_real_stream_socket_close_retries_primary_before_fallback(tmp_path: Path) -> None:
+    """A pure classified disconnect retries Claude instead of consuming Gemini."""
+    executor = _build_executor(tmp_path, _manager())
+    disconnected_process = _stream_error_process(
+        '{"type":"assistant","error":"socket connection was closed unexpectedly",'
+        '"message":{"content":[{"type":"text",'
+        '"text":"socket connection was closed unexpectedly"}]}}\n'
+    )
+    retry_process = _stream_success_process("retry output")
+
+    with patch(
+        "subprocess.Popen",
+        side_effect=[disconnected_process, retry_process],
+    ) as popen, patch("sys.platform", "win32"):
+        _run_iteration(executor)
+
+    iteration_path = executor.phase_dir / "iteration_001" / "iteration.json"
+    record = json.loads(iteration_path.read_text(encoding="utf-8"))
+    assert popen.call_count == 2
+    assert record["response"] == "retry output"
+    assert record["cli"] == "claude"
+    assert [(item["cli"], item["attempt"]) for item in record["failed_attempts"]] == [
+        ("claude", 1),
+    ]
