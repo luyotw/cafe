@@ -187,6 +187,48 @@ def test_out_of_mandate_terms_in_non_scope_section_do_not_pause(
     assert not any(rule.rule_id == "out_of_mandate" for rule in result.triggered_rules)
 
 
+def test_inline_negated_plan_confirmation_does_not_pause(tmp_path: Path) -> None:
+    result = evaluate_alignment_policy(
+        AlignmentPolicyInput(
+            step_name="plan",
+            user_input=(
+                "Plan approved. Proceed exactly within the confirmed #344 scope and "
+                "roadmap constraints; do not broaden into dashboard, HumanTask, "
+                "subflow, external permissions, pricing, deployment approval, or "
+                "release tagging."
+            ),
+            artifacts={
+                "current_output": (
+                    "| Declined | Reason |\n"
+                    "| New database | The roadmap keeps execution state file-based; "
+                    "this issue changes definitions, not workflow-instance ownership. |"
+                )
+            },
+        ),
+        strategic_context=_context(tmp_path),
+    )
+
+    assert result.level == AlignmentDecisionLevel.NO_ALIGNMENT
+    assert result.payload is None
+
+
+def test_affirmative_work_after_negated_clause_still_forces_checkpoint(
+    tmp_path: Path,
+) -> None:
+    result = evaluate_alignment_policy(
+        AlignmentPolicyInput(
+            step_name="plan",
+            user_input=(
+                "Do not broaden roadmap scope; add pricing approval automation."
+            ),
+        ),
+        strategic_context=_context(tmp_path),
+    )
+
+    assert result.level == AlignmentDecisionLevel.MUST_ALIGN
+    assert any(rule.rule_id == "out_of_mandate" for rule in result.triggered_rules)
+
+
 def test_required_strategic_document_update_is_in_payload(tmp_path: Path) -> None:
     result = evaluate_alignment_policy(
         AlignmentPolicyInput(
