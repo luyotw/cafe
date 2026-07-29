@@ -266,10 +266,14 @@ _NEGATED_ACTION_PREFIX_RE = re.compile(
     (?:
         \b(?:do|does|did|will|would|should|must|can)\s+not
         |\b(?:don't|doesn't|didn't|won't|wouldn't|shouldn't|mustn't|can't)
+        |\b(?:do|does|did|will|would|should|must|can)\s+not
+            \s+(?:require|involve|entail)
+        |\b(?:don't|doesn't|didn't|won't|wouldn't|shouldn't|mustn't|can't)
+            \s+(?:require|involve|entail)
         |\bwithout
         |\bno
         |\bnot
-        |不(?:會|再|要|應|得|需)?
+        |不(?:會|再|要|應|得|需|需要)?
         |無需
         |毋須
         |避免
@@ -299,6 +303,7 @@ _NEGATED_SCOPE_CLAUSE_RE = re.compile(
 
 _NON_SCOPE_LINE_MARKERS: tuple[str, ...] = (
     "out of scope",
+    "negative space",
     "non-goal",
     "non-goals",
     "not doing",
@@ -601,10 +606,9 @@ def _matches_actionable_change_intent(
 ) -> bool:
     for action in _STRATEGIC_CHANGE_ACTION_RE.finditer(text):
         clause_start, clause_end = _clause_bounds(text, action.start())
-        clause = text[clause_start:clause_end]
         line_prefix = text[clause_start : action.start()].rstrip()
         nearby_prefix = line_prefix[-32:]
-        if any(marker in clause.lower() for marker in _NON_SCOPE_LINE_MARKERS):
+        if _is_non_scope_context(text, action.start()):
             continue
         if _NEGATED_ACTION_PREFIX_RE.search(nearby_prefix):
             continue

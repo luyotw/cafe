@@ -513,6 +513,58 @@ def test_confirmed_capability_boundary_scope_does_not_pause(
     assert not any(rule.rule_id == "trusted_capability_boundary" for rule in result.triggered_rules)
 
 
+def test_negative_space_table_does_not_turn_declined_boundaries_into_signals(
+    tmp_path: Path,
+) -> None:
+    plan_text = """
+    ### Negative space
+
+    | Declined | Reason |
+    | --- | --- |
+    | Host capability, external mutation, or permission changes |
+      Human-response collection does not require expanding the trusted host boundary. |
+    """
+
+    result = evaluate_alignment_policy(
+        AlignmentPolicyInput(step_name="develop", artifacts={"plan": plan_text}),
+        strategic_context=_context_with_confirmed_strategy(tmp_path),
+        config=AlignmentPolicyConfig(
+            affected_document_categories=(
+                "roadmap",
+                "product_direction",
+                "principles",
+                "positioning",
+                "strategic_context",
+            ),
+            pause_threshold=5,
+            note_threshold=2,
+        ),
+    )
+
+    assert result.level == AlignmentDecisionLevel.NO_ALIGNMENT
+    assert result.triggered_rules == ()
+
+
+def test_negated_requirement_does_not_escalate_trusted_boundary_change(
+    tmp_path: Path,
+) -> None:
+    result = evaluate_alignment_policy(
+        AlignmentPolicyInput(
+            step_name="develop",
+            artifacts={
+                "plan": (
+                    "Human-response collection does not require expanding "
+                    "the trusted host boundary."
+                )
+            },
+        ),
+        strategic_context=_context_with_confirmed_strategy(tmp_path),
+    )
+
+    assert result.level == AlignmentDecisionLevel.NO_ALIGNMENT
+    assert not any(rule.rule_id == "trusted_capability_boundary" for rule in result.triggered_rules)
+
+
 def test_medium_risk_records_note_only(tmp_path: Path) -> None:
     result = evaluate_alignment_policy(
         AlignmentPolicyInput(
