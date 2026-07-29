@@ -1,7 +1,7 @@
 ---
 name: cafe-review
 description: "審查程式碼品質與風險"
-version: 1.0.0
+version: 1.0.1
 workflow:
   prompt_inputs:
     - artifacts: [spec]
@@ -24,7 +24,10 @@ workflow:
       required: false
   checklist:
     context_references:
+      spec_read_instruction: spec_read_instruction.md
+      plan_read_instruction: plan_read_instruction.md
       feedback_instruction: feedback_instruction.md
+      spec_comparison_instruction: spec_comparison_instruction.md
     variants:
       - when: {}
         sections:

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from cafe.agents.manager import AgentManager
+from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.bridge import load_skill_reference
 from cafe.skills.checklist_composer import (
     compose_declared_checklist,
@@ -46,11 +47,21 @@ REQUIRED_SKILL_REFERENCES = {
         "correction_plan_test_list.md",
         "xml_questions_instruction.md",
     ],
-    "review": ["execution_steps.md", "feedback_instruction.md"],
+    "review": [
+        "execution_steps.md",
+        "feedback_instruction.md",
+        "spec_read_instruction.md",
+        "plan_read_instruction.md",
+        "spec_comparison_instruction.md",
+    ],
     "pr": [
         "execution_steps_iteration_1.md",
         "execution_steps_iteration_n.md",
         "comments_organization_steps.md",
+        "spec_read_instruction.md",
+        "plan_read_instruction.md",
+        "pr_spec_context.md",
+        "pr_plan_context.md",
     ],
 }
 
@@ -355,6 +366,72 @@ def test_production_composer_golden_checklist_matches_fixture(
         assert actual == expected
     finally:
         AgentManager.get_agent_file_path = saved
+
+
+@pytest.mark.parametrize(
+    ("playbook_id", "step_name", "available_artifacts"),
+    [
+        ("hotfix", "review", {"code": "code.md"}),
+        ("hotfix", "pr", {"code": "code.md", "review_feedback": "review.md"}),
+        ("simple", "pr", {"spec": "spec.md", "code": "code.md"}),
+        (
+            "tdd",
+            "pr",
+            {
+                "spec": "spec.md",
+                "plan": "plan.md",
+                "code": "code.md",
+                "review_feedback": "review.md",
+            },
+        ),
+    ],
+)
+def test_short_builtin_playbook_checklists_compose_with_declared_artifact_scope(
+    playbook_id: str,
+    step_name: str,
+    available_artifacts: dict[str, str],
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Shipped short workflows omit unavailable optional checklist instructions."""
+    step = PlaybookLoader().load_model(playbook_id).model.steps[step_name]
+    scope = set(step.input_artifacts or [])
+    context = {
+        "output_file": "output.md",
+        "base_branch": "main",
+        **{
+            f"{artifact}_file": path
+            for artifact, path in available_artifacts.items()
+            if artifact in scope and artifact in {"spec", "plan", "review_feedback"}
+        },
+    }
+    monkeypatch.setattr(
+        "cafe.skills.checklist_composer.AgentManager.get_agent_file_path",
+        lambda *_: "agent.md",
+    )
+    checklist = tmp_path / f"{playbook_id}-{step_name}.md"
+    assert compose_declared_checklist(
+        skill_name=step.skill,
+        contract=SkillLoader().get_workflow_contract(step.skill),
+        agent_name="Ada",
+        role=step.role,
+        checklist_file_path=checklist,
+        iteration=1,
+        context=context,
+        artifacts={
+            name: available_artifacts[name]
+            for name in scope
+            if name in available_artifacts
+        },
+    )
+
+    content = checklist.read_text(encoding="utf-8")
+    assert "{spec_file}" not in content
+    assert "{plan_file}" not in content
+    if "spec" not in scope:
+        assert "Read the requirements specification" not in content
+    if "plan" not in scope:
+        assert "Read the implementation plan" not in content
 
 
 @pytest.mark.parametrize(

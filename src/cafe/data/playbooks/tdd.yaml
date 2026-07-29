@@ -150,7 +150,7 @@ steps:
     handoff_label: "Refresh PR output"
     chat_role: developer
     assignee_type: agent
-    input_artifacts: [spec, code, review_feedback]
+    input_artifacts: [spec, plan, code, review_feedback]
     output_artifact: pr_result
     allowed_tools: [Read, Edit, Write, Grep, Glob]
     allowed_goto: [develop, review]

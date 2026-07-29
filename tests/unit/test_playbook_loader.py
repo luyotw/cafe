@@ -713,6 +713,35 @@ steps:
     assert "input_artifacts" not in loaded["steps"]["draft"]
 
 
+def test_playbook_rejects_explicit_null_input_artifact_scope(tmp_path: Path) -> None:
+    """Explicit null must not bypass an isolated artifact scope."""
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "spec_first")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "invalid-null-scope",
+        """
+playbook: {id: invalid-null-scope}
+steps:
+  draft:
+    role: pm
+    skill: spec_first
+    input_artifacts: null
+    on:
+      await_agent: _done
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="input_artifacts must be a list when specified"):
+        loader.load("invalid-null-scope")
+
+
 def test_builtin_non_software_playbooks_define_non_default_handoff_metadata() -> None:
     loader = PlaybookLoader()
 

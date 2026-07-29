@@ -1,7 +1,7 @@
 ---
 name: cafe-pr
 description: "整理提交內容並產出 pull request 標題與描述"
-version: 1.0.0
+version: 1.0.1
 workflow:
   prompt_inputs:
     - artifacts: [spec]
@@ -22,7 +22,13 @@ workflow:
     - artifacts: [review_feedback]
       placeholder: feedback_file
       required: false
+  prompt_references:
+    spec_context: pr_spec_context.md
+    plan_context: pr_plan_context.md
   checklist:
+    context_references:
+      spec_read_instruction: spec_read_instruction.md
+      plan_read_instruction: plan_read_instruction.md
     variants:
       - when: {iteration: 1}
         sections:
@@ -41,8 +47,7 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Context
-- Requirements Specification: {spec_file}
-- Implementation Plan: {plan_file}
+{spec_context}{plan_context}
 
 ## Commits
 {commits}
@@ -74,7 +79,7 @@ alongside this skill.
 ### PR content mode
 其他情況（沒有 PR review comments）：
 
-1. 閱讀需求規格、實作計畫與目前分支上的 commits
+1. 閱讀本 workflow 提供的需求規格、實作計畫與目前分支上的 commits
 2. 編輯 `{output_file}`，產出 PR title 與 description：
    - Title 必須放在第一行 `#` 標題，精簡清楚，不超過 80 字元
    - Body 維持 `Summary`、`Changes`、`Test Plan` 結構

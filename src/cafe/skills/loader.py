@@ -224,8 +224,9 @@ class SkillLoader:
             raise ValueError(
                 f"Invalid workflow contract for skill {skill_dir.name}: {exc}"
             ) from exc
+        references = list(contract.prompt_references.values())
         if contract.checklist is not None:
-            references = list(contract.checklist.context_references.values())
+            references.extend(contract.checklist.context_references.values())
             references.extend(
                 section.reference
                 for variant in contract.checklist.variants
@@ -237,7 +238,7 @@ class SkillLoader:
                 if not reference_path.is_file():
                     raise ValueError(
                         f"Invalid workflow contract for skill {skill_dir.name}: "
-                        f"checklist reference not found: {reference}"
+                        f"workflow reference not found: {reference}"
                     )
         if contract.output_templates is not None:
             template_dir = skill_dir / "assets" / "templates"

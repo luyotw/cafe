@@ -38,6 +38,7 @@ class GenericPhase:
     """Build prompts from skill content and run lifecycle hooks."""
 
     GOTO_PATTERN = re.compile(r"GOTO\s*:\s*([a-zA-Z0-9_-]+)")
+    PLACEHOLDER_PATTERN = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
     SCRIPT_HOOK_STAGES = {"before_execute", "after_execute"}
 
     def __init__(
@@ -63,19 +64,47 @@ class GenericPhase:
         """Install one skill for the target CLI and return its invocation syntax."""
         installed_dir = self.skill_bridge.install_skill(skill_name, agent_cli, context=context)
         contract = self.skill_loader.get_workflow_contract(skill_name)
+        prompt_references = self._render_prompt_references(
+            skill_name=skill_name,
+            references=contract.prompt_references,
+            context=context or {},
+        )
         resolved_inputs = [
             (mapping.placeholder, str((context or {})[mapping.placeholder]))
             for mapping in contract.prompt_inputs
             if (context or {}).get(mapping.placeholder)
         ]
-        if resolved_inputs:
+        if prompt_references or resolved_inputs:
             skill_file = installed_dir / "SKILL.md"
             rendered = skill_file.read_text(encoding="utf-8")
-            rendered += "\n\n## Workflow Inputs\n" + "\n".join(
-                f"- {placeholder}: {path}" for placeholder, path in resolved_inputs
-            )
+            for placeholder, content in prompt_references.items():
+                rendered = rendered.replace(f"{{{placeholder}}}", content)
+            if resolved_inputs:
+                rendered += "\n\n## Workflow Inputs\n" + "\n".join(
+                    f"- {placeholder}: {path}" for placeholder, path in resolved_inputs
+                )
             skill_file.write_text(rendered, encoding="utf-8")
         return self.skill_bridge.get_invocation(skill_name, agent_cli)
+
+    def _render_prompt_references(
+        self,
+        *,
+        skill_name: str,
+        references: Dict[str, str],
+        context: Dict[str, str],
+    ) -> Dict[str, str]:
+        """Render named prompt sections only when every referenced input is available."""
+        resolved: Dict[str, str] = {}
+        for placeholder, reference in references.items():
+            content = self.skill_loader.get_reference(skill_name, reference)
+            names = self.PLACEHOLDER_PATTERN.findall(content)
+            if not all(context.get(name) for name in names):
+                resolved[placeholder] = ""
+                continue
+            for name in set(names):
+                content = content.replace(f"{{{name}}}", str(context[name]))
+            resolved[placeholder] = content
+        return resolved
 
     def prepare_skills(
         self,

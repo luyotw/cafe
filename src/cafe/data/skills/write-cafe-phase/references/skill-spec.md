@@ -61,6 +61,8 @@ workflow:
     - artifacts: [research_notes]
       placeholder: evidence_file
       required: true
+  prompt_references:
+    optional_evidence_instruction: optional_evidence_instruction.md
   checklist:
     context_references:
       xml_questions_instruction: xml_questions_instruction.md
@@ -70,6 +72,7 @@ workflow:
       - when: {artifact_present: [editor_feedback]}
         sections: [{reference: execution_feedback.md}]
     include_role_guidance: true
+    compact_agent_guidance: false
   output_templates:
     catalog: research-report
 ```
@@ -77,9 +80,17 @@ workflow:
 - `prompt_inputs` are resolved in listed candidate order. Required inputs stop
   before agent invocation with the placeholder and candidates named; absent
   optional inputs are omitted.
+- `prompt_references` are named `references/*.md` sections interpolated into the
+  skill body. Use one for an instruction that depends on an optional input: it
+  renders only when every placeholder inside that reference is available;
+  otherwise the named marker and its instruction are omitted. Do not place an
+  optional input placeholder directly in `SKILL.md` prose.
 - Checklist references must remain under `references/`; variants are evaluated
   in declaration order using bounded iteration, artifact-presence, or feedback
   selectors. Role guidance is included only when explicitly requested.
+  `compact_agent_guidance: true` appends that guidance without inserting a
+  separator, for references that intentionally own the preceding spacing; the
+  default keeps a separating newline.
 - A template catalog is the owning skill's `assets/templates/` directory. A
   selection is read from `<step>.template` in `issue.yaml`; `auto` leaves the
   catalog available without selecting a file.

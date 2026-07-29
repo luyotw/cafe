@@ -20,7 +20,11 @@ def _load_skill_checklist_reference(skill_name: str, ref_name: str) -> str:
     return load_skill_reference(canonical_skill_name(skill_name), ref_name)
 
 
-def _resolve_xml_questions_instruction(skill_name: str, ref_name: str, questions_xml_file: str) -> str:
+def _resolve_xml_questions_instruction(
+    skill_name: str,
+    ref_name: str,
+    questions_xml_file: str,
+) -> str:
     """Pre-resolve questions_xml_file in the XML instruction reference."""
     template = _load_skill_checklist_reference(skill_name, ref_name)
     return template.replace("{questions_xml_file}", questions_xml_file)
@@ -200,7 +204,9 @@ def compose_declared_checklist(
     content = resolve_checklist_placeholders(content, placeholders)
     unresolved = sorted(set(_PLACEHOLDER_PATTERN.findall(content)))
     if unresolved:
-        raise ValueError(f"Unresolved checklist placeholders for {skill_name}: {', '.join(unresolved)}")
+        raise ValueError(
+            f"Unresolved checklist placeholders for {skill_name}: {', '.join(unresolved)}"
+        )
     generate_checklist_file(checklist_file_path, content)
     return True
 
@@ -507,11 +513,12 @@ def generate_review_checklist(
 
     pr_todo_list_section = ""
     if pr_todo_list_file_path:
-        pr_todo_list_section = f"""
-## PR Todo List Check
-[ ] Read {pr_todo_list_file_path} - this is the todo list from the PR phase
-[ ] Check that ALL todo items are marked as completed [x]. If any unchecked items [ ] remain, return needs_changes
-"""
+        pr_todo_list_section = (
+            "\n## PR Todo List Check\n"
+            f"[ ] Read {pr_todo_list_file_path} - this is the todo list from the PR phase\n"
+            "[ ] Check that ALL todo items are marked as completed [x]. "
+            "If any unchecked items [ ] remain, return needs_changes\n"
+        )
 
     basic_principles_checklist = ""
     if basic_principles:
@@ -541,6 +548,14 @@ def generate_review_checklist(
     placeholders["feedback_instruction"] = resolve_checklist_placeholders(
         _load_skill_checklist_reference("review", "feedback_instruction.md"), placeholders
     )
+    for placeholder, reference in {
+        "spec_read_instruction": "spec_read_instruction.md",
+        "plan_read_instruction": "plan_read_instruction.md",
+        "spec_comparison_instruction": "spec_comparison_instruction.md",
+    }.items():
+        placeholders[placeholder] = resolve_checklist_placeholders(
+            _load_skill_checklist_reference("review", reference), placeholders
+        )
 
     checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)
     checklist_content = checklist_content.rstrip() + "\n"
@@ -593,6 +608,14 @@ def generate_pr_checklist(
     if iteration > 1:
         placeholders["prev_pr_file"] = prev_pr_file if prev_pr_file else pr_file
         placeholders["current_pr_file"] = pr_file
+
+    for placeholder, reference in {
+        "spec_read_instruction": "spec_read_instruction.md",
+        "plan_read_instruction": "plan_read_instruction.md",
+    }.items():
+        placeholders[placeholder] = resolve_checklist_placeholders(
+            _load_skill_checklist_reference("pr", reference), placeholders
+        )
 
     checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)
     generate_checklist_file(checklist_file_path, checklist_content)

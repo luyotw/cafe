@@ -1,9 +1,7 @@
 ## Checklist
 
 [ ] Read {agent_file} to understand your role and native language
-[ ] Read the requirements specification {spec_file}
-[ ] Read the implementation plan {plan_file}
-[ ] Review all commits in the current branch
+{spec_read_instruction}{plan_read_instruction}[ ] Review all commits in the current branch
 [ ] Edit {output_file} to fill in PR title and description (NOT in your response)
 [ ] Ensure PR title is concise and descriptive (max 80 characters)
 [ ] Include reference to original requirements

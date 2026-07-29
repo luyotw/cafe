@@ -223,20 +223,46 @@ class SkillWorkflowContract(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     prompt_inputs: Tuple[PromptInputContract, ...] = ()
+    prompt_references: dict[str, str] = Field(default_factory=dict)
     checklist: Optional[ChecklistContract] = None
     output_templates: Optional[OutputTemplatesContract] = None
 
+    @field_validator("prompt_references")
+    @classmethod
+    def _validate_prompt_references(cls, value: dict[str, str]) -> dict[str, str]:
+        return {
+            _safe_placeholder(
+                placeholder, field_name="prompt reference placeholder"
+            ): _safe_reference(reference)
+            for placeholder, reference in value.items()
+        }
+
     @model_validator(mode="after")
     def _validate_unique_placeholders(self) -> "SkillWorkflowContract":
-        placeholders = [item.placeholder for item in self.prompt_inputs]
-        if len(set(placeholders)) != len(placeholders):
+        input_placeholders = [item.placeholder for item in self.prompt_inputs]
+        if len(set(input_placeholders)) != len(input_placeholders):
             raise ValueError("prompt input placeholders must be unique")
+        prompt_reference_placeholders = set(self.prompt_references)
+        input_placeholder_set = set(input_placeholders)
+        overlap = input_placeholder_set & prompt_reference_placeholders
+        if overlap:
+            raise ValueError(
+                "prompt reference placeholders must not overlap prompt input placeholders: "
+                f"{', '.join(sorted(overlap))}"
+            )
         if self.checklist is not None:
-            overlap = set(placeholders) & set(self.checklist.context_references)
+            checklist_references = set(self.checklist.context_references)
+            overlap = input_placeholder_set & checklist_references
             if overlap:
                 raise ValueError(
                     "checklist context reference placeholders must not overlap prompt input "
                     f"placeholders: {', '.join(sorted(overlap))}"
+                )
+            overlap = prompt_reference_placeholders & checklist_references
+            if overlap:
+                raise ValueError(
+                    "prompt and checklist reference placeholders must not overlap: "
+                    f"{', '.join(sorted(overlap))}"
                 )
         return self
 

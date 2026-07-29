@@ -508,10 +508,18 @@ def test_prepare_skill_renders_iteration_context_without_mutating_source(
     assert source_file.read_text(encoding="utf-8") == source_before
 
 
-def test_prepare_skill_keeps_optional_instruction_lines_when_input_is_absent(tmp_path: Path) -> None:
-    """The runtime never deletes arbitrary skill-owned instruction lines."""
+def test_prepare_skill_omits_declared_optional_prompt_reference_when_input_is_absent(
+    tmp_path: Path,
+) -> None:
+    """Optional prompt instructions are rendered only through their named reference."""
     loader = _setup_loader(tmp_path)
     source_file = loader.get_skill_dir("cafe-plan") / "SKILL.md"
+    references_dir = source_file.parent / "references"
+    references_dir.mkdir()
+    (references_dir / "optional_notes_instruction.md").write_text(
+        "Read optional notes: {notes_file}\n",
+        encoding="utf-8",
+    )
     source_file.write_text(
         """---
 name: cafe-plan
@@ -521,9 +529,11 @@ workflow:
     - artifacts: [optional_notes]
       placeholder: notes_file
       required: false
+  prompt_references:
+    optional_notes_instruction: optional_notes_instruction.md
 ---
 
-Read optional notes: {notes_file}
+{optional_notes_instruction}
 Write the plan.
 """,
         encoding="utf-8",
@@ -545,8 +555,50 @@ Write the plan.
     installed = (project_root / ".codex" / "skills" / "cafe-plan" / "SKILL.md").read_text(
         encoding="utf-8"
     )
-    assert "Read optional notes: {notes_file}" in installed
+    assert "Read optional notes" not in installed
+    assert "{notes_file}" not in installed
+    assert "{optional_notes_instruction}" not in installed
     assert "Write the plan." in installed
+
+    phase.prepare_skill(
+        skill_name="cafe-plan",
+        agent_cli=AgentCLI.CODEX,
+        context={"notes_file": "notes.md"},
+    )
+
+    installed = (project_root / ".codex" / "skills" / "cafe-plan" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Read optional notes: notes.md" in installed
+
+
+def test_prepare_builtin_pr_skill_omits_unavailable_contexts(tmp_path: Path) -> None:
+    """The shipped PR skill has no fake spec or plan path in short workflows."""
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+    )
+    loader.discover()
+    phase = GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(
+            loader,
+            project_root=project_root,
+            home_dir=tmp_path / "home",
+        ),
+    )
+
+    phase.prepare_skill(skill_name="cafe-pr", agent_cli=AgentCLI.CODEX, context={})
+
+    installed = (project_root / ".codex" / "skills" / "cafe-pr" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Requirements Specification:" not in installed
+    assert "Implementation Plan:" not in installed
+    assert "{spec_file}" not in installed
+    assert "{plan_file}" not in installed
 
 
 def test_prepare_skills_installs_shared_and_phase_skills(tmp_path: Path) -> None:

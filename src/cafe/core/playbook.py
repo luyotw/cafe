@@ -129,6 +129,12 @@ class StepConfig(BaseModel):
     alignment: Optional[StepAlignmentConfig] = None
     on: Dict[str, str]
 
+    @model_validator(mode="after")
+    def _validate_input_artifact_scope(self) -> "StepConfig":
+        if "input_artifacts" in self.model_fields_set and self.input_artifacts is None:
+            raise ValueError("input_artifacts must be a list when specified")
+        return self
+
     @field_validator("on")
     @classmethod
     def _validate_on_intents(cls, value: Dict[str, str]) -> Dict[str, str]:
@@ -567,7 +573,9 @@ def declared_template_managers(
             )
         if not catalogs:
             if step.template is not None:
-                raise ValueError(f"Step {step_name!r} declares a template without a skill template catalog")
+                raise ValueError(
+                    f"Step {step_name!r} declares a template without a skill template catalog"
+                )
             continue
         skill_name = canonical_skill_name(str(selectors[0]))
         manager = TemplateManager(

@@ -28,6 +28,7 @@ def _contract_data() -> dict:
                 "required": False,
             },
         ],
+        "prompt_references": {"optional_review_instruction": "optional_review.md"},
         "checklist": {
             "context_references": {"xml_questions_instruction": "xml_questions.md"},
             "variants": [
@@ -51,6 +52,7 @@ def test_workflow_contract_parses_declared_inputs_checklists_and_templates() -> 
     contract = SkillWorkflowContract.model_validate(_contract_data())
 
     assert contract.prompt_inputs[0].artifacts == ("research_notes", "legacy_notes")
+    assert contract.prompt_references == {"optional_review_instruction": "optional_review.md"}
     assert contract.checklist is not None
     assert contract.checklist.variants[1].when.min_iteration == 2
     assert contract.output_templates is not None
@@ -89,6 +91,15 @@ def test_workflow_contract_rejects_context_reference_that_overlaps_prompt_input(
     """Context references cannot overwrite declared artifact input values."""
     data = _contract_data()
     data["checklist"]["context_references"] = {"evidence_file": "evidence.md"}
+
+    with pytest.raises(ValidationError, match="must not overlap"):
+        SkillWorkflowContract.model_validate(data)
+
+
+def test_workflow_contract_rejects_prompt_reference_that_overlaps_prompt_input() -> None:
+    """Prompt references reserve their own marker names."""
+    data = _contract_data()
+    data["prompt_references"] = {"evidence_file": "evidence.md"}
 
     with pytest.raises(ValidationError, match="must not overlap"):
         SkillWorkflowContract.model_validate(data)
