@@ -20,6 +20,7 @@ def prompt_for_input_method(
     github_ops: GitHubOps,
     *,
     field: Optional[PrepareField] = None,
+    issue_field: Optional[PrepareField] = None,
 ) -> tuple[str, Optional[int]]:
     """Ask user to select input method (manual vs GitHub Issue)
 
@@ -70,14 +71,18 @@ def prompt_for_input_method(
 
     # Ask for Issue ID or URL, with error retry handling
     while True:
-        issue_input = prompt_text(
-            message="Please enter GitHub Issue ID or URL:",
-            default="",
-        )
+        issue_message = "Please enter GitHub Issue ID or URL:"
+        if issue_field is not None:
+            issue_message = issue_field.label
+            if issue_field.help:
+                issue_message = f"{issue_field.label}\n{issue_field.help}"
+        issue_input = prompt_text(message=issue_message, default="")
 
         try:
-            # Use GitHubOps to extract issue number
-            issue_id_str = github_ops.extract_issue_number(issue_input)
+            if issue_field is None or issue_field.normalize == "github_issue":
+                issue_id_str = github_ops.extract_issue_number(issue_input)
+            else:
+                issue_id_str = issue_input
             issue_id = int(issue_id_str)
 
             print()
@@ -108,11 +113,7 @@ def prompt_for_rigor(display: Display, allowed: Optional[List[str]] = None) -> s
     }
     allowed_values = allowed or ["low", "medium", "high"]
     choices = [choice_by_value[value] for value in allowed_values if value in choice_by_value]
-    default_choice = (
-        choice_by_value["medium"]
-        if "medium" in allowed_values
-        else choices[0]
-    )
+    default_choice = choice_by_value["medium"] if "medium" in allowed_values else choices[0]
 
     choice = prompt_list(
         message="Please select specification rigor level:",
@@ -204,7 +205,7 @@ def prompt_and_save_auto_create(config_file: Path, config_key: str) -> bool:
     # Save the choice to issue config
     try:
         if config_file.exists():
-            with open(config_file, 'r', encoding='utf-8') as f:
+            with open(config_file, "r", encoding="utf-8") as f:
                 config_data = yaml.safe_load(f) or {}
         else:
             config_data = {}
@@ -212,8 +213,8 @@ def prompt_and_save_auto_create(config_file: Path, config_key: str) -> bool:
         config_data = {}
 
     # Support dot notation for nested keys (e.g., "pr.auto_create")
-    if '.' in config_key:
-        keys = config_key.split('.')
+    if "." in config_key:
+        keys = config_key.split(".")
         current = config_data
         for key in keys[:-1]:
             if key not in current:
@@ -225,7 +226,7 @@ def prompt_and_save_auto_create(config_file: Path, config_key: str) -> bool:
 
     # Write back to config file
     config_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(config_file, 'w', encoding='utf-8') as f:
+    with open(config_file, "w", encoding="utf-8") as f:
         yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
 
     return auto_create

@@ -34,6 +34,7 @@ from cafe.ui.prepare_field_renderer import (
     prompt_setup_mode,
     prompt_custom_fields,
     resolve_non_interactive_issue_config,
+    run_field_driven_prepare_flow,
     set_write_value,
     validate_non_interactive_required,
     visible_fields,
@@ -73,6 +74,60 @@ def _default_fields():
         playbook_path=loaded.path,
         skill_loader=SkillLoader(),
     )
+
+
+def test_input_method_flow_passes_the_declared_issue_field_to_its_boundary() -> None:
+    """U4 — GitHub input uses the field document's issue-field metadata."""
+    input_field = PrepareField.model_validate(
+        {
+            "id": "input_method",
+            "type": "enum",
+            "label": "Requirement source",
+            "write": "spec.input_method",
+            "choices": [
+                {"value": "manual", "label": "Manual"},
+                {"value": "github", "label": "GitHub"},
+            ],
+        }
+    )
+    issue_field = PrepareField.model_validate(
+        {
+            "id": "issue_reference",
+            "type": "text",
+            "label": "Tracked issue reference",
+            "write": "spec.issue_id",
+            "normalize": "github_issue",
+        }
+    )
+    prompt_input = MagicMock(return_value=("github", 350))
+    deps = RendererDeps(
+        prompt_list=MagicMock(),
+        prompt_confirm=MagicMock(),
+        prompt_text=MagicMock(),
+        prompt_for_input_method=prompt_input,
+        select_template=MagicMock(),
+        spec_template_manager=MagicMock(),
+        plan_template_manager=MagicMock(),
+        display=MagicMock(),
+        github_ops=MagicMock(),
+    )
+    profile = PrepareProfile(
+        prepare=PrepareConfig.model_validate(
+            {"fields": [input_field.model_dump(), issue_field.model_dump()]}
+        ),
+        is_github_repo=True,
+        step_names=frozenset({"spec"}),
+    )
+
+    config, issue_id = run_field_driven_prepare_flow(
+        ParsedPrepareFields(fields=[input_field, issue_field]),
+        profile,
+        deps=deps,
+    )
+
+    assert issue_id == 350
+    assert config.spec == {"input_method": "github", "issue_id": "350"}
+    assert prompt_input.call_args.kwargs["issue_field"] == issue_field
 
 
 class TestShowWhenVisibility:
@@ -333,9 +388,7 @@ class TestNonInteractiveContext:
 
     def test_github_mode_requires_issue_id(self) -> None:
         with pytest.raises(PrepareNonInteractiveRequiredFieldError):
-            validate_non_interactive_required(
-                NonInteractiveCliAnswers(input_method="github")
-            )
+            validate_non_interactive_required(NonInteractiveCliAnswers(input_method="github"))
 
 
 class TestNonInteractiveVisibility:
@@ -372,6 +425,26 @@ class TestNonInteractiveVisibility:
 
 
 class TestNonInteractiveResolver:
+    def test_promptless_playbook_creates_no_legacy_development_config(self) -> None:
+        """U6 — promptless workflows do not inherit the legacy resolver."""
+        profile = PrepareProfile(
+            prepare=PrepareConfig.model_validate({"prompt_for_spec_plan_config": False}),
+            is_github_repo=True,
+            step_names=frozenset({"research"}),
+        )
+
+        config = resolve_non_interactive_issue_config(
+            profile,
+            NonInteractiveCliAnswers(),
+            parsed_fields=None,
+            deps=_resolver_deps(),
+        )
+
+        assert config.spec == {}
+        assert config.plan == {}
+        assert config.pr == {}
+        assert config.steps == {}
+
     def test_default_playbook_manual_defaults(self) -> None:
         parsed = _default_fields()
         profile = _profile()

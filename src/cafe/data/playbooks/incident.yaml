@@ -9,6 +9,10 @@ roles:
     default_agent: "Casey"
     default_cli: "claude"
 
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+
 steps:
   detect:
     type: skill

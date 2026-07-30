@@ -63,7 +63,7 @@ version: 1.3.0
 - Represent optional work with a confirmed or `not_required` plan and an explicit forward skip. Do not add routine backward cycles merely to rewrite a checklist.
 - Reserve `allowed_goto` for deliberate conditional or exceptional routes. Keep the normal path in `"on"` so static simulation can explain it.
 - Quote the YAML key `"on"`. Avoid custom status tokens; use CAFE's supported intents and mappings from the reference.
-- For non-development workflows, explicitly decide `commands.prepare`; normally disable spec/plan setup prompts instead of inheriting irrelevant defaults.
+- For a workflow with interactive setup, declare `commands.prepare.fields` or `fields_ref`; own all prompt copy and defaults there. For a workflow without setup, explicitly set `commands.prepare.prompt_for_spec_plan_config: false`.
 
 ## Writing Process
 1. Inventory the conversation locale, skills, expected outputs, user gates,

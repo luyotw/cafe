@@ -131,7 +131,7 @@ def field_is_visible_for_non_interactive(
     ctx: PrepareNonInteractiveContext,
 ) -> bool:
     """Return whether one field applies in non-interactive mode."""
-    if field.type == "setup_mode" or field.id == "input_method":
+    if field.type == "setup_mode" or not field.non_interactive:
         return False
     show_when = field.show_when
     if show_when is None:
@@ -160,9 +160,7 @@ def validate_non_interactive_required(answers: NonInteractiveCliAnswers) -> None
             "--input-method is required in non-interactive mode"
         )
     if answers.input_method not in _ALLOWED_INPUT_METHODS:
-        raise PrepareNonInteractiveRequiredFieldError(
-            "--input-method must be 'manual' or 'github'"
-        )
+        raise PrepareNonInteractiveRequiredFieldError("--input-method must be 'manual' or 'github'")
     if answers.input_method == "github" and answers.issue_id is None:
         raise PrepareNonInteractiveRequiredFieldError(
             "--issue-id is required when using --input-method=github"
@@ -196,9 +194,7 @@ def _validate_field_enum_value(
     if field.write == "spec.rigor":
         allowed &= set(profile.allowed_rigor_values())
     if value not in allowed:
-        raise PrepareNonInteractiveError(
-            f"invalid value {value!r} for prepare field {field.id!r}"
-        )
+        raise PrepareNonInteractiveError(f"invalid value {value!r} for prepare field {field.id!r}")
 
 
 def validate_non_interactive_config(
@@ -241,6 +237,72 @@ def validate_non_interactive_config(
     _validate_template_name(deps.plan_template_manager, "Plan", plan_template)
 
 
+def _cli_value_for_field(
+    field: PrepareField,
+    answers: NonInteractiveCliAnswers,
+) -> tuple[bool, Any]:
+    """Return an explicitly supplied CLI value for one declared field."""
+    values = {
+        "spec.input_method": answers.input_method,
+        "spec.issue_id": answers.issue_id,
+        "spec.rigor": answers.rigor,
+        "spec.template": answers.spec_template,
+        "plan.template": answers.plan_template,
+        "spec.sync_github": answers.sync_spec_github,
+        "plan.sync_github": answers.sync_plan_github,
+        "pr.post_todo_list": answers.post_pr_todo_list,
+    }
+    if field.write == "pr.auto_create":
+        return answers.auto_create_pr, answers.auto_create_pr
+    value = values.get(field.write)
+    return value is not None, value
+
+
+def _field_default_for_non_interactive(field: PrepareField) -> Any:
+    """Return the authoritative default for a declared field."""
+    if field.non_interactive_default is not None:
+        return field.non_interactive_default
+    return field.default
+
+
+def _template_manager_for_field(
+    field: PrepareField,
+    deps: NonInteractiveResolverDeps,
+) -> TemplateManager:
+    """Resolve the template catalog declared by a template field's destination."""
+    section = field.write.split(".", 1)[0] if field.write else "plan"
+    if section == "spec":
+        return deps.spec_template_manager
+    if section == "plan":
+        return deps.plan_template_manager
+    manager = deps.template_managers.get(section)
+    if manager is None:
+        raise PrepareNonInteractiveError(
+            f"prepare field {field.id!r} targets undeclared template step {section!r}"
+        )
+    return manager
+
+
+def _validate_declared_non_interactive_input(
+    parsed_fields: ParsedPrepareFields,
+    answers: NonInteractiveCliAnswers,
+) -> None:
+    """Require input flags only when a declared input field asks for them."""
+    input_fields = [field for field in parsed_fields.fields if field.write == "spec.input_method"]
+    if not input_fields:
+        return
+    if answers.input_method is not None and answers.input_method not in _ALLOWED_INPUT_METHODS:
+        raise PrepareNonInteractiveRequiredFieldError("--input-method must be 'manual' or 'github'")
+    if any(field.required for field in input_fields) and answers.input_method is None:
+        raise PrepareNonInteractiveRequiredFieldError(
+            "--input-method is required by the declared prepare field"
+        )
+    if answers.input_method == "github" and answers.issue_id is None:
+        raise PrepareNonInteractiveRequiredFieldError(
+            "--issue-id is required when using --input-method=github"
+        )
+
+
 def resolve_non_interactive_issue_config(
     profile: PrepareProfile,
     answers: NonInteractiveCliAnswers,
@@ -249,102 +311,100 @@ def resolve_non_interactive_issue_config(
     deps: NonInteractiveResolverDeps,
 ) -> PrepareIssueConfig:
     """Resolve and validate non-interactive prepare config for issue.yaml."""
-    validate_non_interactive_required(answers)
-
-    defaults = profile.non_interactive_defaults()
-    explicit_legacy_defaults = "non_interactive_defaults" in profile.prepare.model_fields_set
-    field_defaults: dict[str, Any] = {}
-    ctx: Optional[PrepareNonInteractiveContext] = None
-    if parsed_fields is not None:
-        ctx = PrepareNonInteractiveContext(
-            is_github_repo=profile.is_github_repo,
-            issue_id=answers.issue_id if answers.input_method == "github" else None,
-            profile=profile,
-        )
-        for field in visible_fields_for_non_interactive(parsed_fields, ctx):
-            if (
-                field.default is not None
-                and field.write is not None
-                and field.write not in field_defaults
-            ):
-                field_defaults[field.write] = field.default
-
-    default_rigor = (
-        defaults.rigor
-        if explicit_legacy_defaults
-        else field_defaults.get("spec.rigor", defaults.rigor)
-    )
-    default_spec_template = (
-        defaults.spec_template
-        if explicit_legacy_defaults
-        else field_defaults.get("spec.template", defaults.spec_template)
-    )
-    default_plan_template = (
-        defaults.plan_template
-        if explicit_legacy_defaults
-        else field_defaults.get("plan.template", defaults.plan_template)
-    )
-    rigor = answers.rigor if answers.rigor is not None else default_rigor
-    spec_template = answers.spec_template if answers.spec_template is not None else default_spec_template
-    plan_template = answers.plan_template if answers.plan_template is not None else default_plan_template
-
-    validate_non_interactive_config(
-        profile,
-        answers,
-        rigor=rigor,
-        spec_template=spec_template,
-        plan_template=plan_template,
-        parsed_fields=parsed_fields,
-        deps=deps,
-    )
-
-    config = empty_issue_config()
-    set_write_value(config, "spec.input_method", answers.input_method)
-    if answers.input_method == "github" and answers.issue_id is not None:
-        set_write_value(config, "spec.issue_id", str(answers.issue_id))
-    set_write_value(config, "spec.rigor", rigor)
-    if spec_template:
-        set_write_value(config, "spec.template", spec_template)
-    if answers.sync_spec_github is not None:
-        set_write_value(config, "spec.sync_github", answers.sync_spec_github)
-
-    if plan_template:
-        set_write_value(config, "plan.template", plan_template)
-    if answers.sync_plan_github is not None:
-        set_write_value(config, "plan.sync_github", answers.sync_plan_github)
-
-    if parsed_fields is not None:
-        assert ctx is not None
-        for field in visible_fields_for_non_interactive(parsed_fields, ctx):
-            if field.type != "template" or field.write is None:
-                continue
-            section, _key = field.write.split(".", 1)
-            if section in {"spec", "plan"}:
-                continue
-            template_name = field_defaults.get(field.write)
-            if template_name is None:
-                continue
-            manager = deps.template_managers.get(section)
-            if manager is None:
+    if parsed_fields is None:
+        if not profile.prepare.prompt_for_spec_plan_config and profile.prepare.model_fields_set == {
+            "prompt_for_spec_plan_config"
+        }:
+            if answers.auto_create_pr or answers.post_pr_todo_list is not None:
                 raise PrepareNonInteractiveError(
-                    f"prepare field {field.id!r} targets undeclared template step {section!r}"
+                    "--auto-create-pr and --post-pr-todo-list require a playbook with a "
+                    "pr step or explicit pr.* prepare fields"
                 )
-            _validate_template_name(manager, field.label, str(template_name))
-            set_write_value(config, field.write, template_name)
+            return empty_issue_config()
+        validate_non_interactive_required(answers)
+        defaults = profile.non_interactive_defaults()
+        rigor = answers.rigor if answers.rigor is not None else defaults.rigor
+        spec_template = (
+            answers.spec_template if answers.spec_template is not None else defaults.spec_template
+        )
+        plan_template = (
+            answers.plan_template if answers.plan_template is not None else defaults.plan_template
+        )
+        validate_non_interactive_config(
+            profile,
+            answers,
+            rigor=rigor,
+            spec_template=spec_template,
+            plan_template=plan_template,
+            parsed_fields=None,
+            deps=deps,
+        )
+        config = empty_issue_config()
+        set_write_value(config, "spec.input_method", answers.input_method)
+        if answers.input_method == "github" and answers.issue_id is not None:
+            set_write_value(config, "spec.issue_id", str(answers.issue_id))
+        set_write_value(config, "spec.rigor", rigor)
+        if spec_template:
+            set_write_value(config, "spec.template", spec_template)
+        if plan_template:
+            set_write_value(config, "plan.template", plan_template)
+        if answers.sync_spec_github is not None:
+            set_write_value(config, "spec.sync_github", answers.sync_spec_github)
+        if answers.sync_plan_github is not None:
+            set_write_value(config, "plan.sync_github", answers.sync_plan_github)
+        if not profile.supports_pr_config() and (
+            answers.auto_create_pr or answers.post_pr_todo_list is not None
+        ):
+            raise PrepareNonInteractiveError(
+                "--auto-create-pr and --post-pr-todo-list require a playbook with a "
+                "pr step or explicit pr.* prepare fields"
+            )
+        if profile.supports_pr_config() and profile.is_github_repo and answers.auto_create_pr:
+            set_write_value(config, "pr.auto_create", True)
+        if profile.supports_pr_config() and answers.post_pr_todo_list is not None:
+            set_write_value(config, "pr.post_todo_list", answers.post_pr_todo_list)
+        return config
 
-    supports_pr_config = profile.supports_pr_config(parsed_fields)
-    if not supports_pr_config and (
+    _validate_declared_non_interactive_input(parsed_fields, answers)
+    ctx = PrepareNonInteractiveContext(
+        is_github_repo=profile.is_github_repo,
+        issue_id=answers.issue_id if answers.input_method == "github" else None,
+        profile=profile,
+    )
+    config = empty_issue_config()
+    for field in parsed_fields.fields:
+        if field.type == "setup_mode" or field.write is None:
+            continue
+        is_explicit, value = _cli_value_for_field(field, answers)
+        if not field_is_visible_for_non_interactive(field, ctx) and not is_explicit:
+            continue
+        if not is_explicit:
+            value = _field_default_for_non_interactive(field)
+        if value is None:
+            if field.required:
+                raise PrepareNonInteractiveRequiredFieldError(
+                    f"prepare field {field.id!r} requires a value in non-interactive mode"
+                )
+            continue
+        if field.write == "spec.issue_id":
+            value = str(value)
+        _validate_field_enum_value(field, value, profile=profile)
+        if field.type == "template":
+            _validate_template_name(
+                _template_manager_for_field(field, deps), field.label, str(value)
+            )
+        section, key = field.write.split(".", 1)
+        if key in config.section(section) and not is_explicit:
+            continue
+        set_write_value(config, field.write, value)
+
+    if not profile.supports_pr_config(parsed_fields) and (
         answers.auto_create_pr or answers.post_pr_todo_list is not None
     ):
         raise PrepareNonInteractiveError(
             "--auto-create-pr and --post-pr-todo-list require a playbook with a "
             "pr step or explicit pr.* prepare fields"
         )
-    if supports_pr_config and profile.is_github_repo and answers.auto_create_pr:
-        set_write_value(config, "pr.auto_create", True)
-    if supports_pr_config and answers.post_pr_todo_list is not None:
-        set_write_value(config, "pr.post_todo_list", answers.post_pr_todo_list)
-
     return config
 
 
@@ -397,7 +457,11 @@ def apply_quick_defaults(
             continue
         set_write_value(config, field.write, field.default)
 
-    if ctx.profile.supports_pr_config(parsed) and ctx.is_github_repo and "auto_create" not in config.pr:
+    if (
+        ctx.profile.supports_pr_config(parsed)
+        and ctx.is_github_repo
+        and "auto_create" not in config.pr
+    ):
         auto_field = next(
             (field for field in parsed.fields if field.write == "pr.auto_create"),
             None,
@@ -465,9 +529,7 @@ def prompt_setup_mode(field: PrepareField, deps: RendererDeps) -> SetupMode:
 def _prompt_enum_field(field: PrepareField, ctx: PreparePromptContext, deps: RendererDeps) -> str:
     allowed = set(ctx.profile.allowed_rigor_values())
     choices = [
-        choice
-        for choice in field.choices
-        if field.write != "spec.rigor" or choice.value in allowed
+        choice for choice in field.choices if field.write != "spec.rigor" or choice.value in allowed
     ]
     if not choices:
         raise PrepareRigorError("no rigor choices available for this playbook")
@@ -495,9 +557,7 @@ def _prompt_template_field(field: PrepareField, deps: RendererDeps) -> Optional[
     if not template_names:
         if deps.console is not None:
             deps.console.print()
-            deps.console.print(
-                "[yellow]⚠️  No templates found. Using default template.[/yellow]"
-            )
+            deps.console.print("[yellow]⚠️  No templates found. Using default template.[/yellow]")
         return str(field.default) if field.default is not None else None
     if deps.console is not None:
         deps.console.print()
@@ -517,13 +577,13 @@ def prompt_custom_fields(
     custom_ctx = PreparePromptContext(
         is_github_repo=ctx.is_github_repo,
         issue_id=ctx.issue_id,
-        setup_mode="custom",
+        setup_mode=ctx.setup_mode,
         profile=ctx.profile,
         pr_auto_create=ctx.pr_auto_create,
     )
     config = empty_issue_config()
     for field in parsed.fields:
-        if field.type == "setup_mode" or field.id == "input_method":
+        if field.type == "setup_mode" or field.write in {"spec.input_method", "spec.issue_id"}:
             continue
         if field.write is None:
             continue
@@ -539,6 +599,10 @@ def prompt_custom_fields(
             value = _prompt_template_field(field, deps)
             if value is None:
                 continue
+        elif field.type == "text":
+            value = deps.prompt_text(field.label, default=str(field.default or ""))
+            if not value and field.required:
+                raise ValueError(f"prepare field {field.id!r} requires a value")
         else:
             continue
 
@@ -564,7 +628,14 @@ def run_field_driven_prepare_flow(
     spec_config = empty_issue_config()
     issue_id: Optional[int] = None
 
-    input_field = _find_field(parsed, "input_method")
+    input_field = next(
+        (field for field in parsed.fields if field.write == "spec.input_method"),
+        None,
+    )
+    issue_field = next(
+        (field for field in parsed.fields if field.write == "spec.issue_id"),
+        None,
+    )
     if input_field is not None and field_is_visible(
         input_field,
         PreparePromptContext(
@@ -578,23 +649,23 @@ def run_field_driven_prepare_flow(
             deps.display,
             deps.github_ops,
             field=input_field,
+            issue_field=issue_field,
         )
         spec_config.spec["input_method"] = input_method
         if issue_id is not None:
             spec_config.spec["issue_id"] = str(issue_id)
-    elif profile.should_prompt_input_method():
-        input_method, issue_id = deps.prompt_for_input_method(deps.display, deps.github_ops)
-        spec_config.spec["input_method"] = input_method
-        if issue_id is not None:
-            spec_config.spec["issue_id"] = str(issue_id)
-    else:
-        spec_config.spec["input_method"] = profile.default_input_method()
-
+    elif input_field is not None and input_field.default is not None:
+        set_write_value(spec_config, input_field.write, input_field.default)
     ctx.issue_id = issue_id
 
-    setup_field = _find_field(parsed, "setup_mode")
+    setup_field = next((field for field in parsed.fields if field.type == "setup_mode"), None)
     if setup_field is None:
-        raise ValueError("prepare fields document must declare setup_mode")
+        custom_config = prompt_custom_fields(parsed, ctx, deps=deps)
+        spec_config.spec.update(custom_config.spec)
+        spec_config.plan.update(custom_config.plan)
+        spec_config.pr.update(custom_config.pr)
+        spec_config.steps.update(custom_config.steps)
+        return spec_config, issue_id
     if deps.console is not None:
         deps.console.print()
     setup_mode = prompt_setup_mode(setup_field, deps)
@@ -612,6 +683,10 @@ def run_field_driven_prepare_flow(
             for line in format_quick_summary(spec_config, parsed, ctx):
                 deps.console.print(f"  • {line}")
             deps.console.print()
+        if not profile.is_github_repo and any(
+            field.write == "pr.auto_create" for field in parsed.fields
+        ):
+            spec_config.pr["auto_create"] = False
         return spec_config, issue_id
 
     custom_config = prompt_custom_fields(parsed, ctx, deps=deps)
@@ -619,6 +694,8 @@ def run_field_driven_prepare_flow(
     spec_config.plan.update(custom_config.plan)
     spec_config.pr.update(custom_config.pr)
     spec_config.steps.update(custom_config.steps)
-    if not profile.is_github_repo:
+    if not profile.is_github_repo and any(
+        field.write == "pr.auto_create" for field in parsed.fields
+    ):
         spec_config.pr.setdefault("auto_create", False)
     return spec_config, issue_id

@@ -13,6 +13,10 @@ roles:
     default_agent: "David"
     default_cli: "claude"
 
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+
 steps:
   brief:
     type: skill

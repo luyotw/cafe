@@ -28,11 +28,11 @@ def change_test_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def mock_git_ops():
-    with patch("cafe.ui.cli.GitOperations") as MockGitOperations, patch(
-        "cafe.utils.git_utils.is_github_repo"
-    ) as mock_is_github_repo, patch(
-        "cafe.ui.phase_prompts.is_github_repo"
-    ) as mock_is_github_repo_phase:
+    with (
+        patch("cafe.ui.cli.GitOperations") as MockGitOperations,
+        patch("cafe.utils.git_utils.is_github_repo") as mock_is_github_repo,
+        patch("cafe.ui.phase_prompts.is_github_repo") as mock_is_github_repo_phase,
+    ):
         mock_git = MagicMock()
         MockGitOperations.return_value = mock_git
         mock_git.get_current_branch.return_value = "main"
@@ -67,6 +67,39 @@ steps:
 {prepare_block}
 """
     (playbooks_dir / f"{name}.yaml").write_text(content, encoding="utf-8")
+
+
+def _write_workflow_owned_fields_playbook(base_dir: Path, name: str) -> None:
+    """Create a non-development workflow with only workflow-owned setup."""
+    playbooks_dir = base_dir / ".cafe" / "playbooks"
+    playbooks_dir.mkdir(parents=True, exist_ok=True)
+    (playbooks_dir / f"{name}.yaml").write_text(
+        f"""
+playbook:
+  id: {name}
+steps:
+  synthesize:
+    type: skill
+    skill: cafe-spec
+    role: pm
+    "on":
+      await_agent: _done
+commands:
+  prepare:
+    fields:
+      - id: audience
+        type: enum
+        label: Audience
+        write: synthesize.audience
+        default: internal
+        choices:
+          - value: internal
+            label: Internal
+          - value: public
+            label: Public
+""",
+        encoding="utf-8",
+    )
 
 
 class TestPrepareFieldDriven:
@@ -180,6 +213,77 @@ commands:
         assert result.exit_code == 0
         mock_legacy.assert_called_once()
         mock_field.assert_not_called()
+        assert "Deprecated" in result.stdout
+
+    def test_non_development_fields_supply_non_interactive_defaults(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        """I4 — workflow-owned defaults need no development CLI flags."""
+        _write_workflow_owned_fields_playbook(temp_repo_dir, "audience-workflow")
+        _write_config_with_playbook(temp_repo_dir, "audience-workflow")
+
+        result = runner.invoke(
+            app,
+            ["prepare", "audience-default", "--no-interactive"],
+        )
+
+        assert result.exit_code == 0
+        config = yaml.safe_load(
+            (temp_repo_dir / ".cafe" / "issues" / "audience-default" / "issue.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert config["synthesize"] == {"audience": "internal"}
+        assert not {"spec", "plan", "pr"}.intersection(config)
+
+    @pytest.mark.parametrize("playbook_id", ["research", "editorial", "incident"])
+    def test_promptless_builtin_prepare_creates_no_development_config(
+        self, playbook_id, temp_repo_dir, mock_git_ops
+    ):
+        """I4 — promptless bundled workflows need no development CLI flags."""
+        _write_config_with_playbook(temp_repo_dir, playbook_id)
+
+        result = runner.invoke(
+            app,
+            ["prepare", f"{playbook_id}-default", "--no-interactive"],
+        )
+
+        assert result.exit_code == 0
+        config = yaml.safe_load(
+            (
+                temp_repo_dir / ".cafe" / "issues" / f"{playbook_id}-default" / "issue.yaml"
+            ).read_text(encoding="utf-8")
+        )
+        assert not {"spec", "plan", "pr"}.intersection(config)
+
+    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.cli.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
+    def test_non_development_fields_own_interactive_prompts(
+        self,
+        mock_prompt_text,
+        mock_prompt_list,
+        mock_prompt_confirm,
+        temp_repo_dir,
+        mock_git_ops,
+    ):
+        """I3 — interactive setup renders only the workflow's declared prompt."""
+        _write_workflow_owned_fields_playbook(temp_repo_dir, "audience-workflow")
+        _write_config_with_playbook(temp_repo_dir, "audience-workflow")
+        mock_prompt_text.return_value = "audience-interactive"
+        mock_prompt_confirm.return_value = False
+        mock_prompt_list.return_value = "Public"
+
+        result = runner.invoke(app, ["prepare"])
+
+        assert result.exit_code == 0
+        config = yaml.safe_load(
+            (temp_repo_dir / ".cafe" / "issues" / "audience-interactive" / "issue.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert config["synthesize"] == {"audience": "public"}
+        assert [call.kwargs["message"] for call in mock_prompt_list.call_args_list] == ["Audience"]
 
 
 def test_field_driven_prepare_passes_declared_custom_template_managers() -> None:
@@ -203,6 +307,4 @@ def test_field_driven_prepare_passes_declared_custom_template_managers() -> None
             template_managers={"synthesis": custom_manager},
         )
 
-    assert run_flow.call_args.kwargs["deps"].template_managers == {
-        "synthesis": custom_manager
-    }
+    assert run_flow.call_args.kwargs["deps"].template_managers == {"synthesis": custom_manager}
