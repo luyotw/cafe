@@ -149,6 +149,8 @@ def collect_human_task_payload(
     for question in policy.questions:
         if question.multiple and question.options:
             answer = prompt_checkbox(question.prompt, list(question.options))
+        elif question.options:
+            answer = prompt_list(question.prompt, list(question.options), default=None)
         else:
             answer = prompt_multiline(question.prompt).strip()
         answers[question.id] = answer

@@ -155,6 +155,40 @@ def test_inline_multiple_choice_uses_checkbox_answers(monkeypatch) -> None:
     assert calls == [("Choose all channels", ["Email", "Events"])]
 
 
+def test_inline_single_choice_uses_declared_options(monkeypatch) -> None:
+    """Interactive single-choice responses come from the policy allowlist."""
+    calls: list[tuple[str, list[str]]] = []
+
+    def collect_list(message: str, choices: list[str], default=None) -> str:
+        calls.append((message, choices))
+        return "Email"
+
+    monkeypatch.setattr("cafe.ui.inquirer_prompts.prompt_list", collect_list)
+    monkeypatch.setattr(
+        "cafe.ui.inquirer_prompts.prompt_multiline", lambda *_args, **_kwargs: "Unlisted"
+    )
+    policy = HumanTaskPolicy.model_validate(
+        {
+            "id": "channel",
+            "pattern": "answer_questions",
+            "prompt": "Select a channel",
+            "input_schema": "answers",
+            "questions": [
+                {
+                    "id": "primary",
+                    "prompt": "Choose one channel",
+                    "options": ["Email", "Events"],
+                }
+            ],
+        }
+    )
+
+    payload = collect_human_task_payload(policy)
+
+    assert payload == {"task": "channel", "answers": {"primary": "Email"}}
+    assert calls == [("Choose one channel", ["Email", "Events"])]
+
+
 def test_command_completion_uses_the_same_policy_and_declared_destination(tmp_path: Path) -> None:
     """A JSON response advances only through its policy's permitted continuation."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"

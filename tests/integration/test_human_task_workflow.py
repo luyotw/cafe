@@ -109,6 +109,28 @@ def test_invalid_default_human_task_response_keeps_the_user_pause(tmp_path: Path
     assert any(event.event_type == "human_task_rejected" for event in reloaded.events)
 
 
+def test_tdd_no_change_agreement_skips_review_to_pr(tmp_path: Path) -> None:
+    """Built-in TDD retains the established no-change continuation."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "tdd-no-change"
+    playbook = PlaybookLoader().load("tdd")
+    store, state = _paused_default_state(
+        issue_dir, from_step="develop", intent=HandoffIntent.NO_CHANGES_NEEDED
+    )
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="develop",
+        trigger="no_changes_needed",
+        raw_payload={"task": "no-change-decision", "decision": "agree"},
+        source="integration",
+    )
+
+    assert result.target == "pr"
+    assert store.load_or_create("develop").current_step == "pr"
+
+
 def test_editorial_human_tasks_use_editorial_contracts_without_development_copy(
     tmp_path: Path,
 ) -> None:
