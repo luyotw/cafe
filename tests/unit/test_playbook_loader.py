@@ -149,6 +149,9 @@ steps:
     skill: spec_first
     on:
       await_agent: _done
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
 """,
     )
     _write_playbook(
@@ -162,6 +165,9 @@ steps:
     skill: spec_first
     on:
       await_agent: _done
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
 """,
     )
     loader = PlaybookLoader(
@@ -248,6 +254,9 @@ steps:
     valid_intents: [confirmed]
     on:
       await_agent: _done
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
 """,
     )
 
@@ -291,6 +300,9 @@ steps:
     valid_intents: [confirmed]
     on:
       await_agent: _done
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
 """,
     )
 
@@ -327,6 +339,9 @@ steps:
     on:
       await_agent: _done
       alignment_checkpoint: develop
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
 """,
     )
 
@@ -358,6 +373,9 @@ steps:
     capability_requests: [cafe.pr.publish]
     on:
       await_agent: _done
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
 """,
     )
 
@@ -495,6 +513,9 @@ steps:
     on:
       confirm_output: plan
       await_agent: _done
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
 """,
     )
 
@@ -751,6 +772,9 @@ steps:
     skill: spec_first
     on:
       await_agent: _done
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
 """,
     )
 
