@@ -79,8 +79,8 @@ def test_default_human_tasks_validate_and_route_all_user_handoff_patterns(tmp_pa
         source="integration",
     )
 
-    assert no_change.target == "review"
-    assert no_change_store.load_or_create("develop").current_step == "review"
+    assert no_change.target == "pr"
+    assert no_change_store.load_or_create("develop").current_step == "pr"
 
 
 def test_invalid_default_human_task_response_keeps_the_user_pause(tmp_path: Path) -> None:

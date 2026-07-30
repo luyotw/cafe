@@ -28,6 +28,7 @@ def resolve_step_human_task(
     step_name: str,
     trigger: str,
     skill_loader: Optional[SkillLoader] = None,
+    iteration: int = 1,
 ) -> tuple[HumanTaskPolicy, HumanTaskBinding]:
     """Resolve one declared step binding without inferring workflow semantics."""
     raw_steps = playbook_data.get("steps")
@@ -50,7 +51,7 @@ def resolve_step_human_task(
         raise HumanTaskPolicyError(
             f"Step {step_name!r} requires exactly one human task for trigger {trigger!r}"
         )
-    skill_name = _select_skill_name(raw_step)
+    skill_name = _select_skill_name(raw_step, iteration)
     contract = (skill_loader or SkillLoader()).get_workflow_contract(skill_name)
     policy = resolve_human_task_policy(defaults=contract.human_tasks, binding=bindings[0])
     return policy, bindings[0]
@@ -64,6 +65,7 @@ def validate_step_human_task_completion(
     raw_payload: str | Mapping[str, Any],
     skill_loader: Optional[SkillLoader] = None,
     questions: Optional[Sequence[HumanTaskQuestion]] = None,
+    iteration: int = 1,
 ) -> tuple[HumanTaskPolicy, HumanTaskBinding, HumanTaskCompletion | HumanTaskRejection]:
     """Resolve and validate a response without mutating the paused workflow."""
     policy, binding = resolve_step_human_task(
@@ -71,6 +73,7 @@ def validate_step_human_task_completion(
         step_name=step_name,
         trigger=trigger,
         skill_loader=skill_loader,
+        iteration=iteration,
     )
     return policy, binding, validate_human_task_completion(
         policy, raw_payload, questions=questions
@@ -108,7 +111,7 @@ def collect_human_task_payload(
     agent_name: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Collect one interactive response in the policy's declared input shape."""
-    from cafe.ui.inquirer_prompts import prompt_list, prompt_multiline
+    from cafe.ui.inquirer_prompts import prompt_checkbox, prompt_list, prompt_multiline
 
     if policy.input_schema == "feedback":
         return {"task": policy.id, "feedback": prompt_multiline(policy.prompt).strip()}
@@ -142,9 +145,12 @@ def collect_human_task_payload(
             ),
         }
 
-    answers: dict[str, str] = {}
+    answers: dict[str, str | list[str]] = {}
     for question in policy.questions:
-        answer = prompt_multiline(question.prompt).strip()
+        if question.multiple and question.options:
+            answer = prompt_checkbox(question.prompt, list(question.options))
+        else:
+            answer = prompt_multiline(question.prompt).strip()
         answers[question.id] = answer
     return {"task": policy.id, "answers": answers}
 
@@ -171,11 +177,13 @@ def apply_human_task_payload(
     """Validate and apply one response while retaining a pause on rejection."""
     store = BlackboardStore(issue_dir)
     try:
+        iteration = latest_step_iteration(issue_dir=issue_dir, step_name=from_step)
         questions = _load_dynamic_questions(
             issue_dir=issue_dir,
             step_name=from_step,
             playbook_data=playbook_data,
             trigger=trigger,
+            iteration=iteration,
         )
         policy, binding, completion = validate_step_human_task_completion(
             playbook_data=playbook_data,
@@ -183,6 +191,7 @@ def apply_human_task_payload(
             trigger=trigger,
             raw_payload=raw_payload,
             questions=questions,
+            iteration=iteration,
         )
     except HumanTaskPolicyError as exc:
         rejection = HumanTaskRejection(
@@ -274,6 +283,7 @@ def _load_dynamic_questions(
     step_name: str,
     playbook_data: Mapping[str, Any],
     trigger: str,
+    iteration: int,
 ) -> Optional[tuple[HumanTaskQuestion, ...]]:
     """Return the current XML question contract for a dynamic answer task."""
     try:
@@ -281,6 +291,7 @@ def _load_dynamic_questions(
             playbook_data=playbook_data,
             step_name=step_name,
             trigger=trigger,
+            iteration=iteration,
         )
     except HumanTaskPolicyError:
         return None
@@ -305,11 +316,29 @@ def _load_dynamic_questions(
     )
 
 
-def _select_skill_name(step_def: Mapping[str, Any]) -> str:
+def latest_step_iteration(*, issue_dir: Path, step_name: str) -> int:
+    """Return the latest numeric iteration for policy-skill selection."""
+    step_dir = issue_dir / step_name
+    iterations = []
+    if step_dir.exists():
+        for candidate in step_dir.glob("iteration_*"):
+            if not candidate.is_dir():
+                continue
+            try:
+                iterations.append(int(candidate.name.removeprefix("iteration_")))
+            except ValueError:
+                continue
+    return max(iterations, default=1)
+
+
+def _select_skill_name(step_def: Mapping[str, Any], iteration: int) -> str:
     raw_skill = step_def.get("skill")
     if isinstance(raw_skill, str) and raw_skill.strip():
         return raw_skill
     if isinstance(raw_skill, Mapping):
+        exact = raw_skill.get(str(iteration))
+        if isinstance(exact, str) and exact.strip():
+            return exact
         default = raw_skill.get("default")
         if isinstance(default, str) and default.strip():
             return default

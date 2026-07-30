@@ -440,6 +440,7 @@ class UserInputCollector(NoOpHook):
                 playbook_data={"steps": {step_name: step_def}},
                 step_name=step_name,
                 trigger=trigger,
+                iteration=int(getattr(phase, "iteration", 1)),
             )
         except HumanTaskPolicyError:
             return None
@@ -461,6 +462,7 @@ class UserInputCollector(NoOpHook):
             step_name=step_name,
             trigger=trigger,
             raw_payload=payload or {},
+            iteration=int(getattr(phase, "iteration", 1)),
         )
         if not isinstance(result, HumanTaskCompletion):
             return HookResult(

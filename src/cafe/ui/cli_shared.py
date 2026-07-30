@@ -980,6 +980,7 @@ def _handle_declared_human_task_handoff(
     from cafe.ui.human_tasks import (
         apply_human_task_payload,
         collect_human_task_payload,
+        latest_step_iteration,
         resolve_step_human_task,
     )
 
@@ -990,6 +991,7 @@ def _handle_declared_human_task_handoff(
             playbook_data=playbook_data,
             step_name=from_step,
             trigger=trigger,
+            iteration=latest_step_iteration(issue_dir=issue_dir, step_name=from_step),
         )
     except HumanTaskPolicyError:
         result = apply_human_task_payload(
@@ -1004,7 +1006,7 @@ def _handle_declared_human_task_handoff(
         console.print(f"[red]{result.rejection.message}[/red]")
         return None
 
-    if policy.pattern == "confirm_output":
+    if policy.pattern in {"confirm_output", "no_changes_needed"}:
         output_files = sorted((issue_dir / from_step).glob("iteration_*/output.md"))
         if output_files:
             _print_output_file(output_files[-1])
