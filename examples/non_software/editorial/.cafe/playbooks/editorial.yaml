@@ -63,4 +63,8 @@ steps:
     "on":
       await_agent: _done
 
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+
 entry_point: brief
