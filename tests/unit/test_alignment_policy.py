@@ -565,6 +565,26 @@ def test_negated_requirement_does_not_escalate_trusted_boundary_change(
     assert not any(rule.rule_id == "trusted_capability_boundary" for rule in result.triggered_rules)
 
 
+def test_hyphenated_descriptor_is_not_a_strategic_change_action(
+    tmp_path: Path,
+) -> None:
+    plan_text = """
+    This supports the roadmap principle of evolving the repo-defined contract
+    without expanding runtime or host capabilities.
+    """
+
+    result = evaluate_alignment_policy(
+        AlignmentPolicyInput(step_name="develop", artifacts={"plan": plan_text}),
+        strategic_context=_context_with_confirmed_strategy(tmp_path),
+    )
+
+    assert result.level == AlignmentDecisionLevel.NO_ALIGNMENT
+    assert not any(
+        rule.rule_id in {"mandate_escalation:product_scope", "product_or_governance_impact"}
+        for rule in result.triggered_rules
+    )
+
+
 def test_medium_risk_records_note_only(tmp_path: Path) -> None:
     result = evaluate_alignment_policy(
         AlignmentPolicyInput(
