@@ -236,11 +236,13 @@ Prefer an explicit forward skip:
 - `UserInputCollector` belongs on phases that pause and resume with user feedback.
 - `PermissionRetryHandler` belongs on execution phases that may hit permission boundaries.
 - Use specialized hooks only when their implementation exists and their lifecycle stage is valid.
-- Non-software playbooks should normally set `commands.prepare.prompt_for_spec_plan_config: false`; otherwise they inherit development-oriented preparation prompts.
-- Declarative prepare fields support the fixed legacy targets plus
-  `<step>.template` when that step skill declares `workflow.output_templates`.
-  The selected value persists in the same named step block in `issue.yaml`.
-  Do not invent other domain write targets in YAML.
+- A playbook with interactive prepare must declare `commands.prepare.fields` or
+  `fields_ref`; bundled playbooks are rejected otherwise. A promptless workflow must
+  set `commands.prepare.prompt_for_spec_plan_config: false`.
+- Declarative fields may write `<declared-step>.<config-key>` and persist that value
+  in the matching `issue.yaml` block. A `template` field still requires the target
+  skill to declare `workflow.output_templates`; other workflow-owned settings need
+  no development-stage or PR metadata.
 
 ## 9. Validation Sequence
 
