@@ -605,6 +605,13 @@ def _matches_actionable_change_intent(
     target_patterns: Sequence[re.Pattern[str]],
 ) -> bool:
     for action in _STRATEGIC_CHANGE_ACTION_RE.finditer(text):
+        if (
+            action.start() > 0
+            and text[action.start() - 1] == "-"
+            or action.end() < len(text)
+            and text[action.end()] == "-"
+        ):
+            continue
         clause_start, clause_end = _clause_bounds(text, action.start())
         line_prefix = text[clause_start : action.start()].rstrip()
         nearby_prefix = line_prefix[-32:]
