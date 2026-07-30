@@ -7,6 +7,8 @@ fields:
     label: "Input method"
     help: "Choose how issue requirements are provided."
     write: spec.input_method
+    default: manual
+    required: true
     show_when:
       github_repo: true
     choices:
@@ -14,6 +16,14 @@ fields:
         label: "Manual input"
       - value: github
         label: "GitHub issue"
+
+  - id: github_issue_id
+    type: text
+    label: "GitHub issue ID or URL"
+    write: spec.issue_id
+    normalize: github_issue
+    show_when:
+      issue_id_present: true
 
   - id: setup_mode
     type: setup_mode
@@ -55,6 +65,7 @@ fields:
     label: "Plan template"
     write: plan.template
     default: auto
+    non_interactive_default: default
     group: quick_defaults
     show_when:
       setup_mode: quick
@@ -64,6 +75,7 @@ fields:
     label: "Sync spec to GitHub when issue id is present"
     write: spec.sync_github
     default: true
+    non_interactive: false
     group: quick_defaults
     show_when:
       setup_mode: quick
@@ -74,6 +86,7 @@ fields:
     label: "Sync spec to GitHub for manual input"
     write: spec.sync_github
     default: false
+    non_interactive: false
     group: quick_defaults
     show_when:
       setup_mode: quick
@@ -84,6 +97,7 @@ fields:
     label: "Sync plan to GitHub when issue id is present"
     write: plan.sync_github
     default: true
+    non_interactive: false
     group: quick_defaults
     show_when:
       setup_mode: quick
@@ -94,6 +108,7 @@ fields:
     label: "Sync plan to GitHub for manual input"
     write: plan.sync_github
     default: false
+    non_interactive: false
     group: quick_defaults
     show_when:
       setup_mode: quick
@@ -104,6 +119,7 @@ fields:
     label: "Auto create pull request"
     write: pr.auto_create
     default: true
+    non_interactive: false
     group: quick_defaults
     show_when:
       setup_mode: quick
@@ -114,6 +130,7 @@ fields:
     label: "Post PR todo list"
     write: pr.post_todo_list
     default: true
+    non_interactive: false
     group: quick_defaults
     show_when:
       setup_mode: quick
@@ -124,6 +141,7 @@ fields:
     label: "Sync spec to GitHub issue when confirmed?"
     write: spec.sync_github
     default: true
+    non_interactive: false
     group: custom
     show_when:
       setup_mode: custom
@@ -134,6 +152,7 @@ fields:
     label: "Sync plan to GitHub issue when confirmed?"
     write: plan.sync_github
     default: true
+    non_interactive: false
     group: custom
     show_when:
       setup_mode: custom
@@ -175,6 +194,7 @@ fields:
     label: "Auto create pull request"
     write: pr.auto_create
     group: custom
+    non_interactive: false
     show_when:
       setup_mode: custom
       github_repo: true
@@ -184,6 +204,7 @@ fields:
     label: "Post organized PR comments as todo list to PR?"
     write: pr.post_todo_list
     default: true
+    non_interactive: false
     group: custom
     show_when:
       setup_mode: custom

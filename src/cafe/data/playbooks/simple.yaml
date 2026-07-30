@@ -15,35 +15,7 @@ roles:
 
 commands:
   prepare:
-    prompt_for_spec_plan_config: true
-    setup_modes:
-      quick:
-        enabled: true
-        label: "Quick setup (use recommended defaults)"
-      custom:
-        enabled: true
-        label: "Custom configuration"
-    quick_setup:
-      spec:
-        rigor: medium
-        template: auto
-      plan:
-        template: auto
-      sync_github:
-        when_issue_id_present: true
-        when_manual_input: false
-      pr:
-        auto_create_on_github_repo: true
-        post_todo_list_when_auto_create: true
-    non_interactive_defaults:
-      rigor: medium
-      spec_template: auto
-      plan_template: default
-    input_method:
-      prompt_on_github_repo: true
-      non_github_default: manual
-    constraints:
-      rigor: [low, medium, high]
+    fields_ref: skill://cafe-spec/assets/prepare/default_prepare_fields.yaml
 
 steps:
   spec:

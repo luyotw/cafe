@@ -91,7 +91,7 @@ def _loader(tmp_path: Path) -> PlaybookLoader:
 def test_prepare_schema_parses_valid_block(tmp_path: Path) -> None:
     loader = _loader(tmp_path)
     _write_playbook(
-        loader._roots()[0],
+        loader._roots()[-1],
         "test",
         _minimal_playbook_yaml(prepare_block=STANDARD_PREPARE_YAML),
     )
@@ -106,7 +106,7 @@ def test_prepare_schema_parses_valid_block(tmp_path: Path) -> None:
 
 def test_omitted_prepare_section_resolves_defaults(tmp_path: Path) -> None:
     loader = _loader(tmp_path)
-    _write_playbook(loader._roots()[0], "test", _minimal_playbook_yaml())
+    _write_playbook(loader._roots()[-1], "test", _minimal_playbook_yaml())
 
     result = loader.load_model("test")
     resolved = resolve_prepare_config(result.model)
@@ -133,7 +133,7 @@ def test_required_skill_inputs_must_be_declared_by_the_playbook_step(tmp_path: P
         encoding="utf-8",
     )
     _write_playbook(
-        loader._roots()[0],
+        loader._roots()[-1],
         "missing-input",
         """
 playbook: {id: missing-input}
@@ -207,7 +207,7 @@ commands:
 def test_unknown_template_rejected_at_load_time(tmp_path: Path) -> None:
     loader = _loader(tmp_path)
     _write_playbook(
-        loader._roots()[0],
+        loader._roots()[-1],
         "test",
         _minimal_playbook_yaml(
             prepare_block="""
@@ -239,7 +239,7 @@ commands:
     non_interactive_defaults:
       plan_template: missing-template-name
 """
-    path = loader._roots()[0] / "bad.yaml"
+    path = loader._roots()[-1] / "bad.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
@@ -250,9 +250,9 @@ commands:
     )
 
     with pytest.raises(ValueError, match="non_interactive_defaults.plan_template"):
-        load_playbook_file(path, source="builtin", skill_loader=skill_loader)
+        load_playbook_file(path, source="project", skill_loader=skill_loader)
 
-    _write_playbook(loader._roots()[0], "bad", content)
+    _write_playbook(loader._roots()[-1], "bad", content)
     with pytest.raises(ValueError, match="non_interactive_defaults.plan_template"):
         loader.load_model("bad")
 
@@ -260,7 +260,7 @@ commands:
 def test_legacy_playbook_without_prepare_section_loads(tmp_path: Path) -> None:
     loader = _loader(tmp_path)
     _write_playbook(
-        loader._roots()[0],
+        loader._roots()[-1],
         "legacy",
         """
 playbook: {id: legacy}
@@ -277,6 +277,7 @@ steps:
 
     assert result.model.commands is None
     assert resolve_prepare_config(result.model) == default_prepare_config()
+    assert any("Legacy interactive prepare is deprecated" in warning for warning in result.warnings)
 
 
 def test_builtin_interactive_prepare_requires_declared_fields(tmp_path: Path) -> None:
@@ -339,7 +340,23 @@ def test_builtin_non_prepare_playbooks_still_load_without_prepare_section() -> N
 
     for name in ("research", "editorial", "incident"):
         model = loader.load_model(name).model
-        assert model.commands is None or model.commands.prepare is None
+        assert model.commands is not None
+        assert model.commands.prepare is not None
+        assert model.commands.prepare.prompt_for_spec_plan_config is False
+
+
+def test_every_builtin_prepare_is_declarative_or_explicitly_promptless() -> None:
+    """U9 — bundled playbooks cannot reach the legacy interactive adapter."""
+    loader = PlaybookLoader()
+
+    for name in ("default", "simple", "tdd", "hotfix", "research", "editorial", "incident"):
+        model = loader.load_model(name).model
+        prepare = model.commands.prepare if model.commands else None
+        assert (
+            prepare is None
+            or not prepare.prompt_for_spec_plan_config
+            or (prepare.fields is not None or prepare.fields_ref is not None)
+        )
 
 
 def test_prepare_fields_and_fields_ref_are_mutually_exclusive() -> None:
@@ -366,7 +383,7 @@ commands:
 
 def test_invalid_prepare_field_write_target_fails_validate(tmp_path: Path) -> None:
     loader = _loader(tmp_path)
-    playbook_dir = loader._roots()[0]
+    playbook_dir = loader._roots()[-1]
     playbook_dir.mkdir(parents=True, exist_ok=True)
     asset = playbook_dir / "bad_fields.yaml"
     asset.write_text(
@@ -377,7 +394,7 @@ def test_invalid_prepare_field_write_target_fails_validate(tmp_path: Path) -> No
                         "id": "bad",
                         "type": "boolean",
                         "label": "Bad",
-                        "write": "spec.unknown",
+                        "write": "undeclared.unknown",
                         "default": True,
                     }
                 ]
@@ -398,13 +415,13 @@ commands:
         ),
     )
 
-    with pytest.raises((ValueError, ValidationError), match="unknown write target"):
+    with pytest.raises((ValueError, ValidationError), match="undeclared workflow step"):
         loader.load_model("bad")
 
 
 def test_prepare_fields_semantic_mismatch_fails_validate(tmp_path: Path) -> None:
     loader = _loader(tmp_path)
-    playbook_dir = loader._roots()[0]
+    playbook_dir = loader._roots()[-1]
     playbook_dir.mkdir(parents=True, exist_ok=True)
     asset = playbook_dir / "mismatch_fields.yaml"
     asset.write_text(
@@ -460,7 +477,7 @@ commands:
 
 def test_prepare_fields_without_legacy_metadata_skips_parity_validate(tmp_path: Path) -> None:
     loader = _loader(tmp_path)
-    playbook_dir = loader._roots()[0]
+    playbook_dir = loader._roots()[-1]
     playbook_dir.mkdir(parents=True, exist_ok=True)
     asset = playbook_dir / "declarative_only_fields.yaml"
     asset.write_text(

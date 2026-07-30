@@ -183,7 +183,9 @@ def _run_legacy_prepare_prompts(
     else:
         console.print()
         console.print("[yellow]⚠️  No plan templates found. Using default template.[/yellow]")
-        console.print("[dim]    Tip: Use 'cafe template add <source> <name>' to add templates.[/dim]")
+        console.print(
+            "[dim]    Tip: Use 'cafe template add <source> <name>' to add templates.[/dim]"
+        )
 
     if profile.supports_pr_config():
         config_file = Path(".cafe") / "issues" / issue_name / "issue.yaml"
@@ -339,22 +341,30 @@ def prepare(
 
         # 1.1. Sync agents and templates at the beginning of prepare
         from cafe.ui.init_helpers import sync_agents, sync_templates
+
         cafe_dir = Path(".cafe")
         agent_success, agent_failed = sync_agents(cafe_dir)
         template_success, template_failed = sync_templates(cafe_dir)
 
         # Display sync summary
         if agent_success > 0 or template_success > 0:
-            console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s) and {template_success} template(s)")
+            console.print(
+                f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s) and {template_success} template(s)"
+            )
         if agent_failed > 0 or template_failed > 0:
-            console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed + template_failed} file(s)")
+            console.print(
+                f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed + template_failed} file(s)"
+            )
 
         # 1.2. Apply preset if specified
         if preset:
             from cafe.utils.preset import PresetManager, PresetNotFoundError
+
             try:
                 PresetManager().apply(preset, cafe_dir=cafe_dir)
-                console.print(f"  [green]✓[/green] Applied preset '[cyan]{preset}[/cyan]' as crew.yaml")
+                console.print(
+                    f"  [green]✓[/green] Applied preset '[cyan]{preset}[/cyan]' as crew.yaml"
+                )
             except PresetNotFoundError as e:
                 console.print(f"[red]Error: {e}[/red]")
                 raise typer.Exit(1)
@@ -395,26 +405,7 @@ def prepare(
                 console.print("[red]Error: Issue name is required in non-interactive mode.[/red]")
                 raise typer.Exit(1)
 
-        # 4. Validate non-interactive mode parameters (only when user explicitly passed --no-interactive)
-        if not interactive:
-            from cafe.ui.prepare_field_renderer import (
-                NonInteractiveCliAnswers,
-                PrepareNonInteractiveRequiredFieldError,
-                validate_non_interactive_required,
-            )
-
-            try:
-                validate_non_interactive_required(
-                    NonInteractiveCliAnswers(
-                        input_method=input_method,
-                        issue_id=issue_id,
-                    )
-                )
-            except PrepareNonInteractiveRequiredFieldError as exc:
-                console.print(f"[red]Error: {exc}[/red]")
-                raise typer.Exit(1)
-
-        # 5. Initialize Git operations
+        # 4. Initialize Git operations
         try:
             git_ops = GitOperations()
         except Exception as e:
@@ -450,8 +441,12 @@ def prepare(
             )
             console.print()
             console.print("[dim]To fix this, either:[/dim]")
-            console.print(f"[dim]  1. Switch to the base branch first: git checkout main && cafe prepare {issue_name}[/dim]")
-            console.print(f"[dim]  2. Specify the base branch explicitly: cafe prepare {issue_name} --base main[/dim]")
+            console.print(
+                f"[dim]  1. Switch to the base branch first: git checkout main && cafe prepare {issue_name}[/dim]"
+            )
+            console.print(
+                f"[dim]  2. Specify the base branch explicitly: cafe prepare {issue_name} --base main[/dim]"
+            )
             raise typer.Exit(1)
 
         # 8. Determine worktree mode (interactive or from parameter)
@@ -514,6 +509,10 @@ def prepare(
             )
             issue_id: Optional[int] = None
             if parsed_fields is None:
+                console.print(
+                    "[yellow]Deprecated: this playbook uses legacy interactive prepare "
+                    "metadata. Migrate to commands.prepare.fields or fields_ref.[/yellow]"
+                )
                 spec_config, plan_config, pr_config, issue_id = _run_legacy_prepare_prompts(
                     profile,
                     display=display,
@@ -580,12 +579,16 @@ def prepare(
                 console.print(f"[red]Error: {exc}[/red]")
                 raise typer.Exit(1)
             except PrepareNonInteractiveTemplateError as exc:
-                console.print(f"[red]Error: {exc.template_kind} template '{exc.template_name}' not found[/red]")
+                console.print(
+                    f"[red]Error: {exc.template_kind} template '{exc.template_name}' not found[/red]"
+                )
                 console.print()
                 console.print(f"[yellow]Available {exc.template_kind.lower()} templates:[/yellow]")
                 if exc.available:
                     for name, source_type in exc.available:
-                        source_label = " (system default)" if source_type == "system" else " (custom)"
+                        source_label = (
+                            " (system default)" if source_type == "system" else " (custom)"
+                        )
                         console.print(f"  - {name}{source_label}")
                 else:
                     console.print("  (none)")
@@ -649,11 +652,15 @@ def prepare(
                 # Check if branch already exists
                 if git_ops.branch_exists(feature_branch):
                     # Branch exists but worktree doesn't - create worktree with existing branch
-                    console.print(f"[dim]Branch '{feature_branch}' exists, creating worktree...[/dim]")
+                    console.print(
+                        f"[dim]Branch '{feature_branch}' exists, creating worktree...[/dim]"
+                    )
                     git_ops.run_git("worktree", "add", worktree_path, feature_branch)
                 else:
                     # Neither branch nor worktree exists - create both
-                    console.print(f"[dim]Creating worktree at '{worktree_path}' with new branch...[/dim]")
+                    console.print(
+                        f"[dim]Creating worktree at '{worktree_path}' with new branch...[/dim]"
+                    )
                     git_ops.create_worktree(worktree_path, feature_branch, base_branch)
 
             # Create actual .cafe directory in worktree instead of symlink
@@ -1294,9 +1301,7 @@ def close(
         raise typer.Exit(1)
 
 
-def restore(
-    issue_name: str = typer.Argument(..., help="Issue name to restore")
-) -> None:
+def restore(issue_name: str = typer.Argument(..., help="Issue name to restore")) -> None:
     """Restore archived issue from backup.
 
     This command restores an archived issue from ~/.cafe/projects/<project-path>/archived/<issue-name>/
@@ -1378,16 +1383,22 @@ def restore(
                 except Exception as e:
                     # If branch already exists, try without -b flag
                     if "already exists" in str(e):
-                        console.print(f"[yellow]ℹ️  Branch '{feature_branch}' already exists, creating worktree[/yellow]")
+                        console.print(
+                            f"[yellow]ℹ️  Branch '{feature_branch}' already exists, creating worktree[/yellow]"
+                        )
                         try:
                             git_ops.run_git("worktree", "add", worktree_path, feature_branch)
                             console.print(f"[green]✓ Created worktree at: {worktree_path}[/green]")
                             current_branch = feature_branch
                         except Exception as e2:
                             if "already used by worktree" in str(e2):
-                                console.print(f"[yellow]ℹ️  Branch '{feature_branch}' is already in another worktree[/yellow]")
+                                console.print(
+                                    f"[yellow]ℹ️  Branch '{feature_branch}' is already in another worktree[/yellow]"
+                                )
                             else:
-                                console.print(f"[red]❌ Error: Failed to create worktree: {e2}[/red]")
+                                console.print(
+                                    f"[red]❌ Error: Failed to create worktree: {e2}[/red]"
+                                )
                                 raise typer.Exit(1)
                     else:
                         console.print(f"[red]❌ Error: Failed to create worktree: {e}[/red]")
@@ -1404,7 +1415,9 @@ def restore(
                 git_ops.checkout_branch(feature_branch)
                 console.print(f"[green]✓ Checked out branch: {feature_branch}[/green]")
             except Exception as e:
-                console.print(f"[red]❌ Error: Failed to checkout branch {feature_branch}: {e}[/red]")
+                console.print(
+                    f"[red]❌ Error: Failed to checkout branch {feature_branch}: {e}[/red]"
+                )
                 raise typer.Exit(1)
 
         # 7. Remember main repo root before potentially changing directory
@@ -1432,18 +1445,27 @@ def restore(
                         is_in_worktree = False
 
                 if not is_in_worktree:
-                    console.print(f"[yellow]ℹ️  Navigating to worktree directory: {worktree_path}[/yellow]")
+                    console.print(
+                        f"[yellow]ℹ️  Navigating to worktree directory: {worktree_path}[/yellow]"
+                    )
                     try:
                         import os
+
                         os.chdir(worktree_path)
                         console.print(f"[green]✓ Changed directory to: {worktree_path}[/green]")
                     except Exception as e:
-                        console.print(f"[red]❌ Error: Failed to change directory to {worktree_path}: {e}[/red]")
+                        console.print(
+                            f"[red]❌ Error: Failed to change directory to {worktree_path}: {e}[/red]"
+                        )
                         raise typer.Exit(1)
 
         # 8. Prompt user for confirmation
         console.print("[yellow]⚠️  Warning: This will restore the issue from backup.[/yellow]")
-        console.print("[yellow]   Any current changes in .cafe/issues/{} will be overwritten.[/yellow]".format(issue_name))
+        console.print(
+            "[yellow]   Any current changes in .cafe/issues/{} will be overwritten.[/yellow]".format(
+                issue_name
+            )
+        )
         console.print()
 
         # Use typer.confirm for confirmation
@@ -1489,12 +1511,13 @@ def restore(
 def reset(
     phase: Optional[str] = typer.Argument(
         None,
-        help="Phase name (spec, plan, develop, review, pr). If not provided, resets the last phase with iterations"
+        help="Phase name (spec, plan, develop, review, pr). If not provided, resets the last phase with iterations",
     ),
     iteration: int = typer.Option(
         0,
-        "--iteration", "-i",
-        help="Iteration number to keep (positive, 0=remove latest only, negative=relative)"
+        "--iteration",
+        "-i",
+        help="Iteration number to keep (positive, 0=remove latest only, negative=relative)",
     ),
 ) -> None:
     """Remove iterations from a phase when agent behaves unexpectedly.
@@ -1662,7 +1685,9 @@ def reset(
                 if iter_dir.exists():
                     shutil.rmtree(iter_dir)
 
-            console.print(f"[green]✓ Removed iterations: {', '.join([f'iteration_{i:03d}' for i in sorted(to_remove)])}[/green]")
+            console.print(
+                f"[green]✓ Removed iterations: {', '.join([f'iteration_{i:03d}' for i in sorted(to_remove)])}[/green]"
+            )
         except Exception as e:
             console.print(f"[red]❌ Failed to remove iterations: {e}[/red]")
             console.print()
@@ -1700,14 +1725,20 @@ def reset(
                     "status_code": target_status_code,
                     "timestamp": target_timestamp or datetime.now().astimezone().isoformat(),
                     "iteration": target_iteration,
-                    "message": f"Phase completed with {target_status_code}" if target_status_code else "Phase reset to this iteration",
-                    "end_time": target_end_time or target_timestamp or datetime.now().astimezone().isoformat(),
+                    "message": f"Phase completed with {target_status_code}"
+                    if target_status_code
+                    else "Phase reset to this iteration",
+                    "end_time": target_end_time
+                    or target_timestamp
+                    or datetime.now().astimezone().isoformat(),
                 }
 
                 with open(status_file, "w", encoding="utf-8") as f:
                     json.dump(status_data, f, indent=2, ensure_ascii=False)
 
-                console.print(f"[green]✓ Updated {phase} phase status to iteration_{target_iteration:03d}[/green]")
+                console.print(
+                    f"[green]✓ Updated {phase} phase status to iteration_{target_iteration:03d}[/green]"
+                )
 
                 # Update iterations.jsonl to remove deleted iterations
                 if iterations_file.exists():
@@ -1718,7 +1749,11 @@ def reset(
                             if line.strip():
                                 iterations_data.append(json.loads(line))
 
-                    kept_iterations = [rec for rec in iterations_data if rec.get("iteration", 0) <= target_iteration]
+                    kept_iterations = [
+                        rec
+                        for rec in iterations_data
+                        if rec.get("iteration", 0) <= target_iteration
+                    ]
                     with open(iterations_file, "w", encoding="utf-8") as f:
                         for record in kept_iterations:
                             f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -1730,7 +1765,9 @@ def reset(
                     status_file.unlink()
                 if iterations_file.exists():
                     iterations_file.unlink()
-                console.print(f"[green]✓ Phase restarted (status.json and iterations.jsonl removed)[/green]")
+                console.print(
+                    f"[green]✓ Phase restarted (status.json and iterations.jsonl removed)[/green]"
+                )
 
             console.print("[green]✓ Status saved[/green]")
         except Exception as e:

@@ -34,7 +34,7 @@ ALLOWED_FIELD_TYPES = frozenset({"enum", "boolean", "template", "text", "setup_m
 ALLOWED_SHOW_WHEN_KEYS = frozenset({"github_repo", "issue_id_present", "setup_mode"})
 ALLOWED_SETUP_MODES = frozenset({"quick", "custom"})
 ALLOWED_STATIC_SUFFIXES = frozenset({".yaml", ".yml", ".json"})
-STEP_TEMPLATE_WRITE_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*\.template$")
+WRITE_TARGET_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*\.[a-z][a-z0-9_-]*$")
 
 SKILL_FIELDS_REF_PATTERN = re.compile(r"^skill://([^/]+)/assets/(.+)$")
 
@@ -79,6 +79,10 @@ class PrepareField(BaseModel):
     write: Optional[str] = None
     help: Optional[str] = None
     default: Optional[Any] = None
+    non_interactive_default: Optional[Any] = None
+    non_interactive: bool = True
+    required: bool = False
+    normalize: Optional[Literal["github_issue"]] = None
     choices: List[PrepareFieldChoice] = Field(default_factory=list)
     show_when: Optional[ShowWhen] = None
     group: Optional[str] = None
@@ -95,11 +99,8 @@ class PrepareField(BaseModel):
     def _validate_write(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value
-        if value not in ALLOWED_WRITE_TARGETS and not STEP_TEMPLATE_WRITE_PATTERN.fullmatch(value):
-            raise ValueError(
-                f"unknown write target {value!r}; "
-                f"must be one of {sorted(ALLOWED_WRITE_TARGETS)}"
-            )
+        if not WRITE_TARGET_PATTERN.fullmatch(value):
+            raise ValueError(f"invalid write target {value!r}; expected '<step>.<config-key>'")
         return value
 
     @model_validator(mode="after")
@@ -110,6 +111,25 @@ class PrepareField(BaseModel):
             raise ValueError(f"setup_mode field {self.id!r} must not declare write target")
         if self.type != "setup_mode" and self.write is None:
             raise ValueError(f"field {self.id!r} requires write target")
+        if self.type == "boolean":
+            for name, value in (
+                ("default", self.default),
+                ("non_interactive_default", self.non_interactive_default),
+            ):
+                if value is not None and not isinstance(value, bool):
+                    raise ValueError(f"field {self.id!r} {name} must be a boolean")
+        if self.type == "enum":
+            values = {choice.value for choice in self.choices}
+            for name, value in (
+                ("default", self.default),
+                ("non_interactive_default", self.non_interactive_default),
+            ):
+                if value is not None and value not in values:
+                    raise ValueError(
+                        f"field {self.id!r} {name} {value!r} is not one of its choices"
+                    )
+        if self.normalize == "github_issue" and self.write != "spec.issue_id":
+            raise ValueError(f"field {self.id!r} github_issue normalization requires spec.issue_id")
         return self
 
 
@@ -175,9 +195,7 @@ def _validate_relative_path(path: str, *, field_name: str) -> Path:
         raise ValueError(f"{field_name} must not reference scripts/")
     suffix = candidate.suffix.lower()
     if suffix not in ALLOWED_STATIC_SUFFIXES:
-        raise ValueError(
-            f"{field_name} must use one of {sorted(ALLOWED_STATIC_SUFFIXES)}"
-        )
+        raise ValueError(f"{field_name} must use one of {sorted(ALLOWED_STATIC_SUFFIXES)}")
     return candidate
 
 
@@ -282,6 +300,7 @@ def validate_field_semantics(
     spec_manager: TemplateManager,
     plan_manager: TemplateManager,
     template_managers: Optional[Dict[str, TemplateManager]] = None,
+    step_names: Optional[set[str]] = None,
     enforce_legacy_setup_modes: bool = True,
 ) -> None:
     """Apply semantic validation to loaded prepare fields."""
@@ -293,6 +312,11 @@ def validate_field_semantics(
             raise ValueError(f"duplicate prepare field id {field.id!r}")
         seen_ids.add(field.id)
         validate_show_when(field.show_when, field_id=field.id)
+
+        if field.write is not None:
+            section, _key = field.write.split(".", 1)
+            if field.write not in ALLOWED_WRITE_TARGETS and section not in (step_names or set()):
+                raise ValueError(f"field {field.id!r} targets undeclared workflow step {section!r}")
 
         if field.type == "template" and field.default is not None:
             step_name = field.write.split(".", 1)[0] if field.write else "plan"
@@ -338,9 +362,7 @@ def _validate_template_default(
     if template_name == "auto":
         return
     if not manager.template_exists(template_name):
-        raise ValueError(
-            f"field {field.id!r} references unknown template {template_name!r}"
-        )
+        raise ValueError(f"field {field.id!r} references unknown template {template_name!r}")
 
 
 def _validate_rigor_value(
@@ -370,7 +392,9 @@ def _show_when_tuple(show_when: Optional[ShowWhen]) -> tuple[tuple[str, Any], ..
     return tuple(sorted(items, key=lambda item: item[0]))
 
 
-def _legacy_field_defaults(prepare: Any) -> Dict[tuple[Optional[str], tuple[tuple[str, Any], ...]], Any]:
+def _legacy_field_defaults(
+    prepare: Any,
+) -> Dict[tuple[Optional[str], tuple[tuple[str, Any], ...]], Any]:
     quick = prepare.quick_setup
     defaults: Dict[tuple[Optional[str], tuple[tuple[str, Any], ...]], Any] = {
         ("spec.rigor", (("setup_mode", "quick"),)): quick.spec.rigor,
@@ -410,7 +434,9 @@ def _legacy_field_defaults(prepare: Any) -> Dict[tuple[Optional[str], tuple[tupl
     return defaults
 
 
-def _fields_default_map(fields: List[PrepareField]) -> Dict[tuple[Optional[str], tuple[tuple[str, Any], ...]], Any]:
+def _fields_default_map(
+    fields: List[PrepareField],
+) -> Dict[tuple[Optional[str], tuple[tuple[str, Any], ...]], Any]:
     mapping: Dict[tuple[Optional[str], tuple[tuple[str, Any], ...]], Any] = {}
     for field in fields:
         if field.type == "setup_mode" or field.write is None:
@@ -487,9 +513,7 @@ def assert_prepare_semantics_match(
         "constraints",
     ):
         if legacy_semantics[key] != fields_semantics[key]:
-            raise ValueError(
-                f"commands.prepare.fields disagree with legacy metadata for {key!r}"
-            )
+            raise ValueError(f"commands.prepare.fields disagree with legacy metadata for {key!r}")
 
     for key, expected in legacy_semantics["defaults"].items():
         actual = fields_semantics["defaults"].get(key)

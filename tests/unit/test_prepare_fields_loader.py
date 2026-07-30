@@ -37,8 +37,8 @@ def test_prepare_field_schema_parses_valid_definition() -> None:
     assert fields[0].write == "spec.rigor"
 
 
-def test_prepare_field_schema_rejects_unknown_write_target() -> None:
-    invalid = dict(MINIMAL_FIELD, write="spec.unknown")
+def test_prepare_field_schema_rejects_malformed_write_target() -> None:
+    invalid = dict(MINIMAL_FIELD, write="spec")
     with pytest.raises(ValidationError):
         parse_prepare_fields([invalid])
 
@@ -62,6 +62,16 @@ def test_prepare_field_schema_accepts_declared_custom_step_template_target() -> 
     parsed = parse_prepare_fields([field])
 
     assert parsed[0].write == "synthesis.template"
+
+
+def test_prepare_field_schema_rejects_invalid_declared_defaults_and_normalizer() -> None:
+    invalid_enum_default = dict(MINIMAL_FIELD, default="unexpected")
+    invalid_normalizer = dict(MINIMAL_FIELD, normalize="github_issue")
+
+    with pytest.raises(ValidationError):
+        parse_prepare_fields([invalid_enum_default])
+    with pytest.raises(ValidationError):
+        parse_prepare_fields([invalid_normalizer])
 
 
 def _write_skill(root: Path, name: str) -> None:
@@ -175,7 +185,9 @@ def test_skill_loader_precedence_for_fields_ref(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    project_asset = project_root / ".cafe" / "skills" / "cafe-spec" / "assets" / "prepare" / "fields.yaml"
+    project_asset = (
+        project_root / ".cafe" / "skills" / "cafe-spec" / "assets" / "prepare" / "fields.yaml"
+    )
     project_asset.parent.mkdir(parents=True)
     project_asset.write_text(
         yaml.safe_dump({"fields": [dict(MINIMAL_FIELD, default="high")]}),

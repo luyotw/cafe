@@ -488,6 +488,8 @@ def validate_playbook(
         model,
         skill_loader=skill_loader,
         playbook_path=path,
+        source=source,
+        warnings=warnings,
     )
 
     if warnings and strict:
@@ -500,54 +502,75 @@ def _validate_prepare_metadata(
     *,
     skill_loader: SkillLoader,
     playbook_path: Path,
+    source: str,
+    warnings: List[str],
 ) -> None:
     """Validate prepare metadata templates, rigor constraints, and declarative fields."""
     prepare = resolve_prepare_config(model)
+    declared_prepare = model.commands.prepare if model.commands else None
     spec_manager = TemplateManager(template_type="spec")
     plan_manager = TemplateManager(template_type="plan")
     template_managers = declared_template_managers(model, skill_loader)
-
-    _validate_prepare_template(
-        spec_manager,
-        prepare.quick_setup.spec.template,
-        "commands.prepare.quick_setup.spec.template",
-    )
-    _validate_prepare_template(
-        plan_manager,
-        prepare.quick_setup.plan.template,
-        "commands.prepare.quick_setup.plan.template",
-    )
-    _validate_prepare_template(
-        spec_manager,
-        prepare.non_interactive_defaults.spec_template,
-        "commands.prepare.non_interactive_defaults.spec_template",
-    )
-    _validate_prepare_template(
-        plan_manager,
-        prepare.non_interactive_defaults.plan_template,
-        "commands.prepare.non_interactive_defaults.plan_template",
-    )
-
-    allowed_rigor = set(prepare.constraints.rigor)
-    if prepare.quick_setup.spec.rigor not in allowed_rigor:
-        raise ValueError(
-            "commands.prepare.quick_setup.spec.rigor "
-            f"{prepare.quick_setup.spec.rigor!r} is not listed in "
-            f"commands.prepare.constraints.rigor"
-        )
-    if prepare.non_interactive_defaults.rigor not in allowed_rigor:
-        raise ValueError(
-            "commands.prepare.non_interactive_defaults.rigor "
-            f"{prepare.non_interactive_defaults.rigor!r} is not listed in "
-            f"commands.prepare.constraints.rigor"
-        )
 
     parsed_fields = resolve_prepare_fields(
         prepare,
         playbook_path=playbook_path,
         skill_loader=skill_loader,
     )
+
     if parsed_fields is None:
+        if (
+            source == "builtin"
+            and declared_prepare is not None
+            and prepare.prompt_for_spec_plan_config
+        ):
+            raise ValueError(
+                "bundled interactive prepare requires commands.prepare.fields or "
+                "commands.prepare.fields_ref"
+            )
+        if source in {"project", "global"} and (
+            declared_prepare is None or prepare.prompt_for_spec_plan_config
+        ):
+            warnings.append(
+                "Legacy interactive prepare is deprecated; migrate to "
+                "commands.prepare.fields or commands.prepare.fields_ref."
+            )
+
+    if parsed_fields is None:
+        _validate_prepare_template(
+            spec_manager,
+            prepare.quick_setup.spec.template,
+            "commands.prepare.quick_setup.spec.template",
+        )
+        _validate_prepare_template(
+            plan_manager,
+            prepare.quick_setup.plan.template,
+            "commands.prepare.quick_setup.plan.template",
+        )
+        _validate_prepare_template(
+            spec_manager,
+            prepare.non_interactive_defaults.spec_template,
+            "commands.prepare.non_interactive_defaults.spec_template",
+        )
+        _validate_prepare_template(
+            plan_manager,
+            prepare.non_interactive_defaults.plan_template,
+            "commands.prepare.non_interactive_defaults.plan_template",
+        )
+
+        allowed_rigor = set(prepare.constraints.rigor)
+        if prepare.quick_setup.spec.rigor not in allowed_rigor:
+            raise ValueError(
+                "commands.prepare.quick_setup.spec.rigor "
+                f"{prepare.quick_setup.spec.rigor!r} is not listed in "
+                f"commands.prepare.constraints.rigor"
+            )
+        if prepare.non_interactive_defaults.rigor not in allowed_rigor:
+            raise ValueError(
+                "commands.prepare.non_interactive_defaults.rigor "
+                f"{prepare.non_interactive_defaults.rigor!r} is not listed in "
+                f"commands.prepare.constraints.rigor"
+            )
         return
 
     has_explicit_legacy_prepare_metadata = bool(
@@ -559,6 +582,7 @@ def _validate_prepare_metadata(
         spec_manager=spec_manager,
         plan_manager=plan_manager,
         template_managers=template_managers,
+        step_names=set(model.steps),
         enforce_legacy_setup_modes=has_explicit_legacy_prepare_metadata,
     )
 
