@@ -104,8 +104,38 @@ artifacts.
 | `hooks` | Runtime-supported prepare/execute/publish hooks only |
 | `allowed_goto` | Explicit non-default routes; do not use as the happy path |
 | `"on"` | Complete intent-key → step transition map |
+| `human_tasks` | Explicit user-task bindings for user-facing handoff triggers |
 
 Quote `"on"`; unquoted YAML 1.1 may parse it as a boolean before normalization.
+
+### Human-task bindings
+
+`human_tasks` makes a user handoff explicit.  A binding selects a policy declared
+by the step's selected skill and maps each accepted outcome to a playbook step:
+
+```yaml
+human_tasks:
+  - trigger: confirm_output
+    task_id: output-review
+    outcomes: {confirm: execute_work, revise: plan_work}
+```
+
+- Supported policy patterns are `confirm_output`, `answer_questions`,
+  `revision_feedback`, `no_changes_needed`, and `select_next_step`.
+- Bind every user-facing `confirm_output`, `need_clarification`, or
+  `no_changes_needed` pause. `initial` is available for an optional first-run
+  input task and does not require an `"on"` entry.
+- A binding must name exactly one policy supplied by the selected skill. Its
+  non-terminal outcome targets must be existing playbook steps; use `_done` only
+  for a declared terminal outcome.
+- Do not put prompts, decision labels, questions, or validation rules in the
+  playbook. Those belong to the skill policy. A binding may only override prompt
+  or correction copy and constrain allowed targets.
+- CLI `--user-input` supplies the same payload as the interactive UI: JSON
+  objects using `task` plus `decision`, `answers`, `feedback`, or `target` as
+  required by the selected policy. Plain text is accepted only for a feedback
+  policy. Invalid payloads keep the workflow paused and display the policy's
+  correction guidance.
 
 ## 4. Outcome To Transition Mapping
 
@@ -246,6 +276,8 @@ assert steps["bridge"]["output_artifact"] == "plan"
 - [ ] Every role and `chat_role` is declared.
 - [ ] Every step is reachable from `entry_point`.
 - [ ] Every declared intent has an `"on"` handler.
+- [ ] Every user-facing pause has a matching `human_tasks` binding and a policy
+      in the selected skill.
 - [ ] Every normal path reaches `_done` or an intentional user pause.
 - [ ] Plan producers output `plan`; execute consumers input `plan` and read `{plan_file}`.
 - [ ] Serial bridges distinguish incoming `{plan_file}` from next `{output_file}`.

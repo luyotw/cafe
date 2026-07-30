@@ -1,8 +1,13 @@
 ---
 name: cafe-review
 description: "審查程式碼品質與風險"
-version: 1.0.1
+version: 1.0.2
 workflow:
+  human_tasks:
+    - id: clarification-feedback
+      pattern: revision_feedback
+      prompt: Provide the clarification needed to continue the review.
+      input_schema: feedback
   prompt_inputs:
     - artifacts: [spec]
       placeholder: spec_file

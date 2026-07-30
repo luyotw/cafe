@@ -1,7 +1,13 @@
 ---
 name: cafe-draft
 description: 依核定大綱撰寫初稿
-version: 1.0.0
+version: 1.0.1
+workflow:
+  human_tasks:
+    - id: clarification-feedback
+      pattern: revision_feedback
+      prompt: Provide the clarification needed to continue drafting.
+      input_schema: feedback
 ---
 
 # Draft Article

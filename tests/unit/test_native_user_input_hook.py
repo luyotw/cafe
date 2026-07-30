@@ -12,8 +12,8 @@ from cafe.core.hooks.native import (
     PRLinkOpener,
     UserInputCollector,
 )
-from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.workflow_models import StepExecutionResult
 from cafe.phases.generic_phase import GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 
@@ -398,24 +398,25 @@ def test_user_input_collector_prompts_initial_plan_user_input_on_first_iteration
     hook = UserInputCollector()
 
     with patch(
-        "cafe.core.hooks.native.prompt_multiline", return_value="Follow strict TDD first"
+        "cafe.ui.inquirer_prompts.prompt_multiline", return_value="Follow strict TDD first"
     ) as mock_prompt:
         result = hook.run(
             stage="prepare_input",
             phase=phase,
             step_name="plan",
-            step_def={"role": "developer"},
+            step_def={
+                "role": "developer",
+                "skill": "cafe-plan",
+                "human_tasks": [{"trigger": "initial", "task_id": "development-guide"}],
+            },
             agent_name="David",
         )
 
     assert result.context_updates["user_input"] == "Follow strict TDD first"
-    assert result.events == [
-        {"type": "user_input_collected", "step": "plan", "source": "initial_prompt"}
-    ]
+    assert result.events[0]["type"] == "human_task_completed"
     assert phase.step_user_inputs["plan"] == "Follow strict TDD first"
     prompt_text = mock_prompt.call_args.args[0]
-    assert "Suggested content:" in prompt_text
-    assert "Technical solution/direction" in prompt_text
+    assert prompt_text == "Please enter development guide (can be left empty)"
 
 
 def test_user_input_collector_skips_initial_plan_prompt_in_noninteractive_mode(
@@ -427,19 +428,21 @@ def test_user_input_collector_skips_initial_plan_prompt_in_noninteractive_mode(
     phase.interactive = False
     hook = UserInputCollector()
 
-    with patch("cafe.core.hooks.native.prompt_multiline") as mock_prompt:
+    with patch("cafe.ui.inquirer_prompts.prompt_multiline") as mock_prompt:
         result = hook.run(
             stage="prepare_input",
             phase=phase,
             step_name="plan",
-            step_def={"role": "developer"},
+            step_def={
+                "role": "developer",
+                "skill": "cafe-plan",
+                "human_tasks": [{"trigger": "initial", "task_id": "development-guide"}],
+            },
             agent_name="David",
         )
 
     assert result.context_updates["user_input"] == ""
-    assert result.events == [
-        {"type": "user_input_collected", "step": "plan", "source": "initial_prompt"}
-    ]
+    assert result.events[0]["type"] == "human_task_completed"
     assert phase.step_user_inputs["plan"] == ""
     mock_prompt.assert_not_called()
 

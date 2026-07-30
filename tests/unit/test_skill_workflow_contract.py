@@ -59,6 +59,32 @@ def test_workflow_contract_parses_declared_inputs_checklists_and_templates() -> 
     assert contract.output_templates.catalog == "research-report"
 
 
+def test_workflow_contract_parses_reusable_human_task_defaults() -> None:
+    """Skills may own reusable response shape and participant-facing copy."""
+    contract = SkillWorkflowContract.model_validate(
+        {
+            "human_tasks": [
+                {
+                    "id": "review-output",
+                    "pattern": "confirm_output",
+                    "prompt": "Review the proposed brief",
+                    "input_schema": "decision",
+                    "decisions": [
+                        {"id": "confirm", "label": "Approve"},
+                        {
+                            "id": "revise",
+                            "label": "Request revision",
+                            "requires_feedback": True,
+                        },
+                    ],
+                }
+            ]
+        }
+    )
+
+    assert contract.human_tasks[0].id == "review-output"
+
+
 @pytest.mark.parametrize(
     "placeholder",
     ["output_file", "checklist_file", "questions_xml_file", "next_step_path"],

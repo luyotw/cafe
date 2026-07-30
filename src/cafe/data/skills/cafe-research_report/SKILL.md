@@ -1,7 +1,13 @@
 ---
 name: cafe-research_report
 description: 產出研究報告（非軟體研究流程）
-version: 1.0.0
+version: 1.0.1
+workflow:
+  human_tasks:
+    - id: clarification-feedback
+      pattern: revision_feedback
+      prompt: Provide the clarification needed to complete the report.
+      input_schema: feedback
 ---
 
 # Research Report

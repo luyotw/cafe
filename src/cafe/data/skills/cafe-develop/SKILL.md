@@ -1,8 +1,23 @@
 ---
 name: cafe-develop
 description: "依計畫進行程式開發與測試"
-version: 1.3.0
+version: 1.4.0
 workflow:
+  human_tasks:
+    - id: no-change-decision
+      pattern: no_changes_needed
+      prompt: Review the implementation reasoning and choose how to continue.
+      input_schema: decision
+      decisions:
+        - id: agree
+          label: Agree that no further changes are needed
+        - id: disagree
+          label: Request further changes
+          requires_feedback: true
+    - id: clarification-feedback
+      pattern: revision_feedback
+      prompt: Provide the clarification or implementation feedback needed to continue.
+      input_schema: feedback
   prompt_inputs:
     - artifacts: [spec]
       placeholder: spec_file

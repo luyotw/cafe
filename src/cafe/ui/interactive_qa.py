@@ -153,6 +153,33 @@ def interactive_qa_flow(
     return _format_answers(questions, answers)
 
 
+def interactive_qa_answers(
+    questions: list[Question],
+    role: Optional[str] = None,
+    issue_name: Optional[str] = None,
+    agent_name: Optional[str] = None,
+    after_chat: Optional[Callable[[], list[Question] | None]] = None,
+) -> dict[str, str]:
+    """Collect the existing interactive flow and expose its answers by question id."""
+    formatted = interactive_qa_flow(
+        questions,
+        role=role,
+        issue_name=issue_name,
+        agent_name=agent_name,
+        after_chat=after_chat,
+    )
+    answers: dict[str, str] = {}
+    for index, question in enumerate(questions, start=1):
+        marker = f"A{index}: "
+        start = formatted.find(marker)
+        if start < 0:
+            continue
+        value_start = start + len(marker)
+        next_question = formatted.find(f"\n\nQ{index + 1}: ", value_start)
+        answers[question.id] = formatted[value_start:next_question if next_question >= 0 else None]
+    return answers
+
+
 def _ask_select(
     question: Question,
     idx: int,

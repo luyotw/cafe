@@ -925,19 +925,6 @@ def _handle_user_phase(
     handoff_intent = getattr(contract, "intent", None) if contract else None
     from_step = getattr(contract, "from_step", None) if contract else None
 
-    if handoff_intent == HandoffIntent.CONFIRM_OUTPUT and from_step in playbook_data.get(
-        "steps", {}
-    ):
-        return _handle_review_confirmation(
-            issue_name=issue_name,
-            issue_dir=issue_dir,
-            playbook_data=playbook_data,
-            blackboard=blackboard,
-            store=store,
-            from_step=from_step,
-            summary=summary,
-        )
-
     if handoff_intent == HandoffIntent.ALIGNMENT_CHECKPOINT and from_step in playbook_data.get(
         "steps", {}
     ):
@@ -951,27 +938,19 @@ def _handle_user_phase(
             summary=summary,
         )
 
-    if handoff_intent == HandoffIntent.NEED_CLARIFICATION and from_step in playbook_data.get(
-        "steps", {}
-    ):
-        return _handle_clarification_handoff(
+    if handoff_intent in {
+        HandoffIntent.CONFIRM_OUTPUT,
+        HandoffIntent.NEED_CLARIFICATION,
+        HandoffIntent.NO_CHANGES_NEEDED,
+    } and from_step in playbook_data.get("steps", {}):
+        return _handle_declared_human_task_handoff(
             issue_name=issue_name,
             issue_dir=issue_dir,
-            playbook_data=playbook_data,
             blackboard=blackboard,
-            store=store,
-            from_step=from_step,
-            summary=summary,
-        )
-
-    if handoff_intent == HandoffIntent.NO_CHANGES_NEEDED and from_step == "develop":
-        return _handle_develop_no_changes_needed_handoff(
-            issue_dir=issue_dir,
-            blackboard=blackboard,
-            store=store,
             from_step=from_step,
             summary=summary,
             playbook_data=playbook_data,
+            trigger=handoff_intent.value,
         )
 
     # Default generic user-phase menu
@@ -985,44 +964,103 @@ def _handle_user_phase(
     )
 
 
-def _handle_develop_no_changes_needed_handoff(
+def _handle_declared_human_task_handoff(
     *,
+    issue_name: str,
     issue_dir: Path,
     blackboard,
-    store: BlackboardStore,
     from_step: str,
     summary: str,
     playbook_data: Dict[str, Any],
+    trigger: str,
 ) -> Optional[str]:
-    """Route develop no_changes_needed pauses back to develop's input collector."""
-    if from_step not in playbook_data.get("steps", {}):
-        return None
+    """Render and apply any step-declared human task through one shared path."""
+    from cafe.core.human_tasks import HumanTaskPolicyError
+    from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
+    from cafe.ui.human_tasks import (
+        apply_human_task_payload,
+        collect_human_task_payload,
+        latest_step_iteration,
+        resolve_step_human_task,
+    )
 
-    console.print(f"[yellow]No changes confirmation requested[/yellow] step={from_step}")
     if summary:
         console.print(f"[dim]{summary}[/dim]")
+    try:
+        policy, _binding = resolve_step_human_task(
+            playbook_data=playbook_data,
+            step_name=from_step,
+            trigger=trigger,
+            iteration=latest_step_iteration(issue_dir=issue_dir, step_name=from_step),
+        )
+    except HumanTaskPolicyError:
+        result = apply_human_task_payload(
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+            from_step=from_step,
+            trigger=trigger,
+            raw_payload={},
+            source="interactive",
+        )
+        console.print(f"[red]{result.rejection.message}[/red]")
+        return None
 
-    # The migrated agree/disagree/chat flow lives in UserInputCollector for the
-    # next develop iteration.  Resume develop directly so users do not have to
-    # manually pick it from the generic user menu first.
-    store.set_current_step(blackboard, from_step)
-    store.set_handoff_summary(blackboard, f"Resuming {from_step} to resolve no_changes_needed")
-    store.update_handoff_contract(
-        blackboard,
+    if policy.pattern in {"confirm_output", "no_changes_needed"}:
+        output_files = sorted((issue_dir / from_step).glob("iteration_*/output.md"))
+        if output_files:
+            _print_output_file(output_files[-1])
+    questions = None
+    if policy.questions_from_xml:
+        iteration_dirs = sorted((issue_dir / from_step).glob("iteration_*"))
+        questions_file = iteration_dirs[-1] / "questions.xml" if iteration_dirs else None
+        if questions_file is not None and questions_file.exists() and validate_questions_xml(questions_file):
+            questions = parse_questions_xml(questions_file)
+    payload = collect_human_task_payload(
+        policy,
+        questions=questions,
+        role=_resolve_step_chat_role(playbook_data, from_step),
+        issue_name=issue_name,
+        agent_name=_resolve_role_agent_name(
+            playbook_data, _resolve_step_chat_role(playbook_data, from_step)
+        ),
+    )
+    if isinstance(payload, dict) and payload.get("decision") == "chat":
+        from cafe.ui.cli import _consume_pending_chat_handoff, launch_chat_session
+
+        role = _resolve_step_chat_role(playbook_data, from_step)
+        launch_chat_session(role, issue_name)
+        target = _consume_pending_chat_handoff(
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            requested_start_step=None,
+        )
+        if target is not None:
+            return target
+        return _handle_declared_human_task_handoff(
+            issue_name=issue_name,
+            issue_dir=issue_dir,
+            blackboard=blackboard,
+            from_step=from_step,
+            summary=summary,
+            playbook_data=playbook_data,
+            trigger=trigger,
+        )
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook_data,
+        blackboard=blackboard,
         from_step=from_step,
-        to_owner=HandoffOwner.AGENT,
-        to_step=from_step,
-        intent=HandoffIntent.AWAIT_AGENT,
-        status_code="",
-        source="user.no_changes_needed_resume",
+        trigger=trigger,
+        raw_payload=payload or {},
+        source="interactive",
     )
-    store.record_event(
-        blackboard,
-        "no_changes_needed_resume",
-        {"step": from_step, "issue_dir": str(issue_dir)},
-    )
-    console.print(f"[green]Resuming[/green] {from_step}")
-    return from_step
+    if result.rejection is not None:
+        console.print(f"[yellow]{result.rejection.message}[/yellow]")
+        console.print(f"[dim]{result.rejection.correction_guidance}[/dim]")
+        return None
+    console.print(f"[green]Completed human task[/green] {policy.id} -> {result.target}")
+    return result.target
 
 
 def parse_alignment_decision_payload(user_input: Optional[str]) -> Optional[Dict[str, Any]]:

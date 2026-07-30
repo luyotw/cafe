@@ -393,6 +393,14 @@ def test_workflow_command_resume_user_input_targets_handoff_from_step(
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-plan"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    questions_dir = issue_dir / "plan" / "iteration_001"
+    questions_dir.mkdir(parents=True)
+    (questions_dir / "questions.xml").write_text(
+        """<questions>
+  <question id="scope"><title>Scope?</title><options><option>Include CSV export</option></options></question>
+</questions>""",
+        encoding="utf-8",
+    )
     store = BlackboardStore(issue_dir)
     blackboard = store.load_or_create("user", playbook_id="default")
     store.set_current_step(blackboard, "user")
@@ -429,18 +437,20 @@ def test_workflow_command_resume_user_input_targets_handoff_from_step(
                 "--playbook",
                 "default",
                 "--execute",
-                "--single-step",
-                "--user-input",
-                "Clarification: include CSV export in scope.",
+                    "--single-step",
+                    "--user-input",
+                    '{"task":"clarification-answers","answers":{"scope":"include CSV export in scope"}}',
             ],
         )
 
     assert result.exit_code == 0
     assert mock_builder.call_args.kwargs["step_user_inputs"] is None
-    resume_input = issue_dir / "plan" / "iteration_001" / "user_input.md"
-    assert resume_input.read_text(encoding="utf-8") == "Clarification: include CSV export in scope."
+    resume_input = issue_dir / "plan" / "iteration_002" / "user_input.md"
+    assert resume_input.read_text(encoding="utf-8") == "scope: include CSV export in scope"
     reloaded = store.load_or_create("spec", playbook_id="default")
-    assert "resuming plan" in (reloaded.handoff_summary or "").lower()
+    assert "completed human task clarification-answers for plan" in (
+        reloaded.handoff_summary or ""
+    ).lower()
     assert reloaded.current_step == "develop"
 
 
@@ -1253,15 +1263,13 @@ def test_workflow_command_resume_confirm_output_keeps_await_agent_intent(
                 "workflow",
                 "--playbook",
                 "default",
-                "--execute",
-                "--user-input",
-                "Approved with minor wording tweaks.",
+                    "--execute",
+                    "--user-input",
+                    '{"task":"output-review","decision":"confirm"}',
             ],
         )
 
     assert result.exit_code == 0
-    resume_input = issue_dir / "spec" / "iteration_001" / "user_input.md"
-    assert resume_input.read_text(encoding="utf-8") == "Approved with minor wording tweaks."
     reloaded = store.load_or_create("spec", playbook_id="default")
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
 
@@ -2019,11 +2027,19 @@ def test_confirm_output_chat_uses_playbook_chat_role(tmp_path: Path, monkeypatch
             "writer": {"default_agent": "David"},
         },
         "steps": {
-            "brief": {
-                "role": "editor",
-                "chat_role": "writer",
-                "on": {"await_agent": "draft", "confirm_output": "brief"},
-            },
+                "brief": {
+                    "role": "editor",
+                    "chat_role": "writer",
+                    "skill": "cafe-brief_first",
+                    "human_tasks": [
+                        {
+                            "trigger": "confirm_output",
+                            "task_id": "editorial-output-review",
+                            "outcomes": {"approve": "draft", "revise": "brief"},
+                        }
+                    ],
+                    "on": {"await_agent": "draft", "confirm_output": "brief"},
+                },
             "draft": {"role": "writer", "on": {"await_agent": "_done"}},
         },
     }
@@ -2067,18 +2083,26 @@ def test_brief_confirm_output_routes_to_review_confirmation(tmp_path: Path, monk
         "entry_point": "brief",
         "roles": {"editor": {"default_agent": "Roger"}},
         "steps": {
-            "brief": {
-                "role": "editor",
-                "on": {"confirm_output": "brief", "await_agent": "draft"},
-            },
+                "brief": {
+                    "role": "editor",
+                    "skill": "cafe-brief_first",
+                    "human_tasks": [
+                        {
+                            "trigger": "confirm_output",
+                            "task_id": "editorial-output-review",
+                            "outcomes": {"approve": "draft", "revise": "brief"},
+                        }
+                    ],
+                    "on": {"confirm_output": "brief", "await_agent": "draft"},
+                },
             "draft": {"role": "writer", "on": {"await_agent": "_done"}},
         },
     }
 
     with patch(
-        "cafe.ui.cli_shared._handle_review_confirmation",
-        return_value="draft",
-    ) as mock_confirm:
+        "cafe.ui.human_tasks.collect_human_task_payload",
+        return_value={"task": "editorial-output-review", "decision": "approve"},
+    ):
         result = _handle_user_phase(
             issue_name="editorial-confirm",
             issue_dir=issue_dir,
@@ -2087,7 +2111,6 @@ def test_brief_confirm_output_routes_to_review_confirmation(tmp_path: Path, monk
         )
 
     assert result == "draft"
-    mock_confirm.assert_called_once()
 
 
 def test_user_phase_no_changes_needed_resumes_develop_without_generic_menu(
@@ -2104,9 +2127,17 @@ def test_user_phase_no_changes_needed_resumes_develop_without_generic_menu(
         "playbook": {"id": "default"},
         "roles": {"developer": {"default_agent": "David"}},
         "steps": {
-            "develop": {
-                "role": "developer",
-                "on": {
+                "develop": {
+                    "role": "developer",
+                    "skill": "cafe-develop",
+                    "human_tasks": [
+                        {
+                            "trigger": "no_changes_needed",
+                            "task_id": "no-change-decision",
+                            "outcomes": {"agree": "review", "disagree": "develop"},
+                        }
+                    ],
+                    "on": {
                     "await_agent": "review",
                     "manual_handoff": "pr",
                     "no_changes_needed": "develop",
@@ -2129,7 +2160,13 @@ def test_user_phase_no_changes_needed_resumes_develop_without_generic_menu(
         source="test",
     )
 
-    with patch("cafe.ui.cli_shared._handle_user_phase_generic") as mock_generic:
+    with (
+        patch("cafe.ui.cli_shared._handle_user_phase_generic") as mock_generic,
+        patch(
+            "cafe.ui.human_tasks.collect_human_task_payload",
+            return_value={"task": "no-change-decision", "decision": "agree"},
+        ),
+    ):
         result = _handle_user_phase(
             issue_name="issue-no-changes",
             issue_dir=issue_dir,
@@ -2137,15 +2174,15 @@ def test_user_phase_no_changes_needed_resumes_develop_without_generic_menu(
             blackboard=blackboard,
         )
 
-    assert result == "develop"
+    assert result == "review"
     mock_generic.assert_not_called()
     reloaded = store.load_or_create("develop", playbook_id="default")
-    assert reloaded.current_step == "develop"
+    assert reloaded.current_step == "review"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
-    assert reloaded.handoff_contract.to_step == "develop"
+    assert reloaded.handoff_contract.to_step == "review"
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
-    assert any(event.event_type == "no_changes_needed_resume" for event in reloaded.events)
+    assert any(event.event_type == "human_task_completed" for event in reloaded.events)
 
 
 def test_workflow_command_user_owner_can_complete_workflow(tmp_path: Path, monkeypatch) -> None:
@@ -2397,6 +2434,14 @@ def test_user_phase_need_clarification_collects_questions_and_resumes_step(
         "steps": {
             "spec": {
                 "role": "pm",
+                "skill": "cafe-spec",
+                "human_tasks": [
+                    {
+                        "trigger": "need_clarification",
+                        "task_id": "clarification-answers",
+                        "outcomes": {"submit": "spec"},
+                    }
+                ],
                 "on": {"need_clarification": "spec", "await_agent": "plan"},
             },
             "plan": {"role": "developer", "on": {}},
@@ -2415,29 +2460,10 @@ def test_user_phase_need_clarification_collects_questions_and_resumes_step(
         source="test",
     )
 
-    def fake_interactive_qa(questions, **kwargs):
-        assert questions[0].title == "Confirm scope?"
-        (spec_iter_dir / "output.md").write_text(
-            "# Updated Spec Draft\n\nUpdated after chat.", encoding="utf-8"
-        )
-        (spec_iter_dir / "questions.xml").write_text(
-            """<?xml version="1.0" encoding="UTF-8"?>
-<questions>
-  <question id="2">
-    <title>Updated scope?</title>
-    <options>
-      <option>All roles</option>
-    </options>
-  </question>
-</questions>
-""",
-            encoding="utf-8",
-        )
-        refreshed = kwargs["after_chat"]()
-        assert refreshed[0].title == "Updated scope?"
-        return "Q1: Updated scope?\nA1: All roles"
-
-    with patch("cafe.ui.interactive_qa.interactive_qa_flow", side_effect=fake_interactive_qa):
+    with patch(
+        "cafe.ui.human_tasks.collect_human_task_payload",
+        return_value={"task": "clarification-answers", "answers": {"1": "All roles"}},
+    ):
         result = _handle_user_phase(
             issue_name="issue-clarification",
             issue_dir=issue_dir,
@@ -2447,10 +2473,9 @@ def test_user_phase_need_clarification_collects_questions_and_resumes_step(
 
     assert result == "spec"
     output = capsys.readouterr().out
-    assert "# Spec Draft" in output
-    assert "# Updated Spec Draft" in output
+    assert "Completed human task clarification-answers -> spec" in output
     next_input = issue_dir / "spec" / "iteration_002" / "user_input.md"
-    assert next_input.read_text(encoding="utf-8") == "Q1: Updated scope?\nA1: All roles"
+    assert next_input.read_text(encoding="utf-8") == "1: All roles"
     reloaded = store.load_or_create("spec", playbook_id="default")
     assert reloaded.current_step == "spec"
     assert reloaded.handoff_contract is not None
@@ -2458,7 +2483,7 @@ def test_user_phase_need_clarification_collects_questions_and_resumes_step(
     assert reloaded.handoff_contract.to_step == "spec"
 
 
-def test_user_phase_question_need_clarification_resumes_question_step(
+def test_user_phase_question_need_clarification_requires_declared_policy(
     tmp_path: Path, capsys
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-research-clarify"
@@ -2504,23 +2529,19 @@ def test_user_phase_question_need_clarification_resumes_question_step(
         source="test",
     )
 
-    with patch(
-        "cafe.ui.interactive_qa.interactive_qa_flow",
-        return_value="Q1: Primary source?\nA1: Academic papers",
-    ):
-        result = _handle_user_phase(
-            issue_name="issue-research-clarify",
-            issue_dir=issue_dir,
-            playbook_data=playbook_data,
-            blackboard=blackboard,
-        )
+    result = _handle_user_phase(
+        issue_name="issue-research-clarify",
+        issue_dir=issue_dir,
+        playbook_data=playbook_data,
+        blackboard=blackboard,
+    )
 
-    assert result == "question"
-    next_input = issue_dir / "question" / "iteration_002" / "user_input.md"
-    assert next_input.read_text(encoding="utf-8") == "Q1: Primary source?\nA1: Academic papers"
+    assert result is None
+    assert not (issue_dir / "question" / "iteration_002" / "user_input.md").exists()
     reloaded = store.load_or_create("question", playbook_id="research")
-    assert reloaded.current_step == "question"
-    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
+    assert reloaded.current_step == "user"
+    assert reloaded.handoff_contract.intent == HandoffIntent.NEED_CLARIFICATION
+    assert reloaded.events[-1].event_type == "human_task_configuration_error"
 
 
 def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkeypatch) -> None:

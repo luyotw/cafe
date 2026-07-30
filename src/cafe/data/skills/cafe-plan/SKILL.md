@@ -1,8 +1,29 @@
 ---
 name: cafe-plan
 description: "產出可執行的開發計畫"
-version: 1.0.0
+version: 1.0.1
 workflow:
+  human_tasks:
+    - id: development-guide
+      pattern: revision_feedback
+      prompt: "Please enter development guide (can be left empty)"
+      input_schema: feedback
+      required: false
+    - id: output-review
+      pattern: confirm_output
+      prompt: Review the implementation plan and choose how to continue.
+      input_schema: decision
+      decisions:
+        - id: confirm
+          label: Confirm and continue
+        - id: revise
+          label: Request revision
+          requires_feedback: true
+    - id: clarification-answers
+      pattern: answer_questions
+      prompt: Answer the requested clarification questions.
+      input_schema: answers
+      questions_from_xml: true
   prompt_inputs:
     - artifacts: [spec]
       placeholder: spec_file

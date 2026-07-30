@@ -1,7 +1,13 @@
 ---
 name: cafe-incident_detect
 description: 偵測與通報事件徵兆（維運應變流程）
-version: 1.0.0
+version: 1.0.1
+workflow:
+  human_tasks:
+    - id: clarification-feedback
+      pattern: revision_feedback
+      prompt: Provide the incident details needed to continue detection.
+      input_schema: feedback
 ---
 
 # Incident Detect

@@ -1,8 +1,24 @@
 ---
 name: cafe-spec
 description: "收集、整理或修訂需求規格（依 iteration 切換行為）"
-version: 1.0.0
+version: 1.0.1
 workflow:
+  human_tasks:
+    - id: output-review
+      pattern: confirm_output
+      prompt: Review the requirements specification and choose how to continue.
+      input_schema: decision
+      decisions:
+        - id: confirm
+          label: Confirm and continue
+        - id: revise
+          label: Request revision
+          requires_feedback: true
+    - id: clarification-answers
+      pattern: answer_questions
+      prompt: Answer the requested clarification questions.
+      input_schema: answers
+      questions_from_xml: true
   checklist:
     context_references:
       xml_questions_instruction: xml_questions_instruction.md

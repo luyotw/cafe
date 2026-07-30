@@ -416,7 +416,8 @@ class GenericWorkflowStepExecutor(Phase):
             if content.strip():
                 return content
 
-        if step_name == "plan" and self.iteration == 1:
+        step_def = self.playbook.get("steps", {}).get(step_name, {})
+        if self.iteration == 1 and self._declared_human_task_id(step_def, "initial"):
             return ""
         return "workflow execute"
 
@@ -1085,6 +1086,21 @@ class GenericWorkflowStepExecutor(Phase):
             return "no_changes_needed"
         return None
 
+    @staticmethod
+    def _declared_human_task_id(step_def: Dict[str, Any], trigger: str) -> Optional[str]:
+        """Return the task id selected by a step without inferring its name."""
+        raw_tasks = step_def.get("human_tasks")
+        if not isinstance(raw_tasks, (list, tuple)):
+            return None
+        matches = [
+            item.get("task_id")
+            for item in raw_tasks
+            if isinstance(item, dict) and item.get("trigger") == trigger
+        ]
+        if len(matches) != 1 or not isinstance(matches[0], str) or not matches[0].strip():
+            return None
+        return matches[0].strip()
+
     def _agent_wrote_baton(self, step_name: str) -> bool:
         """Check whether the agent already wrote a valid baton (next_step.txt).
 
@@ -1132,10 +1148,12 @@ class GenericWorkflowStepExecutor(Phase):
             return
 
         store = BlackboardStore(self.issue_dir)
+        task_id = self._declared_human_task_id(
+            step_def, self._resolve_handoff_intent(step_def, status_code) or ""
+        )
 
         if status_code == PhaseStatusCode.NO_CHANGES_NEEDED:
-            if self.interactive:
-                # Interactive: always pause so UserInputCollector can show agree/disagree/chat.
+            if task_id or self.interactive:
                 store.update_handoff_contract(
                     blackboard_state,
                     from_step=step_name,
@@ -1145,6 +1163,16 @@ class GenericWorkflowStepExecutor(Phase):
                     status_code=status_code.value,
                     source="workflow.status_transition_adapter",
                 )
+                if task_id:
+                    store.record_event(
+                        blackboard_state,
+                        "human_task_requested",
+                        {
+                            "step": step_name,
+                            "trigger": "no_changes_needed",
+                            "task_id": task_id,
+                        },
+                    )
             else:
                 # Non-interactive: follow playbook on.no_changes_needed routing.
                 target = step_def.get("on", {}).get("no_changes_needed")
@@ -1188,6 +1216,26 @@ class GenericWorkflowStepExecutor(Phase):
                 status_code=status_code.value,
                 source="workflow.status_transition_adapter",
             )
+            if task_id:
+                store.record_event(
+                    blackboard_state,
+                    "human_task_requested",
+                    {
+                        "step": step_name,
+                        "trigger": raw_intent,
+                        "task_id": task_id,
+                    },
+                )
+            elif raw_intent in {"confirm_output", "need_clarification"}:
+                store.record_event(
+                    blackboard_state,
+                    "human_task_configuration_error",
+                    {
+                        "step": step_name,
+                        "trigger": raw_intent,
+                        "reason": "No declared human-task policy matches this handoff.",
+                    },
+                )
             return
 
         next_step = self._resolve_next_step_for_status(

@@ -77,6 +77,42 @@ workflow:
     catalog: research-report
 ```
 
+### Human-task policy contract
+
+When a phase may pause for a person, declare its reusable policy under
+`workflow.human_tasks`; the playbook then binds that policy to a trigger and
+declares the allowed continuations. The skill owns wording and input validation,
+while the playbook owns routing. Runtime state, files, and baton mutation remain
+runtime-owned.
+
+```yaml
+workflow:
+  human_tasks:
+    - id: output-review
+      pattern: confirm_output
+      prompt: Review the result and choose how to continue.
+      input_schema: decision
+      decisions:
+        - id: confirm
+          label: Confirm and continue
+        - id: revise
+          label: Request revision
+          requires_feedback: true
+```
+
+- The valid patterns and matching schemas are: `confirm_output` → `decision`,
+  `answer_questions` → `answers`, `revision_feedback` → `feedback`,
+  `no_changes_needed` → `decision`, and `select_next_step` → `target`.
+- Decision policies declare every choice; `requires_feedback: true` makes the
+  feedback field mandatory for that choice. Answer policies use inline questions
+  or `questions_from_xml: true`; target policies declare `allowed_targets`.
+- `required: false` is only for optional feedback. Use `correction_guidance` for
+  the actionable message shown after invalid interactive or command input.
+- Keep policy identifiers stable. Do not duplicate a policy's wording or input
+  rules in a playbook, hook, or CLI branch. If a matching policy/binding is
+  absent, the workflow remains paused and records a configuration error rather
+  than guessing a continuation.
+
 - `prompt_inputs` are resolved in listed candidate order. Required inputs stop
   before agent invocation with the placeholder and candidates named; absent
   optional inputs are omitted.

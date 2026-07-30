@@ -60,6 +60,13 @@ steps:
     assignee_type: agent
     input_artifacts: []
     output_artifact: spec
+    human_tasks:
+      - trigger: confirm_output
+        task_id: output-review
+        outcomes: {confirm: plan, revise: spec}
+      - trigger: need_clarification
+        task_id: clarification-answers
+        outcomes: {submit: spec}
     allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
     hooks:
       prepare_input: [GitHubIssueFetcher, UserInputCollector, AlignmentCheckpointGate]
@@ -86,6 +93,15 @@ steps:
     assignee_type: agent
     input_artifacts: [spec]
     output_artifact: plan
+    human_tasks:
+      - trigger: initial
+        task_id: development-guide
+      - trigger: confirm_output
+        task_id: output-review
+        outcomes: {confirm: develop, revise: plan}
+      - trigger: need_clarification
+        task_id: clarification-answers
+        outcomes: {submit: plan}
     allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
     hooks:
       prepare_input: [UserInputCollector, AlignmentCheckpointGate]
@@ -127,6 +143,13 @@ steps:
     assignee_type: agent
     input_artifacts: [spec, plan, review_feedback, pr_result]
     output_artifact: code
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: develop}
+      - trigger: no_changes_needed
+        task_id: no-change-decision
+        outcomes: {agree: pr, disagree: develop}
     allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
     hooks:
       prepare_input: [UserInputCollector, AlignmentCheckpointGate]
@@ -154,6 +177,10 @@ steps:
     assignee_type: agent
     input_artifacts: [spec, plan, code]
     output_artifact: review_feedback
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: review}
     allowed_tools: [Read, Grep, Glob, "Bash(git:*)"]
     max_iterations: 3
     allowed_goto: [spec, develop, plan]

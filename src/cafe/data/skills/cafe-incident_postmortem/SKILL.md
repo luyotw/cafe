@@ -1,7 +1,13 @@
 ---
 name: cafe-incident_postmortem
 description: 事後檢討與行動項目（維運應變流程）
-version: 1.0.0
+version: 1.0.1
+workflow:
+  human_tasks:
+    - id: clarification-feedback
+      pattern: revision_feedback
+      prompt: Provide the incident details needed to continue the postmortem.
+      input_schema: feedback
 ---
 
 # Incident Postmortem

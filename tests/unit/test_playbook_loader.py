@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.ui.human_tasks import resolve_step_human_task
 
 
 def _write_skill(root: Path, name: str) -> None:
@@ -19,6 +20,55 @@ def _write_skill(root: Path, name: str) -> None:
 def _write_playbook(root: Path, name: str, content: str) -> None:
     root.mkdir(parents=True, exist_ok=True)
     (root / f"{name}.yaml").write_text(content, encoding="utf-8")
+
+
+def test_playbook_rejects_human_task_outcome_outside_declared_steps(tmp_path: Path) -> None:
+    """A task cannot nominate a continuation absent from its own playbook."""
+    builtin_root = tmp_path / "builtin"
+    skill_dir = builtin_root / "skills" / "reviewer"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: reviewer
+description: reviewer
+workflow:
+  human_tasks:
+    - id: review-output
+      pattern: confirm_output
+      prompt: Review output
+      input_schema: decision
+      decisions:
+        - id: confirm
+          label: Approve
+---
+""",
+        encoding="utf-8",
+    )
+    _write_playbook(
+        builtin_root / "playbooks",
+        "invalid-human-task",
+        """
+playbook: {id: invalid-human-task}
+steps:
+  review:
+    role: reviewer
+    skill: reviewer
+    human_tasks:
+      - trigger: confirm_output
+        task_id: review-output
+        outcomes: {confirm: unknown}
+    on: {confirm_output: review, await_agent: _done}
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="human task outcome"):
+        loader.load_model("invalid-human-task")
 
 
 def test_load_uses_project_override(tmp_path: Path) -> None:
@@ -754,3 +804,22 @@ def test_builtin_non_software_playbooks_define_non_default_handoff_metadata() ->
     assert editorial.steps["draft"].chat_role == "writer"
     assert "implementation" not in (research.steps["question"].handoff_label or "").lower()
     assert "requirements" not in (editorial.steps["draft"].handoff_label or "").lower()
+
+
+def test_builtin_user_handoffs_resolve_nonempty_declared_policies() -> None:
+    """Builtin user pauses must not fall back to implicit development behavior."""
+    loader = PlaybookLoader()
+    triggers = {"confirm_output", "need_clarification", "no_changes_needed"}
+
+    for playbook_id in ("default", "simple", "tdd", "hotfix", "editorial", "incident", "research"):
+        playbook = loader.load(playbook_id)
+        for step_name, step in playbook["steps"].items():
+            for trigger in triggers.intersection(step.get("on", {})):
+                policy, binding = resolve_step_human_task(
+                    playbook_data=playbook,
+                    step_name=step_name,
+                    trigger=trigger,
+                )
+
+                assert policy.prompt
+                assert binding.task_id == policy.id

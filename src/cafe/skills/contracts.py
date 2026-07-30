@@ -8,6 +8,8 @@ from typing import Any, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from cafe.core.human_tasks import HumanTaskPolicy
+
 RUNTIME_OWNED_PROMPT_PLACEHOLDERS = frozenset(
     {
         "agent_file",
@@ -226,6 +228,7 @@ class SkillWorkflowContract(BaseModel):
     prompt_references: dict[str, str] = Field(default_factory=dict)
     checklist: Optional[ChecklistContract] = None
     output_templates: Optional[OutputTemplatesContract] = None
+    human_tasks: Tuple[HumanTaskPolicy, ...] = ()
 
     @field_validator("prompt_references")
     @classmethod
@@ -250,6 +253,9 @@ class SkillWorkflowContract(BaseModel):
                 "prompt reference placeholders must not overlap prompt input placeholders: "
                 f"{', '.join(sorted(overlap))}"
             )
+        task_ids = [task.id for task in self.human_tasks]
+        if len(set(task_ids)) != len(task_ids):
+            raise ValueError("human task ids must be unique")
         if self.checklist is not None:
             checklist_references = set(self.checklist.context_references)
             overlap = input_placeholder_set & checklist_references
