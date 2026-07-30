@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 import subprocess
 import sys
@@ -625,7 +626,13 @@ def workflow(
         interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
         generic_phase = GenericPhase(SkillLoader())
 
-        def dry_executor(step_name: str, step_def: Dict, blackboard_state: object, extra_prompt: Optional[str] = None) -> StepExecutionResult:
+        def dry_executor(
+            step_name: str,
+            step_def: Dict,
+            blackboard_state: object,
+            extra_prompt: Optional[str] = None,
+            same_invocation_retry: bool = False,
+        ) -> StepExecutionResult:
             output_key = step_def.get("output_artifact", step_name)
             output_path = issue_dir / step_name / "output.md"
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -718,11 +725,23 @@ def workflow(
             )
             _executor_holder["fallback_applied"] = True
 
-        def wrapped_executor(step_name: str, step_def: Dict, blackboard_state: object, extra_prompt: Optional[str] = None) -> Any:
+        def wrapped_executor(
+            step_name: str,
+            step_def: Dict,
+            blackboard_state: object,
+            extra_prompt: Optional[str] = None,
+            same_invocation_retry: bool = False,
+        ) -> Any:
             iteration = _predict_next_iteration(issue_dir, step_name)
             console.print(f"[dim]Executing[/dim] step={step_name} iteration={iteration:03d}")
             if dry_run:
-                return dry_executor(step_name, step_def, blackboard_state, extra_prompt=extra_prompt)
+                return dry_executor(
+                    step_name,
+                    step_def,
+                    blackboard_state,
+                    extra_prompt=extra_prompt,
+                    same_invocation_retry=same_invocation_retry,
+                )
             step_role = step_def.get("role") if isinstance(step_def, dict) else None
             missing_clis = _check_agent_clis_available(
                 config_manager,
@@ -738,8 +757,20 @@ def workflow(
                 raise typer.Exit(1)
             step_executor = _executor_holder["executor"]
             assert step_executor is not None
+            execute_kwargs = {"extra_prompt": extra_prompt}
+            execute_signature = inspect.signature(step_executor.execute_step)
+            if "same_invocation_retry" in execute_signature.parameters or any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in execute_signature.parameters.values()
+            ):
+                execute_kwargs["same_invocation_retry"] = same_invocation_retry
             try:
-                result = step_executor.execute_step(step_name, step_def, blackboard_state, extra_prompt=extra_prompt)
+                result = step_executor.execute_step(
+                    step_name,
+                    step_def,
+                    blackboard_state,
+                    **execute_kwargs,
+                )
             except AgentExecutionError as exc:
                 if (
                     fallback_preset
@@ -747,8 +778,19 @@ def workflow(
                     and getattr(exc, "error_type", None) in ("rate_limit", "cli_not_found", "cli_unavailable", "model_not_found")
                 ):
                     _apply_fallback_preset_and_rebuild()
-                    result = _executor_holder["executor"].execute_step(
-                        step_name, step_def, blackboard_state, extra_prompt=extra_prompt
+                    fallback_executor = _executor_holder["executor"]
+                    fallback_kwargs = {"extra_prompt": extra_prompt}
+                    fallback_signature = inspect.signature(fallback_executor.execute_step)
+                    if "same_invocation_retry" in fallback_signature.parameters or any(
+                        parameter.kind == inspect.Parameter.VAR_KEYWORD
+                        for parameter in fallback_signature.parameters.values()
+                    ):
+                        fallback_kwargs["same_invocation_retry"] = same_invocation_retry
+                    result = fallback_executor.execute_step(
+                        step_name,
+                        step_def,
+                        blackboard_state,
+                        **fallback_kwargs,
                     )
                 else:
                     raise

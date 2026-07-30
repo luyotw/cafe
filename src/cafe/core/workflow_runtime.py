@@ -566,6 +566,7 @@ class BlackboardWorkflowRuntime:
         visit_count: int,
         validate_assignee_type: bool = False,
         extra_prompt: Optional[str] = None,
+        same_invocation_retry: bool = False,
     ) -> StepIterationFrame:
         self.blackboard_store.record_event(
             self.blackboard,
@@ -581,10 +582,22 @@ class BlackboardWorkflowRuntime:
         try:
             try:
                 execution_result = self.executor(
-                    current_step, step_def, self.blackboard, extra_prompt=extra_prompt
+                    current_step,
+                    step_def,
+                    self.blackboard,
+                    extra_prompt=extra_prompt,
+                    same_invocation_retry=same_invocation_retry,
                 )
             except TypeError:
-                execution_result = self.executor(current_step, step_def, self.blackboard)
+                try:
+                    execution_result = self.executor(
+                        current_step,
+                        step_def,
+                        self.blackboard,
+                        extra_prompt=extra_prompt,
+                    )
+                except TypeError:
+                    execution_result = self.executor(current_step, step_def, self.blackboard)
         except KeyboardInterrupt:
             self.blackboard_store.record_event(
                 self.blackboard,
@@ -1208,6 +1221,7 @@ class BlackboardWorkflowRuntime:
                         hop_count=hop_count,
                         visit_count=visit_count,
                         extra_prompt=_baton_retry_extra_prompt,
+                        same_invocation_retry=_baton_attempt > 0,
                     )
                 except StepInterrupted as si:
                     reconciled = self._try_reconcile_interrupted_step(
@@ -1459,6 +1473,7 @@ class BlackboardWorkflowRuntime:
                         visit_count=visit_count,
                         validate_assignee_type=True,
                         extra_prompt=_baton_retry_extra_prompt,
+                        same_invocation_retry=_baton_attempt > 0,
                     )
                 except StepInterrupted as si:
                     reconciled = self._try_reconcile_interrupted_step(

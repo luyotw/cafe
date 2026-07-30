@@ -54,7 +54,15 @@ class TestCodexCLIBuildCommand:
         cli = CodexCLI(codex_config_with_session)
         cmd = cli.build_command("test prompt")
 
-        assert cmd[:7] == ["codex", "-C", str(Path.cwd().resolve()), "-a", "never", "exec", "resume"]
+        assert cmd[:7] == [
+            "codex",
+            "-C",
+            str(Path.cwd().resolve()),
+            "-a",
+            "never",
+            "exec",
+            "resume",
+        ]
         assert "--json" in cmd
         assert cmd[7] == "session-123"
         assert cmd[8] == "test prompt"
@@ -68,7 +76,9 @@ class TestCodexCLIBuildCommand:
         model_idx = cmd.index("--model")
         assert cmd[model_idx + 1] == "gpt-5-codex"
 
-    def test_build_command_with_session_places_model_after_prompt(self, codex_config_with_session_and_model):
+    def test_build_command_with_session_places_model_after_prompt(
+        self, codex_config_with_session_and_model
+    ):
         cli = CodexCLI(codex_config_with_session_and_model)
         cmd = cli.build_command("test prompt")
 
@@ -83,11 +93,7 @@ class TestCodexCLIBuildCommand:
         cli = CodexCLI(codex_config)
         cmd = cli.build_command("test prompt", allowed_directories=["src", ".cafe"])
 
-        add_dir_values = [
-            cmd[index + 1]
-            for index, token in enumerate(cmd)
-            if token == "--add-dir"
-        ]
+        add_dir_values = [cmd[index + 1] for index, token in enumerate(cmd) if token == "--add-dir"]
         assert "src" in add_dir_values
         assert ".cafe" in add_dir_values
 
@@ -104,11 +110,7 @@ class TestCodexCLIBuildCommand:
         with patch("cafe.agents.cli.codex.get_git_dir", return_value=worktree_git_dir):
             cmd = cli.build_command("test prompt", allowed_directories=[".cafe"])
 
-        add_dir_values = [
-            cmd[index + 1]
-            for index, token in enumerate(cmd)
-            if token == "--add-dir"
-        ]
+        add_dir_values = [cmd[index + 1] for index, token in enumerate(cmd) if token == "--add-dir"]
         assert ".cafe" in add_dir_values
         assert str(worktree_git_dir) in add_dir_values
 
@@ -153,7 +155,9 @@ class TestCodexCLIParseResponse:
                     "usage": {
                         "input_tokens": 100,
                         "cached_input_tokens": 20,
+                        "cache_write_input_tokens": 4,
                         "output_tokens": 30,
+                        "reasoning_output_tokens": 7,
                     },
                 }
             ),
@@ -165,14 +169,18 @@ class TestCodexCLIParseResponse:
         assert isinstance(token_usage, TokenUsage)
         assert token_usage.input_tokens == 100
         assert token_usage.cache_read_input_tokens == 20
+        assert token_usage.cache_write_input_tokens == 4
         assert token_usage.output_tokens == 30
+        assert token_usage.reasoning_output_tokens == 7
         assert token_usage.turn_usages == [
             {
                 "turn": 1,
                 "input_tokens": 100,
                 "output_tokens": 30,
                 "cache_creation_input_tokens": 0,
+                "cache_write_input_tokens": 4,
                 "cache_read_input_tokens": 20,
+                "reasoning_output_tokens": 7,
             }
         ]
         assert permission_denials == []
@@ -224,14 +232,18 @@ class TestCodexCLIParseResponse:
                 "input_tokens": 80,
                 "output_tokens": 20,
                 "cache_creation_input_tokens": 0,
+                "cache_write_input_tokens": 0,
                 "cache_read_input_tokens": 10,
+                "reasoning_output_tokens": 0,
             },
             {
                 "turn": 2,
                 "input_tokens": 120,
                 "output_tokens": 40,
                 "cache_creation_input_tokens": 5,
+                "cache_write_input_tokens": 0,
                 "cache_read_input_tokens": 30,
+                "reasoning_output_tokens": 0,
             },
         ]
         assert permission_denials == []

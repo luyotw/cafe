@@ -18,6 +18,10 @@ from cafe.core.blackboard import (
 )
 from cafe.core.hooks import HookResult
 from cafe.core.resume_user_input import CONTINUE_USER_INPUT
+from cafe.core.session_continuation import (
+    SessionContinuation,
+    SessionContinuationPolicy,
+)
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import AgentCLI, AgentConfig, TokenUsage
 from cafe.phases.generic_phase import GenericPhase, GenericPhaseExecution
@@ -370,7 +374,9 @@ def test_generic_workflow_step_agent_written_baton_preserved(tmp_path: Path, mon
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
 
 
-def test_generic_workflow_step_status_transition_writes_strict_baton_payload(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_status_transition_writes_strict_baton_payload(
+    tmp_path: Path, monkeypatch
+) -> None:
     """Status-driven handoff write emits only the strict four-field baton payload."""
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-status-baton-payload"
@@ -764,7 +770,7 @@ def test_generic_workflow_step_resolve_resume_user_input_uses_execution_config(
     )
     executor.phase_dir = phase_dir
     executor.issue_dir = issue_dir
-    executor.iteration = 2
+    executor.iteration = 1
     executor._step_agent_name = "David"
 
     resolved = executor._resolve_iteration_user_input("develop")
@@ -990,9 +996,9 @@ def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(
     assert '"event_type": "plan_confirmed"' in prompt
     assert hidden_payload not in prompt
     assert len(prompt) < 20_000
-    installed_skill = (
-        tmp_path / ".codex" / "skills" / "cafe-plan" / "SKILL.md"
-    ).read_text(encoding="utf-8")
+    installed_skill = (tmp_path / ".codex" / "skills" / "cafe-plan" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
     expected_output = "./.cafe/issues/issue-handoff/develop/iteration_001/output.md"
     assert f"Write plan to: {expected_output}" in installed_skill
     assert "{output_file}" not in installed_skill
@@ -2520,11 +2526,7 @@ def test_workflow_allows_selected_global_template_directory(tmp_path: Path, monk
     research_file = tmp_path / "research.md"
     research_file.write_text("evidence", encoding="utf-8")
     global_template = (
-        tmp_path.parent
-        / f"{tmp_path.name}-global-cafe"
-        / "templates"
-        / "synthesis"
-        / "evidence.md"
+        tmp_path.parent / f"{tmp_path.name}-global-cafe" / "templates" / "synthesis" / "evidence.md"
     )
     global_template.parent.mkdir(parents=True)
     global_template.write_text("# Global evidence\n", encoding="utf-8")
@@ -3404,8 +3406,7 @@ def test_apply_resume_to_runtime_context_adds_resume_input_artifacts(tmp_path: P
     )
 
     assert (
-        updated["resume_input_artifacts"]
-        == "- develop_file: .cafe/issues/demo/develop/output.md"
+        updated["resume_input_artifacts"] == "- develop_file: .cafe/issues/demo/develop/output.md"
     )
 
 
@@ -3480,9 +3481,7 @@ def test_apply_resume_to_runtime_context_lists_declared_custom_artifacts(tmp_pat
         json.dumps({"cli": "codex", "session_id": "session-1"}), encoding="utf-8"
     )
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
-    executor.playbook = {
-        "steps": {"synthesize": {"skill": "synthesis", "role": "developer"}}
-    }
+    executor.playbook = {"steps": {"synthesize": {"skill": "synthesis", "role": "developer"}}}
     executor.phase_dir = phase_dir
     executor.iteration = 2
     executor._step_agent_name = "David"
@@ -3700,7 +3699,9 @@ mandate:
     assert not (issue_dir / "develop" / "iteration_001" / "alignment_request.json").exists()
 
 
-def test_alignment_gate_requires_missing_strategic_context_once(tmp_path: Path, monkeypatch) -> None:
+def test_alignment_gate_requires_missing_strategic_context_once(
+    tmp_path: Path, monkeypatch
+) -> None:
     """Missing strategic_context.yaml pauses with a document requirement; a prior
     unblocking decision suppresses the repeat requirement for the issue."""
     monkeypatch.chdir(tmp_path)
@@ -3775,3 +3776,530 @@ mandate:
 
     assert result.status_code != "alignment_checkpoint"
     assert agent_manager.prompts
+
+
+def test_completed_correction_selects_new_session_by_default(tmp_path: Path) -> None:
+    executor = _minimal_spec_executor(
+        tmp_path,
+        agent_manager=FakeAgentManager("confirmed"),
+    )
+    executor.phase_dir = executor.issue_dir / "spec"
+    previous = executor.phase_dir / "iteration_001"
+    previous.mkdir(parents=True)
+    (previous / "iteration.json").write_text(
+        json.dumps(
+            {
+                "cli": "codex",
+                "session_id": "old-session",
+                "end_time": "2026-07-30T00:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    executor.iteration = 2
+
+    continuation = executor._select_session_continuation(
+        agent_name="Roger",
+        step_def=executor.playbook["steps"]["spec"],
+    )
+
+    assert continuation.policy == SessionContinuationPolicy.NEW
+
+
+def test_correction_resume_override_uses_only_previous_exact_pair(tmp_path: Path) -> None:
+    executor = _minimal_spec_executor(
+        tmp_path,
+        agent_manager=FakeAgentManager("confirmed"),
+    )
+    executor.phase_dir = executor.issue_dir / "spec"
+    previous = executor.phase_dir / "iteration_001"
+    previous.mkdir(parents=True)
+    (previous / "iteration.json").write_text(
+        json.dumps(
+            {
+                "cli": "codex",
+                "session_id": "old-session",
+                "end_time": "2026-07-30T00:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    executor.iteration = 2
+    step_def = {
+        **executor.playbook["steps"]["spec"],
+        "correction_session": "resume",
+    }
+
+    continuation = executor._select_session_continuation(
+        agent_name="Roger",
+        step_def=step_def,
+    )
+
+    assert continuation.policy == SessionContinuationPolicy.RESUME_EXACT
+    assert continuation.cli == AgentCLI.CODEX
+    assert continuation.session_id == "old-session"
+
+
+def test_incomplete_iteration_selects_exact_resume(tmp_path: Path) -> None:
+    executor = _minimal_spec_executor(
+        tmp_path,
+        agent_manager=FakeAgentManager("confirmed"),
+    )
+    executor.phase_dir = executor.issue_dir / "spec"
+    current = executor.phase_dir / "iteration_001"
+    current.mkdir(parents=True)
+    (current / "iteration.json").write_text(
+        json.dumps({"cli": "codex", "session_id": "interrupted-session"}),
+        encoding="utf-8",
+    )
+    executor.iteration = 1
+
+    continuation = executor._select_session_continuation(
+        agent_name="Roger",
+        step_def=executor.playbook["steps"]["spec"],
+    )
+
+    assert continuation.policy == SessionContinuationPolicy.RESUME_EXACT
+    assert continuation.session_id == "interrupted-session"
+
+
+def test_interrupted_correction_preserves_partial_output_before_resume(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input"
+    phase_dir = issue_dir / "spec"
+    previous = phase_dir / "iteration_001"
+    current = phase_dir / "iteration_002"
+    previous.mkdir(parents=True)
+    current.mkdir(parents=True)
+    (previous / "iteration.json").write_text(
+        json.dumps(
+            {
+                "cli": "codex",
+                "session_id": "old-session",
+                "end_time": "2026-07-30T00:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (previous / "output.md").write_text("completed output\n", encoding="utf-8")
+    (current / "iteration.json").write_text(
+        json.dumps({"cli": "codex", "session_id": "session-1"}),
+        encoding="utf-8",
+    )
+    (current / "output.md").write_text("partial interrupted output\n", encoding="utf-8")
+    (current / "checklist.md").write_text(
+        "[x] completed\n[ ] partial progress\n",
+        encoding="utf-8",
+    )
+
+    def assert_partial_output_preserved(**kwargs) -> None:
+        assert (current / "output.md").read_text(encoding="utf-8") == (
+            "partial interrupted output\n"
+        )
+        assert (current / "checklist.md").read_text(encoding="utf-8") == (
+            "[x] completed\n[ ] partial progress\n"
+        )
+        (current / "checklist.md").write_text(
+            "[x] completed\n[x] partial progress\n",
+            encoding="utf-8",
+        )
+
+    manager = FakeAgentManager(
+        "confirmed",
+        on_execute=assert_partial_output_preserved,
+    )
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+
+    executor.execute_step("spec", executor.playbook["steps"]["spec"], state)
+
+
+def test_same_invocation_second_agent_call_resumes_fresh_session(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    class RecordingManager(FakeAgentManager):
+        def __init__(self):
+            super().__init__(["confirmed", "confirmed"])
+            self.continuations = []
+
+        def execute(self, *args, continuation=None, **kwargs):
+            self.continuations.append(continuation)
+            return super().execute(*args, **kwargs)
+
+        def get_last_cli(self):
+            return AgentCLI.CODEX
+
+        def get_last_session_id(self):
+            return "fresh-session"
+
+    manager = RecordingManager()
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    executor.phase_dir = executor.issue_dir / "spec"
+    executor.iteration = 1
+    executor._session_continuation = SessionContinuation.new()
+
+    for prompt in ("first", "hook retry"):
+        executor._execute_agent_iteration(
+            agent_name="Roger",
+            prompt=prompt,
+            user_input="workflow execute",
+            valid_intents=[PhaseStatusCode.CONFIRMED],
+            require_status_code=False,
+            phase_specific_data={"step_name": "spec"},
+        )
+
+    assert [item.policy for item in manager.continuations] == [
+        SessionContinuationPolicy.NEW,
+        SessionContinuationPolicy.RESUME_EXACT,
+    ]
+    assert manager.continuations[1].session_id == "fresh-session"
+
+
+def test_after_execute_retry_accumulates_raw_iteration_telemetry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    class RetryOnce:
+        name = "RetryOnce"
+        calls = 0
+
+        def run(self, **kwargs):
+            self.__class__.calls += 1
+            return HookResult(retry_requested=self.__class__.calls == 1)
+
+    class UsageManager(FakeAgentManager):
+        def __init__(self):
+            super().__init__(["confirmed", "confirmed"])
+            self.usages = iter(
+                [
+                    TokenUsage(
+                        input_tokens=10,
+                        cache_write_input_tokens=4,
+                        reasoning_output_tokens=2,
+                    ),
+                    TokenUsage(
+                        input_tokens=20,
+                        cache_write_input_tokens=6,
+                        reasoning_output_tokens=3,
+                    ),
+                ]
+            )
+
+        def execute(self, *args, continuation=None, phase_name=None, **kwargs):
+            self.prompts.append(args[1])
+            return (
+                next(self._responses),
+                next(self.usages),
+                [],
+                [],
+                [],
+                "gpt-test",
+            )
+
+        def get_last_cli(self):
+            return AgentCLI.CODEX
+
+        def get_last_session_id(self):
+            return "fresh-session"
+
+    RetryOnce.calls = 0
+    manager = UsageManager()
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    executor.generic_phase.hook_registry["RetryOnce"] = RetryOnce
+    step_def = {
+        **executor.playbook["steps"]["spec"],
+        "hooks": {"after_execute": ["RetryOnce"]},
+    }
+    executor.playbook["steps"]["spec"] = step_def
+    state = BlackboardStore(executor.issue_dir).load_or_create("spec")
+
+    executor.execute_step("spec", step_def, state)
+
+    context = json.loads(
+        (executor.issue_dir / "spec" / "iteration_001" / "iteration.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert context["stats"]["input_tokens"] == 30
+    assert context["stats"]["cache_write_input_tokens"] == 10
+    assert context["stats"]["reasoning_output_tokens"] == 5
+
+
+def test_same_invocation_baton_retry_resumes_actual_session(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    class RecordingManager(FakeAgentManager):
+        def __init__(self):
+            super().__init__(["confirmed", "confirmed"])
+            self.continuations = []
+
+        def execute(self, *args, continuation=None, phase_name=None, **kwargs):
+            self.continuations.append(continuation)
+            return super().execute(*args, **kwargs)
+
+        def get_last_cli(self):
+            return AgentCLI.CODEX
+
+        def get_last_session_id(self):
+            return "actual-session"
+
+    manager = RecordingManager()
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    state = BlackboardStore(executor.issue_dir).load_or_create("spec")
+    step_def = executor.playbook["steps"]["spec"]
+
+    executor.execute_step("spec", step_def, state)
+    executor.execute_step(
+        "spec",
+        step_def,
+        state,
+        extra_prompt="[BATON ERROR] repair next_step.txt",
+        same_invocation_retry=True,
+    )
+
+    assert [item.policy for item in manager.continuations] == [
+        SessionContinuationPolicy.NEW,
+        SessionContinuationPolicy.RESUME_EXACT,
+    ]
+    assert manager.continuations[1].session_id == "actual-session"
+    assert "[BATON ERROR] repair next_step.txt" in manager.prompts[1]
+    snapshot = executor.issue_dir / "spec" / "iteration_002" / "delta_input.md"
+    assert "[BATON ERROR] repair next_step.txt" in snapshot.read_text(encoding="utf-8")
+
+
+def test_pre_step_baton_repair_after_prior_run_starts_new_session(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    class RecordingManager(FakeAgentManager):
+        def __init__(self):
+            super().__init__("confirmed")
+            self.continuations = []
+
+        def execute(self, *args, continuation=None, phase_name=None, **kwargs):
+            self.continuations.append(continuation)
+            return super().execute(*args, **kwargs)
+
+    manager = RecordingManager()
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    previous = executor.issue_dir / "spec" / "iteration_001"
+    previous.mkdir(parents=True)
+    (previous / "iteration.json").write_text(
+        json.dumps(
+            {
+                "cli": "codex",
+                "session_id": "prior-run-session",
+                "end_time": "2026-07-30T00:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (previous / "output.md").write_text("previous output\n", encoding="utf-8")
+    state = BlackboardStore(executor.issue_dir).load_or_create("spec")
+    step_def = executor.playbook["steps"]["spec"]
+
+    executor.execute_step(
+        "spec",
+        step_def,
+        state,
+        extra_prompt="[BATON ERROR] repair stale baton",
+        same_invocation_retry=False,
+    )
+
+    assert manager.continuations[0].policy == SessionContinuationPolicy.NEW
+
+
+def test_correction_writes_and_inlines_delta_packet(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-delta"
+    previous = issue_dir / "spec" / "iteration_001"
+    previous.mkdir(parents=True)
+    (previous / "iteration.json").write_text(
+        json.dumps(
+            {
+                "cli": "codex",
+                "session_id": "old-session",
+                "end_time": "2026-07-30T00:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (previous / "output.md").write_text("Previous finding F1\n", encoding="utf-8")
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    manager = FakeAgentManager("confirmed")
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-delta",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+        step_user_inputs={"spec": "Apply correction"},
+    )
+
+    executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    iteration_dir = issue_dir / "spec" / "iteration_002"
+    packet_path = iteration_dir / "delta_packet.json"
+    packet = json.loads(packet_path.read_text(encoding="utf-8"))
+    metadata = json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))[
+        "delta_packet"
+    ]
+    assert packet["run_kind"] == "correction"
+    assert packet["previous_output"]["path"].endswith("spec/iteration_001/output.md")
+    assert packet["previous_output"]["state"] == "file"
+    assert packet["user_input"]["sha256"]
+    assert packet["user_input"]["path"].endswith("spec/iteration_002/delta_input.md")
+    assert (iteration_dir / "delta_input.md").read_text(encoding="utf-8") == "Apply correction"
+    assert metadata["path"].endswith("spec/iteration_002/delta_packet.json")
+    assert metadata["bytes"] == packet_path.stat().st_size
+    assert "Correction delta packet" in manager.prompts[0]
+    assert "Read previous_output" in manager.prompts[0]
+
+
+def test_checklist_retry_receives_exact_session_and_phase_name(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    class ChecklistManager(FakeAgentManager):
+        def __init__(self, checklist_path: Path):
+            super().__init__("confirmed")
+            self.checklist_path = checklist_path
+            self.received = []
+
+        def execute(self, *args, continuation=None, phase_name=None, **kwargs):
+            self.received.append((continuation, phase_name))
+            self.checklist_path.write_text("[x] fixed\n", encoding="utf-8")
+            return super().execute(*args, **kwargs)
+
+        def get_last_cli(self):
+            return AgentCLI.CODEX
+
+        def get_last_session_id(self):
+            return "fresh-session"
+
+    phase_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input" / "spec"
+    checklist = phase_dir / "iteration_001" / "checklist.md"
+    checklist.parent.mkdir(parents=True)
+    checklist.write_text("[ ] fix\n", encoding="utf-8")
+    manager = ChecklistManager(checklist)
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    executor.phase_dir = phase_dir
+    executor.phase_name = "spec"
+    executor.iteration = 1
+    executor._session_continuation = SessionContinuation.resume_exact(
+        AgentCLI.CODEX,
+        "fresh-session",
+    )
+
+    _, status, passed = executor._validate_and_retry_checklist_completion(
+        agent_name="Roger",
+        prompt="prompt",
+        user_input="",
+        valid_intents=[PhaseStatusCode.CONFIRMED],
+        max_retries=1,
+    )
+
+    assert passed is True
+    assert status == PhaseStatusCode.CONFIRMED
+    assert manager.received[0][0].policy == SessionContinuationPolicy.RESUME_EXACT
+    assert manager.received[0][0].session_id == "fresh-session"
+    assert manager.received[0][1] == "spec"
+
+
+def test_checklist_retry_accumulates_raw_iteration_telemetry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    class ChecklistUsageManager(FakeAgentManager):
+        def __init__(self, checklist_path: Path):
+            super().__init__("confirmed")
+            self.checklist_path = checklist_path
+
+        def execute(self, *args, continuation=None, phase_name=None, **kwargs):
+            self.checklist_path.write_text("[x] fixed\n", encoding="utf-8")
+            return (
+                "confirmed",
+                TokenUsage(
+                    cache_write_input_tokens=5,
+                    reasoning_output_tokens=7,
+                ),
+                [],
+                [],
+                [],
+                "gpt-test",
+            )
+
+    phase_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input" / "spec"
+    iteration_dir = phase_dir / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    checklist = iteration_dir / "checklist.md"
+    checklist.write_text("[ ] fix\n", encoding="utf-8")
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps(
+            {
+                "response": "confirmed",
+                "streaming_log": [],
+                "stats": TokenUsage(
+                    cache_write_input_tokens=2,
+                    reasoning_output_tokens=3,
+                ).model_dump(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    executor = _minimal_spec_executor(
+        tmp_path,
+        agent_manager=ChecklistUsageManager(checklist),
+    )
+    executor.phase_dir = phase_dir
+    executor.phase_name = "spec"
+    executor.iteration = 1
+
+    _, _, passed = executor._validate_and_retry_checklist_completion(
+        agent_name="Roger",
+        prompt="prompt",
+        user_input="",
+        valid_intents=[PhaseStatusCode.CONFIRMED],
+        max_retries=1,
+    )
+
+    context = json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))
+    assert passed is True
+    assert context["stats"]["cache_write_input_tokens"] == 7
+    assert context["stats"]["reasoning_output_tokens"] == 10

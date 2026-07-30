@@ -17,13 +17,24 @@ from cafe.core.blackboard import (
     HandoffOwner,
 )
 from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
+from cafe.core.delta_packet import (
+    build_delta_packet,
+    inline_delta_packet,
+    persist_delta_input_snapshot,
+    persist_delta_packet,
+)
 from cafe.core.git import GitOperations
 from cafe.core.phase import Phase
 from cafe.core.resume_user_input import (
-    is_resume_iteration,
+    is_followup_iteration,
+    is_interrupted_iteration,
     load_prior_run_context,
     prior_cli_and_session,
     resolve_resume_user_input,
+)
+from cafe.core.session_continuation import (
+    SessionContinuation,
+    exact_continuation_from_context,
 )
 from cafe.core.status_codes import (
     PhaseStatusCode,
@@ -31,6 +42,7 @@ from cafe.core.status_codes import (
     step_on_declares,
     transition_map_key,
 )
+from cafe.core.types import AgentCLI
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.phases.generic_phase import GenericPhase
 from cafe.skills.checklist_composer import compose_declared_checklist
@@ -132,6 +144,10 @@ class GenericWorkflowStepExecutor(Phase):
         self.iteration = 0
         self._current_output_file: Optional[Path] = None
         self._resolved_iteration_user_input: Optional[str] = None
+        # execute_step() replaces this with an explicit invocation-scoped
+        # decision; AUTO only preserves legacy behavior for direct helper use.
+        self._session_continuation = SessionContinuation.auto()
+        self._delta_packet_metadata: Optional[Dict[str, Any]] = None
         self._config_allowed_directories: List[str] = list(config_allowed_directories or [])
         self._extra_allowed_directories: List[str] = list(extra_allowed_directories or [])
         self._template_allowed_directories: List[str] = []
@@ -157,6 +173,7 @@ class GenericWorkflowStepExecutor(Phase):
         step_def: Dict[str, Any],
         blackboard_state: BlackboardState,
         extra_prompt: Optional[str] = None,
+        same_invocation_retry: bool = False,
     ) -> StepExecutionResult:
         self.phase_name = step_name
         self.phase_dir = self.issue_dir / step_name
@@ -164,6 +181,7 @@ class GenericWorkflowStepExecutor(Phase):
 
         self.iteration = self._get_next_iteration_number(step_name, self.phase_dir)
         self._resolved_iteration_user_input = None
+        self._delta_packet_metadata = None
         iteration_dir = self._get_iteration_dir(self.iteration)
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
@@ -174,7 +192,9 @@ class GenericWorkflowStepExecutor(Phase):
         publish_request_file = iteration_dir / "publish_request.json"
         self._current_output_file = output_file
 
-        if self.iteration > 1:
+        # A reused iteration is an interrupted run. Preserve any partial output
+        # it already produced; only seed a genuinely new correction iteration.
+        if self.iteration > 1 and not output_file.exists():
             self._copy_previous_version(step_name, self.iteration, self.phase_dir)
         self._ensure_output_file_initialized(step_name, output_file)
         capability_ids = self._effective_capability_ids(step_name, step_def)
@@ -194,6 +214,11 @@ class GenericWorkflowStepExecutor(Phase):
         valid_intents = self._resolve_valid_intents(step_def)
         agent_name = self._resolve_agent_name(step_name, step_def)
         self._step_agent_name = agent_name
+        self._session_continuation = self._select_session_continuation(
+            agent_name=agent_name,
+            step_def=step_def,
+            same_invocation_retry=same_invocation_retry,
+        )
         self._apply_step_agent_model(step_name=step_name, step_def=step_def, agent_name=agent_name)
         agent_cli = self.agent_manager.get_agent(agent_name).config.cli
         context = self._build_context(
@@ -220,16 +245,17 @@ class GenericWorkflowStepExecutor(Phase):
             agent_cli=agent_cli,
             context=context,
         )
-        self._generate_checklist(
-            step_name=step_name,
-            skill_name=skill_name,
-            agent_name=agent_name,
-            step_def=step_def,
-            blackboard_state=blackboard_state,
-            checklist_file=checklist_file,
-            output_file=output_file,
-            questions_xml_file=questions_xml_file,
-        )
+        if not checklist_file.exists():
+            self._generate_checklist(
+                step_name=step_name,
+                skill_name=skill_name,
+                agent_name=agent_name,
+                step_def=step_def,
+                blackboard_state=blackboard_state,
+                checklist_file=checklist_file,
+                output_file=output_file,
+                questions_xml_file=questions_xml_file,
+            )
 
         last_prompt: List[str] = []
         allowed_tools = self._build_allowed_tools(
@@ -248,13 +274,9 @@ class GenericWorkflowStepExecutor(Phase):
 
         def run_agent(prompt: str) -> str:
             last_prompt[:] = [prompt]
+            if self._delta_packet_metadata is not None:
+                phase_specific_data["delta_packet"] = dict(self._delta_packet_metadata)
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
-            if extra_prompt:
-                resolved_user_input = (
-                    f"{extra_prompt}\n\n{resolved_user_input}"
-                    if resolved_user_input
-                    else extra_prompt
-                )
             attempt_allowed_tools = (
                 self._build_baton_retry_allowed_tools()
                 if self._is_baton_retry_user_input(resolved_user_input)
@@ -296,6 +318,8 @@ class GenericWorkflowStepExecutor(Phase):
                     lambda runtime_context: self._apply_resume_to_runtime_context(
                         runtime_context,
                         step_name,
+                        blackboard_state,
+                        extra_prompt,
                     )
                 ),
             },
@@ -428,7 +452,7 @@ class GenericWorkflowStepExecutor(Phase):
 
         previous_data = self._load_previous_iteration_data()
         current_data = self._load_current_iteration_data()
-        if not is_resume_iteration(
+        if not is_interrupted_iteration(
             iteration=self.iteration,
             previous_iteration_data=previous_data,
             current_iteration_data=current_data,
@@ -446,9 +470,14 @@ class GenericWorkflowStepExecutor(Phase):
             execution_config = self._resolve_execution_config_for_iteration(
                 agent_name=agent_name,
                 step_name=step_name,
+                continuation=self._current_session_continuation(),
             )
         except Exception:
-            execution_config = self.agent_manager.get_agent(agent_name).config
+            default_config = self.agent_manager.get_agent(agent_name).config
+            execution_config = self._fail_closed_execution_config(
+                default_config,
+                self._current_session_continuation(),
+            )
 
         current_cli = (
             execution_config.cli.value
@@ -484,6 +513,8 @@ class GenericWorkflowStepExecutor(Phase):
         self,
         runtime_context: Dict[str, str],
         step_name: str,
+        blackboard_state: Optional[BlackboardState] = None,
+        extra_prompt: Optional[str] = None,
     ) -> Dict[str, str]:
         """Apply resume user-input rules to prompt runtime context."""
         updated = dict(runtime_context)
@@ -495,17 +526,19 @@ class GenericWorkflowStepExecutor(Phase):
             candidate = self._load_iteration_user_input_candidate(step_name)
 
         resolved = self._apply_resume_user_input_to_candidate(step_name, candidate)
+        if extra_prompt:
+            resolved = f"{extra_prompt}\n\n{resolved}" if resolved else extra_prompt
         self._resolved_iteration_user_input = resolved
         if resolved:
             updated["user_input"] = resolved
         else:
             updated.pop("user_input", None)
 
-        # On resume, surface current input artifact paths so the agent
+        # On follow-up, surface current input artifact paths so the agent
         # re-grounds on the current scope instead of inferring from prior work.
         previous_data = self._load_previous_iteration_data()
         current_data = self._load_current_iteration_data()
-        if is_resume_iteration(
+        if is_followup_iteration(
             iteration=self.iteration,
             previous_iteration_data=previous_data,
             current_iteration_data=current_data,
@@ -520,7 +553,142 @@ class GenericWorkflowStepExecutor(Phase):
             if artifact_lines:
                 updated["resume_input_artifacts"] = "\n".join(artifact_lines)
 
+        if self.iteration > 1 and blackboard_state is not None:
+            packet, metadata = self._prepare_delta_packet(
+                step_name=step_name,
+                blackboard_state=blackboard_state,
+                user_input=resolved,
+            )
+            self._delta_packet_metadata = metadata
+            updated["delta_packet"] = inline_delta_packet(packet, metadata)
+            updated["delta_packet_path"] = str(metadata["path"])
+
         return updated
+
+    def _configured_clis_for_agent(self, agent_name: str) -> list[AgentCLI]:
+        try:
+            config = self.agent_manager.get_agent(agent_name).config
+        except Exception:
+            return []
+        if getattr(config, "clis", None):
+            return [
+                entry.cli
+                for entry in config.clis
+                if hasattr(entry, "cli") and isinstance(entry.cli, AgentCLI)
+            ]
+        configured = []
+        if isinstance(getattr(config, "cli", None), AgentCLI):
+            configured.append(config.cli)
+        configured.extend(
+            cli
+            for cli in getattr(config, "backup_clis", [])
+            if isinstance(cli, AgentCLI) and cli not in configured
+        )
+        return configured
+
+    def _select_session_continuation(
+        self,
+        *,
+        agent_name: str,
+        step_def: Dict[str, Any],
+        same_invocation_retry: bool = False,
+    ) -> SessionContinuation:
+        """Choose once per step invocation; retries update it after success."""
+        previous_data = self._load_previous_iteration_data()
+        current_data = self._load_current_iteration_data()
+        configured_clis = self._configured_clis_for_agent(agent_name)
+
+        if is_interrupted_iteration(
+            iteration=self.iteration,
+            previous_iteration_data=previous_data,
+            current_iteration_data=current_data,
+        ):
+            exact = exact_continuation_from_context(
+                current_data,
+                configured_clis=configured_clis,
+            )
+            return exact or SessionContinuation.new()
+
+        if same_invocation_retry:
+            exact = exact_continuation_from_context(
+                previous_data,
+                configured_clis=configured_clis,
+            )
+            return exact or SessionContinuation.new()
+
+        if self.iteration > 1 and step_def.get("correction_session", "fresh") == "resume":
+            exact = exact_continuation_from_context(
+                previous_data,
+                configured_clis=configured_clis,
+            )
+            return exact or SessionContinuation.new()
+
+        return SessionContinuation.new()
+
+    def _git_snapshot(self) -> Dict[str, str]:
+        snapshot: Dict[str, str] = {}
+        run_git = getattr(self.git_ops, "run_git", None)
+        if not callable(run_git):
+            return snapshot
+        try:
+            snapshot["head_sha"] = run_git("rev-parse", "HEAD")
+            base_branch = str(
+                self._get_issue_config_value(
+                    self.issue_dir / "issue.yaml",
+                    "base_branch",
+                )
+                or self.git_ops.get_default_base_branch()
+            )
+            snapshot["base_ref"] = base_branch
+            snapshot["base_sha"] = run_git("rev-parse", base_branch)
+        except Exception:
+            return {}
+        return snapshot
+
+    def _prepare_delta_packet(
+        self,
+        *,
+        step_name: str,
+        blackboard_state: BlackboardState,
+        user_input: str,
+    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        step_def = self.playbook.get("steps", {}).get(step_name, {})
+        declared_artifacts = self._step_input_artifacts(step_def, blackboard_state)
+        iteration_dir = self._get_iteration_dir(self.iteration)
+        packet_path = iteration_dir / "delta_packet.json"
+        delta_input_path = iteration_dir / "delta_input.md"
+        delta_input = persist_delta_input_snapshot(delta_input_path, user_input)
+        previous_output = self._get_versioned_file_path(
+            step_name,
+            self.iteration - 1,
+            self.phase_dir,
+        )
+        packet = build_delta_packet(
+            issue_name=self.issue_name,
+            step_name=step_name,
+            iteration=self.iteration,
+            blackboard_state=blackboard_state,
+            declared_artifacts=declared_artifacts,
+            previous_output=previous_output,
+            user_input_path=delta_input_path,
+            user_input=delta_input,
+            git_snapshot=self._git_snapshot(),
+        )
+        current_data = self._load_current_iteration_data()
+        persisted_metadata = (
+            current_data.get("delta_packet") if isinstance(current_data, dict) else None
+        )
+        expected_sha256 = (
+            persisted_metadata.get("sha256")
+            if isinstance(persisted_metadata, dict)
+            and isinstance(persisted_metadata.get("sha256"), str)
+            else None
+        )
+        return persist_delta_packet(
+            packet_path,
+            packet,
+            expected_sha256=expected_sha256,
+        )
 
     def _declared_prompt_input_placeholders(self, step_name: str) -> tuple[str, ...]:
         """Return declared prompt-input keys for the current step in contract order."""
@@ -617,9 +785,7 @@ class GenericWorkflowStepExecutor(Phase):
             if phase_resolution.model:
                 return phase_resolution.model
         except ValueError as exc:
-            raise ValueError(
-                f"invalid phase config for '{step_name}' in '{step_name}': {exc}"
-            )
+            raise ValueError(f"invalid phase config for '{step_name}' in '{step_name}': {exc}")
 
         role = str(step_def.get("role", "developer"))
         config = self.role_configs.get(role, {})
@@ -855,9 +1021,7 @@ class GenericWorkflowStepExecutor(Phase):
             "current_step": state.current_step,
             "playbook_id": state.playbook_id,
             "handoff_contract": (
-                state.handoff_contract.to_dict()
-                if state.handoff_contract is not None
-                else None
+                state.handoff_contract.to_dict() if state.handoff_contract is not None else None
             ),
             "artifacts": artifacts,
             "omitted_artifact_count": max(0, len(artifact_items) - len(selected_artifacts)),
@@ -907,9 +1071,7 @@ class GenericWorkflowStepExecutor(Phase):
                 ),
             }
         )
-        feedback = bool(
-            input_artifacts.get("review_feedback") or input_artifacts.get("pr_result")
-        )
+        feedback = bool(input_artifacts.get("review_feedback") or input_artifacts.get("pr_result"))
         compose_declared_checklist(
             skill_name=canonical_name,
             contract=contract,

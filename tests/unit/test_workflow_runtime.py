@@ -341,11 +341,18 @@ def test_runtime_retries_stale_invalid_baton_from_startup(tmp_path: Path) -> Non
         },
     }
     prompts: list[str] = []
+    retry_flags: list[bool] = []
 
     def executor(
-        step_name: str, step_def: dict, state: object, *, extra_prompt: str | None = None
+        step_name: str,
+        step_def: dict,
+        state: object,
+        *,
+        extra_prompt: str | None = None,
+        same_invocation_retry: bool = False,
     ) -> StepExecutionResult:
         prompts.append(extra_prompt or "")
+        retry_flags.append(same_invocation_retry)
         _write_baton(
             issue_dir,
             from_step="spec",
@@ -371,6 +378,7 @@ def test_runtime_retries_stale_invalid_baton_from_startup(tmp_path: Path) -> Non
     assert prompts
     assert "await_user_qa" in prompts[0]
     assert "need_clarification" in prompts[0]
+    assert retry_flags == [False]
 
 
 def test_runtime_rejects_legacy_text_baton_in_core_path(tmp_path: Path) -> None:
@@ -2528,11 +2536,13 @@ def test_runtime_retries_invalid_target_step_then_succeeds(tmp_path: Path) -> No
     issue_dir = tmp_path / ".cafe" / "issues" / "retry-invalid-target"
     issue_dir.mkdir(parents=True)
     captured_prompts: list[str | None] = []
+    retry_flags: list[bool] = []
     call_count = [0]
 
     def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
         call_count[0] += 1
         captured_prompts.append(kwargs.get("extra_prompt"))
+        retry_flags.append(bool(kwargs.get("same_invocation_retry")))
         if call_count[0] == 1:
             _make_invalid_target_baton_text(issue_dir, from_step="spec", to_step="release")
         else:
@@ -2553,6 +2563,7 @@ def test_runtime_retries_invalid_target_step_then_succeeds(tmp_path: Path) -> No
     assert captured_prompts[0] is None
     assert "to_step" in (captured_prompts[1] or "")
     assert "release" in (captured_prompts[1] or "")
+    assert retry_flags == [False, True]
     bb = BlackboardStore(issue_dir).load_or_create("spec")
     rejected_events = [e for e in bb.events if e.event_type == "baton_rejected"]
     assert len(rejected_events) == 1

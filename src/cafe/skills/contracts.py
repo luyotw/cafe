@@ -18,6 +18,8 @@ RUNTIME_OWNED_PROMPT_PLACEHOLDERS = frozenset(
         "blackboard_path",
         "checklist_file",
         "commits",
+        "delta_packet",
+        "delta_packet_path",
         "handoff_summary",
         "iteration",
         "next_step_path",
@@ -141,10 +143,13 @@ class ChecklistSection(BaseModel):
 
     @model_validator(mode="after")
     def _validate_source(self) -> "ChecklistSection":
-        if sum(
-            value is not None and value is not False
-            for value in (self.reference, self.optional_checklist, self.template_catalog)
-        ) != 1:
+        if (
+            sum(
+                value is not None and value is not False
+                for value in (self.reference, self.optional_checklist, self.template_catalog)
+            )
+            != 1
+        ):
             raise ValueError("checklist section requires exactly one source")
         return self
 

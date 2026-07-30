@@ -138,7 +138,7 @@ class AgentExecutor:
             if "(" in tool:
                 # Extract tool name and parameters
                 tool_name = tool.split("(")[0]
-                tool_params = tool[len(tool_name):]  # Get "(params)"
+                tool_params = tool[len(tool_name) :]  # Get "(params)"
 
                 # Translate tool name and append parameters
                 translated_name = tool_map.get(tool_name, tool_name)
@@ -189,7 +189,9 @@ class AgentExecutor:
                 cli_strategy.record_existing_sessions()
 
             # Translate allowed tools using CLI-specific logic
-            cli_translated_tools = cli_strategy.translate_allowed_tools(translated_tools) if translated_tools else None
+            cli_translated_tools = (
+                cli_strategy.translate_allowed_tools(translated_tools) if translated_tools else None
+            )
 
             # Build command using strategy
             cmd = cli_strategy.build_command(prompt, cli_translated_tools, allowed_directories)
@@ -205,6 +207,7 @@ class AgentExecutor:
 
             # Execute with session recovery if session_id configured
             if self.config.session_id:
+
                 def extract_codex_content(data: dict) -> Optional[str]:
                     if data.get("type") != "item.completed":
                         return None
@@ -231,10 +234,10 @@ class AgentExecutor:
                             return cmd_list
                         if "resume" in cmd_list:
                             resume_idx = cmd_list.index("resume")
-                            del cmd_list[resume_idx:resume_idx + 2]
+                            del cmd_list[resume_idx : resume_idx + 2]
                         elif "--resume" in cmd_list:
                             resume_idx = cmd_list.index("--resume")
-                            del cmd_list[resume_idx:resume_idx + 2]
+                            del cmd_list[resume_idx : resume_idx + 2]
                         return cmd_list
                     if "resume" in cmd_list:
                         resume_idx = cmd_list.index("resume")
@@ -245,7 +248,11 @@ class AgentExecutor:
                     return cmd_list
 
                 # Only use response parser for stream-json formats
-                parser = (lambda lines: self._parse_using_strategy(cli_strategy, lines)) if parse_stream_json else None
+                parser = (
+                    (lambda lines: self._parse_using_strategy(cli_strategy, lines))
+                    if parse_stream_json
+                    else None
+                )
 
                 agent_response = self._execute_with_session_recovery(
                     cmd=cmd,
@@ -262,7 +269,11 @@ class AgentExecutor:
                 )
             else:
                 # Only use response parser for stream-json formats
-                parser = (lambda lines: self._parse_using_strategy(cli_strategy, lines)) if parse_stream_json else None
+                parser = (
+                    (lambda lines: self._parse_using_strategy(cli_strategy, lines))
+                    if parse_stream_json
+                    else None
+                )
 
                 def extract_codex_content(data: dict) -> Optional[str]:
                     if data.get("type") != "item.completed":
@@ -302,8 +313,18 @@ class AgentExecutor:
             # Accumulate token usage
             self._total_token_usage.input_tokens += agent_response.token_usage.input_tokens
             self._total_token_usage.output_tokens += agent_response.token_usage.output_tokens
-            self._total_token_usage.cache_creation_input_tokens += agent_response.token_usage.cache_creation_input_tokens
-            self._total_token_usage.cache_read_input_tokens += agent_response.token_usage.cache_read_input_tokens
+            self._total_token_usage.cache_creation_input_tokens += (
+                agent_response.token_usage.cache_creation_input_tokens
+            )
+            self._total_token_usage.cache_write_input_tokens += (
+                agent_response.token_usage.cache_write_input_tokens
+            )
+            self._total_token_usage.cache_read_input_tokens += (
+                agent_response.token_usage.cache_read_input_tokens
+            )
+            self._total_token_usage.reasoning_output_tokens += (
+                agent_response.token_usage.reasoning_output_tokens
+            )
             self._total_token_usage.total_cost_usd += agent_response.token_usage.total_cost_usd
             if agent_response.token_usage.turn_usages:
                 self._total_token_usage.turn_usages.extend(agent_response.token_usage.turn_usages)
@@ -338,7 +359,9 @@ class AgentExecutor:
         cli_strategy = self._get_cli_strategy()
         return cli_strategy.build_environment()
 
-    def _parse_using_strategy(self, cli_strategy: AbstractCLI, output_lines: List[str]) -> AgentResponse:
+    def _parse_using_strategy(
+        self, cli_strategy: AbstractCLI, output_lines: List[str]
+    ) -> AgentResponse:
         """Parse response using the CLI strategy.
 
         Args:
@@ -373,7 +396,7 @@ class AgentExecutor:
         update_cmd_with_session_fn: Callable[[List[str], str], List[str]],
         max_retries: int = 3,
         _retry_count: int = 0,
-        **streaming_kwargs
+        **streaming_kwargs,
     ) -> AgentResponse:
         """Generic session recovery wrapper for all CLIs with session support.
 
@@ -410,8 +433,9 @@ class AgentExecutor:
 
             # Check for prompt too long error
             is_prompt_too_long = (
-                hasattr(e, 'error_type') and e.error_type == "invalid_request" and
-                "prompt is too long" in error_msg
+                hasattr(e, "error_type")
+                and e.error_type == "invalid_request"
+                and "prompt is too long" in error_msg
             )
 
             is_session_error = any(phrase in error_msg for phrase in session_error_phrases)
@@ -425,7 +449,9 @@ class AgentExecutor:
                 if is_prompt_too_long:
                     # Handle prompt too long error: create fresh session
                     old_session_id = self.config.session_id
-                    print(f"\n⚠️  Prompt is too long for session {old_session_id}, creating fresh session...\n")
+                    print(
+                        f"\n⚠️  Prompt is too long for session {old_session_id}, creating fresh session...\n"
+                    )
                     # Create new session
                     try:
                         new_session_id = create_new_session_fn()
@@ -444,14 +470,16 @@ class AgentExecutor:
                 else:
                     # Handle stale/invalid resume state
                     old_session_id = self.config.session_id
-                    print(f"\n⚠️  Resume failed for session {old_session_id}, retrying without resume...\n")
+                    print(
+                        f"\n⚠️  Resume failed for session {old_session_id}, retrying without resume...\n"
+                    )
                     cmd = list(cmd)
                     if "resume" in cmd:
                         resume_idx = cmd.index("resume")
-                        del cmd[resume_idx:resume_idx + 2]
+                        del cmd[resume_idx : resume_idx + 2]
                     elif "--resume" in cmd:
                         resume_idx = cmd.index("--resume")
-                        del cmd[resume_idx:resume_idx + 2]
+                        del cmd[resume_idx : resume_idx + 2]
                     self.config.session_id = ""
 
                 # Retry recursively to support multiple recovery attempts
@@ -462,7 +490,7 @@ class AgentExecutor:
                     update_cmd_with_session_fn=update_cmd_with_session_fn,
                     max_retries=max_retries,
                     _retry_count=_retry_count + 1,
-                    **streaming_kwargs
+                    **streaming_kwargs,
                 )
             else:
                 # Other error, re-raise
@@ -551,19 +579,27 @@ class AgentExecutor:
         """Return a concise message for CLI account/policy unavailability."""
         error_lower = error_text.lower()
         if "disabled claude subscription access" in error_lower:
-            return f"{cli_name} CLI unavailable: subscription access is disabled by the organization."
+            return (
+                f"{cli_name} CLI unavailable: subscription access is disabled by the organization."
+            )
         if "failed to authenticate" in error_lower or "authentication_failed" in error_lower:
             return f"{cli_name} CLI unavailable: authentication failed."
         return f"{cli_name} CLI unavailable."
 
-    def _classify_execution_error(self, cli_name: str, error_text: str) -> tuple[Optional[str], Optional[str]]:
+    def _classify_execution_error(
+        self, cli_name: str, error_text: str
+    ) -> tuple[Optional[str], Optional[str]]:
         """Classify CLI execution errors into workflow-level retry categories."""
         if self._is_rate_limit_error(error_text):
             return "rate_limit", self._format_rate_limit_display_message(cli_name, error_text)
         if self._is_cli_unavailable_error(error_text):
-            return "cli_unavailable", self._format_cli_unavailable_display_message(cli_name, error_text)
+            return "cli_unavailable", self._format_cli_unavailable_display_message(
+                cli_name, error_text
+            )
         if self._is_model_not_found_error(error_text):
-            return "model_not_found", self._format_model_not_found_display_message(cli_name, error_text)
+            return "model_not_found", self._format_model_not_found_display_message(
+                cli_name, error_text
+            )
         return None, None
 
     def _is_model_not_found_error(self, error_text: str) -> bool:
@@ -698,31 +734,34 @@ class AgentExecutor:
         """
         if not stderr_text:
             return False
-        
+
         # Check if stderr contains usage summary markers
         has_usage = "Usage by model:" in stderr_text or "Total usage est:" in stderr_text
-        
+
         # Check if stderr contains actual error indicators (must check before "Execution failed:")
         # because usage summary comes after error message
-        lines = stderr_text.split('\n')
-        
+        lines = stderr_text.split("\n")
+
         # Look for error lines that appear BEFORE usage summary
         for i, line in enumerate(lines):
             # Stop when we reach usage summary
             if "Total usage est:" in line:
                 break
-            
+
             # Check for error indicators in lines before usage summary
             line_lower = line.lower()
-            if any(indicator in line_lower for indicator in [
-                "error:",
-                "failed:",
-                "exception",
-                "traceback",
-                "missing finish_reason",
-            ]):
+            if any(
+                indicator in line_lower
+                for indicator in [
+                    "error:",
+                    "failed:",
+                    "exception",
+                    "traceback",
+                    "missing finish_reason",
+                ]
+            ):
                 return False  # Found real error
-        
+
         # Only usage summary if it has usage markers and no error found before it
         return has_usage
 
@@ -870,10 +909,10 @@ class AgentExecutor:
         # Check stderr first for immediate errors (e.g., session locked)
         import select
         import sys
-        
+
         stderr_check_timeout = 0.5  # 500ms to check for immediate errors
-        
-        if sys.platform != 'win32' and process.stderr:
+
+        if sys.platform != "win32" and process.stderr:
             # Use select on Unix-like systems to check for immediate stderr output
             ready, _, _ = select.select([process.stderr], [], [], stderr_check_timeout)
 
@@ -883,12 +922,11 @@ class AgentExecutor:
                 # Only treat as fatal error if it's NOT a tool execution error
                 # Tool errors like "Error executing tool" are recoverable and agent continues
                 is_tool_error = "error executing tool" in stderr_line.lower()
-                is_fatal_error = (
-                    stderr_line and
-                    ("already in use" in stderr_line.lower() or
-                     "limit reached" in stderr_line.lower() or
-                     "hit your limit" in stderr_line.lower() or
-                     ("error" in stderr_line.lower() and not is_tool_error))
+                is_fatal_error = stderr_line and (
+                    "already in use" in stderr_line.lower()
+                    or "limit reached" in stderr_line.lower()
+                    or "hit your limit" in stderr_line.lower()
+                    or ("error" in stderr_line.lower() and not is_tool_error)
                 )
 
                 if is_fatal_error:
@@ -897,7 +935,9 @@ class AgentExecutor:
                     remaining_stderr = process.stderr.read()
                     full_stderr = stderr_line + remaining_stderr
 
-                    error_type, display_message = self._classify_execution_error(cli_name, full_stderr)
+                    error_type, display_message = self._classify_execution_error(
+                        cli_name, full_stderr
+                    )
 
                     # Attach actual CLI arguments to error object for history recording
                     err = AgentExecutionError(
@@ -910,9 +950,9 @@ class AgentExecutor:
                     raise err
 
         # Print header
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print(f"{cli_name} Response (streaming):")
-        print(f"{'='*80}")
+        print(f"{'=' * 80}")
 
         output_lines = []
         response_text = ""
@@ -929,9 +969,11 @@ class AgentExecutor:
         import sys
         import time
 
-        use_idle_timeout = (sys.platform != 'win32')
+        use_idle_timeout = sys.platform != "win32"
         # Gemini needs longer timeout (10 min), others use 5 min
-        idle_timeout = 600 if self.config.cli == AgentCLI.GEMINI else 300  # seconds - timeout if no new output
+        idle_timeout = (
+            600 if self.config.cli == AgentCLI.GEMINI else 300
+        )  # seconds - timeout if no new output
         last_output_time = time.time() if use_idle_timeout else None
         idle_timeout_triggered = False  # Track if we exited due to idle timeout
 
@@ -940,7 +982,7 @@ class AgentExecutor:
         streaming_line_index = 0
         if streaming_output_file:
             try:
-                streaming_file_handle = open(streaming_output_file, 'w', encoding='utf-8')
+                streaming_file_handle = open(streaming_output_file, "w", encoding="utf-8")
             except Exception as e:
                 print(f"⚠️  Failed to open streaming output file: {e}")
 
@@ -971,12 +1013,16 @@ class AgentExecutor:
                     # Check if stdout has data available (with timeout)
                     if use_idle_timeout:
                         # Unix-like systems: use select with timeout to prevent indefinite blocking
-                        ready, _, _ = select.select([process.stdout], [], [], 1.0)  # 1 second timeout per check
+                        ready, _, _ = select.select(
+                            [process.stdout], [], [], 1.0
+                        )  # 1 second timeout per check
 
                         if not ready:
                             # No data available, check if idle timeout exceeded
                             if time.time() - last_output_time > idle_timeout:
-                                print(f"\n⚠️  No output from {cli_name} for {idle_timeout}s, assuming completion...")
+                                print(
+                                    f"\n⚠️  No output from {cli_name} for {idle_timeout}s, assuming completion..."
+                                )
                                 idle_timeout_triggered = True
                                 break
                             continue  # Continue waiting
@@ -999,12 +1045,15 @@ class AgentExecutor:
                             else:
                                 # For non-stream-json: wrap in JSON object with index and timestamp
                                 from datetime import datetime
+
                                 json_obj = {
                                     "index": streaming_line_index,
                                     "timestamp": datetime.now().astimezone().isoformat(),
-                                    "content": line.rstrip('\n')
+                                    "content": line.rstrip("\n"),
                                 }
-                                streaming_file_handle.write(json.dumps(json_obj, ensure_ascii=False) + "\n")
+                                streaming_file_handle.write(
+                                    json.dumps(json_obj, ensure_ascii=False) + "\n"
+                                )
                                 streaming_line_index += 1
                             streaming_file_handle.flush()
                         except Exception as e:
@@ -1045,7 +1094,9 @@ class AgentExecutor:
                                             error_text = content_block.get("text", "")
 
                                 # Raise error with specific type for session recovery handling
-                                err = AgentExecutionError(f"{cli_name} invalid request: {error_text}")
+                                err = AgentExecutionError(
+                                    f"{cli_name} invalid request: {error_text}"
+                                )
                                 err.error_type = "invalid_request"
                                 err.cli_command_args = cmd[1:]
                                 persist_safe_stream_error(err)
@@ -1107,8 +1158,18 @@ class AgentExecutor:
                                 token_usage = TokenUsage(
                                     input_tokens=usage_data.get("input_tokens", 0),
                                     output_tokens=usage_data.get("output_tokens", 0),
-                                    cache_creation_input_tokens=usage_data.get("cache_creation_input_tokens", 0),
-                                    cache_read_input_tokens=usage_data.get("cache_read_input_tokens", 0),
+                                    cache_creation_input_tokens=usage_data.get(
+                                        "cache_creation_input_tokens", 0
+                                    ),
+                                    cache_write_input_tokens=usage_data.get(
+                                        "cache_write_input_tokens", 0
+                                    ),
+                                    cache_read_input_tokens=usage_data.get(
+                                        "cache_read_input_tokens", 0
+                                    ),
+                                    reasoning_output_tokens=usage_data.get(
+                                        "reasoning_output_tokens", 0
+                                    ),
                                 )
 
                             if "total_cost_usd" in data:
@@ -1143,7 +1204,7 @@ class AgentExecutor:
                             if json_content_extractor:
                                 content = json_content_extractor(data)
                                 if content:
-                                    print(content, end='\n\n', flush=True)
+                                    print(content, end="\n\n", flush=True)
                                     streaming_log.append(content)
                                     response_text = content  # Only save the last fragment
                             else:
@@ -1153,14 +1214,14 @@ class AgentExecutor:
                                     for content_block in data["message"]["content"]:
                                         if content_block.get("type") == "text":
                                             text = content_block.get("text", "")
-                                            print(text, end='\n\n', flush=True)
+                                            print(text, end="\n\n", flush=True)
                                             streaming_log.append(text)
                                             response_text = text  # Only save the last fragment
 
                                 # Old format: direct content field
                                 elif "content" in data:
                                     content = data["content"]
-                                    print(content, end='\n\n', flush=True)
+                                    print(content, end="\n\n", flush=True)
                                     streaming_log.append(content)
                                     response_text = content  # Only save the last fragment
 
@@ -1170,12 +1231,14 @@ class AgentExecutor:
                                     permission_denials.append(
                                         PermissionDenial(
                                             tool_name=denial_data["tool_name"],
-                                            tool_input=denial_data["tool_input"]
+                                            tool_input=denial_data["tool_input"],
                                         )
                                     )
 
                         except json.JSONDecodeError:
-                            error_type, display_message = self._classify_execution_error(cli_name, line)
+                            error_type, display_message = self._classify_execution_error(
+                                cli_name, line
+                            )
                             if error_type:
                                 process.terminate()
                                 err = AgentExecutionError(
@@ -1188,11 +1251,11 @@ class AgentExecutor:
                                 raise err
 
                             # Non-JSON line, just print it
-                            print(line, end='')
+                            print(line, end="")
                             output_lines.append(line)
                     else:
                         # Simple line-by-line streaming (Copilot style)
-                        print(line, end='')
+                        print(line, end="")
                         output_lines.append(line)
                         streaming_log.append(line)  # Record each line to streaming_log
         except KeyboardInterrupt:
@@ -1209,7 +1272,7 @@ class AgentExecutor:
                 streaming_file_handle.close()
             raise
 
-        print(f"\n{'='*80}\n")
+        print(f"\n{'=' * 80}\n")
 
         # If idle timeout triggered, terminate process immediately
         if idle_timeout_triggered:
@@ -1264,9 +1327,11 @@ class AgentExecutor:
             if stderr_output and self._is_usage_summary_only(stderr_output):
                 # Treat as success if we got valid output and stderr is just usage summary
                 if output_lines:
-                    print(f"✓ Got valid output from {cli_name}, ignoring non-zero exit code (stderr contains only usage summary)")
+                    print(
+                        f"✓ Got valid output from {cli_name}, ignoring non-zero exit code (stderr contains only usage summary)"
+                    )
                     returncode = 0
-            
+
             # If still non-zero, it's a real error
             if returncode != 0:
                 combined_output = (stderr_output or "") + "\n".join(output_lines)
@@ -1289,11 +1354,12 @@ class AgentExecutor:
         if streaming_file_handle and stderr_output:
             try:
                 from datetime import datetime
+
                 stderr_obj = {
                     "index": streaming_line_index,
                     "timestamp": datetime.now().astimezone().isoformat(),
                     "type": "stderr",
-                    "content": stderr_output.rstrip('\n'),
+                    "content": stderr_output.rstrip("\n"),
                 }
                 streaming_file_handle.write(json.dumps(stderr_obj, ensure_ascii=False) + "\n")
                 streaming_file_handle.flush()
@@ -1344,21 +1410,19 @@ class AgentExecutor:
         # Return response (either from stream-json or combined lines)
         if parse_stream_json:
             # response_text is already the last fragment, use output_lines if empty
-            final_response = response_text if response_text else ''.join(output_lines)
+            final_response = response_text if response_text else "".join(output_lines)
             # streaming_log contains extracted text content for context.json
             final_streaming_log = streaming_log if streaming_log else []
         else:
             # Non-stream-json style (Copilot): parse response to extract token usage
             # Get CLI strategy instance to parse the response
             from cafe.agents.cli.copilot import CopilotCLI
-            
+
             cli_strategy = CopilotCLI(self.config)
             # Parse response to extract token usage and clean response
             # Pass stderr_output separately as usage summary may be in stderr
-            parse_result = cli_strategy.parse_response(
-                output_lines, stderr_output=stderr_output
-            )
-            
+            parse_result = cli_strategy.parse_response(output_lines, stderr_output=stderr_output)
+
             # Check if parser returns model (4-tuple) or not (3-tuple)
             if len(parse_result) == 4:
                 final_response, token_usage, parsed_denials, parsed_model = parse_result
@@ -1368,7 +1432,7 @@ class AgentExecutor:
             else:
                 # Old 3-tuple format (backward compatibility)
                 final_response, token_usage, parsed_denials = parse_result
-            
+
             # Merge any permission denials from parsing with those already collected
             permission_denials.extend(parsed_denials)
             final_streaming_log = output_lines

@@ -214,8 +214,18 @@ class GenericPhase:
             runtime_context.extend(
                 ["Current step input artifacts:", context["resume_input_artifacts"]]
             )
+        if context and context.get("delta_packet"):
+            runtime_context.extend(
+                [
+                    f"Correction delta packet ({context.get('delta_packet_path', 'inline')}):",
+                    context["delta_packet"],
+                    "This is a derived manifest, not a new source of truth. Read previous_output and re-verify prior findings or requested changes item by item before completing this step.",
+                ]
+            )
         if context and context.get("user_input"):
-            runtime_context.extend(["Current user input for this iteration:", context["user_input"]])
+            runtime_context.extend(
+                ["Current user input for this iteration:", context["user_input"]]
+            )
 
         if runtime_context:
             lines.extend(["Runtime context:"])
@@ -441,7 +451,9 @@ class GenericPhase:
                     hook_kwargs=kwargs,
                 )
             else:
-                raise ValueError(f"Unsupported hook entry type '{type(hook_entry).__name__}' in stage '{stage}'")
+                raise ValueError(
+                    f"Unsupported hook entry type '{type(hook_entry).__name__}' in stage '{stage}'"
+                )
 
             aggregate.context_updates.update(result.context_updates)
             stage_context = kwargs.get("context")
@@ -470,10 +482,12 @@ class GenericPhase:
         hook_kwargs: Dict[str, Any],
     ) -> HookResult:
         if stage not in self.SCRIPT_HOOK_STAGES:
-            raise ValueError(f"Script hooks are only supported in {sorted(self.SCRIPT_HOOK_STAGES)}")
+            raise ValueError(
+                f"Script hooks are only supported in {sorted(self.SCRIPT_HOOK_STAGES)}"
+            )
 
-        script, args_template, schema, when_intents, timeout_seconds = self._parse_script_hook_declaration(
-            declaration
+        script, args_template, schema, when_intents, timeout_seconds = (
+            self._parse_script_hook_declaration(declaration)
         )
 
         if when_intents:
@@ -633,7 +647,9 @@ class GenericPhase:
         timeout_seconds_raw = declaration.get("timeout_seconds")
         timeout_seconds: Optional[float] = None
         if timeout_seconds_raw is not None:
-            if isinstance(timeout_seconds_raw, bool) or not isinstance(timeout_seconds_raw, (int, float)):
+            if isinstance(timeout_seconds_raw, bool) or not isinstance(
+                timeout_seconds_raw, (int, float)
+            ):
                 raise ValueError("Script hook 'timeout_seconds' must be a positive number")
             if timeout_seconds_raw <= 0:
                 raise ValueError("Script hook 'timeout_seconds' must be a positive number")
@@ -702,7 +718,9 @@ class GenericPhase:
 
         resolved: Dict[str, Any] = {}
         for key, value in args_template.items():
-            resolved[str(key)] = self._resolve_script_arg_value(value=value, template_values=template_values)
+            resolved[str(key)] = self._resolve_script_arg_value(
+                value=value, template_values=template_values
+            )
         return resolved
 
     def _resolve_script_arg_value(
@@ -715,12 +733,19 @@ class GenericPhase:
             try:
                 return value.format(**template_values)
             except KeyError as exc:
-                raise ValueError(f"Missing template value for '{exc.args[0]}' in script hook args") from exc
+                raise ValueError(
+                    f"Missing template value for '{exc.args[0]}' in script hook args"
+                ) from exc
         if isinstance(value, list):
-            return [self._resolve_script_arg_value(value=item, template_values=template_values) for item in value]
+            return [
+                self._resolve_script_arg_value(value=item, template_values=template_values)
+                for item in value
+            ]
         if isinstance(value, dict):
             return {
-                str(key): self._resolve_script_arg_value(value=item, template_values=template_values)
+                str(key): self._resolve_script_arg_value(
+                    value=item, template_values=template_values
+                )
                 for key, item in value.items()
             }
         return value
@@ -763,12 +788,9 @@ class GenericPhase:
         if not isinstance(payload, dict):
             return None
 
-        if (
-            payload.get("source") == "workflow.start_step_override"
-            and (
-                not step_name
-                or str(payload.get("to_step", payload.get("from_step", ""))) == str(step_name)
-            )
+        if payload.get("source") == "workflow.start_step_override" and (
+            not step_name
+            or str(payload.get("to_step", payload.get("from_step", ""))) == str(step_name)
         ):
             return None
 

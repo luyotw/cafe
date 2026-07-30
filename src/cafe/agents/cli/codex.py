@@ -36,7 +36,9 @@ class CodexCLI(AbstractCLI):
                     "input_tokens": usage_data.get("input_tokens", 0),
                     "output_tokens": usage_data.get("output_tokens", 0),
                     "cache_creation_input_tokens": usage_data.get("cache_creation_input_tokens", 0),
+                    "cache_write_input_tokens": usage_data.get("cache_write_input_tokens", 0),
                     "cache_read_input_tokens": usage_data.get("cached_input_tokens", 0),
+                    "reasoning_output_tokens": usage_data.get("reasoning_output_tokens", 0),
                 }
             )
 
@@ -68,7 +70,9 @@ class CodexCLI(AbstractCLI):
         cmd.extend(self.get_output_format())
 
         if allowed_directories and not self.config.session_id:
-            cmd = self.add_directories(cmd, self._expand_initial_allowed_directories(allowed_directories, cwd))
+            cmd = self.add_directories(
+                cmd, self._expand_initial_allowed_directories(allowed_directories, cwd)
+            )
 
         return cmd
 
@@ -101,6 +105,8 @@ class CodexCLI(AbstractCLI):
                     output_tokens=usage_data.get("output_tokens", 0),
                     cache_read_input_tokens=usage_data.get("cached_input_tokens", 0),
                     cache_creation_input_tokens=usage_data.get("cache_creation_input_tokens", 0),
+                    cache_write_input_tokens=usage_data.get("cache_write_input_tokens", 0),
+                    reasoning_output_tokens=usage_data.get("reasoning_output_tokens", 0),
                     turn_usages=turn_usages,
                 )
 

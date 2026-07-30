@@ -122,6 +122,7 @@ class StepConfig(BaseModel):
     capability_requests: List[str] = Field(default_factory=list)
     valid_intents: List[str] = Field(default_factory=list)
     max_iterations: Optional[Union[int, str]] = None
+    correction_session: Literal["fresh", "resume"] = "fresh"
     allowed_goto: List[str] = Field(default_factory=list)
     hooks: StepHooks = Field(default_factory=StepHooks)
     auto_snapshot: bool = True

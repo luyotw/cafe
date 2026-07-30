@@ -43,19 +43,45 @@ def resolve_resume_user_input(
     return candidate
 
 
+def is_interrupted_iteration(
+    *,
+    iteration: int,
+    previous_iteration_data: Optional[Dict[str, Any]],
+    current_iteration_data: Optional[Dict[str, Any]],
+) -> bool:
+    """True only when the current iteration was started but did not complete."""
+    if current_iteration_data and current_iteration_data.get("cli"):
+        if not current_iteration_data.get("end_time"):
+            return True
+    return False
+
+
+def is_followup_iteration(
+    *,
+    iteration: int,
+    previous_iteration_data: Optional[Dict[str, Any]],
+    current_iteration_data: Optional[Dict[str, Any]],
+) -> bool:
+    """True for either a correction iteration or an interrupted same iteration."""
+    return iteration > 1 or is_interrupted_iteration(
+        iteration=iteration,
+        previous_iteration_data=previous_iteration_data,
+        current_iteration_data=current_iteration_data,
+    )
+
+
 def is_resume_iteration(
     *,
     iteration: int,
     previous_iteration_data: Optional[Dict[str, Any]],
     current_iteration_data: Optional[Dict[str, Any]],
 ) -> bool:
-    """True when this step iteration continues a prior agent run in the same step."""
-    if iteration > 1:
-        return True
-    if current_iteration_data and current_iteration_data.get("cli"):
-        if not current_iteration_data.get("end_time"):
-            return True
-    return False
+    """Backward-compatible alias for interrupted same-iteration continuation."""
+    return is_interrupted_iteration(
+        iteration=iteration,
+        previous_iteration_data=previous_iteration_data,
+        current_iteration_data=current_iteration_data,
+    )
 
 
 def load_prior_run_context(
@@ -65,8 +91,6 @@ def load_prior_run_context(
     current_iteration_data: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     """Load iteration metadata from the prior run being resumed."""
-    if iteration > 1:
-        return previous_iteration_data
     if current_iteration_data and current_iteration_data.get("cli"):
         if not current_iteration_data.get("end_time"):
             return current_iteration_data

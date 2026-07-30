@@ -288,14 +288,18 @@ class TestTimelineEntryWithTokenUsage:
             model="gemini-2.5-flash",
             input_tokens=109260,
             output_tokens=1607,
+            cache_write_tokens=321,
             cache_read_tokens=48179,
+            reasoning_output_tokens=654,
             cost_usd=0.025,
         )
         assert entry.cli == "gemini"
         assert entry.model == "gemini-2.5-flash"
         assert entry.input_tokens == 109260
         assert entry.output_tokens == 1607
+        assert entry.cache_write_tokens == 321
         assert entry.cache_read_tokens == 48179
+        assert entry.reasoning_output_tokens == 654
         assert entry.cost_usd == 0.025
 
     def test_timeline_entry_without_token_fields(self):
@@ -311,7 +315,9 @@ class TestTimelineEntryWithTokenUsage:
         assert entry.model is None
         assert entry.input_tokens is None
         assert entry.output_tokens is None
+        assert entry.cache_write_tokens is None
         assert entry.cache_read_tokens is None
+        assert entry.reasoning_output_tokens is None
         assert entry.cost_usd is None
 
     def test_timeline_entry_with_partial_token_fields(self):
@@ -350,7 +356,9 @@ class TestPopulateTokenUsageInIterations:
             "stats": {
                 "input_tokens": 109260,
                 "output_tokens": 1607,
+                "cache_write_input_tokens": 321,
                 "cache_read_input_tokens": 48179,
+                "reasoning_output_tokens": 654,
                 "total_cost_usd": 0.0
             }
         }
@@ -362,7 +370,9 @@ class TestPopulateTokenUsageInIterations:
         assert entry.model == "gemini-2.5-flash"
         assert entry.input_tokens == 109260
         assert entry.output_tokens == 1607
+        assert entry.cache_write_tokens == 321
         assert entry.cache_read_tokens == 48179
+        assert entry.reasoning_output_tokens == 654
 
     def test_create_iteration_entry_handles_missing_token_data(self):
         """Test that _create_iteration_entry() handles missing token data gracefully"""

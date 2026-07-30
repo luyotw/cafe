@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 from typing import List, Optional
 
+from cafe.core.session_continuation import SessionContinuation
 from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.types import AgentCLI
 
 
 class PhaseChecklistMixin:
@@ -111,10 +113,13 @@ class PhaseChecklistMixin:
         retry_count = 0
         while retry_count < max_retries:
             retry_count += 1
-            print(f"\n⚠️  Re-invoking agent to complete checklist items... (attempt {retry_count}/{max_retries})")
+            print(
+                f"\n⚠️  Re-invoking agent to complete checklist items... (attempt {retry_count}/{max_retries})"
+            )
 
             # Generate retry prompt with safe path conversion
             from cafe.utils.git_utils import to_cwd_relative_path
+
             try:
                 checklist_display_path = to_cwd_relative_path(checklist_path)
             except (ValueError, OSError):
@@ -130,12 +135,39 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
 
             # Execute agent with retry prompt
             try:
-                retry_response, _, _, _, retry_streaming_log, retry_model = self.agent_manager.execute(
-                    agent_name,
-                    retry_prompt,
-                    allowed_tools=allowed_tools,
-                    allowed_directories=self._get_allowed_directories(),
+                execute_kwargs = {
+                    "allowed_tools": allowed_tools,
+                    "allowed_directories": self._get_allowed_directories(),
+                }
+                execute_method = self.agent_manager.execute
+                if self._call_accepts_keyword(execute_method, "phase_name"):
+                    execute_kwargs["phase_name"] = getattr(self, "phase_name", None)
+                if self._call_accepts_keyword(execute_method, "continuation"):
+                    execute_kwargs["continuation"] = self._current_session_continuation()
+                retry_response, retry_token_usage, _, _, retry_streaming_log, retry_model = (
+                    self.agent_manager.execute(
+                        agent_name,
+                        retry_prompt,
+                        **execute_kwargs,
+                    )
                 )
+                self._merge_iteration_token_usage(retry_token_usage)
+
+                actual_cli = getattr(self.agent_manager, "get_last_cli", lambda: None)()
+                actual_session_id = getattr(
+                    self.agent_manager,
+                    "get_last_session_id",
+                    lambda: None,
+                )()
+                if (
+                    isinstance(actual_cli, AgentCLI)
+                    and isinstance(actual_session_id, str)
+                    and actual_session_id
+                ):
+                    self._session_continuation = SessionContinuation.resume_exact(
+                        actual_cli,
+                        actual_session_id,
+                    )
 
                 # Extract status code from retry response
                 retry_status_code = self._extract_status_code_from_response(
@@ -178,7 +210,9 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
                         context_data["response"] = retry_response  # Keep last response only
                         context_data["streaming_log"] = merged_streaming_log
                         context_data["checklist_validation_attempts"] = retry_count
-                        context_data["status_code"] = retry_status_code.value if retry_status_code else None
+                        context_data["status_code"] = (
+                            retry_status_code.value if retry_status_code else None
+                        )
                         # Update model if retry returned one
                         if retry_model is not None:
                             context_data["model"] = retry_model
@@ -189,10 +223,14 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
                     return retry_response, retry_status_code, True
 
                 elif not retry_result.is_complete:
-                    print(f"⚠️  Checklist still has {retry_result.unchecked_count} unchecked items after retry {retry_count}")
+                    print(
+                        f"⚠️  Checklist still has {retry_result.unchecked_count} unchecked items after retry {retry_count}"
+                    )
                 else:
                     # Checklist is complete but no valid status code extracted
-                    print(f"⚠️  Checklist complete but failed to extract valid status code from retry response (attempt {retry_count}/{max_retries})")
+                    print(
+                        f"⚠️  Checklist complete but failed to extract valid status code from retry response (attempt {retry_count}/{max_retries})"
+                    )
 
             except Exception as e:
                 print(f"⚠️  Failed to retry checklist completion: {e}")
@@ -258,7 +296,9 @@ checklist generation by overriding `_rebuild_checklist_for_iteration()`.
 
         print(f"⚠️  WARNING: Checklist rebuild not properly implemented for {phase_name} phase!")
         print(f"   Created placeholder checklist at {checklist_path}")
-        print(f"   Phase should override _rebuild_checklist_for_iteration() for proper checklist generation.")
+        print(
+            f"   Phase should override _rebuild_checklist_for_iteration() for proper checklist generation."
+        )
 
     def _get_checklist_completion_reminder(self) -> str:
         """Get checklist completion reminder text for prompts.
@@ -281,6 +321,7 @@ checklist generation by overriding `_rebuild_checklist_for_iteration()`.
 
         try:
             from cafe.utils.git_utils import to_cwd_relative_path
+
             checklist_relative = to_cwd_relative_path(checklist_path)
         except (ValueError, OSError):
             try:

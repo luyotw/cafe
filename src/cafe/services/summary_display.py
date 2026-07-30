@@ -181,7 +181,9 @@ class SummaryDisplay:
         table.add_column("Model", style="blue", no_wrap=False, overflow="fold")
         table.add_column("Input Tokens", style="cyan", justify="right")
         table.add_column("Output Tokens", style="cyan", justify="right")
+        table.add_column("Cache Write", style="cyan", justify="right")
         table.add_column("Cache Read", style="cyan", justify="right")
+        table.add_column("Reasoning", style="cyan", justify="right")
 
         # Add data rows
         for entry in entries:
@@ -202,7 +204,9 @@ class SummaryDisplay:
             model_str = entry.model or "--"
             input_tokens_str = self.format_token_count(entry.input_tokens)
             output_tokens_str = self.format_token_count(entry.output_tokens)
+            cache_write_str = self.format_token_count(entry.cache_write_tokens)
             cache_read_str = self.format_token_count(entry.cache_read_tokens)
+            reasoning_str = self.format_token_count(entry.reasoning_output_tokens)
 
             # Add row
             table.add_row(
@@ -215,7 +219,9 @@ class SummaryDisplay:
                 model_str,
                 input_tokens_str,
                 output_tokens_str,
-                cache_read_str
+                cache_write_str,
+                cache_read_str,
+                reasoning_str,
             )
 
         # Print table
@@ -245,7 +251,9 @@ class SummaryDisplay:
                         "model": entry.model,
                         "input_tokens": 0,
                         "output_tokens": 0,
+                        "cache_write_tokens": 0,
                         "cache_read_tokens": 0,
+                        "reasoning_output_tokens": 0,
                         "cost_usd": 0.0,
                     }
 
@@ -253,8 +261,12 @@ class SummaryDisplay:
                     aggregated[key]["input_tokens"] += entry.input_tokens
                 if entry.output_tokens:
                     aggregated[key]["output_tokens"] += entry.output_tokens
+                if entry.cache_write_tokens:
+                    aggregated[key]["cache_write_tokens"] += entry.cache_write_tokens
                 if entry.cache_read_tokens:
                     aggregated[key]["cache_read_tokens"] += entry.cache_read_tokens
+                if entry.reasoning_output_tokens:
+                    aggregated[key]["reasoning_output_tokens"] += entry.reasoning_output_tokens
                 if entry.cost_usd:
                     aggregated[key]["cost_usd"] += entry.cost_usd
 
@@ -267,7 +279,11 @@ class SummaryDisplay:
                 print(f"\n{stats['cli']} - {stats['model']}")
                 print(f"  Input Tokens:  {self.format_token_count(stats['input_tokens'])}")
                 print(f"  Output Tokens: {self.format_token_count(stats['output_tokens'])}")
+                print(f"  Cache Write:   {self.format_token_count(stats['cache_write_tokens'])}")
                 print(f"  Cache Read:    {self.format_token_count(stats['cache_read_tokens'])}")
+                print(
+                    f"  Reasoning:     {self.format_token_count(stats['reasoning_output_tokens'])}"
+                )
                 cost_str = f"${stats['cost_usd']:.4f}" if stats['cost_usd'] > 0 else "--"
                 print(f"  Cost (USD):    {cost_str}")
             print()
@@ -286,7 +302,9 @@ class SummaryDisplay:
                     "model": entry.model,
                     "input_tokens": 0,
                     "output_tokens": 0,
+                    "cache_write_tokens": 0,
                     "cache_read_tokens": 0,
+                    "reasoning_output_tokens": 0,
                     "cost_usd": 0.0,
                 }
 
@@ -295,8 +313,12 @@ class SummaryDisplay:
                 aggregated[key]["input_tokens"] += entry.input_tokens
             if entry.output_tokens:
                 aggregated[key]["output_tokens"] += entry.output_tokens
+            if entry.cache_write_tokens:
+                aggregated[key]["cache_write_tokens"] += entry.cache_write_tokens
             if entry.cache_read_tokens:
                 aggregated[key]["cache_read_tokens"] += entry.cache_read_tokens
+            if entry.reasoning_output_tokens:
+                aggregated[key]["reasoning_output_tokens"] += entry.reasoning_output_tokens
             if entry.cost_usd:
                 aggregated[key]["cost_usd"] += entry.cost_usd
 
@@ -316,7 +338,9 @@ class SummaryDisplay:
         table.add_column("Model", style="blue")
         table.add_column("Input Tokens", style="cyan", justify="right")
         table.add_column("Output Tokens", style="cyan", justify="right")
+        table.add_column("Cache Write", style="cyan", justify="right")
         table.add_column("Cache Read", style="cyan", justify="right")
+        table.add_column("Reasoning", style="cyan", justify="right")
         table.add_column("Cost (USD)", style="magenta", justify="right")
 
         # Add rows for each model
@@ -327,7 +351,9 @@ class SummaryDisplay:
                 stats["model"],
                 self.format_token_count(stats["input_tokens"]),
                 self.format_token_count(stats["output_tokens"]),
+                self.format_token_count(stats["cache_write_tokens"]),
                 self.format_token_count(stats["cache_read_tokens"]),
+                self.format_token_count(stats["reasoning_output_tokens"]),
                 f"${stats['cost_usd']:.4f}" if stats['cost_usd'] > 0 else "--",
             )
 

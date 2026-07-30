@@ -29,11 +29,11 @@ class PhaseStatus(str, Enum):
 
 class CriticalPhaseError(Exception):
     """Critical error that should stop the entire workflow.
-    
+
     This is used for errors like API rate limits or missing CLI tools,
     where continuing to the next phase would be pointless.
     """
-    
+
     def __init__(self, message: str, error_type: str, phase_name: str):
         super().__init__(message)
         self.error_type = error_type
@@ -132,7 +132,9 @@ class TokenUsage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    cache_write_input_tokens: int = 0
     cache_read_input_tokens: int = 0
+    reasoning_output_tokens: int = 0
     total_cost_usd: float = 0.0
     duration_ms: Optional[int] = None
     duration_api_ms: Optional[int] = None
@@ -270,14 +272,14 @@ class PhaseProgress(BaseModel):
         """Create from dictionary."""
         # Handle 'Z' suffix in timestamp (convert to +00:00 for fromisoformat)
         timestamp_str = data["timestamp"]
-        if timestamp_str.endswith('Z'):
-            timestamp_str = timestamp_str.replace('Z', '+00:00')
+        if timestamp_str.endswith("Z"):
+            timestamp_str = timestamp_str.replace("Z", "+00:00")
 
         end_time = None
         end_time_str = data.get("end_time")
         if end_time_str:
-            if end_time_str.endswith('Z'):
-                end_time_str = end_time_str.replace('Z', '+00:00')
+            if end_time_str.endswith("Z"):
+                end_time_str = end_time_str.replace("Z", "+00:00")
             end_time = datetime.fromisoformat(end_time_str)
 
         return cls(

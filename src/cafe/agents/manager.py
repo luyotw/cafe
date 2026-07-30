@@ -13,6 +13,10 @@ from cafe.agents.diagnostics import (
 )
 from cafe.agents.executor import AgentExecutor, AgentExecutionError
 from cafe.core.session import SessionManager
+from cafe.core.session_continuation import (
+    SessionContinuation,
+    SessionContinuationPolicy,
+)
 from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, CliEntry, TokenUsage
 
 
@@ -40,7 +44,9 @@ class AgentManager:
         "this session."
     )
 
-    def __init__(self, session_manager: Optional[SessionManager] = None, issue_name: Optional[str] = None) -> None:
+    def __init__(
+        self, session_manager: Optional[SessionManager] = None, issue_name: Optional[str] = None
+    ) -> None:
         """Initialize agent manager.
 
         Args:
@@ -68,15 +74,15 @@ class AgentManager:
         # Check if we should use mock agent
         if self._use_mock:
             from cafe.agents.mock_executor import MockAgentExecutor
-            
+
             # Get mock response from env var (default: ready_for_review with mock spec)
-            mock_response = os.getenv("CAFE_MOCK_RESPONSE", "ready_for_review\n\n# Mock Spec\n\nThis is a mock specification.")
-            self.agents[config.name] = MockAgentExecutor(
-                config=config,
-                response=mock_response
+            mock_response = os.getenv(
+                "CAFE_MOCK_RESPONSE",
+                "ready_for_review\n\n# Mock Spec\n\nThis is a mock specification.",
             )
+            self.agents[config.name] = MockAgentExecutor(config=config, response=mock_response)
             return
-        
+
         # Load existing session for this agent+CLI combination (if any)
         # Use issue-specific session if issue_name is provided
         session_data = self.session_manager.load_session(config.name, config.cli, self.issue_name)
@@ -276,29 +282,53 @@ class AgentManager:
             return None, None
 
         active_cli = active_info[0]
-        configured = [entry.cli for entry in self._normalize_chain(self._configured_chain_for_agent(config))]
+        configured = [
+            entry.cli for entry in self._normalize_chain(self._configured_chain_for_agent(config))
+        ]
         if active_cli not in configured:
             return None, None
 
         return active_cli, self._session_id_for_cli(agent_name, active_cli, phase_name)
 
+    def configured_execution_chain(self, agent_name: str) -> list[CliEntry]:
+        """Return the canonical crew chain, including legacy backup config."""
+        config = self.get_agent(agent_name).config
+        return self._normalize_chain(self._configured_chain_for_agent(config))
+
     def get_execution_config(
         self,
         agent_name: str,
         phase_name: Optional[str] = None,
+        continuation: Optional[SessionContinuation] = None,
     ) -> AgentConfig:
         """Return an AgentConfig adjusted for the effective CLI continuation target."""
         base = self.get_agent(agent_name).config
+        continuation = continuation or SessionContinuation.auto()
         chain = self._resolve_execution_chain(base, phase_name=phase_name)
         if not chain:
-            return base
+            return self._base_config_for_continuation(base, continuation)
+
+        if continuation.is_exact:
+            exact_index = next(
+                (index for index, entry in enumerate(chain) if entry.cli == continuation.cli),
+                None,
+            )
+            if exact_index is None:
+                continuation = SessionContinuation.new()
+            elif exact_index:
+                chain = [chain[exact_index], *chain[:exact_index], *chain[exact_index + 1 :]]
 
         primary = chain[0]
-        primary_session_id = self._session_id_for_cli(
-            agent_name,
-            primary.cli,
-            phase_name,
-        )
+        if continuation.is_exact and primary.cli == continuation.cli:
+            primary_session_id = continuation.session_id
+        elif continuation.policy == SessionContinuationPolicy.AUTO:
+            primary_session_id = self._session_id_for_cli(
+                agent_name,
+                primary.cli,
+                phase_name,
+            )
+        else:
+            primary_session_id = None
         primary_model = primary.resolve_model(phase_name)
         if primary_model is None:
             primary_model = primary.model
@@ -312,6 +342,20 @@ class AgentManager:
             backup_clis=[entry.cli for entry in chain[1:]],
             models_config=base.models_config,
         )
+
+    @staticmethod
+    def _base_config_for_continuation(
+        base: AgentConfig,
+        continuation: SessionContinuation,
+    ) -> AgentConfig:
+        """Apply an explicit continuation policy without consulting persistence."""
+        if continuation.policy == SessionContinuationPolicy.AUTO:
+            return base
+        if continuation.is_exact and continuation.cli == base.cli:
+            session_id = continuation.session_id
+        else:
+            session_id = None
+        return base.model_copy(update={"session_id": session_id})
 
     @staticmethod
     def _config_is_equivalent(a: AgentConfig, b: AgentConfig) -> bool:
@@ -371,6 +415,7 @@ class AgentManager:
         allowed_directories: Optional[List[str]] = None,
         streaming_output_file: Optional[str] = None,
         phase_name: Optional[str] = None,
+        continuation: Optional[SessionContinuation] = None,
     ) -> Tuple[str, TokenUsage, List, Optional[List[str]], List[str], Optional[str]]:
         """Execute prompt with specified agent.
 
@@ -393,23 +438,32 @@ class AgentManager:
         base_executor = self.get_agent(agent_name)
 
         try:
-            execution_config = self.get_execution_config(agent_name, phase_name=phase_name)
+            execution_config = self.get_execution_config(
+                agent_name,
+                phase_name=phase_name,
+                continuation=continuation,
+            )
         except Exception:
-            execution_config = base_executor.config
+            execution_config = self._base_config_for_continuation(
+                base_executor.config,
+                continuation or SessionContinuation.auto(),
+            )
 
         if not self._config_is_equivalent(base_executor.config, execution_config):
             executor = AgentExecutor(execution_config)
-            self.agents[agent_name] = executor
+            effective_continuation = continuation or SessionContinuation.auto()
+            if effective_continuation.policy == SessionContinuationPolicy.AUTO:
+                self.agents[agent_name] = executor
         else:
             executor = base_executor
 
         # Show prompt if enabled
         if self.show_prompt:
-            print(f"\n{'='*80}")
+            print(f"\n{'=' * 80}")
             print(f"📝 Prompt for {agent_name}:")
-            print(f"{'='*80}")
+            print(f"{'=' * 80}")
             print(prompt)
-            print(f"{'='*80}\n")
+            print(f"{'=' * 80}\n")
 
         # Track if we've already retried for session conflict
         retried = False
@@ -458,7 +512,9 @@ class AgentManager:
                         "⚠️  Resuming the develop session once with an immediate-edit instruction..."
                     )
                     primary_attempt += 1
-                elif hasattr(e, 'error_type') and e.error_type == "SESSION_CONFLICT" and not retried:
+                elif (
+                    hasattr(e, "error_type") and e.error_type == "SESSION_CONFLICT" and not retried
+                ):
                     retried = True
                     # Clear session ID to force creation of new session on next execution
                     print(f"⚠️  Session conflict detected, will create new session on retry...")
@@ -473,7 +529,7 @@ class AgentManager:
                         f"⚠️  {executor.config.cli.value} connection closed unexpectedly, "
                         "retrying once..."
                     )
-                elif hasattr(e, 'error_type') and e.error_type in self.FALLBACKABLE_ERROR_TYPES:
+                elif hasattr(e, "error_type") and e.error_type in self.FALLBACKABLE_ERROR_TYPES:
                     # Try backup agents
                     agent_response = self._try_backup_agents(
                         primary_error=e,
@@ -483,6 +539,7 @@ class AgentManager:
                         allowed_directories=allowed_directories,
                         streaming_output_file=streaming_output_file,
                         phase_name=phase_name,
+                        continuation=continuation,
                     )
                     break  # Backup succeeded, exit loop
                 else:
@@ -517,14 +574,18 @@ class AgentManager:
         # Accumulate token usage
         self._total_token_usage.input_tokens += token_usage.input_tokens
         self._total_token_usage.output_tokens += token_usage.output_tokens
-        self._total_token_usage.cache_creation_input_tokens += token_usage.cache_creation_input_tokens
+        self._total_token_usage.cache_creation_input_tokens += (
+            token_usage.cache_creation_input_tokens
+        )
+        self._total_token_usage.cache_write_input_tokens += token_usage.cache_write_input_tokens
         self._total_token_usage.cache_read_input_tokens += token_usage.cache_read_input_tokens
+        self._total_token_usage.reasoning_output_tokens += token_usage.reasoning_output_tokens
         self._total_token_usage.total_cost_usd += token_usage.total_cost_usd
         if token_usage.turn_usages:
             self._total_token_usage.turn_usages.extend(token_usage.turn_usages)
 
         # Track latest model (only in execute, not execute_current which doesn't return model)
-        if 'model' in locals() and model:
+        if "model" in locals() and model:
             self._last_model = model
 
         # For duration, accumulate the values
@@ -547,14 +608,33 @@ class AgentManager:
         prompt: str,
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
+        phase_name: Optional[str] = None,
+        continuation: Optional[SessionContinuation] = None,
     ) -> Optional[List[str]]:
         """Preview CLI command args before execution starts."""
-        executor = self.get_agent(agent_name)
+        executor = AgentExecutor(
+            self.get_execution_config(
+                agent_name,
+                phase_name=phase_name,
+                continuation=continuation,
+            )
+        )
         return executor.preview_cli_command_args(prompt, allowed_tools, allowed_directories)
 
-    def preview_cli_environment(self, agent_name: str) -> Optional[dict[str, str]]:
+    def preview_cli_environment(
+        self,
+        agent_name: str,
+        phase_name: Optional[str] = None,
+        continuation: Optional[SessionContinuation] = None,
+    ) -> Optional[dict[str, str]]:
         """Build the CLI environment that would be used for execution."""
-        executor = self.get_agent(agent_name)
+        executor = AgentExecutor(
+            self.get_execution_config(
+                agent_name,
+                phase_name=phase_name,
+                continuation=continuation,
+            )
+        )
         return executor.preview_cli_environment()
 
     def _try_backup_agents(
@@ -566,6 +646,7 @@ class AgentManager:
         allowed_directories: Optional[List[str]] = None,
         streaming_output_file: Optional[str] = None,
         phase_name: Optional[str] = None,
+        continuation: Optional[SessionContinuation] = None,
     ) -> "AgentResponse":
         """Try backup agents in order until one succeeds or all fail.
 
@@ -603,6 +684,7 @@ class AgentManager:
         else:
             # Legacy path: reconstruct minimal CliEntry list from backup_clis + models_config
             from cafe.core.types import CliEntry
+
             fallback_entries = []
             for backup_cli in config.backup_clis:
                 phase_models = {}
@@ -616,14 +698,14 @@ class AgentManager:
             raise primary_error
 
         primary_cli_name = config.cli.value
-        print(f"❌ {primary_cli_name} failed ({self._fallback_reason(primary_error)}), trying backup agent...")
+        print(
+            f"❌ {primary_cli_name} failed ({self._fallback_reason(primary_error)}), trying backup agent..."
+        )
         self._print_fallback_error_detail(primary_error)
 
         # Track tried CLIs to avoid duplicates
         tried_clis = {config.cli}
-        failed_agents: List[str] = [
-            f"{primary_cli_name} ({sanitize_error_excerpt(primary_error)})"
-        ]
+        failed_agents: List[str] = [f"{primary_cli_name} ({sanitize_error_excerpt(primary_error)})"]
 
         for entry in fallback_entries:
             if entry.cli in tried_clis:
@@ -633,12 +715,15 @@ class AgentManager:
             backup_model = entry.resolve_model(phase_name)
             print(f"Trying {entry.cli.value}...")
 
-            # Create a new executor for the fallback CLI, reusing its session if one exists.
-            fallback_session_id = self._session_id_for_cli(
-                config.name,
-                entry.cli,
-                phase_name,
-            )
+            # Explicit workflow policies never continue a different fallback
+            # session. AUTO preserves legacy sticky-session behavior.
+            fallback_session_id = None
+            if continuation is None or continuation.policy == SessionContinuationPolicy.AUTO:
+                fallback_session_id = self._session_id_for_cli(
+                    config.name,
+                    entry.cli,
+                    phase_name,
+                )
             backup_config = AgentConfig(
                 name=config.name,
                 cli=entry.cli,
@@ -682,18 +767,19 @@ class AgentManager:
                         transient_retry_done = True
                         backup_attempt += 1
                         print(
-                            f"⚠️  {entry.cli.value} connection closed unexpectedly, "
-                            "retrying once..."
+                            f"⚠️  {entry.cli.value} connection closed unexpectedly, retrying once..."
                         )
                         continue
                     if (
-                        hasattr(backup_error, 'error_type')
+                        hasattr(backup_error, "error_type")
                         and backup_error.error_type in self.FALLBACKABLE_ERROR_TYPES
                     ):
                         failed_agents.append(
                             f"{entry.cli.value} ({sanitize_error_excerpt(backup_error)})"
                         )
-                        print(f"❌ {entry.cli.value} failed ({self._fallback_reason(backup_error)}), trying next agent...")
+                        print(
+                            f"❌ {entry.cli.value} failed ({self._fallback_reason(backup_error)}), trying next agent..."
+                        )
                         self._print_fallback_error_detail(backup_error)
                         break
                     raise
@@ -776,18 +862,25 @@ class AgentManager:
         # Save session ID if it was created during execution
         if current.config.session_id and self.current_agent_name:
             self.session_manager.save_session(
-                self.current_agent_name, current.config.cli, current.config.session_id, self.issue_name
+                self.current_agent_name,
+                current.config.cli,
+                current.config.session_id,
+                self.issue_name,
             )
 
         # Accumulate token usage
         self._total_token_usage.input_tokens += token_usage.input_tokens
         self._total_token_usage.output_tokens += token_usage.output_tokens
-        self._total_token_usage.cache_creation_input_tokens += token_usage.cache_creation_input_tokens
+        self._total_token_usage.cache_creation_input_tokens += (
+            token_usage.cache_creation_input_tokens
+        )
+        self._total_token_usage.cache_write_input_tokens += token_usage.cache_write_input_tokens
         self._total_token_usage.cache_read_input_tokens += token_usage.cache_read_input_tokens
+        self._total_token_usage.reasoning_output_tokens += token_usage.reasoning_output_tokens
         self._total_token_usage.total_cost_usd += token_usage.total_cost_usd
 
         # Track latest model (only in execute, not execute_current which doesn't return model)
-        if 'model' in locals() and model:
+        if "model" in locals() and model:
             self._last_model = model
 
         # For duration, accumulate the values
@@ -891,9 +984,7 @@ class AgentManager:
         )
 
         if result.returncode != 0:
-            raise RuntimeError(
-                f"Failed to create Claude session: {result.stderr}"
-            )
+            raise RuntimeError(f"Failed to create Claude session: {result.stderr}")
 
         try:
             response = json.loads(result.stdout)
@@ -902,9 +993,7 @@ class AgentManager:
                 raise RuntimeError("No session_id in Claude CLI response")
             return session_id
         except json.JSONDecodeError as e:
-            raise RuntimeError(
-                f"Failed to parse Claude CLI response: {e}"
-            ) from e
+            raise RuntimeError(f"Failed to parse Claude CLI response: {e}") from e
 
     @classmethod
     def get_agent_file_path(cls, agent_name: str, role: str, cafe_dir: str = None) -> str:
