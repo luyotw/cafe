@@ -279,6 +279,22 @@ steps:
     assert resolve_prepare_config(result.model) == default_prepare_config()
 
 
+def test_builtin_interactive_prepare_requires_declared_fields(tmp_path: Path) -> None:
+    """Bundled interactive setup must not fall back to hidden legacy prompts."""
+    loader = _loader(tmp_path)
+    _write_playbook(
+        loader._roots()[0],
+        "missing-fields",
+        _minimal_playbook_yaml(
+            playbook_id="missing-fields",
+            prepare_block=STANDARD_PREPARE_YAML,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="fields.*fields_ref"):
+        loader.load_model("missing-fields")
+
+
 def _expected_standard_prepare() -> dict:
     return _legacy_prepare_dump(default_prepare_config())
 
