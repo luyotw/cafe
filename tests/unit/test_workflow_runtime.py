@@ -58,6 +58,89 @@ def _write_iteration_evidence(
     return iteration_dir
 
 
+def test_runtime_rejects_undeclared_alignment_baton_before_routing(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "driver-owned-alignment-baton"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    calls = 0
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            _write_baton(
+                issue_dir,
+                from_step=step_name,
+                to_owner="user",
+                to_step="user",
+                intent="alignment_checkpoint",
+            )
+        else:
+            _write_baton(
+                issue_dir,
+                from_step=step_name,
+                to_owner="done",
+                to_step="done",
+                intent="workflow_complete",
+            )
+        return StepExecutionResult(response="", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="develop")
+
+    assert result.completed is True
+    assert calls == 2
+    blackboard = BlackboardStore(issue_dir).load_or_create("develop")
+    rejected = [
+        event for event in blackboard.events if event.event_type == "baton_rejected"
+    ]
+    assert rejected[-1].data["field"] == "intent"
+    assert rejected[-1].data["invalid_value"] == "alignment_checkpoint"
+
+
+def test_runtime_rejects_undeclared_alignment_legacy_status(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "driver-owned-alignment-status"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_: StepExecutionResult(
+            response="alignment_checkpoint",
+            artifacts={},
+        ),
+    ).run(start_step="develop")
+
+    assert result.completed is False
+    assert result.final_status_code == "INVALID_STATUS_CODE"
+    blackboard = BlackboardStore(issue_dir).load_or_create("develop")
+    assert blackboard.current_step == "develop"
+
+
 def test_runtime_blocks_pr_done_without_publish_receipt(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-pr"
     playbook = {
@@ -1451,8 +1534,11 @@ def test_runtime_prefers_step_baton_over_missing_status_text(tmp_path: Path) -> 
             "spec": {
                 "skill": "spec_first",
                 "role": "pm",
-                "valid_intents": ["confirmed"],
-                "on": {"await_agent": "_done"},
+                "valid_intents": ["confirmed", "ready_for_review"],
+                "on": {
+                    "await_agent": "_done",
+                    "confirm_output": "spec",
+                },
             },
         },
     }

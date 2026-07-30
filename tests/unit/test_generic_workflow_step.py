@@ -3665,6 +3665,37 @@ def _make_alignment_executor(tmp_path: Path, issue_name: str, step_def: dict, us
     return issue_dir, playbook, state, agent_manager, executor
 
 
+def test_agent_baton_rejects_intent_not_exposed_by_step(tmp_path: Path) -> None:
+    step_def = {
+        "skill": "develop",
+        "role": "developer",
+        "output_artifact": "code",
+        "on": {"await_agent": "_done", "need_clarification": "develop"},
+    }
+    issue_dir, _, _, _, executor = _make_alignment_executor(
+        tmp_path,
+        "issue-baton-effective-intents",
+        step_def,
+        "",
+    )
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "to_owner": "user",
+                "to_step": "user",
+                "intent": "alignment_checkpoint",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert not executor._agent_wrote_baton(
+        "develop",
+        step_def,
+    )
+
+
 def test_alignment_gate_skipped_without_alignment_block(tmp_path: Path, monkeypatch) -> None:
     """Opt-in gate: a step with no `alignment:` block does not pause, even when
     policy triggers (e.g. roadmap-scope changes) would otherwise fire — the agent

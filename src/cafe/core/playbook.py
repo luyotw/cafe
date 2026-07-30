@@ -78,7 +78,7 @@ SkillSelector = Union[str, Dict[str, str]]
 
 
 class StepAlignmentConfig(BaseModel):
-    """Policy gate configuration for pre-execution alignment checkpoints."""
+    """Opt-in compatibility config for pre-execution alignment checkpoints."""
 
     model_config = ConfigDict(extra="forbid")
 

@@ -1,7 +1,11 @@
 """Tests for status code definitions and extraction helpers."""
 
 from cafe.core.phase import Phase
-from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.status_codes import (
+    PhaseStatusCode,
+    effective_step_handoff_intents,
+    effective_step_status_codes,
+)
 
 
 class TestPhaseStatusCodeEnum:
@@ -19,6 +23,49 @@ class TestPhaseStatusCodeEnum:
         code = PhaseStatusCode.CONFIRMED
         assert code.value == "confirmed"
         assert isinstance(code, str)
+
+    def test_omitted_valid_intents_are_derived_from_declared_transitions(self) -> None:
+        actual = effective_step_status_codes(
+            {
+                "on": {
+                    "await_agent": "plan",
+                    "need_clarification": "spec",
+                }
+            }
+        )
+
+        assert PhaseStatusCode.CONFIRMED in actual
+        assert PhaseStatusCode.NEED_CLARIFICATION in actual
+        assert PhaseStatusCode.ALIGNMENT_CHECKPOINT not in actual
+
+    def test_terminal_transition_exposes_workflow_complete_baton(self) -> None:
+        actual = effective_step_handoff_intents(
+            {"on": {"await_agent": "_done"}}
+        )
+
+        assert "await_agent" in actual
+        assert "workflow_complete" in actual
+        assert "alignment_checkpoint" not in actual
+
+    def test_active_alignment_block_exposes_compatibility_baton(self) -> None:
+        actual = effective_step_handoff_intents(
+            {
+                "alignment": {},
+                "on": {"await_agent": "_done"},
+            }
+        )
+
+        assert "alignment_checkpoint" in actual
+
+    def test_disabled_alignment_block_does_not_expose_compatibility_baton(self) -> None:
+        actual = effective_step_handoff_intents(
+            {
+                "alignment": {"enabled": False},
+                "on": {"await_agent": "_done"},
+            }
+        )
+
+        assert "alignment_checkpoint" not in actual
 
 
 class TestPhaseStatusExtraction:

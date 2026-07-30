@@ -1,4 +1,8 @@
-"""Deterministic alignment policy and checkpoint payload models."""
+"""Opt-in compatibility policy and alignment checkpoint payload models.
+
+Bundled workflows delegate semantic alignment to the workflow driver. This
+module remains available to legacy or explicitly opted-in custom playbooks.
+"""
 
 from __future__ import annotations
 

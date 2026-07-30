@@ -39,6 +39,8 @@ from cafe.core.session_continuation import (
 from cafe.core.status_codes import (
     PhaseStatusCode,
     StatusCodeParser,
+    effective_step_handoff_intents,
+    effective_step_status_codes,
     step_on_declares,
     transition_map_key,
 )
@@ -403,7 +405,7 @@ class GenericWorkflowStepExecutor(Phase):
             # If the agent already wrote a valid baton (next_step.txt),
             # skip the status-code-driven baton write so we don't overwrite
             # the agent's explicit handoff.  This is the baton-first path.
-            if not self._agent_wrote_baton(step_name):
+            if not self._agent_wrote_baton(step_name, step_def):
                 self._write_status_transition_handoff(
                     blackboard_state=blackboard_state,
                     step_name=step_name,
@@ -814,12 +816,7 @@ class GenericWorkflowStepExecutor(Phase):
 
     @staticmethod
     def _resolve_valid_intents(step_def: Dict[str, Any]) -> List[PhaseStatusCode]:
-        valid = []
-        known_values = {item.value for item in PhaseStatusCode}
-        for code in step_def.get("valid_intents", []):
-            if code in known_values:
-                valid.append(PhaseStatusCode(code))
-        return valid or list(PhaseStatusCode)
+        return effective_step_status_codes(step_def)
 
     @staticmethod
     def _normalize_allowed_tools(raw_tools: List[str]) -> List[str]:
@@ -928,6 +925,7 @@ class GenericWorkflowStepExecutor(Phase):
         step_transitions = {
             str(k): ("done" if str(v) in ("_done", "done") else str(v)) for k, v in step_on.items()
         }
+        valid_baton_intents = effective_step_handoff_intents(step_def)
         context = {
             "agent_file": AgentManager.get_agent_file_path(agent_name, role_dir),
             "handoff_summary": getattr(blackboard_state, "handoff_summary", ""),
@@ -936,6 +934,7 @@ class GenericWorkflowStepExecutor(Phase):
             "next_step_path": self._display_path(self.issue_dir / "next_step.txt"),
             "output_file": self._display_path(output_file),
             "valid_to_steps": ", ".join(valid_to_steps),
+            "valid_baton_intents": ", ".join(valid_baton_intents),
             "step_transitions": ", ".join(f"{i}→{s}" for i, s in step_transitions.items()),
         }
 
@@ -1263,13 +1262,17 @@ class GenericWorkflowStepExecutor(Phase):
             return None
         return matches[0].strip()
 
-    def _agent_wrote_baton(self, step_name: str) -> bool:
+    def _agent_wrote_baton(
+        self,
+        step_name: str,
+        step_def: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """Check whether the agent already wrote a valid baton (next_step.txt).
 
         A baton is considered agent-written when it exists, parses as a valid
-        contract, targets a different step (from_step != to_step), and is
-        attributed to the current step (or defaults to it under the new strict
-        contract).
+        contract, uses an intent exposed by the current step, targets a
+        different step (from_step != to_step), and is attributed to the current
+        step (or defaults to it under the new strict contract).
         """
         baton_path = self.issue_dir / "next_step.txt"
         if not baton_path.exists():
@@ -1282,10 +1285,14 @@ class GenericWorkflowStepExecutor(Phase):
                 payload,
                 current_step=step_name,
             )
+            allowed_handoff_intents = set(
+                effective_step_handoff_intents(step_def or {})
+            )
             return (
                 contract.from_step == step_name
                 and contract.from_step != contract.to_step
                 and contract.to_step
+                and contract.intent.value in allowed_handoff_intents
             )
         except Exception:
             return False

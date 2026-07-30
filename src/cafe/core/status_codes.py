@@ -84,6 +84,63 @@ def step_on_declares(step_def: dict, intent_key: str) -> bool:
     return intent_key in on_map
 
 
+def step_declares_active_alignment(step_def: dict) -> bool:
+    """Return whether a custom/legacy step opts into the core alignment gate."""
+    raw_alignment = step_def.get("alignment")
+    return (
+        isinstance(raw_alignment, dict)
+        and raw_alignment.get("enabled", True) is not False
+        and raw_alignment.get("trigger_policy", "policy") != "disabled"
+    )
+
+
+def effective_step_status_codes(step_def: dict) -> List[PhaseStatusCode]:
+    """Resolve the status codes a step can actually consume.
+
+    An explicit ``valid_intents`` list remains authoritative. When it is
+    omitted, derive the effective set from the step's declared transitions
+    instead of exposing every runtime status code. A transition ``default``
+    intentionally preserves the legacy accept-any fallback.
+    """
+    known_values = {item.value for item in PhaseStatusCode}
+    explicit = [
+        PhaseStatusCode(code)
+        for code in step_def.get("valid_intents", [])
+        if code in known_values
+    ]
+    if explicit:
+        return explicit
+
+    on_map = step_def.get("on")
+    if not isinstance(on_map, dict) or not on_map or "default" in on_map:
+        return list(PhaseStatusCode)
+    return [
+        code for code in PhaseStatusCode if transition_map_key(code) in on_map
+    ]
+
+
+def effective_step_handoff_intents(step_def: dict) -> List[str]:
+    """Resolve structured baton intents exposed by one step."""
+    intents = list(
+        dict.fromkeys(
+            transition_map_key(code)
+            for code in effective_step_status_codes(step_def)
+        )
+    )
+    on_map = step_def.get("on")
+    if isinstance(on_map, dict) and any(
+        str(target) in {"done", "_done"} for target in on_map.values()
+    ):
+        intents.append("workflow_complete")
+    if step_declares_active_alignment(step_def):
+        # `alignment:` has historically been the complete opt-in contract.
+        # Custom playbooks should not need a redundant transition route.
+        intents.append("alignment_checkpoint")
+    if step_def.get("allowed_goto"):
+        intents.append("manual_handoff")
+    return list(dict.fromkeys(intents))
+
+
 class StatusCodeParser:
     """Legacy free-text → ``PhaseStatusCode`` parser.
 

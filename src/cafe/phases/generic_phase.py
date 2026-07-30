@@ -13,7 +13,11 @@ from cafe.core.blackboard import HandoffIntent
 from cafe.core.hooks import BUILTIN_HOOKS, HookResult
 from cafe.core.hooks.script_schema import validate_script_args_schema
 from cafe.core.questions_schema import validate_questions_xml
-from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
+from cafe.core.status_codes import (
+    PhaseStatusCode,
+    StatusCodeParser,
+    effective_step_status_codes,
+)
 from cafe.core.types import AgentCLI
 from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.skills.native_bridge import NativeSkillBridge
@@ -161,7 +165,11 @@ class GenericPhase:
             lines.extend(runtime_files)
             lines.append("")
 
-        baton_intents = ", ".join(intent.value for intent in HandoffIntent)
+        baton_intents = (
+            context.get("valid_baton_intents", "")
+            if context
+            else ""
+        ) or ", ".join(intent.value for intent in HandoffIntent)
         runtime_context.append("Baton contract (single source of truth):")
         runtime_context.append(f"- valid intent values: [{baton_intents}]")
         # 列出本 playbook 實際合法的 to_step，避免 agent 沿用共用 skill 範例裡的 step
@@ -814,14 +822,10 @@ class GenericPhase:
         context: Optional[Dict[str, Any]] = None,
         step_name: Optional[str] = None,
     ) -> Optional[str]:
-        valid = [
-            PhaseStatusCode(code)
-            for code in step_def.get("valid_intents", [])
-            if code in {item.value for item in PhaseStatusCode}
-        ]
+        valid = effective_step_status_codes(step_def)
 
         context = context or {}
-        valid_values = {status.value for status in (valid or list(PhaseStatusCode))}
+        valid_values = {status.value for status in valid}
 
         next_step_intent = GenericPhase._read_baton_intent(
             next_step_path=context.get("next_step_path"),
@@ -830,5 +834,5 @@ class GenericPhase:
         if next_step_intent in valid_values:
             return next_step_intent
 
-        status_code = StatusCodeParser.extract(response, valid_codes=valid or list(PhaseStatusCode))
+        status_code = StatusCodeParser.extract(response, valid_codes=valid)
         return status_code.value if status_code is not None else None

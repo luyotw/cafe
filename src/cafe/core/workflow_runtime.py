@@ -21,6 +21,8 @@ from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import (
     PhaseStatusCode,
     StatusCodeParser,
+    effective_step_handoff_intents,
+    effective_step_status_codes,
     step_on_declares,
     transition_map_key,
 )
@@ -454,6 +456,19 @@ class BlackboardWorkflowRuntime:
         contract = self._load_agent_written_handoff_contract(current_step=current_step)
         if contract.from_step != current_step:
             return None
+        if not (
+            contract.to_owner == HandoffOwner.AGENT
+            and contract.to_step == current_step
+        ):
+            valid_intents = effective_step_handoff_intents(
+                self.steps.get(current_step, {})
+            )
+            if contract.intent.value not in valid_intents:
+                raise BatonRejected(
+                    field="intent",
+                    invalid_value=contract.intent.value,
+                    valid_values=valid_intents,
+                )
         return contract
 
     @staticmethod
@@ -529,21 +544,18 @@ class BlackboardWorkflowRuntime:
         response: str,
         explicit_status_code: Optional[str],
     ) -> tuple[Optional[PhaseStatusCode], Optional[str], list[PhaseStatusCode]]:
-        valid_codes = [
-            PhaseStatusCode(code)
-            for code in step_def.get("valid_intents", [])
-            if code in {item.value for item in PhaseStatusCode}
-        ]
+        valid_codes = effective_step_status_codes(step_def)
+        allowed_values = {code.value for code in valid_codes}
         goto_target = self._extract_goto_target(response)
         status_code_obj = (
             PhaseStatusCode(explicit_status_code)
-            if explicit_status_code in {item.value for item in PhaseStatusCode}
+            if explicit_status_code in allowed_values
             else None
         )
         if status_code_obj is None:
             status_code_obj = StatusCodeParser.extract(
                 response,
-                valid_codes=valid_codes or list(PhaseStatusCode),
+                valid_codes=valid_codes,
             )
         return status_code_obj, goto_target, valid_codes
 
@@ -1519,9 +1531,7 @@ class BlackboardWorkflowRuntime:
                             response=frame.response,
                             explicit_status_code=frame.explicit_status_code,
                         )
-                        allowed_status_codes = {
-                            code.value for code in (valid_codes or list(PhaseStatusCode))
-                        }
+                        allowed_status_codes = {code.value for code in valid_codes}
                         status_like_tokens = self._extract_status_like_tokens(
                             response=frame.response,
                             explicit_status_code=frame.explicit_status_code,
@@ -1606,7 +1616,7 @@ class BlackboardWorkflowRuntime:
                 response=frame.response,
                 explicit_status_code=frame.explicit_status_code,
             )
-            allowed_status_codes = {code.value for code in (valid_codes or list(PhaseStatusCode))}
+            allowed_status_codes = {code.value for code in valid_codes}
             if status_code_obj is None:
                 handoff_next_step: Optional[str] = None
                 handoff_transition_source = "terminal"

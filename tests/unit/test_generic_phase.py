@@ -51,6 +51,21 @@ def test_build_prompt_references_skill_invocation_not_embedded_body(tmp_path: Pa
     assert "Custom project plan skill" not in prompt
 
 
+def test_build_prompt_lists_only_effective_baton_intents(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+
+    prompt = phase.build_prompt(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        context={
+            "valid_baton_intents": "await_agent, need_clarification",
+        },
+    )
+
+    assert "valid intent values: [await_agent, need_clarification]" in prompt
+    assert "alignment_checkpoint" not in prompt
+
+
 def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     prompt = phase.build_prompt(

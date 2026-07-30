@@ -17,7 +17,8 @@ def test_required_alignment_checkpoint_pauses_at_user(tmp_path: Path) -> None:
             "develop": {
                 "skill": "develop",
                 "role": "developer",
-                "on": {"await_agent": "_done", "alignment_checkpoint": "develop"},
+                "alignment": {},
+                "on": {"await_agent": "_done"},
             }
         },
         "entry_point": "develop",

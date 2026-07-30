@@ -40,17 +40,10 @@ steps:
         outcomes: {submit: spec}
     allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
     hooks:
-      prepare_input: [GitHubIssueFetcher, UserInputCollector, AlignmentCheckpointGate]
+      prepare_input: [GitHubIssueFetcher, UserInputCollector]
       after_execute: [InteractiveQAHandler]
-    alignment:
-      trigger_policy: policy
-      pause_threshold: 5
-      note_threshold: 2
-      affected_document_categories: [roadmap, product_direction, principles, positioning, strategic_context]
-      reuse_approved: true
     "on":
       confirm_output: spec
-      alignment_checkpoint: spec
       need_clarification: spec
       need_permission: spec
       await_agent: plan
@@ -75,7 +68,7 @@ steps:
         outcomes: {submit: plan}
     allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
     hooks:
-      prepare_input: [UserInputCollector, AlignmentCheckpointGate]
+      prepare_input: [UserInputCollector]
       after_execute:
         - script: sync_github.sh
           when_intents: [confirmed]
@@ -92,15 +85,8 @@ steps:
                 enum: [spec, plan]
               output:
                 type: string
-    alignment:
-      trigger_policy: policy
-      pause_threshold: 5
-      note_threshold: 2
-      affected_document_categories: [roadmap, product_direction, principles, strategic_context]
-      reuse_approved: true
     "on":
       confirm_output: plan
-      alignment_checkpoint: plan
       need_clarification: plan
       need_permission: plan
       await_agent: develop
@@ -123,17 +109,10 @@ steps:
         outcomes: {agree: pr, disagree: develop}
     allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
     hooks:
-      prepare_input: [UserInputCollector, AlignmentCheckpointGate]
+      prepare_input: [UserInputCollector]
       after_execute: [NoChangesNeededHandler, PermissionRetryHandler]
-    alignment:
-      trigger_policy: policy
-      pause_threshold: 5
-      note_threshold: 2
-      affected_document_categories: [roadmap, product_direction, principles, strategic_context]
-      reuse_approved: true
     "on":
       await_agent: review
-      alignment_checkpoint: develop
       manual_handoff: pr
       need_clarification: develop
       need_permission: develop

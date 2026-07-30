@@ -1,4 +1,4 @@
-"""Alignment checkpoint hook."""
+"""Opt-in alignment checkpoint compatibility hook."""
 
 from __future__ import annotations
 
@@ -14,12 +14,12 @@ from cafe.core.alignment import (
 )
 from cafe.core.blackboard import BlackboardState, BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.hooks import HookResult, NoOpHook
-from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.status_codes import PhaseStatusCode, step_declares_active_alignment
 from cafe.core.strategic_context import load_strategic_context
 
 
 class AlignmentCheckpointGate(NoOpHook):
-    """Run deterministic alignment policy before agent execution."""
+    """Run the legacy/custom deterministic policy before agent execution."""
 
     name = "AlignmentCheckpointGate"
 
@@ -32,12 +32,9 @@ class AlignmentCheckpointGate(NoOpHook):
         # `alignment:` block. Omitting the block disables the gate; a playbook
         # that wants gating must add `alignment:` (and may tune it further).
         raw_alignment = step_def.get("alignment")
-        if not isinstance(raw_alignment, dict):
+        if not step_declares_active_alignment(step_def):
             return HookResult()
-        if raw_alignment.get("enabled", True) is False:
-            return HookResult()
-        if raw_alignment.get("trigger_policy", "policy") == "disabled":
-            return HookResult()
+        assert isinstance(raw_alignment, dict)
 
         phase = kwargs.get("phase")
         step_name = str(kwargs.get("step_name") or "")

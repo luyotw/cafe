@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.8.1
+version: 1.9.0
 ---
 
 # Use CAFE Workflow
@@ -15,6 +15,9 @@ version: 1.8.1
   handoff stops, and worktree behavior.
 - Resolve the active playbook's conversation locale before the kickoff and use
   it for every driver-to-user message.
+- Keep semantic alignment decisions in the workflow driver. Bundled playbooks
+  omit alignment configuration, so the globally registered compatibility hook
+  remains inactive for them.
 - Ground Q&A and PR review in **`.cafe/strategic_context.yaml`**—the single file for strategic documents, decision authority, and user-authorized per-issue overrides. If referenced documents do not exist yet, **help the user create them before** `cafe make`.
 
 ## Conversation Locale
@@ -88,17 +91,23 @@ confirmation instead of asking again.
    contract. If there are no candidates, still confirm that the workflow has no
    scheduled confirmation stops.
 
-`need_clarification`, `need_permission`, and `alignment_checkpoint` are reactive
-safety interruptions. They may still baton to the user when triggered, but they
-are not scheduled kickoff candidates. Still name the reactive policy in the
-kickoff contract:
+`need_clarification` and `need_permission` are reactive safety interruptions.
+They may still baton to the user when triggered, but they are not scheduled
+kickoff candidates. Alignment is a proactive driver decision, not a scheduled
+playbook gate. Its authority comes from the confirmed mandate rather than a
+second issue-level policy. Still name the reactive policy in the kickoff
+contract:
 - `need_clarification` stops for the real user unless the exact answer has
   already been supplied in the current thread.
 - `need_permission` stops for the real user unless the exact permission has
   already been supplied in the current thread.
-- `alignment_checkpoint` stops for the real user unless the kickoff contract
-  explicitly authorizes the driver to resolve clear, in-mandate alignment
-  decisions.
+- The driver proceeds without asking only when the proposal is clearly within
+  confirmed strategic documents and the resolved mandate level is `agent`
+  (or `propose` explicitly permits continuing after a grounded recommendation).
+- The driver stops when the proposal contradicts or extends confirmed strategy,
+  needs a strategic choice, or cannot be classified confidently.
+- A legacy or custom `alignment_checkpoint` handoff is compatibility input to
+  the same driver decision; it is not proof that user alignment is required.
 
 `manual_handoff` is routing, not a planned confirmation gate. Any runtime baton
 with `to_owner=user`, or terminal output such as `Workflow is waiting for user
@@ -183,7 +192,7 @@ change, or remove an issue-level override, do not write to this section.
   temporary scope summaries in `issues:`.
 - If an issue appears to need different authority than `mandate`, ask the user
   before writing the override; otherwise keep the repo-wide mandate and let the
-  alignment gate escalate normally.
+  driver classify any strategic delta.
 
 **Levels:** `agent` = decide within strategic docs + issue artifacts; `propose` = recommend then continue per playbook; `escalate` = must ask the user.
 
@@ -247,7 +256,7 @@ Re-read `.cafe/strategic_context.yaml` and linked documents before answering que
 
 ## Initial Setup
 1. Resolve the active playbook, derive its effective conversation locale,
-   confirmation gates, and reactive user-handoff policy, and complete the
+   confirmation gates and reactive user-handoff policy, then complete the
    kickoff contract as the first blocking interaction with the user.
 2. Check the repo state with `git status --short --branch`.
 3. If CAFE is not initialized, run `cafe init --preset <preset>` instead of interactive `cafe init`.
@@ -328,10 +337,9 @@ such as `Workflow is waiting for user input`:
 6. For `need_permission`: stop unless the exact permission has already been
    supplied by the user in the current thread. Never grant production access,
    destructive actions, or external side effects on the user's behalf.
-7. For `alignment_checkpoint`: apply the saved reactive policy. Continue only
-   when the policy explicitly allows driver resolution and the decision follows
-   directly from confirmed strategic docs, issue acceptance criteria, and
-   existing mandate. Otherwise stop for the user.
+7. For a legacy or custom `alignment_checkpoint`, apply the driver-owned
+   alignment classification below. The core checkpoint is evidence to inspect,
+   not an automatic reason to ask the user.
 8. For any other `to_owner=user` pause, stop for the real user. Unknown user
    handoffs are not driver-confirmable by default.
 
@@ -344,94 +352,116 @@ cafe make --user-input "confirmed"
 
 Use a correction instead of `confirmed` when the output is close but needs a
 bounded revision that follows directly from confirmed context. Stop for the user
-when approval would change requirements, implementation direction, public
-positioning, business/legal/pricing decisions, production access, destructive
-operations, or any ambiguous tradeoff.
+when approval would change confirmed requirements beyond driver authority,
+public positioning, business/legal/pricing decisions, production access,
+destructive operations, or any ambiguous strategic tradeoff.
 
-## Alignment Checkpoints
+## Driver-Owned Alignment
 
-When CAFE pauses with `intent=alignment_checkpoint`, apply the user-handoff
-rules first. The workflow driver may resolve the checkpoint only when the saved
-reactive policy allows it and the decision is clear from confirmed project
-context. Do not automatically hand off every checkpoint to the user, but do not
-bypass the kickoff contract either.
+The workflow driver owns the final semantic alignment decision. Bundled
+playbooks omit `alignment:` configuration, so the globally registered
+`AlignmentCheckpointGate` is inactive. An explicitly opted-in custom playbook
+may still use the core heuristic to propose a compatibility checkpoint, but the
+driver must not treat that proposal as the final judgment.
 
-### Inspect
+Alignment answers one question: **does the newest proposed scope remain within
+confirmed strategic documents and the user's mandate?** It is not normal spec
+confirmation, implementation clarification, or permission for an external
+side effect.
 
-1. Read the latest `.cafe/issues/<issue>/<step>/iteration_*/alignment_request.json`.
-2. Re-read `.cafe/strategic_context.yaml` and every referenced strategic document
-   that is relevant to the request.
-3. Read the current issue artifacts needed to understand the proposed scope
-   (`spec`, `plan`, or the blocked step output).
-4. Classify the checkpoint against the repo mandate:
-   - **Resolvable by driver:** the decision follows directly from confirmed
-     strategic docs, issue acceptance criteria, and existing mandate.
-   - **Needs user:** the decision changes or confirms product positioning,
-     roadmap direction, principles, trusted capability boundaries beyond existing
-     docs, business/legal/pricing/production access, or any ambiguous tradeoff.
+### Evaluation Boundaries
 
-### Driver-owned Decisions
+Evaluate alignment:
 
-If the checkpoint is resolvable by the driver, continue non-interactively with an
-explicit JSON decision payload. Plain text must not be used for alignment approval.
+1. During kickoff, after reading `.cafe/strategic_context.yaml` and the relevant
+   strategic documents, before the first `cafe make`.
+2. Before driver-confirming a spec or plan output.
+3. When a correction delta changes requirements, product scope, positioning,
+   principles, mandate, or trusted capability boundaries.
 
-Examples:
+Do not re-evaluate an unchanged scope merely because the workflow moved to
+develop, review, or PR. A correction that only fixes implementation or review
+findings inherits the latest accepted alignment result.
 
-```bash
-cafe make --user-input '{"decision":"approve","reason":"Within confirmed roadmap and capability boundary."}'
-```
+### Evidence And Classification
 
-```bash
-cafe make --user-input '{"decision":"narrow_scope","correction":"Keep this to PR publish plumbing; do not introduce a broader product-level contract model."}'
-```
+Use the newest user request or correction delta, the latest accepted spec, and
+only the relevant strategic documents. Do not classify from incidental keyword
+mentions, negative-space statements, generated boilerplate, or the full history
+of phase artifacts.
 
-```bash
-cafe make --user-input '{"decision":"revise_spec","correction":"Specify that capability contracts protect trusted host execution boundaries; broad product ontology is out of scope."}'
-```
+Write down this evidence tuple in driver reasoning before deciding:
 
-Use `approve` only when no missing or draft strategic document blocks the
-decision. Use `narrow_scope`, `revise_spec`, or `revise_plan` when the desired
-alignment correction is clear from confirmed context.
+- `proposal_delta`: the concrete new or changed scope
+- `strategic_ground`: the exact document section, mandate axis, or
+  out-of-mandate item that governs it
+- `mandate_level`: the resolved issue override or repo mandate level for that
+  axis (`agent`, `propose`, or `escalate`)
+- `relation`: `within`, `contradicts`, `extends`, `missing_ground`, or
+  `uncertain`
 
-### Strategic Document Updates
+Then act:
 
-If a strategic document is `missing` or `draft`, the driver may draft or revise
-the document, but must not treat its own draft as confirmed strategy.
+- `within` + `agent`: continue without asking the user.
+- `within` + `propose`: state the grounded recommendation and continue as
+  allowed by the playbook.
+- `within` + `escalate`: stop for the user; the confirmed mandate reserves that
+  axis even when the proposal is compatible with existing documents.
+- `contradicts` or `extends`: stop and ask the user one focused alignment
+  question.
+- `missing_ground` or `uncertain`: stop; do not invent strategy or silently
+  narrow the request.
 
-The driver may mark a document `status: exists` and continue with
-`strategic_documents_updated` only when one of these is true:
+Except for an explicit `escalate` mandate, only a concrete proposal delta plus
+a strategic ground may cause an alignment stop. A score assembled from several
+weak signals is not sufficient.
 
-- the user explicitly confirmed the final document content in the current
-  thread/chat; or
-- the document content is copied or mechanically split from an already confirmed
-  strategic document, with no new product judgment.
+Treat clarification and permission separately:
 
-When finalizing confirmed strategic documents non-interactively, include
-confirmation evidence in the JSON payload:
+- Missing product or implementation facts use `need_clarification`.
+- Production access, destructive operations, credentials, and external side
+  effects use `need_permission`.
+- A clear in-roadmap implementation choice needs neither.
 
-```bash
-cafe make --user-input '{"decision":"strategic_documents_updated","reason":"Positioning doc confirmed and strategic_context updated.","user_confirmed":true,"user_confirmation":"User confirmed the positioning framing: primary trusted host capability boundary, secondary external mutation risk; broad product contract model is out of scope."}'
-```
+### Asking And Resuming
 
-If the document requires product judgment and the user has not confirmed it,
-leave the document as `draft` or `missing` and ask the user concise questions.
-Do not write `strategic_documents_updated`.
+When alignment is required, ask one focused question that names the governing
+axis, the proposed delta, and a recommended option with its tradeoff. After the
+user answers, pass the answer to the responsible spec or plan step with
+`cafe make --user-input "<answer>"` so the accepted artifact records the
+decision. Update a strategic document only when the user explicitly confirms
+the new strategic content.
 
-### Ask The User When Uncertain
+If a strategic document is `missing` or `draft`, the driver may draft it but
+must not treat its own draft as confirmed strategy. Leave it `draft` or
+`missing` until user confirmation unless the change is a mechanical copy or
+split from already confirmed material.
 
-When the driver cannot resolve the checkpoint confidently, stop and ask the user
-one focused question with a recommended answer and tradeoff. Good questions name
-the decision axis directly, for example:
+### Legacy Or Custom Core Checkpoints
 
-```text
-For #347, should capability contracts be positioned primarily as:
-1. trusted host capability boundary protection (recommended),
-2. external mutation risk reduction, or
-3. a broader product-level contract model?
-```
+A legacy or explicitly opted-in custom playbook may still pause with
+`intent=alignment_checkpoint`. Treat its request as compatibility evidence, not
+as proof that the user must decide:
 
-After the user answers, apply the answer through the same JSON decision flow
-instead of opening the interactive menu unless the user asks for chat.
+1. Read the latest
+   `.cafe/issues/<issue>/<step>/iteration_*/alignment_request.json`.
+2. Apply the same evidence tuple and classification above.
+3. If `within` and `mandate_level` is `agent`, resume with an explicit JSON
+   decision payload; plain text must not approve a core checkpoint:
+
+   ```bash
+   cafe make --user-input '{"decision":"approve","reason":"Within confirmed roadmap and mandate."}'
+   ```
+
+4. If `within` and `mandate_level` is `propose`, follow the playbook's grounded
+   recommendation flow.
+5. If `mandate_level` is `escalate`, or the relation is `contradicts`,
+   `extends`, `missing_ground`, or `uncertain`, stop for the user.
+
+Use `narrow_scope`, `revise_spec`, or `revise_plan` only when the correction
+follows directly from confirmed context. `strategic_documents_updated` requires
+explicit user confirmation evidence unless the update is mechanically copied
+from confirmed strategic material.
 
 ## Useful Options
 - Use `--fallback-preset <preset>` when the primary CLI is rate-limited, unavailable, missing, or configured with a bad model.

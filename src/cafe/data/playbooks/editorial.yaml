@@ -63,19 +63,9 @@ steps:
     valid_intents:
       - confirmed
       - need_clarification
-      - alignment_checkpoint
     allowed_tools: [Read, Edit, Write, Grep, Glob, WebFetch, WebSearch]
-    hooks:
-      prepare_input: [AlignmentCheckpointGate]
-    alignment:
-      trigger_policy: policy
-      pause_threshold: 5
-      note_threshold: 2
-      affected_document_categories: [positioning]
-      reuse_approved: true
     "on":
       await_agent: review
-      alignment_checkpoint: draft
       need_clarification: draft
 
   review:

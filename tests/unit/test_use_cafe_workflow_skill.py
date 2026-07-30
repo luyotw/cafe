@@ -3,24 +3,36 @@
 from pathlib import Path
 
 from cafe.core.playbook import confirmation_gate_steps
+from cafe.core.status_codes import (
+    PhaseStatusCode,
+    effective_step_handoff_intents,
+    effective_step_status_codes,
+)
+from cafe.phases.generic_phase import GenericPhase
 from cafe.playbooks.loader import PlaybookLoader
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_use_cafe_workflow_skill_guides_alignment_checkpoint_delegation() -> None:
+def test_use_cafe_workflow_skill_makes_driver_own_alignment_decisions() -> None:
     skill = (
         PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "use-cafe-workflow" / "SKILL.md"
     ).read_text(encoding="utf-8")
     normalized = " ".join(skill.split())
 
-    assert "## Alignment Checkpoints" in skill
-    assert "apply the user-handoff rules first" in normalized
-    assert "may resolve the checkpoint only when the saved reactive policy allows it" in normalized
-    assert "explicit JSON decision payload" in skill
-    assert "Plain text must not be used for alignment approval" in skill
-    assert "Do not write `strategic_documents_updated`" in skill
-    assert "stop and ask the user" in skill
+    assert "## Driver-Owned Alignment" in skill
+    assert "Bundled playbooks omit `alignment:` configuration" in normalized
+    assert "`proposal_delta`" in skill
+    assert "`strategic_ground`" in skill
+    assert "`mandate_level`" in skill
+    assert "`relation`" in skill
+    assert "`within` + `escalate`: stop for the user" in normalized
+    assert "Except for an explicit `escalate` mandate" in normalized
+    assert "If `within` and `mandate_level` is `agent`" in normalized
+    assert "If `mandate_level` is `escalate`" in normalized
+    assert "Do not re-evaluate an unchanged scope" in normalized
+    assert "compatibility evidence, not as proof that the user must decide" in normalized
+    assert "plain text must not approve a core checkpoint" in normalized
 
 
 def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() -> None:
@@ -36,10 +48,10 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "Do not reuse a repo default or another issue's contract silently" in normalized
     assert "their union must equal the derived" in normalized
     assert "driver_confirmable" in skill
-    assert (
-        "`need_clarification`, `need_permission`, and `alignment_checkpoint` are reactive"
-        in normalized
-    )
+    assert "`need_clarification` and `need_permission` are reactive" in normalized
+    assert "Alignment is a proactive driver decision" in normalized
+    assert "alignment_policy:" not in skill
+    assert "alignment_checkpoint: driver_resolvable_when_clear" in skill
     assert ".cafe/issues/<issue-name>/issue.yaml" in skill
     assert "is not parsed or auto-approved by CAFE" in normalized
 
@@ -69,6 +81,42 @@ def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() 
         "incident": (),
         "research": (),
     }
+
+
+def test_bundled_playbooks_do_not_delegate_alignment_judgment_to_core() -> None:
+    loader = PlaybookLoader(project_root=PROJECT_ROOT)
+
+    for playbook_id in (
+        "default",
+        "simple",
+        "tdd",
+        "editorial",
+        "hotfix",
+        "incident",
+        "research",
+    ):
+        playbook = loader.load_model(playbook_id).model
+        for step in playbook.steps.values():
+            assert step.alignment is None
+            assert "alignment_checkpoint" not in step.on
+            assert "alignment_checkpoint" not in step.valid_intents
+            assert "AlignmentCheckpointGate" not in step.hooks.prepare_input
+            step_def = step.model_dump(by_alias=True)
+            assert (
+                PhaseStatusCode.ALIGNMENT_CHECKPOINT
+                not in effective_step_status_codes(step_def)
+            )
+            assert (
+                "alignment_checkpoint"
+                not in effective_step_handoff_intents(step_def)
+            )
+            assert (
+                GenericPhase._detect_status_code(
+                    response="alignment_checkpoint",
+                    step_def=step_def,
+                )
+                is None
+            )
 
 
 def test_use_cafe_workflow_skill_protects_issue_overrides() -> None:
