@@ -27,11 +27,11 @@ def change_test_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def mock_git_ops():
-    with patch("cafe.ui.cli.GitOperations") as MockGitOperations, patch(
-        "cafe.utils.git_utils.is_github_repo"
-    ) as mock_is_github_repo, patch(
-        "cafe.ui.phase_prompts.is_github_repo"
-    ) as mock_is_github_repo_phase:
+    with (
+        patch("cafe.ui.cli.GitOperations") as MockGitOperations,
+        patch("cafe.utils.git_utils.is_github_repo") as mock_is_github_repo,
+        patch("cafe.ui.phase_prompts.is_github_repo") as mock_is_github_repo_phase,
+    ):
         mock_git = MagicMock()
         MockGitOperations.return_value = mock_git
         mock_git.get_current_branch.return_value = "main"
@@ -121,9 +121,7 @@ class TestPreparePlaybookDriven:
         assert config_data["spec"]["sync_github"] is True
         assert config_data["pr"]["auto_create"] is True
 
-    def test_default_playbook_non_interactive_manual_input(
-        self, temp_repo_dir, mock_git_ops
-    ):
+    def test_default_playbook_non_interactive_manual_input(self, temp_repo_dir, mock_git_ops):
         """Integration #2 — default playbook non-interactive parity."""
         result = runner.invoke(
             app,
@@ -138,9 +136,7 @@ class TestPreparePlaybookDriven:
         assert config_data["spec"]["template"] == "auto"
         assert config_data["plan"]["template"] == "default"
 
-    def test_no_pr_playbook_rejects_non_interactive_pr_flags(
-        self, temp_repo_dir, mock_git_ops
-    ):
+    def test_no_pr_playbook_rejects_non_interactive_pr_flags(self, temp_repo_dir, mock_git_ops):
         """A playbook without a pr step must reject legacy PR config flags."""
         prepare_block = """
 commands:
@@ -168,10 +164,10 @@ commands:
         config_file = temp_repo_dir / ".cafe" / "issues" / "no-pr-issue" / "issue.yaml"
         assert not config_file.exists()
 
-    def test_no_pr_playbook_without_pr_flags_omits_pr_config(
+    def test_promptless_playbook_ignores_legacy_development_flags(
         self, temp_repo_dir, mock_git_ops
     ):
-        """A playbook without a pr step can prepare without PR config."""
+        """A promptless workflow does not persist undeclared development config."""
         prepare_block = """
 commands:
   prepare:
@@ -194,8 +190,7 @@ commands:
         assert result.exit_code == 0
         config_file = temp_repo_dir / ".cafe" / "issues" / "no-pr-issue" / "issue.yaml"
         config_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
-        assert config_data["spec"]["input_method"] == "github"
-        assert "pr" not in config_data
+        assert not {"spec", "plan", "pr"}.intersection(config_data)
 
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.cli.prompt_text")
@@ -322,9 +317,7 @@ commands:
         config_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
         assert config_data["spec"]["rigor"] == "high"
 
-    def test_invalid_playbook_exits_with_actionable_error(
-        self, temp_repo_dir, mock_git_ops
-    ):
+    def test_invalid_playbook_exits_with_actionable_error(self, temp_repo_dir, mock_git_ops):
         """DoD — unloadable playbook fails gracefully."""
         _write_config_with_playbook(temp_repo_dir, "does-not-exist")
 
@@ -354,9 +347,7 @@ commands:
         assert config_data["spec"]["template"] == "auto"
         assert config_data["plan"]["template"] == "default"
 
-    def test_invalid_rigor_exits_before_polluted_issue_yaml(
-        self, temp_repo_dir, mock_git_ops
-    ):
+    def test_invalid_rigor_exits_before_polluted_issue_yaml(self, temp_repo_dir, mock_git_ops):
         """Integration — invalid rigor fails before writing polluted issue.yaml."""
         prepare_block = """
 commands:

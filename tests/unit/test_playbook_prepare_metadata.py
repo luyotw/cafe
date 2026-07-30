@@ -104,15 +104,13 @@ def test_prepare_schema_parses_valid_block(tmp_path: Path) -> None:
     assert result.model.commands.prepare.quick_setup.spec.rigor == "medium"
 
 
-def test_omitted_prepare_section_resolves_defaults(tmp_path: Path) -> None:
+def test_builtin_missing_prepare_section_is_rejected(tmp_path: Path) -> None:
+    """U1 — built-ins cannot inherit implicit interactive legacy prompts."""
     loader = _loader(tmp_path)
-    _write_playbook(loader._roots()[-1], "test", _minimal_playbook_yaml())
+    _write_playbook(loader._roots()[0], "test", _minimal_playbook_yaml())
 
-    result = loader.load_model("test")
-    resolved = resolve_prepare_config(result.model)
-    expected = default_prepare_config()
-
-    assert resolved.model_dump() == expected.model_dump()
+    with pytest.raises(ValueError, match="fields.*fields_ref"):
+        loader.load_model("test")
 
 
 def test_required_skill_inputs_must_be_declared_by_the_playbook_step(tmp_path: Path) -> None:

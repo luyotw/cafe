@@ -519,11 +519,7 @@ def _validate_prepare_metadata(
     )
 
     if parsed_fields is None:
-        if (
-            source == "builtin"
-            and declared_prepare is not None
-            and prepare.prompt_for_spec_plan_config
-        ):
+        if source == "builtin" and prepare.prompt_for_spec_plan_config:
             raise ValueError(
                 "bundled interactive prepare requires commands.prepare.fields or "
                 "commands.prepare.fields_ref"

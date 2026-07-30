@@ -236,6 +236,26 @@ commands:
         assert config["synthesize"] == {"audience": "internal"}
         assert not {"spec", "plan", "pr"}.intersection(config)
 
+    @pytest.mark.parametrize("playbook_id", ["research", "editorial", "incident"])
+    def test_promptless_builtin_prepare_creates_no_development_config(
+        self, playbook_id, temp_repo_dir, mock_git_ops
+    ):
+        """I4 — promptless bundled workflows need no development CLI flags."""
+        _write_config_with_playbook(temp_repo_dir, playbook_id)
+
+        result = runner.invoke(
+            app,
+            ["prepare", f"{playbook_id}-default", "--no-interactive"],
+        )
+
+        assert result.exit_code == 0
+        config = yaml.safe_load(
+            (
+                temp_repo_dir / ".cafe" / "issues" / f"{playbook_id}-default" / "issue.yaml"
+            ).read_text(encoding="utf-8")
+        )
+        assert not {"spec", "plan", "pr"}.intersection(config)
+
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.cli.prompt_list")
     @patch("cafe.ui.cli.prompt_text")

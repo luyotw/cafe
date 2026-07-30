@@ -312,6 +312,15 @@ def resolve_non_interactive_issue_config(
 ) -> PrepareIssueConfig:
     """Resolve and validate non-interactive prepare config for issue.yaml."""
     if parsed_fields is None:
+        if not profile.prepare.prompt_for_spec_plan_config and profile.prepare.model_fields_set == {
+            "prompt_for_spec_plan_config"
+        }:
+            if answers.auto_create_pr or answers.post_pr_todo_list is not None:
+                raise PrepareNonInteractiveError(
+                    "--auto-create-pr and --post-pr-todo-list require a playbook with a "
+                    "pr step or explicit pr.* prepare fields"
+                )
+            return empty_issue_config()
         validate_non_interactive_required(answers)
         defaults = profile.non_interactive_defaults()
         rigor = answers.rigor if answers.rigor is not None else defaults.rigor
@@ -623,6 +632,10 @@ def run_field_driven_prepare_flow(
         (field for field in parsed.fields if field.write == "spec.input_method"),
         None,
     )
+    issue_field = next(
+        (field for field in parsed.fields if field.write == "spec.issue_id"),
+        None,
+    )
     if input_field is not None and field_is_visible(
         input_field,
         PreparePromptContext(
@@ -636,6 +649,7 @@ def run_field_driven_prepare_flow(
             deps.display,
             deps.github_ops,
             field=input_field,
+            issue_field=issue_field,
         )
         spec_config.spec["input_method"] = input_method
         if issue_id is not None:
