@@ -307,6 +307,7 @@ def test_builtin_entry_steps_use_declared_initial_input_resolver(playbook_name: 
 
     assert entry.initial_input.providers == ["manual_text", "github_issue"]
     assert entry.initial_input.bind.artifact == entry.output_artifact
+    assert entry.initial_input.legacy_presentation is True
     assert "InitialInputProviderResolver" in entry.hooks.prepare_input
     assert "GitHubIssueFetcher" not in entry.hooks.prepare_input
 

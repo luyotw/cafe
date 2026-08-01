@@ -282,6 +282,11 @@ their legacy `spec.input_method` / `spec.issue_id` keys. The provider resolver i
 host-side only, runs on first iteration without overwriting existing output, and
 does not grant agent credentials or arbitrary host execution.
 
+`legacy_presentation: true` is reserved for bundled development playbooks. It
+keeps their established requirements heading and guided manual/GitHub interaction
+while they use `InitialInputProviderResolver`; custom playbooks should omit it so
+the resolver writes only the declared input content.
+
 ## 9. Validation Sequence
 
 Run all applicable checks from the target repo:

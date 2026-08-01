@@ -657,6 +657,108 @@ def test_initial_input_provider_skips_resume_and_existing_artifact(tmp_path: Pat
     assert output.read_text(encoding="utf-8") == "existing artifact"
 
 
+@pytest.mark.parametrize("playbook_name", ["default", "simple", "tdd"])
+def test_builtin_initial_input_preserves_legacy_requirements_seed(
+    tmp_path: Path, playbook_name: str
+) -> None:
+    """I3 — built-in first steps retain the legacy initial-input experience."""
+    import yaml
+
+    playbook_file = (
+        Path(__file__).parents[2] / "src" / "cafe" / "data" / "playbooks" / f"{playbook_name}.yaml"
+    )
+    playbook = yaml.safe_load(playbook_file.read_text(encoding="utf-8"))
+    step_def = playbook["steps"]["spec"]
+    assert step_def["hooks"]["prepare_input"][0] == "InitialInputProviderResolver"
+
+    phase = _FakePhase(phase_dir=tmp_path / "spec", iteration=1)
+    output_file = phase._get_iteration_dir(1) / "output.md"
+
+    result = InitialInputProviderResolver().run(
+        stage="prepare_input",
+        phase=phase,
+        step_name="spec",
+        step_def=step_def,
+        output_file=output_file,
+        context={"user_input": "Preserve the established workflow kickoff."},
+    )
+
+    assert output_file.read_text(encoding="utf-8") == (
+        "# Initial Requirements\n\nPreserve the established workflow kickoff.\n"
+    )
+    assert result.context_updates == {
+        "user_input": "Preserve the established workflow kickoff."
+    }
+
+
+def test_builtin_initial_input_reuses_legacy_github_ui_and_formatter(tmp_path: Path) -> None:
+    """I3 — generic built-in resolution keeps the established GitHub interaction."""
+    import yaml
+
+    playbook_file = Path(__file__).parents[2] / "src/cafe/data/playbooks/default.yaml"
+    step_def = yaml.safe_load(playbook_file.read_text(encoding="utf-8"))["steps"]["spec"]
+    phase = _FakePhase(phase_dir=tmp_path / "spec", iteration=1)
+    output_file = phase._get_iteration_dir(1) / "output.md"
+    prompt = MagicMock(return_value=("github_issue", 346))
+
+    with (
+        patch.object(
+            GitHubIssueFetcher,
+            "_prompt_and_save_input_method",
+            return_value=prompt,
+        ) as select_provider,
+        patch.object(
+            GitHubIssueFetcher,
+            "_fetch_github_issue",
+            return_value="**Issue Title:** Restore compatibility",
+        ) as fetch_issue,
+    ):
+        result = InitialInputProviderResolver().run(
+            stage="prepare_input",
+            phase=phase,
+            step_name="spec",
+            step_def=step_def,
+            output_file=output_file,
+        )
+
+    select_provider.assert_called_once_with(phase)
+    prompt.assert_called_once_with()
+    fetch_issue.assert_called_once_with(346)
+    assert output_file.read_text(encoding="utf-8") == (
+        "# Initial Requirements\n\n**Issue Title:** Restore compatibility\n"
+    )
+    assert result.context_updates == {"user_input": "**Issue Title:** Restore compatibility"}
+
+
+def test_initial_input_provider_preserves_github_fetch_failure_guidance(tmp_path: Path) -> None:
+    """U5 — operator-facing provider errors retain the host boundary's remedy."""
+    phase = _FakePhase(phase_dir=tmp_path / "intake", iteration=1)
+    phase.interactive = False
+    phase.issue_dir.mkdir(parents=True, exist_ok=True)
+    (phase.issue_dir / "issue.yaml").write_text(
+        "initial_input:\n  provider: github_issue\n  issue_id: 346\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="gh auth login"):
+        InitialInputProviderResolver().run(
+            stage="prepare_input",
+            phase=phase,
+            step_name="intake",
+            step_def={
+                "output_artifact": "intake_brief",
+                "initial_input": {
+                    "providers": ["github_issue"],
+                    "bind": {"artifact": "intake_brief"},
+                },
+            },
+            output_file=phase._get_iteration_dir(1) / "output.md",
+            initial_input_fetch_github_issue=MagicMock(
+                side_effect=RuntimeError("GitHub CLI unavailable; run gh auth login")
+            ),
+        )
+
+
 def test_github_issue_fetcher_uses_phase_step_user_input_without_prompting(tmp_path: Path) -> None:
     phase_dir = tmp_path / "spec"
     phase = _FakePhase(phase_dir=phase_dir, iteration=1)

@@ -198,6 +198,10 @@ steps:
   `github_issue_id`, not by a `spec.*` write target. A custom entry step may
   therefore write its UI answers to `intake.input_method` and
   `intake.issue_id` while the resolver consumes only the canonical block.
+- `legacy_presentation: true` is reserved for bundled development playbooks.
+  It preserves their existing requirements heading and guided manual/GitHub
+  interaction while continuing to use `InitialInputProviderResolver`; custom
+  playbooks should omit it and receive the declared content unchanged.
 
 Provider resolution runs only for a new first iteration and never overwrites a
 non-empty declared artifact. Manual text prefers invocation input; GitHub

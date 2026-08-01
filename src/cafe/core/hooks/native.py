@@ -602,6 +602,7 @@ class InitialInputProviderResolver(NoOpHook):
         declaration = step_def.get("initial_input")
         if not isinstance(declaration, dict):
             return HookResult()
+        legacy_presentation = declaration.get("legacy_presentation") is True
         providers = declaration.get("providers")
         binding = declaration.get("bind")
         if not isinstance(providers, list) or not isinstance(binding, dict):
@@ -617,19 +618,37 @@ class InitialInputProviderResolver(NoOpHook):
             if output_file.exists() and output_file.read_text(encoding="utf-8").strip():
                 return HookResult()
 
+        legacy_adapter = GitHubIssueFetcher() if legacy_presentation else None
         result = self._resolve(
             phase=phase,
             step_name=step_name,
             providers=providers,
             context=kwargs.get("context"),
-            prompt_input_method=kwargs.get("initial_input_prompt_input_method"),
-            prompt_manual_input=kwargs.get("initial_input_prompt_manual_input"),
-            fetch_github_issue=kwargs.get("initial_input_fetch_github_issue"),
+            prompt_input_method=(
+                kwargs.get("initial_input_prompt_input_method")
+                or (
+                    legacy_adapter._prompt_and_save_input_method(phase)
+                    if legacy_adapter is not None
+                    else None
+                )
+            ),
+            prompt_manual_input=(
+                kwargs.get("initial_input_prompt_manual_input")
+                or (legacy_adapter._prompt_manual_input if legacy_adapter is not None else None)
+            ),
+            fetch_github_issue=(
+                kwargs.get("initial_input_fetch_github_issue")
+                or (legacy_adapter._fetch_github_issue if legacy_adapter is not None else None)
+            ),
         )
         if artifact is not None:
             assert output_file is not None
             output_file.parent.mkdir(parents=True, exist_ok=True)
-            formatter = kwargs.get("initial_input_output_formatter")
+            formatter = kwargs.get("initial_input_output_formatter") or (
+                legacy_adapter._format_initial_requirements
+                if legacy_adapter is not None
+                else None
+            )
             content = formatter(result.content) if callable(formatter) else result.content
             output_file.write_text(f"{content.rstrip()}\n", encoding="utf-8")
 
@@ -696,7 +715,7 @@ class InitialInputProviderResolver(NoOpHook):
                 content = str(fetch(issue_id)).strip()
             except Exception as exc:
                 raise ValueError(
-                    f"initial_input.provider 'github_issue' could not fetch issue {issue_id}"
+                    f"initial_input.provider 'github_issue' could not fetch issue {issue_id}: {exc}"
                 ) from exc
             if not content:
                 raise ValueError(f"GitHub issue {issue_id} produced no initial input")

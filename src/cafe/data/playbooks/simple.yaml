@@ -30,6 +30,7 @@ steps:
       bind:
         artifact: spec
         prompt_context: user_input
+      legacy_presentation: true
     human_tasks:
       - trigger: confirm_output
         task_id: output-review

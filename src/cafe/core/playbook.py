@@ -129,6 +129,7 @@ class InitialInputDeclaration(BaseModel):
 
     providers: List[str]
     bind: InitialInputBinding
+    legacy_presentation: bool = False
 
     @field_validator("providers")
     @classmethod
