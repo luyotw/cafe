@@ -8,20 +8,13 @@ from typing import Optional
 
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.playbook import resolve_playbook_skills
 from cafe.core.types import AgentCLI, AgentConfig
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.config import ConfigManager
 from cafe.utils.crew import CrewManager, normalize_role_config
-
-CHAT_SKILL_NAMES = [
-    "cafe-common-chat-handoff",
-    "cafe-chat-develop-change",
-    "cafe-chat-spec-revision",
-    "cafe-chat-plan-revision",
-    "cafe-chat-alignment-decision",
-]
 
 CURSOR_NATIVE_MODULE_HINT = "@anysphere/file-service-"
 
@@ -364,8 +357,11 @@ def _prepare_chat_handoff_state(issue_dir: Path) -> tuple[str, list[str], str]:
 def _prepare_chat_environment(
     *,
     agent_cli: AgentCLI | object,
+    playbook: dict,
+    role: str,
+    step_name: str,
 ) -> None:
-    """Install shared chat skills for the target CLI."""
+    """Install chat skills resolved from the active playbook."""
     if not isinstance(agent_cli, AgentCLI):
         return
 
@@ -373,7 +369,12 @@ def _prepare_chat_environment(
     loader.discover()
     bridge = NativeSkillBridge(loader)
 
-    for skill_name in CHAT_SKILL_NAMES:
+    for skill_name in resolve_playbook_skills(
+        playbook,
+        channel="chat",
+        role=role,
+        step_name=step_name,
+    ):
         bridge.install_skill(skill_name, agent_cli)
 
 
@@ -475,8 +476,15 @@ def launch_chat_session(
 
     _current_step, _valid_steps, _playbook_id = _prepare_chat_handoff_state(issue_dir)
 
+    try:
+        chat_playbook = PlaybookLoader(project_root=Path.cwd()).load(_playbook_id)
+    except Exception:
+        chat_playbook = {}
     _prepare_chat_environment(
         agent_cli=agent_cli,
+        playbook=chat_playbook,
+        role=role,
+        step_name=_current_step,
     )
     session_id: Optional[str] = executor.config.session_id
     codex_history_start_ts = int(time.time())

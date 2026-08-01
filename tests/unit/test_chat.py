@@ -341,16 +341,25 @@ def test_prepare_chat_environment_installs_chat_skills_only() -> None:
     ):
         _prepare_chat_environment(
             agent_cli=AgentCLI.CODEX,
+            playbook={
+                "skills": {
+                    "chat": {
+                        "shared": ["chat-base"],
+                        "roles": {
+                            "developer": {"mode": "extend", "skills": ["chat-role"]}
+                        },
+                        "steps": {
+                            "develop": {"mode": "replace", "skills": ["chat-step"]}
+                        },
+                    }
+                }
+            },
+            role="developer",
+            step_name="develop",
         )
 
     installed = [call.args[0] for call in mock_install.call_args_list]
-    assert installed == [
-        "cafe-common-chat-handoff",
-        "cafe-chat-develop-change",
-        "cafe-chat-spec-revision",
-        "cafe-chat-plan-revision",
-        "cafe-chat-alignment-decision",
-    ]
+    assert installed == ["chat-step"]
 
 
 def test_latest_role_iteration_cli_infers_codex_for_legacy_fallback_metadata(
