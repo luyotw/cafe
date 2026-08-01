@@ -38,6 +38,12 @@ def test_write_cafe_playbook_skill_preserves_core_contracts() -> None:
     assert "confirmation-gates" in skill
     assert "no unreachable steps" in reference
     assert "write-cafe-phase" in skill
+    assert "skills.workflow" in reference
+    assert "skills.chat" in reference
+    assert "extend" in reference
+    assert "replace" in reference
+    assert "explicit empty" in normalized_reference
+    assert "missing channel" in normalized_reference
 
 
 def test_write_cafe_playbook_repairs_only_its_declarative_layer() -> None:

@@ -244,9 +244,10 @@ placeholder 名稱。不要依賴 artifact 名稱或新增 Python mapping；未�
 
   > 請依 shared skill「cafe-workflow-common」的 **<Section 名>**；本 skill 不重複敘述。
 
-- runtime 對每個 phase 自動附掛的 shared skills 定義在
-  `generic_workflow_step.SHARED_WORKFLOW_SKILLS`（目前為 `cafe-workflow-common`、`cafe-github_sync`）。
-  新的 shared skill 若要自動附掛，需同步修改該常數。
+- runtime 依 active playbook `skills.workflow` 宣告解析每個 phase 的 shared
+  skills；新增 shared skill 時，在 playbook 宣告，不要修改 Python 常數。
+- chat 的共用與修訂能力同樣由 playbook `skills.chat` 宣告。這只決定技能環境，
+  不改變 baton、HumanTask 或 alignment policy 的 owner。
 
 ## 8. Iteration 行為的兩種做法
 

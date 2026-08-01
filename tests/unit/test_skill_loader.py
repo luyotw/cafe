@@ -1,6 +1,7 @@
 """Tests for skill loader."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -140,6 +141,7 @@ def test_imported_project_skill_is_discovered_with_project_precedence(tmp_path: 
     assert any(item.name == "plan" and item.source == "project" for item in items)
     assert "Imported project body" in loader.activate("plan")
 
+
 def test_builtin_catalog_includes_chat_handoff_skills(tmp_path: Path) -> None:
     builtin_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
     loader = SkillLoader(
@@ -236,7 +238,6 @@ def test_global_overrides_builtin_when_no_project_skill(tmp_path: Path) -> None:
     assert items[0].source == "global"
 
 
-
 def test_install_skill_uses_project_version_over_global(tmp_path: Path) -> None:
     """When a project skill overrides a global skill, install_skill uses the project version."""
     global_root = tmp_path / "global" / "skills"
@@ -282,7 +283,7 @@ def test_install_skill_recovers_when_skills_root_is_file(tmp_path: Path) -> None
     loader.discover()
     bridge = NativeSkillBridge(loader, project_root=project_root, home_dir=tmp_path / "home")
 
-    installed = bridge.install_skill("cafe-plan", AgentCLI.COPILOT)
+    installed = bridge.synchronize_skills(["cafe-plan"], AgentCLI.COPILOT)[0]
     assert installed.exists()
     assert bad_root.is_dir()
 
@@ -303,6 +304,61 @@ def test_install_skill_recovers_when_skills_root_is_broken_symlink(tmp_path: Pat
     loader.discover()
     bridge = NativeSkillBridge(loader, project_root=project_root, home_dir=tmp_path / "home")
 
-    installed = bridge.install_skill("cafe-plan", AgentCLI.COPILOT)
+    installed = bridge.synchronize_skills(["cafe-plan"], AgentCLI.COPILOT)[0]
     assert installed.exists()
     assert bad_root.is_dir()
+
+
+@pytest.mark.parametrize("manifest_contents", ["{broken", "{}"])
+def test_synchronize_skills_recovers_stale_skills_from_a_corrupted_manifest(
+    tmp_path: Path, manifest_contents: str
+) -> None:
+    """A damaged manifest still permits replace-style native skill cleanup."""
+    global_root = tmp_path / "global" / "skills"
+    _write_skill(global_root, "cafe-plan")
+    _write_skill(global_root, "cafe-stale")
+    project_root = tmp_path / "project"
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    loader.discover()
+    bridge = NativeSkillBridge(loader, project_root=project_root, home_dir=tmp_path / "home")
+
+    bridge.synchronize_skills(["cafe-stale"], AgentCLI.COPILOT)
+    native_skills = project_root / ".copilot" / "skills"
+    (native_skills / bridge.MANAGED_SKILLS_MANIFEST).write_text(
+        manifest_contents, encoding="utf-8"
+    )
+
+    bridge.synchronize_skills(["cafe-plan"], AgentCLI.COPILOT)
+
+    assert not (native_skills / "cafe-stale").exists()
+    assert (native_skills / "cafe-plan" / "SKILL.md").is_file()
+
+
+def test_synchronize_skills_can_reconcile_without_reinstalling_desired_skills(
+    tmp_path: Path,
+) -> None:
+    """Workflow prompt preparation remains the single installation path."""
+    global_root = tmp_path / "global" / "skills"
+    _write_skill(global_root, "cafe-plan")
+    _write_skill(global_root, "cafe-stale")
+    project_root = tmp_path / "project"
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    loader.discover()
+    bridge = NativeSkillBridge(loader, project_root=project_root, home_dir=tmp_path / "home")
+
+    bridge.synchronize_skills(["cafe-stale"], AgentCLI.COPILOT)
+    with patch.object(bridge, "install_skill") as install_skill:
+        installed = bridge.synchronize_skills(["cafe-plan"], AgentCLI.COPILOT, install=False)
+
+    native_skills = project_root / ".copilot" / "skills"
+    assert installed == []
+    install_skill.assert_not_called()
+    assert not (native_skills / "cafe-stale").exists()

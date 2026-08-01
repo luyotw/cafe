@@ -3,6 +3,12 @@ playbook:
   name: "Editorial Workflow（撰稿 → 審閱 → 發佈）"
   conversation_locale: en-US
 
+skills:
+  workflow:
+    shared: [cafe-workflow-common, cafe-github_sync]
+  chat:
+    shared: [cafe-common-chat-handoff, cafe-chat-develop-change, cafe-chat-spec-revision, cafe-chat-plan-revision, cafe-chat-alignment-decision]
+
 roles:
   editor:
     description: "內容編輯／審閱"

@@ -3,6 +3,12 @@ playbook:
   name: "Incident Response Workflow（偵測 → 分類 → 緩解 → 事後檢討）"
   conversation_locale: en-US
 
+skills:
+  workflow:
+    shared: [cafe-workflow-common, cafe-github_sync]
+  chat:
+    shared: [cafe-common-chat-handoff, cafe-chat-develop-change, cafe-chat-spec-revision, cafe-chat-plan-revision, cafe-chat-alignment-decision]
+
 roles:
   ops:
     description: "值班／維運應變"

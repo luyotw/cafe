@@ -24,6 +24,18 @@ def test_run_builtin_tooling_audit_all_pass() -> None:
     assert all(row.ok for row in lines), format_audit_markdown(lines)
 
 
+def test_builtin_audit_treats_declared_support_skills_as_referenced() -> None:
+    """I1 — support skills are audited for reachability, not phase placeholders."""
+    lines = run_builtin_tooling_audit()
+    messages = [row.message for row in lines]
+
+    assert any("cafe-workflow-common" in message for message in messages)
+    assert not any(
+        "Skill cafe-workflow-common: markdown bundle must mention placeholder" in message
+        for message in messages
+    )
+
+
 def test_format_audit_markdown_includes_checkbox() -> None:
     text = format_audit_markdown([AuditLine(True, "ok")])
     assert "[x]" in text

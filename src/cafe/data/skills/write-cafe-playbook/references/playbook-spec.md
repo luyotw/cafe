@@ -287,6 +287,37 @@ keeps their established requirements heading and guided manual/GitHub interactio
 while they use `InitialInputProviderResolver`; custom playbooks should omit it so
 the resolver writes only the declared input content.
 
+## 8.1 Skill environments
+
+Every playbook explicitly owns both `skills.workflow` and `skills.chat`. Each
+channel has a required `shared` list; an explicit empty list is the way to
+install no shared skills. Runtime resolves names in stable `shared → role → step`
+order and removes duplicates while keeping their first position.
+
+```yaml
+skills:
+  workflow:
+    shared: [cafe-workflow-common]
+    roles:
+      developer: {mode: extend, skills: [project-dev-common]}
+    steps:
+      review: {mode: replace, skills: [project-review-common]}
+  chat:
+    shared: []
+```
+
+Role and step overlays must name a declared role or step. `extend` retains the
+previous layer and appends its names; `replace` discards the previous layer.
+All referenced skills, including overlay-only skills, are validated through the
+normal project/global/builtin discovery order. A missing channel is a warning in
+non-strict custom-playbook loading and resolves to an empty environment; it is a
+failure for `cafe playbook validate <id> --strict`. Add the missing channel with
+`shared: []` to make isolation intentional.
+
+The phase `steps.<name>.skill` remains separate: it selects the phase behavior
+and is installed once, after resolved workflow support skills. Do not add
+development revision skills to `skills.chat` unless that playbook needs them.
+
 ## 9. Validation Sequence
 
 Run all applicable checks from the target repo:

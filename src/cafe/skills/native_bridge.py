@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +31,8 @@ class SkillValidationResult:
 
 class NativeSkillBridge:
     """Bridge resolved CAFE skills into each CLI's native skill directory."""
+
+    MANAGED_SKILLS_MANIFEST = ".cafe-managed-skills.json"
 
     CLI_PREFIXES = {
         AgentCLI.CODEX: "$",
@@ -69,6 +74,17 @@ class NativeSkillBridge:
         """Return the user-level native skills directory for one CLI."""
         return self.home_dir / self.GLOBAL_CLI_SKILL_DIRS[cli]
 
+    def _ensure_native_skills_dir(self, cli: AgentCLI) -> Path:
+        """Return a usable project-local native skill directory for one CLI."""
+        skills_root = self.get_native_skills_dir(cli)
+        if skills_root.is_symlink() and not skills_root.exists():
+            skills_root.unlink()
+        elif skills_root.exists() and not skills_root.is_dir():
+            skills_root.unlink()
+        skills_root.mkdir(parents=True, exist_ok=True)
+        self._ensure_cli_dir_git_excluded(cli)
+        return skills_root
+
     def get_installed_skill_name(self, name: str) -> str:
         """Return the installed skill folder/invocation name.
 
@@ -94,16 +110,7 @@ class NativeSkillBridge:
         multiple CAFE workflows install/update the same native skill in parallel.
         """
         source_dir = self.skill_loader.get_skill_dir(name)
-        target_dir = self.get_native_skills_dir(cli) / self.get_installed_skill_name(name)
-        skills_root = target_dir.parent
-        # Recover from invalid roots (regular file or dangling symlink), which can
-        # otherwise raise FileExistsError even with exist_ok=True.
-        if skills_root.is_symlink() and not skills_root.exists():
-            skills_root.unlink()
-        elif skills_root.exists() and not skills_root.is_dir():
-            skills_root.unlink()
-        skills_root.mkdir(parents=True, exist_ok=True)
-        self._ensure_cli_dir_git_excluded(cli)
+        target_dir = self._ensure_native_skills_dir(cli) / self.get_installed_skill_name(name)
 
         if target_dir.exists():
             shutil.rmtree(target_dir)
@@ -114,7 +121,108 @@ class NativeSkillBridge:
             for key, value in context.items():
                 rendered = rendered.replace(f"{{{key}}}", str(value))
             skill_file.write_text(rendered, encoding="utf-8")
+        self._record_managed_skill(cli, target_dir.name)
         return target_dir
+
+    def synchronize_skills(
+        self,
+        names: list[str],
+        cli: AgentCLI,
+        context: dict[str, str] | None = None,
+        *,
+        install: bool = True,
+    ) -> list[Path]:
+        """Make the CLI-native CAFE skill directory match one resolved environment.
+
+        A workflow or chat environment is an exact set, not an additive install.
+        The manifest lets the bridge remove CAFE-managed entries without touching
+        unrelated native skills. On first use, existing catalog-backed entries
+        are treated as legacy CAFE installs so an upgrade also clears stale skills.
+        """
+        desired: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for name in names:
+            installed_name = self.skill_loader.get_skill_dir(name).name
+            if installed_name in seen:
+                continue
+            seen.add(installed_name)
+            desired.append((name, installed_name))
+
+        self._ensure_native_skills_dir(cli)
+        managed = self._read_managed_skills(cli)
+        if managed is None:
+            managed = self._legacy_managed_skills(cli)
+        desired_names = {installed_name for _, installed_name in desired}
+        for stale_name in managed - desired_names:
+            self._remove_managed_skill(cli, stale_name)
+        self._write_managed_skills(cli, desired_names)
+        if not install:
+            return []
+        return [self.install_skill(name, cli, context=context) for name, _ in desired]
+
+    def _managed_skills_manifest(self, cli: AgentCLI) -> Path:
+        return self.get_native_skills_dir(cli) / self.MANAGED_SKILLS_MANIFEST
+
+    def _read_managed_skills(self, cli: AgentCLI) -> set[str] | None:
+        manifest = self._managed_skills_manifest(cli)
+        if not manifest.is_file():
+            return None
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(data, list):
+            return None
+        return {name for name in data if isinstance(name, str) and Path(name).name == name}
+
+    def _write_managed_skills(self, cli: AgentCLI, names: set[str]) -> None:
+        manifest = self._managed_skills_manifest(cli)
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        file_descriptor, temporary_name = tempfile.mkstemp(
+            dir=manifest.parent,
+            prefix=f".{manifest.name}.",
+            suffix=".tmp",
+        )
+        temporary_manifest = Path(temporary_name)
+        try:
+            with os.fdopen(file_descriptor, "w", encoding="utf-8") as temporary_file:
+                temporary_file.write(json.dumps(sorted(names)) + "\n")
+            temporary_manifest.replace(manifest)
+        finally:
+            if temporary_manifest.exists():
+                temporary_manifest.unlink()
+
+    def _legacy_managed_skills(self, cli: AgentCLI) -> set[str]:
+        """Recognize pre-manifest CAFE installs without claiming arbitrary skills."""
+        skills_root = self.get_native_skills_dir(cli)
+        if not skills_root.is_dir():
+            return set()
+        managed: set[str] = set()
+        for candidate in skills_root.iterdir():
+            if not candidate.is_dir():
+                continue
+            try:
+                if self.skill_loader.get_skill_dir(candidate.name).name == candidate.name:
+                    managed.add(candidate.name)
+            except (SkillDiscoveryError, FileNotFoundError):
+                continue
+        return managed
+
+    def _remove_managed_skill(self, cli: AgentCLI, name: str) -> None:
+        if Path(name).name != name:
+            return
+        target = self.get_native_skills_dir(cli) / name
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+        elif target.is_dir():
+            shutil.rmtree(target)
+
+    def _record_managed_skill(self, cli: AgentCLI, name: str) -> None:
+        managed = self._read_managed_skills(cli)
+        if managed is None:
+            managed = self._legacy_managed_skills(cli)
+        managed.add(name)
+        self._write_managed_skills(cli, managed)
 
     def _ensure_cli_dir_git_excluded(self, cli: AgentCLI) -> None:
         """Best-effort: add the CLI's top-level injection dir to git's local

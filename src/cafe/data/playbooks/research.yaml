@@ -3,6 +3,12 @@ playbook:
   name: "Research Workflow（問題 → 搜尋整理 → 綜合 → 報告）"
   conversation_locale: en-US
 
+skills:
+  workflow:
+    shared: [cafe-workflow-common, cafe-github_sync]
+  chat:
+    shared: [cafe-common-chat-handoff, cafe-chat-develop-change, cafe-chat-spec-revision, cafe-chat-plan-revision, cafe-chat-alignment-decision]
+
 roles:
   researcher:
     description: "研究／分析人員"

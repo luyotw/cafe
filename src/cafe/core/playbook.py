@@ -67,6 +67,56 @@ class PlaybookRole(BaseModel):
     default_cli: Optional[str] = None
 
 
+SkillEnvironmentMode = Literal["extend", "replace"]
+
+
+class SkillEnvironmentOverlay(BaseModel):
+    """One role or step addition to a declared skill environment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: SkillEnvironmentMode
+    skills: List[str]
+
+    @field_validator("skills")
+    @classmethod
+    def _validate_skill_names(cls, value: List[str]) -> List[str]:
+        return _clean_declared_skill_names(value)
+
+
+class SkillEnvironmentChannel(BaseModel):
+    """Shared skills plus optional role and step overlays for one channel."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    shared: List[str]
+    roles: Dict[str, SkillEnvironmentOverlay] = Field(default_factory=dict)
+    steps: Dict[str, SkillEnvironmentOverlay] = Field(default_factory=dict)
+
+    @field_validator("shared")
+    @classmethod
+    def _validate_shared_skill_names(cls, value: List[str]) -> List[str]:
+        return _clean_declared_skill_names(value)
+
+
+class PlaybookSkillEnvironments(BaseModel):
+    """Workflow and chat skill declarations owned by a playbook."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    workflow: Optional[SkillEnvironmentChannel] = None
+    chat: Optional[SkillEnvironmentChannel] = None
+
+
+def _clean_declared_skill_names(value: List[str]) -> List[str]:
+    cleaned: List[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError("skill declarations must contain non-empty skill names")
+        cleaned.append(item.strip())
+    return cleaned
+
+
 class StepHooks(BaseModel):
     """Lifecycle hook configuration."""
 
@@ -439,6 +489,7 @@ class PlaybookDefinition(BaseModel):
 
     playbook: PlaybookMeta
     roles: Dict[str, PlaybookRole] = Field(default_factory=dict)
+    skills: Optional[PlaybookSkillEnvironments] = None
     steps: Dict[str, StepConfig]
     commands: Optional[CommandsConfig] = None
     entry_point: Optional[str] = None
@@ -448,6 +499,74 @@ class PlaybookDefinition(BaseModel):
         if self.entry_point is None:
             self.entry_point = next(iter(self.steps.keys()))
         return self
+
+
+def resolve_playbook_skills(
+    playbook: PlaybookDefinition | Dict[str, Any],
+    *,
+    channel: Literal["workflow", "chat"],
+    role: Optional[str],
+    step_name: Optional[str],
+) -> List[str]:
+    """Resolve one playbook-owned environment in shared → role → step order."""
+    if isinstance(playbook, PlaybookDefinition):
+        environments: Any = playbook.skills
+    else:
+        environments = playbook.get("skills")
+
+    if environments is None:
+        return []
+    environment = (
+        getattr(environments, channel, None)
+        if isinstance(environments, PlaybookSkillEnvironments)
+        else environments.get(channel)
+    )
+    if environment is None:
+        return []
+
+    if isinstance(environment, SkillEnvironmentChannel):
+        shared = environment.shared
+        role_overlay = environment.roles.get(role) if role else None
+        step_overlay = environment.steps.get(step_name) if step_name else None
+    else:
+        shared = environment.get("shared", [])
+        role_overlay = environment.get("roles", {}).get(role) if role else None
+        step_overlay = environment.get("steps", {}).get(step_name) if step_name else None
+
+    resolved = list(shared)
+    for overlay in (role_overlay, step_overlay):
+        if overlay is None:
+            continue
+        if isinstance(overlay, SkillEnvironmentOverlay):
+            mode, names = overlay.mode, overlay.skills
+        else:
+            mode, names = overlay["mode"], overlay["skills"]
+        resolved = list(names) if mode == "replace" else [*resolved, *names]
+    return list(dict.fromkeys(resolved))
+
+
+def iter_declared_playbook_skills(model: PlaybookDefinition) -> List[tuple[str, str]]:
+    """Return every declared support skill with its actionable YAML field path."""
+    if model.skills is None:
+        return []
+
+    references: List[tuple[str, str]] = []
+    for channel_name in ("workflow", "chat"):
+        environment = getattr(model.skills, channel_name)
+        if environment is None:
+            continue
+        for index, skill_name in enumerate(environment.shared):
+            references.append((f"skills.{channel_name}.shared[{index}]", skill_name))
+        for scope_name, overlays in (("roles", environment.roles), ("steps", environment.steps)):
+            for scope_key, overlay in overlays.items():
+                for index, skill_name in enumerate(overlay.skills):
+                    references.append(
+                        (
+                            f"skills.{channel_name}.{scope_name}.{scope_key}.skills[{index}]",
+                            skill_name,
+                        )
+                    )
+    return references
 
 
 @dataclass(frozen=True)
@@ -528,6 +647,7 @@ def validate_playbook(
         strict=strict,
         warnings=warnings,
     )
+    _validate_skill_environments(model, skill_loader=skill_loader, warnings=warnings)
 
     for step_name, step in steps.items():
         _validate_step_role(step_name, step, model.roles)
@@ -555,6 +675,46 @@ def validate_playbook(
     if warnings and strict:
         raise ValueError("\n".join(warnings))
     return warnings
+
+
+def _validate_skill_environments(
+    model: PlaybookDefinition,
+    *,
+    skill_loader: SkillLoader,
+    warnings: List[str],
+) -> None:
+    """Validate playbook-owned support skills before workflow or chat starts."""
+    environments = model.skills
+    for channel_name in ("workflow", "chat"):
+        environment = getattr(environments, channel_name) if environments is not None else None
+        if environment is None:
+            warnings.append(
+                f"skills.{channel_name} is missing; declare it explicitly, for example "
+                f"skills: {{{channel_name}: {{shared: []}}}}."
+            )
+            continue
+
+        for role_name in environment.roles:
+            if role_name not in model.roles:
+                raise ValueError(
+                    f"skills.{channel_name}.roles.{role_name} references an unknown playbook role; "
+                    "add the role or remove the overlay"
+                )
+        for step_name in environment.steps:
+            if step_name not in model.steps:
+                raise ValueError(
+                    f"skills.{channel_name}.steps.{step_name} references an unknown playbook step; "
+                    "add the step or remove the overlay"
+                )
+
+    for field_path, skill_name in iter_declared_playbook_skills(model):
+        try:
+            skill_loader.get_skill_dir(skill_name)
+        except (SkillDiscoveryError, FileNotFoundError) as exc:
+            raise ValueError(
+                f"{field_path} references unknown skill {skill_name!r}; "
+                "install it or correct the declaration"
+            ) from exc
 
 
 def _validate_initial_input_declarations(

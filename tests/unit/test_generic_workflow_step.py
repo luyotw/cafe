@@ -872,6 +872,18 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
     playbook = {
         "playbook": {"id": "default"},
         "roles": {"reviewer": {"default_agent": "Richard"}},
+        "skills": {
+            "workflow": {
+                "shared": ["cafe-workflow-common", "cafe-github_sync"],
+                "roles": {
+                    "reviewer": {"mode": "extend", "skills": ["cafe-workflow-common"]},
+                },
+                "steps": {
+                    "review": {"mode": "extend", "skills": ["cafe-github_sync"]},
+                },
+            },
+            "chat": {"shared": []},
+        },
         "steps": {
             "review": {
                 "skill": "review",
@@ -894,6 +906,14 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
     store.set_artifact(state, "spec", str(spec_file))
     store.set_artifact(state, "plan", str(plan_file))
     generic_phase = _build_loader(tmp_path)
+    installed_skill_names: list[str] = []
+    original_install_skill = generic_phase.skill_bridge.install_skill
+
+    def record_skill_install(name, cli, context=None):
+        installed_skill_names.append(name)
+        return original_install_skill(name, cli, context)
+
+    monkeypatch.setattr(generic_phase.skill_bridge, "install_skill", record_skill_install)
     agent_manager = FakeAgentManager("confirmed")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
@@ -910,6 +930,7 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
     assert (tmp_path / ".codex" / "skills" / "cafe-workflow-common" / "SKILL.md").exists()
     assert (tmp_path / ".codex" / "skills" / "cafe-github_sync" / "SKILL.md").exists()
     assert (tmp_path / ".codex" / "skills" / "cafe-review" / "SKILL.md").exists()
+    assert installed_skill_names == ["cafe-workflow-common", "cafe-github_sync", "review"]
     iteration_dir = issue_dir / "review" / "iteration_001"
     output_file = iteration_dir / "output.md"
     checklist_file = iteration_dir / "checklist.md"
@@ -941,6 +962,12 @@ def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(
     playbook = {
         "playbook": {"id": "default"},
         "roles": {"developer": {"default_agent": "David"}},
+        "skills": {
+            "workflow": {
+                "shared": ["cafe-workflow-common", "cafe-github_sync"],
+            },
+            "chat": {"shared": []},
+        },
         "steps": {
             "develop": {
                 "skill": "plan",
@@ -1012,6 +1039,12 @@ def test_generic_workflow_step_prompt_keeps_skill_invocations_only(
     playbook = {
         "playbook": {"id": "default"},
         "roles": {"developer": {"default_agent": "David"}},
+        "skills": {
+            "workflow": {
+                "shared": ["cafe-workflow-common", "cafe-github_sync"],
+            },
+            "chat": {"shared": []},
+        },
         "steps": {
             "pr": {
                 "skill": "pr",
