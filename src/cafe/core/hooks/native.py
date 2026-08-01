@@ -758,7 +758,15 @@ class InitialInputProviderResolver(NoOpHook):
         prompt_input_method: Any,
     ) -> tuple[str, Optional[int]]:
         if len(providers) == 1:
-            return next(iter(providers)), None
+            provider = next(iter(providers))
+            if provider != GITHUB_ISSUE_PROVIDER or not getattr(phase, "interactive", False):
+                return provider, None
+            prompt = prompt_input_method or GitHubIssueFetcher._prompt_input_method
+            selected_provider, issue_id = prompt()
+            normalized = {"manual": MANUAL_TEXT_PROVIDER, "github": GITHUB_ISSUE_PROVIDER}.get(
+                selected_provider, selected_provider
+            )
+            return normalized, issue_id
         if not getattr(phase, "interactive", False):
             raise ValueError(
                 "initial_input.provider must be selected before non-interactive execution"
@@ -796,7 +804,11 @@ class GitHubIssueFetcher(NoOpHook):
         )
         config = InitialInputProviderResolver._load_issue_config(phase)
         configured_provider, _issue_id = load_initial_input_selection(config)
-        if prefilled is None and not getattr(phase, "interactive", False):
+        if (
+            prefilled is None
+            and not getattr(phase, "interactive", False)
+            and configured_provider != GITHUB_ISSUE_PROVIDER
+        ):
             output_file.parent.mkdir(parents=True, exist_ok=True)
             output_file.write_text("# Initial Requirements\n\n\n", encoding="utf-8")
             return HookResult(

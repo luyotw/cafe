@@ -393,6 +393,7 @@ def prepare(
             raise typer.Exit(1)
 
         profile = PrepareProfile.from_playbook(loaded_playbook.model, is_github_repo())
+        entry_step_name = str(loaded_playbook.model.entry_point)
 
         # 2. Determine interactive mode and config prompt behavior
         # should_prompt_for_config: Should we show config prompts?
@@ -720,7 +721,7 @@ def prepare(
             # Create issues directory structure in worktree
             worktree_issues_dir = worktree_cafe_dir / "issues" / issue_name
             worktree_issues_dir.mkdir(parents=True, exist_ok=True)
-            (worktree_issues_dir / "spec").mkdir(exist_ok=True)
+            (worktree_issues_dir / entry_step_name).mkdir(exist_ok=True)
             (worktree_issues_dir / "sessions").mkdir(exist_ok=True)
 
             # Initialize default templates and agents in worktree .cafe
@@ -732,10 +733,10 @@ def prepare(
             # Normal branch mode
             # First create issue directory structure
             issue_dir = Path(f".cafe/issues/{issue_name}")
-            spec_dir = issue_dir / "spec"
+            entry_step_dir = issue_dir / entry_step_name
             sessions_dir = issue_dir / "sessions"
 
-            spec_dir.mkdir(parents=True, exist_ok=True)
+            entry_step_dir.mkdir(parents=True, exist_ok=True)
             sessions_dir.mkdir(parents=True, exist_ok=True)
 
             # Then perform git operations

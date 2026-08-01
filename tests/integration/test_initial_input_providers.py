@@ -4,14 +4,21 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+import yaml
+from typer.testing import CliRunner
 
 from cafe.core.blackboard import BlackboardStore
 from cafe.core.types import AgentCLI, TokenUsage
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
+from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
+from cafe.ui.cli import app
+
+runner = CliRunner()
 
 
 class _AgentManager:
@@ -45,16 +52,97 @@ def _write_skill(root: Path, name: str) -> None:
     )
 
 
-def _intake_executor(
+def _write_intake_playbook(tmp_path: Path) -> None:
+    playbooks_dir = tmp_path / ".cafe" / "playbooks"
+    playbooks_dir.mkdir(parents=True, exist_ok=True)
+    (playbooks_dir / "intake.yaml").write_text(
+        """
+playbook:
+  id: intake
+roles:
+  researcher:
+    default_agent: David
+entry_point: intake
+steps:
+  intake:
+    type: skill
+    skill: intake
+    role: researcher
+    input_artifacts: []
+    output_artifact: intake_brief
+    initial_input:
+      providers: [manual_text, github_issue]
+      bind:
+        artifact: intake_brief
+        prompt_context: user_input
+    hooks:
+      prepare_input: [InitialInputProviderResolver]
+    valid_intents: [confirmed]
+    "on": {await_agent: _done}
+commands:
+  prepare:
+    fields:
+      - id: input_method
+        type: enum
+        label: Input method
+        write: intake.input_method
+        required: true
+        choices:
+          - value: manual
+            label: Manual input
+          - value: github
+            label: GitHub issue
+      - id: github_issue_id
+        type: text
+        label: GitHub issue ID
+        write: intake.issue_id
+        normalize: github_issue
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+
+def _prepare_intake_issue(
     tmp_path: Path,
     *,
-    initial_input: dict[str, object],
+    input_method: str,
+    issue_id: int | None = None,
     step_user_inputs: dict[str, str] | None = None,
 ) -> tuple[GenericWorkflowStepExecutor, _AgentManager, Path, dict[str, object]]:
+    from tests.conftest import create_minimal_config
+
+    create_minimal_config(tmp_path)
+    _write_skill(tmp_path / ".cafe" / "skills", "intake")
+    _write_intake_playbook(tmp_path)
+    config_path = tmp_path / ".cafe" / "config.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["playbook"] = "intake"
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+
+    mock_git = MagicMock()
+    mock_git.get_current_branch.return_value = "main"
+    mock_git.has_uncommitted_changes.return_value = False
+    mock_git.branch_exists.return_value = False
+    mock_git.worktree_exists.return_value = False
+    command = [
+        "prepare",
+        "intake-journey",
+        "--no-interactive",
+        f"--input-method={input_method}",
+    ]
+    if issue_id is not None:
+        command.append(f"--issue-id={issue_id}")
+    with (
+        patch("cafe.ui.cli.GitOperations", return_value=mock_git),
+        patch("cafe.utils.git_utils.is_github_repo", return_value=True),
+        patch("cafe.ui.phase_prompts.is_github_repo", return_value=True),
+    ):
+        result = runner.invoke(app, command)
+    assert result.exit_code == 0, result.stdout
+
     builtin_root = tmp_path / "builtin"
     for name in ("cafe-workflow-common", "cafe-github_sync"):
         _write_skill(builtin_root / "skills", name)
-    _write_skill(tmp_path / ".cafe" / "skills", "intake")
     loader = SkillLoader(
         project_root=tmp_path,
         global_root=tmp_path / "global",
@@ -66,36 +154,23 @@ def _intake_executor(
         skill_bridge=NativeSkillBridge(loader, project_root=tmp_path, home_dir=tmp_path / "home"),
     )
     issue_dir = tmp_path / ".cafe" / "issues" / "intake-journey"
-    issue_dir.mkdir(parents=True)
-    step: dict[str, object] = {
-        "skill": "intake",
-        "role": "researcher",
-        "input_artifacts": [],
-        "output_artifact": "intake_brief",
-        "initial_input": {
-            "providers": ["manual_text", "github_issue"],
-            "bind": {"artifact": "intake_brief", "prompt_context": "user_input"},
-        },
-        "hooks": {"prepare_input": ["InitialInputProviderResolver"]},
-        "valid_intents": ["confirmed"],
-        "on": {"await_agent": "_done"},
-    }
-    (issue_dir / "issue.yaml").write_text(
-        "initial_input:\n"
-        + "\n".join(f"  {key}: {value}" for key, value in initial_input.items())
-        + "\n",
-        encoding="utf-8",
+    playbook = PlaybookLoader(
+        project_root=tmp_path,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    ).load("intake")
+    step = playbook["steps"]["intake"]
+    assert (issue_dir / "intake").is_dir()
+    assert not (issue_dir / "spec").exists()
+    prepared_config = yaml.safe_load((issue_dir / "issue.yaml").read_text(encoding="utf-8"))
+    assert prepared_config["initial_input"]["provider"] == (
+        "github_issue" if input_method == "github" else "manual_text"
     )
     manager = _AgentManager()
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="intake-journey",
-        playbook={
-            "playbook": {"id": "intake"},
-            "roles": {"researcher": {"default_agent": "David"}},
-            "entry_point": "intake",
-            "steps": {"intake": step},
-        },
+        playbook=playbook,
         generic_phase=generic_phase,
         agent_manager=manager,
         git_ops=_GitOps(),
@@ -105,12 +180,15 @@ def _intake_executor(
     return executor, manager, issue_dir, step
 
 
-def test_custom_manual_intake_delivers_one_input_to_artifact_and_agent(tmp_path: Path) -> None:
-    """I1 — a non-development entry step receives declared manual input."""
+def test_custom_manual_intake_delivers_one_input_to_artifact_and_agent(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """I1 — custom prepare and loader deliver manual input to an intake entry step."""
+    monkeypatch.chdir(tmp_path)
     content = "Collect the customer's incident timeline."
-    executor, manager, issue_dir, step = _intake_executor(
+    executor, manager, issue_dir, step = _prepare_intake_issue(
         tmp_path,
-        initial_input={"provider": "manual_text"},
+        input_method="manual",
         step_user_inputs={"intake": content},
     )
     state = BlackboardStore(issue_dir).load_or_create("intake")
@@ -123,12 +201,14 @@ def test_custom_manual_intake_delivers_one_input_to_artifact_and_agent(tmp_path:
     assert not (issue_dir / "spec").exists()
 
 
-def test_custom_github_intake_uses_trusted_host_boundary_once(tmp_path: Path) -> None:
-    """I2 — a non-development entry step receives host-resolved GitHub input."""
+def test_custom_github_intake_uses_trusted_host_boundary_once(tmp_path: Path, monkeypatch) -> None:
+    """I2 — custom prepare and loader deliver trusted GitHub input to intake."""
+    monkeypatch.chdir(tmp_path)
     content = "**Issue Title:** Intake request\n\nCollect source material."
-    executor, manager, issue_dir, step = _intake_executor(
+    executor, manager, issue_dir, step = _prepare_intake_issue(
         tmp_path,
-        initial_input={"provider": "github_issue", "issue_id": 346},
+        input_method="github",
+        issue_id=346,
     )
     state = BlackboardStore(issue_dir).load_or_create("intake")
 

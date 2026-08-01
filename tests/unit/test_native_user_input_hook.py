@@ -484,6 +484,74 @@ def test_github_issue_fetcher_uses_context_user_input_without_prompting(tmp_path
     mock_fetch_issue.assert_not_called()
 
 
+def test_github_issue_fetcher_fetches_configured_issue_noninteractively(tmp_path: Path) -> None:
+    """U8 — legacy GitHub config remains usable without an interactive prompt."""
+    phase_dir = tmp_path / "spec"
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.interactive = False
+    phase.issue_dir.mkdir(parents=True, exist_ok=True)
+    (phase.issue_dir / "issue.yaml").write_text(
+        "spec:\n  input_method: github\n  issue_id: 346\n", encoding="utf-8"
+    )
+    output_file = phase._get_iteration_dir(1) / "output.md"
+    hook = GitHubIssueFetcher()
+
+    with (
+        patch.object(hook, "_prompt_input_method") as mock_prompt_method,
+        patch.object(hook, "_prompt_manual_input") as mock_prompt_manual,
+        patch.object(
+            hook,
+            "_fetch_github_issue",
+            return_value="**Issue Title:** Restore legacy input",
+        ) as mock_fetch_issue,
+    ):
+        result = hook.run(
+            stage="prepare_input",
+            phase=phase,
+            step_name="spec",
+            output_file=output_file,
+        )
+
+    assert "Restore legacy input" in output_file.read_text(encoding="utf-8")
+    assert result.context_updates == {"user_input": "**Issue Title:** Restore legacy input"}
+    assert result.events == [
+        {"type": "user_input_collected", "step": "spec", "source": "github"}
+    ]
+    mock_prompt_method.assert_not_called()
+    mock_prompt_manual.assert_not_called()
+    mock_fetch_issue.assert_called_once_with(346)
+
+
+def test_github_only_provider_prompts_for_issue_id_interactively(tmp_path: Path) -> None:
+    """U5 — a GitHub-only declaration obtains its issue ID at the trusted UI boundary."""
+    phase = _FakePhase(phase_dir=tmp_path / "intake", iteration=1)
+    output_file = phase._get_iteration_dir(1) / "output.md"
+    hook = InitialInputProviderResolver()
+
+    prompt = MagicMock(return_value=("github", 346))
+    fetch = MagicMock(return_value="**Issue Title:** Gather requirements")
+    result = hook.run(
+        stage="prepare_input",
+        phase=phase,
+        step_name="intake",
+        step_def={
+            "output_artifact": "intake_brief",
+            "initial_input": {
+                "providers": ["github_issue"],
+                "bind": {"artifact": "intake_brief", "prompt_context": "user_input"},
+            },
+        },
+        output_file=output_file,
+        initial_input_prompt_input_method=prompt,
+        initial_input_fetch_github_issue=fetch,
+    )
+
+    assert "Gather requirements" in output_file.read_text(encoding="utf-8")
+    assert result.context_updates == {"user_input": "**Issue Title:** Gather requirements"}
+    prompt.assert_called_once_with()
+    fetch.assert_called_once_with(346)
+
+
 def test_initial_input_provider_delivers_prefilled_manual_text_to_custom_entry_step(
     tmp_path: Path,
 ) -> None:
