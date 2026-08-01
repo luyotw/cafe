@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from cafe.core.playbook import PlaybookDefinition, resolve_playbook_skills
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.skills.loader import SkillLoader
 from cafe.ui.human_tasks import resolve_step_human_task
 
 
@@ -20,6 +22,217 @@ def _write_skill(root: Path, name: str) -> None:
 def _write_playbook(root: Path, name: str, content: str) -> None:
     root.mkdir(parents=True, exist_ok=True)
     (root / f"{name}.yaml").write_text(content, encoding="utf-8")
+
+
+def test_declared_skill_environment_resolves_layers_with_stable_deduplication() -> None:
+    """U1/U2 — workflow skills resolve shared, role, and step layers predictably."""
+    model = PlaybookDefinition.model_validate(
+        {
+            "playbook": {"id": "layered"},
+            "roles": {"developer": {}},
+            "skills": {
+                "workflow": {
+                    "shared": ["base", "shared"],
+                    "roles": {
+                        "developer": {"mode": "extend", "skills": ["shared", "role"]}
+                    },
+                    "steps": {
+                        "build": {"mode": "replace", "skills": ["step", "role", "step"]}
+                    },
+                },
+                "chat": {"shared": []},
+            },
+            "steps": {
+                "build": {"role": "developer", "skill": "phase", "on": {"await_agent": "_done"}}
+            },
+        }
+    )
+
+    assert resolve_playbook_skills(
+        model, channel="workflow", role="developer", step_name="build"
+    ) == ["step", "role"]
+    assert resolve_playbook_skills(
+        model, channel="chat", role="developer", step_name="build"
+    ) == []
+
+
+def test_skill_environment_reports_missing_channel_and_missing_skill_before_execution(
+    tmp_path: Path,
+) -> None:
+    """U3/U4 — declarations identify absent channels and unresolved support skills."""
+    builtin_root = tmp_path / "builtin"
+    project_root = tmp_path / "project"
+    _write_skill(builtin_root / "skills", "phase")
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "custom",
+        """
+playbook: {id: custom}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+steps:
+  run:
+    role: operator
+    skill: phase
+    on: {await_agent: _done}
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    loaded = loader.load_model("custom")
+    assert any("skills.workflow" in warning for warning in loaded.warnings)
+    assert any("skills.chat" in warning for warning in loaded.warnings)
+    with pytest.raises(ValueError, match="skills.workflow"):
+        loader.load_model("custom", strict=True)
+
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "custom",
+        """
+playbook: {id: custom}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+skills:
+  workflow: {shared: [missing-support]}
+  chat: {shared: []}
+steps:
+  run:
+    role: operator
+    skill: phase
+    on: {await_agent: _done}
+""",
+    )
+    with pytest.raises(ValueError, match="skills.workflow.shared\\[0\\]"):
+        loader.load_model("custom")
+
+
+def test_skill_environment_rejects_malformed_and_unknown_overlay_scopes(
+    tmp_path: Path,
+) -> None:
+    """U3 — malformed declarations identify the field that authors must repair."""
+    with pytest.raises(ValueError, match="skills.workflow.shared"):
+        PlaybookDefinition.model_validate(
+            {
+                "playbook": {"id": "invalid"},
+                "skills": {"workflow": {}, "chat": {"shared": []}},
+                "steps": {"run": {"role": "operator", "skill": "phase", "on": {"await_agent": "_done"}}},
+            }
+        )
+    with pytest.raises(ValueError, match="skills.workflow.roles.developer.mode"):
+        PlaybookDefinition.model_validate(
+            {
+                "playbook": {"id": "invalid"},
+                "roles": {"developer": {}},
+                "skills": {
+                    "workflow": {
+                        "shared": [],
+                        "roles": {"developer": {"mode": "merge", "skills": []}},
+                    },
+                    "chat": {"shared": []},
+                },
+                "steps": {
+                    "run": {"role": "developer", "skill": "phase", "on": {"await_agent": "_done"}}
+                },
+            }
+        )
+
+    builtin_root = tmp_path / "builtin"
+    project_root = tmp_path / "project"
+    _write_skill(builtin_root / "skills", "phase")
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "invalid",
+        """
+playbook: {id: invalid}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+skills:
+  workflow:
+    shared: []
+    roles: {missing-role: {mode: extend, skills: []}}
+  chat: {shared: []}
+steps:
+  run: {role: operator, skill: phase, on: {await_agent: _done}}
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="skills.workflow.roles.missing-role"):
+        loader.load_model("invalid")
+
+
+def test_declared_skills_share_project_override_catalog_with_phase_skills(tmp_path: Path) -> None:
+    """U4/I2 — support declarations use the existing project-over-builtin catalog."""
+    builtin_root = tmp_path / "builtin"
+    project_root = tmp_path / "project"
+    _write_skill(builtin_root / "skills", "phase")
+    _write_skill(builtin_root / "skills", "support")
+    _write_skill(project_root / ".cafe" / "skills", "support")
+    _write_skill(project_root / ".cafe" / "skills", "project-extra")
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "custom",
+        """
+playbook: {id: custom}
+roles: {operator: {}}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+skills:
+  workflow:
+    shared: [support]
+    roles: {operator: {mode: extend, skills: [project-extra]}}
+  chat: {shared: []}
+steps:
+  run: {role: operator, skill: phase, on: {await_agent: _done}}
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    loaded = loader.load_model("custom", strict=True)
+    assert resolve_playbook_skills(
+        loaded.model, channel="workflow", role="operator", step_name="run"
+    ) == ["support", "project-extra"]
+    catalog = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+    assert catalog.get_skill_dir("support") == project_root / ".cafe" / "skills" / "support"
+
+
+@pytest.mark.parametrize(
+    "playbook_id",
+    ["default", "simple", "tdd", "hotfix", "editorial", "incident", "research"],
+)
+def test_bundled_playbooks_preserve_declared_skill_environment_parity(
+    tmp_path: Path, playbook_id: str
+) -> None:
+    """I1 — each bundled playbook declares the historic support skill order."""
+    builtin_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
+    model = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    ).load_model(playbook_id, strict=True).model
+
+    assert resolve_playbook_skills(
+        model, channel="workflow", role=None, step_name=None
+    ) == ["cafe-workflow-common", "cafe-github_sync"]
+    assert resolve_playbook_skills(model, channel="chat", role=None, step_name=None) == [
+        "cafe-common-chat-handoff",
+        "cafe-chat-develop-change",
+        "cafe-chat-spec-revision",
+        "cafe-chat-plan-revision",
+        "cafe-chat-alignment-decision",
+    ]
 
 
 def test_playbook_rejects_human_task_outcome_outside_declared_steps(tmp_path: Path) -> None:
