@@ -22,3 +22,5 @@ def test_write_cafe_phase_repairs_only_its_declarative_layer() -> None:
     assert "Driver diagnosis 與 declarative repair 邊界" in spec
     assert "不要建立隱含的 `write-cafe-driver` fallback" in normalized_spec
     assert "沒有 user 明確授權不得 自動 create、comment 或 close issue" in normalized_spec
+    assert "playbook `skills.workflow`" in spec
+    assert "playbook `skills.chat`" in spec
