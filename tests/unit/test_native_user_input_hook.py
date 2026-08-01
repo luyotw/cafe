@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from cafe.core.hooks.native import (
     GitHubIssueFetcher,
     GitHubPRCreator,
@@ -546,10 +548,40 @@ def test_github_only_provider_prompts_for_issue_id_interactively(tmp_path: Path)
         initial_input_fetch_github_issue=fetch,
     )
 
-    assert "Gather requirements" in output_file.read_text(encoding="utf-8")
+    assert output_file.read_text(encoding="utf-8") == (
+        "**Issue Title:** Gather requirements\n"
+    )
     assert result.context_updates == {"user_input": "**Issue Title:** Gather requirements"}
     prompt.assert_called_once_with()
     fetch.assert_called_once_with(346)
+
+
+def test_github_only_provider_rejects_undeclared_prompt_selection_without_persisting(
+    tmp_path: Path,
+) -> None:
+    """U5 — an unavailable interactive choice cannot poison a later retry."""
+    phase = _FakePhase(phase_dir=tmp_path / "intake", iteration=1)
+    output_file = phase._get_iteration_dir(1) / "output.md"
+    hook = InitialInputProviderResolver()
+
+    with pytest.raises(ValueError, match="not declared"):
+        hook.run(
+            stage="prepare_input",
+            phase=phase,
+            step_name="intake",
+            step_def={
+                "output_artifact": "intake_brief",
+                "initial_input": {
+                    "providers": ["github_issue"],
+                    "bind": {"artifact": "intake_brief"},
+                },
+            },
+            output_file=output_file,
+            initial_input_prompt_input_method=MagicMock(return_value=("manual", None)),
+        )
+
+    assert not (phase.issue_dir / "issue.yaml").exists()
+    assert not output_file.exists()
 
 
 def test_initial_input_provider_delivers_prefilled_manual_text_to_custom_entry_step(
@@ -577,7 +609,7 @@ def test_initial_input_provider_delivers_prefilled_manual_text_to_custom_entry_s
     )
 
     assert output_file.read_text(encoding="utf-8") == (
-        "# Initial Requirements\n\nSummarize the incoming customer report.\n"
+        "Summarize the incoming customer report.\n"
     )
     assert result.context_updates == {"user_input": "Summarize the incoming customer report."}
     assert result.events == [

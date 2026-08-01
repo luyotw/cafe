@@ -21,7 +21,7 @@ from cafe.core.initial_input import (
 from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
 from cafe.core.status_codes import PhaseStatusCode, step_on_declares
 from cafe.skills.loader import SkillLoader
-from cafe.ui.inquirer_prompts import prompt_multiline
+from cafe.ui.inquirer_prompts import prompt_list, prompt_multiline, prompt_text
 from cafe.ui.interactive_qa import interactive_qa_flow
 from cafe.utils.github import (
     GitHubError,
@@ -629,9 +629,9 @@ class InitialInputProviderResolver(NoOpHook):
         if artifact is not None:
             assert output_file is not None
             output_file.parent.mkdir(parents=True, exist_ok=True)
-            output_file.write_text(
-                f"# Initial Requirements\n\n{result.content}\n", encoding="utf-8"
-            )
+            formatter = kwargs.get("initial_input_output_formatter")
+            content = formatter(result.content) if callable(formatter) else result.content
+            output_file.write_text(f"{content.rstrip()}\n", encoding="utf-8")
 
         context_updates = (
             {"user_input": result.content}
@@ -660,14 +660,15 @@ class InitialInputProviderResolver(NoOpHook):
         prompt_manual_input: Any,
         fetch_github_issue: Any,
     ) -> InitialInputResult:
-        declared = {str(provider) for provider in providers}
-        prefilled = GitHubIssueFetcher._resolve_prefilled_input(
+        declared = [str(provider) for provider in providers]
+        declared_set = set(declared)
+        prefilled = self._resolve_prefilled_input(
             phase=phase,
             step_name=step_name,
             context=context,
         )
         if prefilled is not None:
-            self._require_declared(MANUAL_TEXT_PROVIDER, declared, step_name)
+            self._require_declared(MANUAL_TEXT_PROVIDER, declared_set, step_name)
             return InitialInputResult(
                 content=prefilled,
                 provider=MANUAL_TEXT_PROVIDER,
@@ -682,13 +683,15 @@ class InitialInputProviderResolver(NoOpHook):
                 providers=declared,
                 prompt_input_method=prompt_input_method,
             )
+            self._require_declared(provider, declared_set, step_name)
             self._save_selection(phase, provider, issue_id)
-        self._require_declared(provider, declared, step_name)
+        else:
+            self._require_declared(provider, declared_set, step_name)
 
         if provider == GITHUB_ISSUE_PROVIDER:
             if issue_id is None:
                 raise ValueError("initial_input.provider 'github_issue' requires issue_id")
-            fetch = fetch_github_issue or GitHubIssueFetcher._fetch_github_issue
+            fetch = fetch_github_issue or self._fetch_github_issue
             try:
                 content = str(fetch(issue_id)).strip()
             except Exception as exc:
@@ -704,7 +707,7 @@ class InitialInputProviderResolver(NoOpHook):
                 "initial_input.provider 'manual_text' requires non-empty invocation input "
                 "when running non-interactively"
             )
-        prompt = prompt_manual_input or GitHubIssueFetcher._prompt_manual_input
+        prompt = prompt_manual_input or self._prompt_manual_input
         content = str(prompt()).strip()
         if not content:
             raise ValueError("initial_input.provider 'manual_text' received empty input")
@@ -754,29 +757,91 @@ class InitialInputProviderResolver(NoOpHook):
     def _select_provider(
         *,
         phase: Any,
-        providers: set[str],
+        providers: list[str],
         prompt_input_method: Any,
     ) -> tuple[str, Optional[int]]:
         if len(providers) == 1:
-            provider = next(iter(providers))
+            provider = providers[0]
             if provider != GITHUB_ISSUE_PROVIDER or not getattr(phase, "interactive", False):
                 return provider, None
-            prompt = prompt_input_method or GitHubIssueFetcher._prompt_input_method
-            selected_provider, issue_id = prompt()
-            normalized = {"manual": MANUAL_TEXT_PROVIDER, "github": GITHUB_ISSUE_PROVIDER}.get(
-                selected_provider, selected_provider
-            )
-            return normalized, issue_id
+            prompt = prompt_input_method or InitialInputProviderResolver._prompt_github_issue
+            return InitialInputProviderResolver._normalize_provider_selection(prompt())
         if not getattr(phase, "interactive", False):
             raise ValueError(
                 "initial_input.provider must be selected before non-interactive execution"
             )
-        prompt = prompt_input_method or GitHubIssueFetcher._prompt_input_method
-        provider, issue_id = prompt()
+        prompt = prompt_input_method or (
+            lambda: InitialInputProviderResolver._prompt_declared_provider(providers)
+        )
+        return InitialInputProviderResolver._normalize_provider_selection(prompt())
+
+    @staticmethod
+    def _normalize_provider_selection(
+        selection: tuple[str, Optional[int]],
+    ) -> tuple[str, Optional[int]]:
+        provider, issue_id = selection
         normalized = {"manual": MANUAL_TEXT_PROVIDER, "github": GITHUB_ISSUE_PROVIDER}.get(
             provider, provider
         )
         return normalized, issue_id
+
+    @staticmethod
+    def _resolve_prefilled_input(
+        *,
+        phase: Any,
+        step_name: str,
+        context: Any,
+    ) -> Optional[str]:
+        if hasattr(phase, "step_user_inputs"):
+            step_user_inputs = getattr(phase, "step_user_inputs")
+            if isinstance(step_user_inputs, dict):
+                raw_user_input = step_user_inputs.get(step_name)
+                if isinstance(raw_user_input, str) and raw_user_input.strip():
+                    return raw_user_input.strip()
+
+        if isinstance(context, dict):
+            raw_user_input = context.get("user_input")
+            if isinstance(raw_user_input, str) and raw_user_input.strip():
+                return raw_user_input.strip()
+
+        return None
+
+    @staticmethod
+    def _prompt_declared_provider(providers: list[str]) -> tuple[str, Optional[int]]:
+        provider = prompt_list("Select initial input provider:", choices=providers)
+        if provider == GITHUB_ISSUE_PROVIDER:
+            return InitialInputProviderResolver._prompt_github_issue()
+        return provider, None
+
+    @staticmethod
+    def _prompt_github_issue() -> tuple[str, Optional[int]]:
+        while True:
+            issue_input = prompt_text(message="GitHub Issue ID or URL:", default="")
+            try:
+                issue_id = int(GitHubOps().extract_issue_number(issue_input))
+            except (ValueError, GitHubError) as exc:
+                print(f"Invalid GitHub Issue ID or URL: {exc}")
+                continue
+            return GITHUB_ISSUE_PROVIDER, issue_id
+
+    @staticmethod
+    def _prompt_manual_input() -> str:
+        content = prompt_multiline("Provide the initial input").strip()
+        if not content:
+            raise ValueError("initial_input.provider 'manual_text' received empty input")
+        return content
+
+    @staticmethod
+    def _fetch_github_issue(issue_id: int) -> str:
+        from cafe.ui.phase_prompts import fetch_github_issue
+
+        fetched_content, _image_urls = fetch_github_issue(GitHubOps(), issue_id)
+        lines = fetched_content.split("\n", 1)
+        if lines[0].startswith("# "):
+            title = lines[0][2:].strip()
+            body = lines[1].strip() if len(lines) > 1 else ""
+            return f"**Issue Title:** {title}\n\n{body}" if body else f"**Issue Title:** {title}"
+        return fetched_content
 
 
 class GitHubIssueFetcher(NoOpHook):
@@ -835,6 +900,7 @@ class GitHubIssueFetcher(NoOpHook):
         resolver_kwargs.update(
             {
                 "step_def": legacy_step_def,
+                "initial_input_output_formatter": self._format_initial_requirements,
                 "initial_input_prompt_input_method": self._prompt_and_save_input_method(phase),
                 "initial_input_prompt_manual_input": self._prompt_manual_input,
                 "initial_input_fetch_github_issue": self._fetch_github_issue,
@@ -871,19 +937,15 @@ class GitHubIssueFetcher(NoOpHook):
         step_name: str,
         context: Any,
     ) -> Optional[str]:
-        if hasattr(phase, "step_user_inputs"):
-            step_user_inputs = getattr(phase, "step_user_inputs")
-            if isinstance(step_user_inputs, dict):
-                raw_user_input = step_user_inputs.get(step_name)
-                if isinstance(raw_user_input, str) and raw_user_input.strip():
-                    return raw_user_input.strip()
+        return InitialInputProviderResolver._resolve_prefilled_input(
+            phase=phase,
+            step_name=step_name,
+            context=context,
+        )
 
-        if isinstance(context, dict):
-            raw_user_input = context.get("user_input")
-            if isinstance(raw_user_input, str) and raw_user_input.strip():
-                return raw_user_input.strip()
-
-        return None
+    @staticmethod
+    def _format_initial_requirements(content: str) -> str:
+        return f"# Initial Requirements\n\n{content}"
 
     @staticmethod
     def _load_input_config(config_file: Path) -> tuple[Optional[str], Optional[int]]:

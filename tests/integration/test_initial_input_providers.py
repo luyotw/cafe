@@ -213,7 +213,8 @@ def test_custom_github_intake_uses_trusted_host_boundary_once(tmp_path: Path, mo
     state = BlackboardStore(issue_dir).load_or_create("intake")
 
     with patch(
-        "cafe.core.hooks.native.GitHubIssueFetcher._fetch_github_issue", return_value=content
+        "cafe.core.hooks.native.InitialInputProviderResolver._fetch_github_issue",
+        return_value=content,
     ) as fetch:
         executor.execute_step("intake", step, state)
 

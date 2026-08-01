@@ -573,6 +573,11 @@ def _validate_initial_input_declarations(model: PlaybookDefinition) -> None:
                 f"{field_path}.bind.artifact {artifact!r} must match output_artifact "
                 f"{step.output_artifact!r}"
             )
+        if "InitialInputProviderResolver" not in step.hooks.prepare_input:
+            raise ValueError(
+                f"{field_path} requires hooks.prepare_input to include "
+                "'InitialInputProviderResolver'"
+            )
 
 
 def _validate_prepare_metadata(

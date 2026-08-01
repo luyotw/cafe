@@ -143,6 +143,9 @@ def test_entry_step_initial_input_accepts_declared_providers_and_bindings(tmp_pa
         """
 playbook: {id: intake-flow}
 entry_point: intake
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
 steps:
   intake:
     role: pm
@@ -153,10 +156,9 @@ steps:
       bind:
         artifact: intake_brief
         prompt_context: user_input
+    hooks:
+      prepare_input: [InitialInputProviderResolver]
     on: {await_agent: _done}
-commands:
-  prepare:
-    prompt_for_spec_plan_config: false
 """,
     )
 
@@ -307,6 +309,36 @@ def test_builtin_entry_steps_use_declared_initial_input_resolver(playbook_name: 
     assert entry.initial_input.bind.artifact == entry.output_artifact
     assert "InitialInputProviderResolver" in entry.hooks.prepare_input
     assert "GitHubIssueFetcher" not in entry.hooks.prepare_input
+
+
+def test_initial_input_declaration_requires_generic_resolver_hook(tmp_path: Path) -> None:
+    """I4 — a declared provider cannot silently bypass trusted delivery."""
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "intake")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "missing-resolver",
+        """
+playbook: {id: missing-resolver}
+entry_point: intake
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+steps:
+  intake:
+    role: pm
+    skill: intake
+    output_artifact: intake_brief
+    initial_input:
+      providers: [manual_text]
+      bind: {artifact: intake_brief}
+    on: {await_agent: _done}
+""",
+    )
+    loader = PlaybookLoader(builtin_root=builtin_root)
+
+    with pytest.raises(ValueError, match="InitialInputProviderResolver"):
+        loader.load_model("missing-resolver")
 
 
 def test_playbook_conversation_locale_supports_bcp47_and_defaults_to_auto(
