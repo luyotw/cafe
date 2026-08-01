@@ -128,8 +128,8 @@ class PrepareField(BaseModel):
                     raise ValueError(
                         f"field {self.id!r} {name} {value!r} is not one of its choices"
                     )
-        if self.normalize == "github_issue" and self.write != "spec.issue_id":
-            raise ValueError(f"field {self.id!r} github_issue normalization requires spec.issue_id")
+        if self.normalize == "github_issue" and self.type != "text":
+            raise ValueError(f"field {self.id!r} github_issue normalization requires a text field")
         return self
 
 

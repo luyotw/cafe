@@ -4,9 +4,12 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from cafe.core.hooks.native import (
     GitHubIssueFetcher,
     GitHubPRCreator,
+    InitialInputProviderResolver,
     LocalPRReviewer,
     PRCommentPoster,
     PRLinkOpener,
@@ -481,6 +484,313 @@ def test_github_issue_fetcher_uses_context_user_input_without_prompting(tmp_path
     mock_prompt_method.assert_not_called()
     mock_prompt_manual.assert_not_called()
     mock_fetch_issue.assert_not_called()
+
+
+def test_github_issue_fetcher_fetches_configured_issue_noninteractively(tmp_path: Path) -> None:
+    """U8 — legacy GitHub config remains usable without an interactive prompt."""
+    phase_dir = tmp_path / "spec"
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.interactive = False
+    phase.issue_dir.mkdir(parents=True, exist_ok=True)
+    (phase.issue_dir / "issue.yaml").write_text(
+        "spec:\n  input_method: github\n  issue_id: 346\n", encoding="utf-8"
+    )
+    output_file = phase._get_iteration_dir(1) / "output.md"
+    hook = GitHubIssueFetcher()
+
+    with (
+        patch.object(hook, "_prompt_input_method") as mock_prompt_method,
+        patch.object(hook, "_prompt_manual_input") as mock_prompt_manual,
+        patch.object(
+            hook,
+            "_fetch_github_issue",
+            return_value="**Issue Title:** Restore legacy input",
+        ) as mock_fetch_issue,
+    ):
+        result = hook.run(
+            stage="prepare_input",
+            phase=phase,
+            step_name="spec",
+            output_file=output_file,
+        )
+
+    assert "Restore legacy input" in output_file.read_text(encoding="utf-8")
+    assert result.context_updates == {"user_input": "**Issue Title:** Restore legacy input"}
+    assert result.events == [
+        {"type": "user_input_collected", "step": "spec", "source": "github"}
+    ]
+    mock_prompt_method.assert_not_called()
+    mock_prompt_manual.assert_not_called()
+    mock_fetch_issue.assert_called_once_with(346)
+
+
+def test_github_only_provider_prompts_for_issue_id_interactively(tmp_path: Path) -> None:
+    """U5 — a GitHub-only declaration obtains its issue ID at the trusted UI boundary."""
+    phase = _FakePhase(phase_dir=tmp_path / "intake", iteration=1)
+    output_file = phase._get_iteration_dir(1) / "output.md"
+    hook = InitialInputProviderResolver()
+
+    prompt = MagicMock(return_value=("github", 346))
+    fetch = MagicMock(return_value="**Issue Title:** Gather requirements")
+    result = hook.run(
+        stage="prepare_input",
+        phase=phase,
+        step_name="intake",
+        step_def={
+            "output_artifact": "intake_brief",
+            "initial_input": {
+                "providers": ["github_issue"],
+                "bind": {"artifact": "intake_brief", "prompt_context": "user_input"},
+            },
+        },
+        output_file=output_file,
+        initial_input_prompt_input_method=prompt,
+        initial_input_fetch_github_issue=fetch,
+    )
+
+    assert output_file.read_text(encoding="utf-8") == (
+        "**Issue Title:** Gather requirements\n"
+    )
+    assert result.context_updates == {"user_input": "**Issue Title:** Gather requirements"}
+    prompt.assert_called_once_with()
+    fetch.assert_called_once_with(346)
+
+
+def test_github_only_provider_rejects_undeclared_prompt_selection_without_persisting(
+    tmp_path: Path,
+) -> None:
+    """U5 — an unavailable interactive choice cannot poison a later retry."""
+    phase = _FakePhase(phase_dir=tmp_path / "intake", iteration=1)
+    output_file = phase._get_iteration_dir(1) / "output.md"
+    hook = InitialInputProviderResolver()
+
+    with pytest.raises(ValueError, match="not declared"):
+        hook.run(
+            stage="prepare_input",
+            phase=phase,
+            step_name="intake",
+            step_def={
+                "output_artifact": "intake_brief",
+                "initial_input": {
+                    "providers": ["github_issue"],
+                    "bind": {"artifact": "intake_brief"},
+                },
+            },
+            output_file=output_file,
+            initial_input_prompt_input_method=MagicMock(return_value=("manual", None)),
+        )
+
+    assert not (phase.issue_dir / "issue.yaml").exists()
+    assert not output_file.exists()
+
+
+def test_initial_input_provider_delivers_prefilled_manual_text_to_custom_entry_step(
+    tmp_path: Path,
+) -> None:
+    """U4/U6 — declared custom entry bindings receive invocation input once."""
+    phase_dir = tmp_path / "intake"
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    output_file = phase._get_iteration_dir(1) / "output.md"
+    hook = InitialInputProviderResolver()
+
+    result = hook.run(
+        stage="prepare_input",
+        phase=phase,
+        step_name="intake",
+        step_def={
+            "output_artifact": "intake_brief",
+            "initial_input": {
+                "providers": ["manual_text", "github_issue"],
+                "bind": {"artifact": "intake_brief", "prompt_context": "user_input"},
+            },
+        },
+        output_file=output_file,
+        context={"user_input": "Summarize the incoming customer report."},
+    )
+
+    assert output_file.read_text(encoding="utf-8") == (
+        "Summarize the incoming customer report.\n"
+    )
+    assert result.context_updates == {"user_input": "Summarize the incoming customer report."}
+    assert result.events == [
+        {"type": "initial_input_resolved", "step": "intake", "provider": "manual_text"}
+    ]
+
+
+def test_initial_input_provider_skips_resume_and_existing_artifact(tmp_path: Path) -> None:
+    """U9 — providers cannot overwrite resumed or already seeded entry output."""
+    hook = InitialInputProviderResolver()
+    step_def = {
+        "output_artifact": "intake_brief",
+        "initial_input": {
+            "providers": ["manual_text"],
+            "bind": {"artifact": "intake_brief", "prompt_context": "user_input"},
+        },
+    }
+    resumed_phase = _FakePhase(phase_dir=tmp_path / "intake", iteration=2)
+    resumed_output = resumed_phase._get_iteration_dir(2) / "output.md"
+
+    resumed = hook.run(
+        stage="prepare_input",
+        phase=resumed_phase,
+        step_name="intake",
+        step_def=step_def,
+        output_file=resumed_output,
+        context={"user_input": "new content"},
+    )
+
+    phase = _FakePhase(phase_dir=tmp_path / "existing", iteration=1)
+    output = phase._get_iteration_dir(1) / "output.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("existing artifact", encoding="utf-8")
+    existing = hook.run(
+        stage="prepare_input",
+        phase=phase,
+        step_name="intake",
+        step_def=step_def,
+        output_file=output,
+        context={"user_input": "new content"},
+    )
+
+    assert resumed.events == []
+    assert existing.events == []
+    assert output.read_text(encoding="utf-8") == "existing artifact"
+
+
+@pytest.mark.parametrize("playbook_name", ["default", "simple", "tdd"])
+def test_builtin_initial_input_preserves_legacy_requirements_seed(
+    tmp_path: Path, playbook_name: str
+) -> None:
+    """I3 — built-in first steps retain the legacy initial-input experience."""
+    import yaml
+
+    playbook_file = (
+        Path(__file__).parents[2] / "src" / "cafe" / "data" / "playbooks" / f"{playbook_name}.yaml"
+    )
+    playbook = yaml.safe_load(playbook_file.read_text(encoding="utf-8"))
+    step_def = playbook["steps"]["spec"]
+    assert step_def["hooks"]["prepare_input"][0] == "InitialInputProviderResolver"
+
+    phase = _FakePhase(phase_dir=tmp_path / "spec", iteration=1)
+    output_file = phase._get_iteration_dir(1) / "output.md"
+
+    result = InitialInputProviderResolver().run(
+        stage="prepare_input",
+        phase=phase,
+        step_name="spec",
+        step_def=step_def,
+        output_file=output_file,
+        context={"user_input": "Preserve the established workflow kickoff."},
+    )
+
+    assert output_file.read_text(encoding="utf-8") == (
+        "# Initial Requirements\n\nPreserve the established workflow kickoff.\n"
+    )
+    assert result.context_updates == {
+        "user_input": "Preserve the established workflow kickoff."
+    }
+
+
+@pytest.mark.parametrize("playbook_name", ["default", "simple", "tdd"])
+def test_builtin_initial_input_seeds_empty_legacy_requirements_non_interactively(
+    tmp_path: Path, playbook_name: str
+) -> None:
+    """I3 — prepared manual built-ins retain the empty legacy requirements seed."""
+    import yaml
+
+    playbook_file = (
+        Path(__file__).parents[2] / "src" / "cafe" / "data" / "playbooks" / f"{playbook_name}.yaml"
+    )
+    step_def = yaml.safe_load(playbook_file.read_text(encoding="utf-8"))["steps"]["spec"]
+    phase = _FakePhase(phase_dir=tmp_path / "spec", iteration=1)
+    phase.interactive = False
+    phase.issue_dir.mkdir(parents=True, exist_ok=True)
+    (phase.issue_dir / "issue.yaml").write_text(
+        "initial_input:\n  provider: manual_text\n", encoding="utf-8"
+    )
+    output_file = phase._get_iteration_dir(1) / "output.md"
+
+    result = InitialInputProviderResolver().run(
+        stage="prepare_input",
+        phase=phase,
+        step_name="spec",
+        step_def=step_def,
+        output_file=output_file,
+    )
+
+    assert output_file.read_text(encoding="utf-8") == "# Initial Requirements\n\n\n"
+    assert result.context_updates == {"user_input": ""}
+    assert result.events == [
+        {"type": "initial_input_resolved", "step": "spec", "provider": "manual_text"}
+    ]
+
+
+def test_builtin_initial_input_reuses_legacy_github_ui_and_formatter(tmp_path: Path) -> None:
+    """I3 — generic built-in resolution keeps the established GitHub interaction."""
+    import yaml
+
+    playbook_file = Path(__file__).parents[2] / "src/cafe/data/playbooks/default.yaml"
+    step_def = yaml.safe_load(playbook_file.read_text(encoding="utf-8"))["steps"]["spec"]
+    phase = _FakePhase(phase_dir=tmp_path / "spec", iteration=1)
+    output_file = phase._get_iteration_dir(1) / "output.md"
+    prompt = MagicMock(return_value=("github_issue", 346))
+
+    with (
+        patch.object(
+            GitHubIssueFetcher,
+            "_prompt_and_save_input_method",
+            return_value=prompt,
+        ) as select_provider,
+        patch.object(
+            GitHubIssueFetcher,
+            "_fetch_github_issue",
+            return_value="**Issue Title:** Restore compatibility",
+        ) as fetch_issue,
+    ):
+        result = InitialInputProviderResolver().run(
+            stage="prepare_input",
+            phase=phase,
+            step_name="spec",
+            step_def=step_def,
+            output_file=output_file,
+        )
+
+    select_provider.assert_called_once_with(phase)
+    prompt.assert_called_once_with()
+    fetch_issue.assert_called_once_with(346)
+    assert output_file.read_text(encoding="utf-8") == (
+        "# Initial Requirements\n\n**Issue Title:** Restore compatibility\n"
+    )
+    assert result.context_updates == {"user_input": "**Issue Title:** Restore compatibility"}
+
+
+def test_initial_input_provider_preserves_github_fetch_failure_guidance(tmp_path: Path) -> None:
+    """U5 — operator-facing provider errors retain the host boundary's remedy."""
+    phase = _FakePhase(phase_dir=tmp_path / "intake", iteration=1)
+    phase.interactive = False
+    phase.issue_dir.mkdir(parents=True, exist_ok=True)
+    (phase.issue_dir / "issue.yaml").write_text(
+        "initial_input:\n  provider: github_issue\n  issue_id: 346\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="gh auth login"):
+        InitialInputProviderResolver().run(
+            stage="prepare_input",
+            phase=phase,
+            step_name="intake",
+            step_def={
+                "output_artifact": "intake_brief",
+                "initial_input": {
+                    "providers": ["github_issue"],
+                    "bind": {"artifact": "intake_brief"},
+                },
+            },
+            output_file=phase._get_iteration_dir(1) / "output.md",
+            initial_input_fetch_github_issue=MagicMock(
+                side_effect=RuntimeError("GitHub CLI unavailable; run gh auth login")
+            ),
+        )
 
 
 def test_github_issue_fetcher_uses_phase_step_user_input_without_prompting(tmp_path: Path) -> None:

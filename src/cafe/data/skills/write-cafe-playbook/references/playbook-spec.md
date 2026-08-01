@@ -98,6 +98,7 @@ artifacts.
 | `assignee_type` | Use `agent`; other values are currently reserved and warn |
 | `input_artifacts` | Artifact keys already produced by earlier or conditional paths |
 | `output_artifact` | The key registered when `{output_file}` exists |
+| `initial_input` | Entry-step-only trusted input providers and explicit artifact/prompt bindings |
 | `template` | Optional default selected from the step skill's declared output-template catalog |
 | `valid_intents` | Supported `PhaseStatusCode` tokens the phase may return |
 | `allowed_tools` | Least broad set that still allows the skill to complete |
@@ -243,6 +244,48 @@ Prefer an explicit forward skip:
   in the matching `issue.yaml` block. A `template` field still requires the target
   skill to declare `workflow.output_templates`; other workflow-owned settings need
   no development-stage or PR metadata.
+
+### Initial input for a custom entry step
+
+Use this contract when an entry step needs operator text or a GitHub issue before
+the agent executes:
+
+```yaml
+entry_point: intake
+steps:
+  intake:
+    type: skill
+    skill: cafe-intake
+    role: researcher
+    output_artifact: intake_brief
+    initial_input:
+      providers: [manual_text, github_issue]
+      bind:
+        artifact: intake_brief
+        prompt_context: user_input
+    hooks:
+      prepare_input: [InitialInputProviderResolver]
+    "on": {await_agent: _done}
+```
+
+`initial_input` is permitted only on `entry_point`. Providers must be unique and
+implemented by CAFE's trusted host registry; this release supplies only
+`manual_text` and `github_issue`. `bind` must name an artifact equal to this
+step's `output_artifact`, `user_input` prompt context, or both. Validation fails
+before agent execution for unsupported providers, non-entry declarations, missing
+bindings, or invalid destinations.
+
+Prepare persists a canonical `initial_input` block in `issue.yaml` using the
+stable field IDs `input_method` and `github_issue_id`; those fields may write to
+the entry step's own config section. Built-in development playbooks also retain
+their legacy `spec.input_method` / `spec.issue_id` keys. The provider resolver is
+host-side only, runs on first iteration without overwriting existing output, and
+does not grant agent credentials or arbitrary host execution.
+
+`legacy_presentation: true` is reserved for bundled development playbooks. It
+keeps their established requirements heading and guided manual/GitHub interaction
+while they use `InitialInputProviderResolver`; custom playbooks should omit it so
+the resolver writes only the declared input content.
 
 ## 9. Validation Sequence
 

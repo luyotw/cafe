@@ -133,6 +133,295 @@ steps:
     assert result.model.steps["spec"].role == "reviewer"
 
 
+def test_entry_step_initial_input_accepts_declared_providers_and_bindings(tmp_path: Path) -> None:
+    """A non-development entry step owns its declared initial-input contract."""
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "intake")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "intake-flow",
+        """
+playbook: {id: intake-flow}
+entry_point: intake
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+steps:
+  intake:
+    role: pm
+    skill: intake
+    output_artifact: intake_brief
+    initial_input:
+      providers: [manual_text, github_issue]
+      bind:
+        artifact: intake_brief
+        prompt_context: user_input
+    hooks:
+      prepare_input: [InitialInputProviderResolver]
+    on: {await_agent: _done}
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    model = loader.load_model("intake-flow").model
+
+    assert model.steps["intake"].initial_input.providers == ["manual_text", "github_issue"]
+    assert model.steps["intake"].initial_input.bind.artifact == "intake_brief"
+    assert model.steps["intake"].initial_input.bind.prompt_context == "user_input"
+
+
+@pytest.mark.parametrize(
+    ("initial_input", "error_token"),
+    [
+        (
+            """
+    initial_input:
+      providers: [manual_text]
+      bind: {artifact: unrelated}
+""",
+            "bind.artifact",
+        ),
+        (
+            """
+    initial_input:
+      providers: [manual_text, manual_text]
+      bind: {artifact: intake_brief}
+""",
+            "duplicates",
+        ),
+        (
+            """
+    initial_input:
+      providers: [url]
+      bind: {artifact: intake_brief}
+""",
+            "unsupported provider",
+        ),
+    ],
+)
+def test_initial_input_rejects_invalid_provider_or_binding_before_execution(
+    tmp_path: Path, initial_input: str, error_token: str
+) -> None:
+    """U2 — invalid entry declarations fail with their actionable field token."""
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "intake")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "invalid-input",
+        f"""
+playbook: {{id: invalid-input}}
+entry_point: intake
+steps:
+  intake:
+    role: pm
+    skill: intake
+    output_artifact: intake_brief
+{initial_input}    on: {{await_agent: _done}}
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match=error_token):
+        loader.load_model("invalid-input")
+
+
+def test_initial_input_rejects_empty_artifact_binding_before_execution(tmp_path: Path) -> None:
+    """U2 — an empty artifact binding remains invalid even with an empty output name."""
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "intake")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "empty-artifact",
+        """
+playbook: {id: empty-artifact}
+entry_point: intake
+steps:
+  intake:
+    role: pm
+    skill: intake
+    output_artifact: ""
+    initial_input:
+      providers: [manual_text]
+      bind: {artifact: ""}
+    hooks:
+      prepare_input: [InitialInputProviderResolver]
+    on: {await_agent: _done}
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="initial_input.bind.artifact"):
+        loader.load_model("empty-artifact")
+
+
+def test_initial_input_rejects_non_entry_or_unimplemented_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """U3 — declarations are entry-only and must map to a host provider."""
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "intake")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "invalid-placement",
+        """
+playbook: {id: invalid-placement}
+entry_point: intake
+steps:
+  intake:
+    role: pm
+    skill: intake
+    output_artifact: intake_brief
+    on: {await_agent: _done}
+  refinement:
+    role: pm
+    skill: intake
+    output_artifact: refined_brief
+    initial_input:
+      providers: [manual_text]
+      bind: {artifact: refined_brief}
+    on: {await_agent: _done}
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="only allowed on entry_point"):
+        loader.load_model("invalid-placement")
+
+    _write_playbook(
+        builtin_root / "playbooks",
+        "unimplemented-provider",
+        """
+playbook: {id: unimplemented-provider}
+entry_point: intake
+steps:
+  intake:
+    role: pm
+    skill: intake
+    output_artifact: intake_brief
+    initial_input:
+      providers: [github_issue]
+      bind: {artifact: intake_brief}
+    on: {await_agent: _done}
+""",
+    )
+    monkeypatch.setattr(
+        "cafe.core.playbook.registered_initial_input_providers", lambda: frozenset()
+    )
+
+    with pytest.raises(ValueError, match="no trusted host implementation"):
+        loader.load_model("unimplemented-provider")
+
+
+@pytest.mark.parametrize("source", ["project", "global"])
+def test_initial_input_rejects_legacy_presentation_outside_bundled_playbooks(
+    tmp_path: Path, source: str
+) -> None:
+    """U2/I4 — custom playbooks cannot opt into the built-in empty-input compatibility path."""
+    builtin_root = tmp_path / "builtin"
+    global_root = tmp_path / "global"
+    project_root = tmp_path / "project"
+    _write_skill(builtin_root / "skills", "intake")
+    playbook_root = (
+        project_root / ".cafe" / "playbooks"
+        if source == "project"
+        else global_root / "playbooks"
+    )
+    _write_playbook(
+        playbook_root,
+        "intake-flow",
+        """
+playbook: {id: intake-flow}
+entry_point: intake
+steps:
+  intake:
+    role: pm
+    skill: intake
+    output_artifact: intake_brief
+    initial_input:
+      providers: [manual_text]
+      bind: {artifact: intake_brief}
+      legacy_presentation: true
+    hooks:
+      prepare_input: [InitialInputProviderResolver]
+    on: {await_agent: _done}
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=project_root,
+        global_root=global_root,
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="legacy_presentation"):
+        loader.load_model("intake-flow")
+
+
+@pytest.mark.parametrize("playbook_name", ["default", "simple", "tdd"])
+def test_builtin_entry_steps_use_declared_initial_input_resolver(playbook_name: str) -> None:
+    """I3 — built-in development flows retain the provider contract."""
+    model = PlaybookLoader().load_model(playbook_name).model
+    entry = model.steps[model.entry_point]
+
+    assert entry.initial_input.providers == ["manual_text", "github_issue"]
+    assert entry.initial_input.bind.artifact == entry.output_artifact
+    assert entry.initial_input.legacy_presentation is True
+    assert "InitialInputProviderResolver" in entry.hooks.prepare_input
+    assert "GitHubIssueFetcher" not in entry.hooks.prepare_input
+
+
+def test_initial_input_declaration_requires_generic_resolver_hook(tmp_path: Path) -> None:
+    """I4 — a declared provider cannot silently bypass trusted delivery."""
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "intake")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "missing-resolver",
+        """
+playbook: {id: missing-resolver}
+entry_point: intake
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+steps:
+  intake:
+    role: pm
+    skill: intake
+    output_artifact: intake_brief
+    initial_input:
+      providers: [manual_text]
+      bind: {artifact: intake_brief}
+    on: {await_agent: _done}
+""",
+    )
+    loader = PlaybookLoader(builtin_root=builtin_root)
+
+    with pytest.raises(ValueError, match="InitialInputProviderResolver"):
+        loader.load_model("missing-resolver")
+
+
 def test_playbook_conversation_locale_supports_bcp47_and_defaults_to_auto(
     tmp_path: Path,
 ) -> None:

@@ -212,6 +212,7 @@ def _run_field_driven_prepare_prompts(
     dict[str, Any],
     dict[str, Any],
     dict[str, dict[str, Any]],
+    dict[str, Any],
     Optional[int],
 ]:
     """Run interactive prepare prompts from declarative PrepareField definitions."""
@@ -231,7 +232,14 @@ def _run_field_driven_prepare_prompts(
         github_ops=github_ops,
     )
     config, issue_id = run_field_driven_prepare_flow(parsed, profile, deps=deps)
-    return config.spec, config.plan, config.pr, config.steps, issue_id
+    return (
+        config.spec,
+        config.plan,
+        config.pr,
+        config.steps,
+        getattr(config, "initial_input", {}),
+        issue_id,
+    )
 
 
 def prepare(
@@ -385,6 +393,7 @@ def prepare(
             raise typer.Exit(1)
 
         profile = PrepareProfile.from_playbook(loaded_playbook.model, is_github_repo())
+        entry_step_name = str(loaded_playbook.model.entry_point)
 
         # 2. Determine interactive mode and config prompt behavior
         # should_prompt_for_config: Should we show config prompts?
@@ -488,6 +497,7 @@ def prepare(
         plan_config = {}
         pr_config = {}
         step_configs: dict[str, dict[str, Any]] = {}
+        initial_input_config: dict[str, Any] = {}
 
         if profile.should_prompt_spec_plan_config(should_prompt_for_config):
             console.print()
@@ -532,8 +542,25 @@ def prepare(
                 )
                 if len(field_result) == 4:
                     spec_config, plan_config, pr_config, issue_id = field_result
-                else:
+                elif len(field_result) == 5:
                     spec_config, plan_config, pr_config, step_configs, issue_id = field_result
+                else:
+                    (
+                        spec_config,
+                        plan_config,
+                        pr_config,
+                        step_configs,
+                        initial_input_config,
+                        issue_id,
+                    ) = field_result
+                if not initial_input_config:
+                    from cafe.core.initial_input import normalize_initial_input_provider
+
+                    provider = normalize_initial_input_provider(spec_config.get("input_method"))
+                    if provider is not None:
+                        initial_input_config = {"provider": provider}
+                        if provider == "github_issue" and issue_id is not None:
+                            initial_input_config["issue_id"] = issue_id
         elif not interactive:
             from cafe.core.playbook import declared_template_managers
             from cafe.skills.loader import SkillLoader
@@ -601,6 +628,7 @@ def prepare(
             plan_config = resolved_config.plan
             pr_config = resolved_config.pr
             step_configs = resolved_config.steps
+            initial_input_config = resolved_config.initial_input
         # else: issue_name was provided as argument but not --no-interactive
         #       Don't save any config (old behavior for backward compatibility)
 
@@ -633,6 +661,9 @@ def prepare(
         # Add pr config if present
         if pr_config:
             config_data["pr"] = pr_config
+
+        if initial_input_config:
+            config_data["initial_input"] = initial_input_config
 
         for step_name, step_config in step_configs.items():
             if step_config:
@@ -690,7 +721,7 @@ def prepare(
             # Create issues directory structure in worktree
             worktree_issues_dir = worktree_cafe_dir / "issues" / issue_name
             worktree_issues_dir.mkdir(parents=True, exist_ok=True)
-            (worktree_issues_dir / "spec").mkdir(exist_ok=True)
+            (worktree_issues_dir / entry_step_name).mkdir(exist_ok=True)
             (worktree_issues_dir / "sessions").mkdir(exist_ok=True)
 
             # Initialize default templates and agents in worktree .cafe
@@ -702,10 +733,10 @@ def prepare(
             # Normal branch mode
             # First create issue directory structure
             issue_dir = Path(f".cafe/issues/{issue_name}")
-            spec_dir = issue_dir / "spec"
+            entry_step_dir = issue_dir / entry_step_name
             sessions_dir = issue_dir / "sessions"
 
-            spec_dir.mkdir(parents=True, exist_ok=True)
+            entry_step_dir.mkdir(parents=True, exist_ok=True)
             sessions_dir.mkdir(parents=True, exist_ok=True)
 
             # Then perform git operations

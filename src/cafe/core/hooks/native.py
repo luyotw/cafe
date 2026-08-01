@@ -12,10 +12,16 @@ from typing import Any, Optional
 
 from cafe.core.blackboard import BlackboardState, HandoffContract, HandoffIntent, HandoffOwner
 from cafe.core.hooks import HookResult, NoOpHook
+from cafe.core.initial_input import (
+    GITHUB_ISSUE_PROVIDER,
+    MANUAL_TEXT_PROVIDER,
+    InitialInputResult,
+    load_initial_input_selection,
+)
 from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
 from cafe.core.status_codes import PhaseStatusCode, step_on_declares
 from cafe.skills.loader import SkillLoader
-from cafe.ui.inquirer_prompts import prompt_multiline
+from cafe.ui.inquirer_prompts import prompt_list, prompt_multiline, prompt_text
 from cafe.ui.interactive_qa import interactive_qa_flow
 from cafe.utils.github import (
     GitHubError,
@@ -576,97 +582,269 @@ def _declares_no_changes_task(step_def: Any) -> bool:
     )
 
 
-class GitHubIssueFetcher(NoOpHook):
-    """Collect initial requirements for spec iteration 1.
+class InitialInputProviderResolver(NoOpHook):
+    """Resolve declared entry-step input through trusted host-side providers."""
 
-    Reads issue.yaml to determine the input method (manual / github).
-    When no config exists, prompts the user to choose.  Writes the
-    initial requirements into the output file so the agent has content
-    to analyze.
-    """
-
-    name = "GitHubIssueFetcher"
+    name = "InitialInputProviderResolver"
 
     def run(self, **kwargs: Any) -> HookResult:
-        stage = kwargs.get("stage")
-        if stage != "prepare_input":
+        if kwargs.get("stage") != "prepare_input":
             return HookResult()
 
         phase = kwargs.get("phase")
-        if phase is None:
-            return HookResult()
-
-        if getattr(phase, "iteration", 0) > 1:
-            return HookResult()
-
         step_name = str(kwargs.get("step_name") or "")
-        if step_name != "spec":
+        step_def = kwargs.get("step_def")
+        if phase is None or not isinstance(step_def, dict):
             return HookResult()
+        if getattr(phase, "iteration", 0) != 1:
+            return HookResult()
+
+        declaration = step_def.get("initial_input")
+        if not isinstance(declaration, dict):
+            return HookResult()
+        legacy_presentation = declaration.get("legacy_presentation") is True
+        providers = declaration.get("providers")
+        binding = declaration.get("bind")
+        if not isinstance(providers, list) or not isinstance(binding, dict):
+            raise ValueError(f"initial_input declaration for step {step_name!r} is invalid")
 
         output_file: Optional[Path] = kwargs.get("output_file")
-        if output_file is None:
-            return HookResult()
+        artifact = binding.get("artifact")
+        if artifact is not None:
+            if output_file is None:
+                raise ValueError(
+                    f"initial_input.bind.artifact for step {step_name!r} requires output_file"
+                )
+            if output_file.exists() and output_file.read_text(encoding="utf-8").strip():
+                return HookResult()
 
-        if output_file.exists() and output_file.read_text(encoding="utf-8").strip():
-            return HookResult()
-
-        content = self._resolve_prefilled_input(
+        legacy_adapter = GitHubIssueFetcher() if legacy_presentation else None
+        legacy_empty_seed = self._should_seed_empty_legacy_requirements(
             phase=phase,
             step_name=step_name,
+            providers=providers,
             context=kwargs.get("context"),
+            legacy_presentation=legacy_presentation,
         )
-        if content is not None:
-            output_file.parent.mkdir(parents=True, exist_ok=True)
-            output_file.write_text(f"# Initial Requirements\n\n{content}\n", encoding="utf-8")
-            return HookResult(
-                context_updates={"user_input": content},
-                events=[
-                    {
-                        "type": "user_input_collected",
-                        "step": step_name,
-                        "source": "workflow_user_input",
-                    }
-                ],
+        if legacy_empty_seed:
+            result = InitialInputResult(
+                content="",
+                provider=MANUAL_TEXT_PROVIDER,
+                source="non_interactive_no_input",
             )
-
-        config_file = phase.issue_dir / "issue.yaml"
-        input_method, issue_id = self._load_input_config(config_file)
-
-        if input_method is None:
-            if not getattr(phase, "interactive", False):
-                return HookResult(
-                    context_updates={"user_input": ""},
-                    events=[
-                        {
-                            "type": "user_input_collected",
-                            "step": step_name,
-                            "source": "non_interactive_no_input",
-                        }
-                    ],
-                )
-            input_method, issue_id = self._prompt_input_method()
-            self._save_input_config(config_file, input_method, issue_id)
-
-        if input_method == "github" and issue_id is not None:
-            content = self._fetch_github_issue(issue_id)
-        elif getattr(phase, "interactive", False):
-            content = self._prompt_manual_input()
         else:
-            content = ""
+            result = self._resolve(
+                phase=phase,
+                step_name=step_name,
+                providers=providers,
+                context=kwargs.get("context"),
+                prompt_input_method=(
+                    kwargs.get("initial_input_prompt_input_method")
+                    or (
+                        legacy_adapter._prompt_and_save_input_method(phase)
+                        if legacy_adapter is not None
+                        else None
+                    )
+                ),
+                prompt_manual_input=(
+                    kwargs.get("initial_input_prompt_manual_input")
+                    or (legacy_adapter._prompt_manual_input if legacy_adapter is not None else None)
+                ),
+                fetch_github_issue=(
+                    kwargs.get("initial_input_fetch_github_issue")
+                    or (legacy_adapter._fetch_github_issue if legacy_adapter is not None else None)
+                ),
+            )
+        if artifact is not None:
+            assert output_file is not None
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            formatter = kwargs.get("initial_input_output_formatter") or (
+                legacy_adapter._format_initial_requirements
+                if legacy_adapter is not None
+                else None
+            )
+            content = formatter(result.content) if callable(formatter) else result.content
+            if legacy_empty_seed:
+                output_file.write_text(f"{content}\n", encoding="utf-8")
+            else:
+                output_file.write_text(f"{content.rstrip()}\n", encoding="utf-8")
 
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-        output_file.write_text(f"# Initial Requirements\n\n{content}\n", encoding="utf-8")
-
+        context_updates = (
+            {"user_input": result.content}
+            if binding.get("prompt_context") == "user_input"
+            else {}
+        )
         return HookResult(
-            context_updates={"user_input": content},
+            context_updates=context_updates,
             events=[
                 {
-                    "type": "user_input_collected",
+                    "type": "initial_input_resolved",
                     "step": step_name,
-                    "source": "github" if input_method == "github" else "manual",
+                    "provider": result.provider,
                 }
             ],
         )
+
+    def _should_seed_empty_legacy_requirements(
+        self,
+        *,
+        phase: Any,
+        step_name: str,
+        providers: list[Any],
+        context: Any,
+        legacy_presentation: bool,
+    ) -> bool:
+        """Keep built-in manual workflows compatible with their empty initial seed."""
+        if not legacy_presentation or getattr(phase, "interactive", False):
+            return False
+        if MANUAL_TEXT_PROVIDER not in {str(provider) for provider in providers}:
+            return False
+        if self._resolve_prefilled_input(
+            phase=phase,
+            step_name=step_name,
+            context=context,
+        ) is not None:
+            return False
+        configured_provider, _issue_id = load_initial_input_selection(
+            self._load_issue_config(phase)
+        )
+        return configured_provider in (None, MANUAL_TEXT_PROVIDER)
+
+    def _resolve(
+        self,
+        *,
+        phase: Any,
+        step_name: str,
+        providers: list[Any],
+        context: Any,
+        prompt_input_method: Any,
+        prompt_manual_input: Any,
+        fetch_github_issue: Any,
+    ) -> InitialInputResult:
+        declared = [str(provider) for provider in providers]
+        declared_set = set(declared)
+        prefilled = self._resolve_prefilled_input(
+            phase=phase,
+            step_name=step_name,
+            context=context,
+        )
+        if prefilled is not None:
+            self._require_declared(MANUAL_TEXT_PROVIDER, declared_set, step_name)
+            return InitialInputResult(
+                content=prefilled,
+                provider=MANUAL_TEXT_PROVIDER,
+                source="workflow_user_input",
+            )
+
+        config = self._load_issue_config(phase)
+        provider, issue_id = load_initial_input_selection(config)
+        if provider is None:
+            provider, issue_id = self._select_provider(
+                phase=phase,
+                providers=declared,
+                prompt_input_method=prompt_input_method,
+            )
+            self._require_declared(provider, declared_set, step_name)
+            self._save_selection(phase, provider, issue_id)
+        else:
+            self._require_declared(provider, declared_set, step_name)
+
+        if provider == GITHUB_ISSUE_PROVIDER:
+            if issue_id is None:
+                raise ValueError("initial_input.provider 'github_issue' requires issue_id")
+            fetch = fetch_github_issue or self._fetch_github_issue
+            try:
+                content = str(fetch(issue_id)).strip()
+            except Exception as exc:
+                raise ValueError(
+                    f"initial_input.provider 'github_issue' could not fetch issue {issue_id}: {exc}"
+                ) from exc
+            if not content:
+                raise ValueError(f"GitHub issue {issue_id} produced no initial input")
+            return InitialInputResult(content=content, provider=provider, source="github_issue")
+
+        if not getattr(phase, "interactive", False):
+            raise ValueError(
+                "initial_input.provider 'manual_text' requires non-empty invocation input "
+                "when running non-interactively"
+            )
+        prompt = prompt_manual_input or self._prompt_manual_input
+        content = str(prompt()).strip()
+        if not content:
+            raise ValueError("initial_input.provider 'manual_text' received empty input")
+        return InitialInputResult(content=content, provider=provider, source="manual_text")
+
+    @staticmethod
+    def _require_declared(provider: str, declared: set[str], step_name: str) -> None:
+        if provider not in declared:
+            raise ValueError(
+                f"initial_input.provider {provider!r} is not declared for entry step {step_name!r}"
+            )
+
+    @staticmethod
+    def _load_issue_config(phase: Any) -> dict[str, Any]:
+        config_file = getattr(phase, "issue_dir", None)
+        if not isinstance(config_file, Path):
+            return {}
+        config_file = config_file / "issue.yaml"
+        if not config_file.exists():
+            return {}
+        try:
+            import yaml
+
+            data = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _save_selection(phase: Any, provider: str, issue_id: Optional[int]) -> None:
+        issue_dir = getattr(phase, "issue_dir", None)
+        if not isinstance(issue_dir, Path):
+            return
+        config_file = issue_dir / "issue.yaml"
+        data = InitialInputProviderResolver._load_issue_config(phase)
+        data["initial_input"] = {"provider": provider}
+        if issue_id is not None:
+            data["initial_input"]["issue_id"] = issue_id
+        import yaml
+
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(
+            yaml.dump(data, allow_unicode=True, default_flow_style=False), encoding="utf-8"
+        )
+
+    @staticmethod
+    def _select_provider(
+        *,
+        phase: Any,
+        providers: list[str],
+        prompt_input_method: Any,
+    ) -> tuple[str, Optional[int]]:
+        if len(providers) == 1:
+            provider = providers[0]
+            if provider != GITHUB_ISSUE_PROVIDER or not getattr(phase, "interactive", False):
+                return provider, None
+            prompt = prompt_input_method or InitialInputProviderResolver._prompt_github_issue
+            return InitialInputProviderResolver._normalize_provider_selection(prompt())
+        if not getattr(phase, "interactive", False):
+            raise ValueError(
+                "initial_input.provider must be selected before non-interactive execution"
+            )
+        prompt = prompt_input_method or (
+            lambda: InitialInputProviderResolver._prompt_declared_provider(providers)
+        )
+        return InitialInputProviderResolver._normalize_provider_selection(prompt())
+
+    @staticmethod
+    def _normalize_provider_selection(
+        selection: tuple[str, Optional[int]],
+    ) -> tuple[str, Optional[int]]:
+        provider, issue_id = selection
+        normalized = {"manual": MANUAL_TEXT_PROVIDER, "github": GITHUB_ISSUE_PROVIDER}.get(
+            provider, provider
+        )
+        return normalized, issue_id
 
     @staticmethod
     def _resolve_prefilled_input(
@@ -688,6 +866,147 @@ class GitHubIssueFetcher(NoOpHook):
                 return raw_user_input.strip()
 
         return None
+
+    @staticmethod
+    def _prompt_declared_provider(providers: list[str]) -> tuple[str, Optional[int]]:
+        provider = prompt_list("Select initial input provider:", choices=providers)
+        if provider == GITHUB_ISSUE_PROVIDER:
+            return InitialInputProviderResolver._prompt_github_issue()
+        return provider, None
+
+    @staticmethod
+    def _prompt_github_issue() -> tuple[str, Optional[int]]:
+        while True:
+            issue_input = prompt_text(message="GitHub Issue ID or URL:", default="")
+            try:
+                issue_id = int(GitHubOps().extract_issue_number(issue_input))
+            except (ValueError, GitHubError) as exc:
+                print(f"Invalid GitHub Issue ID or URL: {exc}")
+                continue
+            return GITHUB_ISSUE_PROVIDER, issue_id
+
+    @staticmethod
+    def _prompt_manual_input() -> str:
+        content = prompt_multiline("Provide the initial input").strip()
+        if not content:
+            raise ValueError("initial_input.provider 'manual_text' received empty input")
+        return content
+
+    @staticmethod
+    def _fetch_github_issue(issue_id: int) -> str:
+        from cafe.ui.phase_prompts import fetch_github_issue
+
+        fetched_content, _image_urls = fetch_github_issue(GitHubOps(), issue_id)
+        lines = fetched_content.split("\n", 1)
+        if lines[0].startswith("# "):
+            title = lines[0][2:].strip()
+            body = lines[1].strip() if len(lines) > 1 else ""
+            return f"**Issue Title:** {title}\n\n{body}" if body else f"**Issue Title:** {title}"
+        return fetched_content
+
+
+class GitHubIssueFetcher(NoOpHook):
+    """Compatibility adapter for legacy ``spec`` initial-input hooks."""
+
+    name = "GitHubIssueFetcher"
+
+    def run(self, **kwargs: Any) -> HookResult:
+        if kwargs.get("stage") != "prepare_input":
+            return HookResult()
+        phase = kwargs.get("phase")
+        step_name = str(kwargs.get("step_name") or "")
+        output_file: Optional[Path] = kwargs.get("output_file")
+        if phase is None or step_name != "spec" or output_file is None:
+            return HookResult()
+        if getattr(phase, "iteration", 0) != 1:
+            return HookResult()
+        if output_file.exists() and output_file.read_text(encoding="utf-8").strip():
+            return HookResult()
+
+        prefilled = self._resolve_prefilled_input(
+            phase=phase,
+            step_name=step_name,
+            context=kwargs.get("context"),
+        )
+        config = InitialInputProviderResolver._load_issue_config(phase)
+        configured_provider, _issue_id = load_initial_input_selection(config)
+        if (
+            prefilled is None
+            and not getattr(phase, "interactive", False)
+            and configured_provider != GITHUB_ISSUE_PROVIDER
+        ):
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text("# Initial Requirements\n\n\n", encoding="utf-8")
+            return HookResult(
+                context_updates={"user_input": ""},
+                events=[
+                    {
+                        "type": "user_input_collected",
+                        "step": step_name,
+                        "source": (
+                            "github"
+                            if configured_provider == GITHUB_ISSUE_PROVIDER
+                            else "non_interactive_no_input"
+                        ),
+                    }
+                ],
+            )
+
+        legacy_step_def = dict(kwargs.get("step_def") or {})
+        legacy_step_def["initial_input"] = {
+            "providers": [MANUAL_TEXT_PROVIDER, GITHUB_ISSUE_PROVIDER],
+            "bind": {"artifact": "spec", "prompt_context": "user_input"},
+        }
+        resolver_kwargs = dict(kwargs)
+        resolver_kwargs.update(
+            {
+                "step_def": legacy_step_def,
+                "initial_input_output_formatter": self._format_initial_requirements,
+                "initial_input_prompt_input_method": self._prompt_and_save_input_method(phase),
+                "initial_input_prompt_manual_input": self._prompt_manual_input,
+                "initial_input_fetch_github_issue": self._fetch_github_issue,
+            }
+        )
+        result = InitialInputProviderResolver().run(**resolver_kwargs)
+        provider = result.events[0]["provider"] if result.events else MANUAL_TEXT_PROVIDER
+        source = (
+            "workflow_user_input"
+            if prefilled is not None
+            else "github" if provider == GITHUB_ISSUE_PROVIDER else "manual"
+        )
+        return HookResult(
+            continue_pipeline=result.continue_pipeline,
+            retry_requested=result.retry_requested,
+            artifact_ready=result.artifact_ready,
+            override_status_code=result.override_status_code,
+            context_updates=result.context_updates,
+            events=[{"type": "user_input_collected", "step": step_name, "source": source}],
+        )
+
+    def _prompt_and_save_input_method(self, phase: Any) -> Any:
+        def prompt() -> tuple[str, Optional[int]]:
+            method, issue_id = self._prompt_input_method()
+            self._save_input_config(phase.issue_dir / "issue.yaml", method, issue_id)
+            return method, issue_id
+
+        return prompt
+
+    @staticmethod
+    def _resolve_prefilled_input(
+        *,
+        phase: Any,
+        step_name: str,
+        context: Any,
+    ) -> Optional[str]:
+        return InitialInputProviderResolver._resolve_prefilled_input(
+            phase=phase,
+            step_name=step_name,
+            context=context,
+        )
+
+    @staticmethod
+    def _format_initial_requirements(content: str) -> str:
+        return f"# Initial Requirements\n\n{content}"
 
     @staticmethod
     def _load_input_config(config_file: Path) -> tuple[Optional[str], Optional[int]]:

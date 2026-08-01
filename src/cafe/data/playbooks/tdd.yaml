@@ -31,6 +31,12 @@ steps:
     assignee_type: agent
     input_artifacts: []
     output_artifact: spec
+    initial_input:
+      providers: [manual_text, github_issue]
+      bind:
+        artifact: spec
+        prompt_context: user_input
+      legacy_presentation: true
     human_tasks:
       - trigger: confirm_output
         task_id: output-review
@@ -40,7 +46,7 @@ steps:
         outcomes: {submit: spec}
     allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
     hooks:
-      prepare_input: [GitHubIssueFetcher, UserInputCollector]
+      prepare_input: [InitialInputProviderResolver, UserInputCollector]
       after_execute: [InteractiveQAHandler]
     "on":
       confirm_output: spec

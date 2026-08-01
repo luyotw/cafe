@@ -23,6 +23,7 @@ class PrepareIssueConfig:
     plan: Dict[str, Any]
     pr: Dict[str, Any]
     steps: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    initial_input: Dict[str, Any] = field(default_factory=dict)
 
     def section(self, step_name: str) -> Dict[str, Any]:
         """Return a mutable issue-config section, retaining legacy views."""
