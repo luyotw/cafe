@@ -1,5 +1,7 @@
 """Tests for bundled use-cafe-workflow skill guidance."""
 
+import subprocess
+import sys
 from pathlib import Path
 
 from cafe.core.playbook import confirmation_gate_steps
@@ -54,6 +56,118 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "alignment_checkpoint: driver_resolvable_when_clear" in skill
     assert ".cafe/issues/<issue-name>/issue.yaml" in skill
     assert "is not parsed or auto-approved by CAFE" in normalized
+    assert "scripts/format_kickoff_contract.py" in skill
+    assert "every playbook phase" in normalized
+    assert "whether execution will stop for the user" in normalized
+
+
+def test_kickoff_contract_formatter_lists_all_phases_and_confirmation_owners(
+    tmp_path: Path,
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        """\
+version: 1
+mandate:
+  preset: technical-led
+  playbook_id: default
+  axes:
+    product_scope: {level: escalate, grounds: [roadmap, positioning]}
+    technical: {level: agent, grounds: [engineering_guidelines]}
+  out_of_mandate: [pricing, production deploy approval]
+""",
+        encoding="utf-8",
+    )
+    script = (
+        PROJECT_ROOT
+        / "src"
+        / "cafe"
+        / "data"
+        / "skills"
+        / "use-cafe-workflow"
+        / "scripts"
+        / "format_kickoff_contract.py"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "default",
+            "--issue-name",
+            "issue346",
+            "--effective-locale",
+            "zh-TW",
+            "--locale-source",
+            "user thread override",
+            "--user-required",
+            "--driver-confirmable",
+            "spec",
+            "plan",
+            "--worktree",
+            ".cafe/worktrees/issue346",
+            "--strategic-context",
+            str(strategic_context),
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "## Kickoff Contract — issue346" in result.stdout
+    assert "| spec | pm | cafe-spec | 是 | driver（驗證後繼續） | 否 |" in result.stdout
+    assert "| plan | developer | cafe-plan | 是 | driver（驗證後繼續） | 否 |" in result.stdout
+    assert "| develop | developer | cafe-develop | 否 | — | 否 |" in result.stdout
+    assert "| review | reviewer | cafe-review | 否 | — | 否 |" in result.stdout
+    assert "| pr | developer | cafe-pr | 否 | — | 否 |" in result.stdout
+    assert "| effective_locale | zh-TW (user thread override) |" in result.stdout
+    assert "| need_clarification | user_required | 否 |" in result.stdout
+    assert "| product_scope | escalate | roadmap, positioning |" in result.stdout
+
+
+def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
+    tmp_path: Path,
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+    script = (
+        PROJECT_ROOT
+        / "src"
+        / "cafe"
+        / "data"
+        / "skills"
+        / "use-cafe-workflow"
+        / "scripts"
+        / "format_kickoff_contract.py"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "default",
+            "--issue-name",
+            "issue346",
+            "--user-required",
+            "spec",
+            "--worktree",
+            ".cafe/worktrees/issue346",
+            "--strategic-context",
+            str(strategic_context),
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "unassigned gates: plan" in result.stderr
 
 
 def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() -> None:

@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.9.0
+version: 1.10.0
 ---
 
 # Use CAFE Workflow
@@ -68,6 +68,28 @@ The confirmation message must include every required field:
 - `reactive_user_handoffs`
 - mandate preset, axes, levels, and out-of-mandate list
 - worktree choice and path, when using a worktree
+
+Render the complete proposal with the bundled deterministic formatter before
+presenting it. Resolve the script path relative to this `SKILL.md` and run:
+
+```bash
+python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
+  --issue-name <issue-name> \
+  --effective-locale <locale> \
+  --locale-source "<playbook or direct-user-override source>" \
+  --user-required <steps...> \
+  --driver-confirmable <steps...> \
+  --worktree .cafe/worktrees/<issue-name>
+```
+
+Pass an option with no step values to represent an explicit empty list. The
+formatter validates that `user_required` and `driver_confirmable` are disjoint
+and exactly partition the playbook's `confirm_output` candidates. Its Markdown
+output includes every playbook phase, role, skill, scheduled gate, planned
+owner, whether execution will stop for the user, reactive handoff policies,
+mandate axes, out-of-mandate boundaries, locale source, and worktree choice.
+Present this table as the kickoff contract; do not replace it with a prose-only
+summary.
 
 If the user already made a choice in the current request, restate it for
 confirmation instead of asking again.
