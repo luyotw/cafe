@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
@@ -180,6 +181,57 @@ def _prepare_intake_issue(
     return executor, manager, issue_dir, step
 
 
+def _prepare_builtin_issue(
+    tmp_path: Path, *, playbook_id: str
+) -> tuple[GenericWorkflowStepExecutor, _AgentManager, Path, dict[str, object]]:
+    """Prepare one built-in workflow for its first-step compatibility journey."""
+    from tests.conftest import create_minimal_config
+
+    create_minimal_config(tmp_path)
+    config_path = tmp_path / ".cafe" / "config.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["playbook"] = playbook_id
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+
+    mock_git = MagicMock()
+    mock_git.get_current_branch.return_value = "main"
+    mock_git.has_uncommitted_changes.return_value = False
+    mock_git.branch_exists.return_value = False
+    mock_git.worktree_exists.return_value = False
+    issue_name = f"{playbook_id}-legacy-input"
+    with (
+        patch("cafe.ui.cli.GitOperations", return_value=mock_git),
+        patch("cafe.utils.git_utils.is_github_repo", return_value=True),
+        patch("cafe.ui.phase_prompts.is_github_repo", return_value=True),
+    ):
+        result = runner.invoke(
+            app,
+            ["prepare", issue_name, "--no-interactive", "--input-method=manual"],
+        )
+    assert result.exit_code == 0, result.stdout
+
+    issue_dir = tmp_path / ".cafe" / "issues" / issue_name
+    playbook = PlaybookLoader(project_root=tmp_path).load(playbook_id)
+    step = playbook["steps"]["spec"]
+    manager = _AgentManager()
+    loader = SkillLoader(project_root=tmp_path)
+    loader.discover()
+    generic_phase = GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(loader, project_root=tmp_path, home_dir=tmp_path / "home"),
+    )
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name=issue_name,
+        playbook=playbook,
+        generic_phase=generic_phase,
+        agent_manager=manager,
+        git_ops=_GitOps(),
+        role_agent_map={"pm": "Roger"},
+    )
+    return executor, manager, issue_dir, step
+
+
 def test_custom_manual_intake_delivers_one_input_to_artifact_and_agent(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -222,3 +274,64 @@ def test_custom_github_intake_uses_trusted_host_boundary_once(tmp_path: Path, mo
     output = issue_dir / "intake" / "iteration_001" / "output.md"
     assert content in output.read_text(encoding="utf-8")
     assert "Current user input for this iteration:\n" + content in manager.prompts[0]
+
+
+@pytest.mark.parametrize("playbook_id", ("default", "simple", "tdd"))
+def test_builtin_workflows_prepare_and_seed_their_first_spec_step(
+    tmp_path: Path, monkeypatch, playbook_id: str
+) -> None:
+    """I3 — built-ins preserve manual prepare config and first-step seeding."""
+    monkeypatch.chdir(tmp_path)
+    executor, manager, issue_dir, step = _prepare_builtin_issue(
+        tmp_path, playbook_id=playbook_id
+    )
+    config = yaml.safe_load((issue_dir / "issue.yaml").read_text(encoding="utf-8"))
+    assert config["spec"]["input_method"] == "manual"
+    assert config["initial_input"] == {"provider": "manual_text"}
+
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    result = executor.execute_step("spec", step, state)
+
+    output = issue_dir / "spec" / "iteration_001" / "output.md"
+    assert result.artifacts["spec"] == str(output)
+    assert output.read_text(encoding="utf-8").strip()
+    assert len(manager.prompts) == 1
+
+
+def test_invalid_initial_input_declaration_stops_at_cli_validation_boundary(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """I4 — invalid declarations fail before agent or GitHub-provider execution."""
+    monkeypatch.chdir(tmp_path)
+    _write_skill(tmp_path / ".cafe" / "skills", "intake")
+    playbooks_dir = tmp_path / ".cafe" / "playbooks"
+    playbooks_dir.mkdir(parents=True, exist_ok=True)
+    (playbooks_dir / "invalid-intake.yaml").write_text(
+        """
+playbook: {id: invalid-intake}
+entry_point: intake
+steps:
+  intake:
+    role: researcher
+    skill: intake
+    output_artifact: intake_brief
+    initial_input:
+      providers: [github_issue]
+      bind: {artifact: ""}
+    hooks:
+      prepare_input: [InitialInputProviderResolver]
+    "on": {await_agent: _done}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with (
+        patch("cafe.core.hooks.native.InitialInputProviderResolver._fetch_github_issue") as fetch,
+        patch("cafe.ui.cli.AgentManager") as agents,
+    ):
+        result = runner.invoke(app, ["playbook", "validate", "invalid-intake"])
+
+    assert result.exit_code == 1
+    assert "bind.artifact" in result.stdout
+    fetch.assert_not_called()
+    agents.assert_not_called()

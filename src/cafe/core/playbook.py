@@ -115,6 +115,13 @@ class InitialInputBinding(BaseModel):
     artifact: Optional[str] = None
     prompt_context: Optional[Literal["user_input"]] = None
 
+    @field_validator("artifact")
+    @classmethod
+    def _validate_artifact(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and not value.strip():
+            raise ValueError("initial_input.bind.artifact must not be empty")
+        return value
+
     @model_validator(mode="after")
     def _require_a_target(self) -> "InitialInputBinding":
         if self.artifact is None and self.prompt_context is None:

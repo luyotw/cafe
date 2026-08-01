@@ -237,6 +237,42 @@ commands:
         loader.load_model("invalid-input")
 
 
+def test_initial_input_rejects_empty_artifact_binding_before_execution(tmp_path: Path) -> None:
+    """U2 — an empty artifact binding remains invalid even with an empty output name."""
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "intake")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "empty-artifact",
+        """
+playbook: {id: empty-artifact}
+entry_point: intake
+steps:
+  intake:
+    role: pm
+    skill: intake
+    output_artifact: ""
+    initial_input:
+      providers: [manual_text]
+      bind: {artifact: ""}
+    hooks:
+      prepare_input: [InitialInputProviderResolver]
+    on: {await_agent: _done}
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="initial_input.bind.artifact"):
+        loader.load_model("empty-artifact")
+
+
 def test_initial_input_rejects_non_entry_or_unimplemented_provider(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
