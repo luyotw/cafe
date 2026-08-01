@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.10.0
+version: 1.10.1
 ---
 
 # Use CAFE Workflow
@@ -89,7 +89,9 @@ output includes every playbook phase, role, skill, scheduled gate, planned
 owner, whether execution will stop for the user, reactive handoff policies,
 mandate axes, out-of-mandate boundaries, locale source, and worktree choice.
 Present this table as the kickoff contract; do not replace it with a prose-only
-summary.
+summary. The formatter automatically re-executes with the Python interpreter
+that owns the installed `cafe` command when the shell's `python3` lacks CAFE's
+runtime dependencies.
 
 If the user already made a choice in the current request, restate it for
 confirmation instead of asking again.

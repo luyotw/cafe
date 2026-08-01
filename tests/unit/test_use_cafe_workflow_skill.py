@@ -170,6 +170,52 @@ def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
     assert "unassigned gates: plan" in result.stderr
 
 
+def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_missing(
+    tmp_path: Path,
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+    script = (
+        PROJECT_ROOT
+        / "src"
+        / "cafe"
+        / "data"
+        / "skills"
+        / "use-cafe-workflow"
+        / "scripts"
+        / "format_kickoff_contract.py"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            str(script),
+            "default",
+            "--issue-name",
+            "issue346",
+            "--user-required",
+            "spec",
+            "plan",
+            "--worktree",
+            ".cafe/worktrees/issue346",
+            "--strategic-context",
+            str(strategic_context),
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "## Kickoff Contract — issue346" in result.stdout
+    assert "| spec | pm | cafe-spec | yes | user | yes |" in result.stdout
+
+
 def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() -> None:
     loader = PlaybookLoader(project_root=PROJECT_ROOT)
 

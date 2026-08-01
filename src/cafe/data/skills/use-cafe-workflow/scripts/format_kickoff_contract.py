@@ -4,14 +4,44 @@
 from __future__ import annotations
 
 import argparse
+import os
+import shlex
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Iterable
 
-import yaml
 
-from cafe.core.playbook import confirmation_gate_steps
-from cafe.playbooks.loader import PlaybookLoader
+def _reexec_with_cafe_python() -> None:
+    """Restart with the interpreter that owns the installed cafe command."""
+    if os.environ.get("CAFE_KICKOFF_FORMATTER_REEXEC") == "1":
+        raise RuntimeError("cafe's Python environment cannot import formatter dependencies")
+    cafe_command = shutil.which("cafe")
+    if cafe_command is None:
+        raise RuntimeError("cafe command not found; cannot load formatter dependencies")
+    first_line = Path(cafe_command).read_text(encoding="utf-8").splitlines()[0]
+    if not first_line.startswith("#!"):
+        raise RuntimeError(f"cafe command has no interpreter shebang: {cafe_command}")
+    interpreter = shlex.split(first_line[2:].strip())
+    if not interpreter:
+        raise RuntimeError(f"cafe command has an empty interpreter shebang: {cafe_command}")
+    environment = dict(os.environ)
+    environment["CAFE_KICKOFF_FORMATTER_REEXEC"] = "1"
+    os.execvpe(
+        interpreter[0],
+        [*interpreter, str(Path(__file__).resolve()), *sys.argv[1:]],
+        environment,
+    )
+
+
+try:
+    import yaml
+
+    from cafe.core.playbook import confirmation_gate_steps
+    from cafe.playbooks.loader import PlaybookLoader
+except ModuleNotFoundError:
+    _reexec_with_cafe_python()
+    raise
 
 
 def _items(values: Iterable[str] | None) -> list[str]:
