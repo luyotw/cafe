@@ -512,7 +512,7 @@ def validate_playbook(
     if entry is not None and entry not in steps:
         raise ValueError(f"entry_point {entry!r} is not a defined step")
 
-    _validate_initial_input_declarations(model)
+    _validate_initial_input_declarations(model, source=source)
 
     _report_structural_issue(
         playbook_id=model.playbook.id,
@@ -550,7 +550,9 @@ def validate_playbook(
     return warnings
 
 
-def _validate_initial_input_declarations(model: PlaybookDefinition) -> None:
+def _validate_initial_input_declarations(
+    model: PlaybookDefinition, *, source: str
+) -> None:
     """Fail closed on invalid initial-input declarations before execution."""
     registered = registered_initial_input_providers()
     for step_name, step in model.steps.items():
@@ -561,6 +563,12 @@ def _validate_initial_input_declarations(model: PlaybookDefinition) -> None:
         if step_name != model.entry_point:
             raise ValueError(
                 f"{field_path} is only allowed on entry_point {model.entry_point!r}"
+            )
+        if declaration.legacy_presentation and (
+            source != "builtin" or model.playbook.id not in {"default", "simple", "tdd"}
+        ):
+            raise ValueError(
+                f"{field_path}.legacy_presentation is reserved for bundled development playbooks"
             )
         missing = [provider for provider in declaration.providers if provider not in registered]
         if missing:

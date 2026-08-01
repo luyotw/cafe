@@ -299,6 +299,50 @@ steps:
         loader.load_model("unimplemented-provider")
 
 
+@pytest.mark.parametrize("source", ["project", "global"])
+def test_initial_input_rejects_legacy_presentation_outside_bundled_playbooks(
+    tmp_path: Path, source: str
+) -> None:
+    """U2/I4 — custom playbooks cannot opt into the built-in empty-input compatibility path."""
+    builtin_root = tmp_path / "builtin"
+    global_root = tmp_path / "global"
+    project_root = tmp_path / "project"
+    _write_skill(builtin_root / "skills", "intake")
+    playbook_root = (
+        project_root / ".cafe" / "playbooks"
+        if source == "project"
+        else global_root / "playbooks"
+    )
+    _write_playbook(
+        playbook_root,
+        "intake-flow",
+        """
+playbook: {id: intake-flow}
+entry_point: intake
+steps:
+  intake:
+    role: pm
+    skill: intake
+    output_artifact: intake_brief
+    initial_input:
+      providers: [manual_text]
+      bind: {artifact: intake_brief}
+      legacy_presentation: true
+    hooks:
+      prepare_input: [InitialInputProviderResolver]
+    on: {await_agent: _done}
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=project_root,
+        global_root=global_root,
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="legacy_presentation"):
+        loader.load_model("intake-flow")
+
+
 @pytest.mark.parametrize("playbook_name", ["default", "simple", "tdd"])
 def test_builtin_entry_steps_use_declared_initial_input_resolver(playbook_name: str) -> None:
     """I3 — built-in development flows retain the provider contract."""
