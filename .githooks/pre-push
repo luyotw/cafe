@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Pre-push hook: Run the full test suite, including slow tests.
+# Pre-push hook: Run the full behavioral suite once, without coverage overhead.
 
 set -e
 
@@ -30,7 +30,7 @@ unset GIT_ALTERNATE_OBJECT_DIRECTORIES
 echo "🔒 Git isolation enabled: GIT_CEILING_DIRECTORIES=$GIT_CEILING_DIRECTORIES"
 echo "Running full tests/unit and tests/integration..."
 ensure_test_env
-"$PROJECT_PYTHON" -m pytest tests/unit/ tests/integration/ -q --tb=short
+"$PROJECT_PYTHON" -m pytest tests/unit/ tests/integration/ -q --tb=short --no-cov
 
 echo ""
 echo "✅ Full test suite passed! Proceeding with push..."

@@ -479,27 +479,8 @@ def launch_chat_session(
         agent_cli=agent_cli,
     )
     session_id: Optional[str] = executor.config.session_id
-
-    cli_command = [agent_cli_str]
     codex_history_start_ts = int(time.time())
-
-    if agent_cli_str == "codex" and agent_model:
-        cli_command.extend(["--model", agent_model])
-
-    if session_id:
-        if agent_cli_str in ("claude", "copilot", "gemini"):
-            cli_command.extend(["--resume", session_id])
-        elif agent_cli_str == "cursor-agent":
-            cli_command.extend(["--resume", session_id])
-        elif agent_cli_str == "codex":
-            cli_command.extend(["resume", session_id])
-
-    if agent_model:
-        if agent_cli_str in ("claude", "copilot", "gemini"):
-            cli_command.extend(["--model", agent_model])
-
-    if initial_prompt and agent_cli_str in {"codex", "claude"}:
-        cli_command.append(initial_prompt)
+    cli_command = cli_strategy.build_interactive_command(initial_prompt=initial_prompt)
 
     env = cli_strategy.build_environment()
     env["CAFE_ISSUE_NAME"] = issue_name

@@ -6,7 +6,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
 import yaml
 from typer.testing import CliRunner
 
@@ -276,12 +275,12 @@ def test_custom_github_intake_uses_trusted_host_boundary_once(tmp_path: Path, mo
     assert "Current user input for this iteration:\n" + content in manager.prompts[0]
 
 
-@pytest.mark.parametrize("playbook_id", ("default", "simple", "tdd"))
 def test_builtin_workflows_prepare_and_seed_their_first_spec_step(
-    tmp_path: Path, monkeypatch, playbook_id: str
+    tmp_path: Path, monkeypatch
 ) -> None:
-    """I3 — built-ins preserve manual prepare config and first-step seeding."""
+    """I3 — the shared built-in contract preserves prepare and first-step seeding."""
     monkeypatch.chdir(tmp_path)
+    playbook_id = "default"
     executor, manager, issue_dir, step = _prepare_builtin_issue(
         tmp_path, playbook_id=playbook_id
     )

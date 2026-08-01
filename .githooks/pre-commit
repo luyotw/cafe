@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Pre-commit hook: Run the fast local test suite
-# Slow orchestration-heavy tests are deferred to pre-push / full test runs.
+# Pre-commit hook: Run a bounded smoke suite plus tests related to staged files.
+# The complete suite is owned by pre-push.
 
 set -e
 
@@ -36,10 +36,55 @@ unset GIT_ALTERNATE_OBJECT_DIRECTORIES
 
 echo "🔒 Git isolation enabled: GIT_CEILING_DIRECTORIES=$GIT_CEILING_DIRECTORIES"
 
-# Run unit and integration tests inside the project-managed Python environment
-echo "Running fast tests/unit and tests/integration (excluding slow tests)..."
+# Keep this list small and contract-oriented. Tests for staged files are appended
+# below, so normal changes still exercise their closest unit/integration boundary.
+TEST_FILES=(
+    "tests/unit/test_abstract_cli.py"
+    "tests/unit/test_delta_packet.py"
+    "tests/unit/test_initial_input_providers.py"
+    "tests/unit/test_issue_yaml_config.py"
+    "tests/unit/test_playbook_loader.py"
+    "tests/unit/test_prepare_fields_loader.py"
+    "tests/unit/test_session_continuation.py"
+    "tests/unit/test_skill_loader.py"
+    "tests/unit/test_status_codes.py"
+    "tests/unit/test_workflow_models.py"
+    "tests/unit/utils/test_checklist_validator.py"
+)
+
+add_test_file() {
+    local candidate="$1"
+    [ -f "$candidate" ] || return 0
+    case " ${TEST_FILES[*]} " in
+        *" $candidate "*) ;;
+        *) TEST_FILES+=("$candidate") ;;
+    esac
+}
+
+while IFS= read -r staged_file; do
+    case "$staged_file" in
+        tests/*/test_*.py|tests/*/*/test_*.py)
+            add_test_file "$staged_file"
+            ;;
+        src/cafe/*.py|src/cafe/*/*.py|src/cafe/*/*/*.py)
+            module_name=$(basename "$staged_file" .py)
+            while IFS= read -r candidate; do
+                add_test_file "$candidate"
+            done < <(find tests -type f -name "test_${module_name}.py" -print)
+            ;;
+        src/cafe/data/playbooks/*)
+            add_test_file "tests/unit/test_playbook_loader.py"
+            add_test_file "tests/unit/test_playbook_prepare_metadata.py"
+            ;;
+        src/cafe/data/skills/*)
+            add_test_file "tests/unit/test_skill_workflow_contract.py"
+            ;;
+    esac
+done < <(git diff --cached --name-only --diff-filter=ACMR)
+
+echo "Running ${#TEST_FILES[@]} selected pre-commit test files..."
 ensure_test_env
-"$PROJECT_PYTHON" -m pytest tests/unit/ tests/integration/ -q --tb=short --no-cov -m "not slow"
+"$PROJECT_PYTHON" -m pytest "${TEST_FILES[@]}" -q --tb=short --no-cov -m "not slow"
 
 # Check exit code
 if [ $? -eq 0 ]; then

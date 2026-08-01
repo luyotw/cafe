@@ -41,12 +41,18 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --cov=cafe --cov-report=term-missing"
+addopts = "-ra"
 markers = [
     "integration: Integration tests that use real components but may mock external dependencies",
     "e2e: End-to-end tests that run the full system including CLI commands",
     "slow: Tests that take a long time to run or cost money (e.g., LLM API calls)",
 ]
+
+[tool.coverage.run]
+source = ["cafe"]
+
+[tool.coverage.report]
+fail_under = 75
 
 [tool.black]
 line-length = 100

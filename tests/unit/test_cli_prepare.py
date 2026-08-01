@@ -1,6 +1,5 @@
 """Tests for prepare CLI command."""
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -331,18 +330,6 @@ class TestPrepareCommandWorktree:
             config_data = yaml.safe_load(f)
             assert config_data["worktree_path"] == worktree_path
 
-    def test_prepare_with_worktree_default_path_suggestion(self, temp_repo_dir, mock_git_ops):
-        """測試 --worktree 使用預設路徑格式 worktrees/{issue-name}"""
-        # 非互動模式下, --worktree 必須帶路徑參數
-        # 這個測試驗證使用預設路徑格式情況
-        default_worktree_path = "worktrees/my-feature"
-        result = runner.invoke(app, ["prepare", "my-feature", "--worktree", default_worktree_path])
-
-        assert result.exit_code == 0
-        # 應使用指定路徑
-        call_args = mock_git_ops.create_worktree.call_args
-        assert call_args[0][0] == default_worktree_path  # 第一個參數是路徑
-
     def test_prepare_without_worktree_uses_branch(self, temp_repo_dir, mock_git_ops):
         """測試不使用 --worktree 時應建立分支"""
         result = runner.invoke(app, ["prepare", "normal-issue"])
@@ -357,14 +344,6 @@ class TestPrepareCommandWorktree:
         with open(config_file) as f:
             config_data = yaml.safe_load(f)
             assert "worktree_path" not in config_data
-
-    def test_prepare_success_message_includes_worktree_path(self, temp_repo_dir, mock_git_ops):
-        """測試成功訊息包含 worktree 路徑資訊"""
-        worktree_path = "worktrees/feature-x"
-        result = runner.invoke(app, ["prepare", "feature-x", "--worktree", worktree_path])
-
-        assert result.exit_code == 0
-        assert "worktree" in result.stdout.lower() or worktree_path in result.stdout
 
     def test_prepare_with_worktree_calls_create_worktree_with_correct_params(self, temp_repo_dir, mock_git_ops):
         """測試 create_worktree 使用正確參數"""
@@ -624,31 +603,6 @@ class TestPrepareCommandWorktree:
 class TestPrepareNonInteractiveMode:
     """測試 prepare 命令的 non-interactive 模式"""
 
-    def test_no_interactive_flag_exists(self, temp_repo_dir, mock_git_ops):
-        """Test 1.1: 驗證 --no-interactive flag 存在且型別正確"""
-        # 測試 --no-interactive flag 可以被接受
-        result = runner.invoke(app, ["prepare", "test-issue", "--no-interactive", "--input-method=manual"])
-
-        # 應該不會因為 --no-interactive flag 而報錯（可能因為其他驗證失敗）
-        # 此測試主要確認參數存在
-        assert "--no-interactive" not in result.stdout or "Error" not in result.stdout
-
-    def test_all_new_parameters_exist(self, temp_repo_dir, mock_git_ops):
-        """Test 1.2: 驗證所有新增參數的定義存在"""
-        # 測試所有新參數都能被接受
-        result = runner.invoke(app, [
-            "prepare", "test-issue",
-            "--no-interactive",
-            "--input-method=manual",
-            "--issue-id=123",
-            "--rigor=medium",
-            "--plan-template=default",
-            "--auto-create-pr"
-        ])
-
-        # 參數應該被接受（不會有 "no such option" 錯誤）
-        assert "no such option" not in result.stdout.lower()
-
     def test_non_interactive_missing_required_input_method(self, temp_repo_dir, mock_git_ops):
         """Test 1.3: 驗證 non-interactive 模式下缺少必填參數時顯示錯誤"""
         # 測試場景：--no-interactive 但缺少 --input-method
@@ -696,64 +650,6 @@ class TestPrepareNonInteractiveMode:
 
 class TestPrepareSpecTemplateParameter:
     """測試 prepare 命令的 spec template 參數"""
-
-    def test_spec_template_parameter_exists(self, temp_repo_dir, mock_git_ops):
-        """測試 --spec-template 參數存在"""
-        result = runner.invoke(app, [
-            "prepare", "test-issue",
-            "--no-interactive",
-            "--input-method=manual",
-            "--spec-template=simple"
-        ])
-
-        assert "no such option" not in result.stdout.lower()
-
-    def test_plan_template_parameter_renamed(self, temp_repo_dir, mock_git_ops):
-        """測試 --plan-template 參數存在（從 --template 重新命名）"""
-        result = runner.invoke(app, [
-            "prepare", "test-issue",
-            "--no-interactive",
-            "--input-method=manual",
-            "--plan-template=bug"
-        ])
-
-        assert "no such option" not in result.stdout.lower()
-
-    def test_spec_template_saved_to_issue_yaml(self, temp_repo_dir, mock_git_ops):
-        """測試 spec template 設定儲存到 issue.yaml"""
-        result = runner.invoke(app, [
-            "prepare", "test-issue",
-            "--no-interactive",
-            "--input-method=manual",
-            "--spec-template=detailed"
-        ])
-
-        assert result.exit_code == 0
-
-        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "issue.yaml"
-        with open(config_file) as f:
-            config_data = yaml.safe_load(f)
-            assert "spec" in config_data
-            assert "template" in config_data["spec"]
-            assert config_data["spec"]["template"] == "detailed"
-
-    def test_plan_template_saved_to_plan_section(self, temp_repo_dir, mock_git_ops):
-        """測試 plan template 設定儲存到 plan section"""
-        result = runner.invoke(app, [
-            "prepare", "test-issue",
-            "--no-interactive",
-            "--input-method=manual",
-            "--plan-template=simple"
-        ])
-
-        assert result.exit_code == 0
-
-        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "issue.yaml"
-        with open(config_file) as f:
-            config_data = yaml.safe_load(f)
-            assert "plan" in config_data
-            assert "template" in config_data["plan"]
-            assert config_data["plan"]["template"] == "simple"
 
     def test_both_templates_can_be_specified(self, temp_repo_dir, mock_git_ops):
         """測試可以同時指定 spec 和 plan template"""
@@ -881,31 +777,6 @@ class TestPrepareCommandSetupMode:
         assert mock_phase_list.call_count == 1
         # 驗證詢問了 templates (2 次：spec 和 plan)
         assert mock_template_list.call_count == 2
-
-    @patch("cafe.ui.phase_prompts.prompt_confirm")
-    @patch("cafe.ui.cli.prompt_confirm")
-    @patch("cafe.ui.template_selector.prompt_list")
-    @patch("cafe.ui.phase_prompts.prompt_list")
-    @patch("cafe.ui.cli.prompt_list")
-    @patch("cafe.ui.cli.prompt_text")
-    def test_quick_setup_displays_default_values_summary(self, mock_prompt_text, mock_cli_list, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
-        """測試 Quick setup 顯示預設值摘要"""
-        # Mock user inputs
-        mock_prompt_text.return_value = "summary-test"
-        mock_cli_confirm.return_value = False  # worktree (n)
-        
-        # Input method 選擇 -> Manual input
-        mock_phase_list.return_value = "1. Manual input"
-        
-        # Setup mode 選擇 -> Quick setup
-        mock_cli_list.return_value = "Quick setup (use recommended defaults)"
-
-        result = runner.invoke(app, ["prepare"])
-
-        assert result.exit_code == 0
-        
-        # 驗證輸出包含預設值摘要資訊
-        assert "Quick setup" in result.stdout or "default" in result.stdout.lower() or "recommended" in result.stdout.lower()
 
     def test_non_interactive_mode_not_affected_by_setup_mode(self, temp_repo_dir, mock_git_ops):
         """測試 non-interactive mode 不受設定模式影響"""

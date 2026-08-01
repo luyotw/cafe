@@ -6,8 +6,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from cafe.agents.cli import ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.core.types import AgentCLI
+from cafe.core.types import AgentCLI, AgentConfig
 from cafe.ui.chat import (
     _load_latest_role_iteration_cli,
     _prepare_chat_environment,
@@ -29,88 +30,32 @@ class TestLaunchChatSession:
 
     def _make_agent_config(self, cli: str, session_id=None, model=None):
         """Build a mock AgentConfig."""
-        config = MagicMock()
-        config.cli.value = cli
-        config.session_id = session_id
-        config.model = model
-        return config
+        return AgentConfig(
+            name="test-agent",
+            cli=AgentCLI(cli),
+            session_id=session_id,
+            model=model,
+        )
 
     def _make_agent_manager(self, agent_name: str, cli: str, session_id=None, model=None):
         """Build a mock AgentManager with one agent."""
         config = self._make_agent_config(cli, session_id, model)
         executor = MagicMock()
         executor.config = config
-        env = dict(os.environ)
-        executor._get_cli_strategy.return_value.build_environment.return_value = env
+        strategy_class = {
+            AgentCLI.CLAUDE: ClaudeCLI,
+            AgentCLI.CODEX: CodexCLI,
+            AgentCLI.COPILOT: CopilotCLI,
+            AgentCLI.CURSOR: CursorCLI,
+            AgentCLI.GEMINI: GeminiCLI,
+        }[config.cli]
+        executor._get_cli_strategy.return_value = strategy_class(config)
 
         agent_manager = MagicMock()
         agent_manager.agents = {agent_name: executor}
         agent_manager.get_agent.return_value = executor
         agent_manager.session_manager = MagicMock()
         return agent_manager
-
-    @patch("cafe.ui.chat.subprocess.run")
-    @patch("cafe.ui.chat.ConfigManager")
-    @patch("cafe.ui.chat.AgentManager")
-    def test_claude_cli_no_session(self, mock_agent_manager_cls, mock_config_manager_cls, mock_run):
-        """Test building CLI command for claude without session."""
-        mock_config = MagicMock()
-        mock_config.get.return_value = {"name": "David", "cli": "claude"}
-        mock_config_manager_cls.return_value = mock_config
-
-        agent_manager = self._make_agent_manager("David", "claude", session_id=None, model=None)
-        mock_agent_manager_cls.return_value = agent_manager
-
-        mock_run.return_value = MagicMock(returncode=0)
-
-        launch_chat_session("developer", "issue123")
-
-        assert mock_run.call_args.args[0] == ["claude"]
-        assert "env" in mock_run.call_args.kwargs
-
-    @patch("cafe.ui.chat.subprocess.run")
-    @patch("cafe.ui.chat.ConfigManager")
-    @patch("cafe.ui.chat.AgentManager")
-    def test_claude_cli_with_session_and_model(
-        self, mock_agent_manager_cls, mock_config_manager_cls, mock_run
-    ):
-        """Test building CLI command for claude with session and model."""
-        mock_config = MagicMock()
-        mock_config.get.return_value = {"name": "David", "cli": "claude", "model": "sonnet"}
-        mock_config_manager_cls.return_value = mock_config
-
-        agent_manager = self._make_agent_manager(
-            "David", "claude", session_id="sess-abc", model="sonnet"
-        )
-        mock_agent_manager_cls.return_value = agent_manager
-
-        mock_run.return_value = MagicMock(returncode=0)
-
-        launch_chat_session("developer", "issue123")
-
-        assert mock_run.call_args.args[0] == ["claude", "--resume", "sess-abc", "--model", "sonnet"]
-        assert "env" in mock_run.call_args.kwargs
-
-    @patch("cafe.ui.chat.subprocess.run")
-    @patch("cafe.ui.chat.ConfigManager")
-    @patch("cafe.ui.chat.AgentManager")
-    def test_copilot_cli_with_session(
-        self, mock_agent_manager_cls, mock_config_manager_cls, mock_run
-    ):
-        """Test building CLI command for copilot with session."""
-        mock_config = MagicMock()
-        mock_config.get.return_value = {"name": "Roger", "cli": "copilot"}
-        mock_config_manager_cls.return_value = mock_config
-
-        agent_manager = self._make_agent_manager("Roger", "copilot", session_id="sess-xyz")
-        mock_agent_manager_cls.return_value = agent_manager
-
-        mock_run.return_value = MagicMock(returncode=0)
-
-        launch_chat_session("pm", "issue123")
-
-        assert mock_run.call_args.args[0] == ["copilot", "--resume", "sess-xyz"]
-        assert "env" in mock_run.call_args.kwargs
 
     @patch("cafe.ui.chat.subprocess.run")
     @patch("cafe.ui.chat.ConfigManager")
@@ -202,60 +147,6 @@ class TestLaunchChatSession:
         assert env["CAFE_ISSUE_NAME"] == "issue123"
         assert env["CAFE_ALIGNMENT_REQUEST_FILE"] == "/tmp/request.json"
         assert env["CAFE_ALIGNMENT_DECISION_FILE"] == "/tmp/decision.json"
-
-    @patch("cafe.ui.chat.subprocess.run")
-    @patch("cafe.ui.chat.ConfigManager")
-    @patch("cafe.ui.chat.AgentManager")
-    def test_gemini_cli_with_session_and_model(
-        self, mock_agent_manager_cls, mock_config_manager_cls, mock_run
-    ):
-        """Test building CLI command for gemini with session and model."""
-        mock_config = MagicMock()
-        mock_config.get.return_value = {
-            "name": "Richard",
-            "cli": "gemini",
-            "model": "gemini-2.5-pro",
-        }
-        mock_config_manager_cls.return_value = mock_config
-
-        agent_manager = self._make_agent_manager(
-            "Richard", "gemini", session_id="sess-gem", model="gemini-2.5-pro"
-        )
-        mock_agent_manager_cls.return_value = agent_manager
-
-        mock_run.return_value = MagicMock(returncode=0)
-
-        launch_chat_session("reviewer", "issue123")
-
-        assert mock_run.call_args.args[0] == [
-            "gemini",
-            "--resume",
-            "sess-gem",
-            "--model",
-            "gemini-2.5-pro",
-        ]
-        assert "env" in mock_run.call_args.kwargs
-
-    @patch("cafe.ui.chat.subprocess.run")
-    @patch("cafe.ui.chat.ConfigManager")
-    @patch("cafe.ui.chat.AgentManager")
-    def test_cursor_agent_cli_with_session(
-        self, mock_agent_manager_cls, mock_config_manager_cls, mock_run
-    ):
-        """Test building CLI command for cursor-agent with session (uses --resume flag)."""
-        mock_config = MagicMock()
-        mock_config.get.return_value = {"name": "David", "cli": "cursor-agent"}
-        mock_config_manager_cls.return_value = mock_config
-
-        agent_manager = self._make_agent_manager("David", "cursor-agent", session_id="sess-cursor")
-        mock_agent_manager_cls.return_value = agent_manager
-
-        mock_run.return_value = MagicMock(returncode=0)
-
-        launch_chat_session("developer", "issue123")
-
-        assert mock_run.call_args.args[0] == ["cursor-agent", "--resume", "sess-cursor"]
-        assert "env" in mock_run.call_args.kwargs
 
     @patch("builtins.print")
     @patch("cafe.ui.chat.ConfigManager")
@@ -559,8 +450,8 @@ def test_launch_chat_session_uses_playbook_role_defaults(
 
         agent_manager = MagicMock()
         executor = MagicMock()
-        executor.config = MagicMock(session_id=None, model=None)
-        executor._get_cli_strategy.return_value.build_environment.return_value = dict(os.environ)
+        executor.config = AgentConfig(name="Morgan", cli=AgentCLI.CLAUDE)
+        executor._get_cli_strategy.return_value = ClaudeCLI(executor.config)
         agent_manager.get_agent.return_value = executor
         agent_manager.session_manager = MagicMock()
         mock_agent_manager_cls.return_value = agent_manager

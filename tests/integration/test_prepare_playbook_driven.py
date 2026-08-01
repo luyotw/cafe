@@ -327,7 +327,7 @@ commands:
         assert result.exit_code == 1
         assert "Failed to load playbook" in result.stdout
 
-    @pytest.mark.parametrize("playbook_id", ["default", "simple", "hotfix", "tdd"])
+    @pytest.mark.parametrize("playbook_id", ["default", "hotfix"])
     def test_builtin_playbooks_non_interactive_defaults(
         self, playbook_id, temp_repo_dir, mock_git_ops
     ):

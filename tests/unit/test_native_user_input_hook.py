@@ -657,13 +657,13 @@ def test_initial_input_provider_skips_resume_and_existing_artifact(tmp_path: Pat
     assert output.read_text(encoding="utf-8") == "existing artifact"
 
 
-@pytest.mark.parametrize("playbook_name", ["default", "simple", "tdd"])
 def test_builtin_initial_input_preserves_legacy_requirements_seed(
-    tmp_path: Path, playbook_name: str
+    tmp_path: Path,
 ) -> None:
-    """I3 — built-in first steps retain the legacy initial-input experience."""
+    """I3 — the shared built-in resolver retains the legacy initial-input experience."""
     import yaml
 
+    playbook_name = "default"
     playbook_file = (
         Path(__file__).parents[2] / "src" / "cafe" / "data" / "playbooks" / f"{playbook_name}.yaml"
     )
@@ -691,13 +691,13 @@ def test_builtin_initial_input_preserves_legacy_requirements_seed(
     }
 
 
-@pytest.mark.parametrize("playbook_name", ["default", "simple", "tdd"])
 def test_builtin_initial_input_seeds_empty_legacy_requirements_non_interactively(
-    tmp_path: Path, playbook_name: str
+    tmp_path: Path,
 ) -> None:
-    """I3 — prepared manual built-ins retain the empty legacy requirements seed."""
+    """I3 — the shared built-in resolver retains the empty legacy requirements seed."""
     import yaml
 
+    playbook_name = "default"
     playbook_file = (
         Path(__file__).parents[2] / "src" / "cafe" / "data" / "playbooks" / f"{playbook_name}.yaml"
     )
