@@ -246,6 +246,7 @@ class GenericWorkflowStepExecutor(Phase):
         self.generic_phase.skill_bridge.synchronize_skills(
             [*workflow_skill_names, skill_name],
             agent_cli,
+            install=False,
         )
         shared_skill_invocations = self.generic_phase.prepare_skills(
             skill_names=workflow_skill_names,

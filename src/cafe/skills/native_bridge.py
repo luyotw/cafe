@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -127,6 +129,8 @@ class NativeSkillBridge:
         names: list[str],
         cli: AgentCLI,
         context: dict[str, str] | None = None,
+        *,
+        install: bool = True,
     ) -> list[Path]:
         """Make the CLI-native CAFE skill directory match one resolved environment.
 
@@ -152,6 +156,8 @@ class NativeSkillBridge:
         for stale_name in managed - desired_names:
             self._remove_managed_skill(cli, stale_name)
         self._write_managed_skills(cli, desired_names)
+        if not install:
+            return []
         return [self.install_skill(name, cli, context=context) for name, _ in desired]
 
     def _managed_skills_manifest(self, cli: AgentCLI) -> Path:
@@ -164,15 +170,27 @@ class NativeSkillBridge:
         try:
             data = json.loads(manifest.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return set()
+            return None
         if not isinstance(data, list):
-            return set()
+            return None
         return {name for name in data if isinstance(name, str) and Path(name).name == name}
 
     def _write_managed_skills(self, cli: AgentCLI, names: set[str]) -> None:
         manifest = self._managed_skills_manifest(cli)
         manifest.parent.mkdir(parents=True, exist_ok=True)
-        manifest.write_text(json.dumps(sorted(names)) + "\n", encoding="utf-8")
+        file_descriptor, temporary_name = tempfile.mkstemp(
+            dir=manifest.parent,
+            prefix=f".{manifest.name}.",
+            suffix=".tmp",
+        )
+        temporary_manifest = Path(temporary_name)
+        try:
+            with os.fdopen(file_descriptor, "w", encoding="utf-8") as temporary_file:
+                temporary_file.write(json.dumps(sorted(names)) + "\n")
+            temporary_manifest.replace(manifest)
+        finally:
+            if temporary_manifest.exists():
+                temporary_manifest.unlink()
 
     def _legacy_managed_skills(self, cli: AgentCLI) -> set[str]:
         """Recognize pre-manifest CAFE installs without claiming arbitrary skills."""
