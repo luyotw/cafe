@@ -17,7 +17,7 @@ Each prepare question is declared as one field object:
 | `non_interactive_default` | no | Default used only by `--no-interactive`; otherwise `default` is used |
 | `non_interactive` | no | Whether the default participates in non-interactive setup (default `true`) |
 | `required` | no | Reject a missing non-interactive value when no default is declared |
-| `normalize` | no | Boundary normalizer; currently `github_issue` is valid only for `spec.issue_id` |
+| `normalize` | no | Boundary normalizer; `github_issue` marks the issue-reference field for the stable `github_issue_id` input field |
 | `choices` | yes for `enum` / `setup_mode` | `{ value, label, description? }` entries |
 | `show_when` | no | Simple visibility conditions |
 | `group` | no | Logical grouping (`input`, `setup`, `quick_defaults`, `custom`) |
@@ -162,6 +162,47 @@ commands:
 Both interactive and non-interactive preparation persist only
 `synthesize.audience`; no `--input-method`, `spec`, `plan`, or `pr` block is
 introduced.
+
+## Initial-input providers
+
+An entry step can declare the trusted host-side input providers it accepts and
+the locations that may receive the resolved content:
+
+```yaml
+entry_point: intake
+steps:
+  intake:
+    skill: cafe-intake
+    role: researcher
+    output_artifact: intake_brief
+    initial_input:
+      providers: [manual_text, github_issue]
+      bind:
+        artifact: intake_brief
+        prompt_context: user_input
+    hooks:
+      prepare_input: [InitialInputProviderResolver]
+    "on": {await_agent: _done}
+```
+
+- `initial_input` is valid only on `entry_point` and each provider may appear
+  once. The built-in providers are `manual_text` and `github_issue`.
+- `bind` must contain at least one destination. `artifact` must equal the
+  entry step's `output_artifact`; the only prompt context allowed in this
+  release is `user_input`.
+- `cafe prepare --input-method=manual|github --issue-id=…` writes the canonical
+  `initial_input.provider` / `initial_input.issue_id` selection to `issue.yaml`.
+  Existing default/simple/TDD prepare fields continue also to write legacy
+  `spec.input_method` / `spec.issue_id` values for compatibility.
+- Input fields are identified by the stable IDs `input_method` and
+  `github_issue_id`, not by a `spec.*` write target. A custom entry step may
+  therefore write its UI answers to `intake.input_method` and
+  `intake.issue_id` while the resolver consumes only the canonical block.
+
+Provider resolution runs only for a new first iteration and never overwrites a
+non-empty declared artifact. Manual text prefers invocation input; GitHub
+content is fetched only by the trusted host-side boundary. Playbooks cannot
+register arbitrary provider scripts or give agents credentials.
 
 ## Custom step template fields
 

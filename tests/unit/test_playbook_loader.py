@@ -133,6 +133,182 @@ steps:
     assert result.model.steps["spec"].role == "reviewer"
 
 
+def test_entry_step_initial_input_accepts_declared_providers_and_bindings(tmp_path: Path) -> None:
+    """A non-development entry step owns its declared initial-input contract."""
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "intake")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "intake-flow",
+        """
+playbook: {id: intake-flow}
+entry_point: intake
+steps:
+  intake:
+    role: pm
+    skill: intake
+    output_artifact: intake_brief
+    initial_input:
+      providers: [manual_text, github_issue]
+      bind:
+        artifact: intake_brief
+        prompt_context: user_input
+    on: {await_agent: _done}
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    model = loader.load_model("intake-flow").model
+
+    assert model.steps["intake"].initial_input.providers == ["manual_text", "github_issue"]
+    assert model.steps["intake"].initial_input.bind.artifact == "intake_brief"
+    assert model.steps["intake"].initial_input.bind.prompt_context == "user_input"
+
+
+@pytest.mark.parametrize(
+    ("initial_input", "error_token"),
+    [
+        (
+            """
+    initial_input:
+      providers: [manual_text]
+      bind: {artifact: unrelated}
+""",
+            "bind.artifact",
+        ),
+        (
+            """
+    initial_input:
+      providers: [manual_text, manual_text]
+      bind: {artifact: intake_brief}
+""",
+            "duplicates",
+        ),
+        (
+            """
+    initial_input:
+      providers: [url]
+      bind: {artifact: intake_brief}
+""",
+            "unsupported provider",
+        ),
+    ],
+)
+def test_initial_input_rejects_invalid_provider_or_binding_before_execution(
+    tmp_path: Path, initial_input: str, error_token: str
+) -> None:
+    """U2 — invalid entry declarations fail with their actionable field token."""
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "intake")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "invalid-input",
+        f"""
+playbook: {{id: invalid-input}}
+entry_point: intake
+steps:
+  intake:
+    role: pm
+    skill: intake
+    output_artifact: intake_brief
+{initial_input}    on: {{await_agent: _done}}
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match=error_token):
+        loader.load_model("invalid-input")
+
+
+def test_initial_input_rejects_non_entry_or_unimplemented_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """U3 — declarations are entry-only and must map to a host provider."""
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "intake")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "invalid-placement",
+        """
+playbook: {id: invalid-placement}
+entry_point: intake
+steps:
+  intake:
+    role: pm
+    skill: intake
+    output_artifact: intake_brief
+    on: {await_agent: _done}
+  refinement:
+    role: pm
+    skill: intake
+    output_artifact: refined_brief
+    initial_input:
+      providers: [manual_text]
+      bind: {artifact: refined_brief}
+    on: {await_agent: _done}
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="only allowed on entry_point"):
+        loader.load_model("invalid-placement")
+
+    _write_playbook(
+        builtin_root / "playbooks",
+        "unimplemented-provider",
+        """
+playbook: {id: unimplemented-provider}
+entry_point: intake
+steps:
+  intake:
+    role: pm
+    skill: intake
+    output_artifact: intake_brief
+    initial_input:
+      providers: [github_issue]
+      bind: {artifact: intake_brief}
+    on: {await_agent: _done}
+""",
+    )
+    monkeypatch.setattr(
+        "cafe.core.playbook.registered_initial_input_providers", lambda: frozenset()
+    )
+
+    with pytest.raises(ValueError, match="no trusted host implementation"):
+        loader.load_model("unimplemented-provider")
+
+
+@pytest.mark.parametrize("playbook_name", ["default", "simple", "tdd"])
+def test_builtin_entry_steps_use_declared_initial_input_resolver(playbook_name: str) -> None:
+    """I3 — built-in development flows retain the provider contract."""
+    model = PlaybookLoader().load_model(playbook_name).model
+    entry = model.steps[model.entry_point]
+
+    assert entry.initial_input.providers == ["manual_text", "github_issue"]
+    assert entry.initial_input.bind.artifact == entry.output_artifact
+    assert "InitialInputProviderResolver" in entry.hooks.prepare_input
+    assert "GitHubIssueFetcher" not in entry.hooks.prepare_input
+
+
 def test_playbook_conversation_locale_supports_bcp47_and_defaults_to_auto(
     tmp_path: Path,
 ) -> None:

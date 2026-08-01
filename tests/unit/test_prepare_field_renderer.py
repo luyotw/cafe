@@ -130,6 +130,57 @@ def test_input_method_flow_passes_the_declared_issue_field_to_its_boundary() -> 
     assert prompt_input.call_args.kwargs["issue_field"] == issue_field
 
 
+def test_stable_input_field_ids_persist_selection_for_a_custom_entry_step() -> None:
+    """U7 — prepare field IDs do not require legacy ``spec.*`` targets."""
+    input_field = PrepareField.model_validate(
+        {
+            "id": "input_method",
+            "type": "enum",
+            "label": "Requirement source",
+            "write": "intake.input_method",
+            "choices": [
+                {"value": "manual", "label": "Manual"},
+                {"value": "github", "label": "GitHub"},
+            ],
+        }
+    )
+    issue_field = PrepareField.model_validate(
+        {
+            "id": "github_issue_id",
+            "type": "text",
+            "label": "Tracked issue reference",
+            "write": "intake.issue_id",
+            "normalize": "github_issue",
+        }
+    )
+    deps = RendererDeps(
+        prompt_list=MagicMock(),
+        prompt_confirm=MagicMock(),
+        prompt_text=MagicMock(),
+        prompt_for_input_method=MagicMock(return_value=("github", 346)),
+        select_template=MagicMock(),
+        spec_template_manager=MagicMock(),
+        plan_template_manager=MagicMock(),
+        display=MagicMock(),
+        github_ops=MagicMock(),
+    )
+    profile = PrepareProfile(
+        prepare=PrepareConfig.model_validate(
+            {"fields": [input_field.model_dump(), issue_field.model_dump()]}
+        ),
+        is_github_repo=True,
+        step_names=frozenset({"intake"}),
+    )
+
+    config, issue_id = run_field_driven_prepare_flow(
+        ParsedPrepareFields(fields=[input_field, issue_field]), profile, deps=deps
+    )
+
+    assert issue_id == 346
+    assert config.steps["intake"] == {"input_method": "github", "issue_id": "346"}
+    assert config.initial_input == {"provider": "github_issue", "issue_id": 346}
+
+
 class TestShowWhenVisibility:
     def test_github_repo_gate(self) -> None:
         field = PrepareField.model_validate(

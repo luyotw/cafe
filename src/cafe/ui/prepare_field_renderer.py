@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Literal, Optional, Tuple
 
+from cafe.core.initial_input import normalize_initial_input_provider
 from cafe.core.prepare_fields import ParsedPrepareFields, PrepareField, PrepareFieldChoice
 from cafe.core.prepare_profile import PrepareIssueConfig, PrepareProfile, PrepareRigorError
 from cafe.templates.manager import TemplateManager
@@ -242,6 +243,10 @@ def _cli_value_for_field(
     answers: NonInteractiveCliAnswers,
 ) -> tuple[bool, Any]:
     """Return an explicitly supplied CLI value for one declared field."""
+    if field.id == "input_method":
+        return answers.input_method is not None, answers.input_method
+    if field.id == "github_issue_id" or field.normalize == "github_issue":
+        return answers.issue_id is not None, answers.issue_id
     values = {
         "spec.input_method": answers.input_method,
         "spec.issue_id": answers.issue_id,
@@ -288,7 +293,7 @@ def _validate_declared_non_interactive_input(
     answers: NonInteractiveCliAnswers,
 ) -> None:
     """Require input flags only when a declared input field asks for them."""
-    input_fields = [field for field in parsed_fields.fields if field.write == "spec.input_method"]
+    input_fields = [field for field in parsed_fields.fields if field.id == "input_method"]
     if not input_fields:
         return
     if answers.input_method is not None and answers.input_method not in _ALLOWED_INPUT_METHODS:
@@ -386,7 +391,7 @@ def resolve_non_interactive_issue_config(
                     f"prepare field {field.id!r} requires a value in non-interactive mode"
                 )
             continue
-        if field.write == "spec.issue_id":
+        if field.id == "github_issue_id" or field.normalize == "github_issue":
             value = str(value)
         _validate_field_enum_value(field, value, profile=profile)
         if field.type == "template":
@@ -397,6 +402,13 @@ def resolve_non_interactive_issue_config(
         if key in config.section(section) and not is_explicit:
             continue
         set_write_value(config, field.write, value)
+
+    if answers.input_method is not None:
+        provider = normalize_initial_input_provider(answers.input_method)
+        if provider is not None:
+            config.initial_input["provider"] = provider
+            if provider == "github_issue" and answers.issue_id is not None:
+                config.initial_input["issue_id"] = answers.issue_id
 
     if not profile.supports_pr_config(parsed_fields) and (
         answers.auto_create_pr or answers.post_pr_todo_list is not None
@@ -583,7 +595,11 @@ def prompt_custom_fields(
     )
     config = empty_issue_config()
     for field in parsed.fields:
-        if field.type == "setup_mode" or field.write in {"spec.input_method", "spec.issue_id"}:
+        if (
+            field.type == "setup_mode"
+            or field.id == "input_method"
+            or field.normalize == "github_issue"
+        ):
             continue
         if field.write is None:
             continue
@@ -629,11 +645,14 @@ def run_field_driven_prepare_flow(
     issue_id: Optional[int] = None
 
     input_field = next(
-        (field for field in parsed.fields if field.write == "spec.input_method"),
-        None,
+        (field for field in parsed.fields if field.id == "input_method"), None
     )
     issue_field = next(
-        (field for field in parsed.fields if field.write == "spec.issue_id"),
+        (
+            field
+            for field in parsed.fields
+            if field.id == "github_issue_id" or field.normalize == "github_issue"
+        ),
         None,
     )
     if input_field is not None and field_is_visible(
@@ -651,11 +670,23 @@ def run_field_driven_prepare_flow(
             field=input_field,
             issue_field=issue_field,
         )
-        spec_config.spec["input_method"] = input_method
+        set_write_value(spec_config, input_field.write, input_method)
         if issue_id is not None:
-            spec_config.spec["issue_id"] = str(issue_id)
+            if issue_field is None or issue_field.write is None:
+                raise ValueError(
+                    "input_method field requires a github_issue field for GitHub input"
+                )
+            set_write_value(spec_config, issue_field.write, str(issue_id))
     elif input_field is not None and input_field.default is not None:
         set_write_value(spec_config, input_field.write, input_field.default)
+        input_method = str(input_field.default)
+    else:
+        input_method = None
+    provider = normalize_initial_input_provider(input_method)
+    if provider is not None:
+        spec_config.initial_input["provider"] = provider
+        if provider == "github_issue" and issue_id is not None:
+            spec_config.initial_input["issue_id"] = issue_id
     ctx.issue_id = issue_id
 
     setup_field = next((field for field in parsed.fields if field.type == "setup_mode"), None)

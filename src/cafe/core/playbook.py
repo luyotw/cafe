@@ -11,6 +11,10 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from cafe.core.human_tasks import HumanTaskBinding
+from cafe.core.initial_input import (
+    SUPPORTED_INITIAL_INPUT_PROVIDERS,
+    registered_initial_input_providers,
+)
 from cafe.core.prepare_fields import (
     PrepareField,
     assert_prepare_semantics_match,
@@ -103,6 +107,50 @@ class StepAlignmentConfig(BaseModel):
         return list(dict.fromkeys(cleaned))
 
 
+class InitialInputBinding(BaseModel):
+    """Declared destinations for an entry step's trusted initial input."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    artifact: Optional[str] = None
+    prompt_context: Optional[Literal["user_input"]] = None
+
+    @model_validator(mode="after")
+    def _require_a_target(self) -> "InitialInputBinding":
+        if self.artifact is None and self.prompt_context is None:
+            raise ValueError("initial_input.bind must declare artifact or prompt_context")
+        return self
+
+
+class InitialInputDeclaration(BaseModel):
+    """Trusted providers permitted for an entry step's first iteration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    providers: List[str]
+    bind: InitialInputBinding
+
+    @field_validator("providers")
+    @classmethod
+    def _validate_providers(cls, value: List[str]) -> List[str]:
+        providers = [provider.strip() for provider in value if provider.strip()]
+        if not providers:
+            raise ValueError("initial_input.providers must include at least one provider")
+        if len(providers) != len(set(providers)):
+            raise ValueError("initial_input.providers must not contain duplicates")
+        unsupported = [
+            provider
+            for provider in providers
+            if provider not in SUPPORTED_INITIAL_INPUT_PROVIDERS
+        ]
+        if unsupported:
+            raise ValueError(
+                "initial_input.providers contains unsupported provider "
+                f"{unsupported[0]!r}"
+            )
+        return providers
+
+
 class StepConfig(BaseModel):
     """One playbook step."""
 
@@ -117,6 +165,7 @@ class StepConfig(BaseModel):
     # remains the opt-in isolated scope.
     input_artifacts: Optional[List[str]] = None
     output_artifact: Optional[str] = None
+    initial_input: Optional[InitialInputDeclaration] = None
     template: Optional[str] = None
     allowed_tools: List[str] = Field(default_factory=list)
     capability_requests: List[str] = Field(default_factory=list)
@@ -462,6 +511,8 @@ def validate_playbook(
     if entry is not None and entry not in steps:
         raise ValueError(f"entry_point {entry!r} is not a defined step")
 
+    _validate_initial_input_declarations(model)
+
     _report_structural_issue(
         playbook_id=model.playbook.id,
         filename=path.stem,
@@ -496,6 +547,32 @@ def validate_playbook(
     if warnings and strict:
         raise ValueError("\n".join(warnings))
     return warnings
+
+
+def _validate_initial_input_declarations(model: PlaybookDefinition) -> None:
+    """Fail closed on invalid initial-input declarations before execution."""
+    registered = registered_initial_input_providers()
+    for step_name, step in model.steps.items():
+        declaration = step.initial_input
+        if declaration is None:
+            continue
+        field_path = f"steps.{step_name}.initial_input"
+        if step_name != model.entry_point:
+            raise ValueError(
+                f"{field_path} is only allowed on entry_point {model.entry_point!r}"
+            )
+        missing = [provider for provider in declaration.providers if provider not in registered]
+        if missing:
+            raise ValueError(
+                f"{field_path}.providers declares {missing[0]!r}, which has no trusted "
+                "host implementation"
+            )
+        artifact = declaration.bind.artifact
+        if artifact is not None and artifact != step.output_artifact:
+            raise ValueError(
+                f"{field_path}.bind.artifact {artifact!r} must match output_artifact "
+                f"{step.output_artifact!r}"
+            )
 
 
 def _validate_prepare_metadata(

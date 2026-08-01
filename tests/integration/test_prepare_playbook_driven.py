@@ -132,6 +132,7 @@ class TestPreparePlaybookDriven:
         config_file = temp_repo_dir / ".cafe" / "issues" / "parity-ni" / "issue.yaml"
         config_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
         assert config_data["spec"]["input_method"] == "manual"
+        assert config_data["initial_input"] == {"provider": "manual_text"}
         assert config_data["spec"]["rigor"] == "medium"
         assert config_data["spec"]["template"] == "auto"
         assert config_data["plan"]["template"] == "default"

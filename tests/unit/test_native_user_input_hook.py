@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from cafe.core.hooks.native import (
     GitHubIssueFetcher,
     GitHubPRCreator,
+    InitialInputProviderResolver,
     LocalPRReviewer,
     PRCommentPoster,
     PRLinkOpener,
@@ -481,6 +482,79 @@ def test_github_issue_fetcher_uses_context_user_input_without_prompting(tmp_path
     mock_prompt_method.assert_not_called()
     mock_prompt_manual.assert_not_called()
     mock_fetch_issue.assert_not_called()
+
+
+def test_initial_input_provider_delivers_prefilled_manual_text_to_custom_entry_step(
+    tmp_path: Path,
+) -> None:
+    """U4/U6 — declared custom entry bindings receive invocation input once."""
+    phase_dir = tmp_path / "intake"
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    output_file = phase._get_iteration_dir(1) / "output.md"
+    hook = InitialInputProviderResolver()
+
+    result = hook.run(
+        stage="prepare_input",
+        phase=phase,
+        step_name="intake",
+        step_def={
+            "output_artifact": "intake_brief",
+            "initial_input": {
+                "providers": ["manual_text", "github_issue"],
+                "bind": {"artifact": "intake_brief", "prompt_context": "user_input"},
+            },
+        },
+        output_file=output_file,
+        context={"user_input": "Summarize the incoming customer report."},
+    )
+
+    assert output_file.read_text(encoding="utf-8") == (
+        "# Initial Requirements\n\nSummarize the incoming customer report.\n"
+    )
+    assert result.context_updates == {"user_input": "Summarize the incoming customer report."}
+    assert result.events == [
+        {"type": "initial_input_resolved", "step": "intake", "provider": "manual_text"}
+    ]
+
+
+def test_initial_input_provider_skips_resume_and_existing_artifact(tmp_path: Path) -> None:
+    """U9 — providers cannot overwrite resumed or already seeded entry output."""
+    hook = InitialInputProviderResolver()
+    step_def = {
+        "output_artifact": "intake_brief",
+        "initial_input": {
+            "providers": ["manual_text"],
+            "bind": {"artifact": "intake_brief", "prompt_context": "user_input"},
+        },
+    }
+    resumed_phase = _FakePhase(phase_dir=tmp_path / "intake", iteration=2)
+    resumed_output = resumed_phase._get_iteration_dir(2) / "output.md"
+
+    resumed = hook.run(
+        stage="prepare_input",
+        phase=resumed_phase,
+        step_name="intake",
+        step_def=step_def,
+        output_file=resumed_output,
+        context={"user_input": "new content"},
+    )
+
+    phase = _FakePhase(phase_dir=tmp_path / "existing", iteration=1)
+    output = phase._get_iteration_dir(1) / "output.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("existing artifact", encoding="utf-8")
+    existing = hook.run(
+        stage="prepare_input",
+        phase=phase,
+        step_name="intake",
+        step_def=step_def,
+        output_file=output,
+        context={"user_input": "new content"},
+    )
+
+    assert resumed.events == []
+    assert existing.events == []
+    assert output.read_text(encoding="utf-8") == "existing artifact"
 
 
 def test_github_issue_fetcher_uses_phase_step_user_input_without_prompting(tmp_path: Path) -> None:
