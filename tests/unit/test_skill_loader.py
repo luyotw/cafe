@@ -140,6 +140,7 @@ def test_imported_project_skill_is_discovered_with_project_precedence(tmp_path: 
     assert any(item.name == "plan" and item.source == "project" for item in items)
     assert "Imported project body" in loader.activate("plan")
 
+
 def test_builtin_catalog_includes_chat_handoff_skills(tmp_path: Path) -> None:
     builtin_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
     loader = SkillLoader(
@@ -236,7 +237,6 @@ def test_global_overrides_builtin_when_no_project_skill(tmp_path: Path) -> None:
     assert items[0].source == "global"
 
 
-
 def test_install_skill_uses_project_version_over_global(tmp_path: Path) -> None:
     """When a project skill overrides a global skill, install_skill uses the project version."""
     global_root = tmp_path / "global" / "skills"
@@ -282,7 +282,7 @@ def test_install_skill_recovers_when_skills_root_is_file(tmp_path: Path) -> None
     loader.discover()
     bridge = NativeSkillBridge(loader, project_root=project_root, home_dir=tmp_path / "home")
 
-    installed = bridge.install_skill("cafe-plan", AgentCLI.COPILOT)
+    installed = bridge.synchronize_skills(["cafe-plan"], AgentCLI.COPILOT)[0]
     assert installed.exists()
     assert bad_root.is_dir()
 
@@ -303,6 +303,6 @@ def test_install_skill_recovers_when_skills_root_is_broken_symlink(tmp_path: Pat
     loader.discover()
     bridge = NativeSkillBridge(loader, project_root=project_root, home_dir=tmp_path / "home")
 
-    installed = bridge.install_skill("cafe-plan", AgentCLI.COPILOT)
+    installed = bridge.synchronize_skills(["cafe-plan"], AgentCLI.COPILOT)[0]
     assert installed.exists()
     assert bad_root.is_dir()

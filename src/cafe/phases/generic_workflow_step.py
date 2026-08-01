@@ -237,13 +237,18 @@ class GenericWorkflowStepExecutor(Phase):
             skill_name=skill_name,
             contract=contract,
         )
+        workflow_skill_names = resolve_playbook_skills(
+            self.playbook,
+            channel="workflow",
+            role=step_def.get("role"),
+            step_name=step_name,
+        )
+        self.generic_phase.skill_bridge.synchronize_skills(
+            [*workflow_skill_names, skill_name],
+            agent_cli,
+        )
         shared_skill_invocations = self.generic_phase.prepare_skills(
-            skill_names=resolve_playbook_skills(
-                self.playbook,
-                channel="workflow",
-                role=step_def.get("role"),
-                step_name=step_name,
-            ),
+            skill_names=workflow_skill_names,
             agent_cli=agent_cli,
             context=context,
         )

@@ -2,6 +2,7 @@
 
 import json
 import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,6 +10,8 @@ import pytest
 from cafe.agents.cli import ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.types import AgentCLI, AgentConfig
+from cafe.skills.loader import SkillLoader
+from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.ui.chat import (
     _load_latest_role_iteration_cli,
     _prepare_chat_environment,
@@ -337,7 +340,7 @@ class TestLaunchChatSession:
 def test_prepare_chat_environment_installs_chat_skills_only() -> None:
     with (
         patch("cafe.ui.chat.SkillLoader.discover"),
-        patch("cafe.ui.chat.NativeSkillBridge.install_skill") as mock_install,
+        patch("cafe.ui.chat.NativeSkillBridge.synchronize_skills") as mock_synchronize,
     ):
         _prepare_chat_environment(
             agent_cli=AgentCLI.CODEX,
@@ -358,8 +361,92 @@ def test_prepare_chat_environment_installs_chat_skills_only() -> None:
             step_name="develop",
         )
 
-    installed = [call.args[0] for call in mock_install.call_args_list]
-    assert installed == ["chat-step"]
+    assert mock_synchronize.call_args.args == (["chat-step"], AgentCLI.CODEX)
+
+
+def test_prepare_chat_environment_removes_previously_installed_chat_skills(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """I3 — a chat replace environment is isolated in the native skill directory."""
+    monkeypatch.chdir(tmp_path)
+    builtin_root = tmp_path / "builtin"
+    for name in ("chat-stale", "chat-current"):
+        skill_dir = builtin_root / "skills" / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {name}\n---\n", encoding="utf-8"
+        )
+    loader = SkillLoader(
+        project_root=tmp_path,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+    loader.discover()
+    NativeSkillBridge(loader, project_root=tmp_path).install_skill("chat-stale", AgentCLI.CODEX)
+    monkeypatch.setattr("cafe.ui.chat.SkillLoader", lambda: loader)
+
+    _prepare_chat_environment(
+        agent_cli=AgentCLI.CODEX,
+        playbook={
+            "skills": {
+                "chat": {
+                    "shared": ["chat-stale"],
+                    "steps": {"question": {"mode": "replace", "skills": ["chat-current"]}},
+                }
+            }
+        },
+        role="researcher",
+        step_name="question",
+    )
+
+    native_skills = tmp_path / ".codex" / "skills"
+    assert not (native_skills / "chat-stale").exists()
+    assert (native_skills / "chat-current" / "SKILL.md").is_file()
+
+    _prepare_chat_environment(
+        agent_cli=AgentCLI.CODEX,
+        playbook={"skills": {"chat": {"shared": []}}},
+        role="researcher",
+        step_name="question",
+    )
+
+    assert not (native_skills / "chat-current").exists()
+
+
+def test_launch_chat_session_stops_before_cli_when_playbook_validation_fails(
+    tmp_path: Path, monkeypatch, mock_chat_environment
+) -> None:
+    """I4 — invalid declared chat skills fail before the interactive CLI starts."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "invalid-chat"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "blackboard.json").write_text(
+        '{"schema_version":1,"playbook_id":"invalid","current_step":"develop",'
+        '"artifacts":{},"events":[],"decisions":[]}',
+        encoding="utf-8",
+    )
+
+    with (
+        patch("builtins.print") as mock_print,
+        patch("cafe.ui.chat.subprocess.run", return_value=MagicMock(returncode=0)) as mock_run,
+        patch("cafe.ui.chat.ConfigManager") as mock_config_manager_cls,
+        patch("cafe.ui.chat.AgentManager"),
+        patch("cafe.ui.chat.PlaybookLoader") as mock_loader_cls,
+    ):
+        mock_config = MagicMock()
+        mock_config.config_dir = str(tmp_path / ".cafe")
+        mock_config.get.return_value = {"name": "David", "cli": "claude"}
+        mock_config_manager_cls.return_value = mock_config
+        mock_loader_cls.return_value.load.side_effect = ValueError(
+            "skills.chat.shared references missing skill 'not-installed'"
+        )
+
+        result = launch_chat_session("developer", "invalid-chat")
+
+    assert result == 1
+    mock_run.assert_not_called()
+    printed = " ".join(str(call) for call in mock_print.call_args_list)
+    assert "not-installed" in printed
 
 
 def test_latest_role_iteration_cli_infers_codex_for_legacy_fallback_metadata(

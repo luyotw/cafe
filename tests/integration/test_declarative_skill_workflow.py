@@ -157,3 +157,74 @@ Read {evidence_file} and use {template_file}.
     activated = loader.activate("synthesis", context)
     assert "research/iteration_001/output.md" in activated
     assert "evidence.md" in activated
+
+
+def test_workflow_replace_removes_stale_native_skills(tmp_path: Path, monkeypatch) -> None:
+    """I2 — a replace declaration leaves only the current workflow environment."""
+    monkeypatch.chdir(tmp_path)
+    builtin_root = tmp_path / "builtin"
+    for name in ("phase", "stale-support", "replacement-support"):
+        _write_skill(builtin_root / "skills", name)
+
+    loader = SkillLoader(
+        project_root=tmp_path,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+    loader.discover()
+    generic_phase = GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(loader, project_root=tmp_path, home_dir=tmp_path / "home"),
+    )
+    step = {
+        "skill": "phase",
+        "role": "operator",
+        "output_artifact": "report",
+        "allowed_tools": ["Read"],
+        "valid_intents": ["confirmed"],
+        "on": {"await_agent": "_done"},
+    }
+
+    def execute_with(playbook: dict) -> None:
+        issue_dir = tmp_path / ".cafe" / "issues" / playbook["playbook"]["id"]
+        state = BlackboardStore(issue_dir).load_or_create("run")
+        executor = GenericWorkflowStepExecutor(
+            issue_dir=issue_dir,
+            issue_name=playbook["playbook"]["id"],
+            playbook=playbook,
+            generic_phase=generic_phase,
+            agent_manager=_AgentManager(),
+            git_ops=_GitOps(),
+            role_agent_map={"operator": "David"},
+        )
+        executor.execute_step("run", step, state)
+
+    execute_with(
+        {
+            "playbook": {"id": "workflow-base"},
+            "roles": {"operator": {"default_agent": "David"}},
+            "skills": {"workflow": {"shared": ["stale-support"]}, "chat": {"shared": []}},
+            "steps": {"run": step},
+        }
+    )
+    assert (tmp_path / ".codex" / "skills" / "stale-support").is_dir()
+
+    execute_with(
+        {
+            "playbook": {"id": "workflow-replace"},
+            "roles": {"operator": {"default_agent": "David"}},
+            "skills": {
+                "workflow": {
+                    "shared": ["stale-support"],
+                    "steps": {"run": {"mode": "replace", "skills": ["replacement-support"]}},
+                },
+                "chat": {"shared": []},
+            },
+            "steps": {"run": step},
+        }
+    )
+
+    native_skills = tmp_path / ".codex" / "skills"
+    assert not (native_skills / "stale-support").exists()
+    assert (native_skills / "replacement-support" / "SKILL.md").is_file()
+    assert (native_skills / "phase" / "SKILL.md").is_file()

@@ -369,13 +369,15 @@ def _prepare_chat_environment(
     loader.discover()
     bridge = NativeSkillBridge(loader)
 
-    for skill_name in resolve_playbook_skills(
-        playbook,
-        channel="chat",
-        role=role,
-        step_name=step_name,
-    ):
-        bridge.install_skill(skill_name, agent_cli)
+    bridge.synchronize_skills(
+        resolve_playbook_skills(
+            playbook,
+            channel="chat",
+            role=role,
+            step_name=step_name,
+        ),
+        agent_cli,
+    )
 
 
 def _format_cli_specific_error(agent_cli: AgentCLI, stderr: str, stdout: str) -> Optional[str]:
@@ -431,6 +433,17 @@ def launch_chat_session(
     """
     issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
 
+    playbook_id = "default"
+    try:
+        _current_step, _valid_steps, playbook_id = _load_chat_workflow_context(issue_dir)
+        chat_playbook = PlaybookLoader(project_root=Path.cwd()).load(playbook_id)
+    except Exception as exc:
+        print(
+            f"\n⚠️  Chat cannot start because playbook validation failed for "
+            f"'{playbook_id}': {exc}. Fix the declaration and retry.\n"
+        )
+        return 1
+
     # Load configuration
     config_manager = ConfigManager()
     agent_config = _load_chat_role_config(config_manager, role, issue_dir=issue_dir)
@@ -475,11 +488,6 @@ def launch_chat_session(
     cli_strategy = executor._get_cli_strategy()
 
     _current_step, _valid_steps, _playbook_id = _prepare_chat_handoff_state(issue_dir)
-
-    try:
-        chat_playbook = PlaybookLoader(project_root=Path.cwd()).load(_playbook_id)
-    except Exception:
-        chat_playbook = {}
     _prepare_chat_environment(
         agent_cli=agent_cli,
         playbook=chat_playbook,
