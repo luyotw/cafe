@@ -130,6 +130,7 @@ Read {evidence_file} and use {template_file}.
         playbook={
             "playbook": {"id": "synthesis"},
             "roles": {"researcher": {"default_agent": "David"}},
+            "skills": {"workflow": {"shared": []}, "chat": {"shared": []}},
             "steps": {"synthesis": step},
         },
         generic_phase=generic_phase,

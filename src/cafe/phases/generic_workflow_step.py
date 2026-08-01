@@ -25,6 +25,7 @@ from cafe.core.delta_packet import (
 )
 from cafe.core.git import GitOperations
 from cafe.core.phase import Phase
+from cafe.core.playbook import resolve_playbook_skills
 from cafe.core.resume_user_input import (
     is_followup_iteration,
     is_interrupted_iteration,
@@ -105,7 +106,6 @@ def align_pr_baton_after_execution(
 class GenericWorkflowStepExecutor(Phase):
     """Execute one playbook step without shelling out to legacy CLI commands."""
 
-    SHARED_WORKFLOW_SKILLS = ["cafe-workflow-common", "cafe-github_sync"]
     BLACKBOARD_DIGEST_EVENT_LIMIT = 5
     BLACKBOARD_DIGEST_ARTIFACT_LIMIT = 20
     BLACKBOARD_DIGEST_TEXT_LIMIT = 240
@@ -238,7 +238,12 @@ class GenericWorkflowStepExecutor(Phase):
             contract=contract,
         )
         shared_skill_invocations = self.generic_phase.prepare_skills(
-            skill_names=self.SHARED_WORKFLOW_SKILLS,
+            skill_names=resolve_playbook_skills(
+                self.playbook,
+                channel="workflow",
+                role=step_def.get("role"),
+                step_name=step_name,
+            ),
             agent_cli=agent_cli,
             context=context,
         )

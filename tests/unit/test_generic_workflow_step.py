@@ -872,6 +872,18 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
     playbook = {
         "playbook": {"id": "default"},
         "roles": {"reviewer": {"default_agent": "Richard"}},
+        "skills": {
+            "workflow": {
+                "shared": ["cafe-workflow-common", "cafe-github_sync"],
+                "roles": {
+                    "reviewer": {"mode": "extend", "skills": ["cafe-workflow-common"]},
+                },
+                "steps": {
+                    "review": {"mode": "extend", "skills": ["cafe-github_sync"]},
+                },
+            },
+            "chat": {"shared": []},
+        },
         "steps": {
             "review": {
                 "skill": "review",
@@ -941,6 +953,12 @@ def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(
     playbook = {
         "playbook": {"id": "default"},
         "roles": {"developer": {"default_agent": "David"}},
+        "skills": {
+            "workflow": {
+                "shared": ["cafe-workflow-common", "cafe-github_sync"],
+            },
+            "chat": {"shared": []},
+        },
         "steps": {
             "develop": {
                 "skill": "plan",
@@ -1012,6 +1030,12 @@ def test_generic_workflow_step_prompt_keeps_skill_invocations_only(
     playbook = {
         "playbook": {"id": "default"},
         "roles": {"developer": {"default_agent": "David"}},
+        "skills": {
+            "workflow": {
+                "shared": ["cafe-workflow-common", "cafe-github_sync"],
+            },
+            "chat": {"shared": []},
+        },
         "steps": {
             "pr": {
                 "skill": "pr",
