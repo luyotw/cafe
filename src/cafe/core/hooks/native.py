@@ -619,28 +619,42 @@ class InitialInputProviderResolver(NoOpHook):
                 return HookResult()
 
         legacy_adapter = GitHubIssueFetcher() if legacy_presentation else None
-        result = self._resolve(
+        legacy_empty_seed = self._should_seed_empty_legacy_requirements(
             phase=phase,
             step_name=step_name,
             providers=providers,
             context=kwargs.get("context"),
-            prompt_input_method=(
-                kwargs.get("initial_input_prompt_input_method")
-                or (
-                    legacy_adapter._prompt_and_save_input_method(phase)
-                    if legacy_adapter is not None
-                    else None
-                )
-            ),
-            prompt_manual_input=(
-                kwargs.get("initial_input_prompt_manual_input")
-                or (legacy_adapter._prompt_manual_input if legacy_adapter is not None else None)
-            ),
-            fetch_github_issue=(
-                kwargs.get("initial_input_fetch_github_issue")
-                or (legacy_adapter._fetch_github_issue if legacy_adapter is not None else None)
-            ),
+            legacy_presentation=legacy_presentation,
         )
+        if legacy_empty_seed:
+            result = InitialInputResult(
+                content="",
+                provider=MANUAL_TEXT_PROVIDER,
+                source="non_interactive_no_input",
+            )
+        else:
+            result = self._resolve(
+                phase=phase,
+                step_name=step_name,
+                providers=providers,
+                context=kwargs.get("context"),
+                prompt_input_method=(
+                    kwargs.get("initial_input_prompt_input_method")
+                    or (
+                        legacy_adapter._prompt_and_save_input_method(phase)
+                        if legacy_adapter is not None
+                        else None
+                    )
+                ),
+                prompt_manual_input=(
+                    kwargs.get("initial_input_prompt_manual_input")
+                    or (legacy_adapter._prompt_manual_input if legacy_adapter is not None else None)
+                ),
+                fetch_github_issue=(
+                    kwargs.get("initial_input_fetch_github_issue")
+                    or (legacy_adapter._fetch_github_issue if legacy_adapter is not None else None)
+                ),
+            )
         if artifact is not None:
             assert output_file is not None
             output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -650,7 +664,10 @@ class InitialInputProviderResolver(NoOpHook):
                 else None
             )
             content = formatter(result.content) if callable(formatter) else result.content
-            output_file.write_text(f"{content.rstrip()}\n", encoding="utf-8")
+            if legacy_empty_seed:
+                output_file.write_text(f"{content}\n", encoding="utf-8")
+            else:
+                output_file.write_text(f"{content.rstrip()}\n", encoding="utf-8")
 
         context_updates = (
             {"user_input": result.content}
@@ -667,6 +684,31 @@ class InitialInputProviderResolver(NoOpHook):
                 }
             ],
         )
+
+    def _should_seed_empty_legacy_requirements(
+        self,
+        *,
+        phase: Any,
+        step_name: str,
+        providers: list[Any],
+        context: Any,
+        legacy_presentation: bool,
+    ) -> bool:
+        """Keep built-in manual workflows compatible with their empty initial seed."""
+        if not legacy_presentation or getattr(phase, "interactive", False):
+            return False
+        if MANUAL_TEXT_PROVIDER not in {str(provider) for provider in providers}:
+            return False
+        if self._resolve_prefilled_input(
+            phase=phase,
+            step_name=step_name,
+            context=context,
+        ) is not None:
+            return False
+        configured_provider, _issue_id = load_initial_input_selection(
+            self._load_issue_config(phase)
+        )
+        return configured_provider in (None, MANUAL_TEXT_PROVIDER)
 
     def _resolve(
         self,
