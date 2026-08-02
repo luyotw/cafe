@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# Keep globally installed helper skills current after merge/pull updates.
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+
+if ! "$REPO_ROOT/scripts/auto-sync-global-skills.sh" ORIG_HEAD HEAD; then
+    echo "⚠️  Merge succeeded, but global helper skill auto-sync failed." >&2
+fi
+
+exit 0

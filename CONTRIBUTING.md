@@ -34,6 +34,8 @@ You can contribute to this project in several ways:
     ```bash
     ./setup-hooks.sh
     ```
+    The configured post-commit and post-merge hooks automatically synchronize
+    changed bundled workflow helper skills to supported agent CLIs.
 
 ## Pull Request Process
 

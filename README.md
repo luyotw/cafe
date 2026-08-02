@@ -280,7 +280,16 @@ Configured and CLI-provided directories must exist before the workflow starts.
 
 ### Global Workflow Helper Skills
 
-Install or update CAFE's bundled workflow helper skills for every supported agent CLI:
+CAFE's Git hooks automatically update bundled workflow helper skills after a
+commit or merge changes their source directories. Enable the hooks once per
+checkout:
+
+```bash
+./setup-hooks.sh
+```
+
+Use the explicit command for initial installation, recovery after an automatic
+sync warning, or limiting the target CLIs:
 
 ```bash
 cafe skill sync-global
@@ -356,7 +365,7 @@ CAFE provides additional commands for managing issues and viewing execution deta
 #### Project Setup
 - `cafe init` - Initialize CAFE (crew + settings + default agents/templates). Use `--preset` for non-interactive init
 - `cafe setup` - Configure project settings (playbook, rigor, auto-update) in config.yaml
-- `cafe skill sync-global` - Install or update bundled workflow helper skills for supported agent CLIs
+- `cafe skill sync-global` - Explicitly install, recover, or selectively update bundled workflow helper skills; configured Git hooks keep normal source updates synchronized automatically
 - `cafe crew list` - Display resolved crew configuration (role → CLI chain → models)
 - `cafe crew set-primary` - Set primary CLI for all roles (interactive or `--preset`/`--cli`/`--phase-model` flags)
 - `cafe crew set-fallback` - Edit per-role fallback chains (interactive or `--role --add/--remove` flags)
