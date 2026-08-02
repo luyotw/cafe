@@ -209,6 +209,63 @@ class TestAgentExecutorErrorHandling:
         assert "API rate limit reached" in (exc_info.value.display_message or "")
 
     @pytest.mark.parametrize(
+        "message",
+        [
+            "You've hit your usage limit. Try again later.",
+            "See https://chatgpt.com/codex/settings/usage for usage details.",
+        ],
+    )
+    def test_codex_usage_limit_signals_are_rate_limit(self, message: str) -> None:
+        """Codex's confirmed usage-limit signals should allow crew fallback."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+
+        error_type, display_message = executor._classify_execution_error("Codex", message)
+
+        assert error_type == "rate_limit"
+        assert "API rate limit reached" in (display_message or "")
+
+    @pytest.mark.parametrize(
+        "event",
+        [
+            '{"type":"error","message":"You\'ve hit your usage limit. Try again later."}\n',
+            '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit. Try again later."}}\n',
+        ],
+    )
+    def test_codex_usage_limit_stream_events_are_rate_limit(self, event: str) -> None:
+        """Codex stream error events should preserve their fallbackable category."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"thread.started","thread_id":"abc"}\n',
+            event,
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 1
+        mock_process.terminate.return_value = None
+
+        with patch("subprocess.Popen", return_value=mock_process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor.execute("Test prompt")
+
+        assert exc_info.value.error_type == "rate_limit"
+
+    def test_unrelated_codex_failure_is_not_rate_limit(self) -> None:
+        """Unrelated Codex failures should retain normal non-fallback behavior."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+
+        error_type, display_message = executor._classify_execution_error(
+            "Codex", "Workspace access was denied by the sandbox."
+        )
+
+        assert error_type is None
+        assert display_message is None
+
+    @pytest.mark.parametrize(
         ("cli", "message"),
         [
             (AgentCLI.CLAUDE, "Error: invalid model cafe-nonexistent-model-xyz"),

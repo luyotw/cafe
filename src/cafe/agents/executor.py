@@ -529,6 +529,8 @@ class AgentExecutor:
             "rate limit",
             "status 429",
             "quota exceeded",
+            "you've hit your usage limit",
+            "chatgpt.com/codex/settings/usage",
         ],
     }
 
