@@ -164,7 +164,7 @@ def test_build_prompt_includes_user_input_when_set(tmp_path: Path) -> None:
     assert "Please prioritize the auth module." in prompt
 
 
-def test_build_prompt_includes_resume_input_artifacts_when_set(tmp_path: Path) -> None:
+def test_build_prompt_renders_actionable_current_resume_scope(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     prompt = phase.build_prompt(
         skill_name="cafe-develop",
@@ -173,14 +173,19 @@ def test_build_prompt_includes_resume_input_artifacts_when_set(tmp_path: Path) -
         context={
             "blackboard_path": ".cafe/issues/demo/blackboard.json",
             "next_step_path": ".cafe/issues/demo/next_step.txt",
-            "resume_input_artifacts": "- develop_file: .cafe/issues/demo/develop/output.md",
+            "handoff_summary": "Continue the previous batch.",
+            "user_input": "[system] Resume from where you left off.",
+            "resume_input_artifacts": "- batch_scope: .cafe/issues/demo/batches/current.md",
         },
         output_file=Path("out.md"),
         checklist_file=Path("checklist.md"),
     )
 
-    assert "Current step input artifacts:" in prompt
-    assert "- develop_file: .cafe/issues/demo/develop/output.md" in prompt
+    assert "Current resume scope (declared step inputs):" in prompt
+    assert "Read every listed current source before selecting work." in prompt
+    assert "- batch_scope: .cafe/issues/demo/batches/current.md" in prompt
+    assert "Latest workflow handoff from blackboard:" in prompt
+    assert "Current user input for this iteration:" in prompt
 
 
 def test_build_prompt_omits_resume_input_artifacts_when_unset(tmp_path: Path) -> None:
