@@ -290,10 +290,12 @@ machines can develop CAFE concurrently: each one syncs from its current local
 checkout, and receives another machine's committed skill changes after the
 normal Git push/pull exchange. CAFE does not auto-pull or modify a checkout.
 Concurrent CAFE processes on one machine serialize complete sync batches so
-their destination updates cannot interleave.
+their destination updates cannot interleave. A batch stages every changed copy
+before publishing and rolls the published copies back if any update fails.
 
-CAFE's Git hooks also update the helpers immediately after a commit or merge
-changes their source directories. Enable the hooks once per checkout:
+CAFE's Git hooks also verify and synchronize all managed copies immediately
+after every commit or merge, including amended commits. Enable the hooks once
+per checkout:
 
 ```bash
 ./setup-hooks.sh

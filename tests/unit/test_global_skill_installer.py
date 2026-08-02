@@ -1,12 +1,17 @@
 """Tests for syncing bundled CAFE helper skills into user-level CLI directories."""
 
+import shutil
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
+from time import monotonic
 from unittest.mock import patch
 
 import pytest
 
+from cafe.skills import global_installer
 from cafe.skills.global_installer import (
     DEFAULT_GLOBAL_SKILLS,
     GlobalSkillSyncError,
@@ -165,6 +170,81 @@ def test_sync_global_skills_keeps_previous_copy_when_staging_fails(tmp_path: Pat
     assert skill_file.read_text(encoding="utf-8") == "previous copy\n"
 
 
+def test_sync_global_skills_rolls_back_the_complete_batch_on_publish_failure(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+    sync_global_skills(source_root=source_root, home_dir=home_dir)
+    for name in DEFAULT_GLOBAL_SKILLS:
+        (source_root / name / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: test skill\n---\n\n{name} v2\n",
+            encoding="utf-8",
+        )
+
+    original_publish = global_installer._publish_staged_replacement
+    publish_count = 0
+
+    def fail_second_publish(operation) -> None:
+        nonlocal publish_count
+        publish_count += 1
+        if publish_count == 2:
+            raise OSError("publish failed")
+        original_publish(operation)
+
+    with patch.object(
+        global_installer,
+        "_publish_staged_replacement",
+        side_effect=fail_second_publish,
+    ):
+        summary = sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    assert summary.failed_count == 15
+    assert summary.changed_count == 0
+    for cli_root in EXPECTED_CLI_ROOTS.values():
+        for name in DEFAULT_GLOBAL_SKILLS:
+            installed = (home_dir / cli_root / name / "SKILL.md").read_text(encoding="utf-8")
+            assert f"{name} v1" in installed
+            assert f"{name} v2" not in installed
+        assert not list((home_dir / cli_root).glob(".cafe-*"))
+
+
+def test_publish_failure_after_backup_move_restores_the_previous_copy(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+    sync_global_skills(
+        source_root=source_root,
+        home_dir=home_dir,
+        skill_names=["use-cafe-workflow"],
+        cli_names=["codex"],
+    )
+    source = source_root / "use-cafe-workflow"
+    destination = home_dir / ".codex/skills/use-cafe-workflow"
+    (source / "SKILL.md").write_text(
+        "---\nname: use-cafe-workflow\ndescription: test skill\n---\n\nversion 2\n",
+        encoding="utf-8",
+    )
+    operation = global_installer._stage_directory_replacement(
+        cli="codex",
+        skill="use-cafe-workflow",
+        source=source,
+        destination=destination,
+        status="updated",
+    )
+    shutil.rmtree(operation.staged)
+
+    with pytest.raises(OSError):
+        global_installer._publish_staged_replacement(operation)
+
+    assert "use-cafe-workflow v1" in (destination / "SKILL.md").read_text(encoding="utf-8")
+    assert not operation.backup.exists()
+    global_installer._cleanup_staged_replacement(operation)
+
+
 def test_auto_sync_serializes_concurrent_initialization(tmp_path: Path) -> None:
     source_root = tmp_path / "bundled-skills"
     home_dir = tmp_path / "home"
@@ -241,7 +321,7 @@ def test_auto_sync_retries_after_failed_install_instead_of_recording_state(
     _write_default_sources(source_root)
 
     with patch(
-        "cafe.skills.global_installer._replace_directory",
+        "cafe.skills.global_installer._stage_directory_replacement",
         side_effect=OSError("copy failed"),
     ):
         failed = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
@@ -253,6 +333,82 @@ def test_auto_sync_retries_after_failed_install_instead_of_recording_state(
     retried = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
     assert retried is not None
     assert retried.installed_count == 15
+
+
+def test_explicit_default_sync_updates_state_before_returning_to_an_older_source(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+    auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+    state_file = home_dir / ".cafe/cache/global-skills-sync.json"
+    v1_state = state_file.read_text(encoding="utf-8")
+    source_file = source_root / "use-cafe-workflow/SKILL.md"
+    v1_source = source_file.read_text(encoding="utf-8")
+
+    source_file.write_text(
+        "---\nname: use-cafe-workflow\ndescription: test skill\n---\n\nversion 2\n",
+        encoding="utf-8",
+    )
+    hook_sync = sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    assert hook_sync.updated_count == 5
+    assert state_file.read_text(encoding="utf-8") != v1_state
+
+    source_file.write_text(v1_source, encoding="utf-8")
+    returned_to_v1 = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    assert returned_to_v1 is not None
+    assert returned_to_v1.updated_count == 5
+    assert "use-cafe-workflow v1" in (
+        home_dir / ".codex/skills/use-cafe-workflow/SKILL.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_auto_sync_skips_quickly_when_another_process_holds_the_lock(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+
+    with global_installer._global_skill_sync_lock(
+        home_dir,
+        timeout_seconds=1,
+    ):
+        started = monotonic()
+        summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+        elapsed = monotonic() - started
+
+    assert summary is None
+    assert elapsed < 0.5
+
+
+def test_auto_sync_lock_contention_is_safe_across_processes(tmp_path: Path) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+    code = (
+        "from pathlib import Path; import sys; "
+        "from cafe.skills.global_installer import auto_sync_global_skills; "
+        "print(auto_sync_global_skills(source_root=Path(sys.argv[1]), "
+        "home_dir=Path(sys.argv[2])))"
+    )
+
+    with global_installer._global_skill_sync_lock(
+        home_dir,
+        timeout_seconds=1,
+    ):
+        result = subprocess.run(
+            [sys.executable, "-c", code, str(source_root), str(home_dir)],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+
+    assert result.stdout.strip() == "None"
 
 
 def test_auto_sync_tracks_each_development_machine_independently(tmp_path: Path) -> None:

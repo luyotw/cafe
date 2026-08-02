@@ -34,8 +34,8 @@ You can contribute to this project in several ways:
     ```bash
     ./setup-hooks.sh
     ```
-    The configured post-commit and post-merge hooks automatically synchronize
-    changed bundled workflow helper skills to supported agent CLIs. CAFE CLI
+    The configured post-commit and post-merge hooks verify and synchronize
+    bundled workflow helper skills to supported agent CLIs. CAFE CLI
     startup also uses a per-machine fingerprint as a cross-check for fresh
     checkouts and package upgrades. Concurrent development machines keep
     independent sync state and pick up each other's committed changes through

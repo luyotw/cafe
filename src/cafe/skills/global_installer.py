@@ -32,7 +32,8 @@ GLOBAL_CLI_SKILL_DIRS = {
 
 GlobalSkillSyncStatus = Literal["installed", "updated", "unchanged", "failed"]
 AUTO_SYNC_STATE_VERSION = 1
-GLOBAL_SKILL_SYNC_LOCK_TIMEOUT_SECONDS = 10
+EXPLICIT_SYNC_LOCK_TIMEOUT_SECONDS = 10
+AUTO_SYNC_LOCK_TIMEOUT_SECONDS = 0.05
 
 
 class GlobalSkillSyncError(ValueError):
@@ -91,6 +92,22 @@ class _ResolvedGlobalSkillSync:
     home_dir: Path
     skill_names: list[str]
     cli_names: list[str]
+
+
+@dataclass
+class _StagedGlobalSkillReplacement:
+    """One destination staged for a batch publish or rollback."""
+
+    cli: str
+    skill: str
+    source: Path
+    destination: Path
+    status: GlobalSkillSyncStatus
+    workspace: Path
+    staged: Path
+    backup: Path
+    had_destination: bool
+    published: bool = False
 
 
 def _default_source_root() -> Path:
@@ -178,14 +195,18 @@ def _auto_sync_state_file(home_dir: Path) -> Path:
 
 
 @contextmanager
-def _global_skill_sync_lock(home_dir: Path) -> Iterator[None]:
+def _global_skill_sync_lock(
+    home_dir: Path,
+    *,
+    timeout_seconds: float,
+) -> Iterator[None]:
     """Serialize one sync batch with SQLite's cross-platform process lock."""
     lock_file = home_dir / ".cafe" / "cache" / "global-skills-sync.lock.sqlite3"
     lock_file.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(
         lock_file,
         isolation_level=None,
-        timeout=GLOBAL_SKILL_SYNC_LOCK_TIMEOUT_SECONDS,
+        timeout=timeout_seconds,
     )
     try:
         connection.execute("BEGIN EXCLUSIVE")
@@ -221,6 +242,19 @@ def _build_auto_sync_state(
     }
 
 
+def _is_complete_default_sync(request: _ResolvedGlobalSkillSync) -> bool:
+    return request.skill_names == list(DEFAULT_GLOBAL_SKILLS) and request.cli_names == list(
+        GLOBAL_CLI_SKILL_DIRS
+    )
+
+
+def _expected_auto_sync_state(
+    request: _ResolvedGlobalSkillSync,
+) -> dict[str, object]:
+    fingerprint = _source_fingerprint(request.source_root, request.skill_names)
+    return _build_auto_sync_state(request, fingerprint)
+
+
 def _auto_sync_state_matches(
     state_file: Path,
     expected_state: dict[str, object],
@@ -252,8 +286,22 @@ def _write_auto_sync_state(
             temporary.unlink()
 
 
-def _replace_directory(source: Path, destination: Path) -> None:
-    """Replace one destination from a fully copied sibling staging directory."""
+def _remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    elif path.exists() or path.is_symlink():
+        path.unlink()
+
+
+def _stage_directory_replacement(
+    *,
+    cli: str,
+    skill: str,
+    source: Path,
+    destination: Path,
+    status: GlobalSkillSyncStatus,
+) -> _StagedGlobalSkillReplacement:
+    """Copy one source beside its destination without publishing it."""
     skills_root = destination.parent
     if skills_root.is_symlink() and not skills_root.exists():
         raise OSError(f"Skills directory is a dangling symlink: {skills_root}")
@@ -268,21 +316,72 @@ def _replace_directory(source: Path, destination: Path) -> None:
 
     try:
         shutil.copytree(source, staged, symlinks=True)
-        if had_destination:
-            destination.rename(backup)
-        try:
-            staged.rename(destination)
-        except Exception:
-            if destination.exists() or destination.is_symlink():
-                if destination.is_dir() and not destination.is_symlink():
-                    shutil.rmtree(destination)
-                else:
-                    destination.unlink()
-            if had_destination and (backup.exists() or backup.is_symlink()):
-                backup.rename(destination)
-            raise
-    finally:
+    except Exception:
         shutil.rmtree(workspace, ignore_errors=True)
+        raise
+
+    return _StagedGlobalSkillReplacement(
+        cli=cli,
+        skill=skill,
+        source=source,
+        destination=destination,
+        status=status,
+        workspace=workspace,
+        staged=staged,
+        backup=backup,
+        had_destination=had_destination,
+    )
+
+
+def _publish_staged_replacement(operation: _StagedGlobalSkillReplacement) -> None:
+    """Publish one staged destination while retaining its rollback backup."""
+    if operation.had_destination:
+        operation.destination.rename(operation.backup)
+    try:
+        operation.staged.rename(operation.destination)
+    except Exception:
+        if operation.had_destination and (
+            operation.backup.exists() or operation.backup.is_symlink()
+        ):
+            operation.backup.rename(operation.destination)
+        raise
+    operation.published = True
+
+
+def _rollback_staged_replacement(operation: _StagedGlobalSkillReplacement) -> None:
+    """Restore one previously published destination."""
+    if not operation.published:
+        return
+    _remove_path(operation.destination)
+    if operation.had_destination:
+        operation.backup.rename(operation.destination)
+    operation.published = False
+
+
+def _cleanup_staged_replacement(
+    operation: _StagedGlobalSkillReplacement,
+    *,
+    preserve_backup: bool = False,
+) -> None:
+    if preserve_backup and (operation.backup.exists() or operation.backup.is_symlink()):
+        return
+    shutil.rmtree(operation.workspace, ignore_errors=True)
+
+
+def _replacement_result(
+    operation: _StagedGlobalSkillReplacement,
+    *,
+    status: Optional[GlobalSkillSyncStatus] = None,
+    reason: Optional[str] = None,
+) -> GlobalSkillSyncResult:
+    return GlobalSkillSyncResult(
+        cli=operation.cli,
+        skill=operation.skill,
+        source=operation.source,
+        destination=operation.destination,
+        status=status or operation.status,
+        reason=reason,
+    )
 
 
 def _resolve_global_skill_sync(
@@ -305,9 +404,10 @@ def _resolve_global_skill_sync(
 def _sync_resolved_global_skills(
     request: _ResolvedGlobalSkillSync,
 ) -> GlobalSkillSyncSummary:
-    """Synchronize one validated request while the caller holds the batch lock."""
+    """Stage every change, then publish or roll back the complete batch."""
 
-    results: list[GlobalSkillSyncResult] = []
+    entries: list[GlobalSkillSyncResult | _StagedGlobalSkillReplacement] = []
+    staging_failure: Optional[str] = None
     for cli in request.cli_names:
         skills_root = request.home_dir / GLOBAL_CLI_SKILL_DIRS[cli]
         for skill in request.skill_names:
@@ -316,21 +416,39 @@ def _sync_resolved_global_skills(
             existed = destination.exists() or destination.is_symlink()
             try:
                 if existed and _trees_equal(source, destination):
-                    status: GlobalSkillSyncStatus = "unchanged"
-                else:
-                    _replace_directory(source, destination)
-                    status = "updated" if existed else "installed"
-                results.append(
-                    GlobalSkillSyncResult(
-                        cli=cli,
-                        skill=skill,
-                        source=source,
-                        destination=destination,
-                        status=status,
+                    entries.append(
+                        GlobalSkillSyncResult(
+                            cli=cli,
+                            skill=skill,
+                            source=source,
+                            destination=destination,
+                            status="unchanged",
+                        )
                     )
-                )
+                elif staging_failure is not None:
+                    entries.append(
+                        GlobalSkillSyncResult(
+                            cli=cli,
+                            skill=skill,
+                            source=source,
+                            destination=destination,
+                            status="failed",
+                            reason=f"Batch staging aborted: {staging_failure}",
+                        )
+                    )
+                else:
+                    entries.append(
+                        _stage_directory_replacement(
+                            cli=cli,
+                            skill=skill,
+                            source=source,
+                            destination=destination,
+                            status="updated" if existed else "installed",
+                        )
+                    )
             except Exception as exc:
-                results.append(
+                staging_failure = f"{cli}/{skill}: {exc}"
+                entries.append(
                     GlobalSkillSyncResult(
                         cli=cli,
                         skill=skill,
@@ -341,6 +459,69 @@ def _sync_resolved_global_skills(
                     )
                 )
 
+    operations = [entry for entry in entries if isinstance(entry, _StagedGlobalSkillReplacement)]
+    if staging_failure is not None:
+        for operation in operations:
+            _cleanup_staged_replacement(operation)
+        results = [
+            _replacement_result(
+                entry,
+                status="failed",
+                reason=f"Batch staging aborted: {staging_failure}",
+            )
+            if isinstance(entry, _StagedGlobalSkillReplacement)
+            else entry
+            for entry in entries
+        ]
+        return GlobalSkillSyncSummary(
+            source_root=request.source_root,
+            home_dir=request.home_dir,
+            results=results,
+        )
+
+    published: list[_StagedGlobalSkillReplacement] = []
+    publish_failure: Optional[str] = None
+    rollback_failures: list[str] = []
+    for operation in operations:
+        try:
+            _publish_staged_replacement(operation)
+            published.append(operation)
+        except Exception as exc:
+            publish_failure = f"{operation.cli}/{operation.skill}: {exc}"
+            for published_operation in reversed(published):
+                try:
+                    _rollback_staged_replacement(published_operation)
+                except Exception as rollback_exc:
+                    rollback_failures.append(
+                        f"{published_operation.cli}/{published_operation.skill}: {rollback_exc}"
+                    )
+            break
+
+    if publish_failure is not None:
+        reason = f"Batch publish rolled back: {publish_failure}"
+        if rollback_failures:
+            reason += f"; rollback failures: {', '.join(rollback_failures)}"
+        for operation in operations:
+            _cleanup_staged_replacement(operation, preserve_backup=True)
+        results = [
+            _replacement_result(entry, status="failed", reason=reason)
+            if isinstance(entry, _StagedGlobalSkillReplacement)
+            else entry
+            for entry in entries
+        ]
+        return GlobalSkillSyncSummary(
+            source_root=request.source_root,
+            home_dir=request.home_dir,
+            results=results,
+        )
+
+    for operation in operations:
+        _cleanup_staged_replacement(operation)
+
+    results = [
+        _replacement_result(entry) if isinstance(entry, _StagedGlobalSkillReplacement) else entry
+        for entry in entries
+    ]
     return GlobalSkillSyncSummary(
         source_root=request.source_root,
         home_dir=request.home_dir,
@@ -368,8 +549,20 @@ def sync_global_skills(
         skill_names=skill_names,
         cli_names=cli_names,
     )
-    with _global_skill_sync_lock(request.home_dir):
-        return _sync_resolved_global_skills(request)
+    with _global_skill_sync_lock(
+        request.home_dir,
+        timeout_seconds=EXPLICIT_SYNC_LOCK_TIMEOUT_SECONDS,
+    ):
+        expected_state = (
+            _expected_auto_sync_state(request) if _is_complete_default_sync(request) else None
+        )
+        summary = _sync_resolved_global_skills(request)
+        if expected_state is not None and summary.failed_count == 0:
+            _write_auto_sync_state(
+                _auto_sync_state_file(request.home_dir),
+                expected_state,
+            )
+        return summary
 
 
 def auto_sync_global_skills(
@@ -388,22 +581,29 @@ def auto_sync_global_skills(
         source_root=source_root,
         home_dir=home_dir,
     )
-    with _global_skill_sync_lock(request.home_dir):
-        fingerprint = _source_fingerprint(request.source_root, request.skill_names)
-        state_file = _auto_sync_state_file(request.home_dir)
-        expected_state = _build_auto_sync_state(request, fingerprint)
-
-        if _auto_sync_state_matches(
-            state_file,
-            expected_state,
-        ) and _global_skill_destinations_exist(
+    try:
+        with _global_skill_sync_lock(
             request.home_dir,
-            request.skill_names,
-            request.cli_names,
+            timeout_seconds=AUTO_SYNC_LOCK_TIMEOUT_SECONDS,
         ):
-            return None
+            state_file = _auto_sync_state_file(request.home_dir)
+            expected_state = _expected_auto_sync_state(request)
 
-        summary = _sync_resolved_global_skills(request)
-        if summary.failed_count == 0:
-            _write_auto_sync_state(state_file, expected_state)
-        return summary
+            if _auto_sync_state_matches(
+                state_file,
+                expected_state,
+            ) and _global_skill_destinations_exist(
+                request.home_dir,
+                request.skill_names,
+                request.cli_names,
+            ):
+                return None
+
+            summary = _sync_resolved_global_skills(request)
+            if summary.failed_count == 0:
+                _write_auto_sync_state(state_file, expected_state)
+            return summary
+    except sqlite3.OperationalError as exc:
+        if "locked" in str(exc).lower():
+            return None
+        raise
