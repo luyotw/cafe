@@ -27,7 +27,6 @@ from cafe.core.git import GitOperations
 from cafe.core.phase import Phase
 from cafe.core.playbook import resolve_playbook_skills
 from cafe.core.resume_user_input import (
-    is_followup_iteration,
     is_interrupted_iteration,
     load_prior_run_context,
     prior_cli_and_session,
@@ -547,22 +546,30 @@ class GenericWorkflowStepExecutor(Phase):
         else:
             updated.pop("user_input", None)
 
-        # On follow-up, surface current input artifact paths so the agent
-        # re-grounds on the current scope instead of inferring from prior work.
+        # On an interrupted run, surface only the current step's declared
+        # Blackboard artifact paths so the agent re-grounds on the current scope.
         previous_data = self._load_previous_iteration_data()
         current_data = self._load_current_iteration_data()
-        if is_followup_iteration(
+        step_def = self.playbook.get("steps", {}).get(step_name, {})
+        declared_artifacts = (
+            step_def.get("input_artifacts") if isinstance(step_def, dict) else None
+        )
+        if (
+            blackboard_state is not None
+            and isinstance(declared_artifacts, list)
+            and is_interrupted_iteration(
             iteration=self.iteration,
             previous_iteration_data=previous_data,
             current_iteration_data=current_data,
+            )
         ):
             artifact_lines = []
-            declared = self._declared_prompt_input_placeholders(step_name)
-            fallback_keys = ("develop_file", "spec_file", "plan_file", "feedback_file")
-            keys = list(dict.fromkeys(declared + fallback_keys))
-            for key in keys:
-                if updated.get(key):
-                    artifact_lines.append(f"- {key}: {updated[key]}")
+            for artifact_name in declared_artifacts:
+                name = str(artifact_name)
+                artifact = blackboard_state.artifacts.get(name)
+                path = artifact.path if artifact is not None else None
+                if isinstance(path, str) and path.strip():
+                    artifact_lines.append(f"- {name}: {path}")
             if artifact_lines:
                 updated["resume_input_artifacts"] = "\n".join(artifact_lines)
 
@@ -702,16 +709,6 @@ class GenericWorkflowStepExecutor(Phase):
             packet,
             expected_sha256=expected_sha256,
         )
-
-    def _declared_prompt_input_placeholders(self, step_name: str) -> tuple[str, ...]:
-        """Return declared prompt-input keys for the current step in contract order."""
-        steps = self.playbook.get("steps", {})
-        step_def = steps.get(step_name) if isinstance(steps, dict) else None
-        if not isinstance(step_def, dict):
-            return ()
-        skill_name = self._resolve_skill_name(step_def, self.iteration)
-        contract = self._get_skill_loader().get_workflow_contract(skill_name)
-        return tuple(mapping.placeholder for mapping in contract.prompt_inputs)
 
     def _detect_written_output_files(self) -> List[Path]:
         if self._current_output_file and self._current_output_file.exists():

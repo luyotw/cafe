@@ -3686,8 +3686,10 @@ def test_execute_step_interrupted_fresh_session_surfaces_declared_current_scope(
     assert manager.prompts
     prompt = manager.prompts[0]
     assert "Current resume scope (declared step inputs):" in prompt
-    assert str(replacement) in prompt
-    assert str(historical) not in prompt
+    scope = prompt.split("Current resume scope (declared step inputs):", maxsplit=1)[1]
+    scope = scope.split("Current user input for this iteration:", maxsplit=1)[0]
+    assert str(replacement) in scope
+    assert str(historical) not in scope
 
 
 def _make_alignment_executor(tmp_path: Path, issue_name: str, step_def: dict, user_input: str):
