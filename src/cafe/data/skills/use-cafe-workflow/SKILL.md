@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.10.2
+version: 1.10.3
 ---
 
 # Use CAFE Workflow
@@ -537,8 +537,10 @@ turn a workflow incident into open-ended framework refactoring.
 - Never patch generated artifacts, installed package contents, or global CLI
   skill copies as the source fix. After changing bundled authoring skills in
   the CAFE repository, commit the source change; configured post-commit and
-  post-merge hooks update installed copies automatically. If a hook reports a
-  sync failure, use `cafe skill sync-global` as the explicit recovery command.
+  post-merge hooks update installed copies automatically. On other machines,
+  CAFE CLI startup performs a per-machine fingerprint check and updates stale
+  or missing copies. If automatic sync reports a failure, use
+  `cafe skill sync-global` as the explicit recovery command.
 - Run each writer skill's strict validation after repair. If planned
   confirmation gates change, rerun `cafe playbook confirmation-gates <id>` and
   reconfirm the issue kickoff contract before the next `cafe make`.

@@ -280,16 +280,26 @@ Configured and CLI-provided directories must exist before the workflow starts.
 
 ### Global Workflow Helper Skills
 
-CAFE's Git hooks automatically update bundled workflow helper skills after a
-commit or merge changes their source directories. Enable the hooks once per
-checkout:
+Every `cafe` CLI startup performs a fast per-machine fingerprint check and
+automatically installs or updates bundled workflow helper skills when their
+sources changed or an installed copy is missing. This covers fresh machines,
+new checkouts, and package upgrades without a manual sync command.
+
+The fingerprint and installed copies are local to each machine. Multiple
+machines can develop CAFE concurrently: each one syncs from its current local
+checkout, and receives another machine's committed skill changes after the
+normal Git push/pull exchange. CAFE does not auto-pull or overwrite a dirty
+checkout.
+
+CAFE's Git hooks also update the helpers immediately after a commit or merge
+changes their source directories. Enable the hooks once per checkout:
 
 ```bash
 ./setup-hooks.sh
 ```
 
-Use the explicit command for initial installation, recovery after an automatic
-sync warning, or limiting the target CLIs:
+Use the explicit command for recovery after an automatic sync warning, repairing
+manually edited destination content, or limiting the target CLIs:
 
 ```bash
 cafe skill sync-global

@@ -203,6 +203,36 @@ def _check_repo_entrypoint_alignment() -> bool:
     return False
 
 
+def _auto_sync_global_helper_skills() -> None:
+    """Keep global helper skills current on each real CAFE CLI startup."""
+    if os.getenv("CAFE_SKIP_GLOBAL_SKILL_SYNC"):
+        return
+    if sys.argv[1:3] == ["skill", "sync-global"]:
+        return
+
+    from cafe.skills.global_installer import auto_sync_global_skills
+
+    try:
+        summary = auto_sync_global_skills()
+    except Exception as exc:
+        console.print(f"[yellow]⚠ Global helper skill auto-sync failed: {exc}[/yellow]")
+        return
+
+    if summary is None:
+        return
+    if summary.failed_count:
+        console.print(
+            f"[yellow]⚠ Global helper skill auto-sync failed for "
+            f"{summary.failed_count} installation(s). "
+            f"Run `cafe skill sync-global` for details.[/yellow]"
+        )
+    elif summary.changed_count:
+        console.print(
+            f"[dim]✓ Synchronized {summary.changed_count} global helper "
+            f"skill installation(s)[/dim]"
+        )
+
+
 def _build_dynamic_step_click_command(step_name: str) -> Optional[click.Command]:
     """Build a dynamic CLI command for one playbook step."""
     playbook_name = _resolve_runtime_playbook_name()
@@ -1218,6 +1248,7 @@ def main() -> Optional[int]:
     _check_dependencies()
     if not _check_repo_entrypoint_alignment():
         return 1
+    _auto_sync_global_helper_skills()
     # Check for updates and auto-upgrade if available
     _check_for_updates()
     app()

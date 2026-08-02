@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import tempfile
@@ -27,6 +28,7 @@ GLOBAL_CLI_SKILL_DIRS = {
 }
 
 GlobalSkillSyncStatus = Literal["installed", "updated", "unchanged", "failed"]
+AUTO_SYNC_STATE_VERSION = 1
 
 
 class GlobalSkillSyncError(ValueError):
@@ -117,8 +119,7 @@ def _validate_sources(source_root: Path, skill_names: Optional[list[str]]) -> li
         metadata = read_skill_frontmatter(skill_file)
         if metadata.get("name") != name:
             raise GlobalSkillSyncError(
-                f"Bundled skill '{name}' has mismatched frontmatter name "
-                f"'{metadata.get('name')}'"
+                f"Bundled skill '{name}' has mismatched frontmatter name '{metadata.get('name')}'"
             )
     return names
 
@@ -150,6 +151,80 @@ def _trees_equal(source: Path, destination: Path) -> bool:
     if destination.is_symlink() or not destination.is_dir():
         return False
     return _tree_manifest(source) == _tree_manifest(destination)
+
+
+def _source_fingerprint(source_root: Path, skill_names: list[str]) -> str:
+    payload = [(skill, _tree_manifest(source_root / skill)) for skill in skill_names]
+    serialized = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _auto_sync_state_file(home_dir: Path) -> Path:
+    return home_dir / ".cafe" / "cache" / "global-skills-sync.json"
+
+
+def _global_skill_destinations_exist(
+    home_dir: Path,
+    skill_names: list[str],
+    cli_names: list[str],
+) -> bool:
+    return all(
+        (home_dir / GLOBAL_CLI_SKILL_DIRS[cli] / skill / "SKILL.md").is_file()
+        for cli in cli_names
+        for skill in skill_names
+    )
+
+
+def _auto_sync_state_matches(
+    state_file: Path,
+    *,
+    source_root: Path,
+    fingerprint: str,
+    skill_names: list[str],
+    cli_names: list[str],
+) -> bool:
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return state == {
+        "version": AUTO_SYNC_STATE_VERSION,
+        "source_root": str(source_root),
+        "fingerprint": fingerprint,
+        "skills": skill_names,
+        "clis": cli_names,
+    }
+
+
+def _write_auto_sync_state(
+    state_file: Path,
+    *,
+    source_root: Path,
+    fingerprint: str,
+    skill_names: list[str],
+    cli_names: list[str],
+) -> None:
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": AUTO_SYNC_STATE_VERSION,
+        "source_root": str(source_root),
+        "fingerprint": fingerprint,
+        "skills": skill_names,
+        "clis": cli_names,
+    }
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{state_file.name}.",
+        dir=state_file.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, sort_keys=True)
+            handle.write("\n")
+        os.replace(temporary, state_file)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def _replace_directory(source: Path, destination: Path) -> None:
@@ -243,3 +318,52 @@ def sync_global_skills(
         home_dir=resolved_home_dir,
         results=results,
     )
+
+
+def auto_sync_global_skills(
+    *,
+    source_root: Optional[Path] = None,
+    home_dir: Optional[Path] = None,
+) -> Optional[GlobalSkillSyncSummary]:
+    """Synchronize defaults only when sources changed or an install is missing.
+
+    The per-machine fingerprint makes normal CAFE startup cheap while ensuring a
+    fresh checkout, package upgrade, or another machine installs the bundled
+    helper skills on its first invocation. Explicit ``sync-global`` remains the
+    recovery path for destination content that exists but was manually edited.
+    """
+    resolved_source_root = (source_root or _default_source_root()).expanduser().resolve()
+    resolved_home_dir = (home_dir or _default_home_dir()).expanduser().resolve()
+    selected_clis = _validate_cli_names(None)
+    selected_skills = _validate_sources(resolved_source_root, None)
+    fingerprint = _source_fingerprint(resolved_source_root, selected_skills)
+    state_file = _auto_sync_state_file(resolved_home_dir)
+
+    if _auto_sync_state_matches(
+        state_file,
+        source_root=resolved_source_root,
+        fingerprint=fingerprint,
+        skill_names=selected_skills,
+        cli_names=selected_clis,
+    ) and _global_skill_destinations_exist(
+        resolved_home_dir,
+        selected_skills,
+        selected_clis,
+    ):
+        return None
+
+    summary = sync_global_skills(
+        source_root=resolved_source_root,
+        home_dir=resolved_home_dir,
+        skill_names=selected_skills,
+        cli_names=selected_clis,
+    )
+    if summary.failed_count == 0:
+        _write_auto_sync_state(
+            state_file,
+            source_root=resolved_source_root,
+            fingerprint=fingerprint,
+            skill_names=selected_skills,
+            cli_names=selected_clis,
+        )
+    return summary
