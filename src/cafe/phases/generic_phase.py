@@ -220,7 +220,11 @@ class GenericPhase:
                 )
         if context and context.get("resume_input_artifacts"):
             runtime_context.extend(
-                ["Current step input artifacts:", context["resume_input_artifacts"]]
+                [
+                    "Current resume scope (declared step inputs):",
+                    "Read every listed current source before selecting work.",
+                    context["resume_input_artifacts"],
+                ]
             )
         if context and context.get("delta_packet"):
             runtime_context.extend(

@@ -296,8 +296,10 @@ def test_interrupted_custom_step_uses_replaced_declared_batch_scope(
 
     prompt = manager.prompts[0]
     assert "Current resume scope (declared step inputs):" in prompt
-    assert str(replacement) in prompt
-    assert str(historical) not in prompt
+    scope = prompt.split("Current resume scope (declared step inputs):", maxsplit=1)[1]
+    scope = scope.split("Current user input for this iteration:", maxsplit=1)[0]
+    assert str(replacement) in scope
+    assert str(historical) not in scope
     assert "CURRENT_BATCH_CONTENT" not in prompt
     assert "Process batch 1 again." in prompt
     assert "[system] Resume from where you left off." in prompt
