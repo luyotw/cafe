@@ -53,3 +53,18 @@ def test_startup_auto_sync_reports_compact_change_summary(monkeypatch) -> None:
         cli._auto_sync_global_helper_skills()
 
     assert "Synchronized 5" in str(mock_console.print.call_args)
+
+
+def test_startup_auto_sync_warns_without_blocking_the_command(monkeypatch) -> None:
+    monkeypatch.setattr(cli.sys, "argv", ["cafe", "status"])
+
+    with (
+        patch(
+            "cafe.skills.global_installer.auto_sync_global_skills",
+            side_effect=RuntimeError("lock timeout"),
+        ),
+        patch.object(cli, "console") as mock_console,
+    ):
+        cli._auto_sync_global_helper_skills()
+
+    assert "auto-sync failed: lock timeout" in str(mock_console.print.call_args)

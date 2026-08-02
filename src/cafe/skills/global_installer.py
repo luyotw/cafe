@@ -6,7 +6,10 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
@@ -29,6 +32,7 @@ GLOBAL_CLI_SKILL_DIRS = {
 
 GlobalSkillSyncStatus = Literal["installed", "updated", "unchanged", "failed"]
 AUTO_SYNC_STATE_VERSION = 1
+GLOBAL_SKILL_SYNC_LOCK_TIMEOUT_SECONDS = 10
 
 
 class GlobalSkillSyncError(ValueError):
@@ -77,6 +81,16 @@ class GlobalSkillSyncSummary:
 
     def _count(self, status: GlobalSkillSyncStatus) -> int:
         return sum(1 for result in self.results if result.status == status)
+
+
+@dataclass(frozen=True)
+class _ResolvedGlobalSkillSync:
+    """Validated paths and names shared by explicit and automatic sync."""
+
+    source_root: Path
+    home_dir: Path
+    skill_names: list[str]
+    cli_names: list[str]
 
 
 def _default_source_root() -> Path:
@@ -163,6 +177,25 @@ def _auto_sync_state_file(home_dir: Path) -> Path:
     return home_dir / ".cafe" / "cache" / "global-skills-sync.json"
 
 
+@contextmanager
+def _global_skill_sync_lock(home_dir: Path) -> Iterator[None]:
+    """Serialize one sync batch with SQLite's cross-platform process lock."""
+    lock_file = home_dir / ".cafe" / "cache" / "global-skills-sync.lock.sqlite3"
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(
+        lock_file,
+        isolation_level=None,
+        timeout=GLOBAL_SKILL_SYNC_LOCK_TIMEOUT_SECONDS,
+    )
+    try:
+        connection.execute("BEGIN EXCLUSIVE")
+        yield
+    finally:
+        if connection.in_transaction:
+            connection.rollback()
+        connection.close()
+
+
 def _global_skill_destinations_exist(
     home_dir: Path,
     skill_names: list[str],
@@ -175,43 +208,35 @@ def _global_skill_destinations_exist(
     )
 
 
+def _build_auto_sync_state(
+    request: _ResolvedGlobalSkillSync,
+    fingerprint: str,
+) -> dict[str, object]:
+    return {
+        "version": AUTO_SYNC_STATE_VERSION,
+        "source_root": str(request.source_root),
+        "fingerprint": fingerprint,
+        "skills": request.skill_names,
+        "clis": request.cli_names,
+    }
+
+
 def _auto_sync_state_matches(
     state_file: Path,
-    *,
-    source_root: Path,
-    fingerprint: str,
-    skill_names: list[str],
-    cli_names: list[str],
+    expected_state: dict[str, object],
 ) -> bool:
     try:
-        state = json.loads(state_file.read_text(encoding="utf-8"))
+        state: object = json.loads(state_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    return state == {
-        "version": AUTO_SYNC_STATE_VERSION,
-        "source_root": str(source_root),
-        "fingerprint": fingerprint,
-        "skills": skill_names,
-        "clis": cli_names,
-    }
+    return state == expected_state
 
 
 def _write_auto_sync_state(
     state_file: Path,
-    *,
-    source_root: Path,
-    fingerprint: str,
-    skill_names: list[str],
-    cli_names: list[str],
+    state: dict[str, object],
 ) -> None:
     state_file.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "version": AUTO_SYNC_STATE_VERSION,
-        "source_root": str(source_root),
-        "fingerprint": fingerprint,
-        "skills": skill_names,
-        "clis": cli_names,
-    }
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{state_file.name}.",
         dir=state_file.parent,
@@ -219,7 +244,7 @@ def _write_auto_sync_state(
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, sort_keys=True)
+            json.dump(state, handle, sort_keys=True)
             handle.write("\n")
         os.replace(temporary, state_file)
     finally:
@@ -260,30 +285,33 @@ def _replace_directory(source: Path, destination: Path) -> None:
         shutil.rmtree(workspace, ignore_errors=True)
 
 
-def sync_global_skills(
+def _resolve_global_skill_sync(
     *,
     source_root: Optional[Path] = None,
     home_dir: Optional[Path] = None,
     skill_names: Optional[list[str]] = None,
     cli_names: Optional[list[str]] = None,
-) -> GlobalSkillSyncSummary:
-    """Install or update bundled skills in selected user-level CLI directories.
-
-    Sources always come from CAFE's bundled skill catalog, not project or global
-    overrides. All sources and CLI names are validated before the home directory
-    is changed. Each destination is staged before replacement so a copy failure
-    does not remove the previously installed skill.
-    """
+) -> _ResolvedGlobalSkillSync:
     resolved_source_root = (source_root or _default_source_root()).expanduser().resolve()
     resolved_home_dir = (home_dir or _default_home_dir()).expanduser().resolve()
-    selected_clis = _validate_cli_names(cli_names)
-    selected_skills = _validate_sources(resolved_source_root, skill_names)
+    return _ResolvedGlobalSkillSync(
+        source_root=resolved_source_root,
+        home_dir=resolved_home_dir,
+        skill_names=_validate_sources(resolved_source_root, skill_names),
+        cli_names=_validate_cli_names(cli_names),
+    )
+
+
+def _sync_resolved_global_skills(
+    request: _ResolvedGlobalSkillSync,
+) -> GlobalSkillSyncSummary:
+    """Synchronize one validated request while the caller holds the batch lock."""
 
     results: list[GlobalSkillSyncResult] = []
-    for cli in selected_clis:
-        skills_root = resolved_home_dir / GLOBAL_CLI_SKILL_DIRS[cli]
-        for skill in selected_skills:
-            source = resolved_source_root / skill
+    for cli in request.cli_names:
+        skills_root = request.home_dir / GLOBAL_CLI_SKILL_DIRS[cli]
+        for skill in request.skill_names:
+            source = request.source_root / skill
             destination = skills_root / skill
             existed = destination.exists() or destination.is_symlink()
             try:
@@ -314,10 +342,34 @@ def sync_global_skills(
                 )
 
     return GlobalSkillSyncSummary(
-        source_root=resolved_source_root,
-        home_dir=resolved_home_dir,
+        source_root=request.source_root,
+        home_dir=request.home_dir,
         results=results,
     )
+
+
+def sync_global_skills(
+    *,
+    source_root: Optional[Path] = None,
+    home_dir: Optional[Path] = None,
+    skill_names: Optional[list[str]] = None,
+    cli_names: Optional[list[str]] = None,
+) -> GlobalSkillSyncSummary:
+    """Install or update bundled skills in selected user-level CLI directories.
+
+    Sources always come from CAFE's bundled skill catalog, not project or global
+    overrides. Validation completes before acquiring one per-machine batch lock,
+    and each destination is staged before replacement so failures do not remove
+    the previous copy.
+    """
+    request = _resolve_global_skill_sync(
+        source_root=source_root,
+        home_dir=home_dir,
+        skill_names=skill_names,
+        cli_names=cli_names,
+    )
+    with _global_skill_sync_lock(request.home_dir):
+        return _sync_resolved_global_skills(request)
 
 
 def auto_sync_global_skills(
@@ -332,38 +384,26 @@ def auto_sync_global_skills(
     helper skills on its first invocation. Explicit ``sync-global`` remains the
     recovery path for destination content that exists but was manually edited.
     """
-    resolved_source_root = (source_root or _default_source_root()).expanduser().resolve()
-    resolved_home_dir = (home_dir or _default_home_dir()).expanduser().resolve()
-    selected_clis = _validate_cli_names(None)
-    selected_skills = _validate_sources(resolved_source_root, None)
-    fingerprint = _source_fingerprint(resolved_source_root, selected_skills)
-    state_file = _auto_sync_state_file(resolved_home_dir)
-
-    if _auto_sync_state_matches(
-        state_file,
-        source_root=resolved_source_root,
-        fingerprint=fingerprint,
-        skill_names=selected_skills,
-        cli_names=selected_clis,
-    ) and _global_skill_destinations_exist(
-        resolved_home_dir,
-        selected_skills,
-        selected_clis,
-    ):
-        return None
-
-    summary = sync_global_skills(
-        source_root=resolved_source_root,
-        home_dir=resolved_home_dir,
-        skill_names=selected_skills,
-        cli_names=selected_clis,
+    request = _resolve_global_skill_sync(
+        source_root=source_root,
+        home_dir=home_dir,
     )
-    if summary.failed_count == 0:
-        _write_auto_sync_state(
+    with _global_skill_sync_lock(request.home_dir):
+        fingerprint = _source_fingerprint(request.source_root, request.skill_names)
+        state_file = _auto_sync_state_file(request.home_dir)
+        expected_state = _build_auto_sync_state(request, fingerprint)
+
+        if _auto_sync_state_matches(
             state_file,
-            source_root=resolved_source_root,
-            fingerprint=fingerprint,
-            skill_names=selected_skills,
-            cli_names=selected_clis,
-        )
-    return summary
+            expected_state,
+        ) and _global_skill_destinations_exist(
+            request.home_dir,
+            request.skill_names,
+            request.cli_names,
+        ):
+            return None
+
+        summary = _sync_resolved_global_skills(request)
+        if summary.failed_count == 0:
+            _write_auto_sync_state(state_file, expected_state)
+        return summary

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
+
+from cafe.skills.global_installer import DEFAULT_GLOBAL_SKILLS
 
 REPO_ROOT = Path(__file__).parents[2]
 SYNC_SCRIPT = REPO_ROOT / "scripts" / "auto-sync-global-skills.sh"
@@ -58,9 +61,7 @@ def test_auto_sync_runs_only_when_default_global_skill_sources_change(tmp_path: 
     _commit_all(repo, "skill update")
     subprocess.run([str(SYNC_SCRIPT)], cwd=repo, env=env, check=True)
 
-    assert sync_log.read_text(encoding="utf-8").strip() == (
-        "-m cafe.ui.cli skill sync-global"
-    )
+    assert sync_log.read_text(encoding="utf-8").strip() == "-m cafe.ui.cli skill sync-global"
     assert str(repo / "src") in env_log.read_text(encoding="utf-8")
 
 
@@ -77,3 +78,10 @@ def test_auto_sync_hooks_are_valid_and_delegate_to_change_detector() -> None:
         content = hook.read_text(encoding="utf-8")
         assert "auto-sync-global-skills.sh" in content
         assert revisions in content
+
+
+def test_hook_change_detector_tracks_the_installer_default_skill_set() -> None:
+    content = SYNC_SCRIPT.read_text(encoding="utf-8")
+    tracked_skills = set(re.findall(r"src/cafe/data/skills/([^/]+)/", content))
+
+    assert tracked_skills == set(DEFAULT_GLOBAL_SKILLS)

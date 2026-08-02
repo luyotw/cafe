@@ -288,8 +288,9 @@ new checkouts, and package upgrades without a manual sync command.
 The fingerprint and installed copies are local to each machine. Multiple
 machines can develop CAFE concurrently: each one syncs from its current local
 checkout, and receives another machine's committed skill changes after the
-normal Git push/pull exchange. CAFE does not auto-pull or overwrite a dirty
-checkout.
+normal Git push/pull exchange. CAFE does not auto-pull or modify a checkout.
+Concurrent CAFE processes on one machine serialize complete sync batches so
+their destination updates cannot interleave.
 
 CAFE's Git hooks also update the helpers immediately after a commit or merge
 changes their source directories. Enable the hooks once per checkout:

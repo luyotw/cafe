@@ -1,6 +1,8 @@
 """Tests for syncing bundled CAFE helper skills into user-level CLI directories."""
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from unittest.mock import patch
 
 import pytest
@@ -8,6 +10,7 @@ import pytest
 from cafe.skills.global_installer import (
     DEFAULT_GLOBAL_SKILLS,
     GlobalSkillSyncError,
+    GlobalSkillSyncSummary,
     auto_sync_global_skills,
     sync_global_skills,
 )
@@ -160,6 +163,27 @@ def test_sync_global_skills_keeps_previous_copy_when_staging_fails(tmp_path: Pat
     assert summary.failed_count == 1
     assert summary.results[0].reason == "copy failed"
     assert skill_file.read_text(encoding="utf-8") == "previous copy\n"
+
+
+def test_auto_sync_serializes_concurrent_initialization(tmp_path: Path) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+    worker_count = 4
+    barrier = Barrier(worker_count)
+
+    def run_auto_sync() -> GlobalSkillSyncSummary | None:
+        barrier.wait()
+        return auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [executor.submit(run_auto_sync) for _ in range(worker_count)]
+        results = [future.result() for future in futures]
+
+    summaries = [result for result in results if result is not None]
+    assert len(summaries) == 1
+    assert summaries[0].installed_count == 15
+    assert summaries[0].failed_count == 0
 
 
 def test_auto_sync_uses_per_machine_fingerprint_and_detects_source_updates(

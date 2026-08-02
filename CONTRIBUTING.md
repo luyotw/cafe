@@ -39,7 +39,7 @@ You can contribute to this project in several ways:
     startup also uses a per-machine fingerprint as a cross-check for fresh
     checkouts and package upgrades. Concurrent development machines keep
     independent sync state and pick up each other's committed changes through
-    the normal Git push/pull flow; CAFE never auto-pulls a dirty checkout.
+    the normal Git push/pull flow; CAFE never auto-pulls or modifies a checkout.
 
 ## Pull Request Process
 
