@@ -263,7 +263,14 @@ def _auto_sync_state_matches(
         state: object = json.loads(state_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    return state == expected_state
+    if not isinstance(state, dict):
+        return False
+
+    # ``source_root`` records which checkout last published this content, but
+    # it is not part of cache validity. Linked worktrees with identical helper
+    # skills must share the same per-machine fingerprint fast path.
+    validity_keys = ("version", "fingerprint", "skills", "clis")
+    return all(state.get(key) == expected_state.get(key) for key in validity_keys)
 
 
 def _write_auto_sync_state(

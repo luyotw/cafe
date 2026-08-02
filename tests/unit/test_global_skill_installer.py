@@ -1,5 +1,6 @@
 """Tests for syncing bundled CAFE helper skills into user-level CLI directories."""
 
+import json
 import shutil
 import subprocess
 import sys
@@ -289,6 +290,27 @@ def test_auto_sync_uses_per_machine_fingerprint_and_detects_source_updates(
     assert updated is not None
     assert updated.updated_count == 5
     assert updated.unchanged_count == 10
+
+
+def test_auto_sync_reuses_fingerprint_across_identical_worktree_sources(
+    tmp_path: Path,
+) -> None:
+    source_a = tmp_path / "repo/src/cafe/data/skills"
+    source_b = tmp_path / "repo/.cafe/worktrees/issue/src/cafe/data/skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_a)
+    _write_default_sources(source_b)
+
+    installed = auto_sync_global_skills(source_root=source_a, home_dir=home_dir)
+    unchanged = auto_sync_global_skills(source_root=source_b, home_dir=home_dir)
+
+    assert installed is not None
+    assert installed.installed_count == 15
+    assert unchanged is None
+    state = json.loads(
+        (home_dir / ".cafe/cache/global-skills-sync.json").read_text(encoding="utf-8")
+    )
+    assert state["source_root"] == str(source_a.resolve())
 
 
 def test_auto_sync_repairs_missing_destination_even_when_fingerprint_matches(
