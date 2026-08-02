@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -228,3 +229,146 @@ def test_workflow_replace_removes_stale_native_skills(tmp_path: Path, monkeypatc
     assert not (native_skills / "stale-support").exists()
     assert (native_skills / "replacement-support" / "SKILL.md").is_file()
     assert (native_skills / "phase" / "SKILL.md").is_file()
+
+
+def test_interrupted_custom_step_uses_replaced_declared_batch_scope(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """I1 — a resumed custom step receives only its latest declared batch source."""
+    monkeypatch.chdir(tmp_path)
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "synthesis")
+    loader = SkillLoader(
+        project_root=tmp_path,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+    loader.discover()
+    generic_phase = GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(loader, project_root=tmp_path, home_dir=tmp_path / "home"),
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "resumed-custom-batch"
+    iteration_dir = issue_dir / "synthesis" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps({"cli": "codex", "session_id": "interrupted-session"}),
+        encoding="utf-8",
+    )
+    replacement = issue_dir / "batches" / "batch-2.md"
+    replacement.parent.mkdir(parents=True)
+    replacement.write_text("CURRENT_BATCH_CONTENT", encoding="utf-8")
+    historical = issue_dir / "history" / "batch-1.md"
+    historical.parent.mkdir(parents=True)
+    historical.write_text("HISTORICAL_BATCH_CONTENT", encoding="utf-8")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("synthesis")
+    state.handoff_summary = "Process batch 1 again."
+    store.set_artifact(state, "batch_scope", str(replacement))
+    store.set_artifact(state, "historical_output", str(historical))
+    step = {
+        "skill": "synthesis",
+        "role": "researcher",
+        "input_artifacts": ["batch_scope"],
+        "output_artifact": "report",
+        "allowed_tools": ["Read"],
+        "valid_intents": ["confirmed"],
+        "on": {"await_agent": "_done"},
+    }
+    manager = _AgentManager()
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="resumed-custom-batch",
+        playbook={
+            "playbook": {"id": "synthesis"},
+            "roles": {"researcher": {"default_agent": "David"}},
+            "skills": {"workflow": {"shared": []}, "chat": {"shared": []}},
+            "steps": {"synthesis": step},
+        },
+        generic_phase=generic_phase,
+        agent_manager=manager,
+        git_ops=_GitOps(),
+        role_agent_map={"researcher": "David"},
+    )
+    executor.step_user_inputs["synthesis"] = "[system] Resume from where you left off."
+
+    executor.execute_step("synthesis", step, state)
+
+    prompt = manager.prompts[0]
+    assert "Current resume scope (declared step inputs):" in prompt
+    scope = prompt.split("Current resume scope (declared step inputs):", maxsplit=1)[1]
+    scope = scope.split("Current user input for this iteration:", maxsplit=1)[0]
+    assert str(replacement) in scope
+    assert str(historical) not in scope
+    assert "CURRENT_BATCH_CONTENT" not in prompt
+    assert "Process batch 1 again." in prompt
+    assert "[system] Resume from where you left off." in prompt
+
+
+def test_execution_without_declared_scope_does_not_invent_resume_scope(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """I2 — fresh and resumed custom steps omit grounding without declared inputs."""
+    monkeypatch.chdir(tmp_path)
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "synthesis")
+    loader = SkillLoader(
+        project_root=tmp_path,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+    loader.discover()
+    generic_phase = GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(loader, project_root=tmp_path, home_dir=tmp_path / "home"),
+    )
+    step = {
+        "skill": "synthesis",
+        "role": "researcher",
+        "input_artifacts": [],
+        "output_artifact": "report",
+        "allowed_tools": ["Read"],
+        "valid_intents": ["confirmed"],
+        "on": {"await_agent": "_done"},
+    }
+
+    def execute(issue_name: str, *, interrupted: bool) -> str:
+        issue_dir = tmp_path / ".cafe" / "issues" / issue_name
+        if interrupted:
+            iteration_dir = issue_dir / "synthesis" / "iteration_001"
+            iteration_dir.mkdir(parents=True)
+            (iteration_dir / "iteration.json").write_text(
+                json.dumps({"cli": "codex", "session_id": "interrupted-session"}),
+                encoding="utf-8",
+            )
+        store = BlackboardStore(issue_dir)
+        state = store.load_or_create("synthesis")
+        historical = issue_dir / "history" / "prior-output.md"
+        historical.parent.mkdir(parents=True)
+        historical.write_text("HISTORICAL_OUTPUT", encoding="utf-8")
+        store.set_artifact(state, "historical_output", str(historical))
+        manager = _AgentManager()
+        executor = GenericWorkflowStepExecutor(
+            issue_dir=issue_dir,
+            issue_name=issue_name,
+            playbook={
+                "playbook": {"id": "synthesis"},
+                "roles": {"researcher": {"default_agent": "David"}},
+                "skills": {"workflow": {"shared": []}, "chat": {"shared": []}},
+                "steps": {"synthesis": step},
+            },
+            generic_phase=generic_phase,
+            agent_manager=manager,
+            git_ops=_GitOps(),
+            role_agent_map={"researcher": "David"},
+        )
+        executor.execute_step("synthesis", step, state)
+        return manager.prompts[0]
+
+    fresh_prompt = execute("fresh-custom-step", interrupted=False)
+    resumed_prompt = execute("resumed-custom-step", interrupted=True)
+
+    assert "Current resume scope (declared step inputs):" not in fresh_prompt
+    assert "Current resume scope (declared step inputs):" not in resumed_prompt
+    assert "HISTORICAL_OUTPUT" not in fresh_prompt
+    assert "HISTORICAL_OUTPUT" not in resumed_prompt

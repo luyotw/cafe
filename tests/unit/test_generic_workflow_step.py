@@ -3412,35 +3412,33 @@ def test_apply_resume_to_runtime_context_keeps_real_input(tmp_path: Path) -> Non
     )
 
 
-def test_apply_resume_to_runtime_context_adds_resume_input_artifacts(tmp_path: Path) -> None:
+def test_apply_resume_to_runtime_context_projects_declared_scope_for_interrupted_run(
+    tmp_path: Path,
+) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input"
     spec_dir = issue_dir / "spec"
-    prev_iter = spec_dir / "iteration_001"
-    prev_iter.mkdir(parents=True)
-    (prev_iter / "iteration.json").write_text(
-        json.dumps(
-            {
-                "cli": "codex",
-                "session_id": "session-1",
-                "end_time": "2026-05-23T00:00:00+08:00",
-            }
-        ),
-        encoding="utf-8",
+    current_iter = spec_dir / "iteration_001"
+    current_iter.mkdir(parents=True)
+    (current_iter / "iteration.json").write_text(
+        json.dumps({"cli": "codex", "session_id": "session-1"}), encoding="utf-8"
     )
 
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
     executor.phase_dir = spec_dir
-    executor.iteration = 2
+    executor.iteration = 1
     executor._step_agent_name = "Roger"
+    executor.playbook["steps"]["spec"]["input_artifacts"] = ["batch_scope"]
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    replacement = issue_dir / "inputs" / "batch-2.md"
+    BlackboardStore(issue_dir).set_artifact(state, "batch_scope", str(replacement))
 
     updated = executor._apply_resume_to_runtime_context(
         {"develop_file": ".cafe/issues/demo/develop/output.md"},
         "spec",
+        state,
     )
 
-    assert (
-        updated["resume_input_artifacts"] == "- develop_file: .cafe/issues/demo/develop/output.md"
-    )
+    assert updated["resume_input_artifacts"] == f"- batch_scope: {replacement}"
 
 
 def test_apply_resume_to_runtime_context_omits_artifacts_on_fresh_run(tmp_path: Path) -> None:
@@ -3458,26 +3456,28 @@ def test_apply_resume_to_runtime_context_omits_artifacts_on_fresh_run(tmp_path: 
     assert "resume_input_artifacts" not in updated
 
 
-def test_apply_resume_to_runtime_context_lists_all_present_artifacts(tmp_path: Path) -> None:
+def test_apply_resume_to_runtime_context_excludes_undeclared_and_fallback_scope(
+    tmp_path: Path,
+) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input"
     spec_dir = issue_dir / "spec"
-    prev_iter = spec_dir / "iteration_001"
-    prev_iter.mkdir(parents=True)
-    (prev_iter / "iteration.json").write_text(
-        json.dumps(
-            {
-                "cli": "codex",
-                "session_id": "session-1",
-                "end_time": "2026-05-23T00:00:00+08:00",
-            }
-        ),
-        encoding="utf-8",
+    current_iter = spec_dir / "iteration_001"
+    current_iter.mkdir(parents=True)
+    (current_iter / "iteration.json").write_text(
+        json.dumps({"cli": "codex", "session_id": "session-1"}), encoding="utf-8"
     )
 
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
     executor.phase_dir = spec_dir
-    executor.iteration = 2
+    executor.iteration = 1
     executor._step_agent_name = "Roger"
+    executor.playbook["steps"]["spec"]["input_artifacts"] = ["batch_scope"]
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    current_scope = issue_dir / "inputs" / "current.md"
+    historical = issue_dir / "history" / "old.md"
+    store = BlackboardStore(issue_dir)
+    store.set_artifact(state, "batch_scope", str(current_scope))
+    store.set_artifact(state, "historical_output", str(historical))
 
     updated = executor._apply_resume_to_runtime_context(
         {
@@ -3487,43 +3487,77 @@ def test_apply_resume_to_runtime_context_lists_all_present_artifacts(tmp_path: P
             "spec_file": "spec.md",
         },
         "spec",
+        state,
     )
 
-    assert updated["resume_input_artifacts"] == "\n".join(
-        [
-            "- develop_file: develop.md",
-            "- spec_file: spec.md",
-            "- plan_file: plan.md",
-            "- feedback_file: review.md",
-        ]
-    )
+    assert updated["resume_input_artifacts"] == f"- batch_scope: {current_scope}"
+    assert "historical_output" not in updated["resume_input_artifacts"]
+    assert "develop_file" not in updated["resume_input_artifacts"]
 
 
-def test_apply_resume_to_runtime_context_lists_declared_custom_artifacts(tmp_path: Path) -> None:
-    """Resume context preserves a custom skill's declared placeholder name."""
+def test_apply_resume_to_runtime_context_uses_latest_declared_artifact_path(tmp_path: Path) -> None:
+    """U3 — interrupted runs read the current Blackboard path, not stale prompt data."""
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-custom-artifacts"
     phase_dir = issue_dir / "synthesize"
-    previous = phase_dir / "iteration_001"
-    previous.mkdir(parents=True)
-    (previous / "iteration.json").write_text(
-        json.dumps({"cli": "codex", "session_id": "session-1"}), encoding="utf-8"
-    )
-    current = phase_dir / "iteration_002"
-    current.mkdir()
+    current = phase_dir / "iteration_001"
+    current.mkdir(parents=True)
     (current / "iteration.json").write_text(
         json.dumps({"cli": "codex", "session_id": "session-1"}), encoding="utf-8"
     )
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
-    executor.playbook = {"steps": {"synthesize": {"skill": "synthesis", "role": "developer"}}}
+    executor.playbook = {
+        "steps": {
+            "synthesize": {
+                "skill": "synthesis",
+                "role": "developer",
+                "input_artifacts": ["batch_scope"],
+            }
+        }
+    }
     executor.phase_dir = phase_dir
-    executor.iteration = 2
+    executor.iteration = 1
     executor._step_agent_name = "David"
+    state = BlackboardStore(issue_dir).load_or_create("synthesize")
+    replacement = issue_dir / "inputs" / "batch-2.md"
+    BlackboardStore(issue_dir).set_artifact(state, "batch_scope", str(replacement))
 
     updated = executor._apply_resume_to_runtime_context(
-        {"evidence_file": "research-notes.md"}, "synthesize"
+        {"evidence_file": "batch-1.md"}, "synthesize", state
     )
 
-    assert updated["resume_input_artifacts"] == "- evidence_file: research-notes.md"
+    assert updated["resume_input_artifacts"] == f"- batch_scope: {replacement}"
+
+
+def test_apply_resume_to_runtime_context_omits_scope_for_completed_correction_iteration(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input"
+    spec_dir = issue_dir / "spec"
+    previous = spec_dir / "iteration_001"
+    previous.mkdir(parents=True)
+    (previous / "iteration.json").write_text(
+        json.dumps(
+            {
+                "cli": "codex",
+                "session_id": "session-1",
+                "end_time": "2026-05-23T00:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = spec_dir
+    executor.iteration = 2
+    executor._step_agent_name = "Roger"
+    executor.playbook["steps"]["spec"]["input_artifacts"] = []
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+
+    updated = executor._apply_resume_to_runtime_context(
+        {"user_input": "Apply review feedback."}, "spec", state
+    )
+
+    assert "resume_input_artifacts" not in updated
+    assert updated["user_input"] == "Apply review feedback."
 
 
 def test_execute_step_same_session_resume_keeps_real_input_in_prompt_and_user_input_md(
@@ -3592,39 +3626,31 @@ def test_execute_step_same_session_resume_keeps_real_input_in_prompt_and_user_in
     )
 
 
-def test_execute_step_resume_includes_current_input_artifacts_in_prompt(
+def test_execute_step_interrupted_fresh_session_surfaces_declared_current_scope(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-artifacts"
     develop_dir = issue_dir / "develop"
-    prev_iter = develop_dir / "iteration_001"
-    prev_iter.mkdir(parents=True)
-    (prev_iter / "iteration.json").write_text(
-        json.dumps(
-            {
-                "cli": "codex",
-                "session_id": "session-1",
-                "end_time": "2026-05-23T00:00:00+08:00",
-            }
-        ),
+    current_iter = develop_dir / "iteration_001"
+    current_iter.mkdir(parents=True)
+    (current_iter / "iteration.json").write_text(
+        json.dumps({"cli": "codex", "session_id": "interrupted-session"}),
         encoding="utf-8",
     )
 
-    code_file = issue_dir / "develop" / "iteration_001" / "output.md"
-    code_file.write_text("Batch 2 scoped work", encoding="utf-8")
-    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
-    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
-    spec_file.parent.mkdir(parents=True, exist_ok=True)
-    plan_file.parent.mkdir(parents=True, exist_ok=True)
-    spec_file.write_text("# Spec\n", encoding="utf-8")
-    plan_file.write_text("# Plan\n", encoding="utf-8")
+    replacement = issue_dir / "inputs" / "batch-2.md"
+    replacement.parent.mkdir(parents=True)
+    replacement.write_text("current batch", encoding="utf-8")
+    historical = issue_dir / "history" / "batch-1.md"
+    historical.parent.mkdir(parents=True)
+    historical.write_text("already completed", encoding="utf-8")
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("develop")
-    store.set_artifact(state, "spec", str(spec_file))
-    store.set_artifact(state, "plan", str(plan_file))
-    store.set_artifact(state, "code", str(code_file))
+    state.handoff_summary = "Continue the old batch."
+    store.set_artifact(state, "batch_scope", str(replacement))
+    store.set_artifact(state, "historical_output", str(historical))
 
     playbook = {
         "playbook": {"id": "default"},
@@ -3633,7 +3659,7 @@ def test_execute_step_resume_includes_current_input_artifacts_in_prompt(
             "develop": {
                 "skill": "cafe-develop",
                 "role": "developer",
-                "input_artifacts": ["code"],
+                "input_artifacts": ["batch_scope"],
                 "output_artifact": "code",
                 "allowed_tools": ["Read"],
                 "valid_intents": ["confirmed"],
@@ -3654,17 +3680,16 @@ def test_execute_step_resume_includes_current_input_artifacts_in_prompt(
         git_ops=FakeGitOperations(),
         role_agent_map={"developer": "David"},
     )
-    executor.iteration = 2
 
     executor.execute_step("develop", playbook["steps"]["develop"], state)
 
     assert manager.prompts
     prompt = manager.prompts[0]
-    assert "Current step input artifacts:" in prompt
-    assert (
-        "- develop_file: ./.cafe/issues/issue-resume-artifacts/develop/iteration_001/output.md"
-        in prompt
-    )
+    assert "Current resume scope (declared step inputs):" in prompt
+    scope = prompt.split("Current resume scope (declared step inputs):", maxsplit=1)[1]
+    scope = scope.split("Current user input for this iteration:", maxsplit=1)[0]
+    assert str(replacement) in scope
+    assert str(historical) not in scope
 
 
 def _make_alignment_executor(tmp_path: Path, issue_name: str, step_def: dict, user_input: str):
