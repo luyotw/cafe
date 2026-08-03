@@ -1,7 +1,7 @@
 ---
 name: cafe-develop
 description: "依計畫進行程式開發與測試"
-version: 1.4.0
+version: 1.5.0
 workflow:
   human_tasks:
     - id: no-change-decision
@@ -76,6 +76,8 @@ Read your agent file: {agent_file}
 - 每輪完成後更新 checklist
 - 維持既有 commit 風格與程式碼註解語言
 - 優先重用現有模式與工具
+- Repo 搜尋與輸出上限：請依 shared skill「cafe-workflow-common」的 **Bounded repository inspection**；本 skill 不重複敘述。
+- 最終 full test receipt 與 review reuse：請依 shared skill「cafe-workflow-common」的 **Develop-to-review verification receipts**；本 skill 不重複敘述。
 - 與 reviewer 往返、blackboard/baton 更新、以及 user 仲裁等跨 phase 規則：請依 shared skill「cafe-workflow-common」的 **Develop and review disagreement protocol** 與 **Shared Rules**；本 skill 不重複敘述。
 
 ## Output

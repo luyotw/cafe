@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.10.3
+version: 1.11.0
 ---
 
 # Use CAFE Workflow
@@ -499,6 +499,15 @@ from confirmed strategic material.
 - Use `cafe show <step> questions` when the workflow is waiting for clarification.
 - Use `cafe show <step> checklist` to see what the agent still must complete.
 - Read `.cafe/issues/<issue>/blackboard.json` only when command output is insufficient to understand the current handoff.
+
+## Correction Session A/B Evidence
+
+When measuring whether fresh correction sessions reduce cost, read
+`references/correction_ab_experiment.md` and follow its paired protocol. Use the
+bundled `scripts/analyze_correction_ab.py` to report per-pair results, medians,
+and 95% confidence intervals. A normal workflow comparison, rate-card estimate,
+or raw-token-only comparison is not controlled evidence and must not be used to
+claim the 30% credit target.
 
 ## Bounded Self-Diagnosis And Declarative Repair
 

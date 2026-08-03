@@ -57,6 +57,8 @@ how the skill consumes them:
 
 ```yaml
 workflow:
+  required_tools:
+    - "Bash(cafe verification check:*)"
   prompt_inputs:
     - artifacts: [research_notes]
       placeholder: evidence_file
@@ -76,6 +78,15 @@ workflow:
   output_templates:
     catalog: research-report
 ```
+
+- `required_tools` lists tool contracts the skill cannot execute correctly
+  without. Every playbook step selecting the skill must grant each declaration
+  through `allowed_tools`; strict playbook validation rejects missing grants.
+- An exact grant is preferred. A broad grant for the same tool, such as `Bash`
+  or `Bash(*)`, also satisfies a narrower declaration, but should only be used
+  when the step genuinely needs that breadth.
+- Keep optional diagnostics out of `required_tools`; otherwise every binding is
+  forced to grant a tool the normal path does not need.
 
 ### Human-task policy contract
 
@@ -328,6 +339,7 @@ skill 文件內不要假設只有某一條 playbook 會用它。
 - [ ] 若 phase 同時 execute 舊 plan 並產生下一份 plan，已依 §15 區分 `{plan_file}` 與 `{output_file}`、先完成舊 checklist、處理 `not_required` 分支
 - [ ] implementation tasks 位於 plan artifact 並使用 `- [ ]`／`- [x]`；沒有另建重複的 plan-derived checklist
 - [ ] planned user approval 同時有 phase routing decision 與 playbook `on.confirm_output`；reactive interruption 未混入 kickoff 候選
+- [ ] 必要工具已集中宣告在 `workflow.required_tools`，所有綁定 step 的 `allowed_tools` 均滿足宣告，選用診斷工具沒有誤列為必要工具
 - [ ] 若 planned gate set 有變更，已執行 `cafe playbook confirmation-gates <id>` 並回報 issue contract 需要重新確認
 
 ## 14. Plan → Execute phase pair 的 artifact contract

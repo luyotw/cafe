@@ -220,6 +220,7 @@ steps:
   qa:
     skill: cafe-review
     role: reviewer
+    allowed_tools: ["Bash(cafe verification check:*)"]
     valid_intents: [confirmed]
     on:
       await_agent: _done

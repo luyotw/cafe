@@ -654,6 +654,7 @@ def validate_playbook(
         _validate_step_chat_role(step_name, step, model.roles)
         _validate_step_skills(step_name, step, skill_loader)
         _validate_step_required_prompt_inputs(step_name, step, skill_loader)
+        _validate_step_required_tools(step_name, step, skill_loader)
         _validate_step_human_tasks(step_name, step, steps, skill_loader)
         _validate_script_hook_stages(step_name, step.hooks)
         _validate_targets(step_name, step.allowed_goto, steps, "allowed_goto")
@@ -951,6 +952,34 @@ def _validate_step_required_prompt_inputs(
                     f"[{candidates}], but input_artifacts declares "
                     f"{sorted(declared_artifacts)}"
                 )
+
+
+def _tool_requirement_satisfied(required: str, allowed_tools: List[str]) -> bool:
+    if required in allowed_tools:
+        return True
+    tool_name = required.split("(", 1)[0]
+    return tool_name in allowed_tools or f"{tool_name}(*)" in allowed_tools
+
+
+def _validate_step_required_tools(
+    step_name: str,
+    step: StepConfig,
+    skill_loader: SkillLoader,
+) -> None:
+    """Reject a step that cannot execute its selected skill's declared tools."""
+    selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
+    for skill_name in selectors:
+        contract = skill_loader.get_workflow_contract(skill_name)
+        missing = [
+            required
+            for required in contract.required_tools
+            if not _tool_requirement_satisfied(required, step.allowed_tools)
+        ]
+        if missing:
+            raise ValueError(
+                f"Step {step_name!r}, skill {canonical_skill_name(skill_name)!r}: "
+                f"allowed_tools is missing required declarations {missing}"
+            )
 
 
 def _validate_step_human_tasks(

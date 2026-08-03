@@ -234,6 +234,9 @@ Prefer an explicit forward skip:
 ## 8. Tools, Hooks, And Prepare
 
 - Use standard tool names such as `Read`, `Edit`, `Write`, `Grep`, `Glob`, `Bash`, `WebFetch`, and `WebSearch`. Scope Bash when a narrower command contract is practical.
+- Resolve `workflow.required_tools` for every selected skill. Each declaration
+  needs an exact `allowed_tools` grant, or a deliberately broader grant for the
+  same tool such as `Bash` / `Bash(*)`; validation rejects missing grants.
 - `UserInputCollector` belongs on phases that pause and resume with user feedback.
 - `PermissionRetryHandler` belongs on execution phases that may hit permission boundaries.
 - Use specialized hooks only when their implementation exists and their lifecycle stage is valid.
@@ -360,4 +363,5 @@ assert steps["bridge"]["output_artifact"] == "plan"
 - [ ] Optional phases have a safe forward skip and a `not_required` contract.
 - [ ] User review loops remain in the phase that owns the current output.
 - [ ] Tools and hooks are sufficient but not gratuitously broad.
+- [ ] Every selected skill's `workflow.required_tools` declarations are satisfied by `allowed_tools`.
 - [ ] Strict validation, show, and simulation results are reported.

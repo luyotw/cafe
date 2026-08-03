@@ -1,7 +1,7 @@
 ---
 name: cafe-workflow-common
 description: Use this skill at the start of any CAFE workflow phase to load the bounded workflow digest, identify the current baton state, and ground the phase in shared context before reading phase-specific artifacts.
-version: 1.3.0
+version: 1.4.0
 ---
 
 # Workflow Common
@@ -128,6 +128,21 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 - Use workflow-defined step names for agent handoff, or built-in targets `user` and `done`.
 - Control workflow transitions by writing the baton — this is the precise control surface.
 
+## Bounded repository inspection
+
+- Locate candidate files with `rg -l` or a path-limited `rg` before printing matching lines. Then inspect only the relevant files with at most 3–5 lines of context.
+- Keep each read or search result below roughly 200 lines and 32 KiB. Narrow the path or pattern before reading more; do not raise the cap merely because the first query was broad.
+- Exclude generated runtime data from repository searches. Never include `streaming.jsonl` in a normal search or read it to recover context already available in the bounded digest, artifacts, or iteration metadata.
+- Do not search `.cafe/` together with source and test trees. Query a specific issue artifact or metadata file only when the current handoff cannot be resolved from the runtime-provided paths.
+- Do not read a phase's own `streaming.jsonl` or full unbounded blackboard as a progress summary. Those are diagnostic evidence for a concrete failure, not normal workflow context.
+
+## Develop-to-review verification receipts
+
+- The develop phase records its final repository-defined full test result with `cafe verification run`. The receipt is iteration-local, machine-generated, and valid only for the clean Git HEAD that was tested.
+- The review phase validates that evidence with `cafe verification check` and confirms the reported command is the repository-defined full suite required by the plan and test policy. A valid full receipt replaces a duplicate run of the same full suite or coverage command; it does not replace static review or requirement checks. For a concrete review risk, `cafe verification focus` accepts only a direct pytest receipt plus relative test-file or node-id selectors; it rejects shell/script runners and never replaces or edits the full receipt.
+- A missing, failed, stale, wrong-scope, or dirty-worktree receipt is not reusable. Review routes the exact problem back to develop instead of creating or repairing develop evidence itself.
+- Develop may run targeted tests and failing full attempts while changing code. It creates the reusable final full receipt only after all tracked changes are committed. If that run fails, fix and commit before replacing the receipt; after a passing receipt, do not change HEAD or tracked files.
+
 ## What Not To Do
 - Do not re-explain the shared workflow model in every phase artifact.
 - Do not invent a new handoff format outside the baton mechanism.
@@ -145,6 +160,8 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 | Spec/plan GitHub issue sync (`scripts/sync_github.sh`) | `cafe-github_sync` skill (script contract and stdout JSON) |
 | PR: local artifact vs remote publish ordering | Generic runtime prompt repeats PR-only lines on purpose; `cafe-pr` skill covers PR modes and title/body structure |
 | develop ↔ review disagreements and user arbitration | This skill (**Develop and review disagreement protocol**) |
+| Bounded code/search output and generated-log exclusions | This skill (**Bounded repository inspection**) |
+| Reuse of final full-test evidence across develop → review | This skill (**Develop-to-review verification receipts**) |
 
 ## Confirming spec and plan with the user
 

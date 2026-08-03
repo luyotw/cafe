@@ -1,7 +1,7 @@
 ---
 name: write-cafe-phase
 description: Use this skill when creating, updating, or repairing a CAFE workflow phase or its supporting shared/chat skill under src/cafe/data/skills or .cafe/skills. Covers phase scope, SKILL.md structure, placeholders, plan handoffs, and runtime conventions, including declarative defects identified by use-cafe-workflow. Not for generic skill files, playbook YAML, driver skills, or CAFE core/runtime defects.
-version: 2.4.0
+version: 2.5.0
 ---
 
 # Write CAFE Phase Skill
@@ -80,6 +80,7 @@ version: 2.4.0
 - If the skill is part of workflow execution, assume runtime will provide file paths such as blackboard, artifacts, output file, checklist, and baton path.
 - For a plan → execute pair, wire the playbook artifact contract before using `{plan_file}`; a skill body alone does not make the handoff work.
 - For planned output approval, wire `on.confirm_output` in the playbook before claiming the phase participates in the kickoff stop contract; routing text in the skill alone is insufficient.
+- Declare every mandatory tool dependency once in `workflow.required_tools`; every playbook step that selects the skill must grant it in `allowed_tools`.
 - Do not duplicate global workflow handoff rules across many phase skills. Put those rules in a shared skill.
 - Do not create extra docs like `README.md`, `CHANGELOG.md`, or design notes inside the skill folder.
 
@@ -107,6 +108,7 @@ version: 2.4.0
 - A plan → execute pair uses `plan` as the artifact key, the execute skill declares `{plan_file}` in `## Context`, and no sidecar duplicates the plan task list.
 - A bridge phase that consumes one plan and produces the next clearly distinguishes incoming `{plan_file}` from next-plan `{output_file}`, completes the incoming checklist before handoff, and supports a `not_required` next plan.
 - Every planned output-confirmation route has a matching playbook `on.confirm_output` declaration; reactive user interruptions are not mislabeled as kickoff candidates.
+- Mandatory tools are declared in `workflow.required_tools`; optional diagnostics are not made unconditional, and every binding playbook grants the declared tools.
 
 ## When To Add References
 - Add `references/` only for details that would otherwise bloat `SKILL.md`.

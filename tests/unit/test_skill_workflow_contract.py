@@ -16,6 +16,7 @@ from cafe.skills.loader import SkillLoader
 
 def _contract_data() -> dict:
     return {
+        "required_tools": [" Bash(cafe verification check:*) "],
         "prompt_inputs": [
             {
                 "artifacts": ["research_notes", "legacy_notes"],
@@ -51,12 +52,22 @@ def test_workflow_contract_parses_declared_inputs_checklists_and_templates() -> 
     """Valid metadata keeps declared ordering and the custom catalog intact."""
     contract = SkillWorkflowContract.model_validate(_contract_data())
 
+    assert contract.required_tools == ("Bash(cafe verification check:*)",)
     assert contract.prompt_inputs[0].artifacts == ("research_notes", "legacy_notes")
     assert contract.prompt_references == {"optional_review_instruction": "optional_review.md"}
     assert contract.checklist is not None
     assert contract.checklist.variants[1].when.min_iteration == 2
     assert contract.output_templates is not None
     assert contract.output_templates.catalog == "research-report"
+
+
+def test_workflow_contract_rejects_duplicate_required_tools() -> None:
+    """Required tools are normalized once and cannot contain duplicate grants."""
+    data = _contract_data()
+    data["required_tools"] = ["Bash(git:*)", " Bash(git:*) "]
+
+    with pytest.raises(ValidationError, match="must not contain duplicates"):
+        SkillWorkflowContract.model_validate(data)
 
 
 def test_workflow_contract_parses_reusable_human_task_defaults() -> None:

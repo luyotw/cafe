@@ -44,7 +44,7 @@
 [ ] Explicit cross-component contracts: when two components share state via persistence or other indirect channels, the protocol is documented (in code or plan), not coincidental; flag implicit coupling that only works because of current framework behavior
 
 ## Testing Review
-[ ] Review test quality and edge cases
+{verification_receipt_instruction}[ ] Review test quality and edge cases
 [ ] Check the tests are not fragile or flaky
 
 ## Test Invariants Review

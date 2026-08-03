@@ -1,7 +1,7 @@
 ---
 name: write-cafe-playbook
 description: Use this skill when creating, restructuring, reviewing, or repairing a CAFE playbook YAML under src/cafe/data/playbooks or .cafe/playbooks. Covers conversation locale, step graphs, roles, artifacts, plan/checklist handoffs, forward plan chains, user review loops, conditional skips, hooks, tools, and strict validation. Use it whenever a user asks to write or update a CAFE playbook, or use-cafe-workflow identifies a playbook declarative defect.
-version: 1.3.0
+version: 1.4.0
 ---
 
 # Write CAFE Playbook
@@ -57,6 +57,7 @@ version: 1.3.0
   quoted text.
 - Define only roles the steps actually use. Choose an existing agent and CLI that are available for that role.
 - Give every step an explicit skill, role, artifact contract, allowed tools, hooks, valid intents, and complete `"on"` map.
+- Resolve each selected skill's `workflow.required_tools` and include every mandatory dependency in `allowed_tools`; validation rejects an incomplete binding.
 - Use `output_artifact: plan` and downstream `input_artifacts: [plan]` whenever the upstream output is an implementation checklist. The execute skill must read `{plan_file}` and update the same checkboxes.
 - A serial bridge may declare both `input_artifacts: [plan]` and `output_artifact: plan`; the incoming `{plan_file}` and next `{output_file}` are different files.
 - Keep user-requested revisions in the phase responsible for the current output. Model them as self-loops through `confirm_output`, `need_clarification`, `need_permission`, or `manual_handoff`.
@@ -93,4 +94,5 @@ version: 1.3.0
 - User review loops stay in the current phase; normal workflow progress remains forward-only.
 - Every implementation plan has exactly one producer and an execute consumer reading `plan`.
 - Optional phases have an explicit skip and do not leave unchecked tasks in a `not_required` plan.
+- Every selected skill's required tools are granted without unnecessarily broadening the step's tool access.
 - `cafe playbook validate --strict` and `cafe playbook simulate --dot` both pass without unexplained findings.

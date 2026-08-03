@@ -53,6 +53,7 @@ REQUIRED_SKILL_REFERENCES = {
         "spec_read_instruction.md",
         "plan_read_instruction.md",
         "spec_comparison_instruction.md",
+        "verification_receipt_instruction.md",
     ],
     "pr": [
         "execution_steps_iteration_1.md",

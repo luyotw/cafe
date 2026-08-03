@@ -1208,6 +1208,65 @@ steps:
         loader.load_model("custom", strict=True)
 
 
+@pytest.mark.parametrize(
+    ("allowed_tools", "should_pass"),
+    [
+        ("[]", False),
+        ('["Bash(cafe verification check:*)"]', True),
+        ("[Bash]", True),
+        ('["Bash(*)"]', True),
+        ('["Bash(cafe verification focus:*)"]', False),
+    ],
+)
+def test_custom_playbook_must_grant_skill_required_tools(
+    tmp_path: Path, allowed_tools: str, should_pass: bool
+) -> None:
+    """Custom bindings fail early unless mandatory skill tools are available."""
+    builtin_root = tmp_path / "builtin"
+    project_root = tmp_path / "project"
+    skill_dir = builtin_root / "skills" / "reviewer"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: reviewer
+description: reviewer
+workflow:
+  required_tools:
+    - "Bash(cafe verification check:*)"
+---
+""",
+        encoding="utf-8",
+    )
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "custom",
+        f"""
+playbook: {{id: custom}}
+commands: {{prepare: {{prompt_for_spec_plan_config: false}}}}
+skills:
+  workflow: {{shared: []}}
+  chat: {{shared: []}}
+steps:
+  review:
+    role: reviewer
+    skill: reviewer
+    allowed_tools: {allowed_tools}
+    on: {{await_agent: _done}}
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    if should_pass:
+        loader.load_model("custom", strict=True)
+    else:
+        with pytest.raises(ValueError, match="allowed_tools is missing required"):
+            loader.load_model("custom", strict=True)
+
+
 def test_builtin_catalog_includes_hotfix_and_simple() -> None:
     loader = PlaybookLoader()
 

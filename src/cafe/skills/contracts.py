@@ -229,11 +229,22 @@ class SkillWorkflowContract(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    required_tools: Tuple[str, ...] = ()
     prompt_inputs: Tuple[PromptInputContract, ...] = ()
     prompt_references: dict[str, str] = Field(default_factory=dict)
     checklist: Optional[ChecklistContract] = None
     output_templates: Optional[OutputTemplatesContract] = None
     human_tasks: Tuple[HumanTaskPolicy, ...] = ()
+
+    @field_validator("required_tools")
+    @classmethod
+    def _validate_required_tools(cls, value: Tuple[str, ...]) -> Tuple[str, ...]:
+        cleaned = tuple(item.strip() for item in value)
+        if any(not item for item in cleaned):
+            raise ValueError("required_tools must contain non-empty tool declarations")
+        if len(set(cleaned)) != len(cleaned):
+            raise ValueError("required_tools must not contain duplicates")
+        return cleaned
 
     @field_validator("prompt_references")
     @classmethod

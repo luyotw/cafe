@@ -548,6 +548,10 @@ def generate_review_checklist(
     placeholders["feedback_instruction"] = resolve_checklist_placeholders(
         _load_skill_checklist_reference("review", "feedback_instruction.md"), placeholders
     )
+    # The legacy checklist wrapper has no develop artifact input. The generic
+    # workflow composer renders this optional instruction when develop_file is
+    # supplied by the playbook artifact mapping.
+    placeholders["verification_receipt_instruction"] = ""
     for placeholder, reference in {
         "spec_read_instruction": "spec_read_instruction.md",
         "plan_read_instruction": "plan_read_instruction.md",
