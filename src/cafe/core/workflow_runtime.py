@@ -23,6 +23,7 @@ from cafe.core.blackboard import (
     LongRunningOperationArtifact,
     LongRunningOperationState,
     operation_artifact_path,
+    operation_receipt_path,
 )
 from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
 from cafe.core.questions_schema import validate_questions_xml
@@ -404,24 +405,6 @@ class BlackboardWorkflowRuntime:
     # existing ``NO_STATUS_CODE`` / error behavior instead of pinning resume.
     _OPERATION_ELIGIBLE_INTERRUPT_REASONS = {"agent_timeout"}
 
-    # Genuine classified critical failures. When one of these lands on an
-    # iteration that already has a runtime-owned ``running`` operation, that
-    # is real evidence the underlying long operation ended in failure.
-    _OPERATION_FAILURE_INTERRUPT_REASONS = {
-        "agent_rate_limit",
-        "agent_cli_not_found",
-        "agent_cli_unavailable",
-        "agent_model_not_found",
-    }
-
-    # Bounded give-up window: if a running operation never produces the
-    # ordinary reconciliation evidence (baton/output/checklist/capability
-    # receipts) within this many seconds, resume gives up recovering it and
-    # marks it ``lost`` instead of pausing forever. No background poller or
-    # job queue is involved; this is only checked when the workflow runtime
-    # itself re-checks the iteration (e.g. on resume).
-    _OPERATION_LOST_AFTER_SECONDS = 3600
-
     def _maybe_record_operation_running(self, *, current_step: str, reason: str) -> None:
         """Leave a durable ``running`` operation artifact for a recoverable interruption.
 
@@ -452,14 +435,6 @@ class BlackboardWorkflowRuntime:
             ),
         )
 
-    def _operation_age_seconds(self, artifact: LongRunningOperationArtifact) -> Optional[float]:
-        try:
-            created = datetime.fromisoformat(artifact.created_at)
-        except (ValueError, TypeError):
-            return None
-        now = datetime.now(created.tzinfo) if created.tzinfo is not None else datetime.now()
-        return (now - created).total_seconds()
-
     def _reconcile_running_operation(
         self,
         *,
@@ -467,21 +442,17 @@ class BlackboardWorkflowRuntime:
         iteration_dir: Path,
         operation: LongRunningOperationArtifact,
         other_missing: list[str],
-        new_interrupt_reason: str = "",
     ) -> LongRunningOperationArtifact:
         """The only production path that promotes ``running`` to a terminal state.
 
         Promotion never trusts agent-authored content directly:
 
-        - ``failed`` only happens when *this* reconciliation attempt was
-          itself triggered by a fresh, genuine classified critical failure
-          (``new_interrupt_reason`` in ``_OPERATION_FAILURE_INTERRUPT_REASONS``)
-          for the same iteration -- i.e. the long-running work reported back
-          with a real failure signal instead of silently disappearing.
-        - ``succeeded`` only happens once the same output/checklist/baton/
-          capability-receipt evidence already required for an ordinary
-          handoff (``other_missing``) is complete.
-        - ``lost`` only happens after a bounded elapsed-time give-up.
+        - ``failed`` and ``lost`` come only from a controlled terminal
+          receipt for this exact ``operation_id``.
+        - ``succeeded`` also requires that controlled receipt plus the same
+          output/checklist/baton/capability-receipt evidence already required
+          for an ordinary handoff.
+        - No elapsed-time guess promotes ``running`` to any terminal state.
 
         All three are written through
         ``BlackboardStore.write_operation_artifact`` -- the same trusted
@@ -489,20 +460,29 @@ class BlackboardWorkflowRuntime:
         agent cannot forge any transition by editing ``operation.json`` or
         the blackboard directly.
         """
-        if new_interrupt_reason in self._OPERATION_FAILURE_INTERRUPT_REASONS:
-            new_state = LongRunningOperationState.FAILED
-            reason = new_interrupt_reason
-        elif not other_missing:
-            new_state = LongRunningOperationState.SUCCEEDED
-            reason = "observed_reconciliation_evidence_complete"
-        else:
-            age = self._operation_age_seconds(operation)
-            if age is None or age <= self._OPERATION_LOST_AFTER_SECONDS:
-                return operation
-            new_state = LongRunningOperationState.LOST
-            reason = "no_evidence_within_recovery_window"
+        try:
+            receipt = self.blackboard_store.read_operation_receipt(iteration_dir)
+        except (ValueError, json.JSONDecodeError, OSError):
+            return operation
+        if receipt is None:
+            return operation
+        if not self._operation_receipt_trusted(
+            current_step=current_step,
+            iteration_dir=iteration_dir,
+            operation=operation,
+            receipt=receipt,
+        ):
+            return operation
+        if receipt.state == LongRunningOperationState.SUCCEEDED and other_missing:
+            return operation
 
-        promoted = LongRunningOperationArtifact(state=new_state, reason=reason)
+        promoted = LongRunningOperationArtifact(
+            operation_id=operation.operation_id,
+            state=receipt.state,
+            reason=receipt.reason,
+            exit_code=receipt.exit_code,
+            created_at=operation.created_at,
+        )
         self.blackboard_store.write_operation_artifact(
             self.blackboard,
             step=current_step,
@@ -1034,6 +1014,32 @@ class BlackboardWorkflowRuntime:
         expected_path = operation_artifact_path(iteration_dir)
         return Path(entry.path) == expected_path
 
+    def _operation_receipt_trusted(
+        self,
+        *,
+        current_step: str,
+        iteration_dir: Path,
+        operation: LongRunningOperationArtifact,
+        receipt: LongRunningOperationArtifact,
+    ) -> bool:
+        """Trust only terminal receipts written through the blackboard store."""
+        if receipt.state == LongRunningOperationState.RUNNING:
+            return False
+        if receipt.operation_id != operation.operation_id:
+            return False
+        entry = self.blackboard_store.get_artifact(
+            self.blackboard, f"{current_step}_operation_receipt"
+        )
+        if entry is None:
+            return False
+        expected_summary = (
+            f"long_running_operation_receipt:{operation.operation_id}:{receipt.state.value}"
+        )
+        if entry.summary != expected_summary:
+            return False
+        expected_path = operation_receipt_path(iteration_dir)
+        return Path(entry.path) == expected_path
+
     def _capability_receipt_recorded(self, capability_id: str) -> bool:
         for receipt in getattr(self.blackboard, "capability_receipts", []):
             if (
@@ -1073,9 +1079,7 @@ class BlackboardWorkflowRuntime:
             missing.append(capability_id)
         return missing
 
-    def _validate_reconciled_handoff(
-        self, *, current_step: str, new_interrupt_reason: str = ""
-    ) -> HandoffReconciliationResult:
+    def _validate_reconciled_handoff(self, *, current_step: str) -> HandoffReconciliationResult:
         missing: list[str] = []
         validated: list[str] = []
         contract: Optional[HandoffContract] = None
@@ -1164,7 +1168,6 @@ class BlackboardWorkflowRuntime:
                     iteration_dir=iteration_dir,
                     operation=operation,
                     other_missing=list(missing),
-                    new_interrupt_reason=new_interrupt_reason,
                 )
                 if operation.state == LongRunningOperationState.SUCCEEDED:
                     validated.append("operation_succeeded")
@@ -1445,15 +1448,11 @@ class BlackboardWorkflowRuntime:
         current_step: str,
         runtime: str,
         reason: str,
-        fresh_interrupt: bool = False,
     ) -> Optional[PlaybookRunResult]:
         if reason in {"interrupted", "keyboard_interrupt", "publish_error"}:
             return None
 
-        result = self._validate_reconciled_handoff(
-            current_step=current_step,
-            new_interrupt_reason=reason if fresh_interrupt else "",
-        )
+        result = self._validate_reconciled_handoff(current_step=current_step)
 
         gated = self._handle_operation_gate(current_step=current_step, runtime=runtime, result=result)
         if gated is not None:
@@ -1566,7 +1565,6 @@ class BlackboardWorkflowRuntime:
                         current_step=current_step,
                         runtime=runtime_label,
                         reason=si.reason,
-                        fresh_interrupt=True,
                     )
                     if reconciled is not None:
                         return reconciled
@@ -1819,7 +1817,6 @@ class BlackboardWorkflowRuntime:
                         current_step=current_step,
                         runtime=runtime_label,
                         reason=si.reason,
-                        fresh_interrupt=True,
                     )
                     if reconciled is not None:
                         return reconciled
@@ -2185,18 +2182,21 @@ class BlackboardWorkflowRuntime:
         )
         raise RuntimeError(f"Playbook run reached max transition limit ({max_transitions})")
 
-    def _try_reconcile_current_single_step(
+    def _try_reconcile_current_step(
         self, *, current_step: str
     ) -> Optional[PlaybookRunResult]:
-        """Re-check an existing operation for ``current_step`` before single-step execution.
+        """Re-check an existing operation for ``current_step`` before (re-)executing it.
 
-        The CLI/agent harness normally drives CAFE one step at a time via
-        ``run(single_step=True, start_step=...)`` rather than the
-        multi-transition loop, so this is the resume re-check that actually
-        matters for preventing a duplicate launch in production: if the
-        latest unreconciled interruption belongs to this same step, reuse the
-        same reconciliation/operation-gate path the multi-transition runner
-        uses instead of re-invoking the executor unconditionally.
+        Called from every ``run()`` path -- single-step, multi-transition,
+        and explicit ``start_step`` overrides alike -- immediately after the
+        current step is resolved and before the executor can be invoked
+        again. Without this, an explicit re-run (e.g. ``run(start_step="X")``
+        called again while step "X" still has a ``running`` operation) would
+        skip reconciliation and relaunch the agent instead of learning the
+        operation's real outcome by rechecking it. If the latest
+        unreconciled interruption belongs to this same step, reuse the same
+        reconciliation/operation-gate path the multi-transition runner uses
+        instead of re-invoking the executor unconditionally.
         """
         interrupted = self._latest_unreconciled_interrupted_step()
         if interrupted is None:
@@ -2259,7 +2259,7 @@ class BlackboardWorkflowRuntime:
             # already written its own real completion baton there before
             # being interrupted. Checking first preserves that evidence for
             # reconciliation instead of clobbering it unconditionally.
-            reconciled = self._try_reconcile_current_single_step(current_step=current_step)
+            reconciled = self._try_reconcile_current_step(current_step=current_step)
             if reconciled is not None:
                 return reconciled
             if start_step is not None:
@@ -2302,6 +2302,19 @@ class BlackboardWorkflowRuntime:
             return terminal_result
         if current_step not in self.steps:
             raise ValueError(f"Unknown playbook step '{current_step}'")
+
+        # Re-check any existing operation for the resolved step before
+        # (re-)running it, exactly like the single-step path above. This is
+        # what closes the explicit-override duplicate-launch gap: an
+        # explicit ``start_step`` override never satisfies
+        # ``_should_attempt_resume_reconciliation`` above (it only fires for
+        # ``workflow.consume_handoff``-sourced resumes), so without this
+        # call a second ``run(start_step=...)`` on a step that still has a
+        # ``running`` operation would relaunch the executor instead of
+        # learning the operation's real outcome.
+        reconciled = self._try_reconcile_current_step(current_step=current_step)
+        if reconciled is not None:
+            return reconciled
 
         if start_step is not None:
             self.blackboard_store.set_current_step(self.blackboard, current_step)

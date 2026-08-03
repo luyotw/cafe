@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -16,6 +17,7 @@ BLACKBOARD_SCHEMA_VERSION = 1
 NEXT_STEP_FILENAME = "next_step.txt"
 HANDOFF_CONTRACT_VERSION = 1
 OPERATION_ARTIFACT_FILENAME = "operation.json"
+OPERATION_RECEIPT_FILENAME = "operation_receipt.json"
 
 
 def _now_iso() -> str:
@@ -69,6 +71,11 @@ def operation_artifact_path(iteration_dir: Path) -> Path:
     return Path(iteration_dir) / OPERATION_ARTIFACT_FILENAME
 
 
+def operation_receipt_path(iteration_dir: Path) -> Path:
+    """Fixed terminal receipt path for one long-running operation."""
+    return Path(iteration_dir) / OPERATION_RECEIPT_FILENAME
+
+
 @dataclass
 class LongRunningOperationArtifact:
     """Durable record of one long-running phase operation.
@@ -80,11 +87,13 @@ class LongRunningOperationArtifact:
     state: LongRunningOperationState
     reason: str = ""
     exit_code: Optional[int] = None
+    operation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "operation_id": self.operation_id,
             "state": self.state.value,
             "reason": self.reason,
             "exit_code": self.exit_code,
@@ -98,6 +107,11 @@ class LongRunningOperationArtifact:
             raise ValueError("operation.json must be a JSON object")
         if "state" not in data:
             raise ValueError("operation.json is missing required field 'state'")
+        if "operation_id" not in data:
+            raise ValueError("operation.json is missing required field 'operation_id'")
+        operation_id = str(data["operation_id"]).strip()
+        if not operation_id:
+            raise ValueError("operation.json operation_id must be non-empty")
 
         # Direct enum construction only: no alias map, no migration fallback.
         state = LongRunningOperationState(str(data["state"]))
@@ -117,6 +131,7 @@ class LongRunningOperationArtifact:
             state=state,
             reason=str(data.get("reason", "")),
             exit_code=exit_code,
+            operation_id=operation_id,
             created_at=str(data.get("created_at", _now_iso())),
             updated_at=str(data.get("updated_at", _now_iso())),
         )
@@ -693,6 +708,69 @@ class BlackboardStore:
             {
                 "step": step,
                 "state": artifact.state.value,
+                "operation_id": artifact.operation_id,
+                "reason": artifact.reason,
+                "exit_code": artifact.exit_code,
+                "path": str(path),
+            },
+        )
+        return artifact
+
+    def read_operation_receipt(
+        self, iteration_dir: Path
+    ) -> Optional[LongRunningOperationArtifact]:
+        path = operation_receipt_path(iteration_dir)
+        if not path.exists():
+            return None
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return LongRunningOperationArtifact.from_dict(raw)
+
+    def write_operation_receipt(
+        self,
+        state: BlackboardState,
+        *,
+        step: str,
+        iteration_dir: Path,
+        operation_id: str,
+        artifact: LongRunningOperationArtifact,
+    ) -> LongRunningOperationArtifact:
+        """Persist a controlled terminal receipt for an existing operation."""
+        if artifact.state == LongRunningOperationState.RUNNING:
+            raise ValueError("operation receipt must be terminal")
+        if artifact.operation_id != operation_id:
+            raise ValueError("operation receipt operation_id mismatch")
+
+        path = operation_receipt_path(iteration_dir)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(artifact.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        artifact_name = f"{step}_operation_receipt"
+        previous = state.artifacts.get(artifact_name)
+        version = previous.version + 1 if previous else 1
+        self.put_artifact(
+            state,
+            ArtifactEntry(
+                name=artifact_name,
+                kind=ArtifactKind.METADATA,
+                version=version,
+                updated_by=step,
+                path=str(path),
+                summary=(
+                    f"long_running_operation_receipt:{artifact.operation_id}:"
+                    f"{artifact.state.value}"
+                ),
+            ),
+        )
+        self.record_event(
+            state,
+            "long_running_operation_receipt",
+            {
+                "step": step,
+                "state": artifact.state.value,
+                "operation_id": artifact.operation_id,
                 "reason": artifact.reason,
                 "exit_code": artifact.exit_code,
                 "path": str(path),

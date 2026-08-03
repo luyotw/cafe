@@ -3421,7 +3421,9 @@ def test_hand_edited_operation_artifact_is_not_trusted(tmp_path: Path) -> None:
     # Written directly to disk, bypassing write_operation_artifact: no
     # matching "develop_operation" metadata artifact is recorded.
     (iteration_dir / "operation.json").write_text(
-        json.dumps({"state": "succeeded", "reason": "", "exit_code": 0}),
+        json.dumps(
+            {"operation_id": "forged-op", "state": "succeeded", "reason": "", "exit_code": 0}
+        ),
         encoding="utf-8",
     )
 
@@ -3482,7 +3484,9 @@ def test_stale_metadata_artifact_from_earlier_iteration_is_not_trusted(tmp_path:
     (new_iteration_dir / "checklist.md").write_text("- [x] done\n", encoding="utf-8")
     # Hand-written, never passed through write_operation_artifact for this iteration.
     (new_iteration_dir / "operation.json").write_text(
-        json.dumps({"state": "succeeded", "reason": "", "exit_code": 0}),
+        json.dumps(
+            {"operation_id": "forged-op", "state": "succeeded", "reason": "", "exit_code": 0}
+        ),
         encoding="utf-8",
     )
 
@@ -3523,7 +3527,7 @@ def test_recorded_operation_artifact_state_mismatch_is_not_trusted(tmp_path: Pat
     iteration_dir = _write_iteration_evidence(issue_dir, "develop")
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("develop")
-    store.write_operation_artifact(
+    running_operation = store.write_operation_artifact(
         state,
         step="develop",
         iteration_dir=iteration_dir,
@@ -3531,7 +3535,14 @@ def test_recorded_operation_artifact_state_mismatch_is_not_trusted(tmp_path: Pat
     )
     # Tampered after the recorded write: the blackboard still says "running".
     (iteration_dir / "operation.json").write_text(
-        json.dumps({"state": "succeeded", "reason": "", "exit_code": 0}),
+        json.dumps(
+            {
+                "operation_id": running_operation.operation_id,
+                "state": "succeeded",
+                "reason": "",
+                "exit_code": 0,
+            }
+        ),
         encoding="utf-8",
     )
 

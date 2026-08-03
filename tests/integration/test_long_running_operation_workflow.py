@@ -16,7 +16,11 @@ import json
 from pathlib import Path
 
 from cafe.agents.executor import AgentExecutionError
-from cafe.core.blackboard import BlackboardStore
+from cafe.core.blackboard import (
+    BlackboardStore,
+    LongRunningOperationArtifact,
+    LongRunningOperationState,
+)
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 
@@ -74,12 +78,29 @@ def test_agent_timeout_then_resume_promotes_running_to_succeeded_without_duplica
     iteration_dir = issue_dir / "develop" / "iteration_001"
     assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "running"
 
-    # Between crash and resume, the backgrounded agent actually finished and
-    # left the ordinary evidence a completed step would leave: output,
-    # checklist, and its own downstream baton.
+    # Between crash and resume, the backgrounded agent leaves ordinary
+    # artifacts, and a controlled production helper records the terminal
+    # receipt for the same operation identity. The runtime must not infer the
+    # terminal operation outcome from agent-writable files alone.
     (iteration_dir / "output.md").write_text("# done\n", encoding="utf-8")
     (iteration_dir / "checklist.md").write_text("- [x] done\n", encoding="utf-8")
     _write_baton(issue_dir, from_step="develop", to_step="review")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    running_operation = store.read_operation_artifact(iteration_dir)
+    assert running_operation is not None
+    store.write_operation_receipt(
+        state,
+        step="develop",
+        iteration_dir=iteration_dir,
+        operation_id=running_operation.operation_id,
+        artifact=LongRunningOperationArtifact(
+            operation_id=running_operation.operation_id,
+            state=LongRunningOperationState.SUCCEEDED,
+            reason="controlled_helper_completed",
+            exit_code=0,
+        ),
+    )
 
     def duplicate_launch_executor(
         step_name: str, step_def: dict, state: object
@@ -103,12 +124,48 @@ def test_agent_timeout_then_resume_promotes_running_to_succeeded_without_duplica
     )
 
 
+def test_agent_writable_completion_evidence_without_receipt_does_not_promote_to_succeeded(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-journey-no-receipt"
+
+    def crashing_executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        iteration_dir = issue_dir / step_name / "iteration_001"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        (iteration_dir / "iteration.json").write_text(
+            json.dumps({"iteration": 1}), encoding="utf-8"
+        )
+        raise AgentExecutionError(
+            "agent did not produce output before the execution timeout", error_type="timeout"
+        )
+
+    BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=_PLAYBOOK, executor=crashing_executor
+    ).run(start_step="develop", single_step=True)
+
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    (iteration_dir / "output.md").write_text("# agent-authored\n", encoding="utf-8")
+    (iteration_dir / "checklist.md").write_text("- [x] done\n", encoding="utf-8")
+    _write_baton(issue_dir, from_step="develop", to_step="review")
+
+    def duplicate_launch_executor(
+        step_name: str, step_def: dict, state: object
+    ) -> StepExecutionResult:
+        raise AssertionError(f"executor must not be invoked again for {step_name}")
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=_PLAYBOOK, executor=duplicate_launch_executor
+    ).run(start_step="develop", single_step=True)
+
+    assert result.final_status_code == "OPERATION_RUNNING"
+    assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "running"
+
+
 def test_agent_timeout_then_resume_stays_running_without_duplicate_launch(
     tmp_path: Path,
 ) -> None:
-    """Journey: resume happens before the backgrounded work leaves any evidence and
-    before the recovery window elapses; the operation stays running, recoverable,
-    and the executor is not invoked again."""
+    """Journey: resume happens before the controlled helper leaves a terminal receipt;
+    the operation stays running, recoverable, and the executor is not invoked again."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-journey-still-running"
 
     def crashing_executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
@@ -141,12 +198,11 @@ def test_agent_timeout_then_resume_stays_running_without_duplicate_launch(
     assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "running"
 
 
-def test_agent_timeout_then_resume_marks_lost_after_recovery_window(
-    tmp_path: Path, monkeypatch
+def test_agent_timeout_then_controlled_receipt_marks_lost_without_duplicate_launch(
+    tmp_path: Path,
 ) -> None:
-    """Journey: no evidence ever appears and the bounded recovery window elapses;
-    resume gives up and marks the operation lost instead of pausing forever, and
-    still does not invoke the executor again."""
+    """Journey: the controlled helper can no longer find/verify the operation and
+    records a lost receipt; resume promotes running -> lost without a relaunch."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-journey-lost"
 
     def crashing_executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
@@ -169,14 +225,29 @@ def test_agent_timeout_then_resume_marks_lost_after_recovery_window(
     ) -> StepExecutionResult:
         raise AssertionError(f"executor must not be invoked again for {step_name}")
 
-    monkeypatch.setattr(BlackboardWorkflowRuntime, "_OPERATION_LOST_AFTER_SECONDS", -1)
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    running_operation = store.read_operation_artifact(iteration_dir)
+    assert running_operation is not None
+    store.write_operation_receipt(
+        state,
+        step="develop",
+        iteration_dir=iteration_dir,
+        operation_id=running_operation.operation_id,
+        artifact=LongRunningOperationArtifact(
+            operation_id=running_operation.operation_id,
+            state=LongRunningOperationState.LOST,
+            reason="controlled_helper_could_not_find_operation",
+        ),
+    )
+
     second_run = BlackboardWorkflowRuntime(
         issue_dir=issue_dir, playbook=_PLAYBOOK, executor=duplicate_launch_executor
     )
     second_result = second_run.run(start_step="develop", single_step=True)
 
     assert second_result.final_status_code == "OPERATION_LOST"
-    iteration_dir = issue_dir / "develop" / "iteration_001"
     assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "lost"
 
     third_run = BlackboardWorkflowRuntime(
@@ -186,41 +257,58 @@ def test_agent_timeout_then_resume_marks_lost_after_recovery_window(
     assert third_result.final_status_code == "OPERATION_LOST"
 
 
-def test_explicit_override_rerun_with_critical_error_marks_operation_failed(
+def test_agent_timeout_then_controlled_receipt_marks_failed_without_duplicate_launch(
     tmp_path: Path,
 ) -> None:
-    """Journey: an explicit multi-transition re-run of the same interrupted step (a
-    caller-driven override that bypasses resume reconciliation, distinct from the
-    default single-step resume path covered above) hits a genuine classified
-    critical failure; the runtime promotes the existing running operation to
-    failed instead of leaving it running forever."""
+    """Journey: the controlled helper records failure for the same operation
+    identity; resume promotes running -> failed without invoking the executor
+    again."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-journey-failed"
 
-    attempts = {"count": 0}
-
-    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        attempts["count"] += 1
+    def crashing_executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
         iteration_dir = issue_dir / step_name / "iteration_001"
         iteration_dir.mkdir(parents=True, exist_ok=True)
         (iteration_dir / "iteration.json").write_text(
             json.dumps({"iteration": 1}), encoding="utf-8"
         )
-        if attempts["count"] == 1:
-            raise AgentExecutionError(
-                "agent did not produce output before the execution timeout",
-                error_type="timeout",
-            )
-        raise AgentExecutionError("Rate limit exceeded", error_type="rate_limit")
+        raise AgentExecutionError(
+            "agent did not produce output before the execution timeout",
+            error_type="timeout",
+        )
 
-    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=_PLAYBOOK, executor=executor)
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=_PLAYBOOK, executor=crashing_executor
+    )
     first_result = runtime.run(start_step="develop", max_transitions=5)
     assert first_result.final_status_code.startswith("INTERRUPTED")
     iteration_dir = issue_dir / "develop" / "iteration_001"
-    assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "running"
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    running_operation = store.read_operation_artifact(iteration_dir)
+    assert running_operation is not None
+    assert running_operation.state == LongRunningOperationState.RUNNING
+    store.write_operation_receipt(
+        state,
+        step="develop",
+        iteration_dir=iteration_dir,
+        operation_id=running_operation.operation_id,
+        artifact=LongRunningOperationArtifact(
+            operation_id=running_operation.operation_id,
+            state=LongRunningOperationState.FAILED,
+            reason="controlled_helper_failed",
+            exit_code=1,
+        ),
+    )
 
-    second_result = runtime.run(start_step="develop", max_transitions=5)
+    def duplicate_launch_executor(
+        step_name: str, step_def: dict, state: object
+    ) -> StepExecutionResult:
+        raise AssertionError(f"executor must not be invoked again for {step_name}")
+
+    second_result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=_PLAYBOOK, executor=duplicate_launch_executor
+    ).run(start_step="develop", max_transitions=5)
     assert second_result.final_status_code == "OPERATION_FAILED"
-    assert attempts["count"] == 2
 
     operation_data = json.loads((iteration_dir / "operation.json").read_text())
     assert operation_data["state"] == "failed"
@@ -229,11 +317,6 @@ def test_explicit_override_rerun_with_critical_error_marks_operation_failed(
         e.event_type == "long_running_operation" and e.data.get("state") == "failed"
         for e in bb.events
     )
-
-    def duplicate_launch_executor(
-        step_name: str, step_def: dict, state: object
-    ) -> StepExecutionResult:
-        raise AssertionError(f"executor must not be invoked again for {step_name}")
 
     resume_runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir, playbook=_PLAYBOOK, executor=duplicate_launch_executor

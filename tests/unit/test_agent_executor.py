@@ -87,6 +87,33 @@ class TestAgentExecutorWithSession:
 class TestAgentExecutorErrorHandling:
     """Test AgentExecutor error handling."""
 
+    def test_stream_json_early_output_then_idle_timeout_raises_timeout(self) -> None:
+        """Early stream output is not success unless a terminal result message arrived."""
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.return_value = (
+            '{"type": "message", "message": {"content": [{"type": "text", "text": "working"}]}}\n'
+        )
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = -15
+
+        def mock_select(rlist, wlist, xlist, timeout=None):
+            if mock_process.stdout.readline.call_count == 0:
+                return (rlist, [], [])
+            return ([], [], [])
+
+        with (
+            patch("subprocess.Popen", return_value=mock_process),
+            patch("select.select", side_effect=mock_select),
+            patch("time.time", side_effect=[0, 0, 301]),
+        ):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor.execute("Test prompt")
+
+        assert exc_info.value.error_type == "timeout"
+
     def test_execute_raises_execution_error_on_failure(self) -> None:
         """測試 agent 執行失敗時拋出 AgentExecutionError"""
         config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE, session_id="test-session")

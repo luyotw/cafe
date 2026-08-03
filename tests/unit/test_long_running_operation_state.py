@@ -80,7 +80,12 @@ class TestReasonAndExitCodeAreExplanatoryOnly:
 
     def test_reason_and_exit_code_do_not_change_failed_state(self) -> None:
         artifact = LongRunningOperationArtifact.from_dict(
-            {"state": "failed", "reason": "process killed", "exit_code": 137}
+            {
+                "operation_id": "op-123",
+                "state": "failed",
+                "reason": "process killed",
+                "exit_code": 137,
+            }
         )
         assert artifact.state == LongRunningOperationState.FAILED
         assert artifact.reason == "process killed"
@@ -89,22 +94,36 @@ class TestReasonAndExitCodeAreExplanatoryOnly:
     def test_zero_exit_code_with_failed_state_stays_failed(self) -> None:
         """exit_code alone must never be reinterpreted as a different state."""
         artifact = LongRunningOperationArtifact.from_dict(
-            {"state": "failed", "exit_code": 0, "reason": "reported failure despite exit 0"}
+            {
+                "operation_id": "op-123",
+                "state": "failed",
+                "exit_code": 0,
+                "reason": "reported failure despite exit 0",
+            }
         )
         assert artifact.state == LongRunningOperationState.FAILED
 
     def test_nonzero_exit_code_with_succeeded_state_stays_succeeded(self) -> None:
         artifact = LongRunningOperationArtifact.from_dict(
-            {"state": "succeeded", "exit_code": 1, "reason": "non-zero but reported success"}
+            {
+                "operation_id": "op-123",
+                "state": "succeeded",
+                "exit_code": 1,
+                "reason": "non-zero but reported success",
+            }
         )
         assert artifact.state == LongRunningOperationState.SUCCEEDED
 
     def test_reason_defaults_to_empty_string(self) -> None:
-        artifact = LongRunningOperationArtifact.from_dict({"state": "running"})
+        artifact = LongRunningOperationArtifact.from_dict(
+            {"operation_id": "op-123", "state": "running"}
+        )
         assert artifact.reason == ""
 
     def test_exit_code_defaults_to_none(self) -> None:
-        artifact = LongRunningOperationArtifact.from_dict({"state": "running"})
+        artifact = LongRunningOperationArtifact.from_dict(
+            {"operation_id": "op-123", "state": "running"}
+        )
         assert artifact.exit_code is None
 
 
