@@ -394,26 +394,42 @@ class BlackboardWorkflowRuntime:
             return str(to_step)
         return None
 
-    _OPERATION_INELIGIBLE_INTERRUPT_REASONS = {
-        "interrupted",
-        "keyboard_interrupt",
-        "publish_error",
+    # Only a characterized timeout/background signal is eligible to create a
+    # durable ``running`` operation. ``agent_timeout`` is raised by
+    # ``AgentExecutor`` when its own idle or post-output wait timeout kills
+    # the process without a more specific classification (see
+    # ``executor.py``'s ``error_type = "timeout"``). Ordinary agent errors,
+    # an explicit Ctrl-C, the separate PR-publish error path, and a plain
+    # missing status code/baton are NOT long-running signals and must keep
+    # existing ``NO_STATUS_CODE`` / error behavior instead of pinning resume.
+    _OPERATION_ELIGIBLE_INTERRUPT_REASONS = {"agent_timeout"}
+
+    # Genuine classified critical failures. When one of these lands on an
+    # iteration that already has a runtime-owned ``running`` operation, that
+    # is real evidence the underlying long operation ended in failure.
+    _OPERATION_FAILURE_INTERRUPT_REASONS = {
         "agent_rate_limit",
         "agent_cli_not_found",
         "agent_cli_unavailable",
         "agent_model_not_found",
     }
 
+    # Bounded give-up window: if a running operation never produces the
+    # ordinary reconciliation evidence (baton/output/checklist/capability
+    # receipts) within this many seconds, resume gives up recovering it and
+    # marks it ``lost`` instead of pausing forever. No background poller or
+    # job queue is involved; this is only checked when the workflow runtime
+    # itself re-checks the iteration (e.g. on resume).
+    _OPERATION_LOST_AFTER_SECONDS = 3600
+
     def _maybe_record_operation_running(self, *, current_step: str, reason: str) -> None:
         """Leave a durable ``running`` operation artifact for a recoverable interruption.
 
-        Only reasons that represent genuine execution-signal interruptions
-        (e.g. agent/tool timeouts or backgrounding) get an operation artifact;
-        an explicit Ctrl-C or the separate PR-publish error path are not
-        forced into the long-running operation model. At most one operation
-        artifact is ever written per iteration.
+        Only a characterized timeout/background signal gets an operation
+        artifact; everything else keeps existing interrupted/error behavior.
+        At most one operation artifact is ever written per iteration.
         """
-        if reason in self._OPERATION_INELIGIBLE_INTERRUPT_REASONS:
+        if reason not in self._OPERATION_ELIGIBLE_INTERRUPT_REASONS:
             return
         iteration_dir = self._latest_iteration_dir(current_step)
         if iteration_dir is None:
@@ -435,6 +451,65 @@ class BlackboardWorkflowRuntime:
                 reason=reason,
             ),
         )
+
+    def _operation_age_seconds(self, artifact: LongRunningOperationArtifact) -> Optional[float]:
+        try:
+            created = datetime.fromisoformat(artifact.created_at)
+        except (ValueError, TypeError):
+            return None
+        now = datetime.now(created.tzinfo) if created.tzinfo is not None else datetime.now()
+        return (now - created).total_seconds()
+
+    def _reconcile_running_operation(
+        self,
+        *,
+        current_step: str,
+        iteration_dir: Path,
+        operation: LongRunningOperationArtifact,
+        other_missing: list[str],
+        new_interrupt_reason: str = "",
+    ) -> LongRunningOperationArtifact:
+        """The only production path that promotes ``running`` to a terminal state.
+
+        Promotion never trusts agent-authored content directly:
+
+        - ``failed`` only happens when *this* reconciliation attempt was
+          itself triggered by a fresh, genuine classified critical failure
+          (``new_interrupt_reason`` in ``_OPERATION_FAILURE_INTERRUPT_REASONS``)
+          for the same iteration -- i.e. the long-running work reported back
+          with a real failure signal instead of silently disappearing.
+        - ``succeeded`` only happens once the same output/checklist/baton/
+          capability-receipt evidence already required for an ordinary
+          handoff (``other_missing``) is complete.
+        - ``lost`` only happens after a bounded elapsed-time give-up.
+
+        All three are written through
+        ``BlackboardStore.write_operation_artifact`` -- the same trusted
+        runtime path ``_operation_artifact_trusted`` already requires -- so an
+        agent cannot forge any transition by editing ``operation.json`` or
+        the blackboard directly.
+        """
+        if new_interrupt_reason in self._OPERATION_FAILURE_INTERRUPT_REASONS:
+            new_state = LongRunningOperationState.FAILED
+            reason = new_interrupt_reason
+        elif not other_missing:
+            new_state = LongRunningOperationState.SUCCEEDED
+            reason = "observed_reconciliation_evidence_complete"
+        else:
+            age = self._operation_age_seconds(operation)
+            if age is None or age <= self._OPERATION_LOST_AFTER_SECONDS:
+                return operation
+            new_state = LongRunningOperationState.LOST
+            reason = "no_evidence_within_recovery_window"
+
+        promoted = LongRunningOperationArtifact(state=new_state, reason=reason)
+        self.blackboard_store.write_operation_artifact(
+            self.blackboard,
+            step=current_step,
+            iteration_dir=iteration_dir,
+            artifact=promoted,
+        )
+        return promoted
 
     def _restore_interrupted_step_handoff(self, *, current_step: str, reason: str) -> None:
         """Keep the baton pinned to the interrupted step when recovery fails."""
@@ -998,7 +1073,9 @@ class BlackboardWorkflowRuntime:
             missing.append(capability_id)
         return missing
 
-    def _validate_reconciled_handoff(self, *, current_step: str) -> HandoffReconciliationResult:
+    def _validate_reconciled_handoff(
+        self, *, current_step: str, new_interrupt_reason: str = ""
+    ) -> HandoffReconciliationResult:
         missing: list[str] = []
         validated: list[str] = []
         contract: Optional[HandoffContract] = None
@@ -1081,7 +1158,20 @@ class BlackboardWorkflowRuntime:
                 operation_untrusted = True
                 missing.append("operation_untrusted")
             elif operation.state == LongRunningOperationState.RUNNING:
-                missing.append("operation_running")
+                assert iteration_dir is not None
+                operation = self._reconcile_running_operation(
+                    current_step=current_step,
+                    iteration_dir=iteration_dir,
+                    operation=operation,
+                    other_missing=list(missing),
+                    new_interrupt_reason=new_interrupt_reason,
+                )
+                if operation.state == LongRunningOperationState.SUCCEEDED:
+                    validated.append("operation_succeeded")
+                elif operation.state == LongRunningOperationState.LOST:
+                    missing.append("operation_lost")
+                else:
+                    missing.append("operation_running")
             elif operation.state == LongRunningOperationState.FAILED:
                 missing.append("operation_failed")
             elif operation.state == LongRunningOperationState.LOST:
@@ -1355,11 +1445,15 @@ class BlackboardWorkflowRuntime:
         current_step: str,
         runtime: str,
         reason: str,
+        fresh_interrupt: bool = False,
     ) -> Optional[PlaybookRunResult]:
         if reason in {"interrupted", "keyboard_interrupt", "publish_error"}:
             return None
 
-        result = self._validate_reconciled_handoff(current_step=current_step)
+        result = self._validate_reconciled_handoff(
+            current_step=current_step,
+            new_interrupt_reason=reason if fresh_interrupt else "",
+        )
 
         gated = self._handle_operation_gate(current_step=current_step, runtime=runtime, result=result)
         if gated is not None:
@@ -1472,6 +1566,7 @@ class BlackboardWorkflowRuntime:
                         current_step=current_step,
                         runtime=runtime_label,
                         reason=si.reason,
+                        fresh_interrupt=True,
                     )
                     if reconciled is not None:
                         return reconciled
@@ -1724,6 +1819,7 @@ class BlackboardWorkflowRuntime:
                         current_step=current_step,
                         runtime=runtime_label,
                         reason=si.reason,
+                        fresh_interrupt=True,
                     )
                     if reconciled is not None:
                         return reconciled
@@ -1923,15 +2019,12 @@ class BlackboardWorkflowRuntime:
                                 },
                             )
                             # The agent returned with neither a status code
-                            # nor a baton — indistinguishable from work that
-                            # is still running in the background. Leave a
-                            # recoverable operation record instead of only
-                            # NO_STATUS_CODE, so resume can tell running
-                            # work apart from a genuinely stuck step.
-                            self._maybe_record_operation_running(
-                                current_step=current_step,
-                                reason="status_code_missing",
-                            )
+                            # nor a baton. This is ordinary NO_STATUS_CODE
+                            # behavior, not a characterized long-running
+                            # signal, so no operation artifact is created
+                            # here: only ``agent_timeout`` (see
+                            # ``_OPERATION_ELIGIBLE_INTERRUPT_REASONS``)
+                            # creates a durable ``running`` record.
                             return PlaybookRunResult(
                                 final_step=current_step,
                                 final_status_code="NO_STATUS_CODE",
@@ -2092,6 +2185,31 @@ class BlackboardWorkflowRuntime:
         )
         raise RuntimeError(f"Playbook run reached max transition limit ({max_transitions})")
 
+    def _try_reconcile_current_single_step(
+        self, *, current_step: str
+    ) -> Optional[PlaybookRunResult]:
+        """Re-check an existing operation for ``current_step`` before single-step execution.
+
+        The CLI/agent harness normally drives CAFE one step at a time via
+        ``run(single_step=True, start_step=...)`` rather than the
+        multi-transition loop, so this is the resume re-check that actually
+        matters for preventing a duplicate launch in production: if the
+        latest unreconciled interruption belongs to this same step, reuse the
+        same reconciliation/operation-gate path the multi-transition runner
+        uses instead of re-invoking the executor unconditionally.
+        """
+        interrupted = self._latest_unreconciled_interrupted_step()
+        if interrupted is None:
+            return None
+        interrupted_step, reason = interrupted
+        if interrupted_step != current_step:
+            return None
+        return self._try_reconcile_interrupted_step(
+            current_step=current_step,
+            runtime="single_step_resume",
+            reason=reason,
+        )
+
     def _run_single_step(self, *, current_step: str) -> PlaybookRunResult:
         if self._is_baton_driven_step(current_step):
             return self._run_baton_driven_pr(
@@ -2135,6 +2253,15 @@ class BlackboardWorkflowRuntime:
                 return terminal_result
             if current_step not in self.steps:
                 raise ValueError(f"Unknown playbook step '{current_step}'")
+            # Re-check any existing operation for this step *before* writing
+            # the self-loop override baton below: the override write
+            # replaces next_step.txt, and a backgrounded agent may have
+            # already written its own real completion baton there before
+            # being interrupted. Checking first preserves that evidence for
+            # reconciliation instead of clobbering it unconditionally.
+            reconciled = self._try_reconcile_current_single_step(current_step=current_step)
+            if reconciled is not None:
+                return reconciled
             if start_step is not None:
                 self.blackboard_store.set_current_step(self.blackboard, current_step)
                 self.blackboard_store.update_handoff_contract(

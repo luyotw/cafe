@@ -3206,9 +3206,51 @@ def test_short_running_step_without_operation_artifact_is_unaffected(tmp_path: P
     assert not (iteration_dir / "operation.json").exists()
 
 
-def test_interruption_records_running_operation_artifact_automatically(tmp_path: Path) -> None:
-    """Integration Test 1: an interrupted step leaves exactly one running operation.json
-    instead of only NO_STATUS_CODE, with a metadata artifact/event on the blackboard."""
+def test_generic_agent_error_does_not_create_operation_artifact(tmp_path: Path) -> None:
+    """A generic/noncritical agent error is not a characterized long-running signal.
+
+    Only ``agent_timeout`` (raised by ``AgentExecutor`` when its own idle or
+    post-output wait timeout kills the process) is eligible to create a
+    ``running`` operation artifact; an ordinary exception with no such
+    classification must retain existing ``INTERRUPTED`` behavior with no
+    operation artifact, so a normal failure never pins resume forever.
+    """
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-generic-error"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}},
+        },
+    }
+
+    call_count = [0]
+
+    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
+        call_count[0] += 1
+        iteration_dir = issue_dir / step_name / "iteration_001"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
+        raise TimeoutError("simulated unrelated tool error")
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
+    result = runtime.run(start_step="develop", max_transitions=5)
+
+    assert result.completed is False
+    assert result.final_status_code.startswith("INTERRUPTED")
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    assert not (iteration_dir / "operation.json").exists()
+
+    bb = BlackboardStore(issue_dir).load_or_create("develop")
+    assert not any(e.event_type == "long_running_operation" for e in bb.events)
+    assert call_count[0] == 1
+
+
+def test_agent_timeout_records_running_operation_artifact_automatically(tmp_path: Path) -> None:
+    """Integration Test 1: a characterized agent-timeout interruption leaves exactly one
+    running operation.json instead of only NO_STATUS_CODE, with a metadata artifact/event
+    on the blackboard."""
+    from cafe.agents.executor import AgentExecutionError
+
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-auto-record"
     playbook = {
         "playbook": {"id": "default"},
@@ -3224,7 +3266,9 @@ def test_interruption_records_running_operation_artifact_automatically(tmp_path:
         iteration_dir = issue_dir / step_name / "iteration_001"
         iteration_dir.mkdir(parents=True, exist_ok=True)
         (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
-        raise TimeoutError("simulated agent tool boundary timeout")
+        raise AgentExecutionError(
+            "agent did not produce output before the execution timeout", error_type="timeout"
+        )
 
     runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
     result = runtime.run(start_step="develop", max_transitions=5)
@@ -3508,14 +3552,16 @@ def test_recorded_operation_artifact_state_mismatch_is_not_trusted(tmp_path: Pat
     assert result.final_status_code == "OPERATION_UNTRUSTED"
 
 
-def test_status_code_missing_records_running_operation_artifact(tmp_path: Path) -> None:
-    """The NO_STATUS_CODE path (no baton, no status code) leaves recoverable operation state.
+def test_status_code_missing_does_not_create_operation_artifact(tmp_path: Path) -> None:
+    """The ordinary NO_STATUS_CODE path (no baton, no status code) is not a
+    characterized long-running signal and retains existing behavior.
 
-    This covers the scenario where an agent phase's Bash work is
-    backgrounded or hits a hard limit and the step returns with neither a
-    valid status code nor a baton — previously that path only recorded
-    ``NO_STATUS_CODE`` with no way to distinguish it from a genuinely stuck
-    step on resume.
+    A normal short step that simply omits a baton/status code must not be
+    classified as a long-running operation -- otherwise resume would be
+    pinned to that step forever waiting for a ``running`` operation that
+    will never resolve. Only a characterized ``agent_timeout`` signal (see
+    ``test_agent_timeout_records_running_operation_artifact_automatically``)
+    creates an operation artifact.
     """
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-status-missing-operation"
     playbook = {
@@ -3546,10 +3592,6 @@ def test_status_code_missing_records_running_operation_artifact(tmp_path: Path) 
     assert result.completed is False
     assert result.final_status_code == "NO_STATUS_CODE"
     iteration_dir = issue_dir / "spec" / "iteration_001"
-    operation_data = json.loads((iteration_dir / "operation.json").read_text(encoding="utf-8"))
-    assert operation_data["state"] == "running"
+    assert not (iteration_dir / "operation.json").exists()
     blackboard = BlackboardStore(issue_dir).load_or_create("spec")
-    assert any(
-        e.event_type == "long_running_operation" and e.data.get("state") == "running"
-        for e in blackboard.events
-    )
+    assert not any(e.event_type == "long_running_operation" for e in blackboard.events)
