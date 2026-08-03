@@ -209,5 +209,5 @@ Baseline (issue317 develop): `uv run --with pytest pytest tests/unit tests/integ
 
 | Behavior | Rationale |
 | --- | --- |
-| Duplicate legacy-text baton tests outside runtime/models boundaries | No additional deletes this pass; runtime agent-step normalize kept as single integration boundary alongside `test_workflow_models.allow_legacy_text` |
+| Duplicate legacy-text baton tests outside runtime/models boundaries | No additional deletes this pass; issue #386 removed `allow_legacy_text` and the runtime's legacy-text normalization boundary entirely — batons are now strict JSON-only, enforced by `test_workflow_runtime.py::test_runtime_rejects_plain_text_baton_written_by_pr_agent` and `test_workflow_models.py::TestLegacyBatonFormatsAreRejected` |
 | Tests asserting global home as default install target | None found; new contract tests lock project-local install |
