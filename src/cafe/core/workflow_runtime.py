@@ -393,7 +393,15 @@ class BlackboardWorkflowRuntime:
             return str(to_step)
         return None
 
-    _OPERATION_INELIGIBLE_INTERRUPT_REASONS = {"interrupted", "keyboard_interrupt", "publish_error"}
+    _OPERATION_INELIGIBLE_INTERRUPT_REASONS = {
+        "interrupted",
+        "keyboard_interrupt",
+        "publish_error",
+        "agent_rate_limit",
+        "agent_cli_not_found",
+        "agent_cli_unavailable",
+        "agent_model_not_found",
+    }
 
     def _maybe_record_operation_running(self, *, current_step: str, reason: str) -> None:
         """Leave a durable ``running`` operation artifact for a recoverable interruption.
@@ -664,16 +672,21 @@ class BlackboardWorkflowRuntime:
             )
             raise StepInterrupted(step=current_step, hop=hop_count, reason="interrupted")
         except BaseException as exc:
-            # Catch AgentExecutionError (rate_limit, cli_not_found) and any
-            # other executor failure so the workflow records a clean
-            # interrupted state instead of crashing.
+            # Catch AgentExecutionError (rate_limit, cli_not_found),
+            # CriticalPhaseError (the same critical error_types re-raised by
+            # the phase layer after exhausting recovery), and any other
+            # executor failure so the workflow records a clean interrupted
+            # state instead of crashing.
             from cafe.agents.executor import AgentExecutionError
+            from cafe.core.types import CriticalPhaseError
 
             reason = "agent_error"
             detail = str(exc)
-            if isinstance(exc, AgentExecutionError) and getattr(exc, "error_type", None):
+            if isinstance(exc, (AgentExecutionError, CriticalPhaseError)) and getattr(
+                exc, "error_type", None
+            ):
                 reason = f"agent_{exc.error_type}"
-                detail = exc.display_message or str(exc)
+                detail = getattr(exc, "display_message", None) or str(exc)
             elif detail.startswith("PR sync script failed:"):
                 reason = "publish_error"
             elif detail.startswith("PR sync timed out"):

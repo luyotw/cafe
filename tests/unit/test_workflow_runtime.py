@@ -3268,6 +3268,90 @@ def test_keyboard_interrupt_does_not_create_operation_artifact(tmp_path: Path) -
     assert not (iteration_dir / "operation.json").exists()
 
 
+@pytest.mark.parametrize(
+    "error_type",
+    ["rate_limit", "cli_not_found", "cli_unavailable", "model_not_found"],
+)
+def test_agent_execution_critical_error_does_not_create_operation_artifact(
+    tmp_path: Path, error_type: str
+) -> None:
+    """A critical AgentExecutionError (rate_limit/cli_not_found/...) is not a long-running
+    operation: resuming must not be gated on a false ``running`` state."""
+    from cafe.agents.executor import AgentExecutionError
+
+    issue_dir = tmp_path / ".cafe" / "issues" / f"demo-critical-{error_type}"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}},
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
+        iteration_dir = issue_dir / step_name / "iteration_001"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        raise AgentExecutionError(f"{error_type} triggered", error_type=error_type)
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
+    result = runtime.run(start_step="develop", max_transitions=5)
+
+    assert result.final_status_code.startswith("INTERRUPTED")
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    assert not (iteration_dir / "operation.json").exists()
+
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *a, **k: StepExecutionResult(
+            response="done", artifacts={}, status_code="confirmed"
+        ),
+    ).run(start_step="develop", max_transitions=5)
+    assert resumed.final_status_code != "OPERATION_RUNNING"
+
+
+def test_critical_phase_error_does_not_create_operation_artifact(tmp_path: Path) -> None:
+    """CriticalPhaseError (raised by the phase layer for rate_limit/cli_not_found/... after
+    exhausting recovery) must not be misreported as recoverable long-running operation work."""
+    from cafe.core.types import CriticalPhaseError
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-critical-phase-error"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}},
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
+        iteration_dir = issue_dir / step_name / "iteration_001"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        raise CriticalPhaseError(
+            message="rate limit exceeded", error_type="rate_limit", phase_name="DevelopPhase"
+        )
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
+    result = runtime.run(start_step="develop", max_transitions=5)
+
+    assert result.final_status_code.startswith("INTERRUPTED")
+    assert "agent_rate_limit" in result.final_status_code
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    assert not (iteration_dir / "operation.json").exists()
+
+    bb = BlackboardStore(issue_dir).load_or_create("develop")
+    interrupted_events = [e for e in bb.events if e.event_type == "step_interrupted"]
+    assert len(interrupted_events) == 1
+    assert interrupted_events[0].data["reason"] == "agent_rate_limit"
+
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *a, **k: StepExecutionResult(
+            response="done", artifacts={}, status_code="confirmed"
+        ),
+    ).run(start_step="develop", max_transitions=5)
+    assert resumed.final_status_code != "OPERATION_RUNNING"
+
+
 def test_hand_edited_operation_artifact_is_not_trusted(tmp_path: Path) -> None:
     """A hand-edited operation.json with no matching blackboard record must not be trusted.
 
