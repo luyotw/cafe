@@ -15,6 +15,7 @@ BLACKBOARD_FILENAME = "blackboard.json"
 BLACKBOARD_SCHEMA_VERSION = 1
 NEXT_STEP_FILENAME = "next_step.txt"
 HANDOFF_CONTRACT_VERSION = 1
+OPERATION_ARTIFACT_FILENAME = "operation.json"
 
 
 def _now_iso() -> str:
@@ -48,6 +49,77 @@ class HandoffIntent(str, Enum):
     NO_CHANGES_NEEDED = "no_changes_needed"
     MANUAL_HANDOFF = "manual_handoff"
     WORKFLOW_COMPLETE = "workflow_complete"
+
+
+class LongRunningOperationState(str, Enum):
+    """Strict four-state model for a long-running phase operation.
+
+    Exactly these four values are accepted. Unknown values are schema
+    errors; there are no aliases or fallback names.
+    """
+
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    LOST = "lost"
+
+
+def operation_artifact_path(iteration_dir: Path) -> Path:
+    """Fixed one-per-iteration path: ``iteration_dir/operation.json``."""
+    return Path(iteration_dir) / OPERATION_ARTIFACT_FILENAME
+
+
+@dataclass
+class LongRunningOperationArtifact:
+    """Durable record of one long-running phase operation.
+
+    ``reason`` and ``exit_code`` are explanatory only; they never change
+    which of the four states is in effect.
+    """
+
+    state: LongRunningOperationState
+    reason: str = ""
+    exit_code: Optional[int] = None
+    created_at: str = field(default_factory=_now_iso)
+    updated_at: str = field(default_factory=_now_iso)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "state": self.state.value,
+            "reason": self.reason,
+            "exit_code": self.exit_code,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "LongRunningOperationArtifact":
+        if not isinstance(data, dict):
+            raise ValueError("operation.json must be a JSON object")
+        if "state" not in data:
+            raise ValueError("operation.json is missing required field 'state'")
+
+        # Direct enum construction only: no alias map, no migration fallback.
+        state = LongRunningOperationState(str(data["state"]))
+
+        raw_exit_code = data.get("exit_code")
+        exit_code: Optional[int]
+        if raw_exit_code is None:
+            exit_code = None
+        elif isinstance(raw_exit_code, bool):
+            raise ValueError(f"operation.json exit_code must be an integer, got {raw_exit_code!r}")
+        elif isinstance(raw_exit_code, int):
+            exit_code = raw_exit_code
+        else:
+            raise ValueError(f"operation.json exit_code must be an integer, got {raw_exit_code!r}")
+
+        return cls(
+            state=state,
+            reason=str(data.get("reason", "")),
+            exit_code=exit_code,
+            created_at=str(data.get("created_at", _now_iso())),
+            updated_at=str(data.get("updated_at", _now_iso())),
+        )
 
 
 @dataclass
@@ -220,8 +292,6 @@ class HandoffContract:
             ) from exc
 
         intent_raw = str(data["intent"])
-        if intent_raw == "chat_handoff":
-            intent_raw = HandoffIntent.MANUAL_HANDOFF.value
         try:
             intent = HandoffIntent(intent_raw)
         except ValueError as exc:
@@ -240,30 +310,6 @@ class HandoffContract:
             status_code=str(data.get("status_code", "")),
             created_at=str(data.get("created_at", _now_iso())),
             source=str(data.get("source", "unknown")),
-        )
-
-    @classmethod
-    def from_legacy_step(
-        cls,
-        *,
-        step: str,
-        from_step: str,
-        status_code: str = "",
-        source: str = "legacy_text",
-    ) -> "HandoffContract":
-        owner = HandoffOwner.AGENT if step not in {"user", "done"} else HandoffOwner(step)
-        intent = HandoffIntent.AWAIT_AGENT if owner == HandoffOwner.AGENT else HandoffIntent.MANUAL_HANDOFF
-        if owner == HandoffOwner.DONE:
-            intent = HandoffIntent.WORKFLOW_COMPLETE
-        return cls(
-            version=HANDOFF_CONTRACT_VERSION,
-            from_step=from_step,
-            to_owner=owner,
-            to_step=step,
-            intent=intent,
-            status_code=status_code,
-            created_at=_now_iso(),
-            source=source,
         )
 
     def validate(self, *, allowed_steps: List[str]) -> None:
@@ -382,7 +428,6 @@ class BlackboardStore:
         initial_step: str,
         playbook_id: str = "default",
         *,
-        allow_legacy_text: bool = False,
         tolerate_invalid_baton: bool = False,
     ) -> BlackboardState:
         if self.file_path.exists():
@@ -392,7 +437,7 @@ class BlackboardStore:
                 state.playbook_id = playbook_id
                 self.save(state)
             try:
-                self.ensure_baton(state, allow_legacy_text=allow_legacy_text)
+                self.ensure_baton(state)
             except BatonRejected:
                 if not tolerate_invalid_baton:
                     raise
@@ -401,7 +446,7 @@ class BlackboardStore:
         state = BlackboardState(current_step=initial_step, playbook_id=playbook_id)
         self.save(state)
         try:
-            self.ensure_baton(state, allow_legacy_text=allow_legacy_text)
+            self.ensure_baton(state)
         except BatonRejected:
             if not tolerate_invalid_baton:
                 raise
@@ -418,8 +463,6 @@ class BlackboardStore:
     def ensure_baton(
         self,
         state: BlackboardState,
-        *,
-        allow_legacy_text: bool = False,
     ) -> Optional[HandoffContract]:
         """Ensure a persistent baton file exists for this issue."""
         if self.next_step_path.exists():
@@ -427,11 +470,12 @@ class BlackboardStore:
                 contract = self.load_handoff_contract(
                     state,
                     allowed_steps=[],
-                    allow_legacy_text=allow_legacy_text,
                 )
-            except BatonRejected:
+            except (BatonRejected, ValueError):
                 # Keep the invalid baton on disk so the workflow runtime can
                 # feed the exact schema error back to the responsible agent.
+                # This also covers non-JSON/legacy-text batons, which are
+                # schema errors now that legacy baton parsing is removed.
                 state.handoff_contract = None
                 self.save(state)
                 return None
@@ -469,8 +513,6 @@ class BlackboardStore:
                 valid_values=[e.value for e in HandoffOwner],
             )
         intent_raw = str(payload.get("intent", ""))
-        if intent_raw == "chat_handoff":
-            intent_raw = HandoffIntent.MANUAL_HANDOFF.value
         try:
             HandoffIntent(intent_raw)
         except ValueError:
@@ -485,66 +527,16 @@ class BlackboardStore:
             valid_values=[],
         )
 
-    def _contract_from_legacy_key_values(
-        self,
-        raw: str,
-        state: BlackboardState,
-    ) -> HandoffContract:
-        """Parse an agent-written multi-line ``key=value`` baton.
-
-        Agents that miss the structured-JSON requirement commonly fall back to
-        this shape. Free-text fields (``summary=``/``message=``) and lines
-        without ``=`` are ignored — only routing fields are honored, so a long
-        summary can never leak into ``to_step`` (sibling of issue #357).
-        """
-        fields: Dict[str, str] = {}
-        for line in raw.splitlines():
-            if "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key = key.strip()
-            if key and key not in fields:
-                fields[key] = value.strip()
-        step = fields.get("to_step", "")
-        if not step or "\n" in step:
-            raise BatonRejected(
-                field="to_step",
-                invalid_value=raw[:80],
-                valid_values=[],
-            )
-        contract = HandoffContract.from_legacy_step(
-            step=step,
-            from_step=fields.get("from_step") or state.current_step,
-            status_code=fields.get("status_code", ""),
-            source="legacy_text",
-        )
-        intent_raw = fields.get("intent", "")
-        if intent_raw:
-            try:
-                contract.intent = HandoffIntent(intent_raw)
-            except ValueError:
-                pass
-        owner_raw = fields.get("to_owner", "")
-        if owner_raw:
-            try:
-                contract.to_owner = HandoffOwner(owner_raw)
-            except ValueError:
-                pass
-        return contract
-
     def load_handoff_contract(
         self,
         state: BlackboardState,
         *,
         allowed_steps: List[str],
-        allow_legacy_text: bool = False,
     ) -> HandoffContract:
         """Load and parse a structured baton contract from next_step.txt.
 
-        Plain step-name batons are a compatibility format used only at
-        chat/CLI handoff boundaries. Core workflow execution should keep the
-        default strict so deprecated handoff shapes do not leak back into the
-        runtime path.
+        Only the structured JSON baton contract is accepted. Plain-text step
+        names, ``key=value`` text, and any other legacy shapes are rejected.
         """
         if not self.next_step_path.exists():
             raise ValueError(f"Baton file is missing: {self.next_step_path}")
@@ -556,22 +548,7 @@ class BlackboardStore:
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError as exc:
-            if not allow_legacy_text:
-                raise ValueError(f"Invalid baton contract payload: {exc}") from exc
-            legacy_step = raw.strip()
-            if not legacy_step:
-                raise ValueError(f"Baton file is empty: {self.next_step_path}")
-            if "=" in legacy_step or "\n" in legacy_step:
-                contract = self._contract_from_legacy_key_values(legacy_step, state)
-            else:
-                contract = HandoffContract.from_legacy_step(
-                    step=legacy_step,
-                    from_step=state.current_step,
-                    source="legacy_text",
-                )
-            if allowed_steps:
-                contract.validate(allowed_steps=allowed_steps)
-            return contract
+            raise ValueError(f"Invalid baton contract payload: {exc}") from exc
 
         if not isinstance(payload, dict):
             raise BatonRejected(
@@ -590,9 +567,7 @@ class BlackboardStore:
         except BatonRejected:
             raise
         except ValueError as exc:
-            if not allow_legacy_text:
-                raise ValueError(f"Invalid baton contract payload: {exc}") from exc
-            raise
+            raise ValueError(f"Invalid baton contract payload: {exc}") from exc
 
         prior_contract = state.handoff_contract
         same_blackboard_handoff = (
@@ -662,6 +637,68 @@ class BlackboardStore:
     def put_artifact(self, state: BlackboardState, entry: ArtifactEntry) -> None:
         state.artifacts[entry.name] = entry
         self.save(state)
+
+    def read_operation_artifact(
+        self, iteration_dir: Path
+    ) -> Optional[LongRunningOperationArtifact]:
+        """Read the fixed one-per-iteration operation artifact, if any.
+
+        Raises ``ValueError``/``json.JSONDecodeError`` when the artifact
+        exists but fails schema validation; callers must treat that as a
+        schema error rather than silently defaulting to a state.
+        """
+        path = operation_artifact_path(iteration_dir)
+        if not path.exists():
+            return None
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return LongRunningOperationArtifact.from_dict(raw)
+
+    def write_operation_artifact(
+        self,
+        state: BlackboardState,
+        *,
+        step: str,
+        iteration_dir: Path,
+        artifact: LongRunningOperationArtifact,
+    ) -> LongRunningOperationArtifact:
+        """Persist the operation artifact and publish it as blackboard metadata.
+
+        Reuses existing metadata-artifact and event helpers; this does not
+        introduce a new ``BlackboardState`` collection or job queue.
+        """
+        path = operation_artifact_path(iteration_dir)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(artifact.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        artifact_name = f"{step}_operation"
+        previous = state.artifacts.get(artifact_name)
+        version = previous.version + 1 if previous else 1
+        self.put_artifact(
+            state,
+            ArtifactEntry(
+                name=artifact_name,
+                kind=ArtifactKind.METADATA,
+                version=version,
+                updated_by=step,
+                path=str(path),
+                summary=f"long_running_operation:{artifact.state.value}",
+            ),
+        )
+        self.record_event(
+            state,
+            "long_running_operation",
+            {
+                "step": step,
+                "state": artifact.state.value,
+                "reason": artifact.reason,
+                "exit_code": artifact.exit_code,
+                "path": str(path),
+            },
+        )
+        return artifact
 
     def append_capability_receipt(self, state: BlackboardState, receipt: Dict[str, Any]) -> None:
         """Append one structured host capability receipt and persist the blackboard."""

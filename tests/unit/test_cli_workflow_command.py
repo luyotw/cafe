@@ -1454,7 +1454,10 @@ def test_workflow_command_does_not_duplicate_pr_url_without_display(
     assert result.stdout.count("https://github.com/test/repo/pull/277") == 1
 
 
-def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, monkeypatch) -> None:
+def test_workflow_command_rejects_plain_text_chat_baton_before_execution(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Issue #386: a plain-text chat-authored baton is never consumed as a step name."""
     monkeypatch.chdir(tmp_path)
     executed_steps: list[str] = []
 
@@ -1502,15 +1505,14 @@ def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, m
         mock_git_cls.return_value = git
 
         result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
-        assert result.exit_code == 0
 
-    assert "Workflow context" in result.stdout
-    assert "playbook=default step=plan" in result.stdout
-    assert "Executing step=plan iteration=001" in result.stdout
-    assert executed_steps == ["plan", "develop", "review", "pr"]
+    # The plain-text baton is rejected as an invalid structured contract, not
+    # silently normalized into a step-name handoff.
+    assert result.exit_code == 1
+    assert not executed_steps
     assert next_step_file.exists()
     blackboard_data = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
-    assert blackboard_data["current_step"] == "user"
+    assert blackboard_data["current_step"] == "pr"
 
 
 def test_workflow_command_does_not_consume_chat_baton_with_uncommitted_changes(
@@ -1557,8 +1559,10 @@ def test_workflow_command_does_not_consume_chat_baton_with_uncommitted_changes(
 
         result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
 
+    # A plain-text baton is rejected outright (never consumed), independent of
+    # the uncommitted-changes guard that only applied to the legacy path. The
+    # workflow stays paused at "user" rather than crashing or advancing.
     assert result.exit_code == 0
-    assert "uncommitted \nchanges" in result.stdout
     assert not executed_steps
     assert next_step_file.exists()
     blackboard_data = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
@@ -2265,7 +2269,18 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(
     def fake_launch_chat(role: str, issue_name: str) -> int:
         assert role == "developer"
         assert issue_name == "issue-209"
-        (issue_dir / "next_step.txt").write_text("develop\n", encoding="utf-8")
+        # Structured JSON baton only (issue #386): plain-text batons are rejected.
+        (issue_dir / "next_step.txt").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "to_owner": "agent",
+                    "to_step": "develop",
+                    "intent": "await_agent",
+                }
+            ),
+            encoding="utf-8",
+        )
         return 0
 
     with (

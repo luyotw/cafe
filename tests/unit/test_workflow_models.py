@@ -114,8 +114,8 @@ class TestLoadHandoffContractBatonRejected:
         assert contract.to_owner == HandoffOwner.AGENT
         assert not any(e.event_type == "baton_auto_corrected" for e in state.events)
 
-    def test_allow_legacy_text_json_invalid_raises_baton_rejected(self, tmp_path: Path) -> None:
-        """JSON 解析成功但 enum 無效時，即使 allow_legacy_text=True 也拋 BatonRejected。"""
+    def test_invalid_enum_value_raises_baton_rejected(self, tmp_path: Path) -> None:
+        """JSON 解析成功但 enum 無效時，一律拋 BatonRejected。"""
         issue_dir = tmp_path / "issue-reject-4"
         issue_dir.mkdir(parents=True)
         store = BlackboardStore(issue_dir)
@@ -123,7 +123,7 @@ class TestLoadHandoffContractBatonRejected:
         _write_baton(issue_dir, _base_payload(to_owner="human", to_step="user", intent="need_clarification"))
 
         with pytest.raises(BatonRejected):
-            store.load_handoff_contract(state, allowed_steps=["develop", "review"], allow_legacy_text=True)
+            store.load_handoff_contract(state, allowed_steps=["develop", "review"])
 
     @pytest.mark.parametrize(
         "missing_field",
@@ -172,8 +172,8 @@ class TestLoadHandoffContractBatonRejected:
         assert contract.from_step == "develop"
         assert contract.status_code == ""
 
-    def test_allow_legacy_text_json_scalar_raises_baton_rejected(self, tmp_path: Path) -> None:
-        """能 parse 的 JSON 非 object 時不可退回 legacy text。"""
+    def test_json_scalar_payload_raises_baton_rejected(self, tmp_path: Path) -> None:
+        """能 parse 的 JSON 非 object 時一律拒絕，不接受純文字或 scalar。"""
         issue_dir = tmp_path / "issue-reject-scalar"
         issue_dir.mkdir(parents=True)
         store = BlackboardStore(issue_dir)
@@ -184,7 +184,6 @@ class TestLoadHandoffContractBatonRejected:
             store.load_handoff_contract(
                 state,
                 allowed_steps=["develop", "review"],
-                allow_legacy_text=True,
             )
 
         exc = exc_info.value
@@ -192,18 +191,16 @@ class TestLoadHandoffContractBatonRejected:
         assert exc.invalid_value == "str"
         assert exc.valid_values == ["JSON object"]
 
-    def test_allow_legacy_text_non_json_falls_back_to_legacy_step(self, tmp_path: Path) -> None:
-        """JSON 解析失敗（非 enum 問題）且 allow_legacy_text=True 時走 legacy step 解析。"""
+    def test_plain_step_name_raises_value_error(self, tmp_path: Path) -> None:
+        """純文字 step name（非 JSON）在每個讀取路徑都必須失敗，不得被視為合法 baton。"""
         issue_dir = tmp_path / "issue-reject-5"
         issue_dir.mkdir(parents=True)
         store = BlackboardStore(issue_dir)
         state = store.load_or_create("develop")
         (issue_dir / "next_step.txt").write_text("review", encoding="utf-8")
 
-        contract = store.load_handoff_contract(state, allowed_steps=["develop", "review"], allow_legacy_text=True)
-
-        assert contract.to_step == "review"
-        assert contract.source == "legacy_text"
+        with pytest.raises(ValueError):
+            store.load_handoff_contract(state, allowed_steps=["develop", "review"])
 
 
 def test_blackboard_load_or_create_persists_current_step_and_playbook(tmp_path: Path) -> None:
@@ -446,8 +443,12 @@ def test_blackboard_rebuild_save_has_no_top_level_owner(tmp_path: Path) -> None:
     assert "owner" not in raw
 
 
-class TestLegacyKeyValueBaton:
-    """Sibling of issue #357: agent-written multi-line key=value batons."""
+class TestLegacyBatonFormatsAreRejected:
+    """Issue #386: legacy baton text shapes must fail clearly, never route.
+
+    Sibling of issue #357's ``key=value`` compatibility parsing, which has
+    since been removed entirely along with ``allow_legacy_text``.
+    """
 
     def _store_and_state(self, tmp_path: Path):
         issue_dir = tmp_path / "issue-legacy-kv"
@@ -456,7 +457,7 @@ class TestLegacyKeyValueBaton:
         state = store.load_or_create("schema-comment")
         return issue_dir, store, state
 
-    def test_multiline_key_value_with_free_text_parses_routing_fields(self, tmp_path: Path) -> None:
+    def test_multiline_key_value_is_rejected(self, tmp_path: Path) -> None:
         issue_dir, store, state = self._store_and_state(tmp_path)
         (issue_dir / "next_step.txt").write_text(
             "to_step=user\nto_owner=user\nintent=need_clarification\n"
@@ -464,69 +465,95 @@ class TestLegacyKeyValueBaton:
             encoding="utf-8",
         )
 
-        contract = store.load_handoff_contract(
-            state,
-            allowed_steps=["build", "review", "schema-comment"],
-            allow_legacy_text=True,
-        )
+        with pytest.raises(ValueError):
+            store.load_handoff_contract(
+                state,
+                allowed_steps=["build", "review", "schema-comment"],
+            )
 
-        assert contract.to_step == "user"
-        assert contract.to_owner == HandoffOwner.USER
-        assert contract.intent == HandoffIntent.NEED_CLARIFICATION
-        assert contract.from_step == "schema-comment"
-
-    def test_key_value_without_to_step_raises_baton_rejected(self, tmp_path: Path) -> None:
+    def test_key_value_without_to_step_is_rejected(self, tmp_path: Path) -> None:
         issue_dir, store, state = self._store_and_state(tmp_path)
         (issue_dir / "next_step.txt").write_text(
             "to_owner=agent\nsummary=long text without routing target\n",
             encoding="utf-8",
         )
 
-        with pytest.raises(BatonRejected) as exc_info:
+        with pytest.raises(ValueError):
             store.load_handoff_contract(
                 state,
                 allowed_steps=["build", "review"],
-                allow_legacy_text=True,
             )
-        assert exc_info.value.field == "to_step"
 
-    def test_single_step_name_still_parses_as_legacy(self, tmp_path: Path) -> None:
+    def test_single_step_name_is_rejected(self, tmp_path: Path) -> None:
         issue_dir, store, state = self._store_and_state(tmp_path)
         (issue_dir / "next_step.txt").write_text("review\n", encoding="utf-8")
 
-        contract = store.load_handoff_contract(
-            state,
-            allowed_steps=["build", "review"],
-            allow_legacy_text=True,
-        )
-        assert contract.to_step == "review"
-        assert contract.source == "legacy_text"
-
-    def test_unknown_single_step_name_is_rejected_by_allowed_steps(self, tmp_path: Path) -> None:
-        issue_dir, store, state = self._store_and_state(tmp_path)
-        (issue_dir / "next_step.txt").write_text("no_such_step\n", encoding="utf-8")
-
-        with pytest.raises(BatonRejected) as exc_info:
+        with pytest.raises(ValueError):
             store.load_handoff_contract(
                 state,
                 allowed_steps=["build", "review"],
-                allow_legacy_text=True,
             )
 
-        assert exc_info.value.field == "to_step"
-        assert exc_info.value.invalid_value == "no_such_step"
+    def test_unknown_single_step_name_is_rejected(self, tmp_path: Path) -> None:
+        issue_dir, store, state = self._store_and_state(tmp_path)
+        (issue_dir / "next_step.txt").write_text("no_such_step\n", encoding="utf-8")
 
-    def test_invalid_intent_value_falls_back_to_step_derived_intent(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError):
+            store.load_handoff_contract(
+                state,
+                allowed_steps=["build", "review"],
+            )
+
+    def test_key_value_with_invalid_intent_is_rejected(self, tmp_path: Path) -> None:
         issue_dir, store, state = self._store_and_state(tmp_path)
         (issue_dir / "next_step.txt").write_text(
             "to_step=review\nto_owner=agent\nintent=not_a_real_intent\n",
             encoding="utf-8",
         )
 
-        contract = store.load_handoff_contract(
-            state,
-            allowed_steps=["build", "review"],
-            allow_legacy_text=True,
+        with pytest.raises(ValueError):
+            store.load_handoff_contract(
+                state,
+                allowed_steps=["build", "review"],
+            )
+
+    def test_load_handoff_contract_has_no_allow_legacy_text_parameter(self) -> None:
+        import inspect
+
+        signature = inspect.signature(BlackboardStore.load_handoff_contract)
+        assert "allow_legacy_text" not in signature.parameters
+
+    def test_ensure_baton_has_no_allow_legacy_text_parameter(self) -> None:
+        import inspect
+
+        signature = inspect.signature(BlackboardStore.ensure_baton)
+        assert "allow_legacy_text" not in signature.parameters
+
+    def test_load_or_create_has_no_allow_legacy_text_parameter(self) -> None:
+        import inspect
+
+        signature = inspect.signature(BlackboardStore.load_or_create)
+        assert "allow_legacy_text" not in signature.parameters
+
+    def test_handoff_contract_has_no_from_legacy_step(self) -> None:
+        from cafe.core.blackboard import HandoffContract
+
+        assert not hasattr(HandoffContract, "from_legacy_step")
+
+    def test_store_has_no_legacy_key_value_helper(self) -> None:
+        assert not hasattr(BlackboardStore, "_contract_from_legacy_key_values")
+
+    def test_chat_handoff_intent_is_rejected_not_aliased(self, tmp_path: Path) -> None:
+        """``intent: "chat_handoff"`` must raise BatonRejected(field="intent"), never normalize."""
+        issue_dir, store, state = self._store_and_state(tmp_path)
+        _write_baton(
+            issue_dir,
+            _base_payload(to_owner="agent", to_step="review", intent="chat_handoff"),
         )
-        assert contract.to_step == "review"
-        assert contract.intent == HandoffIntent.AWAIT_AGENT
+
+        with pytest.raises(BatonRejected) as exc_info:
+            store.load_handoff_contract(state, allowed_steps=["build", "review", "schema-comment"])
+
+        assert exc_info.value.field == "intent"
+        assert exc_info.value.invalid_value == "chat_handoff"
+        assert "manual_handoff" in exc_info.value.valid_values

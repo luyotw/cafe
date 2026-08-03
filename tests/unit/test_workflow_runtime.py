@@ -2039,7 +2039,8 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
     assert any(e.data.get("to") == "review" for e in transitions)
 
 
-def test_runtime_normalizes_legacy_baton_written_by_pr_agent(tmp_path: Path) -> None:
+def test_runtime_rejects_plain_text_baton_written_by_pr_agent(tmp_path: Path) -> None:
+    """Issue #386: a plain step-name baton is never normalized, even at the pr/baton-driven boundary."""
     issue_dir = tmp_path / ".cafe" / "issues" / "legacy-pr-handoff"
     issue_dir.mkdir(parents=True)
     _write_baton(issue_dir, from_step="pr", to_owner="agent", to_step="pr", intent="await_agent")
@@ -2064,18 +2065,6 @@ def test_runtime_normalizes_legacy_baton_written_by_pr_agent(tmp_path: Path) -> 
         if step_name == "pr":
             (issue_dir / "next_step.txt").write_text("develop\n", encoding="utf-8")
             return StepExecutionResult(response="todo", artifacts={}, status_code="needs_changes")
-        if step_name == "develop":
-            store = BlackboardStore(issue_dir)
-            store.update_handoff_contract(
-                state,
-                from_step="develop",
-                to_owner=HandoffOwner.DONE,
-                to_step="done",
-                intent=HandoffIntent.WORKFLOW_COMPLETE,
-                status_code="confirmed",
-                source="test",
-            )
-            return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
         raise AssertionError(f"unexpected step {step_name}")
 
     runtime = BlackboardWorkflowRuntime(
@@ -2083,12 +2072,11 @@ def test_runtime_normalizes_legacy_baton_written_by_pr_agent(tmp_path: Path) -> 
         playbook=playbook,
         executor=executor,
     )
-    result = runtime.run(start_step="pr", max_transitions=5)
 
-    assert calls == ["pr", "develop"]
-    assert result.completed is True
-    baton = json.loads((issue_dir / "next_step.txt").read_text(encoding="utf-8"))
-    assert baton["to_step"] == "done"
+    with pytest.raises(ValueError):
+        runtime.run(start_step="pr", max_transitions=5)
+
+    assert calls == ["pr"]
 
 
 def test_runtime_handles_keyboard_interrupt(tmp_path: Path) -> None:
@@ -2694,7 +2682,7 @@ def test_runtime_retries_missing_required_field_then_succeeds(tmp_path: Path) ->
 
 
 def test_runtime_rejects_no_status_legacy_text_as_status_transition(tmp_path: Path) -> None:
-    """Legacy plain-text next_step 在 legacy 相容邊界仍應被接受。"""
+    """Issue #386: plain-text next_step.txt is rejected in the core runtime path, never accepted."""
     issue_dir = tmp_path / ".cafe" / "issues" / "legacy-status-text"
     playbook = {
         "playbook": {"id": "default"},
@@ -2731,13 +2719,11 @@ def test_runtime_rejects_no_status_legacy_text_as_status_transition(tmp_path: Pa
         playbook=playbook,
         executor=executor,
     )
-    result = runtime.run(start_step="spec", max_transitions=5)
 
-    assert result.completed is True
-    assert result.final_step == "plan"
-    assert visited_steps == ["spec", "plan"]
-    blackboard = BlackboardStore(issue_dir).load_or_create("plan")
-    assert blackboard.current_step == "done"
+    with pytest.raises(ValueError):
+        runtime.run(start_step="spec", max_transitions=5)
+
+    assert visited_steps == ["spec"]
 
 
 def test_runtime_retries_same_phase_baton_then_succeeds(tmp_path: Path) -> None:

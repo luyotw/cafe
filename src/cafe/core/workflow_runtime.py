@@ -15,7 +15,14 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from cafe.core.active_issue import clear_marker_if_matches
-from cafe.core.blackboard import BlackboardStore, HandoffContract, HandoffIntent, HandoffOwner
+from cafe.core.blackboard import (
+    BlackboardStore,
+    HandoffContract,
+    HandoffIntent,
+    HandoffOwner,
+    LongRunningOperationArtifact,
+    LongRunningOperationState,
+)
 from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import (
@@ -69,6 +76,8 @@ class HandoffReconciliationResult:
     iteration_dir: Optional[Path] = None
     missing_evidence: list[str] = field(default_factory=list)
     validated_evidence: list[str] = field(default_factory=list)
+    operation: Optional[LongRunningOperationArtifact] = None
+    operation_schema_invalid: bool = False
 
 
 @dataclass
@@ -383,8 +392,43 @@ class BlackboardWorkflowRuntime:
             return str(to_step)
         return None
 
+    _OPERATION_INELIGIBLE_INTERRUPT_REASONS = {"interrupted", "keyboard_interrupt", "publish_error"}
+
+    def _maybe_record_operation_running(self, *, current_step: str, reason: str) -> None:
+        """Leave a durable ``running`` operation artifact for a recoverable interruption.
+
+        Only reasons that represent genuine execution-signal interruptions
+        (e.g. agent/tool timeouts or backgrounding) get an operation artifact;
+        an explicit Ctrl-C or the separate PR-publish error path are not
+        forced into the long-running operation model. At most one operation
+        artifact is ever written per iteration.
+        """
+        if reason in self._OPERATION_INELIGIBLE_INTERRUPT_REASONS:
+            return
+        iteration_dir = self._latest_iteration_dir(current_step)
+        if iteration_dir is None:
+            return
+        try:
+            existing = self.blackboard_store.read_operation_artifact(iteration_dir)
+        except (ValueError, json.JSONDecodeError, OSError):
+            # Leave a malformed artifact alone; resume reconciliation will
+            # surface it as a schema error instead of silently overwriting it.
+            return
+        if existing is not None:
+            return
+        self.blackboard_store.write_operation_artifact(
+            self.blackboard,
+            step=current_step,
+            iteration_dir=iteration_dir,
+            artifact=LongRunningOperationArtifact(
+                state=LongRunningOperationState.RUNNING,
+                reason=reason,
+            ),
+        )
+
     def _restore_interrupted_step_handoff(self, *, current_step: str, reason: str) -> None:
         """Keep the baton pinned to the interrupted step when recovery fails."""
+        self._maybe_record_operation_running(current_step=current_step, reason=reason)
         self.blackboard_store.set_current_step(self.blackboard, current_step)
         self.blackboard_store.update_handoff_contract(
             self.blackboard,
@@ -406,19 +450,14 @@ class BlackboardWorkflowRuntime:
     def _load_agent_written_handoff_contract(self, *, current_step: str) -> HandoffContract:
         """Load and normalize a baton written by a just-finished agent step.
 
-        ``allow_legacy_text=True`` is kept so that sessions started by older
-        builds remain resumable. Production agents must always write structured
-        JSON batons to ``next_step.txt``; the legacy fallback is for safety only.
+        Only the structured JSON baton contract is accepted; agents must
+        always write structured JSON batons to ``next_step.txt``.
         """
         contract = self.blackboard_store.load_handoff_contract(
             self.blackboard,
             allowed_steps=list(self.steps.keys()),
-            allow_legacy_text=True,
         )
-        if contract.source == "legacy_text":
-            contract.from_step = current_step
-            contract.source = "workflow.legacy_baton_normalized"
-        elif contract.source == "unknown":
+        if contract.source == "unknown":
             contract.source = "baton"
         self.blackboard_store.write_handoff_contract(self.blackboard, contract)
         return contract
@@ -987,6 +1026,25 @@ class BlackboardWorkflowRuntime:
                 else:
                     missing.append("questions_valid")
 
+        operation: Optional[LongRunningOperationArtifact] = None
+        operation_schema_invalid = False
+        if iteration_dir is not None:
+            try:
+                operation = self.blackboard_store.read_operation_artifact(iteration_dir)
+            except (ValueError, json.JSONDecodeError, OSError):
+                operation_schema_invalid = True
+                missing.append("operation_schema_invalid")
+
+        if operation is not None:
+            if operation.state == LongRunningOperationState.RUNNING:
+                missing.append("operation_running")
+            elif operation.state == LongRunningOperationState.FAILED:
+                missing.append("operation_failed")
+            elif operation.state == LongRunningOperationState.LOST:
+                missing.append("operation_lost")
+            else:
+                validated.append("operation_succeeded")
+
         return HandoffReconciliationResult(
             reconciled=not missing,
             status_code=status_code,
@@ -994,6 +1052,8 @@ class BlackboardWorkflowRuntime:
             iteration_dir=iteration_dir,
             missing_evidence=missing,
             validated_evidence=validated,
+            operation=operation,
+            operation_schema_invalid=operation_schema_invalid,
         )
 
     def _reconciliation_event_exists(
@@ -1122,6 +1182,116 @@ class BlackboardWorkflowRuntime:
             completed=False,
         )
 
+    def _pause_operation_running(
+        self,
+        *,
+        current_step: str,
+        runtime: str,
+        result: HandoffReconciliationResult,
+    ) -> PlaybookRunResult:
+        """Stay recoverable while an operation is still running; no duplicate launch."""
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "operation_running",
+            {
+                "step": current_step,
+                "runtime": runtime,
+            },
+        )
+        self._restore_interrupted_step_handoff(current_step=current_step, reason="operation_running")
+        return PlaybookRunResult(
+            final_step=current_step,
+            final_status_code="OPERATION_RUNNING",
+            completed=False,
+        )
+
+    def _block_operation_outcome(
+        self,
+        *,
+        current_step: str,
+        runtime: str,
+        result: HandoffReconciliationResult,
+        outcome: str,
+    ) -> PlaybookRunResult:
+        """Stop clearly and actionably for failed/lost/invalid/unverifiable operations.
+
+        Never advances as if the work succeeded and never retries automatically.
+        """
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "operation_blocked",
+            {
+                "step": current_step,
+                "runtime": runtime,
+                "outcome": outcome,
+                "missing_evidence": list(result.missing_evidence),
+            },
+        )
+        self._restore_interrupted_step_handoff(
+            current_step=current_step,
+            reason=f"operation_{outcome}",
+        )
+        return PlaybookRunResult(
+            final_step=current_step,
+            final_status_code=f"OPERATION_{outcome.upper()}",
+            completed=False,
+        )
+
+    def _handle_operation_gate(
+        self,
+        *,
+        current_step: str,
+        runtime: str,
+        result: HandoffReconciliationResult,
+    ) -> Optional[PlaybookRunResult]:
+        """Resolve running/failed/lost/schema-invalid/unverifiable operation states.
+
+        Returns a definitive ``PlaybookRunResult`` when the workflow must stop
+        here instead of falling through to a duplicate step execution. Returns
+        ``None`` when there is no operation artifact (ordinary short-running
+        step, unaffected) or when the operation is ``succeeded`` and fully
+        verified by existing reconciliation evidence.
+        """
+        if result.operation is None and not result.operation_schema_invalid:
+            return None
+
+        if result.operation_schema_invalid:
+            return self._block_operation_outcome(
+                current_step=current_step,
+                runtime=runtime,
+                result=result,
+                outcome="schema_invalid",
+            )
+
+        operation = result.operation
+        assert operation is not None
+        if operation.state == LongRunningOperationState.RUNNING:
+            return self._pause_operation_running(
+                current_step=current_step, runtime=runtime, result=result
+            )
+
+        if operation.state in {
+            LongRunningOperationState.FAILED,
+            LongRunningOperationState.LOST,
+        }:
+            return self._block_operation_outcome(
+                current_step=current_step,
+                runtime=runtime,
+                result=result,
+                outcome=operation.state.value,
+            )
+
+        # operation.state == SUCCEEDED: only block when other reconciliation
+        # evidence (baton/output/checklist/capability receipts) is missing.
+        if not result.reconciled:
+            return self._block_operation_outcome(
+                current_step=current_step,
+                runtime=runtime,
+                result=result,
+                outcome="succeeded_unverified",
+            )
+        return None
+
     def _try_reconcile_interrupted_step(
         self,
         *,
@@ -1133,6 +1303,11 @@ class BlackboardWorkflowRuntime:
             return None
 
         result = self._validate_reconciled_handoff(current_step=current_step)
+
+        gated = self._handle_operation_gate(current_step=current_step, runtime=runtime, result=result)
+        if gated is not None:
+            return gated
+
         if not result.reconciled:
             self._record_reconciliation_failed(
                 current_step=current_step,
@@ -1906,11 +2081,19 @@ class BlackboardWorkflowRuntime:
             return self._run_single_step(current_step=current_step)
 
         if self._should_attempt_resume_reconciliation(start_step=start_step):
-            reconciled = self._try_resume_reconcile_interrupted_handoff(
-                runtime_label="resume_reconciliation",
-            )
-            if reconciled is not None and self.blackboard.current_step not in self.steps:
-                return reconciled
+            interrupted = self._latest_unreconciled_interrupted_step()
+            if interrupted is not None:
+                interrupted_step, interrupted_reason = interrupted
+                reconciled = self._try_reconcile_interrupted_step(
+                    current_step=interrupted_step,
+                    runtime="resume_reconciliation",
+                    reason=interrupted_reason,
+                )
+                if reconciled is not None and (
+                    self.blackboard.current_step == interrupted_step
+                    or self.blackboard.current_step not in self.steps
+                ):
+                    return reconciled
 
         resolution = (
             RuntimePositionResolution(current_step=start_step)
