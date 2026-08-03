@@ -189,6 +189,9 @@ class GenericPhase:
         runtime_context.append(
             "- stay within this prompt's listed shared skills + phase skill; do not invoke external workflow-driving skills (e.g. use-cafe-workflow)"
         )
+        runtime_context.append(
+            "- for legitimate long-running subprocess work that may exceed the agent tool window, use `cafe operation run --issue-dir <issue_dir> --step <step> --iteration-dir <iteration_dir> -- <command>` and recheck that same operation with `cafe operation status`; do not relaunch the phase executor or command while it reports running"
+        )
 
         if context and context.get("blackboard_digest"):
             runtime_context.extend(
