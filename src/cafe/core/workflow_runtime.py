@@ -22,6 +22,7 @@ from cafe.core.blackboard import (
     HandoffOwner,
     LongRunningOperationArtifact,
     LongRunningOperationState,
+    operation_artifact_path,
 )
 from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
 from cafe.core.questions_schema import validate_questions_xml
@@ -936,7 +937,7 @@ class BlackboardWorkflowRuntime:
         )
 
     def _operation_artifact_trusted(
-        self, *, current_step: str, artifact: LongRunningOperationArtifact
+        self, *, current_step: str, iteration_dir: Path, artifact: LongRunningOperationArtifact
     ) -> bool:
         """Only trust operation state that is also recorded as runtime-owned evidence.
 
@@ -945,14 +946,18 @@ class BlackboardWorkflowRuntime:
         sufficient evidence. ``BlackboardStore.write_operation_artifact`` is
         the only supported writer and always records a matching
         ``{step}_operation`` metadata artifact on the blackboard in the same
-        call; requiring that record to exist and match keeps an
-        agent-authored or hand-edited ``operation.json`` from being accepted
-        as trusted operation truth.
+        call; requiring that record to exist, match, and point at *this*
+        iteration's ``operation.json`` path keeps an agent-authored or
+        hand-edited file, or a stale metadata record left over from an
+        earlier iteration, from being accepted as trusted operation truth.
         """
         entry = self.blackboard_store.get_artifact(self.blackboard, f"{current_step}_operation")
         if entry is None:
             return False
-        return entry.summary == f"long_running_operation:{artifact.state.value}"
+        if entry.summary != f"long_running_operation:{artifact.state.value}":
+            return False
+        expected_path = operation_artifact_path(iteration_dir)
+        return Path(entry.path) == expected_path
 
     def _capability_receipt_recorded(self, capability_id: str) -> bool:
         for receipt in getattr(self.blackboard, "capability_receipts", []):
@@ -1070,7 +1075,9 @@ class BlackboardWorkflowRuntime:
                 missing.append("operation_schema_invalid")
 
         if operation is not None:
-            if not self._operation_artifact_trusted(current_step=current_step, artifact=operation):
+            if not self._operation_artifact_trusted(
+                current_step=current_step, iteration_dir=iteration_dir, artifact=operation
+            ):
                 operation_untrusted = True
                 missing.append("operation_untrusted")
             elif operation.state == LongRunningOperationState.RUNNING:

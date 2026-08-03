@@ -3407,6 +3407,71 @@ def test_hand_edited_operation_artifact_is_not_trusted(tmp_path: Path) -> None:
     )
 
 
+def test_stale_metadata_artifact_from_earlier_iteration_is_not_trusted(tmp_path: Path) -> None:
+    """A ``{step}_operation`` record from an older iteration must not vouch for a newer one.
+
+    ``_operation_artifact_trusted`` used to compare only the recorded
+    ``summary`` string against the current iteration's parsed state. That
+    let a stale metadata artifact -- e.g. left over from
+    ``develop/iteration_001`` -- validate a hand-written
+    ``develop/iteration_002/operation.json`` whenever the state string
+    happened to match, even though the metadata artifact's own ``path``
+    still pointed at iteration 1's file. Trust must be bound to the exact
+    iteration's operation artifact path, not just the state string.
+    """
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-stale-iteration"
+    _setup_interrupted_step(issue_dir, step="develop")
+    old_iteration_dir = _write_iteration_evidence(issue_dir, "develop")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    # Legitimately recorded for iteration_001, then superseded by a new iteration.
+    store.write_operation_artifact(
+        state,
+        step="develop",
+        iteration_dir=old_iteration_dir,
+        artifact=LongRunningOperationArtifact(state=LongRunningOperationState.SUCCEEDED),
+    )
+
+    new_iteration_dir = issue_dir / "develop" / "iteration_002"
+    new_iteration_dir.mkdir(parents=True, exist_ok=True)
+    (new_iteration_dir / "output.md").write_text("# done\n", encoding="utf-8")
+    (new_iteration_dir / "checklist.md").write_text("- [x] done\n", encoding="utf-8")
+    # Hand-written, never passed through write_operation_artifact for this iteration.
+    (new_iteration_dir / "operation.json").write_text(
+        json.dumps({"state": "succeeded", "reason": "", "exit_code": 0}),
+        encoding="utf-8",
+    )
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}},
+            "review": {"skill": "review", "role": "developer", "on": {"confirmed": "_done"}},
+        },
+    }
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
+        calls.append(step_name)
+        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
+
+    store.update_handoff_contract(
+        state,
+        from_step="develop",
+        to_owner=HandoffOwner.AGENT,
+        to_step="review",
+        intent=HandoffIntent.AWAIT_AGENT,
+        source="test",
+    )
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
+    result = runtime.run(max_transitions=5)
+
+    assert calls == []
+    assert result.completed is False
+    assert result.final_status_code == "OPERATION_UNTRUSTED"
+
+
 def test_recorded_operation_artifact_state_mismatch_is_not_trusted(tmp_path: Path) -> None:
     """A file edited after the fact to a different state than recorded must not be trusted."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-mismatch"
