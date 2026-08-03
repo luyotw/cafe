@@ -20,7 +20,7 @@ console = Console()
 
 
 def _load_playbook(playbook: str) -> dict:
-    return PlaybookLoader().load_playbook(playbook)
+    return PlaybookLoader().load(playbook)
 
 
 def _print_payload(payload: dict) -> None:
