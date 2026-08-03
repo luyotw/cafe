@@ -15,10 +15,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from cafe.agents.executor import AgentExecutionError
 from cafe.core.blackboard import (
     BlackboardStore,
-    LongRunningOperationArtifact,
     LongRunningOperationState,
 )
 from cafe.core.workflow_models import StepExecutionResult
@@ -86,20 +87,15 @@ def test_agent_timeout_then_resume_promotes_running_to_succeeded_without_duplica
     (iteration_dir / "checklist.md").write_text("- [x] done\n", encoding="utf-8")
     _write_baton(issue_dir, from_step="develop", to_step="review")
     store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop")
     running_operation = store.read_operation_artifact(iteration_dir)
     assert running_operation is not None
-    store.write_operation_receipt(
-        state,
+    first_run.record_long_running_operation_receipt(
         step="develop",
         iteration_dir=iteration_dir,
         operation_id=running_operation.operation_id,
-        artifact=LongRunningOperationArtifact(
-            operation_id=running_operation.operation_id,
-            state=LongRunningOperationState.SUCCEEDED,
-            reason="controlled_helper_completed",
-            exit_code=0,
-        ),
+        state=LongRunningOperationState.SUCCEEDED,
+        reason="controlled_helper_completed",
+        exit_code=0,
     )
 
     def duplicate_launch_executor(
@@ -159,6 +155,74 @@ def test_agent_writable_completion_evidence_without_receipt_does_not_promote_to_
 
     assert result.final_status_code == "OPERATION_RUNNING"
     assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "running"
+
+
+def test_runtime_records_controlled_terminal_receipt_for_running_operation(
+    tmp_path: Path,
+) -> None:
+    """The production runtime exposes the controlled receipt writer used after
+    out-of-band long work reaches a terminal outcome; tests must not be the
+    only caller of ``BlackboardStore.write_operation_receipt``."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-runtime-receipt"
+
+    def crashing_executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        iteration_dir = issue_dir / step_name / "iteration_001"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        (iteration_dir / "iteration.json").write_text(
+            json.dumps({"iteration": 1}), encoding="utf-8"
+        )
+        raise AgentExecutionError(
+            "agent did not produce output before the execution timeout", error_type="timeout"
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=_PLAYBOOK, executor=crashing_executor
+    )
+    runtime.run(start_step="develop", single_step=True)
+
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    operation = BlackboardStore(issue_dir).read_operation_artifact(iteration_dir)
+    assert operation is not None
+
+    receipt = runtime.record_long_running_operation_receipt(
+        step="develop",
+        iteration_dir=iteration_dir,
+        operation_id=operation.operation_id,
+        state=LongRunningOperationState.FAILED,
+        reason="controlled_helper_exit",
+        exit_code=2,
+    )
+
+    assert receipt.state == LongRunningOperationState.FAILED
+    assert receipt.operation_id == operation.operation_id
+    receipt_data = json.loads((iteration_dir / "operation_receipt.json").read_text())
+    assert receipt_data["state"] == "failed"
+    assert receipt_data["exit_code"] == 2
+
+
+def test_runtime_receipt_writer_rejects_untrusted_operation_artifact(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-untrusted-receipt"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "operation.json").write_text(
+        json.dumps({"operation_id": "forged", "state": "running"}),
+        encoding="utf-8",
+    )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_PLAYBOOK,
+        executor=lambda *_args: StepExecutionResult("unused", "confirmed"),
+    )
+
+    with pytest.raises(ValueError, match="not trusted"):
+        runtime.record_long_running_operation_receipt(
+            step="develop",
+            iteration_dir=iteration_dir,
+            operation_id="forged",
+            state=LongRunningOperationState.FAILED,
+            reason="should_not_be_trusted",
+        )
 
 
 def test_agent_timeout_then_resume_stays_running_without_duplicate_launch(
@@ -227,19 +291,14 @@ def test_agent_timeout_then_controlled_receipt_marks_lost_without_duplicate_laun
 
     iteration_dir = issue_dir / "develop" / "iteration_001"
     store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop")
     running_operation = store.read_operation_artifact(iteration_dir)
     assert running_operation is not None
-    store.write_operation_receipt(
-        state,
+    first_run.record_long_running_operation_receipt(
         step="develop",
         iteration_dir=iteration_dir,
         operation_id=running_operation.operation_id,
-        artifact=LongRunningOperationArtifact(
-            operation_id=running_operation.operation_id,
-            state=LongRunningOperationState.LOST,
-            reason="controlled_helper_could_not_find_operation",
-        ),
+        state=LongRunningOperationState.LOST,
+        reason="controlled_helper_could_not_find_operation",
     )
 
     second_run = BlackboardWorkflowRuntime(
@@ -283,21 +342,16 @@ def test_agent_timeout_then_controlled_receipt_marks_failed_without_duplicate_la
     assert first_result.final_status_code.startswith("INTERRUPTED")
     iteration_dir = issue_dir / "develop" / "iteration_001"
     store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop")
     running_operation = store.read_operation_artifact(iteration_dir)
     assert running_operation is not None
     assert running_operation.state == LongRunningOperationState.RUNNING
-    store.write_operation_receipt(
-        state,
+    runtime.record_long_running_operation_receipt(
         step="develop",
         iteration_dir=iteration_dir,
         operation_id=running_operation.operation_id,
-        artifact=LongRunningOperationArtifact(
-            operation_id=running_operation.operation_id,
-            state=LongRunningOperationState.FAILED,
-            reason="controlled_helper_failed",
-            exit_code=1,
-        ),
+        state=LongRunningOperationState.FAILED,
+        reason="controlled_helper_failed",
+        exit_code=1,
     )
 
     def duplicate_launch_executor(

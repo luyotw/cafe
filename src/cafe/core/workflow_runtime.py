@@ -435,6 +435,51 @@ class BlackboardWorkflowRuntime:
             ),
         )
 
+    def record_long_running_operation_receipt(
+        self,
+        *,
+        step: str,
+        iteration_dir: Path,
+        operation_id: str,
+        state: LongRunningOperationState,
+        reason: Optional[str] = None,
+        exit_code: Optional[int] = None,
+    ) -> LongRunningOperationArtifact:
+        """Record a controlled terminal receipt for a pending long-running operation.
+
+        This is the production runtime surface for controlled helpers that can
+        observe an out-of-band operation outcome after the original agent tool
+        window was interrupted. The receipt remains separate from
+        ``operation.json``; normal resume reconciliation decides whether and
+        when that receipt is trusted enough to promote the operation.
+        """
+        if step not in self.steps:
+            raise ValueError(f"unknown workflow step: {step}")
+        self.blackboard = self.blackboard_store.load_or_create(step)
+        current_operation = self.blackboard_store.read_operation_artifact(iteration_dir)
+        if current_operation is None:
+            raise ValueError("operation artifact is missing")
+        if current_operation.operation_id != operation_id:
+            raise ValueError("operation_id mismatch")
+        if not self._operation_artifact_trusted(
+            current_step=step, iteration_dir=iteration_dir, artifact=current_operation
+        ):
+            raise ValueError("operation artifact is not trusted")
+        receipt = LongRunningOperationArtifact(
+            operation_id=operation_id,
+            state=state,
+            reason=reason,
+            exit_code=exit_code,
+            created_at=current_operation.created_at,
+        )
+        return self.blackboard_store.write_operation_receipt(
+            self.blackboard,
+            step=step,
+            iteration_dir=iteration_dir,
+            operation_id=operation_id,
+            artifact=receipt,
+        )
+
     def _reconcile_running_operation(
         self,
         *,
