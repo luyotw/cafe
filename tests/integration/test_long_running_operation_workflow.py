@@ -16,6 +16,7 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -56,6 +57,199 @@ def _write_baton(issue_dir: Path, *, from_step: str, to_step: str) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def test_runtime_rechecks_operation_created_inside_executor_before_no_status_fallback(
+    tmp_path: Path,
+) -> None:
+    """Executable reproduction for issue #386's NO_STATUS_CODE gap.
+
+    The runtime is constructed first; the executor then uses the production
+    helper and returns no status/baton. The same run must notice the trusted
+    operation and pause as OPERATION_RUNNING instead of falling through to
+    NO_STATUS_CODE.
+    """
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-same-run"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    release_file = tmp_path / "release-same-run"
+    script = tmp_path / "tracked_wait.py"
+    script.write_text(
+        "from __future__ import annotations\n"
+        "import sys, time\n"
+        "from pathlib import Path\n"
+        "release_file = Path(sys.argv[1])\n"
+        "while not release_file.exists():\n"
+        "    time.sleep(0.02)\n",
+        encoding="utf-8",
+    )
+    executor_calls = 0
+
+    def launching_executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        nonlocal executor_calls
+        executor_calls += 1
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
+        launched = run_operation_command(
+            issue_dir=issue_dir,
+            step=step_name,
+            iteration_dir=iteration_dir,
+            command=[sys.executable, str(script), str(release_file)],
+            cwd=tmp_path,
+            playbook=_PLAYBOOK,
+            reason="same_run_real_helper_probe",
+        )
+        assert launched.started is True
+        return StepExecutionResult(response="waiting for tracked operation", artifacts={})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_PLAYBOOK,
+        executor=launching_executor,
+    )
+    first_result = runtime.run(start_step="develop", single_step=True)
+
+    assert first_result.final_status_code == "OPERATION_RUNNING"
+    assert executor_calls == 1
+    assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "running"
+
+    def duplicate_launch_executor(
+        step_name: str, step_def: dict, state: object
+    ) -> StepExecutionResult:
+        raise AssertionError(f"executor must not be invoked again for {step_name}")
+
+    second_result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_PLAYBOOK,
+        executor=duplicate_launch_executor,
+    ).run(start_step="develop", single_step=True)
+
+    release_file.write_text("go", encoding="utf-8")
+    assert second_result.final_status_code == "OPERATION_RUNNING"
+
+
+def test_succeeded_operation_without_phase_artifacts_runs_finalize_only_once(
+    tmp_path: Path,
+) -> None:
+    """A normal long command only exits 0; it cannot write CAFE artifacts.
+
+    Once the trusted receipt is succeeded, the next runtime invocation should
+    call the executor in a finalize-only path so the phase can verify and
+    write output/checklist/baton, without relaunching the tracked command.
+    """
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-finalize-only"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    start_count = tmp_path / "long-command-start-count.txt"
+    script = tmp_path / "only_exits_zero.py"
+    script.write_text(
+        "from __future__ import annotations\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "counter = Path(sys.argv[1])\n"
+        "count = int(counter.read_text(encoding='utf-8')) if counter.exists() else 0\n"
+        "counter.write_text(str(count + 1), encoding='utf-8')\n"
+        "sys.exit(0)\n",
+        encoding="utf-8",
+    )
+    executor_calls = 0
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        nonlocal executor_calls
+        executor_calls += 1
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
+        if executor_calls == 1:
+            launched = run_operation_command(
+                issue_dir=issue_dir,
+                step=step_name,
+                iteration_dir=iteration_dir,
+                command=[sys.executable, str(script), str(start_count)],
+                cwd=tmp_path,
+                playbook=_PLAYBOOK,
+                reason="finalize_only_long_command",
+            )
+            assert launched.started is True
+            return StepExecutionResult(response="waiting for tracked operation", artifacts={})
+
+        (iteration_dir / "output.md").write_text("# finalized\n", encoding="utf-8")
+        (iteration_dir / "checklist.md").write_text("- [x] finalized\n", encoding="utf-8")
+        _write_baton(issue_dir, from_step=step_name, to_step="review")
+        return StepExecutionResult(response="finalized", artifacts={})
+
+    first_result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_PLAYBOOK,
+        executor=executor,
+    ).run(start_step="develop", single_step=True)
+    assert first_result.final_status_code == "OPERATION_RUNNING"
+
+    deadline = time.time() + 5
+    status = get_operation_status(
+        issue_dir=issue_dir,
+        step="develop",
+        iteration_dir=iteration_dir,
+        playbook=_PLAYBOOK,
+    )
+    while status.state == LongRunningOperationState.RUNNING and time.time() < deadline:
+        time.sleep(0.05)
+        status = get_operation_status(
+            issue_dir=issue_dir,
+            step="develop",
+            iteration_dir=iteration_dir,
+            playbook=_PLAYBOOK,
+        )
+    assert status.state == LongRunningOperationState.SUCCEEDED
+
+    second_result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_PLAYBOOK,
+        executor=executor,
+    ).run(start_step="develop", single_step=True)
+
+    assert second_result.final_status_code != "OPERATION_RUNNING"
+    assert executor_calls == 2
+    assert start_count.read_text(encoding="utf-8") == "1"
+    assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "succeeded"
+
+
+def test_run_operation_command_claims_single_operation_atomically(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-atomic-claim"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    release_file = tmp_path / "release-atomic"
+    script = tmp_path / "tracked_atomic_wait.py"
+    script.write_text(
+        "from __future__ import annotations\n"
+        "import sys, time\n"
+        "from pathlib import Path\n"
+        "release_file = Path(sys.argv[1])\n"
+        "while not release_file.exists():\n"
+        "    time.sleep(0.02)\n",
+        encoding="utf-8",
+    )
+    barrier = threading.Barrier(2)
+    results = []
+
+    def launch() -> object:
+        barrier.wait(timeout=5)
+        return run_operation_command(
+            issue_dir=issue_dir,
+            step="develop",
+            iteration_dir=iteration_dir,
+            command=[sys.executable, str(script), str(release_file)],
+            cwd=tmp_path,
+            playbook=_PLAYBOOK,
+            reason="atomic_claim_probe",
+        )
+
+    threads = [threading.Thread(target=lambda: results.append(launch())) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    release_file.write_text("go", encoding="utf-8")
+    assert len(results) == 2
+    assert sum(1 for result in results if result.started) == 1
+    assert len({result.operation.operation_id for result in results}) == 1
 
 
 def test_production_helper_owns_launch_status_and_terminal_receipt_for_success(

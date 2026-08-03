@@ -518,9 +518,6 @@ class BlackboardWorkflowRuntime:
             receipt=receipt,
         ):
             return operation
-        if receipt.state == LongRunningOperationState.SUCCEEDED and other_missing:
-            return operation
-
         promoted = LongRunningOperationArtifact(
             operation_id=operation.operation_id,
             state=receipt.state,
@@ -563,6 +560,7 @@ class BlackboardWorkflowRuntime:
         Only the structured JSON baton contract is accepted; agents must
         always write structured JSON batons to ``next_step.txt``.
         """
+        self.blackboard = self.blackboard_store.load_or_create(current_step)
         contract = self.blackboard_store.load_handoff_contract(
             self.blackboard,
             allowed_steps=list(self.steps.keys()),
@@ -612,7 +610,13 @@ class BlackboardWorkflowRuntime:
             valid_intents = effective_step_handoff_intents(
                 self.steps.get(current_step, {})
             )
-            if contract.intent.value not in valid_intents:
+            downstream_agent_handoff = (
+                contract.intent == HandoffIntent.AWAIT_AGENT
+                and contract.to_owner == HandoffOwner.AGENT
+                and contract.to_step in self.steps
+                and contract.to_step != current_step
+            )
+            if contract.intent.value not in valid_intents and not downstream_agent_handoff:
                 raise BatonRejected(
                     field="intent",
                     invalid_value=contract.intent.value,
@@ -1479,12 +1483,39 @@ class BlackboardWorkflowRuntime:
         # operation.state == SUCCEEDED: only block when other reconciliation
         # evidence (baton/output/checklist/capability receipts) is missing.
         if not result.reconciled:
-            return self._block_operation_outcome(
-                current_step=current_step,
-                runtime=runtime,
-                result=result,
-                outcome="succeeded_unverified",
+            trusted_succeeded_receipt = False
+            if result.iteration_dir is not None:
+                try:
+                    receipt = self.blackboard_store.read_operation_receipt(result.iteration_dir)
+                except (ValueError, json.JSONDecodeError, OSError):
+                    receipt = None
+                trusted_succeeded_receipt = (
+                    receipt is not None
+                    and receipt.state == LongRunningOperationState.SUCCEEDED
+                    and self._operation_receipt_trusted(
+                        current_step=current_step,
+                        iteration_dir=result.iteration_dir,
+                        operation=operation,
+                        receipt=receipt,
+                    )
+                )
+            if not trusted_succeeded_receipt:
+                return self._block_operation_outcome(
+                    current_step=current_step,
+                    runtime=runtime,
+                    result=result,
+                    outcome="succeeded_unverified",
+                )
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "operation_finalize_required",
+                {
+                    "step": current_step,
+                    "runtime": runtime,
+                    "missing_evidence": list(result.missing_evidence),
+                },
             )
+            return None
         return None
 
     def _try_reconcile_interrupted_step(
@@ -1516,6 +1547,17 @@ class BlackboardWorkflowRuntime:
             runtime=runtime,
             result=result,
         )
+
+    def _try_reconcile_operation_after_executor_return(
+        self,
+        *,
+        current_step: str,
+        runtime: str,
+    ) -> Optional[PlaybookRunResult]:
+        """Re-check operations created by a production helper during this invocation."""
+        self.blackboard = self.blackboard_store.load_or_create(current_step)
+        result = self._validate_reconciled_handoff(current_step=current_step)
+        return self._handle_operation_gate(current_step=current_step, runtime=runtime, result=result)
 
     def _latest_unreconciled_interrupted_step(self) -> Optional[tuple[str, str]]:
         for event in reversed(self.blackboard.events):
@@ -1947,6 +1989,12 @@ class BlackboardWorkflowRuntime:
                 post_contract.to_owner == HandoffOwner.AGENT
                 and post_contract.to_step == current_step
             ):
+                operation_result = self._try_reconcile_operation_after_executor_return(
+                    current_step=current_step,
+                    runtime=runtime_label,
+                )
+                if operation_result is not None:
+                    return operation_result
                 status_code = (
                     post_contract.status_code
                     or f"BATON_{post_contract.intent.value.upper()}"
@@ -2051,6 +2099,12 @@ class BlackboardWorkflowRuntime:
                             status_code = "NO_STATUS_CODE"
                             last_status_code = status_code
                         else:
+                            operation_result = self._try_reconcile_operation_after_executor_return(
+                                current_step=current_step,
+                                runtime=runtime_label,
+                            )
+                            if operation_result is not None:
+                                return operation_result
                             self.blackboard_store.record_event(
                                 self.blackboard,
                                 "status_code_missing",

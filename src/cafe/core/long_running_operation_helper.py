@@ -28,6 +28,7 @@ from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 
 OPERATION_HANDLE_FILENAME = "operation_handle.json"
 OPERATION_MONITOR_REQUEST_FILENAME = "operation_monitor_request.json"
+OPERATION_CLAIM_LOCK_FILENAME = "operation.claim.lock"
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,10 @@ def operation_handle_path(iteration_dir: Path) -> Path:
 
 def _request_path(iteration_dir: Path) -> Path:
     return Path(iteration_dir) / OPERATION_MONITOR_REQUEST_FILENAME
+
+
+def _claim_lock_path(iteration_dir: Path) -> Path:
+    return Path(iteration_dir) / OPERATION_CLAIM_LOCK_FILENAME
 
 
 def _now_iso() -> str:
@@ -115,6 +120,33 @@ def _read_json(path: Path) -> Dict[str, Any]:
     return raw
 
 
+def _acquire_operation_claim(iteration_dir: Path) -> int:
+    """Atomically claim the fixed operation slot for this iteration."""
+    lock_path = _claim_lock_path(iteration_dir)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.time() + 5
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            if time.time() >= deadline:
+                raise TimeoutError("timed out waiting for operation claim lock")
+            time.sleep(0.01)
+            continue
+        os.write(fd, f"{os.getpid()}\n".encode("utf-8"))
+        return fd
+
+
+def _release_operation_claim(iteration_dir: Path, fd: int) -> None:
+    try:
+        os.close(fd)
+    finally:
+        try:
+            _claim_lock_path(iteration_dir).unlink()
+        except FileNotFoundError:
+            pass
+
+
 def _unused_executor(*_args: object, **_kwargs: object) -> StepExecutionResult:
     raise RuntimeError("operation helper receipt recording must not execute workflow steps")
 
@@ -167,24 +199,29 @@ def run_operation_command(
     cwd_path = Path(cwd) if cwd is not None else Path.cwd()
 
     store = BlackboardStore(issue_dir)
-    state = store.load_or_create(step)
-    existing = store.read_operation_artifact(iteration_dir)
-    if existing is not None:
-        return OperationLaunchResult(
-            operation=existing,
-            started=False,
-            handle_path=operation_handle_path(iteration_dir),
-        )
+    claim_fd = _acquire_operation_claim(iteration_dir)
+    try:
+        state = store.load_or_create(step)
+        existing = store.read_operation_artifact(iteration_dir)
+        if existing is not None:
+            return OperationLaunchResult(
+                operation=existing,
+                started=False,
+                handle_path=operation_handle_path(iteration_dir),
+            )
 
-    operation = store.write_operation_artifact(
-        state,
-        step=step,
-        iteration_dir=iteration_dir,
-        artifact=LongRunningOperationArtifact(
-            state=LongRunningOperationState.RUNNING,
-            reason=reason,
-        ),
-    )
+        operation = store.write_operation_artifact(
+            state,
+            step=step,
+            iteration_dir=iteration_dir,
+            artifact=LongRunningOperationArtifact(
+                state=LongRunningOperationState.RUNNING,
+                reason=reason,
+            ),
+        )
+    finally:
+        _release_operation_claim(iteration_dir, claim_fd)
+
     request = {
         "issue_dir": str(issue_dir),
         "step": step,
