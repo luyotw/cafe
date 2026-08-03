@@ -78,6 +78,7 @@ class HandoffReconciliationResult:
     validated_evidence: list[str] = field(default_factory=list)
     operation: Optional[LongRunningOperationArtifact] = None
     operation_schema_invalid: bool = False
+    operation_untrusted: bool = False
 
 
 @dataclass
@@ -921,6 +922,25 @@ class BlackboardWorkflowRuntime:
             or status_code == PhaseStatusCode.NEED_CLARIFICATION.value
         )
 
+    def _operation_artifact_trusted(
+        self, *, current_step: str, artifact: LongRunningOperationArtifact
+    ) -> bool:
+        """Only trust operation state that is also recorded as runtime-owned evidence.
+
+        ``operation.json`` lives in the iteration directory alongside files a
+        develop step can freely write, so its raw content alone is not
+        sufficient evidence. ``BlackboardStore.write_operation_artifact`` is
+        the only supported writer and always records a matching
+        ``{step}_operation`` metadata artifact on the blackboard in the same
+        call; requiring that record to exist and match keeps an
+        agent-authored or hand-edited ``operation.json`` from being accepted
+        as trusted operation truth.
+        """
+        entry = self.blackboard_store.get_artifact(self.blackboard, f"{current_step}_operation")
+        if entry is None:
+            return False
+        return entry.summary == f"long_running_operation:{artifact.state.value}"
+
     def _capability_receipt_recorded(self, capability_id: str) -> bool:
         for receipt in getattr(self.blackboard, "capability_receipts", []):
             if (
@@ -1028,6 +1048,7 @@ class BlackboardWorkflowRuntime:
 
         operation: Optional[LongRunningOperationArtifact] = None
         operation_schema_invalid = False
+        operation_untrusted = False
         if iteration_dir is not None:
             try:
                 operation = self.blackboard_store.read_operation_artifact(iteration_dir)
@@ -1036,7 +1057,10 @@ class BlackboardWorkflowRuntime:
                 missing.append("operation_schema_invalid")
 
         if operation is not None:
-            if operation.state == LongRunningOperationState.RUNNING:
+            if not self._operation_artifact_trusted(current_step=current_step, artifact=operation):
+                operation_untrusted = True
+                missing.append("operation_untrusted")
+            elif operation.state == LongRunningOperationState.RUNNING:
                 missing.append("operation_running")
             elif operation.state == LongRunningOperationState.FAILED:
                 missing.append("operation_failed")
@@ -1054,6 +1078,7 @@ class BlackboardWorkflowRuntime:
             validated_evidence=validated,
             operation=operation,
             operation_schema_invalid=operation_schema_invalid,
+            operation_untrusted=operation_untrusted,
         )
 
     def _reconciliation_event_exists(
@@ -1252,7 +1277,11 @@ class BlackboardWorkflowRuntime:
         step, unaffected) or when the operation is ``succeeded`` and fully
         verified by existing reconciliation evidence.
         """
-        if result.operation is None and not result.operation_schema_invalid:
+        if (
+            result.operation is None
+            and not result.operation_schema_invalid
+            and not result.operation_untrusted
+        ):
             return None
 
         if result.operation_schema_invalid:
@@ -1261,6 +1290,14 @@ class BlackboardWorkflowRuntime:
                 runtime=runtime,
                 result=result,
                 outcome="schema_invalid",
+            )
+
+        if result.operation_untrusted:
+            return self._block_operation_outcome(
+                current_step=current_step,
+                runtime=runtime,
+                result=result,
+                outcome="untrusted",
             )
 
         operation = result.operation
@@ -1864,6 +1901,16 @@ class BlackboardWorkflowRuntime:
                                     "response": frame.response,
                                     "runtime": runtime_label,
                                 },
+                            )
+                            # The agent returned with neither a status code
+                            # nor a baton — indistinguishable from work that
+                            # is still running in the background. Leave a
+                            # recoverable operation record instead of only
+                            # NO_STATUS_CODE, so resume can tell running
+                            # work apart from a genuinely stuck step.
+                            self._maybe_record_operation_running(
+                                current_step=current_step,
+                                reason="status_code_missing",
                             )
                             return PlaybookRunResult(
                                 final_step=current_step,

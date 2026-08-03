@@ -3266,3 +3266,141 @@ def test_keyboard_interrupt_does_not_create_operation_artifact(tmp_path: Path) -
     assert result.final_status_code.startswith("INTERRUPTED")
     iteration_dir = issue_dir / "develop" / "iteration_001"
     assert not (iteration_dir / "operation.json").exists()
+
+
+def test_hand_edited_operation_artifact_is_not_trusted(tmp_path: Path) -> None:
+    """A hand-edited operation.json with no matching blackboard record must not be trusted.
+
+    ``operation.json`` lives in the iteration directory alongside files a
+    develop step can freely write; only ``write_operation_artifact`` records
+    the matching ``{step}_operation`` metadata artifact. An agent-authored
+    or hand-edited file that claims ``succeeded`` without that provenance
+    must block rather than be accepted as verified success evidence.
+    """
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-untrusted"
+    _setup_interrupted_step(issue_dir, step="develop")
+    iteration_dir = _write_iteration_evidence(issue_dir, "develop")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    store.update_handoff_contract(
+        state,
+        from_step="develop",
+        to_owner=HandoffOwner.AGENT,
+        to_step="review",
+        intent=HandoffIntent.AWAIT_AGENT,
+        source="test",
+    )
+    # Written directly to disk, bypassing write_operation_artifact: no
+    # matching "develop_operation" metadata artifact is recorded.
+    (iteration_dir / "operation.json").write_text(
+        json.dumps({"state": "succeeded", "reason": "", "exit_code": 0}),
+        encoding="utf-8",
+    )
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}},
+            "review": {"skill": "review", "role": "developer", "on": {"confirmed": "_done"}},
+        },
+    }
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
+        calls.append(step_name)
+        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
+    result = runtime.run(max_transitions=5)
+
+    assert calls == []
+    assert result.completed is False
+    assert result.final_status_code == "OPERATION_UNTRUSTED"
+    bb = BlackboardStore(issue_dir).load_or_create("develop")
+    assert any(
+        e.event_type == "operation_blocked" and e.data.get("outcome") == "untrusted"
+        for e in bb.events
+    )
+
+
+def test_recorded_operation_artifact_state_mismatch_is_not_trusted(tmp_path: Path) -> None:
+    """A file edited after the fact to a different state than recorded must not be trusted."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-mismatch"
+    _setup_interrupted_step(issue_dir, step="develop")
+    iteration_dir = _write_iteration_evidence(issue_dir, "develop")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    store.write_operation_artifact(
+        state,
+        step="develop",
+        iteration_dir=iteration_dir,
+        artifact=LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING),
+    )
+    # Tampered after the recorded write: the blackboard still says "running".
+    (iteration_dir / "operation.json").write_text(
+        json.dumps({"state": "succeeded", "reason": "", "exit_code": 0}),
+        encoding="utf-8",
+    )
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {"develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}},
+    }
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
+        calls.append(step_name)
+        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
+    result = runtime.run(max_transitions=5)
+
+    assert calls == []
+    assert result.final_status_code == "OPERATION_UNTRUSTED"
+
+
+def test_status_code_missing_records_running_operation_artifact(tmp_path: Path) -> None:
+    """The NO_STATUS_CODE path (no baton, no status code) leaves recoverable operation state.
+
+    This covers the scenario where an agent phase's Bash work is
+    backgrounded or hits a hard limit and the step returns with neither a
+    valid status code nor a baton — previously that path only recorded
+    ``NO_STATUS_CODE`` with no way to distinguish it from a genuinely stuck
+    step on resume.
+    """
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-status-missing-operation"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_intents": ["need_clarification"],
+                "on": {"need_clarification": "spec"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object):
+        iteration_dir = issue_dir / step_name / "iteration_001"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
+        return ("plain response without status token", {})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="spec")
+
+    assert result.completed is False
+    assert result.final_status_code == "NO_STATUS_CODE"
+    iteration_dir = issue_dir / "spec" / "iteration_001"
+    operation_data = json.loads((iteration_dir / "operation.json").read_text(encoding="utf-8"))
+    assert operation_data["state"] == "running"
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    assert any(
+        e.event_type == "long_running_operation" and e.data.get("state") == "running"
+        for e in blackboard.events
+    )
