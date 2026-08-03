@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.blackboard import (
+    BlackboardStore,
+    HandoffIntent,
+    HandoffOwner,
+    LongRunningOperationArtifact,
+    LongRunningOperationState,
+)
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 
@@ -2935,3 +2941,328 @@ def test_runtime_plan_need_permission_pauses_at_user(tmp_path: Path) -> None:
     assert blackboard.handoff_contract is not None
     assert blackboard.handoff_contract.to_owner == HandoffOwner.USER
     assert blackboard.handoff_contract.intent == HandoffIntent.NEED_PERMISSION
+
+
+# ---------------------------------------------------------------------------
+# Long-running operation resume/reconciliation gate (issue #386)
+# ---------------------------------------------------------------------------
+
+
+def _setup_interrupted_step(
+    issue_dir: Path,
+    *,
+    step: str,
+    reason: str = "agent_idle_timeout",
+) -> None:
+    """Persist blackboard state as if ``step`` was interrupted and pinned for resume."""
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "current_step": step,
+                "playbook_id": "default",
+                "artifacts": {},
+                "events": [
+                    {
+                        "timestamp": "2026-04-26T23:00:00+08:00",
+                        "step": step,
+                        "event_type": "step_interrupted",
+                        "message": "{}",
+                        "data": {"step": step, "reason": reason},
+                    }
+                ],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_baton(
+        issue_dir,
+        from_step=step,
+        to_owner="agent",
+        to_step=step,
+        intent="await_agent",
+        source="workflow.interrupted_step",
+    )
+
+
+def test_running_operation_prevents_duplicate_execution(tmp_path: Path) -> None:
+    """Test List item 14: resume sees operation.json state=running; no duplicate executor call."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-running"
+    _setup_interrupted_step(issue_dir, step="develop")
+    iteration_dir = _write_iteration_evidence(issue_dir, "develop")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    store.write_operation_artifact(
+        state,
+        step="develop",
+        iteration_dir=iteration_dir,
+        artifact=LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING),
+    )
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {"develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}},
+    }
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
+        calls.append(step_name)
+        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
+    result = runtime.run(max_transitions=5)
+
+    assert calls == []
+    assert result.completed is False
+    assert result.final_status_code == "OPERATION_RUNNING"
+    bb = BlackboardStore(issue_dir).load_or_create("develop")
+    assert any(e.event_type == "operation_running" for e in bb.events)
+
+
+def test_succeeded_operation_requires_verification_before_advancing(tmp_path: Path) -> None:
+    """Test List item 15: succeeded alone does not advance; verified evidence does."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-succeeded"
+    _setup_interrupted_step(issue_dir, step="develop")
+    iteration_dir = _write_iteration_evidence(issue_dir, "develop")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    # Between interruption and resume, the executor's own written handoff
+    # already points downstream to "review" - simulating a step that
+    # finished its work but whose host process was killed before the
+    # runtime observed completion.
+    store.update_handoff_contract(
+        state,
+        from_step="develop",
+        to_owner=HandoffOwner.AGENT,
+        to_step="review",
+        intent=HandoffIntent.AWAIT_AGENT,
+        source="test",
+    )
+    store.write_operation_artifact(
+        state,
+        step="develop",
+        iteration_dir=iteration_dir,
+        artifact=LongRunningOperationArtifact(state=LongRunningOperationState.SUCCEEDED),
+    )
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}},
+            "review": {"skill": "review", "role": "developer", "on": {"confirmed": "_done"}},
+        },
+    }
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
+        calls.append(step_name)
+        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
+    runtime.run(max_transitions=5)
+
+    # develop is never re-executed (no duplicate launch); only review, the
+    # downstream step from the verified handoff, runs.
+    assert calls == ["review"]
+    bb = BlackboardStore(issue_dir).load_or_create("develop")
+    assert any(e.event_type == "step_reconciled" for e in bb.events)
+    assert any(
+        e.event_type == "long_running_operation" and e.data.get("state") == "succeeded"
+        for e in bb.events
+    )
+
+
+@pytest.mark.parametrize("op_state", ["failed", "lost"])
+def test_failed_or_lost_operation_blocks_without_retry(tmp_path: Path, op_state: str) -> None:
+    """Test List item 16: failed/lost operations stop clearly, no automatic retry."""
+    issue_dir = tmp_path / ".cafe" / "issues" / f"demo-op-{op_state}"
+    _setup_interrupted_step(issue_dir, step="develop")
+    iteration_dir = _write_iteration_evidence(issue_dir, "develop")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    store.write_operation_artifact(
+        state,
+        step="develop",
+        iteration_dir=iteration_dir,
+        artifact=LongRunningOperationArtifact(
+            state=LongRunningOperationState(op_state), reason="process exited"
+        ),
+    )
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {"develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}},
+    }
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
+        calls.append(step_name)
+        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
+    result = runtime.run(max_transitions=5)
+
+    assert calls == []
+    assert result.completed is False
+    assert result.final_status_code == f"OPERATION_{op_state.upper()}"
+    bb = BlackboardStore(issue_dir).load_or_create("develop")
+    assert any(
+        e.event_type == "operation_blocked" and e.data.get("outcome") == op_state
+        for e in bb.events
+    )
+
+
+def test_schema_invalid_operation_blocks_clearly(tmp_path: Path) -> None:
+    """Test List item 16: schema-invalid operation.json stops clearly, no silent success."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-invalid"
+    _setup_interrupted_step(issue_dir, step="develop")
+    iteration_dir = _write_iteration_evidence(issue_dir, "develop")
+    (iteration_dir / "operation.json").write_text(json.dumps({"state": "pending"}), encoding="utf-8")
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {"develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}},
+    }
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
+        calls.append(step_name)
+        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
+    result = runtime.run(max_transitions=5)
+
+    assert calls == []
+    assert result.final_status_code == "OPERATION_SCHEMA_INVALID"
+    bb = BlackboardStore(issue_dir).load_or_create("develop")
+    assert any(
+        e.event_type == "operation_blocked" and e.data.get("outcome") == "schema_invalid"
+        for e in bb.events
+    )
+
+
+def test_succeeded_operation_without_evidence_blocks_as_unverified(tmp_path: Path) -> None:
+    """Succeeded alone is not enough; missing output/checklist evidence must block."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-unverified"
+    _setup_interrupted_step(issue_dir, step="develop")
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
+    # No output.md / checklist.md written - nothing observable to verify.
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    store.write_operation_artifact(
+        state,
+        step="develop",
+        iteration_dir=iteration_dir,
+        artifact=LongRunningOperationArtifact(state=LongRunningOperationState.SUCCEEDED),
+    )
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {"develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}},
+    }
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
+        calls.append(step_name)
+        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
+    result = runtime.run(max_transitions=5)
+
+    assert calls == []
+    assert result.final_status_code == "OPERATION_SUCCEEDED_UNVERIFIED"
+
+
+def test_short_running_step_without_operation_artifact_is_unaffected(tmp_path: Path) -> None:
+    """Test List item 16: ordinary quick steps create no operation.json and behave as before."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-short-step"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_intents": ["confirmed"],
+                "on": {"confirmed": "_done"},
+            },
+        },
+    }
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
+        calls.append(step_name)
+        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
+    result = runtime.run(start_step="spec", max_transitions=5)
+
+    assert calls == ["spec"]
+    assert result.final_status_code == "confirmed"
+    iteration_dir = issue_dir / "spec" / "iteration_001"
+    assert not (iteration_dir / "operation.json").exists()
+
+
+def test_interruption_records_running_operation_artifact_automatically(tmp_path: Path) -> None:
+    """Integration Test 1: an interrupted step leaves exactly one running operation.json
+    instead of only NO_STATUS_CODE, with a metadata artifact/event on the blackboard."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-auto-record"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}},
+        },
+    }
+
+    call_count = [0]
+
+    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
+        call_count[0] += 1
+        iteration_dir = issue_dir / step_name / "iteration_001"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
+        raise TimeoutError("simulated agent tool boundary timeout")
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
+    result = runtime.run(start_step="develop", max_transitions=5)
+
+    assert result.completed is False
+    assert result.final_status_code.startswith("INTERRUPTED")
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    operation_files = list(iteration_dir.glob("operation.json"))
+    assert len(operation_files) == 1
+    operation_data = json.loads((iteration_dir / "operation.json").read_text(encoding="utf-8"))
+    assert operation_data["state"] == "running"
+
+    bb = BlackboardStore(issue_dir).load_or_create("develop")
+    assert any(
+        e.event_type == "long_running_operation" and e.data.get("state") == "running"
+        for e in bb.events
+    )
+    assert call_count[0] == 1
+
+
+def test_keyboard_interrupt_does_not_create_operation_artifact(tmp_path: Path) -> None:
+    """An explicit Ctrl-C is not forced into the long-running operation model."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-keyboard-interrupt"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}},
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
+        iteration_dir = issue_dir / step_name / "iteration_001"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        raise KeyboardInterrupt()
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
+    result = runtime.run(start_step="develop", max_transitions=5)
+
+    assert result.final_status_code.startswith("INTERRUPTED")
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    assert not (iteration_dir / "operation.json").exists()
