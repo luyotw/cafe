@@ -197,7 +197,12 @@ class ClaudeCLI(AbstractCLI):
         return processed_tools
 
     def add_directories(self, cmd: List[str], directories: List[str]) -> List[str]:
-        """Add allowed directories to command line arguments.
+        """Add canonical allowed directories to command line arguments.
+
+        Claude CLI evaluates its write sandbox against canonical filesystem
+        paths.  Passing a relative directory such as ``.cafe`` works for
+        reads, but can reject writes from a nested worktree because the tool
+        resolves the target path before comparing it to ``--add-dir``.
 
         Args:
             cmd: Current command line arguments
@@ -207,7 +212,7 @@ class ClaudeCLI(AbstractCLI):
             Updated command line arguments
         """
         for directory in directories:
-            cmd.extend(["--add-dir", directory])
+            cmd.extend(["--add-dir", str(Path(directory).expanduser().resolve())])
         return cmd
 
     def get_output_format(self) -> List[str]:

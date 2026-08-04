@@ -177,11 +177,14 @@ class TestClaudeCLITranslateAllowedTools:
 class TestClaudeCLIAddDirectories:
     """測試 add_directories() 方法."""
 
-    def test_add_directories_to_command(self, claude_config):
-        """測試將目錄加入命令."""
+    def test_add_directories_to_command(self, claude_config, tmp_path, monkeypatch):
+        """測試將目錄以 canonical 絕對路徑加入命令."""
+        monkeypatch.chdir(tmp_path)
         cli = ClaudeCLI(claude_config)
         cmd = ["claude", "-p", "test"]
-        directories = ["/path/to/dir1", "/path/to/dir2"]
+        relative_directory = ".cafe"
+        absolute_directory = tmp_path / "shared"
+        directories = [relative_directory, str(absolute_directory)]
 
         result = cli.add_directories(cmd, directories)
 
@@ -189,8 +192,8 @@ class TestClaudeCLIAddDirectories:
         # 每個目錄都應該有獨立的 --add-dir 參數
         add_dir_count = result.count("--add-dir")
         assert add_dir_count == 2
-        assert "/path/to/dir1" in result
-        assert "/path/to/dir2" in result
+        assert str((tmp_path / relative_directory).resolve()) in result
+        assert str(absolute_directory.resolve()) in result
 
     def test_add_directories_empty_list(self, claude_config):
         """測試空目錄列表."""

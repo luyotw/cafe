@@ -2063,8 +2063,8 @@ class TestAllowedDirectoriesParameter:
             call_args = mock_popen.call_args[0][0]
             assert "--add-dir" in call_args
 
-    def test_claude_adds_add_dir_parameters(self) -> None:
-        """測試 Claude 使用 --add-dir 參數"""
+    def test_claude_adds_canonical_add_dir_parameters(self) -> None:
+        """測試 Claude 使用 canonical 絕對路徑的 --add-dir 參數"""
         config = AgentConfig(
             name="Roger",
             cli=AgentCLI.CLAUDE,
@@ -2092,10 +2092,10 @@ class TestAllowedDirectoriesParameter:
             called_cmd = mock_popen.call_args[0][0]
             assert "--add-dir" in called_cmd
             cafe_index = called_cmd.index("--add-dir")
-            assert called_cmd[cafe_index + 1] == ".cafe"
+            assert called_cmd[cafe_index + 1] == str((Path.cwd() / ".cafe").resolve())
             # Find second --add-dir
             src_index = called_cmd.index("--add-dir", cafe_index + 2)
-            assert called_cmd[src_index + 1] == "src"
+            assert called_cmd[src_index + 1] == str((Path.cwd() / "src").resolve())
 
     def test_gemini_adds_include_directories_parameters(self) -> None:
         """測試 Gemini 使用 --include-directories 參數"""
