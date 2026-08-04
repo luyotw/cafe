@@ -192,12 +192,11 @@ def test_driver_skill_requires_controlled_correction_ab_before_claim() -> None:
     reference = (
         SKILLS / "use-cafe-workflow/references/correction_ab_experiment.md"
     ).read_text(encoding="utf-8")
-    normalized = " ".join(skill.split())
+    normalized = " ".join(reference.split())
 
-    assert "## Correction Session A/B Evidence" in skill
     assert "references/correction_ab_experiment.md" in skill
-    assert "scripts/analyze_correction_ab.py" in skill
-    assert "must not be used to claim the 30% credit target" in normalized
+    assert "scripts/analyze_correction_ab.py" in reference
+    assert "Do not claim the 30% target until `claim_ready: yes`" in normalized
     assert "actual billed Codex credits" in reference
     assert "Do not substitute a rate-card estimate" in reference
     assert "Do not run the second arm on files mutated by the first" in reference

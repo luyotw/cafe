@@ -14,51 +14,78 @@ from cafe.phases.generic_phase import GenericPhase
 from cafe.playbooks.loader import PlaybookLoader
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SKILL_ROOT = (
+    PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "use-cafe-workflow"
+)
+
+
+def _read_skill_resource(path: str) -> str:
+    return (SKILL_ROOT / path).read_text(encoding="utf-8")
+
+
+def test_use_cafe_workflow_uses_progressive_disclosure() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    references = (
+        "kickoff.md",
+        "strategic_context.md",
+        "running_workflow.md",
+        "handoffs_and_alignment.md",
+        "diagnosis_and_repair.md",
+        "convergent_pr_review.md",
+        "correction_ab_experiment.md",
+    )
+
+    assert "## Progressive disclosure" in skill
+    assert len(skill.splitlines()) <= 150
+    for name in references:
+        assert f"references/{name}" in skill
+        assert (SKILL_ROOT / "references" / name).is_file()
+
+    assert "## Conversation Locale" not in skill
+    assert "## Driver-Owned Alignment" not in skill
+    assert "## Bounded Self-Diagnosis And Declarative Repair" not in skill
 
 
 def test_use_cafe_workflow_skill_makes_driver_own_alignment_decisions() -> None:
-    skill = (
-        PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "use-cafe-workflow" / "SKILL.md"
-    ).read_text(encoding="utf-8")
-    normalized = " ".join(skill.split())
+    skill = _read_skill_resource("SKILL.md")
+    reference = _read_skill_resource("references/handoffs_and_alignment.md")
+    normalized = " ".join(reference.split())
 
-    assert "## Driver-Owned Alignment" in skill
+    assert "references/handoffs_and_alignment.md" in skill
+    assert "## Driver-owned alignment" in reference
     assert "Bundled playbooks omit `alignment:` configuration" in normalized
-    assert "`proposal_delta`" in skill
-    assert "`strategic_ground`" in skill
-    assert "`mandate_level`" in skill
-    assert "`relation`" in skill
-    assert "`within` + `escalate`: stop for the user" in normalized
+    assert "`proposal_delta`" in reference
+    assert "`strategic_ground`" in reference
+    assert "`mandate_level`" in reference
+    assert "`relation`" in reference
+    assert "`within` + `escalate`: stop" in normalized
     assert "Except for an explicit `escalate` mandate" in normalized
-    assert "If `within` and `mandate_level` is `agent`" in normalized
-    assert "If `mandate_level` is `escalate`" in normalized
-    assert "Do not re-evaluate an unchanged scope" in normalized
-    assert "compatibility evidence, not as proof that the user must decide" in normalized
-    assert "plain text must not approve a core checkpoint" in normalized
+    assert "`within` + `agent`: continue without asking" in normalized
+    assert "Do not re-evaluate unchanged scope" in normalized
+    assert "checkpoint is evidence, not proof the user must decide" in normalized
+    assert "plain text must not approve the checkpoint" in normalized
 
 
 def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() -> None:
-    skill = (
-        PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "use-cafe-workflow" / "SKILL.md"
-    ).read_text(encoding="utf-8")
-    normalized = " ".join(skill.split())
+    skill = _read_skill_resource("SKILL.md")
+    reference = _read_skill_resource("references/kickoff.md")
+    normalized = " ".join(reference.split())
 
-    assert "## Kickoff Contract (first blocking gate)" in skill
-    assert "Before `cafe prepare`, any repository mutation, or the first `cafe make`" in skill
-    assert "cafe playbook confirmation-gates <playbook-id>" in skill
-    assert '`steps.<step>."on".confirm_output`' in skill
-    assert "Do not reuse a repo default or another issue's contract silently" in normalized
-    assert "their union must equal the derived" in normalized
-    assert "driver_confirmable" in skill
-    assert "`need_clarification` and `need_permission` are reactive" in normalized
+    assert "references/kickoff.md" in skill
+    assert "## Kickoff contract: first blocking gate" in reference
+    assert "Before `cafe prepare`, any repository mutation, or the first `cafe make`" in reference
+    assert "cafe playbook confirmation-gates <playbook-id>" in reference
+    assert '`steps.<step>."on".confirm_output`' in reference
+    assert "Do not reuse another issue's contract" in normalized
+    assert "union to equal the candidates" in normalized
+    assert "driver_confirmable" in reference
+    assert "reactive interruptions, not scheduled candidates" in normalized
     assert "Alignment is a proactive driver decision" in normalized
-    assert "alignment_policy:" not in skill
-    assert "alignment_checkpoint: driver_resolvable_when_clear" in skill
-    assert ".cafe/issues/<issue-name>/issue.yaml" in skill
-    assert "is not parsed or auto-approved by CAFE" in normalized
-    assert "scripts/format_kickoff_contract.py" in skill
-    assert "every playbook phase" in normalized
-    assert "whether execution will stop for the user" in normalized
+    assert "alignment_policy:" not in reference
+    assert "alignment_checkpoint: driver_resolvable_when_clear" in reference
+    assert ".cafe/issues/<issue-name>/issue.yaml" in reference
+    assert "scripts/format_kickoff_contract.py" in reference
+    assert "every phase, role, skill, scheduled gate" in normalized
 
 
 def test_kickoff_contract_formatter_lists_all_phases_and_confirmation_owners(
@@ -280,54 +307,77 @@ def test_bundled_playbooks_do_not_delegate_alignment_judgment_to_core() -> None:
 
 
 def test_use_cafe_workflow_skill_protects_issue_overrides() -> None:
-    skill = (
-        PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "use-cafe-workflow" / "SKILL.md"
-    ).read_text(encoding="utf-8")
+    skill = _read_skill_resource("SKILL.md")
+    reference = _read_skill_resource("references/strategic_context.md")
+    normalized = " ".join(reference.split())
 
-    assert "### Issue overrides are opt-in only" in skill
-    assert "The `issues:` section is protected" in skill
-    assert "do not write to this section" in skill
-    assert "Do not create `issues.<issue-name>` just because" in skill
-    assert "Do not store workflow progress, baton state, phase outputs" in skill
-    assert "leave `issues:` untouched unless the user explicitly requested" in skill
+    assert "references/strategic_context.md" in skill
+    assert "## Protected issue overrides" in reference
+    assert "optional, protected overrides" in normalized
+    assert "Do not create `issues.<issue-name>` because" in reference
+    assert "Do not store workflow progress, baton state, phase outputs" in reference
+    assert "Do not add, edit, or remove an issue override" in normalized
+    assert "Leave `issues:` untouched unless the user explicitly requested" in reference
 
 
 def test_use_cafe_workflow_bounds_diagnosis_and_repairs_only_declarative_layers() -> None:
-    skill = (
-        PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "use-cafe-workflow" / "SKILL.md"
-    ).read_text(encoding="utf-8")
-    normalized = " ".join(skill.split())
+    skill = _read_skill_resource("SKILL.md")
+    reference = _read_skill_resource("references/diagnosis_and_repair.md")
+    normalized = " ".join(reference.split())
 
-    assert "## Bounded Self-Diagnosis And Declarative Repair" in skill
-    assert "Playbook declarative defect" in skill
-    assert "Phase declarative defect" in skill
-    assert "Driver or CAFE core defect" in skill
+    assert "references/diagnosis_and_repair.md" in skill
+    assert "# Bounded Diagnosis And Repair" in reference
+    assert "Playbook declarative defect" in reference
+    assert "Phase declarative defect" in reference
+    assert "Driver or CAFE core defect" in reference
     assert "activate `write-cafe-playbook`" in normalized
     assert "activate `write-cafe-phase`" in normalized
-    assert "Do not invent or require a `write-cafe-driver` skill" in normalized
-    assert "search open and closed issues read-only" in normalized
-    assert "https://github.com/luyotw/cafe/issues" in skill
-    assert (
-        "never create, comment on, or close an upstream issue without explicit user" in normalized
-    )
-    assert "stale installed skill copies" in normalized
-    assert "unconfirmed or transient failure" in normalized
+    assert "Do not invent a `write-cafe-driver` skill" in normalized
+    assert "Search open and closed issues read-only" in reference
+    assert "https://github.com/luyotw/cafe/issues" in reference
+    assert "Do not create, comment on, or close an upstream issue" in normalized
+    assert "stale installed skills" in normalized
+    assert "unconfirmed or transient failures" in normalized
 
 
 def test_use_cafe_workflow_uses_playbook_conversation_locale() -> None:
-    skill = (
-        PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "use-cafe-workflow" / "SKILL.md"
-    ).read_text(encoding="utf-8")
-    normalized = " ".join(skill.split())
+    skill = _read_skill_resource("SKILL.md")
+    reference = _read_skill_resource("references/kickoff.md")
+    normalized = " ".join(reference.split())
 
-    assert "## Conversation Locale" in skill
-    assert "playbook.conversation_locale" in skill
-    assert "cafe playbook confirmation-gates <playbook-id>" in skill
+    assert "references/kickoff.md" in skill
+    assert "## Conversation locale checklist" in reference
+    assert "playbook.conversation_locale" in reference
+    assert "cafe playbook confirmation-gates <playbook-id>" in reference
     assert "`Conversation locale:` line" in normalized
     assert "For `auto`, use the language of the user's current request" in normalized
     assert "conversation_locale: en-US (from playbook: default)" in normalized
     assert "required kickoff field, not a confirmation gate" in normalized
     assert "asking why a language was used is not an override" in normalized
-    assert "Never claim that this skill lacks a conversation locale rule" in normalized
-    assert "Do not copy the conversation locale into `issue.yaml`" in normalized
-    assert "commands, paths, playbook/step names, intents, artifact keys" in normalized
+    assert "Never claim this skill lacks a locale rule" in normalized
+    assert "Do not copy the locale into `issue.yaml`" in normalized
+    assert "commands, paths, playbook and step names, intents, artifact keys" in normalized
+
+
+def test_use_cafe_workflow_batches_driver_pr_review_findings() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    reference = _read_skill_resource("references/convergent_pr_review.md")
+    normalized_reference = " ".join(reference.split())
+
+    assert "references/convergent_pr_review.md" in skill
+    assert "finish its full review matrix" in skill
+    assert "consolidate every currently observable blocker" in normalized_reference
+    assert "## 1. Establish one review baseline" in reference
+    assert (
+        "every acceptance criterion and the original reported production journey"
+        in normalized_reference
+    )
+    assert "real production entry points and callers" in normalized_reference
+    assert "Continue across all applicable rows after finding a blocker" in reference
+    assert "A green unit/full suite is supporting evidence" in normalized_reference
+    assert (
+        "tests do not forge workflow output, trusted state, or receipts"
+        in normalized_reference
+    )
+    assert "previously observable but missed" in reference
+    assert "Do not restart repository-wide discovery for unchanged areas" in reference
