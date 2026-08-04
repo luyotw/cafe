@@ -17,6 +17,7 @@ from cafe.ui.commands import lifecycle as lifecycle_commands
 from cafe.ui.commands import issues as issues_commands
 from cafe.ui.commands import templates as template_commands
 from cafe.ui.commands import catalog as catalog_commands
+from cafe.ui.commands import operation as operation_commands
 from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.commands import audit as audit_commands
 from cafe.ui.commands import preset as preset_commands
@@ -779,6 +780,7 @@ workflow = workflow_commands.workflow
 
 # Template management commands
 app.add_typer(template_commands.template_app, name="template")
+app.add_typer(operation_commands.operation_app, name="operation")
 
 # Backward-compatible alias for TEMPLATE_TYPES (now defined in templates module)
 TEMPLATE_TYPES = template_commands.TEMPLATE_TYPES

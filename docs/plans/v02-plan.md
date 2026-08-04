@@ -1078,7 +1078,7 @@ Artifact 分工：
 
 ### 保留的相容層
 
-- `next_step.txt` 的純文字 step name 格式只保留給 chat / CLI handoff 過渡使用，讀取時必須顯式傳入 `allow_legacy_text=True`。
+- （issue #386 更新）`next_step.txt` 純文字 step name 相容格式已完全移除；`allow_legacy_text` 參數與 `key=value`、`chat_handoff` alias 解析路徑不再存在。所有讀取路徑（workflow runtime、CLI single-step alias、chat handoff、`cafe workflow`）只接受結構化 JSON baton contract，並以嚴格 `HandoffOwner` / `HandoffIntent` enum 驗證；無效或純文字 baton 一律回報 schema 錯誤而非被正規化。
 - Workflow runtime、baton validation、PR feedback alignment 只讀結構化 baton contract，避免 Milestone C 期間繼續把 legacy handoff shape 當成核心執行模型。
 - Hidden legacy phase commands (`cafe spec` / `plan` / `develop` / `review` / `pr`) 已於 issue #315 刪除；使用者導引與主要入口為 `cafe make` / `cafe workflow --start-step <step> --execute`。
 - Generic workflow step 仍會接受現有 skill 回傳的 `CAFE_*` 結果，但只在 step executor 邊界轉成結構化 baton contract（`workflow.status_transition_adapter`）。`BlackboardWorkflowRuntime` 先消費 baton，再把 status parser 留給 mock / legacy executor 測試與過渡 wrapper。

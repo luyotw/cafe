@@ -184,8 +184,8 @@ Baseline (issue317 develop): `uv run --with pytest pytest tests/unit tests/integ
 | `tests/unit/test_skill_loader.py` | **keep** | project > global > builtin precedence; project `install_skill` body |
 | `tests/unit/test_generic_phase.py` | **keep** | project-local native skill install paths |
 | `tests/unit/test_generic_workflow_step.py` | **keep** | workflow-common + phase skill install per step |
-| `tests/unit/test_workflow_runtime.py` | **keep** | structured baton default; `test_runtime_rejects_legacy_text_baton_in_core_path`; agent-step legacy normalize (`test_runtime_normalizes_legacy_baton_written_by_pr_agent`) as explicit boundary |
-| `tests/unit/test_workflow_models.py` | **keep** | `allow_legacy_text` legacy step-name fallback; invalid JSON still rejects |
+| `tests/unit/test_workflow_runtime.py` | **superseded by issue386** | `allow_legacy_text` and legacy step-name/`key=value` baton parsing were removed entirely (not just defaulted-off); `test_runtime_normalizes_legacy_baton_written_by_pr_agent` was inverted to `test_runtime_rejects_plain_text_baton_written_by_pr_agent` |
+| `tests/unit/test_workflow_models.py` | **superseded by issue386** | `allow_legacy_text` legacy step-name fallback no longer exists; `TestLegacyKeyValueBaton` was inverted to `TestLegacyBatonFormatsAreRejected` (see issue #386) |
 | `tests/unit/test_phases_legacy_retired.py` | **update** | guardrail for retired `cafe spec|plan|…`; add `cafe workflow --start-step spec` dry-run |
 | `tests/unit/test_issue_yaml_config.py` | **update** | docstrings only (remove SpecPhase/PlanPhase mirror wording) |
 | `tests/integration/test_workflow_e2e.py` | **keep** | happy path, pause/resume, baton handoff |
@@ -209,5 +209,5 @@ Baseline (issue317 develop): `uv run --with pytest pytest tests/unit tests/integ
 
 | Behavior | Rationale |
 | --- | --- |
-| Duplicate legacy-text baton tests outside runtime/models boundaries | No additional deletes this pass; runtime agent-step normalize kept as single integration boundary alongside `test_workflow_models.allow_legacy_text` |
+| Duplicate legacy-text baton tests outside runtime/models boundaries | No additional deletes this pass; issue #386 removed `allow_legacy_text` and the runtime's legacy-text normalization boundary entirely — batons are now strict JSON-only, enforced by `test_workflow_runtime.py::test_runtime_rejects_plain_text_baton_written_by_pr_agent` and `test_workflow_models.py::TestLegacyBatonFormatsAreRejected` |
 | Tests asserting global home as default install target | None found; new contract tests lock project-local install |

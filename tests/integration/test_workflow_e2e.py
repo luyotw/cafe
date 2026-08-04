@@ -703,11 +703,22 @@ class TestChatBaton:
         return _load_default_playbook()
 
     def test_chat_baton_consumed_and_blackboard_updated(self, tmp_path: Path) -> None:
-        """next_step.txt 存在且內容有效時，應被消費並更新 blackboard。"""
+        """structured JSON next_step.txt 存在且內容有效時，應被消費並更新 blackboard。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-baton-1"
         issue_dir.mkdir(parents=True, exist_ok=True)
         next_step_path = issue_dir / "next_step.txt"
-        next_step_path.write_text("develop", encoding="utf-8")
+        next_step_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "from_step": "spec",
+                    "to_owner": "agent",
+                    "to_step": "develop",
+                    "intent": "await_agent",
+                }
+            ),
+            encoding="utf-8",
+        )
 
         playbook_data = self._make_playbook_data()
 
@@ -727,6 +738,29 @@ class TestChatBaton:
 
         blackboard = BlackboardStore(issue_dir).load_or_create("spec")
         assert blackboard.current_step == "develop"
+
+    def test_chat_baton_plain_text_is_rejected_not_consumed(self, tmp_path: Path) -> None:
+        """Issue #386: a plain-text next_step.txt is never consumed as a step name."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "issue-baton-1-legacy"
+        issue_dir.mkdir(parents=True, exist_ok=True)
+        next_step_path = issue_dir / "next_step.txt"
+        next_step_path.write_text("develop", encoding="utf-8")
+
+        playbook_data = self._make_playbook_data()
+
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
+            git = MagicMock()
+            git.has_uncommitted_changes.return_value = False
+            mock_git_cls.return_value = git
+
+            result = _consume_pending_chat_handoff(
+                issue_dir=issue_dir,
+                playbook_data=playbook_data,
+                requested_start_step=None,
+            )
+
+        assert result is None
+        assert next_step_path.exists()
 
     def test_chat_baton_bootstrap_not_consumed(self, tmp_path: Path) -> None:
         """bootstrap/persistent baton should not be treated as pending chat handoff."""
@@ -793,20 +827,21 @@ class TestChatBaton:
         assert result is None
         assert "await_user_qa" in next_step_path.read_text(encoding="utf-8")
 
-    def test_chat_baton_empty_raises_error(self, tmp_path: Path) -> None:
-        """空的 next_step.txt 應拋出 ValueError。"""
+    def test_chat_baton_empty_is_left_for_runtime_recovery(self, tmp_path: Path) -> None:
+        """空的 next_step.txt 是 schema 錯誤，交給 workflow runtime 處理，不在此處拋出。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-baton-2"
         issue_dir.mkdir(parents=True, exist_ok=True)
         (issue_dir / "next_step.txt").write_text("", encoding="utf-8")
 
         playbook_data = self._make_playbook_data()
 
-        with pytest.raises(ValueError, match="empty"):
-            _consume_pending_chat_handoff(
-                issue_dir=issue_dir,
-                playbook_data=playbook_data,
-                requested_start_step=None,
-            )
+        result = _consume_pending_chat_handoff(
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            requested_start_step=None,
+        )
+
+        assert result is None
 
     def test_chat_baton_nonexistent_step_raises_error(self, tmp_path: Path) -> None:
         """next_step.txt 含不存在步驟名稱時應拋出 ValueError。"""

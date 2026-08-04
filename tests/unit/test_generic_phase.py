@@ -528,6 +528,35 @@ def test_prepare_skill_renders_iteration_context_without_mutating_source(
     assert source_file.read_text(encoding="utf-8") == source_before
 
 
+def test_build_prompt_renders_complete_operation_helper_commands(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue386"
+    iteration_dir = issue_dir / "develop" / "iteration_012"
+
+    prompt = phase.build_prompt(
+        skill_name="cafe-plan",
+        skill_invocation="$cafe-plan",
+        context={
+            "issue_dir": str(issue_dir),
+            "current_step": "develop",
+            "iteration_dir": str(iteration_dir),
+            "playbook_id": "default",
+        },
+    )
+
+    assert (
+        f"cafe operation run --issue-dir {issue_dir} --step develop "
+        f"--iteration-dir {iteration_dir} --playbook default -- <command>"
+    ) in prompt
+    assert (
+        f"cafe operation status --issue-dir {issue_dir} --step develop "
+        f"--iteration-dir {iteration_dir} --playbook default"
+    ) in prompt
+    assert "cafe operation status`; " not in prompt
+    assert "<issue_dir>" not in prompt
+    assert "<iteration_dir>" not in prompt
+
+
 def test_prepare_skill_omits_declared_optional_prompt_reference_when_input_is_absent(
     tmp_path: Path,
 ) -> None:

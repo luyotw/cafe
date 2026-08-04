@@ -978,6 +978,11 @@ class AgentExecutor:
         )  # seconds - timeout if no new output
         last_output_time = time.time() if use_idle_timeout else None
         idle_timeout_triggered = False  # Track if we exited due to idle timeout
+        # Track whether the CLI ever emitted a structured "the run is done"
+        # signal (stream-json's terminal `type: "result"` message). This is
+        # what lets us tell "finished, just slow to exit" apart from "still
+        # actively working when we had to kill it" below.
+        received_result_message = False
 
         # Open streaming output file if provided
         streaming_file_handle = None
@@ -1199,6 +1204,7 @@ class AgentExecutor:
                             # Check for result message (indicates completion for Gemini/Claude)
                             # When type is "result", the CLI has completed and we should stop reading
                             if data.get("type") == "result":
+                                received_result_message = True
                                 break
 
                             # Extract content using custom extractor or default Claude extractor
@@ -1276,6 +1282,8 @@ class AgentExecutor:
 
         print(f"\n{'=' * 80}\n")
 
+        post_output_timeout_triggered = False
+
         # If idle timeout triggered, terminate process immediately
         if idle_timeout_triggered:
             print(f"⚠️  Terminating {cli_name} process due to idle timeout...")
@@ -1295,8 +1303,15 @@ class AgentExecutor:
             # Read stderr after termination
             stderr_output = process.stderr.read() if process.stderr else ""
 
-            # Treat as success if we got output
-            if output_lines:
+            # Treat as success only if we can actually tell the run finished:
+            # either the CLI has no structured completion signal at all (e.g.
+            # Copilot's raw line streaming, where this ambiguity has always
+            # existed), or it does and we saw that signal (`received_result_message`)
+            # before going idle. Otherwise the idle timeout fired while the
+            # CLI was still actively working (e.g. stuck on an inner tool
+            # call) -- that's a genuine timeout, not a success, and must be
+            # left as a non-zero returncode so it can be classified below.
+            if output_lines and (not parse_stream_json or received_result_message):
                 print(f"✓ Got output from {cli_name}, treating as success despite idle timeout")
                 returncode = 0
         else:
@@ -1310,6 +1325,7 @@ class AgentExecutor:
             except subprocess.TimeoutExpired:
                 print(f"⚠️  {cli_name} process did not exit within timeout, terminating...")
                 process.terminate()
+                post_output_timeout_triggered = True
                 try:
                     returncode = process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
@@ -1319,8 +1335,10 @@ class AgentExecutor:
                 # Read stderr after termination
                 stderr_output = process.stderr.read() if process.stderr else ""
 
-                # If we got output, treat timeout as success (agent likely finished but didn't exit)
-                if output_lines:
+                # Same reasoning as the idle-timeout branch above: only treat
+                # this as "finished but slow to exit" when we have a way to
+                # know the run actually finished.
+                if output_lines and (not parse_stream_json or received_result_message):
                     print(f"✓ Got output from {cli_name}, treating as success despite timeout")
                     returncode = 0
 
@@ -1341,6 +1359,17 @@ class AgentExecutor:
                     cli_name,
                     combined_output,
                 )
+
+                # A characterized timeout/background signal: our own idle or
+                # post-output wait timeout killed the process and no more
+                # specific classification (rate limit, etc.) matched. This is
+                # the one signal the workflow runtime treats as eligible for
+                # a durable long-running "running" operation record.
+                if error_type is None and (idle_timeout_triggered or post_output_timeout_triggered):
+                    error_type = "timeout"
+                    display_message = (
+                        f"{cli_name} did not produce output before the execution timeout"
+                    )
 
                 err = AgentExecutionError(
                     f"{cli_name} execution failed with code {returncode}: {stderr_output}",

@@ -2683,6 +2683,26 @@ def test_workflow_limits_prompt_inputs_to_step_artifacts(tmp_path: Path) -> None
         )
 
 
+def test_build_context_includes_operation_helper_paths(tmp_path: Path) -> None:
+    executor = _make_minimal_executor(tmp_path)
+    state = BlackboardStore(executor.issue_dir).load_or_create("develop")
+    step_def = {"skill": "cafe-plan", "role": "developer", "input_artifacts": []}
+    output_file = executor.issue_dir / "develop" / "iteration_012" / "output.md"
+
+    context = executor._build_context(
+        step_name="develop",
+        step_def=step_def,
+        blackboard_state=state,
+        agent_name="David",
+        output_file=output_file,
+    )
+
+    assert context["issue_dir"] == executor._display_path(executor.issue_dir)
+    assert context["current_step"] == "develop"
+    assert context["iteration_dir"] == executor._display_path(output_file.parent)
+    assert context["playbook_id"] == "default"
+
+
 def test_workflow_limits_checklist_inputs_to_step_artifacts(tmp_path: Path) -> None:
     """Checklist generation uses the same declared artifact boundary as the prompt."""
     executor = _make_minimal_executor(tmp_path)
