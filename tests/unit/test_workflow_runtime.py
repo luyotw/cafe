@@ -12,7 +12,7 @@ from cafe.core.blackboard import (
     LongRunningOperationArtifact,
     LongRunningOperationState,
 )
-from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.workflow_models import BatonRejected, StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 
 
@@ -2413,6 +2413,37 @@ def test_runtime_reconciles_after_consumed_handoff_start_step(tmp_path: Path) ->
     assert iteration_data["end_time"]
 
 
+def test_downstream_handoff_must_declare_await_agent_intent(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-strict-downstream-intent"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_baton(
+        issue_dir,
+        from_step="develop",
+        to_owner="agent",
+        to_step="review",
+        intent="await_agent",
+        source="test",
+    )
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "review"}},
+            "review": {"skill": "review", "role": "developer", "on": {"confirmed": "_done"}},
+        },
+    }
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args, **_kwargs: StepExecutionResult(response="", artifacts={}),
+    )
+
+    with pytest.raises(BatonRejected) as excinfo:
+        runtime._load_step_handoff_contract(current_step="develop")
+
+    assert excinfo.value.field == "intent"
+    assert excinfo.value.invalid_value == "await_agent"
+
+
 # ---------------------------------------------------------------------------
 # extra_prompt 傳遞測試
 # ---------------------------------------------------------------------------
@@ -2987,8 +3018,10 @@ def _setup_interrupted_step(
     )
 
 
-def test_running_operation_prevents_duplicate_execution(tmp_path: Path) -> None:
-    """Test List item 14: resume sees operation.json state=running; no duplicate executor call."""
+def test_running_operation_without_helper_evidence_becomes_lost_without_duplicate_execution(
+    tmp_path: Path,
+) -> None:
+    """Resume rechecks helper evidence; missing helper proof is actionable lost."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-running"
     _setup_interrupted_step(issue_dir, step="develop")
     iteration_dir = _write_iteration_evidence(issue_dir, "develop")
@@ -3016,22 +3049,20 @@ def test_running_operation_prevents_duplicate_execution(tmp_path: Path) -> None:
 
     assert calls == []
     assert result.completed is False
-    assert result.final_status_code == "OPERATION_RUNNING"
+    assert result.final_status_code == "OPERATION_LOST"
     bb = BlackboardStore(issue_dir).load_or_create("develop")
-    assert any(e.event_type == "operation_running" for e in bb.events)
+    assert any(e.event_type == "operation_lost" for e in bb.events)
 
 
-def test_succeeded_operation_requires_verification_before_advancing(tmp_path: Path) -> None:
-    """Test List item 15: succeeded alone does not advance; verified evidence does."""
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-succeeded"
+def test_prewritten_succeeded_operation_without_trusted_receipt_does_not_advance(
+    tmp_path: Path,
+) -> None:
+    """Agent-authored success-looking files are not trusted without a terminal receipt."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-succeeded-no-receipt"
     _setup_interrupted_step(issue_dir, step="develop")
     iteration_dir = _write_iteration_evidence(issue_dir, "develop")
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("develop")
-    # Between interruption and resume, the executor's own written handoff
-    # already points downstream to "review" - simulating a step that
-    # finished its work but whose host process was killed before the
-    # runtime observed completion.
     store.update_handoff_contract(
         state,
         from_step="develop",
@@ -3050,7 +3081,65 @@ def test_succeeded_operation_requires_verification_before_advancing(tmp_path: Pa
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}},
+            "develop": {"skill": "develop", "role": "developer", "on": {"await_agent": "review"}},
+            "review": {"skill": "review", "role": "developer", "on": {"confirmed": "_done"}},
+        },
+    }
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
+        calls.append(step_name)
+        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
+    result = runtime.run(max_transitions=5)
+
+    assert result.final_status_code == "OPERATION_SUCCEEDED_UNVERIFIED"
+    assert calls == []
+    bb = BlackboardStore(issue_dir).load_or_create("develop")
+    assert any(
+        e.event_type == "operation_blocked" and e.data.get("outcome") == "succeeded_unverified"
+        for e in bb.events
+    )
+
+
+def test_succeeded_operation_with_trusted_receipt_and_evidence_advances(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-succeeded-trusted"
+    _setup_interrupted_step(issue_dir, step="develop")
+    iteration_dir = _write_iteration_evidence(issue_dir, "develop")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    store.update_handoff_contract(
+        state,
+        from_step="develop",
+        to_owner=HandoffOwner.AGENT,
+        to_step="review",
+        intent=HandoffIntent.AWAIT_AGENT,
+        source="test",
+    )
+    running = store.write_operation_artifact(
+        state,
+        step="develop",
+        iteration_dir=iteration_dir,
+        artifact=LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING),
+    )
+    store.write_operation_receipt(
+        state,
+        step="develop",
+        iteration_dir=iteration_dir,
+        operation_id=running.operation_id,
+        artifact=LongRunningOperationArtifact(
+            operation_id=running.operation_id,
+            state=LongRunningOperationState.SUCCEEDED,
+            reason="operation_helper_exit",
+            exit_code=0,
+        ),
+    )
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {"skill": "develop", "role": "developer", "on": {"await_agent": "review"}},
             "review": {"skill": "review", "role": "developer", "on": {"confirmed": "_done"}},
         },
     }
@@ -3063,15 +3152,126 @@ def test_succeeded_operation_requires_verification_before_advancing(tmp_path: Pa
     runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
     runtime.run(max_transitions=5)
 
-    # develop is never re-executed (no duplicate launch); only review, the
-    # downstream step from the verified handoff, runs.
     assert calls == ["review"]
     bb = BlackboardStore(issue_dir).load_or_create("develop")
     assert any(e.event_type == "step_reconciled" for e in bb.events)
-    assert any(
-        e.event_type == "long_running_operation" and e.data.get("state") == "succeeded"
-        for e in bb.events
+
+
+def test_failed_receipt_promoted_during_reconciliation_records_failed_not_running(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-failed-receipt"
+    _setup_interrupted_step(issue_dir, step="develop")
+    iteration_dir = _write_iteration_evidence(issue_dir, "develop")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    running = store.write_operation_artifact(
+        state,
+        step="develop",
+        iteration_dir=iteration_dir,
+        artifact=LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING),
     )
+    store.write_operation_receipt(
+        state,
+        step="develop",
+        iteration_dir=iteration_dir,
+        operation_id=running.operation_id,
+        artifact=LongRunningOperationArtifact(
+            operation_id=running.operation_id,
+            state=LongRunningOperationState.FAILED,
+            reason="operation_helper_exit",
+            exit_code=7,
+        ),
+    )
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {"develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}},
+    }
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args, **_kwargs: StepExecutionResult(response="done", artifacts={}),
+    )
+    result = runtime.run(max_transitions=5)
+
+    assert result.final_status_code == "OPERATION_FAILED"
+    bb = BlackboardStore(issue_dir).load_or_create("develop")
+    assert any(e.event_type == "operation_failed" for e in bb.events)
+    assert not any(e.event_type == "operation_running" for e in bb.events)
+
+
+def test_trusted_succeeded_receipt_with_missing_phase_artifacts_uses_finalize_only_prompt(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-finalize-prompt"
+    _setup_interrupted_step(issue_dir, step="develop")
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    running = store.write_operation_artifact(
+        state,
+        step="develop",
+        iteration_dir=iteration_dir,
+        artifact=LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING),
+    )
+    store.write_operation_receipt(
+        state,
+        step="develop",
+        iteration_dir=iteration_dir,
+        operation_id=running.operation_id,
+        artifact=LongRunningOperationArtifact(
+            operation_id=running.operation_id,
+            state=LongRunningOperationState.SUCCEEDED,
+            reason="operation_helper_exit",
+            exit_code=0,
+        ),
+    )
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {"skill": "develop", "role": "developer", "on": {"await_agent": "review"}},
+            "review": {"skill": "review", "role": "developer", "on": {"confirmed": "_done"}},
+        },
+    }
+    prompts: list[str | None] = []
+    executor_calls = 0
+
+    def executor(
+        step_name: str,
+        step_def: dict,
+        state_obj: object,
+        *,
+        extra_prompt: str | None = None,
+        **_kwargs: object,
+    ) -> StepExecutionResult:
+        nonlocal executor_calls
+        executor_calls += 1
+        prompts.append(extra_prompt)
+        (iteration_dir / "output.md").write_text("# finalized\n", encoding="utf-8")
+        (iteration_dir / "checklist.md").write_text("- [x] finalized\n", encoding="utf-8")
+        _write_baton(
+            issue_dir,
+            from_step=step_name,
+            to_owner="agent",
+            to_step="review",
+            intent="await_agent",
+        )
+        return StepExecutionResult(response="finalized", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=playbook, executor=executor
+    ).run(start_step="develop", single_step=True)
+
+    assert result.final_status_code == "BATON_AWAIT_AGENT"
+    assert executor_calls == 1
+    assert prompts and prompts[0] is not None
+    assert running.operation_id in prompts[0]
+    assert "finalize" in prompts[0].lower()
+    assert "do not relaunch" in prompts[0].lower()
 
 
 @pytest.mark.parametrize("op_state", ["failed", "lost"])

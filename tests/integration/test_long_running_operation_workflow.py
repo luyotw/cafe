@@ -35,7 +35,7 @@ from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 _PLAYBOOK = {
     "playbook": {"id": "default"},
     "steps": {
-        "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "review"}},
+        "develop": {"skill": "develop", "role": "developer", "on": {"await_agent": "review"}},
         "review": {"skill": "review", "role": "developer", "on": {"confirmed": "_done"}},
     },
 }
@@ -125,6 +125,83 @@ def test_runtime_rechecks_operation_created_inside_executor_before_no_status_fal
 
     release_file.write_text("go", encoding="utf-8")
     assert second_result.final_status_code == "OPERATION_RUNNING"
+
+
+def test_runtime_run_rechecks_helper_liveness_and_marks_lost_without_manual_status(
+    tmp_path: Path,
+) -> None:
+    """Resume must perform the controlled status/liveness check itself.
+
+    This intentionally does not call ``get_operation_status`` before the
+    second ``BlackboardWorkflowRuntime.run``. A running operation whose helper
+    handle is gone must become actionable/lost instead of staying
+    ``OPERATION_RUNNING`` forever.
+    """
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-runtime-lost"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    release_file = tmp_path / "release-runtime-lost"
+    script = tmp_path / "tracked_wait_runtime_lost.py"
+    script.write_text(
+        "from __future__ import annotations\n"
+        "import sys, time\n"
+        "from pathlib import Path\n"
+        "release_file = Path(sys.argv[1])\n"
+        "while not release_file.exists():\n"
+        "    time.sleep(0.02)\n",
+        encoding="utf-8",
+    )
+    launched_operations = []
+
+    def launching_executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
+        launched = run_operation_command(
+            issue_dir=issue_dir,
+            step=step_name,
+            iteration_dir=iteration_dir,
+            command=[sys.executable, str(script), str(release_file)],
+            cwd=tmp_path,
+            playbook=_PLAYBOOK,
+            reason="runtime_liveness_probe",
+        )
+        launched_operations.append(launched)
+        assert launched.started is True
+        return StepExecutionResult(response="waiting for tracked operation", artifacts={})
+
+    first_result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_PLAYBOOK,
+        executor=launching_executor,
+    ).run(start_step="develop", single_step=True)
+
+    assert first_result.final_status_code == "OPERATION_RUNNING"
+    launched = launched_operations[0]
+    deadline = time.time() + 2
+    while not launched.handle_path.exists() and time.time() < deadline:
+        time.sleep(0.02)
+    handle = json.loads(launched.handle_path.read_text(encoding="utf-8"))
+    monitor_pid = int(handle["monitor_pid"])
+    try:
+        os.killpg(monitor_pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    launched.handle_path.unlink(missing_ok=True)
+
+    def duplicate_launch_executor(
+        step_name: str, step_def: dict, state: object
+    ) -> StepExecutionResult:
+        raise AssertionError(f"executor must not be invoked again for {step_name}")
+
+    second_result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_PLAYBOOK,
+        executor=duplicate_launch_executor,
+    ).run(start_step="develop", single_step=True)
+
+    release_file.write_text("go", encoding="utf-8")
+    assert second_result.final_status_code == "OPERATION_LOST"
+    assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "lost"
+    assert json.loads((iteration_dir / "operation_receipt.json").read_text())["state"] == "lost"
 
 
 def test_succeeded_operation_without_phase_artifacts_runs_finalize_only_once(
@@ -530,14 +607,13 @@ def test_agent_writable_completion_evidence_without_receipt_does_not_promote_to_
         issue_dir=issue_dir, playbook=_PLAYBOOK, executor=duplicate_launch_executor
     ).run(start_step="develop", single_step=True)
 
-    assert result.final_status_code == "OPERATION_RUNNING"
-    assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "running"
+    assert result.final_status_code == "OPERATION_LOST"
+    assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "lost"
 
-def test_agent_timeout_then_resume_stays_running_without_duplicate_launch(
+def test_agent_timeout_without_helper_evidence_becomes_lost_without_duplicate_launch(
     tmp_path: Path,
 ) -> None:
-    """Journey: resume happens before the controlled helper leaves a terminal receipt;
-    the operation stays running, recoverable, and the executor is not invoked again."""
+    """Timeout-created operation state must not stay running without helper evidence."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-journey-still-running"
 
     def crashing_executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
@@ -565,6 +641,6 @@ def test_agent_timeout_then_resume_stays_running_without_duplicate_launch(
     )
     second_result = second_run.run(start_step="develop", single_step=True)
 
-    assert second_result.final_status_code == "OPERATION_RUNNING"
+    assert second_result.final_status_code == "OPERATION_LOST"
     iteration_dir = issue_dir / "develop" / "iteration_001"
-    assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "running"
+    assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "lost"

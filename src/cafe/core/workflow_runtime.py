@@ -116,6 +116,7 @@ class BlackboardWorkflowRuntime:
             playbook_id=self.playbook_id,
             tolerate_invalid_baton=True,
         )
+        self._operation_finalize_extra_prompt: Optional[str] = None
 
     @staticmethod
     def _extract_goto_target(response: str) -> Optional[str]:
@@ -510,7 +511,26 @@ class BlackboardWorkflowRuntime:
         except (ValueError, json.JSONDecodeError, OSError):
             return operation
         if receipt is None:
-            return operation
+            try:
+                from cafe.core.long_running_operation_helper import get_operation_status
+
+                refreshed = get_operation_status(
+                    issue_dir=self.issue_dir,
+                    step=current_step,
+                    iteration_dir=iteration_dir,
+                    playbook=self.playbook,
+                )
+            except (ValueError, json.JSONDecodeError, OSError):
+                return operation
+            if refreshed.state == LongRunningOperationState.RUNNING:
+                return operation
+            self.blackboard = self.blackboard_store.load_or_create(current_step)
+            try:
+                receipt = self.blackboard_store.read_operation_receipt(iteration_dir)
+            except (ValueError, json.JSONDecodeError, OSError):
+                return operation
+            if receipt is None:
+                receipt = refreshed
         if not self._operation_receipt_trusted(
             current_step=current_step,
             iteration_dir=iteration_dir,
@@ -610,13 +630,7 @@ class BlackboardWorkflowRuntime:
             valid_intents = effective_step_handoff_intents(
                 self.steps.get(current_step, {})
             )
-            downstream_agent_handoff = (
-                contract.intent == HandoffIntent.AWAIT_AGENT
-                and contract.to_owner == HandoffOwner.AGENT
-                and contract.to_step in self.steps
-                and contract.to_step != current_step
-            )
-            if contract.intent.value not in valid_intents and not downstream_agent_handoff:
+            if contract.intent.value not in valid_intents:
                 raise BatonRejected(
                     field="intent",
                     invalid_value=contract.intent.value,
@@ -1220,6 +1234,8 @@ class BlackboardWorkflowRuntime:
                 )
                 if operation.state == LongRunningOperationState.SUCCEEDED:
                     validated.append("operation_succeeded")
+                elif operation.state == LongRunningOperationState.FAILED:
+                    missing.append("operation_failed")
                 elif operation.state == LongRunningOperationState.LOST:
                     missing.append("operation_lost")
                 else:
@@ -1229,7 +1245,26 @@ class BlackboardWorkflowRuntime:
             elif operation.state == LongRunningOperationState.LOST:
                 missing.append("operation_lost")
             else:
-                validated.append("operation_succeeded")
+                trusted_succeeded_receipt = False
+                assert iteration_dir is not None
+                try:
+                    receipt = self.blackboard_store.read_operation_receipt(iteration_dir)
+                except (ValueError, json.JSONDecodeError, OSError):
+                    receipt = None
+                trusted_succeeded_receipt = (
+                    receipt is not None
+                    and receipt.state == LongRunningOperationState.SUCCEEDED
+                    and self._operation_receipt_trusted(
+                        current_step=current_step,
+                        iteration_dir=iteration_dir,
+                        operation=operation,
+                        receipt=receipt,
+                    )
+                )
+                if trusted_succeeded_receipt:
+                    validated.append("operation_succeeded")
+                else:
+                    missing.append("operation_succeeded_receipt")
 
         return HandoffReconciliationResult(
             reconciled=not missing,
@@ -1404,6 +1439,16 @@ class BlackboardWorkflowRuntime:
 
         Never advances as if the work succeeded and never retries automatically.
         """
+        if outcome in {"failed", "lost"}:
+            self.blackboard_store.record_event(
+                self.blackboard,
+                f"operation_{outcome}",
+                {
+                    "step": current_step,
+                    "runtime": runtime,
+                    "missing_evidence": list(result.missing_evidence),
+                },
+            )
         self.blackboard_store.record_event(
             self.blackboard,
             "operation_blocked",
@@ -1480,32 +1525,39 @@ class BlackboardWorkflowRuntime:
                 outcome=operation.state.value,
             )
 
-        # operation.state == SUCCEEDED: only block when other reconciliation
-        # evidence (baton/output/checklist/capability receipts) is missing.
-        if not result.reconciled:
-            trusted_succeeded_receipt = False
-            if result.iteration_dir is not None:
-                try:
-                    receipt = self.blackboard_store.read_operation_receipt(result.iteration_dir)
-                except (ValueError, json.JSONDecodeError, OSError):
-                    receipt = None
-                trusted_succeeded_receipt = (
-                    receipt is not None
-                    and receipt.state == LongRunningOperationState.SUCCEEDED
-                    and self._operation_receipt_trusted(
-                        current_step=current_step,
-                        iteration_dir=result.iteration_dir,
-                        operation=operation,
-                        receipt=receipt,
-                    )
-                )
-            if not trusted_succeeded_receipt:
-                return self._block_operation_outcome(
+        trusted_succeeded_receipt = False
+        if result.iteration_dir is not None:
+            try:
+                receipt = self.blackboard_store.read_operation_receipt(result.iteration_dir)
+            except (ValueError, json.JSONDecodeError, OSError):
+                receipt = None
+            trusted_succeeded_receipt = (
+                receipt is not None
+                and receipt.state == LongRunningOperationState.SUCCEEDED
+                and self._operation_receipt_trusted(
                     current_step=current_step,
-                    runtime=runtime,
-                    result=result,
-                    outcome="succeeded_unverified",
+                    iteration_dir=result.iteration_dir,
+                    operation=operation,
+                    receipt=receipt,
                 )
+            )
+        if not trusted_succeeded_receipt:
+            return self._block_operation_outcome(
+                current_step=current_step,
+                runtime=runtime,
+                result=result,
+                outcome="succeeded_unverified",
+            )
+
+        # operation.state == SUCCEEDED with a trusted receipt: only execute
+        # again to finalize phase artifacts/baton, never to relaunch command
+        # work.
+        if not result.reconciled:
+            self._operation_finalize_extra_prompt = self._build_operation_finalize_prompt(
+                current_step=current_step,
+                result=result,
+                operation=operation,
+            )
             self.blackboard_store.record_event(
                 self.blackboard,
                 "operation_finalize_required",
@@ -1517,6 +1569,39 @@ class BlackboardWorkflowRuntime:
             )
             return None
         return None
+
+    @staticmethod
+    def _merge_extra_prompts(*parts: Optional[str]) -> Optional[str]:
+        present = [part.strip() for part in parts if part and part.strip()]
+        if not present:
+            return None
+        return "\n\n".join(present)
+
+    def _build_operation_finalize_prompt(
+        self,
+        *,
+        current_step: str,
+        result: HandoffReconciliationResult,
+        operation: LongRunningOperationArtifact,
+    ) -> str:
+        receipt_path: object = "operation_receipt.json"
+        if result.iteration_dir is not None:
+            receipt_path = operation_receipt_path(result.iteration_dir)
+        missing = ", ".join(result.missing_evidence) or "phase finalization"
+        return (
+            "[LONG-RUNNING OPERATION FINALIZE ONLY]\n"
+            f"Step `{current_step}` already has a trusted succeeded receipt for "
+            f"operation `{operation.operation_id}` at `{receipt_path}`.\n"
+            "Finalize the phase from the existing operation/result evidence. "
+            "Do not relaunch the command, do not start a replacement command, "
+            "and do not call `cafe operation run` again.\n"
+            f"Complete only the missing workflow evidence: {missing}."
+        )
+
+    def _consume_operation_finalize_extra_prompt(self) -> Optional[str]:
+        prompt = self._operation_finalize_extra_prompt
+        self._operation_finalize_extra_prompt = None
+        return prompt
 
     def _try_reconcile_interrupted_step(
         self,
@@ -1644,7 +1729,10 @@ class BlackboardWorkflowRuntime:
                         runtime=runtime_label,
                         hop_count=hop_count,
                         visit_count=visit_count,
-                        extra_prompt=_baton_retry_extra_prompt,
+                        extra_prompt=self._merge_extra_prompts(
+                            self._consume_operation_finalize_extra_prompt(),
+                            _baton_retry_extra_prompt,
+                        ),
                         same_invocation_retry=_baton_attempt > 0,
                     )
                 except StepInterrupted as si:
@@ -1896,7 +1984,10 @@ class BlackboardWorkflowRuntime:
                         hop_count=hop_count,
                         visit_count=visit_count,
                         validate_assignee_type=True,
-                        extra_prompt=_baton_retry_extra_prompt,
+                        extra_prompt=self._merge_extra_prompts(
+                            self._consume_operation_finalize_extra_prompt(),
+                            _baton_retry_extra_prompt,
+                        ),
                         same_invocation_retry=_baton_attempt > 0,
                     )
                 except StepInterrupted as si:
