@@ -314,7 +314,18 @@ def get_operation_status(
             reason="operation_handle_identity_mismatch",
         )
 
-    monitor_pid = int(handle.get("monitor_pid") or 0)
+    try:
+        monitor_pid = int(handle.get("monitor_pid") or 0)
+    except (TypeError, ValueError):
+        return _record_terminal_receipt(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            step=step,
+            iteration_dir=iteration_dir,
+            operation_id=operation.operation_id,
+            state=LongRunningOperationState.LOST,
+            reason="operation_handle_invalid",
+        )
     recorded_start = handle.get("monitor_start_time")
     current_start = _pid_start_time(monitor_pid)
     if monitor_pid > 0 and _pid_alive(monitor_pid) and (

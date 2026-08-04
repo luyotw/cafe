@@ -114,7 +114,12 @@ class LongRunningOperationArtifact:
             raise ValueError("operation.json operation_id must be non-empty")
 
         # Direct enum construction only: no alias map, no migration fallback.
-        state = LongRunningOperationState(str(data["state"]))
+        try:
+            state = LongRunningOperationState(str(data["state"]))
+        except ValueError as exc:
+            raise ValueError(
+                f"operation.json state has unsupported value {data['state']!r}"
+            ) from exc
 
         raw_exit_code = data.get("exit_code")
         exit_code: Optional[int]
@@ -722,8 +727,11 @@ class BlackboardStore:
         path = operation_receipt_path(iteration_dir)
         if not path.exists():
             return None
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        return LongRunningOperationArtifact.from_dict(raw)
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            return LongRunningOperationArtifact.from_dict(raw)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise ValueError(f"{path.name} schema invalid: {exc}") from exc
 
     def write_operation_receipt(
         self,

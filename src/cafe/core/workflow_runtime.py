@@ -488,7 +488,7 @@ class BlackboardWorkflowRuntime:
         iteration_dir: Path,
         operation: LongRunningOperationArtifact,
         other_missing: list[str],
-    ) -> LongRunningOperationArtifact:
+    ) -> tuple[LongRunningOperationArtifact, bool, bool]:
         """The only production path that promotes ``running`` to a terminal state.
 
         Promotion never trusts agent-authored content directly:
@@ -506,10 +506,15 @@ class BlackboardWorkflowRuntime:
         agent cannot forge any transition by editing ``operation.json`` or
         the blackboard directly.
         """
-        try:
-            receipt = self.blackboard_store.read_operation_receipt(iteration_dir)
-        except (ValueError, json.JSONDecodeError, OSError):
-            return operation
+        receipt, receipt_schema_invalid, receipt_untrusted = (
+            self._read_trusted_operation_receipt(
+                current_step=current_step,
+                iteration_dir=iteration_dir,
+                operation=operation,
+            )
+        )
+        if receipt_schema_invalid or receipt_untrusted:
+            return operation, receipt_schema_invalid, receipt_untrusted
         if receipt is None:
             try:
                 from cafe.core.long_running_operation_helper import get_operation_status
@@ -521,23 +526,21 @@ class BlackboardWorkflowRuntime:
                     playbook=self.playbook,
                 )
             except (ValueError, json.JSONDecodeError, OSError):
-                return operation
+                return operation, False, False
             if refreshed.state == LongRunningOperationState.RUNNING:
-                return operation
+                return operation, False, False
             self.blackboard = self.blackboard_store.load_or_create(current_step)
-            try:
-                receipt = self.blackboard_store.read_operation_receipt(iteration_dir)
-            except (ValueError, json.JSONDecodeError, OSError):
-                return operation
+            receipt, receipt_schema_invalid, receipt_untrusted = (
+                self._read_trusted_operation_receipt(
+                    current_step=current_step,
+                    iteration_dir=iteration_dir,
+                    operation=operation,
+                )
+            )
+            if receipt_schema_invalid or receipt_untrusted:
+                return operation, receipt_schema_invalid, receipt_untrusted
             if receipt is None:
                 receipt = refreshed
-        if not self._operation_receipt_trusted(
-            current_step=current_step,
-            iteration_dir=iteration_dir,
-            operation=operation,
-            receipt=receipt,
-        ):
-            return operation
         promoted = LongRunningOperationArtifact(
             operation_id=operation.operation_id,
             state=receipt.state,
@@ -551,7 +554,7 @@ class BlackboardWorkflowRuntime:
             iteration_dir=iteration_dir,
             artifact=promoted,
         )
-        return promoted
+        return promoted, False, False
 
     def _restore_interrupted_step_handoff(self, *, current_step: str, reason: str) -> None:
         """Keep the baton pinned to the interrupted step when recovery fails."""
@@ -1103,6 +1106,29 @@ class BlackboardWorkflowRuntime:
         expected_path = operation_receipt_path(iteration_dir)
         return Path(entry.path) == expected_path
 
+    def _read_trusted_operation_receipt(
+        self,
+        *,
+        current_step: str,
+        iteration_dir: Path,
+        operation: LongRunningOperationArtifact,
+    ) -> tuple[Optional[LongRunningOperationArtifact], bool, bool]:
+        """Read terminal receipt evidence and classify schema/trust failures."""
+        try:
+            receipt = self.blackboard_store.read_operation_receipt(iteration_dir)
+        except (ValueError, json.JSONDecodeError, OSError):
+            return None, True, False
+        if receipt is None:
+            return None, False, False
+        if not self._operation_receipt_trusted(
+            current_step=current_step,
+            iteration_dir=iteration_dir,
+            operation=operation,
+            receipt=receipt,
+        ):
+            return receipt, False, True
+        return receipt, False, False
+
     def _capability_receipt_recorded(self, capability_id: str) -> bool:
         for receipt in getattr(self.blackboard, "capability_receipts", []):
             if (
@@ -1226,13 +1252,23 @@ class BlackboardWorkflowRuntime:
                 missing.append("operation_untrusted")
             elif operation.state == LongRunningOperationState.RUNNING:
                 assert iteration_dir is not None
-                operation = self._reconcile_running_operation(
+                (
+                    operation,
+                    receipt_schema_invalid,
+                    receipt_untrusted,
+                ) = self._reconcile_running_operation(
                     current_step=current_step,
                     iteration_dir=iteration_dir,
                     operation=operation,
                     other_missing=list(missing),
                 )
-                if operation.state == LongRunningOperationState.SUCCEEDED:
+                if receipt_schema_invalid:
+                    operation_schema_invalid = True
+                    missing.append("operation_schema_invalid")
+                elif receipt_untrusted:
+                    operation_untrusted = True
+                    missing.append("operation_untrusted")
+                elif operation.state == LongRunningOperationState.SUCCEEDED:
                     validated.append("operation_succeeded")
                 elif operation.state == LongRunningOperationState.FAILED:
                     missing.append("operation_failed")
@@ -1245,23 +1281,25 @@ class BlackboardWorkflowRuntime:
             elif operation.state == LongRunningOperationState.LOST:
                 missing.append("operation_lost")
             else:
-                trusted_succeeded_receipt = False
                 assert iteration_dir is not None
-                try:
-                    receipt = self.blackboard_store.read_operation_receipt(iteration_dir)
-                except (ValueError, json.JSONDecodeError, OSError):
-                    receipt = None
-                trusted_succeeded_receipt = (
-                    receipt is not None
-                    and receipt.state == LongRunningOperationState.SUCCEEDED
-                    and self._operation_receipt_trusted(
+                receipt, receipt_schema_invalid, receipt_untrusted = (
+                    self._read_trusted_operation_receipt(
                         current_step=current_step,
                         iteration_dir=iteration_dir,
                         operation=operation,
-                        receipt=receipt,
                     )
                 )
-                if trusted_succeeded_receipt:
+                trusted_succeeded_receipt = (
+                    receipt is not None
+                    and receipt.state == LongRunningOperationState.SUCCEEDED
+                )
+                if receipt_schema_invalid:
+                    operation_schema_invalid = True
+                    missing.append("operation_schema_invalid")
+                elif receipt_untrusted:
+                    operation_untrusted = True
+                    missing.append("operation_untrusted")
+                elif trusted_succeeded_receipt:
                     validated.append("operation_succeeded")
                 else:
                     missing.append("operation_succeeded_receipt")
