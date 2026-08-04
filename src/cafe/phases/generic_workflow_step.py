@@ -869,21 +869,28 @@ class GenericWorkflowStepExecutor(Phase):
             if tool and tool not in allowed_tools:
                 allowed_tools.append(tool)
 
+        def add_writable_file(path: Path) -> None:
+            display_path = self._display_path(path)
+            # Claude uses Write for file creation and full replacement, and
+            # Edit for in-place changes.  Runtime artifacts must support both.
+            add(f"edit({display_path})")
+            add(f"write({display_path})")
+
         add("ls")
 
-        # Always allow editing blackboard and baton so agents can hand off
+        # Always allow writing blackboard and baton so agents can hand off
         # without hitting permission denials (runtime also writes these, but
         # belt-and-suspenders prevents the agent from wasting tokens asking
         # for permission).
-        add(f"edit({self._display_path(self.issue_dir / 'blackboard.json')})")
-        add(f"edit({self._display_path(self.issue_dir / 'next_step.txt')})")
+        add_writable_file(self.issue_dir / "blackboard.json")
+        add_writable_file(self.issue_dir / "next_step.txt")
 
         if step_name in {"spec", "plan", "review", "pr"}:
-            add(f"edit({self._display_path(output_file)})")
-            add(f"edit({self._display_path(checklist_file)})")
+            add_writable_file(output_file)
+            add_writable_file(checklist_file)
 
         if step_on_declares(step_def, "need_clarification"):
-            add(f"edit({self._display_path(questions_xml_file)})")
+            add_writable_file(questions_xml_file)
 
         if step_name == "review":
             add("web_fetch")
@@ -901,8 +908,10 @@ class GenericWorkflowStepExecutor(Phase):
 
     def _build_baton_retry_allowed_tools(self) -> List[str]:
         allowed_tools = ["read", "grep", "glob", "ls"]
-        allowed_tools.append(f"edit({self._display_path(self.issue_dir / 'blackboard.json')})")
-        allowed_tools.append(f"edit({self._display_path(self.issue_dir / 'next_step.txt')})")
+        for path in (self.issue_dir / "blackboard.json", self.issue_dir / "next_step.txt"):
+            display_path = self._display_path(path)
+            allowed_tools.append(f"edit({display_path})")
+            allowed_tools.append(f"write({display_path})")
         return allowed_tools
 
     def _build_context(
