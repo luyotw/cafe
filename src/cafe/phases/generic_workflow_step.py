@@ -294,16 +294,30 @@ class GenericWorkflowStepExecutor(Phase):
                 if self._is_baton_retry_user_input(resolved_user_input)
                 else allowed_tools
             )
-            response, _ = self._execute_agent_iteration(
-                agent_name=agent_name,
-                prompt=prompt,
-                user_input=resolved_user_input,
-                valid_intents=valid_intents,
-                require_status_code=False,
-                persist_status=False,
-                allowed_tools=attempt_allowed_tools,
-                phase_specific_data=phase_specific_data,
-            )
+            try:
+                response, _ = self._execute_agent_iteration(
+                    agent_name=agent_name,
+                    prompt=prompt,
+                    user_input=resolved_user_input,
+                    valid_intents=valid_intents,
+                    require_status_code=False,
+                    persist_status=False,
+                    allowed_tools=attempt_allowed_tools,
+                    phase_specific_data=phase_specific_data,
+                )
+            finally:
+                # A phase agent can launch a controlled long-running operation,
+                # whose helper publishes runtime-owned metadata while this
+                # executor still holds the blackboard snapshot from before the
+                # agent call. Refresh that shared object before after-execute
+                # hooks or artifact writes can persist the stale snapshot and
+                # erase the operation's trust record.
+                refreshed = BlackboardStore(self.issue_dir).load_or_create(
+                    step_name,
+                    playbook_id=str(self.playbook.get("playbook", {}).get("id", "default")),
+                    tolerate_invalid_baton=True,
+                )
+                blackboard_state.__dict__.update(refreshed.__dict__)
             return response
 
         execution = self.generic_phase.execute(

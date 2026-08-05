@@ -15,6 +15,8 @@ from cafe.core.blackboard import (
     BlackboardStore,
     HandoffIntent,
     HandoffOwner,
+    LongRunningOperationArtifact,
+    LongRunningOperationState,
 )
 from cafe.core.hooks import HookResult
 from cafe.core.resume_user_input import CONTINUE_USER_INPUT
@@ -2711,6 +2713,64 @@ def test_build_context_includes_operation_helper_paths(tmp_path: Path) -> None:
     assert context["current_step"] == "develop"
     assert context["iteration_dir"] == executor._display_path(output_file.parent)
     assert context["playbook_id"] == "default"
+
+
+def test_agent_launched_operation_metadata_survives_phase_artifact_write(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Post-agent writes must not erase helper metadata published during the agent call."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-operation-refresh"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "output_artifact": "code",
+                "allowed_tools": ["Read"],
+                "on": {"await_agent": "develop"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    stale_state = store.load_or_create("develop")
+    operation_path: Path | None = None
+
+    def launch_operation(*, streaming_output_file, **kwargs) -> None:
+        nonlocal operation_path
+        iteration_dir = Path(streaming_output_file).parent
+        (iteration_dir / "output.md").write_text("# waiting\n", encoding="utf-8")
+        fresh_state = store.load_or_create("develop")
+        operation = store.write_operation_artifact(
+            fresh_state,
+            step="develop",
+            iteration_dir=iteration_dir,
+            artifact=LongRunningOperationArtifact(
+                state=LongRunningOperationState.RUNNING,
+                reason="test_agent_launch",
+            ),
+        )
+        operation_path = iteration_dir / "operation.json"
+        assert operation.operation_id
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-operation-refresh",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("waiting", on_execute=launch_operation),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("develop", playbook["steps"]["develop"], stale_state)
+
+    persisted = store.load_or_create("develop")
+    assert operation_path is not None
+    assert persisted.artifacts["develop_operation"].path == str(operation_path)
+    assert persisted.artifacts["develop_operation"].summary == "long_running_operation:running"
 
 
 def test_workflow_limits_checklist_inputs_to_step_artifacts(tmp_path: Path) -> None:
