@@ -116,43 +116,39 @@ class TestClaudeCLITranslateAllowedTools:
         assert "Write" in result
         assert "Bash" in result
 
-    @patch('cafe.agents.cli.claude.get_repo_root')
-    def test_translate_tools_with_relative_paths(self, mock_repo_root, claude_config):
-        """測試轉換帶有相對路徑的工具（保持相對路徑不變，移除 ./ 前綴）."""
-        mock_repo_root.return_value = Path("/test/repo")
+    @patch('cafe.agents.cli.claude.get_git_toplevel')
+    def test_translate_tools_with_relative_paths(self, mock_get_toplevel, claude_config):
+        """測試轉換帶有相對路徑的工具為 Claude 絕對權限格式."""
+        mock_get_toplevel.return_value = Path("/test/repo")
         cli = ClaudeCLI(claude_config)
         tools = ["read(.cafe/config.yaml)", "write(src/main.py)", "edit(./test.py)"]
         result = cli.translate_allowed_tools(tools)
 
-        # 相對路徑應該保持不變
-        assert "Read(.cafe/config.yaml)" in result
-        assert "Write(src/main.py)" in result
-        # ./ 前綴應該被移除
-        assert "Edit(test.py)" in result
+        assert "Read(//test/repo/.cafe/config.yaml)" in result
+        assert "Write(//test/repo/src/main.py)" in result
+        assert "Edit(//test/repo/test.py)" in result
 
-    @patch('cafe.agents.cli.claude.get_repo_root')
-    @patch('cafe.agents.cli.claude.to_git_ignore_path')
-    def test_translate_tools_with_absolute_paths(self, mock_to_git, mock_repo_root, claude_config):
-        """測試轉換帶有絕對路徑的工具 (轉為 git-ignore 格式)."""
-        mock_repo_root.return_value = Path("/test/repo")
-        mock_to_git.return_value = "/.cafe/config.yaml"
+    @patch('cafe.agents.cli.claude.get_git_toplevel')
+    def test_translate_tools_with_absolute_paths(self, mock_get_toplevel, claude_config):
+        """測試轉換帶有絕對路徑的工具為 Claude 雙斜線格式."""
+        mock_get_toplevel.return_value = Path("/test/repo")
 
         cli = ClaudeCLI(claude_config)
         tools = ["read(/test/repo/.cafe/config.yaml)"]
         result = cli.translate_allowed_tools(tools)
 
-        # 絕對路徑應該轉換為 git-ignore 格式
-        assert "Read(/.cafe/config.yaml)" in result
+        assert "Read(//test/repo/.cafe/config.yaml)" in result
 
-    def test_translate_tools_with_git_ignore_format_paths(self, claude_config):
-        """測試轉換已經是 git-ignore 格式的路徑 (保持不變)."""
+    @patch('cafe.agents.cli.claude.get_git_toplevel')
+    def test_translate_tools_with_git_ignore_format_paths(self, mock_get_toplevel, claude_config):
+        """測試轉換 CAFE 專案根目錄格式路徑."""
+        mock_get_toplevel.return_value = Path("/test/repo")
         cli = ClaudeCLI(claude_config)
         tools = ["read(/.cafe/config.yaml)", "write(/src/main.py)"]
         result = cli.translate_allowed_tools(tools)
 
-        # 已經是 git-ignore 格式，保持不變
-        assert "Read(/.cafe/config.yaml)" in result
-        assert "Write(/src/main.py)" in result
+        assert "Read(//test/repo/.cafe/config.yaml)" in result
+        assert "Write(//test/repo/src/main.py)" in result
 
     def test_translate_tools_with_commands(self, claude_config):
         """測試轉換帶有命令的工具."""
@@ -163,15 +159,17 @@ class TestClaudeCLITranslateAllowedTools:
         assert "Bash(git status)" in result
         assert "Bash(npm install)" in result
 
-    def test_translate_tools_deduplication(self, claude_config):
+    @patch('cafe.agents.cli.claude.get_git_toplevel')
+    def test_translate_tools_deduplication(self, mock_get_toplevel, claude_config):
         """測試工具去重."""
+        mock_get_toplevel.return_value = Path("/test/repo")
         cli = ClaudeCLI(claude_config)
         tools = ["read", "read", "write(/.cafe/test)", "write(/.cafe/test)"]
         result = cli.translate_allowed_tools(tools)
 
         # 應該去除重複項目
         assert len([t for t in result if "Read" in t and "(" not in t]) == 1
-        assert len([t for t in result if "Write(/.cafe/test)" in t]) == 1
+        assert len([t for t in result if "Write(//test/repo/.cafe/test)" in t]) == 1
 
 
 class TestClaudeCLIAddDirectories:

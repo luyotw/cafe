@@ -581,7 +581,8 @@ class TestClaudeAllowedToolsFormatting:
         assert "LS" in allowed_tools_value
         assert "WebFetch" in allowed_tools_value
         assert "WebSearch" in allowed_tools_value
-        assert "Edit(.cafe/issues/test/spec/output.md)" in allowed_tools_value
+        assert "Edit(" in allowed_tools_value
+        assert "/.cafe/issues/test/spec/output.md)" in allowed_tools_value
         assert "Webfetch" not in allowed_tools_value
         assert "Websearch" not in allowed_tools_value
 
@@ -1176,7 +1177,8 @@ class TestCLICommandArgsGeneration:
             allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
 
             # 不再額外加雙引號, 應直接是傳給 CLI 參數值
-            assert allowed_tools_value == "Write,Read,Edit(/views/admin/topics.php)"
+            assert allowed_tools_value.startswith("Write,Read,Edit(//")
+            assert allowed_tools_value.endswith("/views/admin/topics.php)")
 
     def test_execute_gemini_generates_cli_command_args_without_allowed_tools(self) -> None:
         """測試 Gemini 在沒有 allowed_tools 時生成正確 cli_command_args"""
@@ -1786,6 +1788,7 @@ class TestWriteToolPathStripping:
         mock_run_result = MagicMock(stdout='{"session_id": "test123"}', returncode=0)
 
         with patch("subprocess.run", return_value=mock_run_result), \
+             patch("cafe.agents.cli.claude.get_git_toplevel", return_value=Path("/test/repo")), \
              patch("subprocess.Popen", return_value=mock_process), \
              patch("sys.platform", "win32"):
             allowed_tools = ["Read", "Write(/.cafe/test.txt)", "Write(/.cafe/test2.txt)"]
@@ -1796,10 +1799,10 @@ class TestWriteToolPathStripping:
             tools_index = response.cli_command_args.index("--allowed-tools")
             tools_value = response.cli_command_args[tools_index + 1]
 
-            # Should contain Read and Write with paths (converted to git ignore format)
+            # Should contain Read and Write with canonical absolute paths.
             assert "Read" in tools_value
-            assert "Write(/.cafe/test.txt)" in tools_value
-            assert "Write(/.cafe/test2.txt)" in tools_value
+            assert "Write(//test/repo/.cafe/test.txt)" in tools_value
+            assert "Write(//test/repo/.cafe/test2.txt)" in tools_value
             # Should have separate Write entries for different paths
             tools_list = tools_value.strip('"').split(",")
             write_tools = [t for t in tools_list if t.startswith("Write")]

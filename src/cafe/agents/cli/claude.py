@@ -7,7 +7,7 @@ from typing import List, Optional, Tuple
 
 from cafe.agents.cli.abstract import AbstractCLI
 from cafe.core.types import PermissionDenial, TokenUsage
-from cafe.utils.git_utils import get_repo_root, to_git_ignore_path
+from cafe.utils.git_utils import get_git_toplevel
 
 logger = logging.getLogger(__name__)
 
@@ -120,13 +120,13 @@ class ClaudeCLI(AbstractCLI):
         return response_text, token_usage, permission_denials
 
     def translate_allowed_tools(self, tools: List[str]) -> List[str]:
-        """Convert tool names to Claude format (capitalize first letter, convert paths to git-ignore format).
+        """Convert tool names and paths to Claude permission-rule format.
 
         Args:
             tools: List of tool names (lowercase format, e.g. ["read", "write(/path)"])
 
         Returns:
-            List of converted tool names (e.g. ["Read", "Write(/.cafe/config.yaml)"])
+            List of converted tool names (e.g. ["Read", "Write(//repo/.cafe/config.yaml)"])
         """
         processed_tools = []
         tool_name_map = {
@@ -156,36 +156,8 @@ class ClaudeCLI(AbstractCLI):
                     # Command parameter, use directly, don't add / prefix
                     processed_tool = f"{display_tool_name}({path_or_cmd})"
                 else:
-                    # Path parameter, needs conversion to git-ignore format
-                    path_obj = Path(path_or_cmd)
-
-                    # Distinguish path types:
-                    # 1. Already git ignore format (starts with / but not absolute path)
-                    # 2. Absolute path (system path, e.g. /Users/...)
-                    # 3. Relative path (e.g. .cafe/... or src/...)
-                    is_git_ignore_format = path_or_cmd.startswith("/") and not path_obj.is_absolute()
-
-                    if is_git_ignore_format:
-                        # Already git ignore format, keep unchanged
-                        processed_tool = f"{display_tool_name}({path_or_cmd})"
-                    elif path_obj.is_absolute():
-                        # Absolute path, convert to git ignore format
-                        try:
-                            repo_root = get_repo_root()
-                            git_ignore_path = to_git_ignore_path(path_obj, repo_root)
-                            processed_tool = f"{display_tool_name}({git_ignore_path})"
-                        except (ValueError, OSError) as e:
-                            # Conversion failed, use original path and log warning
-                            logger.warning(
-                                f"Failed to convert path to git-ignore format: {path_or_cmd}. "
-                                f"Error: {e}. Using original path."
-                            )
-                            processed_tool = f"{display_tool_name}({path_or_cmd})"
-                    else:
-                        # Relative path, remove ./ prefix if present
-                        if path_or_cmd.startswith("./"):
-                            path_or_cmd = path_or_cmd[2:]
-                        processed_tool = f"{display_tool_name}({path_or_cmd})"
+                    permission_path = self._to_permission_path(path_or_cmd)
+                    processed_tool = f"{display_tool_name}({permission_path})"
             else:
                 # Tool has no path parameter, normalize known Claude tool names.
                 processed_tool = tool_name_map.get(tool.lower(), tool)
@@ -195,6 +167,37 @@ class ClaudeCLI(AbstractCLI):
                 processed_tools.append(processed_tool)
 
         return processed_tools
+
+    @staticmethod
+    def _to_permission_path(path: str) -> str:
+        """Return a cwd-independent Claude permission path.
+
+        Claude uses ``//path`` for absolute filesystem permission rules. CAFE's
+        historical single-leading-slash form is repository-root relative, while
+        unprefixed paths are also repository relative. Resolve both against the
+        active checkout so a resumed agent can change directories without
+        invalidating its workflow-artifact permissions.
+        """
+        if path.startswith("//"):
+            return path
+
+        try:
+            checkout_root = get_git_toplevel().resolve()
+        except (ValueError, OSError):
+            checkout_root = Path.cwd().resolve()
+
+        path_obj = Path(path)
+        if path_obj.is_absolute():
+            try:
+                path_obj.relative_to(checkout_root)
+                absolute_path = path_obj
+            except ValueError:
+                # A single leading slash is CAFE's legacy repository-root form.
+                absolute_path = checkout_root / path.lstrip("/")
+        else:
+            absolute_path = checkout_root / path.removeprefix("./")
+
+        return "/" + str(absolute_path.resolve())
 
     def add_directories(self, cmd: List[str], directories: List[str]) -> List[str]:
         """Add canonical allowed directories to command line arguments.
