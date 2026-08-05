@@ -1168,7 +1168,12 @@ class BlackboardWorkflowRuntime:
             missing.append(capability_id)
         return missing
 
-    def _validate_reconciled_handoff(self, *, current_step: str) -> HandoffReconciliationResult:
+    def _validate_reconciled_handoff(
+        self,
+        *,
+        current_step: str,
+        iteration_dir_override: Optional[Path] = None,
+    ) -> HandoffReconciliationResult:
         missing: list[str] = []
         validated: list[str] = []
         contract: Optional[HandoffContract] = None
@@ -1205,7 +1210,7 @@ class BlackboardWorkflowRuntime:
                     if not self._capability_receipt_recorded(capability_id):
                         missing.append(f"capability_receipt:{capability_id}")
 
-        iteration_dir = self._latest_iteration_dir(current_step)
+        iteration_dir = iteration_dir_override or self._latest_iteration_dir(current_step)
         if iteration_dir is None:
             missing.append("iteration_dir")
         else:
@@ -2426,6 +2431,32 @@ class BlackboardWorkflowRuntime:
         reconciliation/operation-gate path the multi-transition runner uses
         instead of re-invoking the executor unconditionally.
         """
+        operation_iteration_dir = self._pending_operation_iteration_dir(current_step)
+        if operation_iteration_dir is not None:
+            result = self._validate_reconciled_handoff(
+                current_step=current_step,
+                iteration_dir_override=operation_iteration_dir,
+            )
+            gated = self._handle_operation_gate(
+                current_step=current_step,
+                runtime="single_step_resume",
+                result=result,
+            )
+            if gated is not None:
+                return gated
+            if not result.reconciled:
+                self._record_reconciliation_failed(
+                    current_step=current_step,
+                    runtime="single_step_resume",
+                    missing_evidence=result.missing_evidence,
+                )
+                return None
+            return self._apply_reconciled_handoff(
+                current_step=current_step,
+                runtime="single_step_resume",
+                result=result,
+            )
+
         interrupted = self._latest_unreconciled_interrupted_step()
         if interrupted is None:
             return None
@@ -2437,6 +2468,54 @@ class BlackboardWorkflowRuntime:
             runtime="single_step_resume",
             reason=reason,
         )
+
+    def _pending_operation_iteration_dir(self, current_step: str) -> Optional[Path]:
+        """Return a registered operation still awaiting phase completion.
+
+        The CLI can reserve the next iteration directory before ``run()`` gets
+        a chance to reconcile a helper receipt. In that case, using only the
+        numerically latest directory hides the trusted operation from the
+        previous iteration and the finalize agent may relaunch completed work.
+
+        A later completion/reconciliation event for this step closes the
+        operation lifecycle, so old successful operations are not reused when
+        a downstream review sends the step back for unrelated corrections.
+        """
+        operation_id: Optional[str] = None
+        for event in reversed(self.blackboard.events):
+            if event.step != current_step:
+                continue
+            if event.event_type in {
+                "step_completed",
+                "single_step_completed",
+                "step_reconciled",
+            }:
+                return None
+            if event.event_type == "long_running_operation_receipt":
+                operation_id = str(event.data.get("operation_id", "")).strip() or None
+                break
+            if event.event_type == "operation_running":
+                break
+        else:
+            return None
+
+        entry = self.blackboard_store.get_artifact(
+            self.blackboard, f"{current_step}_operation"
+        )
+        if entry is None:
+            return None
+        path = Path(entry.path)
+        if path.name != "operation.json":
+            return None
+        try:
+            operation = self.blackboard_store.read_operation_artifact(path.parent)
+        except (ValueError, json.JSONDecodeError, OSError):
+            return path.parent
+        if operation is None:
+            return None
+        if operation_id is not None and operation.operation_id != operation_id:
+            return None
+        return path.parent
 
     def _run_single_step(self, *, current_step: str) -> PlaybookRunResult:
         if self._is_baton_driven_step(current_step):

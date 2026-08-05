@@ -228,10 +228,18 @@ def test_succeeded_operation_without_phase_artifacts_runs_finalize_only_once(
         encoding="utf-8",
     )
     executor_calls = 0
+    received_extra_prompts: list[str | None] = []
 
-    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+    def executor(
+        step_name: str,
+        step_def: dict,
+        state: object,
+        extra_prompt: str | None = None,
+        **_kwargs: object,
+    ) -> StepExecutionResult:
         nonlocal executor_calls
         executor_calls += 1
+        received_extra_prompts.append(extra_prompt)
         iteration_dir.mkdir(parents=True, exist_ok=True)
         (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
         if executor_calls == 1:
@@ -276,6 +284,14 @@ def test_succeeded_operation_without_phase_artifacts_runs_finalize_only_once(
         )
     assert status.state == LongRunningOperationState.SUCCEEDED
 
+    # The real CLI reserves the next iteration before runtime reconciliation.
+    # That empty directory must not hide iteration_001's trusted receipt.
+    next_iteration_dir = issue_dir / "develop" / "iteration_002"
+    next_iteration_dir.mkdir(parents=True)
+    (next_iteration_dir / "iteration.json").write_text(
+        json.dumps({"iteration": 2}), encoding="utf-8"
+    )
+
     second_result = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=_PLAYBOOK,
@@ -284,8 +300,17 @@ def test_succeeded_operation_without_phase_artifacts_runs_finalize_only_once(
 
     assert second_result.final_status_code != "OPERATION_RUNNING"
     assert executor_calls == 2
+    assert received_extra_prompts[0] is None
+    assert received_extra_prompts[1] is not None
+    assert "[LONG-RUNNING OPERATION FINALIZE ONLY]" in received_extra_prompts[1]
     assert start_count.read_text(encoding="utf-8") == "1"
     assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "succeeded"
+    completed_runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_PLAYBOOK,
+        executor=executor,
+    )
+    assert completed_runtime._pending_operation_iteration_dir("develop") is None
 
 
 def test_run_operation_command_claims_single_operation_atomically(tmp_path: Path) -> None:
