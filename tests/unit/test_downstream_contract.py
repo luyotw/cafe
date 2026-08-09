@@ -31,3 +31,42 @@ def test_rejects_missing_contract_to_preserve_full_source_fallback(tmp_path: Pat
 
     with pytest.raises(ContractValidationError):
         extract_downstream_contract(source, kind="spec")
+
+
+def test_rejects_plan_task_state_that_disagrees_with_complete_plan(tmp_path: Path) -> None:
+    source = tmp_path / "plan.md"
+    source.write_text(
+        "# Plan\n\n## Development Task Breakdown\n\n"
+        "- [x] **TASK-001** — Completed implementation\n\n"
+        "## Downstream Contract\n\n"
+        "- Contract-Version: `1`\n- Artifact-Kind: `plan`\n\n"
+        "### Architecture Boundaries\n| ID | Location | Responsibility |\n| --- | --- | --- |\n| ARCH-001 | src | Boundary |\n\n"
+        "### Invariants\n| ID | Statement |\n| --- | --- |\n| INV-001 | Safe |\n\n"
+        "### Test List\n| ID | Type | Covers |\n| --- | --- | --- |\n| UT-001 | unit | INV-001 |\n\n"
+        "### Dependency ADR References\n| ID | Decision | Requirement / invariant |\n| --- | --- | --- |\n| ADR-001 | Keep safe | INV-001 |\n\n"
+        "### Task Status\n| ID | Status | Summary | Depends On |\n| --- | --- | --- | --- |\n| TASK-001 | pending | Implementation | — |\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ContractValidationError, match="task state"):
+        extract_downstream_contract(source, kind="plan")
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "kind"),
+    [
+        ("src/cafe/data/skills/cafe-spec/assets/templates/default.md", "spec"),
+        ("src/cafe/data/skills/cafe-spec/assets/templates/detailed.md", "spec"),
+        ("src/cafe/data/skills/cafe-spec/assets/templates/simple.md", "spec"),
+        ("src/cafe/data/skills/cafe-plan/assets/templates/default.md", "plan"),
+        ("src/cafe/data/skills/cafe-plan/assets/templates/bug.md", "plan"),
+        ("src/cafe/data/skills/cafe-plan/assets/templates/simple.md", "plan"),
+    ],
+)
+def test_builtin_source_templates_have_valid_contracts(relative_path: str, kind: str) -> None:
+    root = Path(__file__).resolve().parents[2]
+
+    contract = extract_downstream_contract(root / relative_path, kind=kind)
+
+    assert contract.kind == kind
+    assert contract.bytes.startswith(b"## Downstream Contract\n")

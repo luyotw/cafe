@@ -94,6 +94,7 @@ def extract_downstream_contract(path: str | Path, *, kind: str) -> DownstreamCon
     if contract[cursor:].startswith("\n"):
         cursor += 1
     ids: set[str] = set()
+    task_states: dict[str, str] = {}
     for index, (heading, columns, prefix) in enumerate(_SCHEMAS[kind]):
         expected = f"### {heading}\n"
         if not contract[cursor:].startswith(expected):
@@ -109,6 +110,8 @@ def extract_downstream_contract(path: str | Path, *, kind: str) -> DownstreamCon
             ids.add(identifier)
             if heading == "Task Status" and row[1] not in {"pending", "completed"}:
                 raise ContractValidationError("Task Status must be pending or completed")
+            if heading == "Task Status":
+                task_states[identifier] = row[1]
         cursor = section_end
     if contract[cursor:].strip():
         raise ContractValidationError("Unexpected contract content")
@@ -124,4 +127,14 @@ def extract_downstream_contract(path: str | Path, *, kind: str) -> DownstreamCon
     body_ids = set(_ID.findall(text[:start]))
     if body_ids - ids:
         raise ContractValidationError("Contract does not cover source stable IDs")
+    if kind == "plan":
+        body_task_states = {
+            identifier: "completed" if marker.lower() == "x" else "pending"
+            for marker, identifier in re.findall(
+                r"(?m)^-\s+\[([ xX])\]\s+\*\*(TASK-[0-9]{3,})\*\*",
+                text[:start],
+            )
+        }
+        if body_task_states and body_task_states != task_states:
+            raise ContractValidationError("Plan task state disagrees with complete plan")
     return DownstreamContract(kind=kind, version=1, bytes=exact, sha256=hashlib.sha256(exact).hexdigest(), ids=frozenset(ids))

@@ -217,6 +217,30 @@ class TestAgentManagerBackupRetry:
 
         assert response == "backup success"
 
+    def test_backup_receives_fresh_takeover_context_without_primary_session(self) -> None:
+        manager = AgentManager()
+        manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CLAUDE, backup_clis=[AgentCLI.GEMINI]))
+        seen_prompts = []
+
+        def side_effect(prompt, *args, **kwargs):
+            seen_prompts.append(prompt)
+            if len(seen_prompts) == 1:
+                raise self._make_rate_limit_error()
+            return self._make_success_response("backup success")
+
+        with patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect):
+            response, *_ = manager.execute(
+                "David",
+                "primary prompt",
+                backup_context_callback=lambda _error: '{"operation":{"state":"running"}}',
+            )
+
+        assert response == "backup success"
+        assert len(seen_prompts) == 2
+        assert "Cold backup takeover context" in seen_prompts[1]
+        assert '"operation":{"state":"running"}' in seen_prompts[1]
+        assert "session-" not in seen_prompts[1]
+
     def test_first_backup_fails_second_succeeds(self) -> None:
         """Test that when the first backup also fails, the second backup is tried."""
         manager = AgentManager()

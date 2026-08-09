@@ -24,6 +24,7 @@ from cafe.core.delta_packet import (
     persist_delta_packet,
 )
 from cafe.core.git import GitOperations
+from cafe.core.long_running_operation_helper import get_operation_status
 from cafe.core.phase import Phase
 from cafe.core.playbook import resolve_playbook_skills
 from cafe.core.resume_user_input import (
@@ -45,6 +46,7 @@ from cafe.core.status_codes import (
     transition_map_key,
 )
 from cafe.core.types import AgentCLI
+from cafe.core.takeover import build_takeover_snapshot
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.phases.generic_phase import GenericPhase
 from cafe.skills.checklist_composer import compose_declared_checklist
@@ -305,6 +307,15 @@ class GenericWorkflowStepExecutor(Phase):
                     persist_status=False,
                     allowed_tools=attempt_allowed_tools,
                     phase_specific_data=phase_specific_data,
+                    backup_context_callback=lambda error: self._build_backup_takeover_context(
+                        error=error,
+                        step_name=step_name,
+                        step_def=step_def,
+                        blackboard_state=blackboard_state,
+                        output_file=output_file,
+                        checklist_file=checklist_file,
+                        iteration_dir=iteration_dir,
+                    ),
                 )
             finally:
                 # A phase agent can launch a controlled long-running operation,
@@ -454,6 +465,67 @@ class GenericWorkflowStepExecutor(Phase):
             auto_continue=auto_continue,
             events=events,
         )
+
+    def _build_backup_takeover_context(
+        self,
+        *,
+        error: object,
+        step_name: str,
+        step_def: Dict[str, Any],
+        blackboard_state: BlackboardState,
+        output_file: Path,
+        checklist_file: Path,
+        iteration_dir: Path,
+    ) -> str:
+        """Refresh a bounded cold-takeover snapshot just before a backup runs."""
+        contract = self._get_skill_loader().get_workflow_contract(
+            self._resolve_skill_name(step_def, self.iteration)
+        )
+        inputs = self._step_input_artifacts(step_def, blackboard_state)
+        resolved_inputs = resolve_effective_prompt_inputs(
+            contract,
+            inputs,
+            step=step_name,
+            iteration=self.iteration,
+            feedback=bool(inputs.get("review_feedback") or inputs.get("pr_result")),
+            packet_dir=iteration_dir,
+        )
+        workspace: dict[str, Any] = {}
+        try:
+            workspace["head"] = self.git_ops.run_git("rev-parse", "HEAD")
+            workspace["changed"] = [
+                line[3:]
+                for line in self.git_ops.get_status().splitlines()[:100]
+                if len(line) >= 4
+            ]
+        except Exception:
+            workspace["state"] = "unknown"
+
+        operation: dict[str, Any] | None = None
+        try:
+            current = get_operation_status(
+                issue_dir=self.issue_dir,
+                step=step_name,
+                iteration_dir=iteration_dir,
+                playbook=self.playbook,
+            )
+            operation = {
+                "state": "running" if current.state.value == "running" else "terminal",
+                "id": current.operation_id,
+            }
+        except (OSError, ValueError):
+            pass
+        snapshot = build_takeover_snapshot(
+            reason=error,
+            step=step_name,
+            iteration=self.iteration,
+            resolved_inputs=resolved_inputs,
+            output_file=output_file,
+            checklist_file=checklist_file,
+            operation=operation,
+            workspace=workspace,
+        )
+        return json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
 
     def _load_iteration_user_input_candidate(self, step_name: str) -> str:
         """Load raw user input before resume-token optimization."""

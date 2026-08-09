@@ -397,6 +397,9 @@ def resolve_effective_prompt_inputs(
     from cafe.core.context_packet import resolve_context_packet
 
     result: dict[str, dict[str, str]] = {}
+    relationships: list[
+        tuple[PromptInputContract, str, PromptInputLoadPolicy | None]
+    ] = []
     for mapping in contract.prompt_inputs:
         source = next(
             (
@@ -423,21 +426,43 @@ def resolve_effective_prompt_inputs(
             ),
             None,
         )
+        relationships.append((mapping, source, selected))
+
+    # A paired ``*_file`` / ``*_file_path`` declaration represents one input
+    # relationship.  Coalesce any declarations with the same source and
+    # packet policy so both placeholders receive the same validated envelope.
+    # Explicit full and packet declarations deliberately remain independent.
+    packet_groups: dict[
+        tuple[str, str], list[tuple[PromptInputContract, str, PromptInputLoadPolicy]]
+    ] = {}
+    for mapping, source, selected in relationships:
         if selected is None or selected.mode == "full":
             result[mapping.placeholder] = {"mode": "full", "path": source}
             continue
-        packet_path = Path(packet_dir) / f"context_{mapping.placeholder}.json"
+        contract_kind = selected.contract_kind
+        assert contract_kind is not None  # validated by PromptInputContract
+        packet_groups.setdefault((source, contract_kind), []).append(
+            (mapping, source, selected)
+        )
+
+    for (source, contract_kind), group in packet_groups.items():
+        placeholders = tuple(
+            mapping.placeholder for mapping, _source, _policy in group
+        )
+        packet_path = Path(packet_dir) / f"context_{placeholders[0]}.json"
         resolved = resolve_context_packet(
             source_path=source,
-            contract_kind=selected.contract_kind or "spec",
+            contract_kind=contract_kind,
             target_step=step,
             iteration=iteration,
-            placeholders=(mapping.placeholder,),
+            placeholders=placeholders,
             packet_path=packet_path,
         )
-        result[mapping.placeholder] = {
+        binding = {
             "mode": str(resolved["mode"]),
             "path": str(resolved["path"]),
             "reason": str(resolved.get("reason", "")),
         }
+        for mapping, _source, _policy in group:
+            result[mapping.placeholder] = dict(binding)
     return result
