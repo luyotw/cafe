@@ -125,6 +125,38 @@ def test_ignores_contract_headings_inside_fenced_code_blocks(tmp_path: Path) -> 
     assert extract_downstream_contract(source, kind="spec").kind == "spec"
 
 
+@pytest.mark.parametrize("closing_marker", ["```", "```` still-open"])
+def test_rejects_contract_heading_inside_an_invalid_fence_closer(
+    tmp_path: Path, closing_marker: str
+) -> None:
+    """A closer needs sufficient length and no information string."""
+    source = tmp_path / "unclosed-example.md"
+    source.write_text(
+        f"````markdown\n## Downstream Contract\n{closing_marker}\n\n" + _valid_spec_contract(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ContractValidationError, match="exactly one"):
+        extract_downstream_contract(source, kind="spec")
+
+
+def test_rejects_free_form_prose_between_a_section_table_and_its_successor(
+    tmp_path: Path,
+) -> None:
+    """Fixed-schema sections may contain only their declared table and whitespace."""
+    source = tmp_path / "free-form-section.md"
+    source.write_text(
+        _valid_spec_contract().replace(
+            "| GOAL-001 | Goal |\n\n### Non-Goals",
+            "| GOAL-001 | Goal |\n\nThis prose is not part of the schema.\n\n### Non-Goals",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ContractValidationError, match="unexpected content"):
+        extract_downstream_contract(source, kind="spec")
+
+
 def test_rejects_contract_ids_that_are_not_declared_by_the_body(tmp_path: Path) -> None:
     source = tmp_path / "spec.md"
     source.write_text(

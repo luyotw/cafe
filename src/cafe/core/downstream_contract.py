@@ -40,13 +40,18 @@ _SCHEMAS = {
 }
 _ID = re.compile(r"[A-Z][A-Z0-9_]*-[0-9]{3,}")
 _TABLE_SEPARATOR = re.compile(r":?-{3,}:?")
+_FENCE_MARKER = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 
 
 def _rows(section: str, heading: str, columns: tuple[str, ...]) -> list[list[str]]:
     lines = section.splitlines()
+    if lines and lines[0] == f"### {heading}":
+        lines = lines[1:]
     table_start = next((index for index, line in enumerate(lines) if line.startswith("|")), None)
     if table_start is None or table_start + 2 >= len(lines):
         raise ContractValidationError(f"{heading} requires a non-empty table")
+    if any(line.strip() for line in lines[:table_start]):
+        raise ContractValidationError(f"{heading} has unexpected content before its table")
     header = [item.strip() for item in lines[table_start].strip().strip("|").split("|")]
     if tuple(header) != columns:
         raise ContractValidationError(f"{heading} has invalid columns")
@@ -58,8 +63,11 @@ def _rows(section: str, heading: str, columns: tuple[str, ...]) -> list[list[str
     ):
         raise ContractValidationError(f"{heading} has an invalid table separator")
     result: list[list[str]] = []
-    for line in lines[table_start + 2 :]:
+    remaining = lines[table_start + 2 :]
+    for row_index, line in enumerate(remaining):
         if not line.startswith("|"):
+            if any(candidate.strip() for candidate in remaining[row_index:]):
+                raise ContractValidationError(f"{heading} has unexpected content after its table")
             break
         row = [item.strip() for item in line.strip().strip("|").split("|")]
         if len(row) != len(columns) or not all(row):
@@ -68,6 +76,23 @@ def _rows(section: str, heading: str, columns: tuple[str, ...]) -> list[list[str
     if not result:
         raise ContractValidationError(f"{heading} requires a non-empty table")
     return result
+
+
+def _update_fence(fence: str | None, line: str) -> str | None:
+    """Track CommonMark fences without treating a shorter marker as a closer."""
+    marker = _FENCE_MARKER.match(line.rstrip("\r\n"))
+    if marker is None:
+        return fence
+    token, trailing = marker.groups()
+    if fence is None:
+        return token
+    if (
+        token[0] == fence[0]
+        and len(token) >= len(fence)
+        and not trailing.strip()
+    ):
+        return None
+    return fence
 
 
 def _required_references(text: str) -> Iterable[str]:
@@ -80,14 +105,9 @@ def _markdown_heading_positions(text: str, pattern: re.Pattern[str]) -> list[int
     offset = 0
     fence: str | None = None
     for line in text.splitlines(keepends=True):
-        marker = re.match(r"^\s*(`{3,}|~{3,})", line)
-        if marker:
-            token = marker.group(1)[0]
-            if fence is None:
-                fence = token
-            elif fence == token:
-                fence = None
-        elif fence is None and pattern.fullmatch(line.rstrip("\r\n")):
+        was_visible = fence is None
+        fence = _update_fence(fence, line)
+        if was_visible and fence is None and pattern.fullmatch(line.rstrip("\r\n")):
             positions.append(offset)
         offset += len(line)
     return positions
@@ -98,14 +118,9 @@ def _visible_markdown(text: str) -> str:
     lines: list[str] = []
     fence: str | None = None
     for line in text.splitlines(keepends=True):
-        marker = re.match(r"^\s*(`{3,}|~{3,})", line)
-        if marker:
-            token = marker.group(1)[0]
-            if fence is None:
-                fence = token
-            elif fence == token:
-                fence = None
-        elif fence is None:
+        was_visible = fence is None
+        fence = _update_fence(fence, line)
+        if was_visible and fence is None:
             lines.append(line)
     return "".join(lines)
 

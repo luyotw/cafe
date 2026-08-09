@@ -9,7 +9,7 @@ import pytest
 
 from cafe.agents.executor import AgentExecutionError
 from cafe.agents.manager import AgentManager
-from cafe.core.blackboard import BlackboardStore
+from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore
 from cafe.core.long_running_operation_helper import get_operation_status, run_operation_command
 from cafe.core.types import (
     AgentCLI,
@@ -25,11 +25,23 @@ from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 
 
-def _build_loader(tmp_path: Path) -> GenericPhase:
-    skill_root = tmp_path / "builtin" / "skills" / "develop"
+def _build_loader(
+    tmp_path: Path,
+    *,
+    skill_name: str = "develop",
+    input_artifact: str | None = None,
+) -> GenericPhase:
+    skill_root = tmp_path / "builtin" / "skills" / skill_name
     skill_root.mkdir(parents=True)
+    prompt_inputs = (
+        f"workflow:\n  prompt_inputs:\n    - artifacts: [{input_artifact}]\n"
+        f"      placeholder: {input_artifact}_file\n"
+        if input_artifact
+        else ""
+    )
     (skill_root / "SKILL.md").write_text(
-        "---\nname: develop\ndescription: desc\n---\n\nWrite output to: {output_file}\n",
+        f"---\nname: {skill_name}\ndescription: desc\n{prompt_inputs}---\n\n"
+        "Write output to: {output_file}\n",
         encoding="utf-8",
     )
     loader = SkillLoader(
@@ -48,9 +60,16 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
     )
 
 
-def _build_executor(tmp_path: Path, manager: AgentManager) -> GenericWorkflowStepExecutor:
+def _build_executor(
+    tmp_path: Path,
+    manager: AgentManager,
+    *,
+    step_name: str = "develop",
+    skill_name: str = "develop",
+    input_artifact: str | None = None,
+) -> GenericWorkflowStepExecutor:
     issue_dir = tmp_path / ".cafe" / "issues" / "attempt-diagnostics"
-    phase_dir = issue_dir / "develop"
+    phase_dir = issue_dir / step_name
     spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
     spec_file.parent.mkdir(parents=True, exist_ok=True)
     spec_file.write_text("# Initial Requirements\n", encoding="utf-8")
@@ -65,9 +84,17 @@ def _build_executor(tmp_path: Path, manager: AgentManager) -> GenericWorkflowSte
         playbook={
             "playbook": {"id": "default"},
             "roles": {"developer": {"default_agent": "David"}},
-            "steps": {"develop": {"skill": "develop", "role": "developer"}},
+            "steps": {
+                step_name: {
+                    "skill": skill_name,
+                    "role": "developer",
+                    **({"input_artifacts": [input_artifact]} if input_artifact else {}),
+                }
+            },
         },
-        generic_phase=_build_loader(tmp_path),
+        generic_phase=_build_loader(
+            tmp_path, skill_name=skill_name, input_artifact=input_artifact
+        ),
         agent_manager=manager,
         git_ops=git_ops,
         role_agent_map={"developer": "David"},
@@ -151,7 +178,10 @@ def test_fallback_success_preserves_primary_attempts_in_iteration_record(tmp_pat
 def test_cold_backup_chain_status_checks_a_running_operation_before_takeover(
     tmp_path: Path,
 ) -> None:
-    """IT-005 — each cold backup reuses, rather than relaunches, live work."""
+    """IT-005 — a custom workflow reuses, rather than relaunches, live work."""
+    step_name = "orbit_launch"
+    skill_name = "orbit_operator"
+    input_artifact = "mission_brief"
     manager = AgentManager()
     manager.register_agent(
         AgentConfig(
@@ -164,10 +194,25 @@ def test_cold_backup_chain_status_checks_a_running_operation_before_takeover(
             ],
         )
     )
-    executor = _build_executor(tmp_path, manager)
+    executor = _build_executor(
+        tmp_path,
+        manager,
+        step_name=step_name,
+        skill_name=skill_name,
+        input_artifact=input_artifact,
+    )
     executor.git_ops.run_git.return_value = "test-head"
     executor.git_ops.get_status.return_value = ""
-    state = BlackboardStore(executor.issue_dir).load_or_create("develop")
+    state = BlackboardStore(executor.issue_dir).load_or_create(step_name)
+    brief_file = tmp_path / "mission-brief.md"
+    brief_file.write_text("mission input", encoding="utf-8")
+    state.artifacts[input_artifact] = ArtifactEntry(
+        name=input_artifact,
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="orbit_intake",
+        path=str(brief_file),
+    )
     iteration_dir = executor.phase_dir / "iteration_001"
     output_file = iteration_dir / "output.md"
     checklist_file = iteration_dir / "checklist.md"
@@ -182,7 +227,7 @@ def test_cold_backup_chain_status_checks_a_running_operation_before_takeover(
     )
     launched = run_operation_command(
         issue_dir=executor.issue_dir,
-        step="develop",
+        step=step_name,
         iteration_dir=iteration_dir,
         command=[sys.executable, str(operation_script), str(release_file)],
         cwd=tmp_path,
@@ -197,8 +242,8 @@ def test_cold_backup_chain_status_checks_a_running_operation_before_takeover(
     def snapshot(error: AgentExecutionError) -> str:
         return executor._build_backup_takeover_context(
             error=error,
-            step_name="develop",
-            step_def={"skill": "develop", "role": "developer"},
+            step_name=step_name,
+            step_def=executor.playbook["steps"][step_name],
             blackboard_state=state,
             output_file=output_file,
             checklist_file=checklist_file,
@@ -227,7 +272,7 @@ def test_cold_backup_chain_status_checks_a_running_operation_before_takeover(
             response, *_ = manager.execute(
                 "David",
                 "perform the workflow step",
-                phase_name="develop",
+                phase_name=step_name,
                 backup_context_callback=snapshot,
             )
 
@@ -239,6 +284,11 @@ def test_cold_backup_chain_status_checks_a_running_operation_before_takeover(
     second_takeover = json.loads(prompts[2].split("provider-neutral):\n", 1)[1])
     assert response == "replacement output"
     assert first_takeover["reason"] != second_takeover["reason"]
+    assert first_takeover["target"]["step"] == step_name
+    assert first_takeover["resolved_inputs"][f"{input_artifact}_file"]["mode"] == "full"
+    assert first_takeover["resolved_inputs"][f"{input_artifact}_file"]["path"] == str(
+        brief_file
+    )
     assert first_takeover["partial"]["output"]["state"] == "missing"
     assert second_takeover["partial"]["output"]["state"] == "file"
     assert second_takeover["partial"]["checklist"]["completed"] == 1
