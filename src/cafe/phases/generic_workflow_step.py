@@ -349,7 +349,7 @@ class GenericWorkflowStepExecutor(Phase):
                 "iteration_dir": iteration_dir,
                 "output_file": output_file,
                 "questions_xml_file": questions_xml_file,
-                "authoritative_inputs": context["authoritative_inputs"],
+                "authoritative_inputs": context.get("authoritative_inputs", {}),
                 "capability_request_file": capability_request_file if capability_ids else None,
                 "publish_request_file": publish_request_file if step_name == "pr" else None,
                 "blackboard_state": blackboard_state,
