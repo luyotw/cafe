@@ -503,16 +503,18 @@ class GenericWorkflowStepExecutor(Phase):
 
         operation: dict[str, Any] | None = None
         try:
-            current = get_operation_status(
-                issue_dir=self.issue_dir,
-                step=step_name,
-                iteration_dir=iteration_dir,
-                playbook=self.playbook,
-            )
-            operation = {
-                "state": "running" if current.state.value == "running" else "terminal",
-                "id": current.operation_id,
-            }
+            stored_operation = BlackboardStore(self.issue_dir).read_operation_artifact(iteration_dir)
+            if stored_operation is not None:
+                current = get_operation_status(
+                    issue_dir=self.issue_dir,
+                    step=step_name,
+                    iteration_dir=iteration_dir,
+                    playbook=self.playbook,
+                )
+                operation = {
+                    "state": "running" if current.state.value == "running" else "terminal",
+                    "id": current.operation_id,
+                }
         except (OSError, ValueError):
             # Unknown operation evidence is unsafe to treat as absent: a cold
             # backup must status-check rather than risk relaunching it.

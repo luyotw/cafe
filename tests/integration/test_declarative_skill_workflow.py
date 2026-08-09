@@ -160,6 +160,141 @@ Read {evidence_file} and use {template_file}.
     assert "evidence.md" in activated
 
 
+def test_custom_executor_preserves_full_inputs_and_falls_back_from_damaged_packet_source(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """IT-003/IT-004 — real custom execution keeps full authority and fails closed."""
+    monkeypatch.chdir(tmp_path)
+    builtin_root = tmp_path / "builtin"
+    skill_dir = builtin_root / "skills" / "assembly"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: assembly
+description: assembly
+workflow:
+  prompt_inputs:
+    - artifacts: [brief_packet]
+      placeholder: compact_brief
+      required: true
+      load_policy:
+        - mode: packet
+          contract_kind: spec
+    - artifacts: [full_record]
+      placeholder: full_record
+      required: true
+---
+
+Use {compact_brief} with {full_record}.
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(
+        project_root=tmp_path,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+    loader.discover()
+    phase = GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(loader, project_root=tmp_path, home_dir=tmp_path / "home"),
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "packet-journey"
+    packet_source = issue_dir / "brief" / "iteration_001" / "output.md"
+    full_record = issue_dir / "record" / "iteration_001" / "output.md"
+    packet_source.parent.mkdir(parents=True)
+    full_record.parent.mkdir(parents=True)
+    packet_source.write_text(
+        """# Brief
+
+BODY-ONLY-SENTINEL GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
+
+## Downstream Contract
+
+- Contract-Version: `1`
+- Artifact-Kind: `spec`
+
+### Goals
+| ID | Statement |
+| --- | --- |
+| GOAL-001 | Goal |
+### Non-Goals
+| ID | Statement |
+| --- | --- |
+| NONGOAL-001 | No |
+### Acceptance Criteria
+| ID | Priority | Statement |
+| --- | --- | --- |
+| AC-001 | must | Yes |
+### Invariants
+| ID | Statement |
+| --- | --- |
+| INV-001 | Safe |
+### Trust Boundaries
+| ID | Statement |
+| --- | --- |
+| TRUST-001 | Local |
+""",
+        encoding="utf-8",
+    )
+    full_record.write_text("AUTHORITATIVE-FULL-RECORD", encoding="utf-8")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("assemble")
+    store.set_artifact(state, "brief_packet", str(packet_source))
+    store.set_artifact(state, "full_record", str(full_record))
+    step = {
+        "skill": "assembly",
+        "role": "researcher",
+        "input_artifacts": ["brief_packet", "full_record"],
+        "output_artifact": "compiled_report",
+        "allowed_tools": ["Read"],
+        "valid_intents": ["confirmed"],
+        "on": {"await_agent": "_done"},
+    }
+    playbook = {
+        "playbook": {"id": "arbitrary-packet-journey"},
+        "roles": {"researcher": {"default_agent": "David"}},
+        "skills": {"workflow": {"shared": []}, "chat": {"shared": []}},
+        "steps": {"assemble": step},
+    }
+
+    first_manager = _AgentManager()
+    first = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="packet-journey",
+        playbook=playbook,
+        generic_phase=phase,
+        agent_manager=first_manager,
+        git_ops=_GitOps(),
+        role_agent_map={"researcher": "David"},
+    )
+    first.execute_step("assemble", step, state)
+
+    packet_path = issue_dir / "assemble" / "iteration_001" / "context_compact_brief.json"
+    packet = json.loads(packet_path.read_text(encoding="utf-8"))
+    assert "BODY-ONLY-SENTINEL" not in packet["contract"]["bytes"]
+    assert "compact_brief=packet" in first_manager.prompts[0]
+    assert "full_record=full" in first_manager.prompts[0]
+    assert str(full_record) in first_manager.prompts[0]
+
+    packet_source.write_text("# legacy source without a contract\n", encoding="utf-8")
+    second_manager = _AgentManager()
+    second = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="packet-journey",
+        playbook=playbook,
+        generic_phase=phase,
+        agent_manager=second_manager,
+        git_ops=_GitOps(),
+        role_agent_map={"researcher": "David"},
+    )
+    second.execute_step("assemble", step, state)
+
+    assert "compact_brief=full_fallback" in second_manager.prompts[0]
+    assert str(packet_source) in second_manager.prompts[0]
+    assert "full_record=full" in second_manager.prompts[0]
+
+
 def test_workflow_replace_removes_stale_native_skills(tmp_path: Path, monkeypatch) -> None:
     """I2 — a replace declaration leaves only the current workflow environment."""
     monkeypatch.chdir(tmp_path)

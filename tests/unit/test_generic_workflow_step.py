@@ -3353,6 +3353,67 @@ def _minimal_spec_executor(
     )
 
 
+def test_cold_takeover_reports_absent_when_no_operation_has_started(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """UT-011 — a missing operation artifact is distinct from bad evidence."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-takeover-absent"
+    step = {
+        "skill": "cafe-develop",
+        "role": "developer",
+        "input_artifacts": [],
+        "output_artifact": "code",
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-takeover-absent",
+        playbook={
+            "playbook": {"id": "default"},
+            "roles": {"developer": {"default_agent": "David"}},
+            "steps": {"develop": step},
+        },
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    executor.iteration = 1
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+
+    snapshot = json.loads(
+        executor._build_backup_takeover_context(
+            error="primary failed",
+            step_name="develop",
+            step_def=step,
+            blackboard_state=state,
+            output_file=iteration_dir / "output.md",
+            checklist_file=iteration_dir / "checklist.md",
+            iteration_dir=iteration_dir,
+        )
+    )
+
+    assert snapshot["operation"] == {"state": "absent"}
+
+    (iteration_dir / "operation.json").write_text("not valid json", encoding="utf-8")
+    untrusted_snapshot = json.loads(
+        executor._build_backup_takeover_context(
+            error="primary failed",
+            step_name="develop",
+            step_def=step,
+            blackboard_state=state,
+            output_file=iteration_dir / "output.md",
+            checklist_file=iteration_dir / "checklist.md",
+            iteration_dir=iteration_dir,
+        )
+    )
+
+    assert untrusted_snapshot["operation"] == {"state": "unknown"}
+
+
 def test_resolve_iteration_user_input_first_start_unchanged(tmp_path: Path) -> None:
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
     executor.phase_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input" / "spec"
