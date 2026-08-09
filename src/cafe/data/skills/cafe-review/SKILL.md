@@ -1,7 +1,7 @@
 ---
 name: cafe-review
 description: "審查程式碼品質與風險"
-version: 1.1.0
+version: 1.2.0
 workflow:
   required_tools:
     - "Bash(cafe verification check:*)"
@@ -14,15 +14,27 @@ workflow:
     - artifacts: [spec]
       placeholder: spec_file
       required: false
+      load_policy:
+        - mode: packet
+          contract_kind: spec
     - artifacts: [spec]
       placeholder: spec_file_path
       required: false
+      load_policy:
+        - mode: packet
+          contract_kind: spec
     - artifacts: [plan]
       placeholder: plan_file
       required: false
+      load_policy:
+        - mode: packet
+          contract_kind: plan
     - artifacts: [plan]
       placeholder: plan_file_path
       required: false
+      load_policy:
+        - mode: packet
+          contract_kind: plan
     - artifacts: [code]
       placeholder: develop_file
       required: false

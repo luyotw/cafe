@@ -242,6 +242,7 @@ class TestLaunchChatSession:
         mock_config_manager_cls,
         mock_run,
         mock_extract_session,
+        monkeypatch,
     ):
         """Test that Codex chat stores a new session after interactive launch."""
         mock_config = MagicMock()
@@ -251,12 +252,14 @@ class TestLaunchChatSession:
         agent_manager = self._make_agent_manager("Nick", "codex", session_id=None, model="gpt-5.4")
         mock_agent_manager_cls.return_value = agent_manager
         mock_run.return_value = MagicMock(returncode=0)
+        codex_home = "/tmp/custom-codex-home"
+        monkeypatch.setenv("CODEX_HOME", codex_home)
 
         result = launch_chat_session("developer", "issue123")
 
         assert result == 0
         assert mock_run.call_args.args[0] == ["codex", "--model", "gpt-5.4"]
-        assert "CODEX_HOME" not in mock_run.call_args.kwargs["env"]
+        assert mock_run.call_args.kwargs["env"]["CODEX_HOME"] == codex_home
         agent_manager.session_manager.save_session.assert_called_once_with(
             "Nick",
             AgentCLI.CODEX,
@@ -272,6 +275,7 @@ class TestLaunchChatSession:
         mock_agent_manager_cls,
         mock_config_manager_cls,
         mock_run,
+        monkeypatch,
     ):
         """Test Codex interactive resume and session persistence."""
         mock_config = MagicMock()
@@ -283,12 +287,14 @@ class TestLaunchChatSession:
         )
         mock_agent_manager_cls.return_value = agent_manager
         mock_run.return_value = MagicMock(returncode=0)
+        codex_home = "/tmp/custom-codex-home"
+        monkeypatch.setenv("CODEX_HOME", codex_home)
 
         result = launch_chat_session("developer", "issue123")
 
         assert result == 0
         assert mock_run.call_args.args[0] == ["codex", "--model", "gpt-5.4", "resume", "sess-codex"]
-        assert "CODEX_HOME" not in mock_run.call_args.kwargs["env"]
+        assert mock_run.call_args.kwargs["env"]["CODEX_HOME"] == codex_home
         agent_manager.session_manager.save_session.assert_called_once_with(
             "Nick",
             AgentCLI.CODEX,

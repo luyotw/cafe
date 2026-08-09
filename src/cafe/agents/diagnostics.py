@@ -19,7 +19,7 @@ _NON_TRANSIENT_CLI_UNAVAILABLE = re.compile(
 )
 _BEARER_CREDENTIAL = re.compile(r"\bbearer\s+[^\s,;]+", re.IGNORECASE)
 _KEY_VALUE_CREDENTIAL = re.compile(
-    r"\b(api[_-]?key|token|password|secret|authorization)\s*[:=]\s*[^\s,;]+",
+    r"\b(api[_-]?key|token|password|secret|credential|authorization)\s*[:=]\s*[^\s,;]+",
     re.IGNORECASE,
 )
 _URL_CREDENTIAL = re.compile(r"(https?://)[^\s:/@]+:[^\s@/]+@", re.IGNORECASE)

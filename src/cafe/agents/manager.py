@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from cafe.agents.diagnostics import (
     build_failed_attempt,
@@ -43,6 +43,7 @@ class AgentManager:
         "edit only when the approved plan requires no new test). Use the context already in "
         "this session."
     )
+    SUPPORTS_COLD_TAKEOVER = True
 
     def __init__(
         self, session_manager: Optional[SessionManager] = None, issue_name: Optional[str] = None
@@ -416,6 +417,7 @@ class AgentManager:
         streaming_output_file: Optional[str] = None,
         phase_name: Optional[str] = None,
         continuation: Optional[SessionContinuation] = None,
+        backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
     ) -> Tuple[str, TokenUsage, List, Optional[List[str]], List[str], Optional[str]]:
         """Execute prompt with specified agent.
 
@@ -540,6 +542,7 @@ class AgentManager:
                         streaming_output_file=streaming_output_file,
                         phase_name=phase_name,
                         continuation=continuation,
+                        backup_context_callback=backup_context_callback,
                     )
                     break  # Backup succeeded, exit loop
                 else:
@@ -647,6 +650,7 @@ class AgentManager:
         streaming_output_file: Optional[str] = None,
         phase_name: Optional[str] = None,
         continuation: Optional[SessionContinuation] = None,
+        backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
     ) -> "AgentResponse":
         """Try backup agents in order until one succeeds or all fail.
 
@@ -706,6 +710,7 @@ class AgentManager:
         # Track tried CLIs to avoid duplicates
         tried_clis = {config.cli}
         failed_agents: List[str] = [f"{primary_cli_name} ({sanitize_error_excerpt(primary_error)})"]
+        takeover_error = primary_error
 
         for entry in fallback_entries:
             if entry.cli in tried_clis:
@@ -714,6 +719,27 @@ class AgentManager:
 
             backup_model = entry.resolve_model(phase_name)
             print(f"Trying {entry.cli.value}...")
+
+            # Every different-provider attempt is a cold takeover. Refresh the
+            # durable runtime snapshot at this last responsible moment instead
+            # of carrying a provider session or an earlier in-memory summary.
+            backup_prompt = prompt
+            if backup_context_callback is not None:
+                try:
+                    takeover_context = backup_context_callback(takeover_error)
+                except Exception as exc:
+                    failed_agents.append(
+                        f"{entry.cli.value} (takeover context unavailable: {sanitize_error_excerpt(exc)})"
+                    )
+                    print(
+                        f"❌ {entry.cli.value} takeover context unavailable; trying next agent..."
+                    )
+                    continue
+                if takeover_context:
+                    backup_prompt = (
+                        f"{prompt}\n\nCold backup takeover context (fresh, provider-neutral):\n"
+                        f"{takeover_context}"
+                    )
 
             # Explicit workflow policies never continue a different fallback
             # session. AUTO preserves legacy sticky-session behavior.
@@ -742,7 +768,7 @@ class AgentManager:
                             self.DEVELOP_READ_ONLY_COMMAND_LIMIT
                         )
                     agent_response = backup_executor.execute(
-                        prompt,
+                        backup_prompt,
                         allowed_tools,
                         allowed_directories,
                         streaming_output_file,
@@ -781,6 +807,7 @@ class AgentManager:
                             f"❌ {entry.cli.value} failed ({self._fallback_reason(backup_error)}), trying next agent..."
                         )
                         self._print_fallback_error_detail(backup_error)
+                        takeover_error = backup_error
                         break
                     raise
 

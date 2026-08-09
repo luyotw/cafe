@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Optional, Tuple
+from pathlib import Path
+from typing import Any, Literal, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -72,6 +73,7 @@ class PromptInputContract(BaseModel):
     artifacts: Tuple[str, ...]
     placeholder: str
     required: bool = False
+    load_policy: Tuple["PromptInputLoadPolicy", ...] = ()
 
     @field_validator("artifacts")
     @classmethod
@@ -88,12 +90,21 @@ class PromptInputContract(BaseModel):
     def _validate_placeholder(cls, value: str) -> str:
         return _safe_placeholder(value, field_name="placeholder")
 
+    @model_validator(mode="after")
+    def _validate_load_policy(self) -> "PromptInputContract":
+        if any(
+            policy.mode == "packet" and policy.contract_kind is None for policy in self.load_policy
+        ):
+            raise ValueError("packet prompt input policy requires contract_kind")
+        return self
 
-class ChecklistWhen(BaseModel):
-    """Bounded runtime facts used to select a checklist variant."""
+
+class RuntimeWhen(BaseModel):
+    """One shared, strict selector for checklist and input-loading variants."""
 
     model_config = ConfigDict(extra="forbid")
 
+    step: Optional[str] = None
     iteration: Optional[int] = None
     min_iteration: Optional[int] = None
     max_iteration: Optional[int] = None
@@ -112,8 +123,13 @@ class ChecklistWhen(BaseModel):
     def _validate_artifact_presence(cls, value: Tuple[str, ...]) -> Tuple[str, ...]:
         return tuple(_safe_token(item, field_name="artifact_present") for item in value)
 
+    @field_validator("step")
+    @classmethod
+    def _validate_step(cls, value: Optional[str]) -> Optional[str]:
+        return _safe_token(value, field_name="step") if value is not None else None
+
     @model_validator(mode="after")
-    def _validate_bounds(self) -> "ChecklistWhen":
+    def _validate_bounds(self) -> "RuntimeWhen":
         if self.iteration is not None and any(
             bound is not None for bound in (self.min_iteration, self.max_iteration)
         ):
@@ -125,6 +141,37 @@ class ChecklistWhen(BaseModel):
         ):
             raise ValueError("min_iteration must not exceed max_iteration")
         return self
+
+    def matches(
+        self,
+        *,
+        step: Optional[str],
+        iteration: int,
+        artifacts: Mapping[str, Any],
+        feedback: bool,
+    ) -> bool:
+        return (
+            (self.step is None or self.step == step)
+            and (self.iteration is None or self.iteration == iteration)
+            and (self.min_iteration is None or iteration >= self.min_iteration)
+            and (self.max_iteration is None or iteration <= self.max_iteration)
+            and (self.feedback is None or self.feedback == feedback)
+            and all(bool(artifacts.get(name)) for name in self.artifact_present)
+        )
+
+
+# Retain the public name used by existing skill declarations and imports.
+ChecklistWhen = RuntimeWhen
+
+
+class PromptInputLoadPolicy(BaseModel):
+    """A declared full-or-packet policy for an individual consuming relation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    when: RuntimeWhen = Field(default_factory=RuntimeWhen)
+    mode: Literal["full", "packet"] = "full"
+    contract_kind: Optional[Literal["spec", "plan"]] = None
 
 
 class ChecklistSection(BaseModel):
@@ -314,6 +361,15 @@ def _artifact_path(value: Any) -> Optional[str]:
     return text or None
 
 
+def _artifact_version(value: Any) -> int:
+    version = (
+        value.get("version") if isinstance(value, Mapping) else getattr(value, "version", None)
+    )
+    return (
+        version if isinstance(version, int) and not isinstance(version, bool) and version > 0 else 1
+    )
+
+
 def resolve_prompt_inputs(
     contract: SkillWorkflowContract,
     artifacts: Mapping[str, Any],
@@ -330,3 +386,97 @@ def resolve_prompt_inputs(
             if mapping.required:
                 raise DeclaredArtifactError(mapping.placeholder, mapping.artifacts)
     return resolved
+
+
+def resolve_effective_prompt_inputs(
+    contract: SkillWorkflowContract,
+    artifacts: Mapping[str, Any],
+    *,
+    step: str,
+    iteration: int,
+    feedback: bool,
+    packet_dir: str | Path,
+) -> dict[str, dict[str, str]]:
+    """Resolve declared input relationships without relying on artifact names.
+
+    Packet failures are deliberately local: other inputs remain in their
+    declared mode and the affected input exposes its complete source path.
+    """
+    from cafe.core.context_packet import resolve_context_packet
+
+    result: dict[str, dict[str, str]] = {}
+    relationships: list[tuple[PromptInputContract, str, str, int, PromptInputLoadPolicy | None]] = (
+        []
+    )
+    for mapping in contract.prompt_inputs:
+        source_name = next(
+            (name for name in mapping.artifacts if _artifact_path(artifacts.get(name))),
+            None,
+        )
+        if source_name is None:
+            if mapping.required:
+                raise DeclaredArtifactError(mapping.placeholder, mapping.artifacts)
+            continue
+        source_value = artifacts[source_name]
+        source = _artifact_path(source_value)
+        assert source is not None
+        selected = next(
+            (
+                policy
+                for policy in mapping.load_policy
+                if policy.when.matches(
+                    step=step,
+                    iteration=iteration,
+                    artifacts=artifacts,
+                    feedback=feedback,
+                )
+            ),
+            None,
+        )
+        relationships.append(
+            (mapping, source, source_name, _artifact_version(source_value), selected)
+        )
+
+    # A paired ``*_file`` / ``*_file_path`` declaration represents one input
+    # relationship.  Coalesce any declarations with the same source and
+    # packet policy so both placeholders receive the same validated envelope.
+    # Explicit full and packet declarations deliberately remain independent.
+    packet_groups: dict[
+        tuple[str, str, str, int],
+        list[tuple[PromptInputContract, str, str, int, PromptInputLoadPolicy]],
+    ] = {}
+    for mapping, source, source_name, source_version, selected in relationships:
+        if selected is None or selected.mode == "full":
+            result[mapping.placeholder] = {"mode": "full", "path": source}
+            continue
+        contract_kind = selected.contract_kind
+        assert contract_kind is not None  # validated by PromptInputContract
+        packet_groups.setdefault((source, source_name, contract_kind, source_version), []).append(
+            (mapping, source, source_name, source_version, selected)
+        )
+
+    for (source, source_name, contract_kind, source_version), group in packet_groups.items():
+        placeholders = tuple(
+            mapping.placeholder
+            for mapping, _source, _source_name, _source_version, _policy in group
+        )
+        packet_path = Path(packet_dir) / f"context_{placeholders[0]}.json"
+        resolved = resolve_context_packet(
+            source_path=source,
+            contract_kind=contract_kind,
+            target_step=step,
+            iteration=iteration,
+            placeholders=placeholders,
+            packet_path=packet_path,
+            source_artifact_name=source_name,
+            source_artifact_version=source_version,
+        )
+        binding = {
+            "mode": str(resolved["mode"]),
+            "path": str(resolved["path"]),
+            "reason": str(resolved.get("reason", "")),
+            "source": dict(resolved.get("source", {})),
+        }
+        for mapping, _source, _source_name, _source_version, _policy in group:
+            result[mapping.placeholder] = dict(binding)
+    return result

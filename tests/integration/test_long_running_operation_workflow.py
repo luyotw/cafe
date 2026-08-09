@@ -88,7 +88,9 @@ def test_runtime_rechecks_operation_created_inside_executor_before_no_status_fal
         nonlocal executor_calls
         executor_calls += 1
         iteration_dir.mkdir(parents=True, exist_ok=True)
-        (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
+        (iteration_dir / "iteration.json").write_text(
+            json.dumps({"iteration": 1}), encoding="utf-8"
+        )
         launched = run_operation_command(
             issue_dir=issue_dir,
             step=step_name,
@@ -154,7 +156,9 @@ def test_runtime_run_rechecks_helper_liveness_and_marks_lost_without_manual_stat
 
     def launching_executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
         iteration_dir.mkdir(parents=True, exist_ok=True)
-        (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
+        (iteration_dir / "iteration.json").write_text(
+            json.dumps({"iteration": 1}), encoding="utf-8"
+        )
         launched = run_operation_command(
             issue_dir=issue_dir,
             step=step_name,
@@ -220,10 +224,12 @@ def test_succeeded_operation_without_phase_artifacts_runs_finalize_only_once(
     script.write_text(
         "from __future__ import annotations\n"
         "import sys\n"
+        "import time\n"
         "from pathlib import Path\n"
         "counter = Path(sys.argv[1])\n"
         "count = int(counter.read_text(encoding='utf-8')) if counter.exists() else 0\n"
         "counter.write_text(str(count + 1), encoding='utf-8')\n"
+        "time.sleep(0.2)\n"
         "sys.exit(0)\n",
         encoding="utf-8",
     )
@@ -241,7 +247,9 @@ def test_succeeded_operation_without_phase_artifacts_runs_finalize_only_once(
         executor_calls += 1
         received_extra_prompts.append(extra_prompt)
         iteration_dir.mkdir(parents=True, exist_ok=True)
-        (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
+        (iteration_dir / "iteration.json").write_text(
+            json.dumps({"iteration": 1}), encoding="utf-8"
+        )
         if executor_calls == 1:
             launched = run_operation_command(
                 issue_dir=issue_dir,
@@ -401,7 +409,13 @@ iteration_dir.mkdir(parents=True, exist_ok=True)
         issue_dir=issue_dir,
         step="develop",
         iteration_dir=iteration_dir,
-        command=[sys.executable, str(script), str(release_file), str(issue_dir), str(iteration_dir)],
+        command=[
+            sys.executable,
+            str(script),
+            str(release_file),
+            str(issue_dir),
+            str(iteration_dir),
+        ],
         cwd=tmp_path,
         playbook=_PLAYBOOK,
         reason="integration_fake_long_command",
@@ -410,19 +424,28 @@ iteration_dir.mkdir(parents=True, exist_ok=True)
         issue_dir=issue_dir,
         step="develop",
         iteration_dir=iteration_dir,
-        command=[sys.executable, str(script), str(release_file), str(issue_dir), str(iteration_dir)],
+        command=[
+            sys.executable,
+            str(script),
+            str(release_file),
+            str(issue_dir),
+            str(iteration_dir),
+        ],
         cwd=tmp_path,
         playbook=_PLAYBOOK,
         reason="integration_fake_long_command",
     )
     assert duplicate.operation.operation_id == launched.operation.operation_id
     assert duplicate.started is False
-    assert get_operation_status(
-        issue_dir=issue_dir,
-        step="develop",
-        iteration_dir=iteration_dir,
-        playbook=_PLAYBOOK,
-    ).state == LongRunningOperationState.RUNNING
+    assert (
+        get_operation_status(
+            issue_dir=issue_dir,
+            step="develop",
+            iteration_dir=iteration_dir,
+            playbook=_PLAYBOOK,
+        ).state
+        == LongRunningOperationState.RUNNING
+    )
 
     def duplicate_launch_executor(
         step_name: str, step_def: dict, state: object
@@ -458,7 +481,9 @@ iteration_dir.mkdir(parents=True, exist_ok=True)
     ).run(start_step="develop", single_step=True)
 
     assert second_result.final_status_code != "OPERATION_RUNNING"
-    assert json.loads((iteration_dir / "operation_receipt.json").read_text())["state"] == "succeeded"
+    assert (
+        json.loads((iteration_dir / "operation_receipt.json").read_text())["state"] == "succeeded"
+    )
     assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "succeeded"
 
 
@@ -467,9 +492,7 @@ def test_production_helper_records_nonzero_exit_as_failed(tmp_path: Path) -> Non
     iteration_dir = issue_dir / "develop" / "iteration_001"
     script = tmp_path / "fake_long_failed.py"
     script.write_text(
-        "from __future__ import annotations\n"
-        "import sys\n"
-        "sys.exit(7)\n",
+        "from __future__ import annotations\n" "import sys\n" "sys.exit(7)\n",
         encoding="utf-8",
     )
 
@@ -634,6 +657,7 @@ def test_agent_writable_completion_evidence_without_receipt_does_not_promote_to_
 
     assert result.final_status_code == "OPERATION_LOST"
     assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "lost"
+
 
 def test_agent_timeout_without_helper_evidence_becomes_lost_without_duplicate_launch(
     tmp_path: Path,

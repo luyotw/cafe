@@ -704,7 +704,9 @@ class BlackboardStore:
                 version=version,
                 updated_by=step,
                 path=str(path),
-                summary=f"long_running_operation:{artifact.state.value}",
+                summary=(
+                    f"long_running_operation:{artifact.operation_id}:{artifact.state.value}"
+                ),
             ),
         )
         self.record_event(

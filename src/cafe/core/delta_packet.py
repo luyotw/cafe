@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from cafe.core.blackboard import ArtifactEntry, BlackboardState
+from cafe.core.packet_io import (
+    atomic_write_bytes,
+    canonical_json,
+    compact_json,
+    file_metadata,
+    load_or_persist_json,
+    sha256_bytes,
+)
 from cafe.utils.git_utils import to_cwd_relative_path
 
 DELTA_PACKET_SCHEMA_VERSION = 1
@@ -23,33 +27,8 @@ def _display_path(path: Path) -> str:
         return path.as_posix()
 
 
-def _sha256_bytes(content: bytes) -> str:
-    return hashlib.sha256(content).hexdigest()
-
-
 def _file_record(path: str | Path) -> dict[str, Any]:
-    source = Path(path)
-    record: dict[str, Any] = {"path": _display_path(source)}
-    try:
-        if not source.exists():
-            record["state"] = "missing"
-            return record
-        if not source.is_file():
-            record["state"] = "not_file"
-            return record
-        content = source.read_bytes()
-    except OSError:
-        record["state"] = "unreadable"
-        return record
-
-    record.update(
-        {
-            "state": "file",
-            "bytes": len(content),
-            "sha256": _sha256_bytes(content),
-        }
-    )
-    return record
+    return file_metadata(path, display_path=_display_path)
 
 
 def _artifact_record(name: str, artifact: ArtifactEntry) -> dict[str, Any]:
@@ -101,7 +80,7 @@ def build_delta_packet(
         "user_input": {
             "path": _display_path(user_input_path),
             "bytes": len(user_input_bytes),
-            "sha256": _sha256_bytes(user_input_bytes),
+            "sha256": sha256_bytes(user_input_bytes),
         },
     }
     if git_snapshot:
@@ -111,36 +90,7 @@ def build_delta_packet(
 
 def serialize_delta_packet(packet: Mapping[str, Any]) -> bytes:
     """Return canonical UTF-8 JSON bytes."""
-    return (
-        json.dumps(
-            packet,
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n"
-    ).encode("utf-8")
-
-
-def _atomic_write_bytes(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path: Optional[Path] = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as temp_file:
-            temp_path = Path(temp_file.name)
-            temp_file.write(content)
-            temp_file.flush()
-            os.fsync(temp_file.fileno())
-        os.replace(temp_path, path)
-    finally:
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
+    return canonical_json(packet)
 
 
 def persist_delta_input_snapshot(path: Path, user_input: str) -> str:
@@ -150,7 +100,7 @@ def persist_delta_input_snapshot(path: Path, user_input: str) -> str:
             return path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             raise ValueError(f"Invalid persisted delta input snapshot: {path}") from exc
-    _atomic_write_bytes(path, user_input.encode("utf-8"))
+    atomic_write_bytes(path, user_input.encode("utf-8"))
     return user_input
 
 
@@ -225,34 +175,30 @@ def persist_delta_packet(
     expected_sha256: Optional[str] = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Persist once, or reuse and validate the immutable packet from an interrupted run."""
-    if path.exists():
-        try:
-            content = path.read_bytes()
-            persisted = json.loads(content.decode("utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError(f"Invalid persisted delta packet: {path}") from exc
-        actual_sha256 = _sha256_bytes(content)
-        if expected_sha256 is not None and actual_sha256 != expected_sha256:
-            raise ValueError(f"Persisted delta packet hash mismatch: {path}")
-        validate_delta_packet(persisted)
-        for key in ("schema_version", "issue", "step", "iteration"):
-            if persisted.get(key) != packet.get(key):
-                raise ValueError(f"Persisted delta packet identity mismatch for {key}: {path}")
-        if persisted.get("user_input") != packet.get("user_input"):
-            raise ValueError(f"Persisted delta packet identity mismatch for user_input: {path}")
-        packet_data = persisted
-    else:
-        packet_data = dict(packet)
-        validate_delta_packet(packet_data)
-        content = serialize_delta_packet(packet_data)
-        _atomic_write_bytes(path, content)
 
-    metadata = {
-        "path": _display_path(path),
-        "bytes": len(content),
-        "sha256": _sha256_bytes(content),
-    }
-    return packet_data, metadata
+    def matches_identity(old: Mapping[str, Any], new: Mapping[str, Any]) -> bool:
+        return all(
+            old.get(key) == new.get(key) for key in ("schema_version", "issue", "step", "iteration")
+        ) and old.get("user_input") == new.get("user_input")
+
+    try:
+        return load_or_persist_json(
+            path,
+            packet,
+            validate=validate_delta_packet,
+            matches_identity=matches_identity,
+            expected_sha256=expected_sha256,
+            display_path=_display_path,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        if "Invalid persisted packet" in message:
+            raise ValueError(f"Invalid persisted delta packet: {path}") from exc
+        if "Persisted packet hash mismatch" in message:
+            raise ValueError(f"Persisted delta packet hash mismatch: {path}") from exc
+        if "identity mismatch" in message:
+            raise ValueError(f"Persisted delta packet identity mismatch: {path}") from exc
+        raise
 
 
 def inline_delta_packet(
@@ -260,12 +206,7 @@ def inline_delta_packet(
     metadata: Mapping[str, Any],
 ) -> str:
     """Inline the packet when bounded, otherwise inline a deterministic pointer."""
-    compact = json.dumps(
-        packet,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
+    compact = compact_json(packet)
     if len(compact.encode("utf-8")) <= DELTA_PACKET_INLINE_LIMIT_BYTES:
         return compact
 
@@ -278,9 +219,4 @@ def inline_delta_packet(
         "previous_output": packet.get("previous_output"),
         "packet": dict(metadata),
     }
-    return json.dumps(
-        pointer,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
+    return compact_json(pointer)

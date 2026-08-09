@@ -156,12 +156,20 @@ def test_persisted_packet_hash_mismatch_fails_closed(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="hash mismatch"):
+    with pytest.raises(ValueError, match="Persisted delta packet hash mismatch"):
         persist_delta_packet(
             packet_path,
             packet,
             expected_sha256=metadata["sha256"],
         )
+
+
+def test_persisted_delta_packet_keeps_its_public_parse_diagnostic(tmp_path: Path) -> None:
+    packet_path = tmp_path / "delta_packet.json"
+    packet_path.write_text("{not-json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid persisted delta packet"):
+        persist_delta_packet(packet_path, _minimal_valid_packet())
 
 
 def test_persisted_packet_identity_mismatch_fails_closed(tmp_path: Path) -> None:

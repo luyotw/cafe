@@ -36,26 +36,21 @@ _PLACEHOLDER_PATTERN = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 def _variant_matches(
     variant: ChecklistVariant,
     *,
+    step: str | None,
     iteration: int,
     artifacts: Mapping[str, Any],
     feedback: bool,
 ) -> bool:
     """Return whether one bounded, declared checklist selector applies."""
-    when = variant.when
-    if when.iteration is not None and when.iteration != iteration:
-        return False
-    if when.min_iteration is not None and iteration < when.min_iteration:
-        return False
-    if when.max_iteration is not None and iteration > when.max_iteration:
-        return False
-    if when.feedback is not None and when.feedback != feedback:
-        return False
-    return all(bool(artifacts.get(name)) for name in when.artifact_present)
+    return variant.when.matches(
+        step=step, iteration=iteration, artifacts=artifacts, feedback=feedback
+    )
 
 
 def select_checklist_variant(
     contract: SkillWorkflowContract,
     *,
+    step: str | None = None,
     iteration: int,
     artifacts: Mapping[str, Any],
     feedback: bool,
@@ -64,7 +59,9 @@ def select_checklist_variant(
     if contract.checklist is None:
         raise ValueError("Skill does not declare checklist composition")
     for variant in contract.checklist.variants:
-        if _variant_matches(variant, iteration=iteration, artifacts=artifacts, feedback=feedback):
+        if _variant_matches(
+            variant, step=step, iteration=iteration, artifacts=artifacts, feedback=feedback
+        ):
             return variant
     raise ValueError(f"No checklist variant matches iteration {iteration}")
 
@@ -129,6 +126,7 @@ def compose_declared_checklist(
     agent_name: str,
     role: str,
     checklist_file_path: Path,
+    step: str | None = None,
     iteration: int,
     context: Mapping[str, str],
     artifacts: Mapping[str, Any],
@@ -143,6 +141,7 @@ def compose_declared_checklist(
 
     variant = select_checklist_variant(
         contract,
+        step=step,
         iteration=iteration,
         artifacts=artifacts,
         feedback=feedback,

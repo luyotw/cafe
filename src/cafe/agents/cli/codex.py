@@ -12,6 +12,10 @@ from cafe.utils.git_utils import get_git_dir
 class CodexCLI(AbstractCLI):
     """Concrete implementation of Codex CLI tool."""
 
+    def build_environment(self) -> dict[str, str]:
+        """Build the child environment without changing provider configuration."""
+        return super().build_environment()
+
     @staticmethod
     def extract_turn_usages(output_lines: List[str]) -> List[Dict[str, Any]]:
         """Extract per-turn token usage from Codex JSONL output."""

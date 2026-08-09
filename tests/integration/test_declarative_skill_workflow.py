@@ -10,6 +10,7 @@ from cafe.core.blackboard import BlackboardStore
 from cafe.core.types import AgentCLI, TokenUsage
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
+from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 
@@ -158,6 +159,339 @@ Read {evidence_file} and use {template_file}.
     activated = loader.activate("synthesis", context)
     assert "research/iteration_001/output.md" in activated
     assert "evidence.md" in activated
+
+
+def test_custom_executor_preserves_full_inputs_and_falls_back_from_damaged_packet_source(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """IT-003/IT-004 — real custom execution keeps full authority and fails closed."""
+    monkeypatch.chdir(tmp_path)
+    builtin_root = tmp_path / "builtin"
+    skill_dir = builtin_root / "skills" / "assembly"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: assembly
+description: assembly
+workflow:
+  prompt_inputs:
+    - artifacts: [brief_packet]
+      placeholder: compact_brief
+      required: true
+      load_policy:
+        - mode: packet
+          contract_kind: spec
+    - artifacts: [full_record]
+      placeholder: full_record
+      required: true
+---
+
+Use {compact_brief} with {full_record}.
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(
+        project_root=tmp_path,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+    loader.discover()
+    phase = GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(loader, project_root=tmp_path, home_dir=tmp_path / "home"),
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "packet-journey"
+    packet_source = issue_dir / "brief" / "iteration_001" / "output.md"
+    full_record = issue_dir / "record" / "iteration_001" / "output.md"
+    packet_source.parent.mkdir(parents=True)
+    full_record.parent.mkdir(parents=True)
+    packet_source.write_text(
+        """# Brief
+
+BODY-ONLY-SENTINEL GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
+
+## Downstream Contract
+
+- Contract-Version: `1`
+- Artifact-Kind: `spec`
+
+### Goals
+| ID | Statement |
+| --- | --- |
+| GOAL-001 | Goal |
+### Non-Goals
+| ID | Statement |
+| --- | --- |
+| NONGOAL-001 | No |
+### Acceptance Criteria
+| ID | Priority | Statement |
+| --- | --- | --- |
+| AC-001 | must | Yes |
+### Invariants
+| ID | Statement |
+| --- | --- |
+| INV-001 | Safe |
+### Trust Boundaries
+| ID | Statement |
+| --- | --- |
+| TRUST-001 | Local |
+""",
+        encoding="utf-8",
+    )
+    full_record.write_text("AUTHORITATIVE-FULL-RECORD", encoding="utf-8")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("assemble")
+    store.set_artifact(state, "brief_packet", str(packet_source))
+    store.set_artifact(state, "full_record", str(full_record))
+    step = {
+        "skill": "assembly",
+        "role": "researcher",
+        "input_artifacts": ["brief_packet", "full_record"],
+        "output_artifact": "compiled_report",
+        "allowed_tools": ["Read"],
+        "valid_intents": ["confirmed"],
+        "on": {"await_agent": "_done"},
+    }
+    playbook = {
+        "playbook": {"id": "arbitrary-packet-journey"},
+        "roles": {"researcher": {"default_agent": "David"}},
+        "skills": {"workflow": {"shared": []}, "chat": {"shared": []}},
+        "steps": {"assemble": step},
+    }
+
+    first_manager = _AgentManager()
+    first = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="packet-journey",
+        playbook=playbook,
+        generic_phase=phase,
+        agent_manager=first_manager,
+        git_ops=_GitOps(),
+        role_agent_map={"researcher": "David"},
+    )
+    first.execute_step("assemble", step, state)
+
+    packet_path = issue_dir / "assemble" / "iteration_001" / "context_compact_brief.json"
+    packet = json.loads(packet_path.read_text(encoding="utf-8"))
+    assert "BODY-ONLY-SENTINEL" not in packet["contract"]["bytes"]
+    assert "compact_brief=packet" in first_manager.prompts[0]
+    assert "full_record=full" in first_manager.prompts[0]
+    assert str(full_record) in first_manager.prompts[0]
+
+    # A syntactically valid source revision must not reuse a packet whose
+    # persisted provenance still identifies the previous source bytes.
+    packet_source.write_text(
+        packet_source.read_text(encoding="utf-8").replace(
+            "| GOAL-001 | Goal |", "| GOAL-001 | Revised goal |"
+        ),
+        encoding="utf-8",
+    )
+    next_packet_path = packet_path.parent.parent / "iteration_002" / packet_path.name
+    next_packet_path.parent.mkdir(parents=True)
+    stale_packet = json.loads(packet_path.read_text(encoding="utf-8"))
+    stale_packet["target"]["iteration"] = 2
+    next_packet_path.write_text(
+        json.dumps(stale_packet, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    stale_source_manager = _AgentManager()
+    stale_source_executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="packet-journey",
+        playbook=playbook,
+        generic_phase=phase,
+        agent_manager=stale_source_manager,
+        git_ops=_GitOps(),
+        role_agent_map={"researcher": "David"},
+    )
+    stale_source_executor.execute_step("assemble", step, state)
+
+    assert "compact_brief=full_fallback" in stale_source_manager.prompts[0]
+    assert str(packet_source) in stale_source_manager.prompts[0]
+
+    tampered_packet_path = packet_path.parent.parent / "iteration_003" / packet_path.name
+    tampered_packet_path.parent.mkdir(parents=True)
+    tampered_packet_path.write_text("{tampered packet", encoding="utf-8")
+    tampered_packet_manager = _AgentManager()
+    tampered_packet_executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="packet-journey",
+        playbook=playbook,
+        generic_phase=phase,
+        agent_manager=tampered_packet_manager,
+        git_ops=_GitOps(),
+        role_agent_map={"researcher": "David"},
+    )
+    tampered_packet_executor.execute_step("assemble", step, state)
+
+    assert "compact_brief=full_fallback" in tampered_packet_manager.prompts[0]
+    assert str(packet_source) in tampered_packet_manager.prompts[0]
+
+    packet_source.write_text("# legacy source without a contract\n", encoding="utf-8")
+    second_manager = _AgentManager()
+    second = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="packet-journey",
+        playbook=playbook,
+        generic_phase=phase,
+        agent_manager=second_manager,
+        git_ops=_GitOps(),
+        role_agent_map={"researcher": "David"},
+    )
+    second.execute_step("assemble", step, state)
+
+    assert "compact_brief=full_fallback" in second_manager.prompts[0]
+    assert str(packet_source) in second_manager.prompts[0]
+    assert "full_record=full" in second_manager.prompts[0]
+
+    packet_source.write_text(
+        """# Brief
+
+GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
+
+## Downstream Contract
+
+- Contract-Version: `1`
+- Artifact-Kind: `spec`
+
+### Goals
+| ID | Statement |
+| --- | --- |
+### Non-Goals
+| ID | Statement |
+| --- | --- |
+| NONGOAL-001 | No |
+### Acceptance Criteria
+| ID | Priority | Statement |
+| --- | --- | --- |
+| AC-001 | must | Yes |
+### Invariants
+| ID | Statement |
+| --- | --- |
+| INV-001 | Safe |
+### Trust Boundaries
+| ID | Statement |
+| --- | --- |
+| TRUST-001 | Local |
+""",
+        encoding="utf-8",
+    )
+    empty_table_manager = _AgentManager()
+    empty_table_executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="packet-journey",
+        playbook=playbook,
+        generic_phase=phase,
+        agent_manager=empty_table_manager,
+        git_ops=_GitOps(),
+        role_agent_map={"researcher": "David"},
+    )
+    empty_table_executor.execute_step("assemble", step, state)
+
+    assert "compact_brief=full_fallback" in empty_table_manager.prompts[0]
+    assert str(packet_source) in empty_table_manager.prompts[0]
+
+
+def test_packaged_workflow_uses_full_then_packet_then_legacy_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """IT-001/IT-002/IT-006 — packaged stages retain full host authority."""
+    monkeypatch.chdir(tmp_path)
+    root = Path(__file__).resolve().parents[2]
+    source_root = root / "src" / "cafe" / "data"
+    loader = SkillLoader(
+        project_root=tmp_path,
+        global_root=tmp_path / "global",
+        builtin_root=source_root,
+    )
+    loader.discover()
+    class CapturingPhase(GenericPhase):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.host_contexts: list[dict[str, object]] = []
+
+        def execute(self, **kwargs):
+            self.host_contexts.append(dict(kwargs["hook_context"]))
+            return super().execute(**kwargs)
+
+    phase = CapturingPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(loader, project_root=tmp_path, home_dir=tmp_path / "home"),
+    )
+    playbook = PlaybookLoader().load("default")
+    issue_dir = tmp_path / ".cafe" / "issues" / "packaged-packet-journey"
+    spec = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan = issue_dir / "plan" / "iteration_001" / "output.md"
+    code = issue_dir / "develop" / "iteration_001" / "output.md"
+    feedback = issue_dir / "review" / "iteration_001" / "output.md"
+    for artifact in (spec, plan, code, feedback):
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+    spec.write_text(
+        "BODY-ONLY-PACKAGED-SENTINEL\n"
+        + (source_root / "skills/cafe-spec/assets/templates/default.md").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    plan.write_text(
+        (source_root / "skills/cafe-plan/assets/templates/default.md").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    code.write_text("implementation evidence", encoding="utf-8")
+    feedback.write_text("review evidence", encoding="utf-8")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    for name, artifact in (("spec", spec), ("plan", plan), ("code", code)):
+        store.set_artifact(state, name, str(artifact))
+
+    def run(step_name: str) -> _AgentManager:
+        manager = _AgentManager()
+        GenericWorkflowStepExecutor(
+            issue_dir=issue_dir,
+            issue_name="packaged-packet-journey",
+            playbook=playbook,
+            generic_phase=phase,
+            agent_manager=manager,
+            git_ops=_GitOps(),
+            role_agent_map={"developer": "David", "reviewer": "Richard"},
+        ).execute_step(step_name, playbook["steps"][step_name], state)
+        return manager
+
+    first_develop = run("develop")
+    assert "spec_file=full" in first_develop.prompts[0]
+    assert "plan_file=full" in first_develop.prompts[0]
+
+    store.set_artifact(state, "review_feedback", str(feedback))
+    correction_develop = run("develop")
+    review = run("review")
+    pr = run("pr")
+    pr_follow_up = run("pr")
+    for prompt in (
+        correction_develop.prompts[0],
+        review.prompts[0],
+        pr.prompts[0],
+        pr_follow_up.prompts[0],
+    ):
+        assert "spec_file=packet" in prompt
+        assert "plan_file=packet" in prompt
+    spec_packets = list(issue_dir.glob("**/context_spec_file.json"))
+    plan_packets = list(issue_dir.glob("**/context_plan_file.json"))
+    assert spec_packets and plan_packets
+    spec_packet = json.loads(spec_packets[-1].read_text(encoding="utf-8"))["contract"]["bytes"]
+    plan_packet = json.loads(plan_packets[-1].read_text(encoding="utf-8"))["contract"]["bytes"]
+    assert "BODY-ONLY-PACKAGED-SENTINEL" not in spec_packet
+    for identifier in ("GOAL-001", "NONGOAL-001", "AC-001", "INV-001", "TRUST-001"):
+        assert identifier in spec_packet
+    assert "### Test List" in plan_packet
+    assert "### Dependency ADR References" in plan_packet
+    assert "ADR-001" in plan_packet
+    assert "| TASK-001 | pending |" in plan_packet
+    final_host_inputs = phase.host_contexts[-1]["authoritative_inputs"]
+    assert Path(final_host_inputs["spec_file"]).resolve() == spec
+    assert Path(final_host_inputs["plan_file"]).resolve() == plan
+
+    spec.write_text("# Legacy confirmed artifact\n", encoding="utf-8")
+    legacy_correction = run("develop")
+    assert "spec_file=full_fallback" in legacy_correction.prompts[0]
+    assert "plan_file=packet" in legacy_correction.prompts[0]
 
 
 def test_workflow_replace_removes_stale_native_skills(tmp_path: Path, monkeypatch) -> None:

@@ -24,6 +24,7 @@ from cafe.core.delta_packet import (
     persist_delta_packet,
 )
 from cafe.core.git import GitOperations
+from cafe.core.long_running_operation_helper import get_operation_status
 from cafe.core.phase import Phase
 from cafe.core.playbook import resolve_playbook_skills
 from cafe.core.resume_user_input import (
@@ -44,13 +45,19 @@ from cafe.core.status_codes import (
     step_on_declares,
     transition_map_key,
 )
+from cafe.core.takeover import build_takeover_snapshot
 from cafe.core.types import AgentCLI
 from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.workflow_runtime import (
+    operation_artifact_is_trusted,
+    operation_receipt_is_trusted,
+)
 from cafe.phases.generic_phase import GenericPhase
 from cafe.skills.checklist_composer import compose_declared_checklist
 from cafe.skills.contracts import (
     DeclaredArtifactError,
     SkillWorkflowContract,
+    resolve_effective_prompt_inputs,
     resolve_prompt_inputs,
 )
 from cafe.skills.loader import SkillLoader, canonical_skill_name
@@ -304,6 +311,15 @@ class GenericWorkflowStepExecutor(Phase):
                     persist_status=False,
                     allowed_tools=attempt_allowed_tools,
                     phase_specific_data=phase_specific_data,
+                    backup_context_callback=lambda error: self._build_backup_takeover_context(
+                        error=error,
+                        step_name=step_name,
+                        step_def=step_def,
+                        blackboard_state=blackboard_state,
+                        output_file=output_file,
+                        checklist_file=checklist_file,
+                        iteration_dir=iteration_dir,
+                    ),
                 )
             finally:
                 # A phase agent can launch a controlled long-running operation,
@@ -337,6 +353,7 @@ class GenericWorkflowStepExecutor(Phase):
                 "iteration_dir": iteration_dir,
                 "output_file": output_file,
                 "questions_xml_file": questions_xml_file,
+                "authoritative_inputs": context.get("authoritative_inputs", {}),
                 "capability_request_file": capability_request_file if capability_ids else None,
                 "publish_request_file": publish_request_file if step_name == "pr" else None,
                 "blackboard_state": blackboard_state,
@@ -453,6 +470,93 @@ class GenericWorkflowStepExecutor(Phase):
             auto_continue=auto_continue,
             events=events,
         )
+
+    def _build_backup_takeover_context(
+        self,
+        *,
+        error: object,
+        step_name: str,
+        step_def: Dict[str, Any],
+        blackboard_state: BlackboardState,
+        output_file: Path,
+        checklist_file: Path,
+        iteration_dir: Path,
+    ) -> str:
+        """Refresh a bounded cold-takeover snapshot just before a backup runs."""
+        contract = self._get_skill_loader().get_workflow_contract(
+            self._resolve_skill_name(step_def, self.iteration)
+        )
+        inputs = self._step_input_artifacts(step_def, blackboard_state)
+        resolved_inputs = resolve_effective_prompt_inputs(
+            contract,
+            inputs,
+            step=step_name,
+            iteration=self.iteration,
+            feedback=bool(inputs.get("review_feedback") or inputs.get("pr_result")),
+            packet_dir=iteration_dir,
+        )
+        workspace: dict[str, Any] = {}
+        try:
+            workspace["head"] = self.git_ops.run_git("rev-parse", "HEAD")
+            workspace["changed"] = [
+                line[3:]
+                for line in self.git_ops.get_status().splitlines()[:100]
+                if len(line) >= 4
+            ]
+        except Exception:
+            workspace["state"] = "unknown"
+
+        operation: dict[str, Any] | None = None
+        operation_store = BlackboardStore(self.issue_dir)
+        try:
+            stored_operation = operation_store.read_operation_artifact(iteration_dir)
+            if stored_operation is not None:
+                current_blackboard = operation_store.load_or_create(step_name)
+                if not operation_artifact_is_trusted(
+                    blackboard_store=operation_store,
+                    blackboard=current_blackboard,
+                    current_step=step_name,
+                    iteration_dir=iteration_dir,
+                    artifact=stored_operation,
+                ):
+                    operation = {"state": "unknown"}
+                else:
+                    receipt = operation_store.read_operation_receipt(iteration_dir)
+                    if receipt is not None and not operation_receipt_is_trusted(
+                        blackboard_store=operation_store,
+                        blackboard=current_blackboard,
+                        current_step=step_name,
+                        iteration_dir=iteration_dir,
+                        operation=stored_operation,
+                        receipt=receipt,
+                    ):
+                        operation = {"state": "unknown"}
+                    else:
+                        current = get_operation_status(
+                            issue_dir=self.issue_dir,
+                            step=step_name,
+                            iteration_dir=iteration_dir,
+                            playbook=self.playbook,
+                        )
+                        operation = {
+                            "state": "running" if current.state.value == "running" else "terminal",
+                            "id": current.operation_id,
+                        }
+        except (OSError, ValueError, json.JSONDecodeError):
+            # Unknown operation evidence is unsafe to treat as absent: a cold
+            # backup must status-check rather than risk relaunching it.
+            operation = {"state": "unknown"}
+        snapshot = build_takeover_snapshot(
+            reason=error,
+            step=step_name,
+            iteration=self.iteration,
+            resolved_inputs=resolved_inputs,
+            output_file=output_file,
+            checklist_file=checklist_file,
+            operation=operation,
+            workspace=workspace,
+        )
+        return json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
 
     def _load_iteration_user_input_candidate(self, step_name: str) -> str:
         """Load raw user input before resume-token optimization."""
@@ -977,16 +1081,33 @@ class GenericWorkflowStepExecutor(Phase):
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
         try:
-            declared_inputs = resolve_prompt_inputs(contract, input_artifacts)
+            authoritative_inputs = resolve_prompt_inputs(contract, input_artifacts)
         except DeclaredArtifactError as exc:
             raise ValueError(
                 f"Step {step_name!r}, skill {canonical_skill_name(skill_name)!r}: {exc}"
             ) from exc
+        context["authoritative_inputs"] = {
+            placeholder: self._display_path(Path(path))
+            for placeholder, path in authoritative_inputs.items()
+        }
+        effective_inputs = resolve_effective_prompt_inputs(
+            contract,
+            input_artifacts,
+            step=step_name,
+            iteration=self.iteration,
+            feedback=bool(
+                input_artifacts.get("review_feedback") or input_artifacts.get("pr_result")
+            ),
+            packet_dir=output_file.parent,
+        )
         context.update(
             {
-                placeholder: self._display_path(Path(path))
-                for placeholder, path in declared_inputs.items()
+                placeholder: self._display_path(Path(binding["path"]))
+                for placeholder, binding in effective_inputs.items()
             }
+        )
+        context["input_loading_modes"] = ", ".join(
+            f"{placeholder}={binding['mode']}" for placeholder, binding in sorted(effective_inputs.items())
         )
         self._add_template_context(
             context=context,
@@ -1112,6 +1233,7 @@ class GenericWorkflowStepExecutor(Phase):
             agent_name=agent_name,
             role=str(step_def.get("role", "developer")),
             checklist_file_path=checklist_file,
+            step=step_name,
             iteration=self.iteration,
             context=context,
             artifacts=input_artifacts,

@@ -17,7 +17,9 @@ from cafe.skills.checklist_composer import (
     generate_pr_checklist,
     generate_review_checklist,
     generate_spec_checklist,
+    select_checklist_variant,
 )
+from cafe.skills.contracts import SkillWorkflowContract
 from cafe.skills.loader import SkillLoader
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "checklists"
@@ -65,6 +67,30 @@ REQUIRED_SKILL_REFERENCES = {
         "pr_plan_context.md",
     ],
 }
+
+
+def test_checklist_variant_honors_declared_arbitrary_step() -> None:
+    contract = SkillWorkflowContract.model_validate(
+        {
+            "checklist": {
+                "variants": [
+                    {"when": {"step": "assemble"}, "sections": [{"reference": "assemble.md"}]},
+                    {"when": {}, "sections": [{"reference": "fallback.md"}]},
+                ]
+            }
+        }
+    )
+
+    selected = select_checklist_variant(
+        contract,
+        step="assemble",
+        iteration=1,
+        artifacts={},
+        feedback=False,
+    )
+
+    assert selected.when.step == "assemble"
+
 
 GOLDEN_RUNNERS = {
     "spec_iter1": lambda path: generate_spec_checklist(
@@ -315,7 +341,9 @@ def _builtin_agent_path(cls, name, role, **_kw: object) -> str:
     return f"src/cafe/data/agents/{role}/{name}.md"
 
 
-@pytest.mark.parametrize("case_name", json.loads((FIXTURES_DIR / "manifest.json").read_text(encoding="utf-8")))
+@pytest.mark.parametrize(
+    "case_name", json.loads((FIXTURES_DIR / "manifest.json").read_text(encoding="utf-8"))
+)
 def test_golden_checklist_matches_fixture(case_name: str, tmp_path: Path) -> None:
     """Composed checklists stay equivalent to the pre-migration golden snapshots."""
     saved = AgentManager.get_agent_file_path
@@ -420,9 +448,7 @@ def test_short_builtin_playbook_checklists_compose_with_declared_artifact_scope(
         iteration=1,
         context=context,
         artifacts={
-            name: available_artifacts[name]
-            for name in scope
-            if name in available_artifacts
+            name: available_artifacts[name] for name in scope if name in available_artifacts
         },
     )
 
@@ -439,7 +465,9 @@ def test_short_builtin_playbook_checklists_compose_with_declared_artifact_scope(
     ("skill_name", "reference_names"),
     [(skill, refs) for skill, refs in REQUIRED_SKILL_REFERENCES.items()],
 )
-def test_builtin_skill_checklist_references_exist(skill_name: str, reference_names: list[str]) -> None:
+def test_builtin_skill_checklist_references_exist(
+    skill_name: str, reference_names: list[str]
+) -> None:
     for ref_name in reference_names:
         content = load_skill_reference(skill_name, ref_name)
         assert content.strip(), f"{skill_name}/{ref_name} must be non-empty"
@@ -502,7 +530,9 @@ def test_spec_and_develop_xml_question_instruction_requires_need_clarification()
     assert "intent=need_clarification" in develop_instruction
 
 
-def test_generate_checklist_with_basic_principles_includes_checklist_section(tmp_path: Path) -> None:
+def test_generate_checklist_with_basic_principles_includes_checklist_section(
+    tmp_path: Path,
+) -> None:
     checklist_path = tmp_path / "checklist.md"
     generate_plan_checklist(
         agent_name="David",

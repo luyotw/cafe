@@ -40,3 +40,40 @@ _(If N or M is 0, one sentence explains why.)_
 
 ## Notes
 Uses existing `utils/email.py` for sending emails.
+
+## Authoritative Delivery IDs
+
+Keep these IDs on the matching architecture, test, ADR, and top-level task as
+the plan evolves; the downstream contract must contain the same IDs and task state.
+
+- **ARCH-001** — [Architecture boundary]
+- **INV-001** — [Stable invariant]
+- **UT-001** — [Planned unit test]
+- **ADR-001** — [Dependency decision]
+- [ ] **TASK-001** — [Top-level executable task]
+
+## Downstream Contract
+
+- Contract-Version: `1`
+- Artifact-Kind: `plan`
+
+### Architecture Boundaries
+| ID | Location | Responsibility |
+| --- | --- | --- |
+| ARCH-001 | [Path] | [Boundary] |
+### Invariants
+| ID | Statement |
+| --- | --- |
+| INV-001 | [Stable invariant] |
+### Test List
+| ID | Type | Covers |
+| --- | --- | --- |
+| UT-001 | unit | INV-001 |
+### Dependency ADR References
+| ID | Decision | Requirement / invariant |
+| --- | --- | --- |
+| ADR-001 | [Decision] | INV-001 |
+### Task Status
+| ID | Status | Summary | Depends On |
+| --- | --- | --- | --- |
+| TASK-001 | pending | [Top-level task] | — |

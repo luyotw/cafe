@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from copy import copy
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ from cafe.core.session_continuation import (
     SessionContinuation,
     SessionContinuationPolicy,
 )
-from cafe.agents.executor import AgentExecutor
+from cafe.agents.executor import AgentExecutor, AgentExecutionError
 
 # Backward-compat re-export for test imports
 from cafe.core.phase_state_mixin import ensure_agent_file_exists  # noqa: F401
@@ -810,6 +810,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         allowed_tools: Optional[List[str]] = None,
         denied_tools: Optional[List[str]] = None,
         phase_specific_data: Optional[Dict[str, Any]] = None,
+        backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
     ) -> tuple[str, Optional[PhaseStatusCode]]:
         """Common agent execution flow that all phases can use.
 
@@ -1020,6 +1021,15 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 for param in execute_signature.parameters.values()
             ):
                 execute_kwargs["continuation"] = requested_continuation
+            if backup_context_callback is not None and getattr(
+                self.agent_manager, "SUPPORTS_COLD_TAKEOVER", False
+            ) and (
+                "backup_context_callback" in execute_signature.parameters or any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD
+                    for param in execute_signature.parameters.values()
+                )
+            ):
+                execute_kwargs["backup_context_callback"] = backup_context_callback
 
             response, token_usage, permission_denials, cli_command_args, streaming_log, model = (
                 self.agent_manager.execute(
