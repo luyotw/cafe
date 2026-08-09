@@ -710,6 +710,7 @@ class AgentManager:
         # Track tried CLIs to avoid duplicates
         tried_clis = {config.cli}
         failed_agents: List[str] = [f"{primary_cli_name} ({sanitize_error_excerpt(primary_error)})"]
+        takeover_error = primary_error
 
         for entry in fallback_entries:
             if entry.cli in tried_clis:
@@ -725,7 +726,7 @@ class AgentManager:
             backup_prompt = prompt
             if backup_context_callback is not None:
                 try:
-                    takeover_context = backup_context_callback(primary_error)
+                    takeover_context = backup_context_callback(takeover_error)
                 except Exception as exc:
                     failed_agents.append(
                         f"{entry.cli.value} (takeover context unavailable: {sanitize_error_excerpt(exc)})"
@@ -806,6 +807,7 @@ class AgentManager:
                             f"❌ {entry.cli.value} failed ({self._fallback_reason(backup_error)}), trying next agent..."
                         )
                         self._print_fallback_error_detail(backup_error)
+                        takeover_error = backup_error
                         break
                     raise
 

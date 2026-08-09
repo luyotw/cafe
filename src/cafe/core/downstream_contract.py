@@ -44,7 +44,7 @@ _ID = re.compile(r"[A-Z][A-Z0-9_]*-[0-9]{3,}")
 def _rows(section: str, heading: str, columns: tuple[str, ...]) -> list[list[str]]:
     lines = section.splitlines()
     tables = [index for index, line in enumerate(lines) if line.startswith("|")]
-    if len(tables) < 2:
+    if len(tables) < 3:
         raise ContractValidationError(f"{heading} requires a non-empty table")
     header = [item.strip() for item in lines[tables[0]].strip().strip("|").split("|")]
     if tuple(header) != columns:

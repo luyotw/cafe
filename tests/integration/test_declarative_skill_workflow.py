@@ -10,6 +10,7 @@ from cafe.core.blackboard import BlackboardStore
 from cafe.core.types import AgentCLI, TokenUsage
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
+from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 
@@ -293,6 +294,128 @@ BODY-ONLY-SENTINEL GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
     assert "compact_brief=full_fallback" in second_manager.prompts[0]
     assert str(packet_source) in second_manager.prompts[0]
     assert "full_record=full" in second_manager.prompts[0]
+
+    packet_source.write_text(
+        """# Brief
+
+GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
+
+## Downstream Contract
+
+- Contract-Version: `1`
+- Artifact-Kind: `spec`
+
+### Goals
+| ID | Statement |
+| --- | --- |
+### Non-Goals
+| ID | Statement |
+| --- | --- |
+| NONGOAL-001 | No |
+### Acceptance Criteria
+| ID | Priority | Statement |
+| --- | --- | --- |
+| AC-001 | must | Yes |
+### Invariants
+| ID | Statement |
+| --- | --- |
+| INV-001 | Safe |
+### Trust Boundaries
+| ID | Statement |
+| --- | --- |
+| TRUST-001 | Local |
+""",
+        encoding="utf-8",
+    )
+    empty_table_manager = _AgentManager()
+    empty_table_executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="packet-journey",
+        playbook=playbook,
+        generic_phase=phase,
+        agent_manager=empty_table_manager,
+        git_ops=_GitOps(),
+        role_agent_map={"researcher": "David"},
+    )
+    empty_table_executor.execute_step("assemble", step, state)
+
+    assert "compact_brief=full_fallback" in empty_table_manager.prompts[0]
+    assert str(packet_source) in empty_table_manager.prompts[0]
+
+
+def test_packaged_workflow_uses_full_then_packet_then_legacy_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """IT-001/IT-002/IT-006 — real packaged stages retain authority and fail closed."""
+    monkeypatch.chdir(tmp_path)
+    root = Path(__file__).resolve().parents[2]
+    source_root = root / "src" / "cafe" / "data"
+    loader = SkillLoader(
+        project_root=tmp_path,
+        global_root=tmp_path / "global",
+        builtin_root=source_root,
+    )
+    loader.discover()
+    phase = GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(loader, project_root=tmp_path, home_dir=tmp_path / "home"),
+    )
+    playbook = PlaybookLoader().load("default")
+    issue_dir = tmp_path / ".cafe" / "issues" / "packaged-packet-journey"
+    spec = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan = issue_dir / "plan" / "iteration_001" / "output.md"
+    code = issue_dir / "develop" / "iteration_001" / "output.md"
+    feedback = issue_dir / "review" / "iteration_001" / "output.md"
+    for artifact in (spec, plan, code, feedback):
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+    spec.write_text(
+        "BODY-ONLY-PACKAGED-SENTINEL\n"
+        + (source_root / "skills/cafe-spec/assets/templates/default.md").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    plan.write_text(
+        (source_root / "skills/cafe-plan/assets/templates/default.md").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    code.write_text("implementation evidence", encoding="utf-8")
+    feedback.write_text("review evidence", encoding="utf-8")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    for name, artifact in (("spec", spec), ("plan", plan), ("code", code)):
+        store.set_artifact(state, name, str(artifact))
+
+    def run(step_name: str) -> _AgentManager:
+        manager = _AgentManager()
+        GenericWorkflowStepExecutor(
+            issue_dir=issue_dir,
+            issue_name="packaged-packet-journey",
+            playbook=playbook,
+            generic_phase=phase,
+            agent_manager=manager,
+            git_ops=_GitOps(),
+            role_agent_map={"developer": "David", "reviewer": "Richard"},
+        ).execute_step(step_name, playbook["steps"][step_name], state)
+        return manager
+
+    first_develop = run("develop")
+    assert "spec_file=full" in first_develop.prompts[0]
+    assert "plan_file=full" in first_develop.prompts[0]
+
+    store.set_artifact(state, "review_feedback", str(feedback))
+    correction_develop = run("develop")
+    review = run("review")
+    pr = run("pr")
+    for prompt in (correction_develop.prompts[0], review.prompts[0], pr.prompts[0]):
+        assert "spec_file=packet" in prompt
+        assert "plan_file=packet" in prompt
+    packets = list(issue_dir.glob("**/context_spec_file.json"))
+    assert packets
+    assert "BODY-ONLY-PACKAGED-SENTINEL" not in packets[-1].read_text(encoding="utf-8")
+
+    spec.write_text("# Legacy confirmed artifact\n", encoding="utf-8")
+    legacy_correction = run("develop")
+    assert "spec_file=full_fallback" in legacy_correction.prompts[0]
+    assert "plan_file=packet" in legacy_correction.prompts[0]
 
 
 def test_workflow_replace_removes_stale_native_skills(tmp_path: Path, monkeypatch) -> None:

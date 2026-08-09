@@ -33,6 +33,18 @@ def test_rejects_missing_contract_to_preserve_full_source_fallback(tmp_path: Pat
         extract_downstream_contract(source, kind="spec")
 
 
+def test_rejects_required_table_without_data_rows(tmp_path: Path) -> None:
+    """An empty declared section is invalid and must allow the full-source fallback."""
+    source = tmp_path / "empty-goals.md"
+    source.write_text(
+        _valid_spec_contract().replace("| GOAL-001 | Goal |\n", "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ContractValidationError, match="non-empty table"):
+        extract_downstream_contract(source, kind="spec")
+
+
 def test_rejects_plan_task_state_that_disagrees_with_complete_plan(tmp_path: Path) -> None:
     source = tmp_path / "plan.md"
     source.write_text(

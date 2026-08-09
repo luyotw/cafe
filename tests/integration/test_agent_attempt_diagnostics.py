@@ -8,6 +8,7 @@ import pytest
 
 from cafe.agents.executor import AgentExecutionError
 from cafe.agents.manager import AgentManager
+from cafe.core.blackboard import BlackboardStore
 from cafe.core.types import (
     AgentCLI,
     AgentConfig,
@@ -143,6 +144,71 @@ def test_fallback_success_preserves_primary_attempts_in_iteration_record(tmp_pat
         ("claude", 2),
     ]
     assert "raw-primary-secret" not in iteration_path.read_text(encoding="utf-8")
+
+
+def test_cold_backup_chain_refreshes_takeover_reason_and_partial_progress(tmp_path: Path) -> None:
+    """IT-005 — each fresh provider receives current durable takeover state."""
+    manager = AgentManager()
+    manager.register_agent(
+        AgentConfig(
+            name="David",
+            cli=AgentCLI.CLAUDE,
+            clis=[
+                CliEntry(cli=AgentCLI.CLAUDE),
+                CliEntry(cli=AgentCLI.GEMINI),
+                CliEntry(cli=AgentCLI.CODEX),
+            ],
+        )
+    )
+    executor = _build_executor(tmp_path, manager)
+    executor.git_ops.run_git.return_value = "test-head"
+    executor.git_ops.get_status.return_value = ""
+    state = BlackboardStore(executor.issue_dir).load_or_create("develop")
+    iteration_dir = executor.phase_dir / "iteration_001"
+    output_file = iteration_dir / "output.md"
+    checklist_file = iteration_dir / "checklist.md"
+    primary_error = AgentExecutionError("primary rate limit", error_type="rate_limit")
+    backup_error = AgentExecutionError("backup rate limit", error_type="rate_limit")
+    prompts: list[str] = []
+
+    def snapshot(error: AgentExecutionError) -> str:
+        return executor._build_backup_takeover_context(
+            error=error,
+            step_name="develop",
+            step_def={"skill": "develop", "role": "developer"},
+            blackboard_state=state,
+            output_file=output_file,
+            checklist_file=checklist_file,
+            iteration_dir=iteration_dir,
+        )
+
+    def side_effect(prompt: str, *_args, **_kwargs):
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            raise primary_error
+        if len(prompts) == 2:
+            iteration_dir.mkdir(parents=True, exist_ok=True)
+            output_file.write_text("partial output", encoding="utf-8")
+            checklist_file.write_text("[x] partial task\n", encoding="utf-8")
+            raise backup_error
+        return _success("replacement output")
+
+    with patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect):
+        response, *_ = manager.execute(
+            "David",
+            "perform the workflow step",
+            phase_name="develop",
+            backup_context_callback=snapshot,
+        )
+
+    first_takeover = json.loads(prompts[1].split("provider-neutral):\n", 1)[1])
+    second_takeover = json.loads(prompts[2].split("provider-neutral):\n", 1)[1])
+    assert response == "replacement output"
+    assert first_takeover["reason"] != second_takeover["reason"]
+    assert first_takeover["partial"]["output"]["state"] == "missing"
+    assert second_takeover["partial"]["output"]["state"] == "file"
+    assert second_takeover["partial"]["checklist"]["completed"] == 1
+    assert second_takeover["operation"]["state"] == "absent"
 
 
 def test_all_failed_journey_persists_sanitized_history_without_raw_secrets(tmp_path: Path) -> None:
