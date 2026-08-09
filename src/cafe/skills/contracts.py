@@ -93,8 +93,7 @@ class PromptInputContract(BaseModel):
     @model_validator(mode="after")
     def _validate_load_policy(self) -> "PromptInputContract":
         if any(
-            policy.mode == "packet" and policy.contract_kind is None
-            for policy in self.load_policy
+            policy.mode == "packet" and policy.contract_kind is None for policy in self.load_policy
         ):
             raise ValueError("packet prompt input policy requires contract_kind")
         return self
@@ -362,6 +361,15 @@ def _artifact_path(value: Any) -> Optional[str]:
     return text or None
 
 
+def _artifact_version(value: Any) -> int:
+    version = (
+        value.get("version") if isinstance(value, Mapping) else getattr(value, "version", None)
+    )
+    return (
+        version if isinstance(version, int) and not isinstance(version, bool) and version > 0 else 1
+    )
+
+
 def resolve_prompt_inputs(
     contract: SkillWorkflowContract,
     artifacts: Mapping[str, Any],
@@ -397,22 +405,21 @@ def resolve_effective_prompt_inputs(
     from cafe.core.context_packet import resolve_context_packet
 
     result: dict[str, dict[str, str]] = {}
-    relationships: list[
-        tuple[PromptInputContract, str, PromptInputLoadPolicy | None]
-    ] = []
+    relationships: list[tuple[PromptInputContract, str, str, int, PromptInputLoadPolicy | None]] = (
+        []
+    )
     for mapping in contract.prompt_inputs:
-        source = next(
-            (
-                _artifact_path(artifacts.get(name))
-                for name in mapping.artifacts
-                if _artifact_path(artifacts.get(name))
-            ),
+        source_name = next(
+            (name for name in mapping.artifacts if _artifact_path(artifacts.get(name))),
             None,
         )
-        if source is None:
+        if source_name is None:
             if mapping.required:
                 raise DeclaredArtifactError(mapping.placeholder, mapping.artifacts)
             continue
+        source_value = artifacts[source_name]
+        source = _artifact_path(source_value)
+        assert source is not None
         selected = next(
             (
                 policy
@@ -426,28 +433,32 @@ def resolve_effective_prompt_inputs(
             ),
             None,
         )
-        relationships.append((mapping, source, selected))
+        relationships.append(
+            (mapping, source, source_name, _artifact_version(source_value), selected)
+        )
 
     # A paired ``*_file`` / ``*_file_path`` declaration represents one input
     # relationship.  Coalesce any declarations with the same source and
     # packet policy so both placeholders receive the same validated envelope.
     # Explicit full and packet declarations deliberately remain independent.
     packet_groups: dict[
-        tuple[str, str], list[tuple[PromptInputContract, str, PromptInputLoadPolicy]]
+        tuple[str, str, str, int],
+        list[tuple[PromptInputContract, str, str, int, PromptInputLoadPolicy]],
     ] = {}
-    for mapping, source, selected in relationships:
+    for mapping, source, source_name, source_version, selected in relationships:
         if selected is None or selected.mode == "full":
             result[mapping.placeholder] = {"mode": "full", "path": source}
             continue
         contract_kind = selected.contract_kind
         assert contract_kind is not None  # validated by PromptInputContract
-        packet_groups.setdefault((source, contract_kind), []).append(
-            (mapping, source, selected)
+        packet_groups.setdefault((source, source_name, contract_kind, source_version), []).append(
+            (mapping, source, source_name, source_version, selected)
         )
 
-    for (source, contract_kind), group in packet_groups.items():
+    for (source, source_name, contract_kind, source_version), group in packet_groups.items():
         placeholders = tuple(
-            mapping.placeholder for mapping, _source, _policy in group
+            mapping.placeholder
+            for mapping, _source, _source_name, _source_version, _policy in group
         )
         packet_path = Path(packet_dir) / f"context_{placeholders[0]}.json"
         resolved = resolve_context_packet(
@@ -457,12 +468,15 @@ def resolve_effective_prompt_inputs(
             iteration=iteration,
             placeholders=placeholders,
             packet_path=packet_path,
+            source_artifact_name=source_name,
+            source_artifact_version=source_version,
         )
         binding = {
             "mode": str(resolved["mode"]),
             "path": str(resolved["path"]),
             "reason": str(resolved.get("reason", "")),
+            "source": dict(resolved.get("source", {})),
         }
-        for mapping, _source, _policy in group:
+        for mapping, _source, _source_name, _source_version, _policy in group:
             result[mapping.placeholder] = dict(binding)
     return result

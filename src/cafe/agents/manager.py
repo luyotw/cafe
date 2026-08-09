@@ -726,8 +726,14 @@ class AgentManager:
             if backup_context_callback is not None:
                 try:
                     takeover_context = backup_context_callback(primary_error)
-                except Exception:
-                    takeover_context = ""
+                except Exception as exc:
+                    failed_agents.append(
+                        f"{entry.cli.value} (takeover context unavailable: {sanitize_error_excerpt(exc)})"
+                    )
+                    print(
+                        f"❌ {entry.cli.value} takeover context unavailable; trying next agent..."
+                    )
+                    continue
                 if takeover_context:
                     backup_prompt = (
                         f"{prompt}\n\nCold backup takeover context (fresh, provider-neutral):\n"

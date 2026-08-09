@@ -50,7 +50,7 @@ def _rows(section: str, heading: str, columns: tuple[str, ...]) -> list[list[str
     if tuple(header) != columns:
         raise ContractValidationError(f"{heading} has invalid columns")
     result: list[list[str]] = []
-    for line in lines[tables[2]:]:
+    for line in lines[tables[2] :]:
         if not line.startswith("|"):
             break
         row = [item.strip() for item in line.strip().strip("|").split("|")]
@@ -87,7 +87,10 @@ def extract_downstream_contract(path: str | Path, *, kind: str) -> DownstreamCon
     end = start + 1 + following.start() if following else len(text)
     exact = text[start:end].encode("utf-8")
     contract = text[start:end]
-    match = re.match(r"## Downstream Contract\n\n- Contract-Version: `([0-9]+)`\n- Artifact-Kind: `([a-z]+)`\n", contract)
+    match = re.match(
+        r"## Downstream Contract\n\n- Contract-Version: `([0-9]+)`\n- Artifact-Kind: `([a-z]+)`\n",
+        contract,
+    )
     if match is None or match.group(1) != "1" or match.group(2) != kind:
         raise ContractValidationError("Unsupported or mismatched contract declaration")
     cursor = match.end()
@@ -95,6 +98,7 @@ def extract_downstream_contract(path: str | Path, *, kind: str) -> DownstreamCon
         cursor += 1
     ids: set[str] = set()
     task_states: dict[str, str] = {}
+    sections: dict[str, list[list[str]]] = {}
     for index, (heading, columns, prefix) in enumerate(_SCHEMAS[kind]):
         expected = f"### {heading}\n"
         if not contract[cursor:].startswith(expected):
@@ -102,10 +106,15 @@ def extract_downstream_contract(path: str | Path, *, kind: str) -> DownstreamCon
         next_cursor = contract.find("\n### ", cursor + len(expected))
         section_end = len(contract) if next_cursor == -1 else next_cursor + 1
         rows = _rows(contract[cursor:section_end], heading, columns)
+        sections[heading] = rows
         for row in rows:
             identifier = row[0]
             valid_prefixes = (prefix,) if isinstance(prefix, str) else prefix
-            if not _ID.fullmatch(identifier) or not identifier.startswith(valid_prefixes) or identifier in ids:
+            if (
+                not _ID.fullmatch(identifier)
+                or not identifier.startswith(valid_prefixes)
+                or identifier in ids
+            ):
                 raise ContractValidationError(f"Invalid or duplicate ID: {identifier}")
             ids.add(identifier)
             if heading == "Task Status" and row[1] not in {"pending", "completed"}:
@@ -115,16 +124,12 @@ def extract_downstream_contract(path: str | Path, *, kind: str) -> DownstreamCon
         cursor = section_end
     if contract[cursor:].strip():
         raise ContractValidationError("Unexpected contract content")
-    for heading, _columns, _prefix in _SCHEMAS[kind]:
-        # references are only meaningful in dependency columns; all references
-        # must resolve to a declared stable ID, except a plan task's own ID.
-        if heading in {"Test List", "Dependency ADR References", "Task Status"}:
-            position = contract.find(f"### {heading}")
-            end_position = contract.find("\n### ", position + 1)
-            for reference in _required_references(contract[position:end_position if end_position != -1 else len(contract)]):
-                if reference not in ids:
-                    raise ContractValidationError(f"Unresolved contract reference: {reference}")
-    body_ids = set(_ID.findall(text[:start]))
+    if kind == "plan":
+        _validate_plan_references(sections, ids)
+    body = text[:start] + text[end:]
+    body_ids = set(_ID.findall(body))
+    if not body_ids:
+        raise ContractValidationError("Source must declare stable IDs in its authoritative body")
     if body_ids - ids:
         raise ContractValidationError("Contract does not cover source stable IDs")
     if kind == "plan":
@@ -132,9 +137,35 @@ def extract_downstream_contract(path: str | Path, *, kind: str) -> DownstreamCon
             identifier: "completed" if marker.lower() == "x" else "pending"
             for marker, identifier in re.findall(
                 r"(?m)^-\s+\[([ xX])\]\s+\*\*(TASK-[0-9]{3,})\*\*",
-                text[:start],
+                body,
             )
         }
-        if body_task_states and body_task_states != task_states:
+        if not body_task_states:
+            raise ContractValidationError(
+                "Plan must declare top-level task state in its authoritative body"
+            )
+        if body_task_states != task_states:
             raise ContractValidationError("Plan task state disagrees with complete plan")
-    return DownstreamContract(kind=kind, version=1, bytes=exact, sha256=hashlib.sha256(exact).hexdigest(), ids=frozenset(ids))
+    return DownstreamContract(
+        kind=kind,
+        version=1,
+        bytes=exact,
+        sha256=hashlib.sha256(exact).hexdigest(),
+        ids=frozenset(ids),
+    )
+
+
+def _validate_plan_references(sections: dict[str, list[list[str]]], ids: set[str]) -> None:
+    """Validate reference columns against the kinds mandated by the schema."""
+    allowed = {
+        "Test List": (2, ("INV-",)),
+        "Dependency ADR References": (2, ("INV-",)),
+        "Task Status": (3, ("TASK-",)),
+    }
+    for section, (column, prefixes) in allowed.items():
+        for row in sections[section]:
+            for reference in _required_references(row[column]):
+                if reference not in ids or not reference.startswith(prefixes):
+                    raise ContractValidationError(
+                        f"{section} has an invalid reference: {reference}"
+                    )

@@ -18,17 +18,25 @@ def sha256_bytes(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
-def file_metadata(path: str | Path) -> dict[str, Any]:
+def file_metadata(
+    path: str | Path, *, display_path: Callable[[Path], str] | None = None
+) -> dict[str, Any]:
     source = Path(path)
+    shown_path = display_path(source) if display_path is not None else source.as_posix()
     if not source.exists():
-        return {"path": source.as_posix(), "state": "missing"}
+        return {"path": shown_path, "state": "missing"}
     if not source.is_file():
-        return {"path": source.as_posix(), "state": "not_file"}
+        return {"path": shown_path, "state": "not_file"}
     try:
         content = source.read_bytes()
     except OSError:
-        return {"path": source.as_posix(), "state": "unreadable"}
-    return {"path": source.as_posix(), "state": "file", "bytes": len(content), "sha256": sha256_bytes(content)}
+        return {"path": shown_path, "state": "unreadable"}
+    return {
+        "path": shown_path,
+        "state": "file",
+        "bytes": len(content),
+        "sha256": sha256_bytes(content),
+    }
 
 
 def canonical_json(value: Mapping[str, Any]) -> bytes:
@@ -43,7 +51,9 @@ def atomic_write_bytes(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:
-        with tempfile.NamedTemporaryFile("wb", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
+        with tempfile.NamedTemporaryFile(
+            "wb", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
+        ) as handle:
             temporary = Path(handle.name)
             handle.write(content)
             handle.flush()
@@ -61,6 +71,7 @@ def load_or_persist_json(
     validate: Callable[[Any], None],
     matches_identity: Callable[[Mapping[str, Any], Mapping[str, Any]], bool],
     expected_sha256: str | None = None,
+    display_path: Callable[[Path], str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Persist immutable JSON once, or return a validated matching prior copy."""
     if path.exists():
@@ -81,4 +92,5 @@ def load_or_persist_json(
         validate(packet)
         content = canonical_json(packet)
         atomic_write_bytes(path, content)
-    return packet, {"path": path.as_posix(), "bytes": len(content), "sha256": sha256_bytes(content)}
+    shown_path = display_path(path) if display_path is not None else path.as_posix()
+    return packet, {"path": shown_path, "bytes": len(content), "sha256": sha256_bytes(content)}

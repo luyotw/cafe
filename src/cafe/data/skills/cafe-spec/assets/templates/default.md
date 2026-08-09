@@ -49,6 +49,17 @@
 - ✅ **DoD:** [User-selected completion criterion 2]
 - ✅ **DoD:** [Custom user-provided criterion if any]
 
+## Authoritative Requirement IDs
+
+Maintain these IDs beside the corresponding source requirements whenever this
+template is completed; the downstream contract must contain the same set.
+
+- **GOAL-001** — [Stable goal represented in the requirements above]
+- **NONGOAL-001** — [Stable non-goal represented in scope]
+- **AC-001** — [Stable acceptance criterion]
+- **INV-001** — [Stable invariant]
+- **TRUST-001** — [Stable trust boundary]
+
 ## Downstream Contract
 
 - Contract-Version: `1`

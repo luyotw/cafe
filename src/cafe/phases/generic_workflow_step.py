@@ -1198,6 +1198,7 @@ class GenericWorkflowStepExecutor(Phase):
             agent_name=agent_name,
             role=str(step_def.get("role", "developer")),
             checklist_file_path=checklist_file,
+            step=step_name,
             iteration=self.iteration,
             context=context,
             artifacts=input_artifacts,
