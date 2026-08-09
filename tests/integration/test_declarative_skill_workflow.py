@@ -278,6 +278,24 @@ BODY-ONLY-SENTINEL GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
     assert "full_record=full" in first_manager.prompts[0]
     assert str(full_record) in first_manager.prompts[0]
 
+    next_packet_path = packet_path.parent.parent / "iteration_002" / packet_path.name
+    next_packet_path.parent.mkdir(parents=True)
+    next_packet_path.write_text("{tampered packet", encoding="utf-8")
+    tampered_packet_manager = _AgentManager()
+    tampered_packet_executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="packet-journey",
+        playbook=playbook,
+        generic_phase=phase,
+        agent_manager=tampered_packet_manager,
+        git_ops=_GitOps(),
+        role_agent_map={"researcher": "David"},
+    )
+    tampered_packet_executor.execute_step("assemble", step, state)
+
+    assert "compact_brief=full_fallback" in tampered_packet_manager.prompts[0]
+    assert str(packet_source) in tampered_packet_manager.prompts[0]
+
     packet_source.write_text("# legacy source without a contract\n", encoding="utf-8")
     second_manager = _AgentManager()
     second = GenericWorkflowStepExecutor(
@@ -346,7 +364,7 @@ GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
 def test_packaged_workflow_uses_full_then_packet_then_legacy_fallback(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """IT-001/IT-002/IT-006 — real packaged stages retain authority and fail closed."""
+    """IT-001/IT-002/IT-006 — packaged stages retain full host authority."""
     monkeypatch.chdir(tmp_path)
     root = Path(__file__).resolve().parents[2]
     source_root = root / "src" / "cafe" / "data"
@@ -356,7 +374,16 @@ def test_packaged_workflow_uses_full_then_packet_then_legacy_fallback(
         builtin_root=source_root,
     )
     loader.discover()
-    phase = GenericPhase(
+    class CapturingPhase(GenericPhase):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.host_contexts: list[dict[str, object]] = []
+
+        def execute(self, **kwargs):
+            self.host_contexts.append(dict(kwargs["hook_context"]))
+            return super().execute(**kwargs)
+
+    phase = CapturingPhase(
         loader,
         skill_bridge=NativeSkillBridge(loader, project_root=tmp_path, home_dir=tmp_path / "home"),
     )
@@ -405,12 +432,30 @@ def test_packaged_workflow_uses_full_then_packet_then_legacy_fallback(
     correction_develop = run("develop")
     review = run("review")
     pr = run("pr")
-    for prompt in (correction_develop.prompts[0], review.prompts[0], pr.prompts[0]):
+    pr_follow_up = run("pr")
+    for prompt in (
+        correction_develop.prompts[0],
+        review.prompts[0],
+        pr.prompts[0],
+        pr_follow_up.prompts[0],
+    ):
         assert "spec_file=packet" in prompt
         assert "plan_file=packet" in prompt
-    packets = list(issue_dir.glob("**/context_spec_file.json"))
-    assert packets
-    assert "BODY-ONLY-PACKAGED-SENTINEL" not in packets[-1].read_text(encoding="utf-8")
+    spec_packets = list(issue_dir.glob("**/context_spec_file.json"))
+    plan_packets = list(issue_dir.glob("**/context_plan_file.json"))
+    assert spec_packets and plan_packets
+    spec_packet = json.loads(spec_packets[-1].read_text(encoding="utf-8"))["contract"]["bytes"]
+    plan_packet = json.loads(plan_packets[-1].read_text(encoding="utf-8"))["contract"]["bytes"]
+    assert "BODY-ONLY-PACKAGED-SENTINEL" not in spec_packet
+    for identifier in ("GOAL-001", "NONGOAL-001", "AC-001", "INV-001", "TRUST-001"):
+        assert identifier in spec_packet
+    assert "### Test List" in plan_packet
+    assert "### Dependency ADR References" in plan_packet
+    assert "ADR-001" in plan_packet
+    assert "| TASK-001 | pending |" in plan_packet
+    final_host_inputs = phase.host_contexts[-1]["authoritative_inputs"]
+    assert Path(final_host_inputs["spec_file"]).resolve() == spec
+    assert Path(final_host_inputs["plan_file"]).resolve() == plan
 
     spec.write_text("# Legacy confirmed artifact\n", encoding="utf-8")
     legacy_correction = run("develop")

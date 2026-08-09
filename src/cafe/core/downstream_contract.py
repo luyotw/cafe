@@ -39,18 +39,26 @@ _SCHEMAS = {
     ),
 }
 _ID = re.compile(r"[A-Z][A-Z0-9_]*-[0-9]{3,}")
+_TABLE_SEPARATOR = re.compile(r":?-{3,}:?")
 
 
 def _rows(section: str, heading: str, columns: tuple[str, ...]) -> list[list[str]]:
     lines = section.splitlines()
-    tables = [index for index, line in enumerate(lines) if line.startswith("|")]
-    if len(tables) < 3:
+    table_start = next((index for index, line in enumerate(lines) if line.startswith("|")), None)
+    if table_start is None or table_start + 2 >= len(lines):
         raise ContractValidationError(f"{heading} requires a non-empty table")
-    header = [item.strip() for item in lines[tables[0]].strip().strip("|").split("|")]
+    header = [item.strip() for item in lines[table_start].strip().strip("|").split("|")]
     if tuple(header) != columns:
         raise ContractValidationError(f"{heading} has invalid columns")
+    separator = [
+        item.strip() for item in lines[table_start + 1].strip().strip("|").split("|")
+    ]
+    if len(separator) != len(columns) or not all(
+        _TABLE_SEPARATOR.fullmatch(cell) for cell in separator
+    ):
+        raise ContractValidationError(f"{heading} has an invalid table separator")
     result: list[list[str]] = []
-    for line in lines[tables[2] :]:
+    for line in lines[table_start + 2 :]:
         if not line.startswith("|"):
             break
         row = [item.strip() for item in line.strip().strip("|").split("|")]
@@ -58,7 +66,7 @@ def _rows(section: str, heading: str, columns: tuple[str, ...]) -> list[list[str
             raise ContractValidationError(f"{heading} has an invalid row")
         result.append(row)
     if not result:
-        raise ContractValidationError(f"{heading} requires rows")
+        raise ContractValidationError(f"{heading} requires a non-empty table")
     return result
 
 

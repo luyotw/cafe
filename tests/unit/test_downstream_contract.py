@@ -45,6 +45,20 @@ def test_rejects_required_table_without_data_rows(tmp_path: Path) -> None:
         extract_downstream_contract(source, kind="spec")
 
 
+def test_rejects_table_with_an_invalid_separator_row(tmp_path: Path) -> None:
+    """Only a Markdown separator may appear between a header and its rows."""
+    source = tmp_path / "invalid-separator.md"
+    source.write_text(
+        _valid_spec_contract().replace(
+            "| --- | --- |", "| untrusted | ignored |", 1
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ContractValidationError):
+        extract_downstream_contract(source, kind="spec")
+
+
 def test_rejects_plan_task_state_that_disagrees_with_complete_plan(tmp_path: Path) -> None:
     source = tmp_path / "plan.md"
     source.write_text(

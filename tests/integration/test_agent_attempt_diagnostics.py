@@ -1,6 +1,7 @@
 """Journey tests for durable CLI-attempt diagnostics."""
 
 import json
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -9,6 +10,7 @@ import pytest
 from cafe.agents.executor import AgentExecutionError
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore
+from cafe.core.long_running_operation_helper import get_operation_status, run_operation_command
 from cafe.core.types import (
     AgentCLI,
     AgentConfig,
@@ -146,8 +148,10 @@ def test_fallback_success_preserves_primary_attempts_in_iteration_record(tmp_pat
     assert "raw-primary-secret" not in iteration_path.read_text(encoding="utf-8")
 
 
-def test_cold_backup_chain_refreshes_takeover_reason_and_partial_progress(tmp_path: Path) -> None:
-    """IT-005 — each fresh provider receives current durable takeover state."""
+def test_cold_backup_chain_status_checks_a_running_operation_before_takeover(
+    tmp_path: Path,
+) -> None:
+    """IT-005 — each cold backup reuses, rather than relaunches, live work."""
     manager = AgentManager()
     manager.register_agent(
         AgentConfig(
@@ -167,6 +171,25 @@ def test_cold_backup_chain_refreshes_takeover_reason_and_partial_progress(tmp_pa
     iteration_dir = executor.phase_dir / "iteration_001"
     output_file = iteration_dir / "output.md"
     checklist_file = iteration_dir / "checklist.md"
+    release_file = tmp_path / "release-operation"
+    operation_script = tmp_path / "wait-for-release.py"
+    operation_script.write_text(
+        "from pathlib import Path\n"
+        "import sys, time\n"
+        "while not Path(sys.argv[1]).exists():\n"
+        "    time.sleep(0.01)\n",
+        encoding="utf-8",
+    )
+    launched = run_operation_command(
+        issue_dir=executor.issue_dir,
+        step="develop",
+        iteration_dir=iteration_dir,
+        command=[sys.executable, str(operation_script), str(release_file)],
+        cwd=tmp_path,
+        playbook=executor.playbook,
+        reason="cold_backup_integration",
+    )
+    assert launched.started is True
     primary_error = AgentExecutionError("primary rate limit", error_type="rate_limit")
     backup_error = AgentExecutionError("backup rate limit", error_type="rate_limit")
     prompts: list[str] = []
@@ -193,13 +216,24 @@ def test_cold_backup_chain_refreshes_takeover_reason_and_partial_progress(tmp_pa
             raise backup_error
         return _success("replacement output")
 
-    with patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect):
-        response, *_ = manager.execute(
-            "David",
-            "perform the workflow step",
-            phase_name="develop",
-            backup_context_callback=snapshot,
-        )
+    try:
+        with (
+            patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect),
+            patch(
+                "cafe.phases.generic_workflow_step.get_operation_status",
+                wraps=get_operation_status,
+            ) as status_check,
+        ):
+            response, *_ = manager.execute(
+                "David",
+                "perform the workflow step",
+                phase_name="develop",
+                backup_context_callback=snapshot,
+            )
+
+        assert status_check.call_count == 2
+    finally:
+        release_file.write_text("release", encoding="utf-8")
 
     first_takeover = json.loads(prompts[1].split("provider-neutral):\n", 1)[1])
     second_takeover = json.loads(prompts[2].split("provider-neutral):\n", 1)[1])
@@ -208,7 +242,11 @@ def test_cold_backup_chain_refreshes_takeover_reason_and_partial_progress(tmp_pa
     assert first_takeover["partial"]["output"]["state"] == "missing"
     assert second_takeover["partial"]["output"]["state"] == "file"
     assert second_takeover["partial"]["checklist"]["completed"] == 1
-    assert second_takeover["operation"]["state"] == "absent"
+    assert first_takeover["operation"] == {
+        "state": "running",
+        "id": launched.operation.operation_id,
+    }
+    assert second_takeover["operation"] == first_takeover["operation"]
 
 
 def test_all_failed_journey_persists_sanitized_history_without_raw_secrets(tmp_path: Path) -> None:

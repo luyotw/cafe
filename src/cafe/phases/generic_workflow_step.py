@@ -349,6 +349,7 @@ class GenericWorkflowStepExecutor(Phase):
                 "iteration_dir": iteration_dir,
                 "output_file": output_file,
                 "questions_xml_file": questions_xml_file,
+                "authoritative_inputs": context["authoritative_inputs"],
                 "capability_request_file": capability_request_file if capability_ids else None,
                 "publish_request_file": publish_request_file if step_name == "pr" else None,
                 "blackboard_state": blackboard_state,
@@ -1054,11 +1055,15 @@ class GenericWorkflowStepExecutor(Phase):
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
         try:
-            resolve_prompt_inputs(contract, input_artifacts)
+            authoritative_inputs = resolve_prompt_inputs(contract, input_artifacts)
         except DeclaredArtifactError as exc:
             raise ValueError(
                 f"Step {step_name!r}, skill {canonical_skill_name(skill_name)!r}: {exc}"
             ) from exc
+        context["authoritative_inputs"] = {
+            placeholder: self._display_path(Path(path))
+            for placeholder, path in authoritative_inputs.items()
+        }
         effective_inputs = resolve_effective_prompt_inputs(
             contract,
             input_artifacts,
