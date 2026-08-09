@@ -1,7 +1,7 @@
 ---
 name: cafe-develop
 description: "依計畫進行程式開發與測試"
-version: 1.5.0
+version: 1.6.0
 workflow:
   human_tasks:
     - id: no-change-decision
@@ -22,15 +22,31 @@ workflow:
     - artifacts: [spec]
       placeholder: spec_file
       required: false
+      load_policy:
+        - when: {feedback: true}
+          mode: packet
+          contract_kind: spec
     - artifacts: [spec]
       placeholder: spec_file_path
       required: false
+      load_policy:
+        - when: {feedback: true}
+          mode: packet
+          contract_kind: spec
     - artifacts: [plan]
       placeholder: plan_file
       required: false
+      load_policy:
+        - when: {feedback: true}
+          mode: packet
+          contract_kind: plan
     - artifacts: [plan]
       placeholder: plan_file_path
       required: false
+      load_policy:
+        - when: {feedback: true}
+          mode: packet
+          contract_kind: plan
     - artifacts: [review_feedback, pr_result]
       placeholder: feedback_file_path
       required: false

@@ -145,3 +145,29 @@ Copy the DoD items from the spec's Acceptance Criteria section (lines marked wit
 - [ ] **Dev 6.1**: Login and registration work correctly through the new service layer
 - [ ] **Dev 6.2**: All error handling returns proper error codes and messages
 - [ ] **Dev 6.3**: API response format is unchanged from before refactoring
+
+## Downstream Contract
+
+- Contract-Version: `1`
+- Artifact-Kind: `plan`
+
+### Architecture Boundaries
+| ID | Location | Responsibility |
+| --- | --- | --- |
+| ARCH-001 | [Path] | [Boundary] |
+### Invariants
+| ID | Statement |
+| --- | --- |
+| INV-001 | [Stable invariant] |
+### Test List
+| ID | Type | Covers |
+| --- | --- | --- |
+| UT-001 | unit | INV-001 |
+### Dependency ADR References
+| ID | Decision | Requirement / invariant |
+| --- | --- | --- |
+| ADR-001 | [Decision] | INV-001 |
+### Task Status
+| ID | Status | Summary | Depends On |
+| --- | --- | --- | --- |
+| TASK-001 | pending | [Top-level task] | — |

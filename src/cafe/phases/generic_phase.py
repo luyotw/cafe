@@ -243,6 +243,14 @@ class GenericPhase:
                     context["resume_input_artifacts"],
                 ]
             )
+        if context and context.get("input_loading_modes"):
+            runtime_context.extend(
+                [
+                    "Declared input loading modes:",
+                    context["input_loading_modes"],
+                    "A packet is a validated exact Downstream Contract; full and full_fallback paths remain complete authoritative sources.",
+                ]
+            )
         if context and context.get("delta_packet"):
             runtime_context.extend(
                 [

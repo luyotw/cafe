@@ -51,6 +51,7 @@ from cafe.skills.checklist_composer import compose_declared_checklist
 from cafe.skills.contracts import (
     DeclaredArtifactError,
     SkillWorkflowContract,
+    resolve_effective_prompt_inputs,
     resolve_prompt_inputs,
 )
 from cafe.skills.loader import SkillLoader, canonical_skill_name
@@ -977,16 +978,29 @@ class GenericWorkflowStepExecutor(Phase):
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
         try:
-            declared_inputs = resolve_prompt_inputs(contract, input_artifacts)
+            resolve_prompt_inputs(contract, input_artifacts)
         except DeclaredArtifactError as exc:
             raise ValueError(
                 f"Step {step_name!r}, skill {canonical_skill_name(skill_name)!r}: {exc}"
             ) from exc
+        effective_inputs = resolve_effective_prompt_inputs(
+            contract,
+            input_artifacts,
+            step=step_name,
+            iteration=self.iteration,
+            feedback=bool(
+                input_artifacts.get("review_feedback") or input_artifacts.get("pr_result")
+            ),
+            packet_dir=output_file.parent,
+        )
         context.update(
             {
-                placeholder: self._display_path(Path(path))
-                for placeholder, path in declared_inputs.items()
+                placeholder: self._display_path(Path(binding["path"]))
+                for placeholder, binding in effective_inputs.items()
             }
+        )
+        context["input_loading_modes"] = ", ".join(
+            f"{placeholder}={binding['mode']}" for placeholder, binding in sorted(effective_inputs.items())
         )
         self._add_template_context(
             context=context,

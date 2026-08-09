@@ -1,7 +1,7 @@
 ---
 name: cafe-spec
 description: "收集、整理或修訂需求規格（依 iteration 切換行為）"
-version: 1.0.1
+version: 1.1.0
 workflow:
   human_tasks:
     - id: output-review
@@ -86,6 +86,10 @@ bash scripts/sync_github.sh --help
 
 ## Output
 Write spec to: {output_file}
+
+## Downstream Contract
+
+Keep exactly one versioned `## Downstream Contract` in every produced spec. Its stable IDs must cover the downstream requirements in the complete body; it is confirmed with the complete artifact and is copied byte-for-byte only by the runtime. Legacy artifacts without this section deliberately remain full-source inputs.
 
 ## Handoff
 - 依照本輪結果更新 blackboard 與 next-step baton。

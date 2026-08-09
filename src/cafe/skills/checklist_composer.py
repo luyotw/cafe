@@ -41,16 +41,9 @@ def _variant_matches(
     feedback: bool,
 ) -> bool:
     """Return whether one bounded, declared checklist selector applies."""
-    when = variant.when
-    if when.iteration is not None and when.iteration != iteration:
-        return False
-    if when.min_iteration is not None and iteration < when.min_iteration:
-        return False
-    if when.max_iteration is not None and iteration > when.max_iteration:
-        return False
-    if when.feedback is not None and when.feedback != feedback:
-        return False
-    return all(bool(artifacts.get(name)) for name in when.artifact_present)
+    return variant.when.matches(
+        step=None, iteration=iteration, artifacts=artifacts, feedback=feedback
+    )
 
 
 def select_checklist_variant(
