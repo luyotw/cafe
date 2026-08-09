@@ -422,10 +422,12 @@ class TestCodexPermissionExtraction:
         assert denials[0].tool_name == "Bash"
         assert denials[0].tool_input["command"].startswith("git add src/cafe/ui/cli.py")
 
-    def test_codex_exec_does_not_override_codex_home(self) -> None:
-        """Codex executions should inherit the default environment."""
+    def test_codex_exec_preserves_codex_home(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Codex executions should preserve the provider configuration environment."""
         config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
         executor = AgentExecutor(config)
+        codex_home = "/tmp/custom-codex-home"
+        monkeypatch.setenv("CODEX_HOME", codex_home)
 
         mock_process = MagicMock()
         mock_process.stdout.readline.side_effect = [
@@ -438,7 +440,7 @@ class TestCodexPermissionExtraction:
         with patch("subprocess.Popen", return_value=mock_process) as mock_popen, patch("sys.platform", "win32"):
             executor.execute("Test prompt")
 
-        assert "CODEX_HOME" not in mock_popen.call_args.kwargs["env"]
+        assert mock_popen.call_args.kwargs["env"]["CODEX_HOME"] == codex_home
 
 
 class TestTokenUsageTracking:
