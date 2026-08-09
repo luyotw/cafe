@@ -278,9 +278,40 @@ BODY-ONLY-SENTINEL GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
     assert "full_record=full" in first_manager.prompts[0]
     assert str(full_record) in first_manager.prompts[0]
 
+    # A syntactically valid source revision must not reuse a packet whose
+    # persisted provenance still identifies the previous source bytes.
+    packet_source.write_text(
+        packet_source.read_text(encoding="utf-8").replace(
+            "| GOAL-001 | Goal |", "| GOAL-001 | Revised goal |"
+        ),
+        encoding="utf-8",
+    )
     next_packet_path = packet_path.parent.parent / "iteration_002" / packet_path.name
     next_packet_path.parent.mkdir(parents=True)
-    next_packet_path.write_text("{tampered packet", encoding="utf-8")
+    stale_packet = json.loads(packet_path.read_text(encoding="utf-8"))
+    stale_packet["target"]["iteration"] = 2
+    next_packet_path.write_text(
+        json.dumps(stale_packet, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    stale_source_manager = _AgentManager()
+    stale_source_executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="packet-journey",
+        playbook=playbook,
+        generic_phase=phase,
+        agent_manager=stale_source_manager,
+        git_ops=_GitOps(),
+        role_agent_map={"researcher": "David"},
+    )
+    stale_source_executor.execute_step("assemble", step, state)
+
+    assert "compact_brief=full_fallback" in stale_source_manager.prompts[0]
+    assert str(packet_source) in stale_source_manager.prompts[0]
+
+    tampered_packet_path = packet_path.parent.parent / "iteration_003" / packet_path.name
+    tampered_packet_path.parent.mkdir(parents=True)
+    tampered_packet_path.write_text("{tampered packet", encoding="utf-8")
     tampered_packet_manager = _AgentManager()
     tampered_packet_executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
