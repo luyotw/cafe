@@ -2753,6 +2753,7 @@ def test_agent_launched_operation_metadata_survives_phase_artifact_write(
             artifact=LongRunningOperationArtifact(
                 state=LongRunningOperationState.RUNNING,
                 reason="test_agent_launch",
+                operation_id="operation-refresh",
             ),
         )
         operation_path = iteration_dir / "operation.json"
@@ -2773,7 +2774,10 @@ def test_agent_launched_operation_metadata_survives_phase_artifact_write(
     persisted = store.load_or_create("develop")
     assert operation_path is not None
     assert persisted.artifacts["develop_operation"].path == str(operation_path)
-    assert persisted.artifacts["develop_operation"].summary == "long_running_operation:running"
+    assert (
+        persisted.artifacts["develop_operation"].summary
+        == "long_running_operation:operation-refresh:running"
+    )
 
 
 def test_workflow_limits_checklist_inputs_to_step_artifacts(tmp_path: Path) -> None:
@@ -3498,6 +3502,18 @@ def test_cold_takeover_rejects_untrusted_operation_evidence(
     ) as status_check:
         assert snapshot()["operation"] == {"state": "running", "id": trusted.operation_id}
         status_check.assert_called_once()
+
+    replaced = LongRunningOperationArtifact(
+        operation_id="replaced-running",
+        state=LongRunningOperationState.RUNNING,
+        reason="agent_timeout",
+    )
+    operation_artifact_path(iteration_dir).write_text(
+        json.dumps(replaced.to_dict()), encoding="utf-8"
+    )
+    with patch("cafe.phases.generic_workflow_step.get_operation_status") as status_check:
+        assert snapshot()["operation"] == {"state": "unknown"}
+        status_check.assert_not_called()
 
     operation_receipt_path(iteration_dir).write_text(
         json.dumps(

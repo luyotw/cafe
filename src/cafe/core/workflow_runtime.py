@@ -101,7 +101,10 @@ def operation_artifact_is_trusted(
     entry = blackboard_store.get_artifact(blackboard, f"{current_step}_operation")
     if entry is None:
         return False
-    if entry.summary != f"long_running_operation:{artifact.state.value}":
+    expected_summary = (
+        f"long_running_operation:{artifact.operation_id}:{artifact.state.value}"
+    )
+    if entry.summary != expected_summary:
         return False
     return Path(entry.path) == operation_artifact_path(iteration_dir)
 
@@ -1109,10 +1112,11 @@ class BlackboardWorkflowRuntime:
         sufficient evidence. ``BlackboardStore.write_operation_artifact`` is
         the only supported writer and always records a matching
         ``{step}_operation`` metadata artifact on the blackboard in the same
-        call; requiring that record to exist, match, and point at *this*
-        iteration's ``operation.json`` path keeps an agent-authored or
-        hand-edited file, or a stale metadata record left over from an
-        earlier iteration, from being accepted as trusted operation truth.
+        call; requiring that record to bind this artifact's operation ID and
+        state, and point at *this* iteration's ``operation.json`` path keeps
+        an agent-authored or hand-edited file, or a stale metadata record left
+        over from an earlier iteration, from being accepted as trusted
+        operation truth.
         """
         return operation_artifact_is_trusted(
             blackboard_store=self.blackboard_store,
