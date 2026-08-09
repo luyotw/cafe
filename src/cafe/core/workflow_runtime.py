@@ -89,6 +89,48 @@ class RuntimePositionResolution:
     realignment_result: Optional[PlaybookRunResult] = None
 
 
+def operation_artifact_is_trusted(
+    *,
+    blackboard_store: BlackboardStore,
+    blackboard: Any,
+    current_step: str,
+    iteration_dir: Path,
+    artifact: LongRunningOperationArtifact,
+) -> bool:
+    """Return whether operation state has matching runtime-owned evidence."""
+    entry = blackboard_store.get_artifact(blackboard, f"{current_step}_operation")
+    if entry is None:
+        return False
+    if entry.summary != f"long_running_operation:{artifact.state.value}":
+        return False
+    return Path(entry.path) == operation_artifact_path(iteration_dir)
+
+
+def operation_receipt_is_trusted(
+    *,
+    blackboard_store: BlackboardStore,
+    blackboard: Any,
+    current_step: str,
+    iteration_dir: Path,
+    operation: LongRunningOperationArtifact,
+    receipt: LongRunningOperationArtifact,
+) -> bool:
+    """Return whether terminal receipt state has matching runtime-owned evidence."""
+    if receipt.state == LongRunningOperationState.RUNNING:
+        return False
+    if receipt.operation_id != operation.operation_id:
+        return False
+    entry = blackboard_store.get_artifact(blackboard, f"{current_step}_operation_receipt")
+    if entry is None:
+        return False
+    expected_summary = (
+        f"long_running_operation_receipt:{operation.operation_id}:{receipt.state.value}"
+    )
+    if entry.summary != expected_summary:
+        return False
+    return Path(entry.path) == operation_receipt_path(iteration_dir)
+
+
 class BlackboardWorkflowRuntime:
     """Workflow runtime that prefers blackboard/baton-driven transitions."""
 
@@ -1072,13 +1114,13 @@ class BlackboardWorkflowRuntime:
         hand-edited file, or a stale metadata record left over from an
         earlier iteration, from being accepted as trusted operation truth.
         """
-        entry = self.blackboard_store.get_artifact(self.blackboard, f"{current_step}_operation")
-        if entry is None:
-            return False
-        if entry.summary != f"long_running_operation:{artifact.state.value}":
-            return False
-        expected_path = operation_artifact_path(iteration_dir)
-        return Path(entry.path) == expected_path
+        return operation_artifact_is_trusted(
+            blackboard_store=self.blackboard_store,
+            blackboard=self.blackboard,
+            current_step=current_step,
+            iteration_dir=iteration_dir,
+            artifact=artifact,
+        )
 
     def _operation_receipt_trusted(
         self,
@@ -1089,22 +1131,14 @@ class BlackboardWorkflowRuntime:
         receipt: LongRunningOperationArtifact,
     ) -> bool:
         """Trust only terminal receipts written through the blackboard store."""
-        if receipt.state == LongRunningOperationState.RUNNING:
-            return False
-        if receipt.operation_id != operation.operation_id:
-            return False
-        entry = self.blackboard_store.get_artifact(
-            self.blackboard, f"{current_step}_operation_receipt"
+        return operation_receipt_is_trusted(
+            blackboard_store=self.blackboard_store,
+            blackboard=self.blackboard,
+            current_step=current_step,
+            iteration_dir=iteration_dir,
+            operation=operation,
+            receipt=receipt,
         )
-        if entry is None:
-            return False
-        expected_summary = (
-            f"long_running_operation_receipt:{operation.operation_id}:{receipt.state.value}"
-        )
-        if entry.summary != expected_summary:
-            return False
-        expected_path = operation_receipt_path(iteration_dir)
-        return Path(entry.path) == expected_path
 
     def _read_trusted_operation_receipt(
         self,

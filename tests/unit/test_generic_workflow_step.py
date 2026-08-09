@@ -1,6 +1,7 @@
 """Tests for direct workflow step execution."""
 
 import json
+import os
 from collections.abc import Iterator
 from pathlib import Path
 from types import MethodType, SimpleNamespace
@@ -17,6 +18,8 @@ from cafe.core.blackboard import (
     HandoffOwner,
     LongRunningOperationArtifact,
     LongRunningOperationState,
+    operation_artifact_path,
+    operation_receipt_path,
 )
 from cafe.core.hooks import HookResult
 from cafe.core.resume_user_input import CONTINUE_USER_INPUT
@@ -3412,6 +3415,102 @@ def test_cold_takeover_reports_absent_when_no_operation_has_started(
     )
 
     assert untrusted_snapshot["operation"] == {"state": "unknown"}
+
+
+def test_cold_takeover_rejects_untrusted_operation_evidence(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """UT-011 — takeover state uses the runtime's operation trust boundary."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-takeover-trust"
+    step = {
+        "skill": "cafe-develop",
+        "role": "developer",
+        "input_artifacts": [],
+        "output_artifact": "code",
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-takeover-trust",
+        playbook={
+            "playbook": {"id": "default"},
+            "roles": {"developer": {"default_agent": "David"}},
+            "steps": {"develop": step},
+        },
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    executor.iteration = 1
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    forged = LongRunningOperationArtifact(
+        operation_id="forged-running",
+        state=LongRunningOperationState.RUNNING,
+        reason="agent_timeout",
+    )
+    operation_artifact_path(iteration_dir).write_text(
+        json.dumps(forged.to_dict()), encoding="utf-8"
+    )
+    (iteration_dir / "operation_handle.json").write_text(
+        json.dumps(
+            {
+                "operation_id": forged.operation_id,
+                "monitor_pid": os.getpid(),
+                "monitor_start_time": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def snapshot() -> dict[str, object]:
+        return json.loads(
+            executor._build_backup_takeover_context(
+                error="primary failed",
+                step_name="develop",
+                step_def=step,
+                blackboard_state=state,
+                output_file=iteration_dir / "output.md",
+                checklist_file=iteration_dir / "checklist.md",
+                iteration_dir=iteration_dir,
+            )
+        )
+
+    with patch("cafe.phases.generic_workflow_step.get_operation_status") as status_check:
+        assert snapshot()["operation"] == {"state": "unknown"}
+        status_check.assert_not_called()
+
+    trusted = store.write_operation_artifact(
+        state,
+        step="develop",
+        iteration_dir=iteration_dir,
+        artifact=LongRunningOperationArtifact(
+            operation_id="trusted-running",
+            state=LongRunningOperationState.RUNNING,
+            reason="agent_timeout",
+        ),
+    )
+    with patch(
+        "cafe.phases.generic_workflow_step.get_operation_status", return_value=trusted
+    ) as status_check:
+        assert snapshot()["operation"] == {"state": "running", "id": trusted.operation_id}
+        status_check.assert_called_once()
+
+    operation_receipt_path(iteration_dir).write_text(
+        json.dumps(
+            LongRunningOperationArtifact(
+                operation_id=trusted.operation_id,
+                state=LongRunningOperationState.SUCCEEDED,
+            ).to_dict()
+        ),
+        encoding="utf-8",
+    )
+    with patch("cafe.phases.generic_workflow_step.get_operation_status") as status_check:
+        assert snapshot()["operation"] == {"state": "unknown"}
+        status_check.assert_not_called()
 
 
 def test_resolve_iteration_user_input_first_start_unchanged(tmp_path: Path) -> None:

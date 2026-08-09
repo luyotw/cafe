@@ -114,12 +114,13 @@ class TestCodexCLIBuildCommand:
         assert ".cafe" in add_dir_values
         assert str(worktree_git_dir) in add_dir_values
 
-    def test_build_environment_does_not_override_codex_home(self, codex_config):
+    def test_build_environment_preserves_codex_home(self, codex_config, monkeypatch):
+        monkeypatch.setenv("CODEX_HOME", "/custom/codex-home")
         cli = CodexCLI(codex_config)
 
         env = cli.build_environment()
 
-        assert "CODEX_HOME" not in env
+        assert env["CODEX_HOME"] == "/custom/codex-home"
 
 
 class TestCodexCLITranslateAllowedTools:
@@ -294,15 +295,15 @@ class TestCodexCLICreateSession:
 
         assert session_id == ""
         mock_run.assert_not_called()
-def test_codex_environment_removes_inherited_codex_home(monkeypatch) -> None:
-    """CAFE must not leak its own Codex configuration into child sessions."""
+def test_codex_environment_preserves_inherited_codex_home(monkeypatch) -> None:
+    """An explicit provider home remains available to child sessions."""
     from cafe.agents.cli.codex import CodexCLI
     from cafe.core.types import AgentCLI, AgentConfig
 
-    monkeypatch.setenv("CODEX_HOME", "/runtime-owned/codex-home")
+    monkeypatch.setenv("CODEX_HOME", "/custom/codex-home")
 
     environment = CodexCLI(
         AgentConfig(name="test", cli=AgentCLI.CODEX)
     ).build_environment()
 
-    assert "CODEX_HOME" not in environment
+    assert environment["CODEX_HOME"] == "/custom/codex-home"

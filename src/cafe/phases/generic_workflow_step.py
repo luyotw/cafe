@@ -45,9 +45,13 @@ from cafe.core.status_codes import (
     step_on_declares,
     transition_map_key,
 )
-from cafe.core.types import AgentCLI
 from cafe.core.takeover import build_takeover_snapshot
+from cafe.core.types import AgentCLI
 from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.workflow_runtime import (
+    operation_artifact_is_trusted,
+    operation_receipt_is_trusted,
+)
 from cafe.phases.generic_phase import GenericPhase
 from cafe.skills.checklist_composer import compose_declared_checklist
 from cafe.skills.contracts import (
@@ -503,20 +507,42 @@ class GenericWorkflowStepExecutor(Phase):
             workspace["state"] = "unknown"
 
         operation: dict[str, Any] | None = None
+        operation_store = BlackboardStore(self.issue_dir)
         try:
-            stored_operation = BlackboardStore(self.issue_dir).read_operation_artifact(iteration_dir)
+            stored_operation = operation_store.read_operation_artifact(iteration_dir)
             if stored_operation is not None:
-                current = get_operation_status(
-                    issue_dir=self.issue_dir,
-                    step=step_name,
+                current_blackboard = operation_store.load_or_create(step_name)
+                if not operation_artifact_is_trusted(
+                    blackboard_store=operation_store,
+                    blackboard=current_blackboard,
+                    current_step=step_name,
                     iteration_dir=iteration_dir,
-                    playbook=self.playbook,
-                )
-                operation = {
-                    "state": "running" if current.state.value == "running" else "terminal",
-                    "id": current.operation_id,
-                }
-        except (OSError, ValueError):
+                    artifact=stored_operation,
+                ):
+                    operation = {"state": "unknown"}
+                else:
+                    receipt = operation_store.read_operation_receipt(iteration_dir)
+                    if receipt is not None and not operation_receipt_is_trusted(
+                        blackboard_store=operation_store,
+                        blackboard=current_blackboard,
+                        current_step=step_name,
+                        iteration_dir=iteration_dir,
+                        operation=stored_operation,
+                        receipt=receipt,
+                    ):
+                        operation = {"state": "unknown"}
+                    else:
+                        current = get_operation_status(
+                            issue_dir=self.issue_dir,
+                            step=step_name,
+                            iteration_dir=iteration_dir,
+                            playbook=self.playbook,
+                        )
+                        operation = {
+                            "state": "running" if current.state.value == "running" else "terminal",
+                            "id": current.operation_id,
+                        }
+        except (OSError, ValueError, json.JSONDecodeError):
             # Unknown operation evidence is unsafe to treat as absent: a cold
             # backup must status-check rather than risk relaunching it.
             operation = {"state": "unknown"}
