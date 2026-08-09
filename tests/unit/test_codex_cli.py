@@ -294,3 +294,15 @@ class TestCodexCLICreateSession:
 
         assert session_id == ""
         mock_run.assert_not_called()
+def test_codex_environment_removes_inherited_codex_home(monkeypatch) -> None:
+    """CAFE must not leak its own Codex configuration into child sessions."""
+    from cafe.agents.cli.codex import CodexCLI
+    from cafe.core.types import AgentCLI, AgentConfig
+
+    monkeypatch.setenv("CODEX_HOME", "/runtime-owned/codex-home")
+
+    environment = CodexCLI(
+        AgentConfig(name="test", cli=AgentCLI.CODEX)
+    ).build_environment()
+
+    assert "CODEX_HOME" not in environment
