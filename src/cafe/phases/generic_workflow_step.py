@@ -514,7 +514,9 @@ class GenericWorkflowStepExecutor(Phase):
                 "id": current.operation_id,
             }
         except (OSError, ValueError):
-            pass
+            # Unknown operation evidence is unsafe to treat as absent: a cold
+            # backup must status-check rather than risk relaunching it.
+            operation = {"state": "unknown"}
         snapshot = build_takeover_snapshot(
             reason=error,
             step=step_name,

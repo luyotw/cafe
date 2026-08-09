@@ -88,6 +88,46 @@ def test_rejects_kind_incompatible_contract_references(tmp_path: Path) -> None:
         extract_downstream_contract(source, kind="plan")
 
 
+def test_ignores_contract_headings_inside_fenced_code_blocks(tmp_path: Path) -> None:
+    """Examples must not be mistaken for a second authoritative contract."""
+    source = tmp_path / "spec.md"
+    source.write_text(
+        "```markdown\n## Downstream Contract\n```\n\n" + _valid_spec_contract(),
+        encoding="utf-8",
+    )
+
+    assert extract_downstream_contract(source, kind="spec").kind == "spec"
+
+
+def test_rejects_contract_ids_that_are_not_declared_by_the_body(tmp_path: Path) -> None:
+    source = tmp_path / "spec.md"
+    source.write_text(
+        _valid_spec_contract().replace("| GOAL-001 | Goal |", "| GOAL-001 | Goal |\n| GOAL-002 | Stale |"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ContractValidationError, match="cover"):
+        extract_downstream_contract(source, kind="spec")
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        ("| UT-001 | unit | INV-001 |", "| UT-001 | unit | none |"),
+        ("| ADR-001 | Keep safe | INV-001 |", "| ADR-001 | Keep safe | none |"),
+        ("| TASK-001 | completed | Implementation | — |", "| TASK-001 | completed | Implementation | none |"),
+    ],
+)
+def test_rejects_plan_reference_rows_without_a_required_id(
+    tmp_path: Path, replacement: tuple[str, str]
+) -> None:
+    source = tmp_path / "plan.md"
+    source.write_text(_valid_plan_contract().replace(*replacement), encoding="utf-8")
+
+    with pytest.raises(ContractValidationError):
+        extract_downstream_contract(source, kind="plan")
+
+
 def _valid_spec_contract() -> str:
     return """# Spec
 

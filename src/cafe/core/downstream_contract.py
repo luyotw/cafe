@@ -66,6 +66,42 @@ def _required_references(text: str) -> Iterable[str]:
     return _ID.findall(text)
 
 
+def _markdown_heading_positions(text: str, pattern: re.Pattern[str]) -> list[int]:
+    """Return headings outside fenced examples, preserving source byte layout."""
+    positions: list[int] = []
+    offset = 0
+    fence: str | None = None
+    for line in text.splitlines(keepends=True):
+        marker = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if marker:
+            token = marker.group(1)[0]
+            if fence is None:
+                fence = token
+            elif fence == token:
+                fence = None
+        elif fence is None and pattern.fullmatch(line.rstrip("\r\n")):
+            positions.append(offset)
+        offset += len(line)
+    return positions
+
+
+def _visible_markdown(text: str) -> str:
+    """Exclude fenced examples from authoritative-body ID validation."""
+    lines: list[str] = []
+    fence: str | None = None
+    for line in text.splitlines(keepends=True):
+        marker = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if marker:
+            token = marker.group(1)[0]
+            if fence is None:
+                fence = token
+            elif fence == token:
+                fence = None
+        elif fence is None:
+            lines.append(line)
+    return "".join(lines)
+
+
 def extract_downstream_contract(path: str | Path, *, kind: str) -> DownstreamContract:
     """Return the exact contract bytes after validating the fixed schema.
 
@@ -79,12 +115,12 @@ def extract_downstream_contract(path: str | Path, *, kind: str) -> DownstreamCon
         text = source.decode("utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         raise ContractValidationError("Unreadable contract source") from exc
-    starts = [match.start() for match in re.finditer(r"(?m)^## Downstream Contract\s*$", text)]
+    starts = _markdown_heading_positions(text, re.compile(r"## Downstream Contract\s*"))
     if len(starts) != 1:
         raise ContractValidationError("Source must contain exactly one Downstream Contract")
     start = starts[0]
-    following = re.search(r"(?m)^## (?!#)", text[start + 1 :])
-    end = start + 1 + following.start() if following else len(text)
+    headings = _markdown_heading_positions(text, re.compile(r"## (?!#).+"))
+    end = next((position for position in headings if position > start), len(text))
     exact = text[start:end].encode("utf-8")
     contract = text[start:end]
     match = re.match(
@@ -126,12 +162,7 @@ def extract_downstream_contract(path: str | Path, *, kind: str) -> DownstreamCon
         raise ContractValidationError("Unexpected contract content")
     if kind == "plan":
         _validate_plan_references(sections, ids)
-    body = text[:start] + text[end:]
-    body_ids = set(_ID.findall(body))
-    if not body_ids:
-        raise ContractValidationError("Source must declare stable IDs in its authoritative body")
-    if body_ids - ids:
-        raise ContractValidationError("Contract does not cover source stable IDs")
+    body = _visible_markdown(text[:start] + text[end:])
     if kind == "plan":
         body_task_states = {
             identifier: "completed" if marker.lower() == "x" else "pending"
@@ -146,6 +177,11 @@ def extract_downstream_contract(path: str | Path, *, kind: str) -> DownstreamCon
             )
         if body_task_states != task_states:
             raise ContractValidationError("Plan task state disagrees with complete plan")
+    body_ids = set(_ID.findall(body))
+    if not body_ids:
+        raise ContractValidationError("Source must declare stable IDs in its authoritative body")
+    if body_ids != ids:
+        raise ContractValidationError("Contract does not cover source stable IDs")
     return DownstreamContract(
         kind=kind,
         version=1,
@@ -164,7 +200,12 @@ def _validate_plan_references(sections: dict[str, list[list[str]]], ids: set[str
     }
     for section, (column, prefixes) in allowed.items():
         for row in sections[section]:
-            for reference in _required_references(row[column]):
+            references = list(_required_references(row[column]))
+            if not references:
+                if section == "Task Status" and row[column] == "—":
+                    continue
+                raise ContractValidationError(f"{section} requires a reference")
+            for reference in references:
                 if reference not in ids or not reference.startswith(prefixes):
                     raise ContractValidationError(
                         f"{section} has an invalid reference: {reference}"

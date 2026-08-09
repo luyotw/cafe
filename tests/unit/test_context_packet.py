@@ -156,6 +156,36 @@ def test_packet_rejects_extra_envelope_fields_and_persisted_format_tampering(
     assert fallback["mode"] == "full_fallback"
 
 
+def test_packet_tampering_cannot_be_approved_by_rewriting_a_sidecar_receipt(tmp_path: Path) -> None:
+    source = tmp_path / "spec.md"
+    source.write_text(_spec(), encoding="utf-8")
+    packet_path = tmp_path / "packet.json"
+    first = resolve_context_packet(
+        source_path=source,
+        contract_kind="spec",
+        target_step="custom",
+        iteration=2,
+        placeholders=("packet_spec",),
+        packet_path=packet_path,
+    )
+
+    packet_path.write_text(json.dumps(first["packet"], indent=4), encoding="utf-8")
+    packet_path.with_suffix(".json.sha256").write_text(
+        __import__("hashlib").sha256(packet_path.read_bytes()).hexdigest() + "\n",
+        encoding="ascii",
+    )
+
+    fallback = resolve_context_packet(
+        source_path=source,
+        contract_kind="spec",
+        target_step="custom",
+        iteration=2,
+        placeholders=("packet_spec",),
+        packet_path=packet_path,
+    )
+    assert fallback["mode"] == "full_fallback"
+
+
 def test_packet_persistence_errors_fall_back_to_authoritative_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

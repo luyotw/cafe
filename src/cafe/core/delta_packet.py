@@ -191,7 +191,12 @@ def persist_delta_packet(
             display_path=_display_path,
         )
     except ValueError as exc:
-        if "identity mismatch" in str(exc):
+        message = str(exc)
+        if "Invalid persisted packet" in message:
+            raise ValueError(f"Invalid persisted delta packet: {path}") from exc
+        if "Persisted packet hash mismatch" in message:
+            raise ValueError(f"Persisted delta packet hash mismatch: {path}") from exc
+        if "identity mismatch" in message:
             raise ValueError(f"Persisted delta packet identity mismatch: {path}") from exc
         raise
 

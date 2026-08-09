@@ -2,18 +2,27 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 from pathlib import Path
 from typing import Any, Mapping
 
+from cafe.agents.diagnostics import sanitize_error_excerpt
 from cafe.core.packet_io import file_metadata
-
-_SECRET = re.compile(r"(?i)(token|password|secret|api[_-]?key)\s*[=:]\s*\S+")
 
 
 def sanitize_failure_reason(reason: object, *, limit: int = 400) -> str:
-    return _SECRET.sub(r"\1=[redacted]", str(reason).replace("\n", " "))[:limit]
+    return sanitize_error_excerpt(reason).replace("<redacted>", "[redacted]")[:limit]
+
+
+def _checklist_progress(path: str | Path) -> dict[str, int]:
+    try:
+        markers = re.findall(r"(?m)^\s*(?:[-*]\s+)?\[([ xX])\]", Path(path).read_text())
+    except (OSError, UnicodeDecodeError):
+        return {}
+    return {
+        "completed": sum(marker.lower() == "x" for marker in markers),
+        "pending": sum(marker == " " for marker in markers),
+    }
 
 
 def build_takeover_snapshot(
@@ -32,12 +41,15 @@ def build_takeover_snapshot(
     if operation:
         candidate = operation.get("state")
         status = str(candidate) if candidate in {"running", "terminal", "unknown"} else "unknown"
+    checklist = file_metadata(checklist_file)
+    if checklist.get("state") == "file":
+        checklist.update(_checklist_progress(checklist_file))
     return {
         "schema_version": 1,
         "reason": sanitize_failure_reason(reason),
         "target": {"step": step, "iteration": iteration},
         "resolved_inputs": {key: {"mode": value.get("mode", "full"), "path": value.get("path", "")} for key, value in sorted(resolved_inputs.items())},
         "workspace": dict(workspace or {}),
-        "partial": {"output": file_metadata(output_file), "checklist": file_metadata(checklist_file)},
+        "partial": {"output": file_metadata(output_file), "checklist": checklist},
         "operation": {"state": status, **({"id": str(operation.get("id", ""))} if operation and operation.get("id") else {})},
     }

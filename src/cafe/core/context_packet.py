@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 from cafe.core.downstream_contract import ContractValidationError, extract_downstream_contract
 from cafe.core.packet_io import (
-    atomic_write_bytes,
+    canonical_json,
     file_metadata,
     load_or_persist_json,
     sha256_bytes,
@@ -154,13 +154,12 @@ def resolve_context_packet(
             source_artifact_name=source_artifact_name,
             source_artifact_version=source_artifact_version,
         )
-        receipt_path = packet_path.with_suffix(f"{packet_path.suffix}.sha256")
-        expected_sha256 = _read_packet_receipt(receipt_path) if packet_path.exists() else None
+        # The deterministic packet derived from the current authority is the
+        # trust anchor.  A mutable adjacent receipt cannot approve altered bytes.
+        expected_sha256 = sha256_bytes(canonical_json(packet))
         persisted, metadata = persist_context_packet(
             packet_path, packet, expected_sha256=expected_sha256
         )
-        if expected_sha256 is None:
-            atomic_write_bytes(receipt_path, metadata["sha256"].encode("ascii") + b"\n")
         return {
             "mode": "packet",
             "path": packet_path.as_posix(),
@@ -175,13 +174,3 @@ def resolve_context_packet(
             else "Invalid or altered context packet"
         )
         return {"mode": "full_fallback", "path": Path(source_path).as_posix(), "reason": reason}
-
-
-def _read_packet_receipt(path: Path) -> str:
-    try:
-        receipt = path.read_text(encoding="ascii").strip()
-    except OSError as exc:
-        raise ValueError("Missing context packet receipt") from exc
-    if not _valid_sha256(receipt):
-        raise ValueError("Invalid context packet receipt")
-    return receipt
