@@ -61,7 +61,7 @@ from cafe.skills.contracts import (
     resolve_prompt_inputs,
 )
 from cafe.skills.loader import SkillLoader, canonical_skill_name
-from cafe.core.context_packet import build_context_packet_diagnostics
+from cafe.core.context_packet import build_context_packet_diagnostics, format_context_packet_diagnostic
 from cafe.templates.manager import TemplateManager
 from cafe.utils.git_utils import get_git_toplevel, get_repo_root, to_cwd_relative_path
 from cafe.utils.phase_config import load_phase_step_model
@@ -488,17 +488,16 @@ class GenericWorkflowStepExecutor(Phase):
         contract = self._get_skill_loader().get_workflow_contract(
             self._resolve_skill_name(step_def, self.iteration)
         )
-        inputs = self._step_input_artifacts(step_def, blackboard_state)
         resolved_inputs = self._load_persisted_effective_inputs(iteration_dir)
-        if not resolved_inputs:
-            resolved_inputs = resolve_effective_prompt_inputs(
-                contract,
-                inputs,
-                step=step_name,
-                iteration=self.iteration,
-                feedback=bool(inputs.get("review_feedback") or inputs.get("pr_result")),
-                packet_dir=iteration_dir,
+        if resolved_inputs is None:
+            packet_requested = any(
+                policy.mode == "packet"
+                for prompt_input in contract.prompt_inputs
+                for policy in prompt_input.load_policy
             )
+            if packet_requested:
+                raise ValueError("Missing pre-launch context packet decision for backup takeover")
+            resolved_inputs = {}
         workspace: dict[str, Any] = {}
         try:
             workspace["head"] = self.git_ops.run_git("rev-parse", "HEAD")
@@ -563,47 +562,41 @@ class GenericWorkflowStepExecutor(Phase):
         return json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
 
     @staticmethod
-    def _load_persisted_effective_inputs(iteration_dir: Path) -> dict[str, dict[str, str]]:
+    def _load_persisted_effective_inputs(
+        iteration_dir: Path,
+    ) -> dict[str, dict[str, Any]] | None:
         """Reuse pre-launch packet decisions instead of resolving them during takeover."""
         path = iteration_dir / "iteration.json"
+        if not path.exists():
+            return None
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {}
-        persisted = raw.get("effective_inputs") if isinstance(raw, dict) else None
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("Invalid persisted context packet decision") from exc
+        if not isinstance(raw, dict):
+            raise ValueError("Invalid persisted context packet decision")
+        if "effective_inputs" not in raw:
+            return None
+        persisted = raw.get("effective_inputs")
         if isinstance(persisted, dict):
-            try:
-                return {
-                    str(placeholder): dict(binding)
-                    for placeholder, binding in persisted.items()
-                    if isinstance(placeholder, str) and isinstance(binding, dict)
-                }
-            except (TypeError, ValueError):
-                return {}
-        diagnostics = raw.get("context_packets") if isinstance(raw, dict) else None
-        if not isinstance(diagnostics, list):
-            return {}
-        result: dict[str, dict[str, str]] = {}
-        for diagnostic in diagnostics:
-            if not isinstance(diagnostic, dict):
-                return {}
-            placeholders = diagnostic.get("placeholders")
-            if not isinstance(placeholders, list):
-                return {}
-            binding = {
-                "requested_mode": "packet",
-                "mode": str(diagnostic.get("effective_mode", "")),
-                "path": str(diagnostic.get("path", "")),
-                "reason": str(diagnostic.get("fallback_reason") or ""),
-                "fallback_reason": str(diagnostic.get("fallback_reason") or ""),
-                "detail": str(diagnostic.get("detail") or ""),
-                "source": dict(diagnostic.get("source") or {}),
-            }
-            for placeholder in placeholders:
-                if not isinstance(placeholder, str) or not placeholder:
-                    return {}
+            result: dict[str, dict[str, Any]] = {}
+            for placeholder, binding in persisted.items():
+                if not isinstance(placeholder, str) or not placeholder or not isinstance(binding, dict):
+                    raise ValueError("Invalid persisted context packet decision")
+                mode = binding.get("mode")
+                path_value = binding.get("path")
+                if mode not in {"full", "packet", "full_fallback"} or not isinstance(
+                    path_value, str
+                ) or not path_value:
+                    raise ValueError("Invalid persisted context packet decision")
+                if mode in {"packet", "full_fallback"} and (
+                    binding.get("requested_mode") != "packet"
+                    or not isinstance(binding.get("source"), dict)
+                ):
+                    raise ValueError("Invalid persisted context packet decision")
                 result[placeholder] = dict(binding)
-        return result
+            return result
+        raise ValueError("Invalid persisted context packet decision")
 
     @staticmethod
     def _persist_context_packet_diagnostics(
@@ -1160,7 +1153,7 @@ class GenericWorkflowStepExecutor(Phase):
             for placeholder, path in authoritative_inputs.items()
         }
         effective_inputs = self._load_persisted_effective_inputs(output_file.parent)
-        if not effective_inputs:
+        if effective_inputs is None:
             effective_inputs = resolve_effective_prompt_inputs(
                 contract,
                 input_artifacts,
@@ -1179,7 +1172,8 @@ class GenericWorkflowStepExecutor(Phase):
             }
         )
         context["input_loading_modes"] = ", ".join(
-            f"{placeholder}={binding['mode']}" for placeholder, binding in sorted(effective_inputs.items())
+            f"{placeholder}={format_context_packet_diagnostic(binding)}"
+            for placeholder, binding in sorted(effective_inputs.items())
         )
         self._add_template_context(
             context=context,

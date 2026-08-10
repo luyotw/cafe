@@ -17,8 +17,47 @@ from cafe.core.blackboard import (
     BlackboardStore,
     LongRunningOperationArtifact,
     LongRunningOperationState,
+    OperationLogPolicy,
+    OperationMonitoring,
+    OperationRisk,
     operation_artifact_path,
 )
+
+_OPERATION_DECISION = {
+    "risk": "low",
+    "monitoring": "final-only",
+    "log_policy": "summary-only",
+    "stop_condition": "operation reaches a terminal state",
+    "recovery": "inspect the same operation id",
+}
+
+
+def test_operation_decision_requires_bounded_text_and_matching_policy() -> None:
+    """UT-008: persisted operation decisions are complete and risk-driven."""
+    payload = LongRunningOperationArtifact(
+        operation_id="op-123",
+        state=LongRunningOperationState.RUNNING,
+        risk=OperationRisk.HIGH,
+        monitoring=OperationMonitoring.ACTIVE,
+        log_policy=OperationLogPolicy.FILTERED_STREAM,
+        stop_condition="stop external mutation",
+        recovery="restore from backup",
+    ).to_dict()
+    assert LongRunningOperationArtifact.from_dict(payload).risk == OperationRisk.HIGH
+
+    payload["stop_condition"] = ""
+    with pytest.raises(ValueError, match="stop_condition"):
+        LongRunningOperationArtifact.from_dict(payload)
+
+    payload["stop_condition"] = "stop external mutation"
+    payload["monitoring"] = "periodic"
+    with pytest.raises(ValueError, match="monitoring"):
+        LongRunningOperationArtifact.from_dict(payload)
+
+    payload["monitoring"] = "active"
+    payload.pop("recovery")
+    with pytest.raises(ValueError, match="recovery"):
+        LongRunningOperationArtifact.from_dict(payload)
 
 
 class TestLongRunningOperationStateEnum:
@@ -85,6 +124,7 @@ class TestReasonAndExitCodeAreExplanatoryOnly:
                 "state": "failed",
                 "reason": "process killed",
                 "exit_code": 137,
+                **_OPERATION_DECISION,
             }
         )
         assert artifact.state == LongRunningOperationState.FAILED
@@ -99,6 +139,7 @@ class TestReasonAndExitCodeAreExplanatoryOnly:
                 "state": "failed",
                 "exit_code": 0,
                 "reason": "reported failure despite exit 0",
+                **_OPERATION_DECISION,
             }
         )
         assert artifact.state == LongRunningOperationState.FAILED
@@ -110,19 +151,20 @@ class TestReasonAndExitCodeAreExplanatoryOnly:
                 "state": "succeeded",
                 "exit_code": 1,
                 "reason": "non-zero but reported success",
+                **_OPERATION_DECISION,
             }
         )
         assert artifact.state == LongRunningOperationState.SUCCEEDED
 
     def test_reason_defaults_to_empty_string(self) -> None:
         artifact = LongRunningOperationArtifact.from_dict(
-            {"operation_id": "op-123", "state": "running"}
+            {"operation_id": "op-123", "state": "running", **_OPERATION_DECISION}
         )
         assert artifact.reason == ""
 
     def test_exit_code_defaults_to_none(self) -> None:
         artifact = LongRunningOperationArtifact.from_dict(
-            {"operation_id": "op-123", "state": "running"}
+            {"operation_id": "op-123", "state": "running", **_OPERATION_DECISION}
         )
         assert artifact.exit_code is None
 

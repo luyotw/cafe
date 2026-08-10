@@ -14,8 +14,19 @@ from cafe.core.packet_io import (
 )
 
 CONTEXT_PACKET_SCHEMA_VERSION = 1
-_FALLBACK_REASONS = frozenset({"contract_invalid", "packet_persist_failed", "packet_invalid"})
+_FALLBACK_REASONS = frozenset({"packet_persist_failed", "packet_invalid"})
 _MAX_DIAGNOSTIC_DETAIL = 160
+
+
+def format_context_packet_diagnostic(binding: Mapping[str, Any]) -> str:
+    """Return the shared, sanitized diagnostic used by prompt and status views."""
+    effective_mode = str(binding.get("effective_mode", binding.get("mode", "")))
+    if effective_mode == "packet":
+        return "verified"
+    reason = str(binding.get("fallback_reason") or "")
+    detail = str(binding.get("detail") or "")
+    diagnostic = f"{effective_mode}:{reason}" if reason else effective_mode
+    return f"{diagnostic} ({detail})" if detail else diagnostic
 
 
 def build_context_packet_diagnostics(
@@ -217,8 +228,10 @@ def resolve_context_packet(
             "source": dict(packet["source"]),
         }
     except ContractValidationError:
-        fallback_reason = "contract_invalid"
-        detail = "source contract failed validation"
+        # Invalid source contracts are confirmation failures, not safe packet
+        # fallbacks.  The producer must receive the contract validator's
+        # relation-specific feedback before a consumer can start.
+        raise
     except OSError:
         fallback_reason = "packet_persist_failed"
         detail = "context packet could not be persisted"

@@ -258,10 +258,15 @@ def test_terminal_receipt_without_blackboard_metadata_is_untrusted(tmp_path: Pat
             {
                 "operation_id": "op-1",
                 "step": "develop",
-                "state": LongRunningOperationState.SUCCEEDED.value,
-                "reason": "completed",
-                "exit_code": 0,
-            }
+                    "state": LongRunningOperationState.SUCCEEDED.value,
+                    "reason": "completed",
+                    "exit_code": 0,
+                    "risk": "low",
+                    "monitoring": "final-only",
+                    "log_policy": "summary-only",
+                    "stop_condition": "operation reaches a terminal state",
+                    "recovery": "inspect the same operation id",
+                }
         ),
         encoding="utf-8",
     )

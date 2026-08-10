@@ -4774,3 +4774,26 @@ def test_checklist_retry_accumulates_raw_iteration_telemetry(
     assert passed is True
     assert context["stats"]["cache_write_input_tokens"] == 7
     assert context["stats"]["reasoning_output_tokens"] == 10
+
+
+def test_persisted_packet_decision_rejects_malformed_iteration_metadata(tmp_path: Path) -> None:
+    """UT-005: takeover must never derive a replacement packet decision."""
+    iteration_dir = tmp_path / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "iteration.json").write_text("{broken", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="context packet decision"):
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(iteration_dir)
+
+
+def test_persisted_packet_decision_requires_complete_binding_record(tmp_path: Path) -> None:
+    """UT-005: partial state is unsafe rather than a signal to recompute."""
+    iteration_dir = tmp_path / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps({"effective_inputs": {"spec_file": {"mode": "packet"}}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="context packet decision"):
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(iteration_dir)

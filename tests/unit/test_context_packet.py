@@ -9,6 +9,7 @@ from cafe.core.context_packet import (
     resolve_context_packet,
     validate_context_packet,
 )
+from cafe.core.downstream_contract import ContractValidationError
 from cafe.skills.contracts import SkillWorkflowContract, resolve_effective_prompt_inputs
 
 
@@ -75,15 +76,15 @@ def test_packet_relationship_falls_back_without_affecting_other_inputs(tmp_path:
     assert resolved["packet_spec"]["source"]["artifact_version"] == 1
     assert resolved["full_notes"] == {"mode": "full", "path": str(tmp_path / "notes.md")}
     source.write_text("# legacy", encoding="utf-8")
-    fallback = resolve_context_packet(
-        source_path=source,
-        contract_kind="spec",
-        target_step="custom",
-        iteration=2,
-        placeholders=("packet_spec",),
-        packet_path=tmp_path / "new.json",
-    )
-    assert fallback["mode"] == "full_fallback"
+    with pytest.raises(ContractValidationError):
+        resolve_context_packet(
+            source_path=source,
+            contract_kind="spec",
+            target_step="custom",
+            iteration=2,
+            placeholders=("packet_spec",),
+            packet_path=tmp_path / "new.json",
+        )
 
 
 def test_paired_placeholders_share_one_effective_packet_binding(tmp_path: Path) -> None:
@@ -136,7 +137,7 @@ def test_packet_diagnostics_are_strict_and_deduplicate_paired_bindings() -> None
             "mode": "full_fallback",
             "path": "spec.md",
             "source": {"artifact_name": "spec", "artifact_version": 2},
-            "fallback_reason": "contract_invalid",
+            "fallback_reason": "packet_invalid",
             "detail": "contract validation failed",
         },
         "spec_file_path": {
@@ -144,7 +145,7 @@ def test_packet_diagnostics_are_strict_and_deduplicate_paired_bindings() -> None
             "mode": "full_fallback",
             "path": "spec.md",
             "source": {"artifact_name": "spec", "artifact_version": 2},
-            "fallback_reason": "contract_invalid",
+            "fallback_reason": "packet_invalid",
             "detail": "contract validation failed",
         },
     }
@@ -157,12 +158,16 @@ def test_packet_diagnostics_are_strict_and_deduplicate_paired_bindings() -> None
             "source": {"artifact_name": "spec", "artifact_version": 2},
             "requested_mode": "packet",
             "effective_mode": "full_fallback",
-            "fallback_reason": "contract_invalid",
+            "fallback_reason": "packet_invalid",
             "detail": "contract validation failed",
             "path": "spec.md",
         }
     ]
     bindings["spec_file"]["fallback_reason"] = "untrusted-agent-text"
+    with pytest.raises(ValueError, match="fallback reason"):
+        build_context_packet_diagnostics(bindings)
+
+    bindings["spec_file"]["fallback_reason"] = "contract_invalid"
     with pytest.raises(ValueError, match="fallback reason"):
         build_context_packet_diagnostics(bindings)
 

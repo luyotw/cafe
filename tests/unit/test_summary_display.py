@@ -8,6 +8,25 @@ from cafe.services.timeline_builder import TimelineEntry
 from cafe.services.summary_display import SummaryDisplay
 
 
+def test_context_packet_status_uses_the_shared_sanitized_diagnostic() -> None:
+    """UT-006: status and workflow context expose the same fallback detail."""
+    rendered = SummaryDisplay().format_context_packets(
+        [
+            {
+                "consumer": "develop",
+                "iteration": 1,
+                "source": {"artifact_name": "plan"},
+                "requested_mode": "packet",
+                "effective_mode": "full_fallback",
+                "fallback_reason": "packet_invalid",
+                "detail": "context packet validation failed",
+            }
+        ]
+    )
+
+    assert "full_fallback:packet_invalid (context packet validation failed)" in rendered
+
+
 class TestFormatPhaseEntry:
     """Test cases for format_phase_entry() method."""
 

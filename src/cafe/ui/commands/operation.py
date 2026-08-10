@@ -9,7 +9,12 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-from cafe.core.blackboard import OperationLogPolicy, OperationMonitoring, OperationRisk
+from cafe.core.blackboard import (
+    OperationLogPolicy,
+    OperationMonitoring,
+    OperationRisk,
+    validate_operation_decision,
+)
 from cafe.core.long_running_operation_helper import (
     get_operation_status,
     run_operation_command,
@@ -65,6 +70,16 @@ def run(
     if not command:
         console.print("[red]Error: operation run requires a command after --[/red]")
         raise typer.Exit(2)
+    try:
+        validate_operation_decision(
+            risk=risk,
+            monitoring=monitoring,
+            log_policy=log_policy,
+            stop_condition=stop_condition,
+            recovery=recovery,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
     result = run_operation_command(
         issue_dir=issue_dir,

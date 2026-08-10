@@ -5,6 +5,7 @@ from typing import Any, List, Mapping, Optional
 from cafe.services.timeline_builder import TimelineEntry
 from cafe.services.time_formatter import format_timestamp_local, format_timestamp_utc, format_duration, calculate_elapsed_time
 from cafe.core.types import PhaseStatus
+from cafe.core.context_packet import format_context_packet_diagnostic
 
 try:
     from rich.console import Console
@@ -54,7 +55,7 @@ class SummaryDisplay:
             source = packet.get("source")
             source_name = source.get("artifact_name", "unknown") if isinstance(source, Mapping) else "unknown"
             consumer = f"{packet.get('consumer', 'unknown')}#{packet.get('iteration', '?')}"
-            reason = packet.get("fallback_reason") or ""
+            diagnostic = format_context_packet_diagnostic(packet)
             lines.append(
                 " | ".join(
                     [
@@ -62,7 +63,7 @@ class SummaryDisplay:
                         str(source_name),
                         str(packet.get("requested_mode", "")),
                         str(packet.get("effective_mode", "")),
-                        str(reason),
+                        diagnostic,
                     ]
                 )
             )

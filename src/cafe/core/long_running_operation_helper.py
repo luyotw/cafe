@@ -25,6 +25,7 @@ from cafe.core.blackboard import (
     OperationRisk,
     LongRunningOperationState,
     operation_receipt_path,
+    validate_operation_decision,
 )
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -192,8 +193,8 @@ def run_operation_command(
     risk: OperationRisk = OperationRisk.LOW,
     monitoring: OperationMonitoring = OperationMonitoring.FINAL_ONLY,
     log_policy: OperationLogPolicy = OperationLogPolicy.SUMMARY_ONLY,
-    stop_condition: str = "",
-    recovery: str = "",
+    stop_condition: str = "operation reaches a terminal state",
+    recovery: str = "inspect the same operation id",
 ) -> OperationLaunchResult:
     """Launch one supervised command for one workflow iteration.
 
@@ -202,6 +203,13 @@ def run_operation_command(
     """
     if not command:
         raise ValueError("operation command must not be empty")
+    validate_operation_decision(
+        risk=risk,
+        monitoring=monitoring,
+        log_policy=log_policy,
+        stop_condition=stop_condition,
+        recovery=recovery,
+    )
     issue_dir = Path(issue_dir)
     iteration_dir = Path(iteration_dir)
     cwd_path = Path(cwd) if cwd is not None else Path.cwd()

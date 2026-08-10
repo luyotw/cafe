@@ -21,6 +21,9 @@ from cafe.core.blackboard import (
     HandoffIntent,
     HandoffOwner,
     LongRunningOperationArtifact,
+    OperationLogPolicy,
+    OperationMonitoring,
+    OperationRisk,
     LongRunningOperationState,
     operation_artifact_path,
     operation_receipt_path,
@@ -474,6 +477,11 @@ class BlackboardWorkflowRuntime:
             artifact=LongRunningOperationArtifact(
                 state=LongRunningOperationState.RUNNING,
                 reason=reason,
+                risk=OperationRisk.LOW,
+                monitoring=OperationMonitoring.FINAL_ONLY,
+                log_policy=OperationLogPolicy.SUMMARY_ONLY,
+                stop_condition="operation reaches a terminal state",
+                recovery="inspect the same operation id",
             ),
         )
 
@@ -513,6 +521,11 @@ class BlackboardWorkflowRuntime:
             reason=reason,
             exit_code=exit_code,
             created_at=current_operation.created_at,
+            risk=current_operation.risk,
+            monitoring=current_operation.monitoring,
+            log_policy=current_operation.log_policy,
+            stop_condition=current_operation.stop_condition,
+            recovery=current_operation.recovery,
         )
         return self.blackboard_store.write_operation_receipt(
             self.blackboard,
@@ -588,6 +601,11 @@ class BlackboardWorkflowRuntime:
             reason=receipt.reason,
             exit_code=receipt.exit_code,
             created_at=operation.created_at,
+            risk=operation.risk,
+            monitoring=operation.monitoring,
+            log_policy=operation.log_policy,
+            stop_condition=operation.stop_condition,
+            recovery=operation.recovery,
         )
         self.blackboard_store.write_operation_artifact(
             self.blackboard,

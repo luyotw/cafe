@@ -16,6 +16,12 @@ from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui import cli_shared
 
 
+def test_agent_manager_has_no_fixed_read_only_retry_policy():
+    """UT-007: investigation and monitoring have no forced-edit budget."""
+    assert not hasattr(agent_manager.AgentManager, "READ_ONLY_RETRY_LIMIT")
+    assert not hasattr(agent_manager.AgentManager, "READ_ONLY_RETRY_PROMPT")
+
+
 def _playbook(*, build_behavior=None, defaults=None):
     payload = {
         "playbook": {"id": "custom"},

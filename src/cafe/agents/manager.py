@@ -33,15 +33,6 @@ class AgentManager:
     CAFE_DIR = ".cafe"
     AGENTS_DIR = "agents"
     FALLBACKABLE_ERROR_TYPES = ("rate_limit", "cli_not_found", "cli_unavailable", "model_not_found")
-    READ_ONLY_RETRY_LIMIT = 3
-    READ_ONLY_RETRY_PROMPT = (
-        "The runtime stopped your previous attempt because it exhausted the read-only "
-        "progress budget without making the next file edit. Do not restart discovery or reread "
-        "the spec, plan, skills, or unchanged source files. Your FIRST tool action must be "
-        "a file edit that adds the first relevant failing test (or the first implementation "
-        "edit only when the approved plan requires no new test). Use the context already in "
-        "this session."
-    )
     SUPPORTS_COLD_TAKEOVER = True
 
     def __init__(
