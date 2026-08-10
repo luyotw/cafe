@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.downstream_contract import ContractValidationError, extract_downstream_contract
 from cafe.core.human_tasks import (
     HumanTaskBinding,
     HumanTaskCompletion,
@@ -241,6 +242,31 @@ def apply_human_task_payload(
         )
         return HumanTaskApplication(target=None, policy=policy, rejection=continuation)
 
+    qualification_rejection = (
+        _validate_packet_contracts_before_confirmation(
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+            producer_step=from_step,
+            correction_guidance=policy.correction_guidance,
+        )
+        if trigger == "confirm_output" and continuation != from_step
+        else None
+    )
+    if qualification_rejection is not None:
+        store.record_event(
+            blackboard,
+            "human_task_rejected",
+            {
+                "step": from_step,
+                "trigger": trigger,
+                "task_id": policy.id,
+                "reason": qualification_rejection.message,
+            },
+        )
+        return HumanTaskApplication(
+            target=None, policy=policy, rejection=qualification_rejection
+        )
+
     agent_input = completion.agent_input()
     if agent_input:
         _write_next_iteration_user_input(issue_dir=issue_dir, step_name=from_step, text=agent_input)
@@ -269,6 +295,62 @@ def apply_human_task_payload(
         },
     )
     return HumanTaskApplication(target="done" if is_done else continuation, policy=policy)
+
+
+def _validate_packet_contracts_before_confirmation(
+    *,
+    playbook_data: Mapping[str, Any],
+    blackboard: Any,
+    producer_step: str,
+    correction_guidance: str,
+) -> Optional[HumanTaskRejection]:
+    """Reject confirmation when a declared packet consumer lacks a valid source contract."""
+    raw_steps = playbook_data.get("steps")
+    if not isinstance(raw_steps, Mapping):
+        return None
+    producer = raw_steps.get(producer_step)
+    if not isinstance(producer, Mapping):
+        return None
+    artifact_name = producer.get("output_artifact")
+    if not isinstance(artifact_name, str):
+        return None
+    artifact = getattr(blackboard, "artifacts", {}).get(artifact_name)
+    # Legacy callers that only exercise routing have no produced artifact to
+    # qualify. Runtime confirmation always records the producer output first.
+    if artifact is None:
+        return None
+    source_path = getattr(artifact, "path", None)
+    for consumer_step, consumer in raw_steps.items():
+        if not isinstance(consumer_step, str) or not isinstance(consumer, Mapping):
+            continue
+        input_artifacts = consumer.get("input_artifacts")
+        if (
+            not isinstance(input_artifacts, Sequence)
+            or isinstance(input_artifacts, (str, bytes))
+            or artifact_name not in input_artifacts
+        ):
+            continue
+        skill_name = _select_skill_name(consumer, 1)
+        contract = SkillLoader().get_workflow_contract(skill_name)
+        packet_kinds = {
+            policy.contract_kind
+            for mapping in contract.prompt_inputs
+            if artifact_name in mapping.artifacts
+            for policy in mapping.load_policy
+            if policy.mode == "packet" and policy.contract_kind in {"spec", "plan"}
+        }
+        for kind in sorted(packet_kinds):
+            try:
+                extract_downstream_contract(str(source_path or ""), kind=kind)
+            except ContractValidationError as exc:
+                return HumanTaskRejection(
+                    message=(
+                        f"Cannot confirm {producer_step} -> {consumer_step} packet relation "
+                        f"for {artifact_name!r}: {exc}"
+                    ),
+                    correction_guidance=correction_guidance,
+                )
+    return None
 
 
 def _write_next_iteration_user_input(*, issue_dir: Path, step_name: str, text: str) -> None:

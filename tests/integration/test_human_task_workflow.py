@@ -109,6 +109,54 @@ def test_invalid_default_human_task_response_keeps_the_user_pause(tmp_path: Path
     assert any(event.event_type == "human_task_rejected" for event in reloaded.events)
 
 
+def test_confirmation_rejects_invalid_declared_packet_contract_for_custom_steps(
+    tmp_path: Path,
+) -> None:
+    """A packet consumer blocks confirmation before any fallback can be recorded."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "packet-confirmation"
+    store, state = _paused_default_state(
+        issue_dir, from_step="producer", intent=HandoffIntent.CONFIRM_OUTPUT
+    )
+    output = issue_dir / "producer" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("# incomplete source\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(output))
+    playbook = {
+        "steps": {
+            "producer": {
+                "skill": "cafe-spec",
+                "output_artifact": "spec",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "output-review",
+                        "outcomes": {"confirm": "consumer", "revise": "producer"},
+                    }
+                ],
+            },
+            "consumer": {"skill": "cafe-develop", "input_artifacts": ["spec"]},
+        }
+    }
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="producer",
+        trigger="confirm_output",
+        raw_payload={"task": "output-review", "decision": "confirm"},
+        source="integration",
+    )
+
+    assert result.target is None
+    assert result.rejection is not None
+    assert "producer -> consumer" in result.rejection.message
+    assert "Downstream Contract" in result.rejection.message
+    reloaded = store.load_or_create("producer")
+    assert reloaded.current_step == "user"
+    assert not any("fallback" in event.event_type for event in reloaded.events)
+
+
 def test_tdd_no_change_agreement_skips_review_to_pr(tmp_path: Path) -> None:
     """Built-in TDD retains the established no-change continuation."""
     issue_dir = tmp_path / ".cafe" / "issues" / "tdd-no-change"
