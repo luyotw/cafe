@@ -29,7 +29,6 @@ from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.core.types import AgentCLI, TokenUsage
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.playbook import resolve_step_behavior
-from cafe.phases.generic_workflow_step import align_pr_baton_after_execution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.phases.generic_phase import GenericPhase
 from cafe.playbooks.loader import PlaybookLoader
@@ -80,6 +79,24 @@ class _BatonWritingAgentManager:
         return "completed", TokenUsage(), [], [], [], None
 
 
+class _FeedbackAgentManager(_BatonWritingAgentManager):
+    """Test-double agent that reports publish feedback through the normal executor."""
+
+    def execute(self, _name: str, _prompt: str, **_kwargs):
+        store = BlackboardStore(self.issue_dir)
+        state = store.load_or_create("release")
+        store.update_handoff_contract(
+            state,
+            from_step="release",
+            to_owner=HandoffOwner.AGENT,
+            to_step="repair",
+            intent=HandoffIntent.AWAIT_AGENT,
+            status_code=PhaseStatusCode.NEEDS_CHANGES.value,
+            source="test.feedback",
+        )
+        return "needs_changes", TokenUsage(), [], [], [], None
+
+
 class _GitOperations:
     def get_default_base_branch(self) -> str:
         return "main"
@@ -90,7 +107,7 @@ class _GitOperations:
 
 def _build_integration_generic_phase(tmp_path: Path) -> GenericPhase:
     skill_dir = tmp_path / "builtin" / "skills" / "cafe-develop"
-    skill_dir.mkdir(parents=True)
+    skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(
         "---\nname: cafe-develop\ndescription: Integration test skill\n---\n\n# Develop\n",
         encoding="utf-8",
@@ -108,7 +125,7 @@ def _build_integration_generic_phase(tmp_path: Path) -> GenericPhase:
 
 
 def test_custom_publish_feedback_and_lifecycle_contracts(tmp_path: Path, monkeypatch) -> None:
-    """IT-001/IT-002: a custom publish journey uses executor, hooks, and receipts."""
+    """IT-001/IT-002: custom publish feedback resumes its declared repair step."""
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "release-journey"
     issue_dir.mkdir(parents=True)
@@ -191,6 +208,76 @@ steps:
 
     runner = CliRunner()
     git_factory = lambda: SimpleNamespace(get_current_branch=lambda: "release-journey")
+
+    feedback_executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="release-journey",
+        playbook=playbook,
+        generic_phase=_build_integration_generic_phase(tmp_path),
+        agent_manager=_FeedbackAgentManager(issue_dir),
+        git_ops=_GitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=feedback_executor.execute_step,
+    ).run(start_step="release", single_step=True)
+
+    state = BlackboardStore(issue_dir).load_or_create("release")
+    assert (
+        BlackboardStore(issue_dir)
+        .load_handoff_contract(state, allowed_steps=["repair", "release"])
+        .to_step
+        == "repair"
+    )
+
+    resumed_steps: list[str] = []
+
+    class _ResumeExecutor:
+        def execute_step(
+            self,
+            step_name: str,
+            step_def: dict,
+            blackboard_state: object,
+            extra_prompt: Optional[str] = None,
+        ) -> StepExecutionResult:
+            resumed_steps.append(step_name)
+            if step_name == "release":
+                BlackboardStore(issue_dir).update_handoff_contract(
+                    blackboard_state,
+                    from_step="release",
+                    to_owner=HandoffOwner.DONE,
+                    to_step="done",
+                    intent=HandoffIntent.WORKFLOW_COMPLETE,
+                    source="test.resume",
+                )
+            return StepExecutionResult(
+                response="confirmed",
+                artifacts={},
+                status_code="confirmed",
+            )
+
+    with (
+        patch("cafe.ui.cli.GitOperations", return_value=git_factory()),
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=_ResumeExecutor()),
+    ):
+        resume_result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "release-flow",
+                "--issue",
+                "release-journey",
+                "--start-step",
+                "repair",
+                "--execute",
+            ],
+        )
+    assert resume_result.exit_code == 0, resume_result.output
+    assert resumed_steps == ["repair", "release"]
+
     with patch("cafe.ui.commands.workflow._get_GitOperations", return_value=git_factory):
         show_result = runner.invoke(app, ["show", "release"])
     assert show_result.exit_code == 0
@@ -209,43 +296,24 @@ steps:
         status_result = runner.invoke(app, ["status"])
     assert status_result.exit_code == 0
 
+    feedback_iteration_dir = issue_dir / "release" / "iteration_002"
+    assert feedback_iteration_dir.exists()
     with (
         patch("cafe.ui.cli.GitOperations", return_value=git_factory()),
-        patch("cafe.ui.cli.prompt_confirm", return_value=False),
+        patch("cafe.ui.cli.prompt_confirm", return_value=True),
         patch("cafe.ui.commands.lifecycle.GitOperations", return_value=git_factory()),
         patch("cafe.ui.commands.lifecycle._get_project_path", return_value="test/project"),
-        patch("cafe.ui.commands.lifecycle.prompt_confirm", return_value=False),
+        patch("cafe.ui.commands.lifecycle.prompt_confirm", return_value=True),
+        patch("cafe.ui.commands.lifecycle.Path.home", return_value=tmp_path / "home"),
     ):
         reset_result = runner.invoke(app, ["reset", "release"])
-    assert reset_result.exit_code == 0
+    assert reset_result.exit_code == 0, reset_result.output
     assert iteration_dir.exists()
-
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("release")
-    store.update_handoff_contract(
-        state,
-        from_step="release",
-        to_owner=HandoffOwner.AGENT,
-        to_step="release",
-        intent=HandoffIntent.AWAIT_AGENT,
-        status_code=PhaseStatusCode.NEEDS_CHANGES.value,
-        source="test.feedback",
-    )
-    align_pr_baton_after_execution(
-        issue_dir=issue_dir,
-        playbook=playbook,
-        blackboard_state=state,
-        step_name="release",
-        status_code=PhaseStatusCode.NEEDS_CHANGES.value,
-    )
-
-    assert (
-        store.load_handoff_contract(state, allowed_steps=["repair", "release"]).to_step == "repair"
-    )
+    assert not feedback_iteration_dir.exists()
 
 
 def test_default_parity_and_metadata_absent_lifecycle_boundary(tmp_path: Path, monkeypatch) -> None:
-    """IT-003: default declarations stay explicit and broken metadata never falls back."""
+    """IT-003: default completion, correction, review, and publish remain observable."""
     monkeypatch.chdir(tmp_path)
 
     default = PlaybookLoader().load("default")
@@ -254,6 +322,46 @@ def test_default_parity_and_metadata_absent_lifecycle_boundary(tmp_path: Path, m
         "web_research",
         "git_inspection",
     ]
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "default-parity"
+    executed_steps: list[str] = []
+    review_visits = 0
+
+    def default_executor(
+        step_name: str, step_def: dict, state: BlackboardState
+    ) -> StepExecutionResult:
+        nonlocal review_visits
+        executed_steps.append(step_name)
+        if step_name == "review":
+            review_visits += 1
+            if review_visits == 1:
+                return StepExecutionResult(
+                    response="needs_changes",
+                    artifacts={},
+                    status_code="needs_changes",
+                )
+        events = []
+        if step_name == "pr":
+            _write_pr_done_baton(issue_dir)
+            events.append({"type": "pr_synced", "url": "https://example.test/pr/default"})
+        return StepExecutionResult(
+            response="confirmed",
+            artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+            status_code="confirmed",
+            events=events,
+        )
+
+    result = _run_until_settled(
+        issue_dir=issue_dir,
+        playbook=default,
+        executor=default_executor,
+        max_transitions=20,
+    )
+    assert result.completed is True
+    assert executed_steps.count("develop") == 2
+    assert executed_steps.count("review") == 2
+    assert executed_steps[-1] == "pr"
+
     assert _load_issue_step_names("metadata-absent") == ["spec", "plan", "develop", "review", "pr"]
 
     issue_dir = tmp_path / ".cafe" / "issues" / "configured-invalid"
