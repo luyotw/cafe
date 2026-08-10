@@ -30,7 +30,7 @@ def test_align_pr_baton_updates_when_needs_changes_and_stale(tmp_path: Path) -> 
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-pr-baton"
     _bootstrap_issue(issue_dir)
 
-    playbook = {"steps": {"pr": {}, "develop": {}, "review": {}}}
+    playbook = {"steps": {"pr": {"behavior": {"feedback_target": "develop"}}, "develop": {}, "review": {}}}
     (issue_dir / "next_step.txt").write_text(
         json.dumps(
             {

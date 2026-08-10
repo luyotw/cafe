@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from cafe.agents.executor import AgentExecutionError
@@ -19,12 +20,71 @@ from cafe.ui.cli import (
 from cafe.ui.cli_shared import (
     _alignment_checkpoint_menu_choices,
     _build_workflow_step_executor,
+    _load_issue_step_names,
+    _resolve_issue_playbook_name,
     apply_alignment_decision_from_payload,
 )
 from cafe.ui.commands.workflow import _reset_baton_for_explicit_start_step
 from cafe.utils.config import ConfigManager
 
 runner = CliRunner()
+
+
+def test_issue_step_resolution_uses_issue_yaml_before_blackboard_exists(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """UT-009: configured custom steps are valid before the runtime creates state."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "custom-issue"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook: release-flow\n", encoding="utf-8")
+    playbook_dir = tmp_path / ".cafe" / "playbooks"
+    playbook_dir.mkdir(parents=True)
+    (playbook_dir / "release-flow.yaml").write_text(
+        """
+playbook:
+  id: release-flow
+steps:
+  prepare:
+    skill: cafe-develop
+    role: developer
+    on: {await_agent: deploy}
+  deploy:
+    skill: cafe-develop
+    role: developer
+    on: {await_agent: _done}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    assert _resolve_issue_playbook_name("custom-issue") == "release-flow"
+    assert _load_issue_step_names("custom-issue") == ["prepare", "deploy"]
+
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps({"current_step": "prepare"}), encoding="utf-8"
+    )
+    assert _resolve_issue_playbook_name("custom-issue") == "release-flow"
+    assert _load_issue_step_names("custom-issue") == ["prepare", "deploy"]
+
+
+@pytest.mark.parametrize(
+    ("filename", "contents"),
+    [
+        ("blackboard.json", "{not json"),
+        ("issue.yaml", "playbook: [not valid"),
+    ],
+)
+def test_issue_playbook_resolution_rejects_unreadable_persisted_metadata(
+    tmp_path: Path, monkeypatch, filename: str, contents: str
+) -> None:
+    """UT-009: resume never replaces present broken metadata with ``default``."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "broken-issue"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / filename).write_text(contents, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unreadable workflow metadata"):
+        _resolve_issue_playbook_name("broken-issue")
 
 
 def _result(
@@ -165,6 +225,52 @@ def test_workflow_command_runs_dry_mode(tmp_path: Path, monkeypatch) -> None:
         assert "Workflow completed" in result.stdout
         blackboard_file = tmp_path / ".cafe" / "issues" / "issue-100" / "blackboard.json"
         assert blackboard_file.exists()
+
+
+def test_workflow_dry_mode_completes_declared_custom_publish_step(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """IT-001: dry execution recognizes publish behavior, not a step name."""
+    monkeypatch.chdir(tmp_path)
+    playbook_dir = tmp_path / ".cafe" / "playbooks"
+    playbook_dir.mkdir(parents=True)
+    (playbook_dir / "custom.yaml").write_text(
+        """
+playbook:
+  id: custom
+steps:
+  release:
+    skill: cafe-pr
+    role: developer
+    capability_requests: [cafe.pr.publish]
+    behavior:
+      completion: baton
+      publish_confirmation: true
+    on:
+      await_agent: _done
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-custom-publish"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "custom", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "Workflow completed" in result.stdout
+    blackboard = json.loads(
+        (
+            tmp_path
+            / ".cafe"
+            / "issues"
+            / "issue-custom-publish"
+            / "blackboard.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert blackboard["current_step"] == "done"
 
 
 def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None:
@@ -3190,6 +3296,52 @@ steps:
         result = runner.invoke(app, ["workflow", "--execute"])
         assert result.exit_code == 0
         assert executed_steps == ["develop", "pr"]
+
+
+def test_workflow_resume_uses_the_issue_owned_playbook_before_global_config(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """UT-009: an existing issue resumes its recorded workflow, not global config."""
+    monkeypatch.chdir(tmp_path)
+    cafe_dir = tmp_path / ".cafe"
+    issue_dir = cafe_dir / "issues" / "issue-owned-flow"
+    issue_dir.mkdir(parents=True)
+    (cafe_dir / "config.yaml").write_text("playbook: default\n", encoding="utf-8")
+    (issue_dir / "issue.yaml").write_text("playbook: release-flow\n", encoding="utf-8")
+    playbook_dir = cafe_dir / "playbooks"
+    playbook_dir.mkdir()
+    (playbook_dir / "release-flow.yaml").write_text(
+        """
+playbook:
+  id: release-flow
+steps:
+  ship:
+    skill: cafe-develop
+    role: developer
+    on: {await_agent: _done}
+""".strip(),
+        encoding="utf-8",
+    )
+    executed_steps: list[str] = []
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor") as mock_builder,
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-owned-flow"
+        mock_git_cls.return_value = git
+        executor = MagicMock()
+        executor.execute_step.side_effect = lambda step_name, step_def, state, **kwargs: (
+            executed_steps.append(step_name)
+            or _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
+        )
+        mock_builder.return_value = executor
+
+        result = runner.invoke(app, ["workflow", "--issue", "issue-owned-flow", "--execute"])
+
+    assert result.exit_code == 0, result.output
+    assert executed_steps == ["ship"]
 
 
 def test_workflow_execute_syncs_active_issue_on_healthy_branch(tmp_path: Path, monkeypatch) -> None:

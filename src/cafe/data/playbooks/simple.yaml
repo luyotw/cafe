@@ -3,6 +3,9 @@ playbook:
   name: "Simple Workflow"
   conversation_locale: en-US
 
+behavior:
+  completion: status_code
+
 skills:
   workflow:
     shared: [cafe-workflow-common, cafe-github_sync]
@@ -61,6 +64,8 @@ steps:
     assignee_type: agent
     input_artifacts: [spec]
     output_artifact: code
+    behavior:
+      max_read_only_commands: 20
     human_tasks:
       - trigger: need_clarification
         task_id: clarification-feedback
@@ -81,6 +86,12 @@ steps:
     assignee_type: agent
     input_artifacts: [spec, code]
     output_artifact: pr_result
+    behavior:
+      completion: baton
+      publish_confirmation: true
+      feedback_target: develop
+      context_providers: [git_history]
+    capability_requests: [cafe.pr.publish]
     allowed_tools: [Read, Edit, Write, Grep, Glob]
     allowed_goto: [develop]
     hooks:

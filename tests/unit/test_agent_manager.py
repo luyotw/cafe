@@ -190,7 +190,7 @@ class TestAgentExecution:
         with pytest.raises(AgentNotFoundError, match="No current agent selected"):
             manager.execute_current("Test prompt")
 
-    def test_develop_read_only_budget_resumes_once_with_immediate_edit_prompt(self) -> None:
+    def test_declared_read_only_budget_resumes_once_with_immediate_edit_prompt(self) -> None:
         from cafe.core.types import AgentResponse, TokenUsage
 
         manager = AgentManager()
@@ -219,7 +219,8 @@ class TestAgentExecution:
             response, *_ = manager.execute(
                 "David",
                 "original phase prompt",
-                phase_name="develop",
+                phase_name="build",
+                max_read_only_commands=20,
             )
 
         assert response == "done"
@@ -227,6 +228,36 @@ class TestAgentExecution:
         assert calls[1][1:] == (20, 3)
         assert "FIRST tool action must be a file edit" in calls[1][0]
         assert "Do not restart discovery" in calls[1][0]
+
+    def test_declared_read_only_budget_is_shared_with_backup_agents(self) -> None:
+        from cafe.core.types import AgentResponse, TokenUsage
+
+        manager = AgentManager()
+        manager.register_agent(
+            AgentConfig(
+                name="David",
+                cli=AgentCLI.CODEX,
+                backup_clis=[AgentCLI.CLAUDE],
+            )
+        )
+        limits = []
+
+        def execute_side_effect(*args, max_read_only_commands=None, **kwargs):
+            limits.append(max_read_only_commands)
+            if len(limits) == 1:
+                raise AgentExecutionError("temporary failure", error_type="rate_limit")
+            return AgentResponse(response="done", token_usage=TokenUsage())
+
+        with patch.object(AgentExecutor, "execute", side_effect=execute_side_effect):
+            response, *_ = manager.execute(
+                "David",
+                "original phase prompt",
+                phase_name="build",
+                max_read_only_commands=7,
+            )
+
+        assert response == "done"
+        assert limits == [7, 7]
 
 
 class TestSessionManagement:

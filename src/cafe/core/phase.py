@@ -811,6 +811,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         denied_tools: Optional[List[str]] = None,
         phase_specific_data: Optional[Dict[str, Any]] = None,
         backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
+        max_read_only_commands: Optional[int] = None,
     ) -> tuple[str, Optional[PhaseStatusCode]]:
         """Common agent execution flow that all phases can use.
 
@@ -1021,6 +1022,11 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 for param in execute_signature.parameters.values()
             ):
                 execute_kwargs["continuation"] = requested_continuation
+            if "max_read_only_commands" in execute_signature.parameters or any(
+                param.kind == inspect.Parameter.VAR_KEYWORD
+                for param in execute_signature.parameters.values()
+            ):
+                execute_kwargs["max_read_only_commands"] = max_read_only_commands
             if backup_context_callback is not None and getattr(
                 self.agent_manager, "SUPPORTS_COLD_TAKEOVER", False
             ) and (

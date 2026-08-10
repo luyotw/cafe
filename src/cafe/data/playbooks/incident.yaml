@@ -3,6 +3,9 @@ playbook:
   name: "Incident Response Workflow（偵測 → 分類 → 緩解 → 事後檢討）"
   conversation_locale: en-US
 
+behavior:
+  completion: status_code
+
 skills:
   workflow:
     shared: [cafe-workflow-common, cafe-github_sync]

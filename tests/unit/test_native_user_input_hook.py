@@ -21,6 +21,12 @@ from cafe.phases.generic_phase import GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 
 
+PUBLISH_STEP = {
+    "capability_requests": ["cafe.pr.publish"],
+    "behavior": {"publish_confirmation": True},
+}
+
+
 class _FakePhase:
     def __init__(self, phase_dir: Path, iteration: int, issue_name: str = "demo") -> None:
         self.phase_dir = phase_dir
@@ -210,6 +216,31 @@ def test_user_input_collector_plan_ready_for_review_falls_back_to_full_output_wi
     assert result.override_status_code == PhaseStatusCode.CONFIRMED
     mock_display_delta.assert_called_once()
     mock_display_output.assert_called_once()
+
+
+def test_user_input_collector_uses_resolved_publish_contract_from_context(tmp_path: Path) -> None:
+    """UT-004: playbook-level publish behavior bypasses duplicate confirmation."""
+    phase_dir = tmp_path / "release"
+    previous_dir = phase_dir / "iteration_001"
+    previous_dir.mkdir(parents=True, exist_ok=True)
+    (previous_dir / "output.md").write_text("# Release\n", encoding="utf-8")
+    _record_previous_step_status(tmp_path, "release", "ready_for_review")
+
+    phase = _FakePhase(phase_dir=phase_dir, iteration=2)
+    phase._ask_user_for_review_decision = MagicMock(return_value="confirm")
+    hook = UserInputCollector()
+
+    result = hook.run(
+        stage="prepare_input",
+        phase=phase,
+        step_name="release",
+        step_def={"role": "developer"},
+        context={"publish_confirmation": True},
+        agent_name="David",
+    )
+
+    assert result.continue_pipeline is True
+    phase._ask_user_for_review_decision.assert_not_called()
 
 
 def test_user_input_collector_loads_interactive_qa_for_need_clarification(tmp_path: Path) -> None:
@@ -883,7 +914,9 @@ def test_pr_link_opener_opens_current_pr_url_when_confirmed() -> None:
             "https://github.com/test/repo/pull/123"
         )
 
-        result = hook.run(stage="publish_output", status_code=PhaseStatusCode.CONFIRMED)
+        result = hook.run(
+            stage="publish_output", status_code=PhaseStatusCode.CONFIRMED, step_def=PUBLISH_STEP
+        )
 
     mock_open.assert_called_once_with("https://github.com/test/repo/pull/123")
     assert result.events == [
@@ -903,7 +936,9 @@ def test_pr_link_opener_skips_browser_in_non_interactive() -> None:
             "https://github.com/test/repo/pull/123"
         )
 
-        result = hook.run(stage="publish_output", status_code=PhaseStatusCode.CONFIRMED)
+        result = hook.run(
+            stage="publish_output", status_code=PhaseStatusCode.CONFIRMED, step_def=PUBLISH_STEP
+        )
 
     mock_open.assert_not_called()
     assert result.events == []
@@ -918,7 +953,9 @@ def test_pr_link_opener_noops_when_pr_url_unavailable() -> None:
     ):
         mock_github_ops.return_value.get_current_pr_url.side_effect = Exception("no pr")
 
-        result = hook.run(stage="publish_output", status_code=PhaseStatusCode.CONFIRMED)
+        result = hook.run(
+            stage="publish_output", status_code=PhaseStatusCode.CONFIRMED, step_def=PUBLISH_STEP
+        )
 
     mock_open.assert_not_called()
     assert result.events == []
@@ -938,7 +975,9 @@ def test_pr_link_opener_noops_when_browser_open_fails() -> None:
             "https://github.com/test/repo/pull/123"
         )
 
-        result = hook.run(stage="publish_output", status_code=PhaseStatusCode.CONFIRMED)
+        result = hook.run(
+            stage="publish_output", status_code=PhaseStatusCode.CONFIRMED, step_def=PUBLISH_STEP
+        )
 
     mock_open.assert_called_once_with("https://github.com/test/repo/pull/123")
     assert result.events == []
@@ -969,6 +1008,7 @@ def test_local_pr_reviewer_displays_diff_and_confirms_local_mode(tmp_path: Path)
         agent_name="Nick",
         output_file=output_file,
         status_code=PhaseStatusCode.CONFIRMED,
+        step_def=PUBLISH_STEP,
     )
 
     phase.git_ops.get_diff.assert_called_once_with("develop", "HEAD")
@@ -1002,6 +1042,7 @@ def test_local_pr_reviewer_writes_feedback_todo_and_requests_changes(tmp_path: P
         agent_name="Nick",
         output_file=output_file,
         status_code=PhaseStatusCode.CONFIRMED,
+        step_def=PUBLISH_STEP,
     )
 
     assert result.override_status_code == PhaseStatusCode.NEEDS_CHANGES
@@ -1132,6 +1173,7 @@ def test_github_pr_creator_publish_output_runs_sync_pr_script(tmp_path: Path) ->
             stage="publish_output",
             phase=phase,
             step_name="pr",
+            step_def=PUBLISH_STEP,
             output_file=output_file,
             publish_request_file=publish_request_file,
             status_code=PhaseStatusCode.CONFIRMED,
@@ -1317,6 +1359,7 @@ def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_with
             stage="publish_output",
             phase=phase,
             step_name="pr",
+            step_def=PUBLISH_STEP,
             output_file=output_file,
             publish_request_file=publish_request_file,
             context={"next_step_path": str(next_step_file)},
@@ -1386,6 +1429,7 @@ def test_github_pr_creator_publish_output_runs_from_pr_done_await_agent_baton(
             stage="publish_output",
             phase=phase,
             step_name="pr",
+            step_def=PUBLISH_STEP,
             output_file=output_file,
             publish_request_file=publish_request_file,
             context={"next_step_path": str(next_step_file)},
@@ -1441,6 +1485,7 @@ def test_github_pr_creator_publish_output_runs_from_legacy_done_baton(
             stage="publish_output",
             phase=phase,
             step_name="pr",
+            step_def=PUBLISH_STEP,
             output_file=output_file,
             publish_request_file=publish_request_file,
             context={"next_step_path": str(next_step_file)},
@@ -1474,6 +1519,7 @@ def test_github_pr_creator_publish_output_skips_local_pr_mode(tmp_path: Path) ->
             stage="publish_output",
             phase=phase,
             step_name="pr",
+            step_def=PUBLISH_STEP,
             output_file=output_file,
             publish_request_file=publish_request_file,
             status_code=PhaseStatusCode.CONFIRMED,
@@ -1524,6 +1570,7 @@ def test_github_pr_creator_publish_ignores_untrusted_script_field_in_request(
             stage="publish_output",
             phase=phase,
             step_name="pr",
+            step_def=PUBLISH_STEP,
             output_file=output_file,
             publish_request_file=publish_request_file,
             status_code=PhaseStatusCode.CONFIRMED,
@@ -1554,6 +1601,7 @@ def test_pr_comment_poster_posts_todo_comment_only_when_confirmed_and_complete(
             phase=phase,
             output_file=output_file,
             status_code=PhaseStatusCode.CONFIRMED,
+            step_def=PUBLISH_STEP,
         )
 
     mock_github_ops.return_value.add_pr_comment.assert_called_once()

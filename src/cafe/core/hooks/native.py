@@ -79,15 +79,29 @@ def _hook_status_value(raw_status: Any) -> str:
     return ""
 
 
-def _pr_publish_requested(
+def _publish_confirmation_declared(
+    *, context: Optional[dict[str, Any]] = None, step_def: Any = None
+) -> bool:
+    """Return the publish selector supplied by a validated workflow contract."""
+    if isinstance(context, dict) and "publish_confirmation" in context:
+        return bool(context["publish_confirmation"])
+    if isinstance(step_def, dict):
+        behavior = step_def.get("behavior")
+        if isinstance(behavior, dict):
+            return bool(behavior.get("publish_confirmation"))
+    return False
+
+
+def _publish_requested(
     *,
     phase: Any,
     step_name: str,
     status_code: Any,
     context: Optional[dict[str, Any]] = None,
+    step_def: Any = None,
 ) -> bool:
-    """Return True when the PR step has reached its publish handoff."""
-    if step_name and step_name != "pr":
+    """Return True when a declared publishing step reaches its handoff."""
+    if not _publish_confirmation_declared(context=context, step_def=step_def):
         return False
     if _hook_status_value(status_code) == PhaseStatusCode.CONFIRMED.value:
         return True
@@ -119,7 +133,7 @@ def _pr_publish_requested(
         return False
 
     return (
-        contract.from_step == "pr"
+        contract.from_step == step_name
         and contract.to_owner == HandoffOwner.DONE
         and contract.to_step == "done"
         and contract.intent in {HandoffIntent.AWAIT_AGENT, HandoffIntent.WORKFLOW_COMPLETE}
@@ -136,12 +150,8 @@ def _declared_capability_ids(step_def: Any) -> list[str]:
 
 
 def _effective_capability_ids(*, step_name: str, step_def: Any) -> list[str]:
-    declared = _declared_capability_ids(step_def)
-    if declared:
-        return declared
-    if step_name == "pr":
-        return ["cafe.pr.publish"]
-    return []
+    del step_name
+    return _declared_capability_ids(step_def)
 
 
 def _capability_execution_requested(
@@ -155,12 +165,13 @@ def _capability_execution_requested(
     capability_ids = _effective_capability_ids(step_name=step_name, step_def=step_def)
     if not capability_ids:
         return False
-    if step_name == "pr" and "cafe.pr.publish" in capability_ids:
-        return _pr_publish_requested(
+    if "cafe.pr.publish" in capability_ids:
+        return _publish_requested(
             phase=phase,
             step_name=step_name,
             status_code=status_code,
             context=context,
+            step_def=step_def,
         )
     if _hook_status_value(status_code) == PhaseStatusCode.CONFIRMED.value:
         return True
@@ -315,9 +326,14 @@ class UserInputCollector(NoOpHook):
         if previous_status not in {"need_clarification", "ready_for_review"}:
             return HookResult()
 
-        # PR step uses ready_for_review to loop back and check for new comments,
-        # not to request user confirmation — skip the review prompt entirely.
-        if step_name == "pr" and previous_status in {"ready_for_review", "confirm_output"}:
+        # Publishing steps use ready_for_review to inspect external feedback,
+        # not to request a duplicate user confirmation.
+        if _publish_confirmation_declared(
+            context=kwargs.get("context"), step_def=step_def
+        ) and previous_status in {
+            "ready_for_review",
+            "confirm_output",
+        }:
             return HookResult()
 
         current_iter_dir = phase._get_iteration_dir(phase.iteration)
@@ -906,7 +922,7 @@ class InitialInputProviderResolver(NoOpHook):
 
 
 class GitHubIssueFetcher(NoOpHook):
-    """Compatibility adapter for legacy ``spec`` initial-input hooks."""
+    """Compatibility adapter for legacy initial-input hooks."""
 
     name = "GitHubIssueFetcher"
 
@@ -916,7 +932,7 @@ class GitHubIssueFetcher(NoOpHook):
         phase = kwargs.get("phase")
         step_name = str(kwargs.get("step_name") or "")
         output_file: Optional[Path] = kwargs.get("output_file")
-        if phase is None or step_name != "spec" or output_file is None:
+        if phase is None or output_file is None:
             return HookResult()
         if getattr(phase, "iteration", 0) != 1:
             return HookResult()
@@ -955,7 +971,10 @@ class GitHubIssueFetcher(NoOpHook):
         legacy_step_def = dict(kwargs.get("step_def") or {})
         legacy_step_def["initial_input"] = {
             "providers": [MANUAL_TEXT_PROVIDER, GITHUB_ISSUE_PROVIDER],
-            "bind": {"artifact": "spec", "prompt_context": "user_input"},
+            "bind": {
+                "artifact": legacy_step_def.get("output_artifact", step_name),
+                "prompt_context": "user_input",
+            },
         }
         resolver_kwargs = dict(kwargs)
         resolver_kwargs.update(
@@ -1162,7 +1181,9 @@ class GitHubPRCreator(NoOpHook):
         if not formatted_comments:
             return HookResult(context_updates=context_updates)
 
-        phase.step_user_inputs[str(kwargs.get("step_name") or "pr")] = formatted_comments
+        step_name = kwargs.get("step_name")
+        if isinstance(step_name, str) and step_name:
+            phase.step_user_inputs[step_name] = formatted_comments
         context_updates["user_input"] = formatted_comments
         context_updates["pr_comment_count"] = str(len(unresolved_comments))
         context_updates["pr_mode"] = "comments"
@@ -1437,11 +1458,12 @@ class PRCommentPoster(NoOpHook):
             return HookResult()
         phase = kwargs.get("phase")
         step_name = str(kwargs.get("step_name") or "")
-        if not _pr_publish_requested(
+        if not _publish_requested(
             phase=phase,
             step_name=step_name,
             status_code=kwargs.get("status_code"),
             context=kwargs.get("context"),
+            step_def=kwargs.get("step_def"),
         ):
             return HookResult()
         output_file = kwargs.get("output_file")
@@ -1529,17 +1551,16 @@ class LocalPRReviewer(NoOpHook):
             return HookResult()
         phase = kwargs.get("phase")
         step_name = str(kwargs.get("step_name") or "")
-        if not _pr_publish_requested(
+        if not _publish_requested(
             phase=phase,
             step_name=step_name,
             status_code=kwargs.get("status_code"),
             context=kwargs.get("context"),
+            step_def=kwargs.get("step_def"),
         ):
             return HookResult()
         output_file = kwargs.get("output_file")
         if not isinstance(output_file, Path):
-            return HookResult()
-        if step_name != "pr":
             return HookResult()
         if not self._is_local_pr_mode(phase):
             return HookResult()
@@ -1617,11 +1638,12 @@ class PRLinkOpener(NoOpHook):
             return HookResult()
         phase = kwargs.get("phase")
         step_name = str(kwargs.get("step_name") or "")
-        if not _pr_publish_requested(
+        if not _publish_requested(
             phase=phase,
             step_name=step_name,
             status_code=kwargs.get("status_code"),
             context=kwargs.get("context"),
+            step_def=kwargs.get("step_def"),
         ):
             return HookResult()
 

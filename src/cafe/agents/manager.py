@@ -33,9 +33,8 @@ class AgentManager:
     CAFE_DIR = ".cafe"
     AGENTS_DIR = "agents"
     FALLBACKABLE_ERROR_TYPES = ("rate_limit", "cli_not_found", "cli_unavailable", "model_not_found")
-    DEVELOP_READ_ONLY_COMMAND_LIMIT = 20
-    DEVELOP_READ_ONLY_RETRY_LIMIT = 3
-    DEVELOP_READ_ONLY_RETRY_PROMPT = (
+    READ_ONLY_RETRY_LIMIT = 3
+    READ_ONLY_RETRY_PROMPT = (
         "The runtime stopped your previous attempt because it exhausted the read-only "
         "progress budget without making the next file edit. Do not restart discovery or reread "
         "the spec, plan, skills, or unchanged source files. Your FIRST tool action must be "
@@ -418,6 +417,7 @@ class AgentManager:
         phase_name: Optional[str] = None,
         continuation: Optional[SessionContinuation] = None,
         backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
+        max_read_only_commands: Optional[int] = None,
     ) -> Tuple[str, TokenUsage, List, Optional[List[str]], List[str], Optional[str]]:
         """Execute prompt with specified agent.
 
@@ -428,6 +428,7 @@ class AgentManager:
             allowed_directories: List of allowed directories
             streaming_output_file: Optional file path to write streaming output line-by-line
             phase_name: Current phase name for phase-specific model lookup in backup agents
+            max_read_only_commands: Declared read-only progress guard limit, if enabled
 
         Returns:
             Tuple of (agent's response, token usage, permission denials, cli_command_args, streaming_log, model)
@@ -473,9 +474,7 @@ class AgentManager:
         transient_retry_done = False
         primary_attempt = 1
         attempt_prompt = prompt
-        read_only_command_limit = (
-            self.DEVELOP_READ_ONLY_COMMAND_LIMIT if phase_name == "develop" else None
-        )
+        read_only_command_limit = max_read_only_commands
         initial_read_only_command_limit = None
 
         while True:
@@ -508,10 +507,10 @@ class AgentManager:
                     and not read_only_budget_retried
                 ):
                     read_only_budget_retried = True
-                    attempt_prompt = self.DEVELOP_READ_ONLY_RETRY_PROMPT
-                    initial_read_only_command_limit = self.DEVELOP_READ_ONLY_RETRY_LIMIT
+                    attempt_prompt = self.READ_ONLY_RETRY_PROMPT
+                    initial_read_only_command_limit = self.READ_ONLY_RETRY_LIMIT
                     print(
-                        "⚠️  Resuming the develop session once with an immediate-edit instruction..."
+                        "⚠️  Resuming the session once with an immediate-edit instruction..."
                     )
                     primary_attempt += 1
                 elif (
@@ -542,6 +541,7 @@ class AgentManager:
                         streaming_output_file=streaming_output_file,
                         phase_name=phase_name,
                         continuation=continuation,
+                        max_read_only_commands=read_only_command_limit,
                         backup_context_callback=backup_context_callback,
                     )
                     break  # Backup succeeded, exit loop
@@ -650,6 +650,7 @@ class AgentManager:
         streaming_output_file: Optional[str] = None,
         phase_name: Optional[str] = None,
         continuation: Optional[SessionContinuation] = None,
+        max_read_only_commands: Optional[int] = None,
         backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
     ) -> "AgentResponse":
         """Try backup agents in order until one succeeds or all fail.
@@ -763,10 +764,8 @@ class AgentManager:
             while True:
                 try:
                     execute_kwargs = {}
-                    if phase_name == "develop":
-                        execute_kwargs["max_read_only_commands"] = (
-                            self.DEVELOP_READ_ONLY_COMMAND_LIMIT
-                        )
+                    if max_read_only_commands is not None:
+                        execute_kwargs["max_read_only_commands"] = max_read_only_commands
                     agent_response = backup_executor.execute(
                         backup_prompt,
                         allowed_tools,

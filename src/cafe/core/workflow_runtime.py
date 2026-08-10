@@ -26,6 +26,7 @@ from cafe.core.blackboard import (
     operation_receipt_path,
 )
 from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
+from cafe.core.playbook import resolve_step_behavior
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import (
     PhaseStatusCode,
@@ -137,8 +138,6 @@ def operation_receipt_is_trusted(
 class BlackboardWorkflowRuntime:
     """Workflow runtime that prefers blackboard/baton-driven transitions."""
 
-    BATON_DRIVEN_STEPS = {"pr"}
-
     def __init__(
         self,
         *,
@@ -210,17 +209,14 @@ class BlackboardWorkflowRuntime:
 
     def _required_capability_ids(self, current_step: str) -> list[str]:
         step_def = self.steps.get(current_step, {})
-        if current_step == "pr" and not self._pr_step_requires_publish_receipt(current_step):
-            return []
         declared = self._step_declared_capability_ids(step_def)
-        if declared:
-            return declared
-        if current_step == "pr":
-            return [CAPABILITY_PR_PUBLISH_ID]
-        return []
+        behavior = resolve_step_behavior(self.playbook, current_step)
+        if behavior.publish_confirmation and not self._step_requires_publish_receipt(current_step):
+            return []
+        return declared
 
     def _is_baton_driven_step(self, current_step: str) -> bool:
-        return current_step in self.BATON_DRIVEN_STEPS or bool(
+        return resolve_step_behavior(self.playbook, current_step).completion == "baton" or bool(
             self._required_capability_ids(current_step)
         )
 
@@ -638,8 +634,8 @@ class BlackboardWorkflowRuntime:
         self.blackboard_store.write_handoff_contract(self.blackboard, contract)
         return contract
 
-    def _pr_step_requires_publish_receipt(self, current_step: str) -> bool:
-        if current_step != "pr":
+    def _step_requires_publish_receipt(self, current_step: str) -> bool:
+        if not resolve_step_behavior(self.playbook, current_step).publish_confirmation:
             return False
         issue_yaml = self.issue_dir / "issue.yaml"
         if not issue_yaml.exists():
@@ -1908,7 +1904,10 @@ class BlackboardWorkflowRuntime:
                 )
 
             require_capability_receipts = next_step != "user"
-            if current_step == "pr" and next_step != "done":
+            if (
+                resolve_step_behavior(self.playbook, current_step).publish_confirmation
+                and next_step != "done"
+            ):
                 require_capability_receipts = False
 
             if require_capability_receipts:

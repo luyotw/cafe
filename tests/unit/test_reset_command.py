@@ -2,6 +2,7 @@
 
 import json
 import pytest
+import typer
 from pathlib import Path
 from typer.testing import CliRunner
 from unittest.mock import MagicMock, patch, Mock
@@ -9,6 +10,7 @@ import tempfile
 import shutil
 
 from cafe.ui.cli import app
+from cafe.ui.commands import lifecycle as lifecycle_commands
 
 runner = CliRunner()
 
@@ -76,6 +78,46 @@ class TestResetCommandArgumentParsing:
         invalid_phase = "invalid_phase"
         valid_phases = ["spec", "plan", "develop", "review", "pr"]
         assert invalid_phase not in valid_phases
+
+    def test_reset_accepts_step_declared_by_issue_playbook(self, tmp_path: Path, monkeypatch):
+        """UT-009: reset validates against the issue playbook, not legacy names."""
+        monkeypatch.chdir(tmp_path)
+        issue_dir = tmp_path / ".cafe" / "issues" / "test_issue"
+        iteration_dir = issue_dir / "qa" / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+        (iteration_dir / "iteration.json").write_text('{"iteration": 1}', encoding="utf-8")
+        (issue_dir / "blackboard.json").write_text(
+            '{"schema_version": 1, "playbook_id": "custom", "current_step": "qa", '
+            '"artifacts": {}, "events": [], "decisions": []}',
+            encoding="utf-8",
+        )
+        playbook_dir = tmp_path / ".cafe" / "playbooks"
+        playbook_dir.mkdir()
+        (playbook_dir / "custom.yaml").write_text(
+            """
+playbook:
+  id: custom
+steps:
+  qa:
+    skill: cafe-review
+    role: reviewer
+    allowed_tools: ["Bash(cafe verification check:*)"]
+    on:
+      await_agent: _done
+""".strip(),
+            encoding="utf-8",
+        )
+
+        with (
+            patch("cafe.ui.commands.lifecycle.GitOperations") as mock_git_cls,
+            patch("cafe.ui.commands.lifecycle.prompt_confirm", return_value=False),
+            pytest.raises(typer.Exit) as exit_info,
+        ):
+            mock_git_cls.return_value.get_current_branch.return_value = "test_issue"
+            lifecycle_commands.reset("qa", iteration=0)
+
+        assert exit_info.value.exit_code == 0
+        assert iteration_dir.exists()
 
     def test_iteration_number_parsing_positive(self):
         """Test 1.2: Parse positive iteration numbers."""

@@ -3,6 +3,9 @@ playbook:
   name: "Editorial Workflow（撰稿 → 審閱 → 發佈）"
   conversation_locale: en-US
 
+behavior:
+  completion: status_code
+
 skills:
   workflow:
     shared: [cafe-workflow-common, cafe-github_sync]

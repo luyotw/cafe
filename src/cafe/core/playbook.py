@@ -28,6 +28,8 @@ from cafe.templates.manager import TemplateManager
 
 DONE_TARGET = "_done"
 SCRIPT_HOOK_STAGES = {"before_execute", "after_execute"}
+RUNTIME_CONTEXT_PROVIDERS = frozenset({"workflow_metadata", "git_history"})
+RUNTIME_TOOL_GRANTS = frozenset({"web_research", "git_inspection"})
 
 RigorLevel = Literal["low", "medium", "high"]
 InputMethodDefault = Literal["manual", "github"]
@@ -209,6 +211,73 @@ class InitialInputDeclaration(BaseModel):
         return providers
 
 
+CompletionMode = Literal["status_code", "baton"]
+
+
+class StepBehaviorDeclaration(BaseModel):
+    """Optional behavior selectors declared by a playbook or one step.
+
+    This model intentionally contains only runtime-owned identifiers.  A
+    playbook can select existing providers and grants, but cannot introduce
+    import paths or executable host behavior.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    completion: Optional[CompletionMode] = None
+    publish_confirmation: Optional[bool] = None
+    feedback_target: Optional[str] = None
+    context_providers: Optional[List[str]] = None
+    runtime_tool_grants: Optional[List[str]] = None
+    max_read_only_commands: Optional[int] = Field(default=None, ge=1)
+
+    @field_validator("context_providers", "runtime_tool_grants")
+    @classmethod
+    def _validate_runtime_owned_identifiers(
+        cls, value: Optional[List[str]], info: Any
+    ) -> Optional[List[str]]:
+        if value is None:
+            return None
+        allowed = (
+            RUNTIME_CONTEXT_PROVIDERS
+            if info.field_name == "context_providers"
+            else RUNTIME_TOOL_GRANTS
+        )
+        cleaned = [str(item).strip() for item in value]
+        if not all(cleaned) or len(cleaned) != len(set(cleaned)):
+            raise ValueError(f"{info.field_name} must contain unique non-empty identifiers")
+        unknown = [item for item in cleaned if item not in allowed]
+        if unknown:
+            raise ValueError(f"{info.field_name} contains unknown runtime-owned id {unknown[0]!r}")
+        return cleaned
+
+
+class EffectiveStepBehavior(BaseModel):
+    """Fully resolved, name-independent runtime behavior for one step."""
+
+    model_config = ConfigDict(frozen=True)
+
+    completion: CompletionMode = "status_code"
+    publish_confirmation: bool = False
+    feedback_target: Optional[str] = None
+    context_providers: List[str] = Field(default_factory=list)
+    runtime_tool_grants: List[str] = Field(default_factory=list)
+    max_read_only_commands: Optional[int] = None
+
+
+def _behavior_value(
+    defaults: StepBehaviorDeclaration,
+    override: StepBehaviorDeclaration,
+    field_name: str,
+    fallback: Any,
+) -> Any:
+    value = getattr(override, field_name)
+    if value is not None:
+        return value
+    value = getattr(defaults, field_name)
+    return fallback if value is None else value
+
+
 class StepConfig(BaseModel):
     """One playbook step."""
 
@@ -227,6 +296,7 @@ class StepConfig(BaseModel):
     template: Optional[str] = None
     allowed_tools: List[str] = Field(default_factory=list)
     capability_requests: List[str] = Field(default_factory=list)
+    behavior: StepBehaviorDeclaration = Field(default_factory=StepBehaviorDeclaration)
     valid_intents: List[str] = Field(default_factory=list)
     max_iterations: Optional[Union[int, str]] = None
     correction_session: Literal["fresh", "resume"] = "fresh"
@@ -490,6 +560,7 @@ class PlaybookDefinition(BaseModel):
     playbook: PlaybookMeta
     roles: Dict[str, PlaybookRole] = Field(default_factory=dict)
     skills: Optional[PlaybookSkillEnvironments] = None
+    behavior: StepBehaviorDeclaration = Field(default_factory=StepBehaviorDeclaration)
     steps: Dict[str, StepConfig]
     commands: Optional[CommandsConfig] = None
     entry_point: Optional[str] = None
@@ -498,7 +569,55 @@ class PlaybookDefinition(BaseModel):
     def _default_entry_point(self) -> "PlaybookDefinition":
         if self.entry_point is None:
             self.entry_point = next(iter(self.steps.keys()))
+        for step_name, step in self.steps.items():
+            behavior = resolve_step_behavior(self, step_name)
+            target = behavior.feedback_target
+            if target is not None and target not in self.steps:
+                raise ValueError(
+                    f"steps.{step_name}.behavior.feedback_target {target!r} is not a defined step"
+                )
+            if (
+                behavior.publish_confirmation
+                and "cafe.pr.publish" not in step.capability_requests
+            ):
+                raise ValueError(
+                    f"steps.{step_name}.behavior.publish_confirmation requires "
+                    "the cafe.pr.publish capability request"
+                )
         return self
+
+
+def resolve_step_behavior(
+    playbook: PlaybookDefinition | Dict[str, Any], step_name: str
+) -> EffectiveStepBehavior:
+    """Resolve one step's declaration without considering its name.
+
+    Omitted declarations use universal schema defaults.  This function is the
+    only behavior merge point used by the runtime.
+    """
+    if isinstance(playbook, PlaybookDefinition):
+        defaults = playbook.behavior
+        step = playbook.steps[step_name]
+        override = step.behavior
+    else:
+        defaults = StepBehaviorDeclaration.model_validate(playbook.get("behavior") or {})
+        steps = playbook.get("steps") or {}
+        if step_name not in steps:
+            # Direct helper calls can supply a transient step definition that
+            # is not part of a test fixture's complete playbook.  It receives
+            # the same universal defaults as every omitted declaration.
+            return EffectiveStepBehavior()
+        override = StepBehaviorDeclaration.model_validate(steps[step_name].get("behavior") or {})
+    return EffectiveStepBehavior(
+        completion=_behavior_value(defaults, override, "completion", "status_code"),
+        publish_confirmation=_behavior_value(defaults, override, "publish_confirmation", False),
+        feedback_target=_behavior_value(defaults, override, "feedback_target", None),
+        context_providers=_behavior_value(defaults, override, "context_providers", []),
+        runtime_tool_grants=_behavior_value(defaults, override, "runtime_tool_grants", []),
+        max_read_only_commands=_behavior_value(
+            defaults, override, "max_read_only_commands", None
+        ),
+    )
 
 
 def resolve_playbook_skills(

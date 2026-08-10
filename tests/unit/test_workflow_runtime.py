@@ -152,7 +152,7 @@ def test_runtime_blocks_pr_done_without_publish_receipt(tmp_path: Path) -> None:
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
+            "pr": {"skill": "spec_first", "role": "developer", "behavior": {"completion": "baton", "publish_confirmation": True}, "capability_requests": ["cafe.pr.publish"], "on": {"await_agent": "_done"}},
         },
     }
 
@@ -181,7 +181,7 @@ def test_runtime_completes_pr_when_publish_receipt_exists(tmp_path: Path) -> Non
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
+            "pr": {"skill": "spec_first", "role": "developer", "behavior": {"completion": "baton", "publish_confirmation": True}, "capability_requests": ["cafe.pr.publish"], "on": {"await_agent": "_done"}},
         },
     }
 
@@ -212,7 +212,7 @@ def test_runtime_completes_pr_when_capability_receipt_success_exists(tmp_path: P
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
+            "pr": {"skill": "spec_first", "role": "developer", "behavior": {"completion": "baton", "publish_confirmation": True}, "capability_requests": ["cafe.pr.publish"], "on": {"await_agent": "_done"}},
         },
     }
 
@@ -525,6 +525,8 @@ def test_runtime_hands_off_to_pr_runtime_boundary(tmp_path: Path) -> None:
             "pr": {
                 "skill": "spec_first",
                 "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
                 "on": {"await_agent": "_done"},
             },
         },
@@ -928,6 +930,8 @@ def test_runtime_legacy_step_honors_review_confirmed_advance(tmp_path: Path) -> 
             "pr": {
                 "skill": "spec_first",
                 "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
                 "on": {"await_agent": "_done"},
             },
         },
@@ -987,6 +991,8 @@ def test_runtime_review_confirmed_routes_to_pr_without_legacy_class(tmp_path: Pa
             "pr": {
                 "skill": "pr",
                 "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
                 "on": {"await_agent": "_done"},
             },
         },
@@ -1840,7 +1846,7 @@ def test_runtime_emits_expected_runtime_labels_per_path(tmp_path: Path) -> None:
                 "valid_intents": ["confirmed"],
                 "on": {"await_agent": "pr"},
             },
-            "pr": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
+            "pr": {"skill": "spec_first", "role": "developer", "behavior": {"completion": "baton", "publish_confirmation": True}, "capability_requests": ["cafe.pr.publish"], "on": {"await_agent": "_done"}},
         },
     }
 
@@ -1880,7 +1886,7 @@ def test_runtime_emits_expected_runtime_labels_per_path(tmp_path: Path) -> None:
     playbook_pr = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
+            "pr": {"skill": "spec_first", "role": "developer", "behavior": {"completion": "baton", "publish_confirmation": True}, "capability_requests": ["cafe.pr.publish"], "on": {"await_agent": "_done"}},
         },
     }
 
@@ -1971,7 +1977,7 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "assignee_type": "agent", "on": {}},
+            "pr": {"skill": "spec_first", "role": "developer", "assignee_type": "agent", "behavior": {"completion": "baton", "feedback_target": "develop"}, "on": {}},
             "develop": {
                 "skill": "develop",
                 "role": "developer",
@@ -1984,7 +1990,7 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
                 "role": "reviewer",
                 "assignee_type": "agent",
                 "valid_intents": ["confirmed"],
-                "on": {"await_agent": "_done"},
+                "on": {"await_agent": "_done", "manual_handoff": "user"},
             },
         },
     }

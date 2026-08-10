@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import List, Optional
 from unittest.mock import MagicMock, patch
 
@@ -25,8 +26,16 @@ from cafe.core.blackboard import (
 )
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+from cafe.core.types import AgentCLI, TokenUsage
+from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.playbook import resolve_step_behavior
+from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
+from cafe.phases.generic_phase import GenericPhase
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.skills.loader import SkillLoader
+from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.ui.cli import _consume_pending_chat_handoff, app
+from cafe.ui.cli_shared import _load_issue_step_names
 
 
 def _write_pr_done_baton(issue_dir: Path) -> None:
@@ -42,6 +51,334 @@ def _write_pr_done_baton(issue_dir: Path) -> None:
         status_code="confirmed",
         source="test.executor",
     )
+
+
+class _BatonWritingAgentManager:
+    """Test-double agent boundary that writes the workflow's public baton."""
+
+    def __init__(self, issue_dir: Path) -> None:
+        self.issue_dir = issue_dir
+        self.prompts: list[str] = []
+        self.allowed_tools_calls: list[list[str] | None] = []
+        self.agent = SimpleNamespace(
+            config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="integration-test", model=None)
+        )
+
+    def get_agent(self, _name: str) -> SimpleNamespace:
+        return self.agent
+
+    def execute(self, _name: str, _prompt: str, **_kwargs):
+        self.prompts.append(_prompt)
+        self.allowed_tools_calls.append(_kwargs.get("allowed_tools"))
+        state = BlackboardStore(self.issue_dir).load_or_create("release")
+        BlackboardStore(self.issue_dir).update_handoff_contract(
+            state,
+            from_step="release",
+            to_owner=HandoffOwner.DONE,
+            to_step="done",
+            intent=HandoffIntent.WORKFLOW_COMPLETE,
+            status_code="confirmed",
+            source="test.agent",
+        )
+        return "completed", TokenUsage(), [], [], [], None
+
+
+class _FeedbackAgentManager(_BatonWritingAgentManager):
+    """Test-double agent that reports publish feedback through the normal executor."""
+
+    def execute(self, _name: str, _prompt: str, **_kwargs):
+        store = BlackboardStore(self.issue_dir)
+        state = store.load_or_create("release")
+        store.update_handoff_contract(
+            state,
+            from_step="release",
+            to_owner=HandoffOwner.AGENT,
+            to_step="repair",
+            intent=HandoffIntent.AWAIT_AGENT,
+            status_code=PhaseStatusCode.NEEDS_CHANGES.value,
+            source="test.feedback",
+        )
+        return "needs_changes", TokenUsage(), [], [], [], None
+
+
+class _GitOperations:
+    def get_default_base_branch(self) -> str:
+        return "main"
+
+    def get_repo_root(self) -> Path:
+        return Path.cwd()
+
+
+def _build_integration_generic_phase(tmp_path: Path) -> GenericPhase:
+    skill_dir = tmp_path / "builtin" / "skills" / "cafe-develop"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: cafe-develop\ndescription: Integration test skill\n---\n\n# Develop\n",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(
+        project_root=tmp_path,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    loader.discover()
+    return GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(loader, project_root=tmp_path, home_dir=tmp_path / "home"),
+    )
+
+
+def test_custom_publish_feedback_and_lifecycle_contracts(tmp_path: Path, monkeypatch) -> None:
+    """IT-001/IT-002: custom publish feedback resumes its declared repair step."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "release-journey"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "playbook: release-flow\npr:\n  auto_create: true\n", encoding="utf-8"
+    )
+    playbook_dir = tmp_path / ".cafe" / "playbooks"
+    playbook_dir.mkdir(parents=True)
+    (playbook_dir / "release-flow.yaml").write_text(
+        """
+playbook:
+  id: release-flow
+roles:
+  developer: {default_agent: David}
+steps:
+  repair:
+    skill: cafe-develop
+    role: developer
+    on: {await_agent: release}
+  release:
+    skill: cafe-develop
+    role: developer
+    capability_requests: [cafe.pr.publish]
+    behavior:
+      completion: baton
+      publish_confirmation: true
+      feedback_target: repair
+      context_providers: [workflow_metadata]
+      runtime_tool_grants: [git_inspection]
+    hooks:
+      prepare_input: [UserInputCollector]
+      publish_output: [GitHubPRCreator]
+    on: {await_agent: _done}
+""".strip(),
+        encoding="utf-8",
+    )
+    playbook = PlaybookLoader().load("release-flow")
+
+    agent_manager = _BatonWritingAgentManager(issue_dir)
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="release-journey",
+        playbook=playbook,
+        generic_phase=_build_integration_generic_phase(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=_GitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    receipt = {
+        "capability": "cafe.pr.publish",
+        "correlation_id": "release-journey",
+        "success": True,
+        "category": "success",
+        "code": "published",
+        "inputs": {},
+        "outputs": {"pr_url": "https://example.test/pr/1", "pr_number": "1"},
+    }
+    with (
+        patch("cafe.core.capabilities.load_capability_registry", return_value=object()),
+        patch(
+            "cafe.core.capabilities.run_capability_request",
+            return_value=SimpleNamespace(
+                receipt=receipt,
+                pr_synced_event={"type": "pr_synced", "url": "https://example.test/pr/1"},
+            ),
+        ),
+    ):
+        result = BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            executor=executor.execute_step,
+        ).run(start_step="release")
+
+    assert result.completed is True
+    assert '"playbook_id": "release-flow"' in agent_manager.prompts[0]
+    assert "bash(git status)" in (agent_manager.allowed_tools_calls[0] or [])
+    assert _load_issue_step_names("release-journey") == ["repair", "release"]
+
+    iteration_dir = issue_dir / "release" / "iteration_001"
+    assert json.loads((iteration_dir / "publish_request.json").read_text(encoding="utf-8"))[
+        "capability"
+    ] == ("cafe.pr.publish")
+    state = BlackboardStore(issue_dir).load_or_create("release")
+    assert state.capability_receipts == [receipt]
+
+    runner = CliRunner()
+    git_factory = lambda: SimpleNamespace(get_current_branch=lambda: "release-journey")
+
+    feedback_executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="release-journey",
+        playbook=playbook,
+        generic_phase=_build_integration_generic_phase(tmp_path),
+        agent_manager=_FeedbackAgentManager(issue_dir),
+        git_ops=_GitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=feedback_executor.execute_step,
+    ).run(start_step="release", single_step=True)
+
+    state = BlackboardStore(issue_dir).load_or_create("release")
+    assert (
+        BlackboardStore(issue_dir)
+        .load_handoff_contract(state, allowed_steps=["repair", "release"])
+        .to_step
+        == "repair"
+    )
+
+    resumed_steps: list[str] = []
+
+    class _ResumeExecutor:
+        def execute_step(
+            self,
+            step_name: str,
+            step_def: dict,
+            blackboard_state: object,
+            extra_prompt: Optional[str] = None,
+        ) -> StepExecutionResult:
+            resumed_steps.append(step_name)
+            if step_name == "release":
+                BlackboardStore(issue_dir).update_handoff_contract(
+                    blackboard_state,
+                    from_step="release",
+                    to_owner=HandoffOwner.DONE,
+                    to_step="done",
+                    intent=HandoffIntent.WORKFLOW_COMPLETE,
+                    source="test.resume",
+                )
+            return StepExecutionResult(
+                response="confirmed",
+                artifacts={},
+                status_code="confirmed",
+            )
+
+    with (
+        patch("cafe.ui.cli.GitOperations", return_value=git_factory()),
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=_ResumeExecutor()),
+    ):
+        resume_result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "release-flow",
+                "--issue",
+                "release-journey",
+                "--start-step",
+                "repair",
+                "--execute",
+            ],
+        )
+    assert resume_result.exit_code == 0, resume_result.output
+    assert resumed_steps == ["repair", "release"]
+
+    with patch("cafe.ui.commands.workflow._get_GitOperations", return_value=git_factory):
+        show_result = runner.invoke(app, ["show", "release"])
+    assert show_result.exit_code == 0
+
+    class _SummaryService:
+        def get_current_issue(self) -> str:
+            return "release-journey"
+
+        def load_phase_status(self, _issue: str, _step: str):
+            return None
+
+        def load_iteration_statuses(self, _issue: str, _step: str):
+            return []
+
+    with patch("cafe.services.summary_service.SummaryService", _SummaryService):
+        status_result = runner.invoke(app, ["status"])
+    assert status_result.exit_code == 0
+
+    feedback_iteration_dir = issue_dir / "release" / "iteration_002"
+    assert feedback_iteration_dir.exists()
+    with (
+        patch("cafe.ui.cli.GitOperations", return_value=git_factory()),
+        patch("cafe.ui.cli.prompt_confirm", return_value=True),
+        patch("cafe.ui.commands.lifecycle.GitOperations", return_value=git_factory()),
+        patch("cafe.ui.commands.lifecycle._get_project_path", return_value="test/project"),
+        patch("cafe.ui.commands.lifecycle.prompt_confirm", return_value=True),
+        patch("cafe.ui.commands.lifecycle.Path.home", return_value=tmp_path / "home"),
+    ):
+        reset_result = runner.invoke(app, ["reset", "release"])
+    assert reset_result.exit_code == 0, reset_result.output
+    assert iteration_dir.exists()
+    assert not feedback_iteration_dir.exists()
+
+
+def test_default_parity_and_metadata_absent_lifecycle_boundary(tmp_path: Path, monkeypatch) -> None:
+    """IT-003: default completion, correction, review, and publish remain observable."""
+    monkeypatch.chdir(tmp_path)
+
+    default = PlaybookLoader().load("default")
+    assert resolve_step_behavior(default, "pr").publish_confirmation is True
+    assert resolve_step_behavior(default, "review").runtime_tool_grants == [
+        "web_research",
+        "git_inspection",
+    ]
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "default-parity"
+    executed_steps: list[str] = []
+    review_visits = 0
+
+    def default_executor(
+        step_name: str, step_def: dict, state: BlackboardState
+    ) -> StepExecutionResult:
+        nonlocal review_visits
+        executed_steps.append(step_name)
+        if step_name == "review":
+            review_visits += 1
+            if review_visits == 1:
+                return StepExecutionResult(
+                    response="needs_changes",
+                    artifacts={},
+                    status_code="needs_changes",
+                )
+        events = []
+        if step_name == "pr":
+            _write_pr_done_baton(issue_dir)
+            events.append({"type": "pr_synced", "url": "https://example.test/pr/default"})
+        return StepExecutionResult(
+            response="confirmed",
+            artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+            status_code="confirmed",
+            events=events,
+        )
+
+    result = _run_until_settled(
+        issue_dir=issue_dir,
+        playbook=default,
+        executor=default_executor,
+        max_transitions=20,
+    )
+    assert result.completed is True
+    assert executed_steps.count("develop") == 2
+    assert executed_steps.count("review") == 2
+    assert executed_steps[-1] == "pr"
+
+    assert _load_issue_step_names("metadata-absent") == ["spec", "plan", "develop", "review", "pr"]
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "configured-invalid"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook: unavailable\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="could not be loaded"):
+        _load_issue_step_names("configured-invalid")
 
 
 # ---------------------------------------------------------------------------
@@ -93,17 +430,17 @@ def _run_until_settled(
     return last_result
 
 
-
-
 # ---------------------------------------------------------------------------
 # Task 2: Happy Path E2E 測試
 # ---------------------------------------------------------------------------
+
 
 class TestHappyPath:
     def test_full_workflow_completes(self, tmp_path: Path) -> None:
         """完整 spec→plan→develop→review→pr→_done happy path。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-e2e-happy"
         playbook = _load_default_playbook()
+
         def executor(step_name: str, step_def: dict, state: BlackboardState) -> StepExecutionResult:
             events = []
             if step_name == "pr":
@@ -111,7 +448,9 @@ class TestHappyPath:
                 events.append({"type": "pr_synced", "url": "https://example.com/pr/1"})
             return StepExecutionResult(
                 response="confirmed",
-                artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+                artifacts={
+                    str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"
+                },
                 status_code="confirmed",
                 events=events,
             )
@@ -128,9 +467,7 @@ class TestHappyPath:
 
         blackboard = BlackboardStore(issue_dir).load_or_create("spec")
         step_completed_steps = [
-            e.data.get("step")
-            for e in blackboard.events
-            if e.event_type == "step_completed"
+            e.data.get("step") for e in blackboard.events if e.event_type == "step_completed"
         ]
         for step in ("spec", "plan", "develop", "review", "pr"):
             assert step in step_completed_steps, f"step_completed event missing for {step}"
@@ -139,6 +476,7 @@ class TestHappyPath:
         """每個步驟的 artifact 正確寫入 blackboard。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-e2e-artifacts"
         playbook = _load_default_playbook()
+
         def executor(step_name: str, step_def: dict, state: BlackboardState) -> StepExecutionResult:
             artifact_key = str(step_def.get("output_artifact", step_name))
             events = []
@@ -171,6 +509,7 @@ class TestHappyPath:
 # Task 3: Self-loop 迭代測試（全步驟）
 # ---------------------------------------------------------------------------
 
+
 class TestSelfLoop:
     def _run_single_step_loop(
         self,
@@ -201,7 +540,9 @@ class TestSelfLoop:
                     )
                 return StepExecutionResult(
                     response=final_status,
-                    artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+                    artifacts={
+                        str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"
+                    },
                     status_code=final_status,
                 )
             subsequent_calls[step_name] = subsequent_calls.get(step_name, 0) + 1
@@ -211,7 +552,9 @@ class TestSelfLoop:
                 events.append({"type": "pr_synced", "url": "https://example.com/pr/1"})
             return StepExecutionResult(
                 response="confirmed",
-                artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+                artifacts={
+                    str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"
+                },
                 status_code="confirmed",
                 events=events,
             )
@@ -296,7 +639,9 @@ class TestSelfLoop:
                 )
             return StepExecutionResult(
                 response="confirmed",
-                artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+                artifacts={
+                    str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"
+                },
                 status_code="confirmed",
             )
 
@@ -330,7 +675,9 @@ class TestSelfLoop:
                     )
             return StepExecutionResult(
                 response="confirmed",
-                artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+                artifacts={
+                    str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"
+                },
                 status_code="confirmed",
             )
 
@@ -343,7 +690,8 @@ class TestSelfLoop:
 
         blackboard = BlackboardStore(issue_dir).load_or_create("spec")
         spec_started_events = [
-            e for e in blackboard.events
+            e
+            for e in blackboard.events
             if e.event_type == "step_started" and e.data.get("step") == "spec"
         ]
         visits = [e.data.get("visit") for e in spec_started_events]
@@ -353,6 +701,7 @@ class TestSelfLoop:
 # ---------------------------------------------------------------------------
 # Task 4: User Handoff + Same-Run Continue 測試
 # ---------------------------------------------------------------------------
+
 
 class TestUserHandoff:
     def test_user_handoff_pauses_workflow(self, tmp_path: Path) -> None:
@@ -381,9 +730,7 @@ class TestUserHandoff:
         pause_events = [e for e in blackboard.events if e.event_type == "workflow_paused"]
         assert pause_events, "workflow_paused event should be recorded"
 
-    def test_contract_mismatch_realigns_before_resuming_agent_step(
-        self, tmp_path: Path
-    ) -> None:
+    def test_contract_mismatch_realigns_before_resuming_agent_step(self, tmp_path: Path) -> None:
         """A valid baton/current_step mismatch pauses once before the target step runs."""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-contract-mismatch"
         playbook = {
@@ -414,9 +761,7 @@ class TestUserHandoff:
         )
         executed_steps: list[str] = []
 
-        def executor(
-            step_name: str, step_def: dict, state: BlackboardState
-        ) -> StepExecutionResult:
+        def executor(step_name: str, step_def: dict, state: BlackboardState) -> StepExecutionResult:
             executed_steps.append(step_name)
             return StepExecutionResult(
                 response="confirmed",
@@ -435,9 +780,7 @@ class TestUserHandoff:
         assert executed_steps == []
         blackboard = BlackboardStore(issue_dir).load_or_create("spec")
         assert blackboard.current_step == "plan"
-        assert any(
-            e.event_type == "runtime_position_realigned" for e in blackboard.events
-        )
+        assert any(e.event_type == "runtime_position_realigned" for e in blackboard.events)
 
         second = BlackboardWorkflowRuntime(
             issue_dir=issue_dir,
@@ -449,9 +792,7 @@ class TestUserHandoff:
         assert second.final_step == "plan"
         assert executed_steps == ["plan"]
 
-    def test_contract_owner_user_and_done_are_terminal_positions(
-        self, tmp_path: Path
-    ) -> None:
+    def test_contract_owner_user_and_done_are_terminal_positions(self, tmp_path: Path) -> None:
         """Contract owner states should not execute an agent step while resuming."""
         playbook = {
             "playbook": {"id": "default"},
@@ -470,9 +811,7 @@ class TestUserHandoff:
         }
         executed_steps: list[str] = []
 
-        def executor(
-            step_name: str, step_def: dict, state: BlackboardState
-        ) -> StepExecutionResult:
+        def executor(step_name: str, step_def: dict, state: BlackboardState) -> StepExecutionResult:
             executed_steps.append(step_name)
             return StepExecutionResult(
                 response="confirmed",
@@ -502,10 +841,7 @@ class TestUserHandoff:
         assert user_result.completed is False
         assert user_result.final_step == "develop"
         assert user_result.final_status_code == "need_clarification"
-        assert (
-            BlackboardStore(user_issue_dir).load_or_create("develop").current_step
-            == "user"
-        )
+        assert BlackboardStore(user_issue_dir).load_or_create("develop").current_step == "user"
 
         done_issue_dir = tmp_path / ".cafe" / "issues" / "issue-contract-done"
         done_store = BlackboardStore(done_issue_dir)
@@ -528,10 +864,7 @@ class TestUserHandoff:
 
         assert done_result.completed is True
         assert done_result.final_step == "review"
-        assert (
-            BlackboardStore(done_issue_dir).load_or_create("develop").current_step
-            == "done"
-        )
+        assert BlackboardStore(done_issue_dir).load_or_create("develop").current_step == "done"
         assert executed_steps == []
 
     def test_user_handoff_auto_continue_resumes_in_same_run(self, tmp_path: Path) -> None:
@@ -557,7 +890,9 @@ class TestUserHandoff:
                 events.append({"type": "pr_synced", "url": "https://example.com/pr/1"})
             return StepExecutionResult(
                 response="confirmed",
-                artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+                artifacts={
+                    str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"
+                },
                 status_code="confirmed",
                 events=events,
             )
@@ -586,7 +921,10 @@ class TestUserHandoff:
 
         class FakeExecutor:
             def execute_step(
-                self, step_name: str, step_def: dict, blackboard_state: object,
+                self,
+                step_name: str,
+                step_def: dict,
+                blackboard_state: object,
                 extra_prompt: Optional[str] = None,
             ) -> StepExecutionResult:
                 nonlocal spec_calls
@@ -603,7 +941,9 @@ class TestUserHandoff:
                         )
                 return StepExecutionResult(
                     response="confirmed",
-                    artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+                    artifacts={
+                        str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"
+                    },
                     status_code="confirmed",
                 )
 
@@ -637,8 +977,11 @@ class TestUserHandoff:
 # Task 5.0: next_step.txt Lifecycle
 # ---------------------------------------------------------------------------
 
+
 class TestNextStepLifecycle:
-    def test_workflow_initializes_next_step_txt_when_missing(self, tmp_path: Path, monkeypatch) -> None:
+    def test_workflow_initializes_next_step_txt_when_missing(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
         """next_step.txt missing initially should be created once workflow starts."""
         monkeypatch.chdir(tmp_path)
 
@@ -663,7 +1006,10 @@ class TestNextStepLifecycle:
 
         class FakeExecutor:
             def execute_step(
-                self, step_name: str, step_def: dict, blackboard_state: object,
+                self,
+                step_name: str,
+                step_def: dict,
+                blackboard_state: object,
                 extra_prompt: Optional[str] = None,
             ) -> tuple[str, dict[str, str]]:
                 if step_name == "pr":
@@ -697,6 +1043,7 @@ class TestNextStepLifecycle:
 # ---------------------------------------------------------------------------
 # Task 5: Chat Baton 消費測試
 # ---------------------------------------------------------------------------
+
 
 class TestChatBaton:
     def _make_playbook_data(self) -> dict:
@@ -880,7 +1227,9 @@ class TestChatBaton:
             )
 
         assert result is None
-        assert next_step_path.exists(), "next_step.txt should NOT be deleted when uncommitted changes exist"
+        assert (
+            next_step_path.exists()
+        ), "next_step.txt should NOT be deleted when uncommitted changes exist"
 
     def test_chat_baton_no_file_returns_none(self, tmp_path: Path) -> None:
         """next_step.txt 不存在時應返回 None。"""
