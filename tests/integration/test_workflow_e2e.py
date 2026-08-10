@@ -25,8 +25,12 @@ from cafe.core.blackboard import (
 )
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.playbook import resolve_step_behavior
+from cafe.phases.generic_workflow_step import align_pr_baton_after_execution
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui.cli import _consume_pending_chat_handoff, app
+from cafe.ui.cli_shared import _load_issue_step_names
 
 
 def _write_pr_done_baton(issue_dir: Path) -> None:
@@ -42,6 +46,107 @@ def _write_pr_done_baton(issue_dir: Path) -> None:
         status_code="confirmed",
         source="test.executor",
     )
+
+
+def test_custom_publish_feedback_and_lifecycle_contracts(tmp_path: Path, monkeypatch) -> None:
+    """IT-001/IT-002: custom contracts publish, repair, and expose lifecycle steps."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "release-journey"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "playbook: release-flow\npr:\n  auto_create: true\n", encoding="utf-8"
+    )
+    playbook_dir = tmp_path / ".cafe" / "playbooks"
+    playbook_dir.mkdir(parents=True)
+    (playbook_dir / "release-flow.yaml").write_text(
+        """
+playbook:
+  id: release-flow
+steps:
+  repair:
+    skill: cafe-develop
+    role: developer
+    on: {await_agent: release}
+  release:
+    skill: cafe-develop
+    role: developer
+    capability_requests: [cafe.pr.publish]
+    behavior:
+      completion: baton
+      publish_confirmation: true
+      feedback_target: repair
+    on: {await_agent: _done}
+""".strip(),
+        encoding="utf-8",
+    )
+    playbook = PlaybookLoader().load("release-flow")
+
+    def executor(step_name: str, _step_def: dict, state: BlackboardState) -> StepExecutionResult:
+        BlackboardStore(issue_dir).update_handoff_contract(
+            state,
+            from_step=step_name,
+            to_owner=HandoffOwner.DONE,
+            to_step="done",
+            intent=HandoffIntent.WORKFLOW_COMPLETE,
+            status_code="confirmed",
+            source="test.executor",
+        )
+        return StepExecutionResult(
+            response="confirmed",
+            artifacts={},
+            status_code="confirmed",
+            events=[{"type": "pr_synced"}],
+        )
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=playbook, executor=executor
+    ).run(start_step="release")
+
+    assert result.completed is True
+    assert _load_issue_step_names("release-journey") == ["repair", "release"]
+
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("release")
+    store.update_handoff_contract(
+        state,
+        from_step="release",
+        to_owner=HandoffOwner.AGENT,
+        to_step="release",
+        intent=HandoffIntent.AWAIT_AGENT,
+        status_code=PhaseStatusCode.NEEDS_CHANGES.value,
+        source="test.feedback",
+    )
+    align_pr_baton_after_execution(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        blackboard_state=state,
+        step_name="release",
+        status_code=PhaseStatusCode.NEEDS_CHANGES.value,
+    )
+
+    assert store.load_handoff_contract(state, allowed_steps=["repair", "release"]).to_step == "repair"
+
+
+def test_default_parity_and_metadata_absent_lifecycle_boundary(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """IT-003: default declarations stay explicit and broken metadata never falls back."""
+    monkeypatch.chdir(tmp_path)
+
+    default = PlaybookLoader().load("default")
+    assert resolve_step_behavior(default, "pr").publish_confirmation is True
+    assert resolve_step_behavior(default, "review").runtime_tool_grants == [
+        "web_research",
+        "git_inspection",
+    ]
+    assert _load_issue_step_names("metadata-absent") == ["spec", "plan", "develop", "review", "pr"]
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "configured-invalid"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook: unavailable\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="could not be loaded"):
+        _load_issue_step_names("configured-invalid")
 
 
 # ---------------------------------------------------------------------------

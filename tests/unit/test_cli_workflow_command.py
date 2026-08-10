@@ -19,12 +19,51 @@ from cafe.ui.cli import (
 from cafe.ui.cli_shared import (
     _alignment_checkpoint_menu_choices,
     _build_workflow_step_executor,
+    _load_issue_step_names,
+    _resolve_issue_playbook_name,
     apply_alignment_decision_from_payload,
 )
 from cafe.ui.commands.workflow import _reset_baton_for_explicit_start_step
 from cafe.utils.config import ConfigManager
 
 runner = CliRunner()
+
+
+def test_issue_step_resolution_uses_issue_yaml_before_blackboard_exists(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """UT-009: configured custom steps are valid before the runtime creates state."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "custom-issue"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook: release-flow\n", encoding="utf-8")
+    playbook_dir = tmp_path / ".cafe" / "playbooks"
+    playbook_dir.mkdir(parents=True)
+    (playbook_dir / "release-flow.yaml").write_text(
+        """
+playbook:
+  id: release-flow
+steps:
+  prepare:
+    skill: cafe-develop
+    role: developer
+    on: {await_agent: deploy}
+  deploy:
+    skill: cafe-develop
+    role: developer
+    on: {await_agent: _done}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    assert _resolve_issue_playbook_name("custom-issue") == "release-flow"
+    assert _load_issue_step_names("custom-issue") == ["prepare", "deploy"]
+
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps({"current_step": "prepare"}), encoding="utf-8"
+    )
+    assert _resolve_issue_playbook_name("custom-issue") == "release-flow"
+    assert _load_issue_step_names("custom-issue") == ["prepare", "deploy"]
 
 
 def _result(

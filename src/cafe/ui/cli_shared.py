@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import typer
+import yaml
 from rich.console import Console
 
 from cafe.agents.manager import AgentManager
@@ -566,17 +567,27 @@ _get_latest_versioned_file = get_latest_versioned_file
 
 def _resolve_issue_playbook_name(issue_name: str) -> str:
     """Resolve the playbook id associated with an issue."""
-    blackboard_file = Path.cwd() / ".cafe" / "issues" / issue_name / "blackboard.json"
-    if not blackboard_file.exists():
-        return "default"
+    issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
+    blackboard_file = issue_dir / "blackboard.json"
+    if blackboard_file.exists():
+        try:
+            raw = json.loads(blackboard_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raw = {}
+        if isinstance(raw, dict) and raw.get("playbook_id"):
+            return str(raw["playbook_id"])
 
-    try:
-        raw = json.loads(blackboard_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return "default"
-
-    playbook_id = raw.get("playbook_id")
-    return str(playbook_id) if playbook_id else "default"
+    issue_config_file = issue_dir / "issue.yaml"
+    if issue_config_file.exists():
+        try:
+            config = yaml.safe_load(issue_config_file.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            config = {}
+        if isinstance(config, dict):
+            configured_playbook = config.get("playbook_id") or config.get("playbook")
+            if configured_playbook:
+                return str(configured_playbook)
+    return "default"
 
 
 def _load_playbook_step_names(playbook_name: str) -> List[str]:
@@ -590,16 +601,34 @@ def _load_playbook_step_names(playbook_name: str) -> List[str]:
 
 def _load_issue_step_names(issue_name: str) -> List[str]:
     """Load issue-owned steps, retaining legacy phases only without metadata."""
-    blackboard_file = Path.cwd() / ".cafe" / "issues" / issue_name / "blackboard.json"
-    if not blackboard_file.exists():
+    issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
+    blackboard_file = issue_dir / "blackboard.json"
+    issue_config_file = issue_dir / "issue.yaml"
+    playbook_name: Optional[str] = None
+
+    if blackboard_file.exists():
+        try:
+            raw = json.loads(blackboard_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Issue {issue_name!r} has unreadable workflow metadata") from exc
+        if not isinstance(raw, dict):
+            raise ValueError(f"Issue {issue_name!r} has unreadable workflow metadata")
+        if raw.get("playbook_id"):
+            playbook_name = str(raw["playbook_id"])
+
+    if playbook_name is None and issue_config_file.exists():
+        try:
+            config = yaml.safe_load(issue_config_file.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            raise ValueError(f"Issue {issue_name!r} has unreadable workflow metadata") from exc
+        if not isinstance(config, dict):
+            raise ValueError(f"Issue {issue_name!r} has unreadable workflow metadata")
+        configured_playbook = config.get("playbook_id") or config.get("playbook")
+        if configured_playbook:
+            playbook_name = str(configured_playbook)
+
+    if playbook_name is None:
         return list(ALL_PHASES)
-    try:
-        raw = json.loads(blackboard_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"Issue {issue_name!r} has unreadable workflow metadata") from exc
-    if not isinstance(raw, dict) or not raw.get("playbook_id"):
-        return list(ALL_PHASES)
-    playbook_name = str(raw["playbook_id"])
     try:
         return list(PlaybookLoader().load(playbook_name)["steps"].keys())
     except Exception as exc:

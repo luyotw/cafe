@@ -218,6 +218,31 @@ def test_user_input_collector_plan_ready_for_review_falls_back_to_full_output_wi
     mock_display_output.assert_called_once()
 
 
+def test_user_input_collector_uses_resolved_publish_contract_from_context(tmp_path: Path) -> None:
+    """UT-004: playbook-level publish behavior bypasses duplicate confirmation."""
+    phase_dir = tmp_path / "release"
+    previous_dir = phase_dir / "iteration_001"
+    previous_dir.mkdir(parents=True, exist_ok=True)
+    (previous_dir / "output.md").write_text("# Release\n", encoding="utf-8")
+    _record_previous_step_status(tmp_path, "release", "ready_for_review")
+
+    phase = _FakePhase(phase_dir=phase_dir, iteration=2)
+    phase._ask_user_for_review_decision = MagicMock(return_value="confirm")
+    hook = UserInputCollector()
+
+    result = hook.run(
+        stage="prepare_input",
+        phase=phase,
+        step_name="release",
+        step_def={"role": "developer"},
+        context={"publish_confirmation": True},
+        agent_name="David",
+    )
+
+    assert result.continue_pipeline is True
+    phase._ask_user_for_review_decision.assert_not_called()
+
+
 def test_user_input_collector_loads_interactive_qa_for_need_clarification(tmp_path: Path) -> None:
     phase_dir = tmp_path / "spec"
     prev_iter_dir = phase_dir / "iteration_001"

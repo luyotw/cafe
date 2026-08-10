@@ -56,11 +56,11 @@ def test_behavior_contract_merges_defaults_for_arbitrary_step_names():
     assert behavior.publish_confirmation is True
     assert behavior.feedback_target == "verify"
     assert behavior.context_providers == ["workflow_metadata"]
-    assert behavior.runtime_tool_grants == ["web_research", "git_inspection"]
+    assert behavior.runtime_tool_grants == ["git_inspection"]
 
 
-def test_behavior_contract_combines_declared_provider_and_grant_layers():
-    """UT-002/UT-006/UT-007: step additions retain playbook-wide grants."""
+def test_behavior_contract_step_values_override_playbook_defaults():
+    """UT-002/UT-006/UT-007: a step can narrow inherited runtime access."""
     model = PlaybookDefinition.model_validate(
         _playbook(
             defaults={
@@ -76,8 +76,8 @@ def test_behavior_contract_combines_declared_provider_and_grant_layers():
 
     behavior = resolve_step_behavior(model, "build")
 
-    assert behavior.context_providers == ["workflow_metadata", "git_history"]
-    assert behavior.runtime_tool_grants == ["web_research", "git_inspection"]
+    assert behavior.context_providers == ["git_history"]
+    assert behavior.runtime_tool_grants == ["git_inspection"]
 
 
 @pytest.mark.parametrize("step_name", ["assemble", "quality_gate"])
@@ -112,6 +112,15 @@ def test_behavior_contract_rejects_unknown_grant_and_unknown_feedback_target():
         PlaybookDefinition.model_validate(
             _playbook(build_behavior={"feedback_target": "missing"})
         )
+
+
+def test_publish_confirmation_requires_the_publish_capability():
+    """UT-001: publishing contracts cannot be satisfied by an unrelated grant."""
+    payload = _playbook(build_behavior={"publish_confirmation": True})
+    payload["steps"]["build"]["capability_requests"] = ["cafe.github.read"]
+
+    with pytest.raises(ValueError, match="cafe.pr.publish"):
+        PlaybookDefinition.model_validate(payload)
 
 
 def test_custom_named_publish_step_uses_declared_baton_and_receipt_contract(tmp_path):

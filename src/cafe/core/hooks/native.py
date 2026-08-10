@@ -328,7 +328,9 @@ class UserInputCollector(NoOpHook):
 
         # Publishing steps use ready_for_review to inspect external feedback,
         # not to request a duplicate user confirmation.
-        if _publish_confirmation_declared(step_def=step_def) and previous_status in {
+        if _publish_confirmation_declared(
+            context=kwargs.get("context"), step_def=step_def
+        ) and previous_status in {
             "ready_for_review",
             "confirm_output",
         }:

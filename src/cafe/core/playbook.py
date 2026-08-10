@@ -585,9 +585,13 @@ class PlaybookDefinition(BaseModel):
                 raise ValueError(
                     f"steps.{step_name}.behavior.feedback_target {target!r} is not a defined step"
                 )
-            if behavior.publish_confirmation and not step.capability_requests:
+            if (
+                behavior.publish_confirmation
+                and "cafe.pr.publish" not in step.capability_requests
+            ):
                 raise ValueError(
-                    f"steps.{step_name}.behavior.publish_confirmation requires capability_requests"
+                    f"steps.{step_name}.behavior.publish_confirmation requires "
+                    "the cafe.pr.publish capability request"
                 )
         return self
 
@@ -617,8 +621,8 @@ def resolve_step_behavior(
         completion=_behavior_value(defaults, override, "completion", "status_code"),
         publish_confirmation=_behavior_value(defaults, override, "publish_confirmation", False),
         feedback_target=_behavior_value(defaults, override, "feedback_target", None),
-        context_providers=_behavior_sequence(defaults, override, "context_providers"),
-        runtime_tool_grants=_behavior_sequence(defaults, override, "runtime_tool_grants"),
+        context_providers=_behavior_value(defaults, override, "context_providers", []),
+        runtime_tool_grants=_behavior_value(defaults, override, "runtime_tool_grants", []),
     )
 
 
