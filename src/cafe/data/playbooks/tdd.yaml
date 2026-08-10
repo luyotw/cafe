@@ -115,6 +115,8 @@ steps:
     assignee_type: agent
     input_artifacts: [spec, plan, review_feedback, pr_result]
     output_artifact: code
+    behavior:
+      max_read_only_commands: 20
     human_tasks:
       - trigger: need_clarification
         task_id: clarification-feedback

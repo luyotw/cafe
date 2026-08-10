@@ -54,6 +54,7 @@ class FakeAgentManager:
         self.prompts: list[str] = []
         self.allowed_tools_calls: list[list[str] | None] = []
         self.allowed_directories_calls: list[list[str] | None] = []
+        self.max_read_only_commands_calls: list[int | None] = []
         self.preview_calls: list[list[str] | None] = []
         self.agent = SimpleNamespace(
             config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="session-1", model=None)
@@ -88,12 +89,14 @@ class FakeAgentManager:
         allowed_directories=None,
         streaming_output_file=None,
         phase_name=None,
+        max_read_only_commands=None,
     ):
         self.prompts.append(prompt)
         self.allowed_tools_calls.append(list(allowed_tools) if allowed_tools is not None else None)
         self.allowed_directories_calls.append(
             list(allowed_directories) if allowed_directories is not None else None
         )
+        self.max_read_only_commands_calls.append(max_read_only_commands)
         response = next(self._responses)
         if self.on_execute is not None:
             self.on_execute(
@@ -284,6 +287,44 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert reloaded.handoff_contract.intent == HandoffIntent.WORKFLOW_COMPLETE
     assert reloaded.handoff_contract.status_code == "confirmed"
     assert reloaded.handoff_contract.source == "workflow.status_transition_adapter"
+
+
+def test_generic_step_passes_declared_read_only_guard_to_agent_manager(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """UT-003: a custom step forwards its resolved guard to execution."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-declared-guard"
+    playbook = {
+        "playbook": {"id": "custom"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "build": {
+                "skill": {"default": "spec_first"},
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "behavior": {"max_read_only_commands": 7},
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("build")
+    agent_manager = FakeAgentManager("confirmed")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-declared-guard",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+
+    executor.execute_step("build", playbook["steps"]["build"], state)
+
+    assert agent_manager.max_read_only_commands_calls == [7]
 
 
 def test_resolve_agent_name_uses_phase_config_name(tmp_path: Path, monkeypatch) -> None:

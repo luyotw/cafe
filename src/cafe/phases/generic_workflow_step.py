@@ -201,6 +201,7 @@ class GenericWorkflowStepExecutor(Phase):
         if self.iteration > 1 and not output_file.exists():
             self._copy_previous_version(step_name, self.iteration, self.phase_dir)
         self._ensure_output_file_initialized(step_name, output_file)
+        behavior = resolve_step_behavior(self.playbook, step_name)
         capability_ids = self._effective_capability_ids(step_name, step_def)
         if capability_ids:
             self._write_capability_request(
@@ -208,7 +209,7 @@ class GenericWorkflowStepExecutor(Phase):
                 capability_request_file=capability_request_file,
                 capability_ids=capability_ids,
             )
-            if resolve_step_behavior(self.playbook, step_name).publish_confirmation:
+            if behavior.publish_confirmation:
                 self._write_publish_request(
                     output_file=output_file,
                     publish_request_file=publish_request_file,
@@ -307,6 +308,7 @@ class GenericWorkflowStepExecutor(Phase):
                     persist_status=False,
                     allowed_tools=attempt_allowed_tools,
                     phase_specific_data=phase_specific_data,
+                    max_read_only_commands=behavior.max_read_only_commands,
                     backup_context_callback=lambda error: self._build_backup_takeover_context(
                         error=error,
                         step_name=step_name,
