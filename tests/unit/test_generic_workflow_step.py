@@ -4632,6 +4632,7 @@ def test_checklist_retry_receives_exact_session_and_phase_name(
         prompt="prompt",
         user_input="",
         valid_intents=[PhaseStatusCode.CONFIRMED],
+        max_read_only_commands=7,
         max_retries=1,
     )
 
@@ -4640,6 +4641,7 @@ def test_checklist_retry_receives_exact_session_and_phase_name(
     assert manager.received[0][0].policy == SessionContinuationPolicy.RESUME_EXACT
     assert manager.received[0][0].session_id == "fresh-session"
     assert manager.received[0][1] == "spec"
+    assert manager.max_read_only_commands_calls == [7]
 
 
 def test_checklist_retry_accumulates_raw_iteration_telemetry(

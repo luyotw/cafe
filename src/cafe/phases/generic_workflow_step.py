@@ -392,6 +392,7 @@ class GenericWorkflowStepExecutor(Phase):
                     user_input=resolved_user_input,
                     valid_intents=valid_intents,
                     allowed_tools=allowed_tools,
+                    max_read_only_commands=behavior.max_read_only_commands,
                     max_retries=3,
                 )
             )
