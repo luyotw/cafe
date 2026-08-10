@@ -301,4 +301,4 @@ def test_verification_cli_requires_a_command(tmp_path: Path, monkeypatch) -> Non
     )
 
     assert result.exit_code == 2
-    assert "verification command must not be empty" in result.stderr
+    assert "verification command must not be empty" in result.output

@@ -26,8 +26,8 @@ def test_packaged_develop_skill_has_risk_driven_operation_guidance() -> None:
     assert "version: 1.5.0" in text
     assert "low 使用 `final-only`／`summary-only`" in text
     assert "max_read_only_commands" not in text
-    assert "20 次" in text
-    assert "failing test" in text
-    assert "不得繼續探索" in text
-    assert "任兩次實質修改之間" in text
-    assert "3 次唯讀呼叫內" in text
+    assert "20 次" not in text
+    assert "failing test" not in text
+    assert "不得繼續探索" not in text
+    assert "任兩次實質修改之間" not in text
+    assert "3 次唯讀呼叫內" not in text
