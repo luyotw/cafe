@@ -305,7 +305,10 @@ def test_generic_step_passes_declared_read_only_guard_to_agent_manager(
                 "output_artifact": "spec",
                 "allowed_tools": ["Read"],
                 "valid_intents": ["confirmed"],
-                "behavior": {"max_read_only_commands": 7},
+                "behavior": {
+                    "completion": "status_code",
+                    "max_read_only_commands": 7,
+                },
                 "on": {"await_agent": "_done"},
             }
         },
@@ -325,6 +328,74 @@ def test_generic_step_passes_declared_read_only_guard_to_agent_manager(
     executor.execute_step("build", playbook["steps"]["build"], state)
 
     assert agent_manager.max_read_only_commands_calls == [7]
+
+
+def test_generic_step_forwards_declared_read_only_guard_on_checklist_retry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """UT-003: a custom step preserves its guard when checklist retrying."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-declared-guard-retry"
+    checklist = issue_dir / "build" / "iteration_001" / "checklist.md"
+
+    class ChecklistRetryManager(FakeAgentManager):
+        def __init__(self) -> None:
+            super().__init__(["confirmed", "confirmed"])
+
+        def execute(self, *args, continuation=None, **kwargs):
+            result = super().execute(*args, **kwargs)
+            checklist.write_text(
+                "[ ] complete task\n"
+                if len(self.max_read_only_commands_calls) == 1
+                else "[x] complete task\n",
+                encoding="utf-8",
+            )
+            return result
+
+    playbook = {
+        "playbook": {"id": "custom"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "build": {
+                "skill": {"default": "spec_first"},
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "behavior": {
+                    "completion": "status_code",
+                    "max_read_only_commands": 7,
+                },
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("build")
+    agent_manager = ChecklistRetryManager()
+    generic_phase = _build_loader(tmp_path)
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-declared-guard-retry",
+        playbook=playbook,
+        generic_phase=generic_phase,
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+
+    def execute_with_confirmed_status(*args, **kwargs):
+        response = kwargs["agent_executor"]("prompt")
+        return GenericPhaseExecution(
+            response=response,
+            status_code=PhaseStatusCode.CONFIRMED,
+            goto_target=None,
+        )
+
+    monkeypatch.setattr(generic_phase, "execute", execute_with_confirmed_status)
+
+    executor.execute_step("build", playbook["steps"]["build"], state)
+
+    assert agent_manager.max_read_only_commands_calls == [7, 7]
 
 
 def test_resolve_agent_name_uses_phase_config_name(tmp_path: Path, monkeypatch) -> None:
