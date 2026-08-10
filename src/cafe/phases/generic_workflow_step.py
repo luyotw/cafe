@@ -26,7 +26,7 @@ from cafe.core.delta_packet import (
 from cafe.core.git import GitOperations
 from cafe.core.long_running_operation_helper import get_operation_status
 from cafe.core.phase import Phase
-from cafe.core.playbook import resolve_playbook_skills
+from cafe.core.playbook import resolve_playbook_skills, resolve_step_behavior
 from cafe.core.resume_user_input import (
     is_interrupted_iteration,
     load_prior_run_context,
@@ -74,13 +74,9 @@ def align_pr_baton_after_execution(
     step_name: str,
     status_code: Optional[str],
 ) -> None:
-    """If PR feedback needs code changes, ensure the baton leaves the PR step.
-
-    Agents should update ``next_step.txt`` themselves, but when they return
-    ``manual_handoff`` while the baton still targets ``pr``, advance it to
-    ``develop`` so ``BlackboardWorkflowRuntime`` can transition.
-    """
-    if step_name != "pr" or not status_code:
+    """Realign stale feedback batons using the declared repair target."""
+    behavior = resolve_step_behavior(playbook, step_name)
+    if not status_code or behavior.feedback_target is None:
         return
     if status_code != PhaseStatusCode.NEEDS_CHANGES.value:
         return
@@ -91,21 +87,21 @@ def align_pr_baton_after_execution(
         blackboard_state,
         allowed_steps=allowed,
     )
-    if contract.to_owner != HandoffOwner.AGENT or contract.to_step != "pr":
+    if contract.to_owner != HandoffOwner.AGENT or contract.to_step != step_name:
         return
 
     store.update_handoff_contract(
         blackboard_state,
-        from_step="pr",
+        from_step=step_name,
         to_owner=HandoffOwner.AGENT,
-        to_step="develop",
+        to_step=behavior.feedback_target,
         intent=HandoffIntent.AWAIT_AGENT,
         status_code=status_code,
-        source="workflow.pr_needs_changes",
+        source="workflow.declared_feedback_target",
     )
     store.set_handoff_summary(
         blackboard_state,
-        "PR feedback requires development work; next playbook step is develop.",
+        f"Feedback requires work; next declared step is {behavior.feedback_target}.",
     )
 
 
@@ -212,7 +208,7 @@ class GenericWorkflowStepExecutor(Phase):
                 capability_request_file=capability_request_file,
                 capability_ids=capability_ids,
             )
-            if step_name == "pr":
+            if resolve_step_behavior(self.playbook, step_name).publish_confirmation:
                 self._write_publish_request(
                     output_file=output_file,
                     publish_request_file=publish_request_file,
@@ -355,7 +351,11 @@ class GenericWorkflowStepExecutor(Phase):
                 "questions_xml_file": questions_xml_file,
                 "authoritative_inputs": context.get("authoritative_inputs", {}),
                 "capability_request_file": capability_request_file if capability_ids else None,
-                "publish_request_file": publish_request_file if step_name == "pr" else None,
+                "publish_request_file": (
+                    publish_request_file
+                    if resolve_step_behavior(self.playbook, step_name).publish_confirmation
+                    else None
+                ),
                 "blackboard_state": blackboard_state,
                 "transform_runtime_context": (
                     lambda runtime_context: self._apply_resume_to_runtime_context(
@@ -1003,16 +1003,17 @@ class GenericWorkflowStepExecutor(Phase):
         add_writable_file(self.issue_dir / "blackboard.json")
         add_writable_file(self.issue_dir / "next_step.txt")
 
-        if step_name in {"spec", "plan", "review", "pr"}:
-            add_writable_file(output_file)
-            add_writable_file(checklist_file)
+        add_writable_file(output_file)
+        add_writable_file(checklist_file)
 
         if step_on_declares(step_def, "need_clarification"):
             add_writable_file(questions_xml_file)
 
-        if step_name == "review":
+        grants = resolve_step_behavior(self.playbook, step_name).runtime_tool_grants
+        if "web_research" in grants:
             add("web_fetch")
             add("web_search")
+        if "git_inspection" in grants:
             add("bash(git log)")
             add("bash(git diff)")
             add("bash(git show)")
@@ -1117,7 +1118,7 @@ class GenericWorkflowStepExecutor(Phase):
             contract=contract,
         )
 
-        if canonical_skill_name(skill_name) == "cafe-pr":
+        if "git_history" in resolve_step_behavior(self.playbook, step_name).context_providers:
             base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
             resolved_base = str(base_branch or self.git_ops.get_default_base_branch())
             context["base_branch"] = resolved_base
@@ -1379,9 +1380,8 @@ class GenericWorkflowStepExecutor(Phase):
             return False
         return event.get("source") in {"questions_xml", "prompt", "user_input_file"}
 
-    @staticmethod
-    def _step_requires_status_code(step_name: str) -> bool:
-        return step_name != "pr"
+    def _step_requires_status_code(self, step_name: str) -> bool:
+        return resolve_step_behavior(self.playbook, step_name).completion == "status_code"
 
     @staticmethod
     def _resolve_handoff_intent(
@@ -1470,7 +1470,7 @@ class GenericWorkflowStepExecutor(Phase):
         existing skills, but the workflow runtime should consume the baton
         written here instead of re-deriving transitions from agent text.
         """
-        if step_name == "pr":
+        if resolve_step_behavior(self.playbook, step_name).completion == "baton":
             return
 
         store = BlackboardStore(self.issue_dir)
@@ -1657,7 +1657,7 @@ class GenericWorkflowStepExecutor(Phase):
         output_file.parent.mkdir(parents=True, exist_ok=True)
         if output_file.exists():
             return
-        if step_name == "pr":
+        if resolve_step_behavior(self.playbook, step_name).publish_confirmation:
             output_file.write_text(
                 "# [Your PR Title Here]\n\n## Summary\n\n## Changes\n\n## Test Plan\n",
                 encoding="utf-8",
@@ -1674,11 +1674,7 @@ class GenericWorkflowStepExecutor(Phase):
 
     def _effective_capability_ids(self, step_name: str, step_def: Dict[str, Any]) -> List[str]:
         declared = self._declared_capability_ids(step_def)
-        if declared:
-            return declared
-        if step_name == "pr":
-            return [CAPABILITY_PR_PUBLISH_ID]
-        return []
+        return declared
 
     def _write_capability_request(
         self,

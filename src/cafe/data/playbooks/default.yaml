@@ -3,6 +3,9 @@ playbook:
   name: "Standard Development Workflow"
   conversation_locale: en-US
 
+behavior:
+  completion: status_code
+
 skills:
   workflow:
     shared: [cafe-workflow-common, cafe-github_sync]
@@ -37,6 +40,8 @@ steps:
     assignee_type: agent
     input_artifacts: []
     output_artifact: spec
+    behavior:
+      completion: status_code
     initial_input:
       providers: [manual_text, github_issue]
       bind:
@@ -69,6 +74,8 @@ steps:
     assignee_type: agent
     input_artifacts: [spec]
     output_artifact: plan
+    behavior:
+      completion: status_code
     human_tasks:
       - trigger: initial
         task_id: development-guide
@@ -112,6 +119,8 @@ steps:
     assignee_type: agent
     input_artifacts: [spec, plan, review_feedback, pr_result]
     output_artifact: code
+    behavior:
+      completion: status_code
     human_tasks:
       - trigger: need_clarification
         task_id: clarification-feedback
@@ -139,6 +148,9 @@ steps:
     assignee_type: agent
     input_artifacts: [spec, plan, code]
     output_artifact: review_feedback
+    behavior:
+      completion: status_code
+      runtime_tool_grants: [web_research, git_inspection]
     human_tasks:
       - trigger: need_clarification
         task_id: clarification-feedback
@@ -163,6 +175,11 @@ steps:
     assignee_type: agent
     input_artifacts: [spec, plan, code, review_feedback]
     output_artifact: pr_result
+    behavior:
+      completion: baton
+      publish_confirmation: true
+      feedback_target: develop
+      context_providers: [git_history]
     allowed_tools: [Read, Edit, Write, Grep, Glob]
     capability_requests: [cafe.pr.publish]
     allowed_goto: [develop, review]

@@ -1062,6 +1062,8 @@ def test_generic_workflow_step_prompt_keeps_skill_invocations_only(
             "pr": {
                 "skill": "pr",
                 "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
                 "output_artifact": "pr",
                 "allowed_tools": ["Read"],
                 "valid_intents": ["confirmed"],
@@ -1165,6 +1167,8 @@ def test_generic_workflow_step_writes_pr_publish_request_contract(
             "pr": {
                 "skill": "pr",
                 "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
                 "output_artifact": "pr",
                 "allowed_tools": ["Read"],
                 "valid_intents": ["confirmed"],
@@ -1858,6 +1862,7 @@ def test_generic_workflow_step_restores_review_runtime_allowed_tools(
             "review": {
                 "skill": "review",
                 "role": "reviewer",
+                "behavior": {"runtime_tool_grants": ["web_research", "git_inspection"]},
                 "output_artifact": "review_feedback",
                 "allowed_tools": ["Read", "Grep", "Glob", "Bash(git:*)"],
                 "valid_intents": ["confirmed"],
@@ -2045,6 +2050,7 @@ def test_generic_workflow_step_pr_does_not_parse_status_from_response(
             "pr": {
                 "skill": "pr",
                 "role": "developer",
+                "behavior": {"completion": "baton"},
                 "output_artifact": "pr_result",
                 "allowed_tools": ["Read"],
                 "valid_intents": ["confirmed"],

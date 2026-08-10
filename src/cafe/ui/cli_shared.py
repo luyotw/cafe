@@ -589,9 +589,23 @@ def _load_playbook_step_names(playbook_name: str) -> List[str]:
 
 
 def _load_issue_step_names(issue_name: str) -> List[str]:
-    """Load ordered step names for the current issue playbook."""
-    playbook_name = _resolve_issue_playbook_name(issue_name)
-    return _load_playbook_step_names(playbook_name)
+    """Load issue-owned steps, retaining legacy phases only without metadata."""
+    blackboard_file = Path.cwd() / ".cafe" / "issues" / issue_name / "blackboard.json"
+    if not blackboard_file.exists():
+        return list(ALL_PHASES)
+    try:
+        raw = json.loads(blackboard_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Issue {issue_name!r} has unreadable workflow metadata") from exc
+    if not isinstance(raw, dict) or not raw.get("playbook_id"):
+        return list(ALL_PHASES)
+    playbook_name = str(raw["playbook_id"])
+    try:
+        return list(PlaybookLoader().load(playbook_name)["steps"].keys())
+    except Exception as exc:
+        raise ValueError(
+            f"Issue {issue_name!r} declares playbook {playbook_name!r}, which could not be loaded"
+        ) from exc
 
 
 def _resolve_selected_playbook(playbook_name: Optional[str]) -> str:
@@ -2672,20 +2686,10 @@ def _print_workflow_pause_guidance(*, step_name: str, status_code: Optional[str]
         console.print(
             "[dim]Agent finished without updating the workflow baton for this step.[/dim]"
         )
-        if step_name == "pr":
-            console.print("[bold]Recommended next action:[/bold] Open chat with role `developer`")
-            console.print("[bold]Suggested prompt:[/bold]")
-            console.print(
-                "  Do not wait for remote PR existence. Complete the local PR artifact/checklist,"
-            )
-            console.print(
-                "  update the workflow baton, and treat remote PR publish as a later host-side hook."
-            )
-        else:
-            console.print(
-                "[bold]Recommended next action:[/bold] Open chat with the role responsible for this step,"
-            )
-            console.print("  or leave a handoff note in the workflow UI before resuming.")
+        console.print(
+            "[bold]Recommended next action:[/bold] Open chat with the role responsible for this step,"
+        )
+        console.print("  or leave a handoff note in the workflow UI before resuming.")
         console.print(
             "[dim]After the chat or handoff is written back, run cafe make again to resume.[/dim]"
         )
