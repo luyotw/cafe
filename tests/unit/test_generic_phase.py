@@ -14,6 +14,9 @@ from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
 def _setup_loader(tmp_path: Path) -> SkillLoader:
     skill_root = tmp_path / "builtin" / "skills"
     for name, body in {
@@ -496,6 +499,32 @@ def test_prepare_skill_installs_skill_and_returns_cli_invocation(tmp_path: Path)
 
     assert invocation == "$cafe-plan"
     assert (project_root / ".codex" / "skills" / "cafe-plan" / "SKILL.md").exists()
+
+
+def test_packaged_develop_instruction_declares_all_monitoring_journeys(tmp_path: Path) -> None:
+    """IT-006: the installed agent instruction owns each monitoring intensity."""
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=PROJECT_ROOT / "src" / "cafe" / "data",
+    )
+    loader.discover()
+    phase = GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(loader, project_root=project_root, home_dir=tmp_path / "home"),
+    )
+
+    phase.prepare_skill(skill_name="cafe-develop", agent_cli=AgentCLI.CODEX)
+
+    instruction = (project_root / ".codex/skills/cafe-develop/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "low 使用 `final-only`／`summary-only`" in instruction
+    assert "medium 使用 `periodic`／`incremental-tail`" in instruction
+    assert "high 使用 `active`／`filtered-stream`" in instruction
+    assert "同一 operation ID 檢查，不得重新啟動" in instruction
 
 
 def test_prepare_skill_renders_iteration_context_without_mutating_source(

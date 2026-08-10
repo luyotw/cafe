@@ -8,6 +8,7 @@ helpers rather than a new registry.
 """
 
 import json
+from dataclasses import MISSING
 from pathlib import Path
 
 import pytest
@@ -17,8 +18,88 @@ from cafe.core.blackboard import (
     BlackboardStore,
     LongRunningOperationArtifact,
     LongRunningOperationState,
+    OperationLogPolicy,
+    OperationMonitoring,
+    OperationRisk,
     operation_artifact_path,
 )
+
+_OPERATION_DECISION = {
+    "risk": "low",
+    "monitoring": "final-only",
+    "log_policy": "summary-only",
+    "stop_condition": "operation reaches a terminal state",
+    "recovery": "inspect the same operation id",
+}
+
+
+@pytest.mark.parametrize(
+    ("risk", "monitoring", "log_policy"),
+    [
+        (OperationRisk.LOW, OperationMonitoring.FINAL_ONLY, OperationLogPolicy.SUMMARY_ONLY),
+        (OperationRisk.MEDIUM, OperationMonitoring.PERIODIC, OperationLogPolicy.INCREMENTAL_TAIL),
+        (OperationRisk.HIGH, OperationMonitoring.ACTIVE, OperationLogPolicy.FILTERED_STREAM),
+    ],
+)
+def test_operation_decision_accepts_each_risk_policy(
+    risk: OperationRisk,
+    monitoring: OperationMonitoring,
+    log_policy: OperationLogPolicy,
+) -> None:
+    """UT-008: every documented risk level has one compatible policy."""
+    restored = LongRunningOperationArtifact.from_dict(
+        LongRunningOperationArtifact(
+            operation_id="op-123",
+            state=LongRunningOperationState.RUNNING,
+            risk=risk,
+            monitoring=monitoring,
+            log_policy=log_policy,
+            stop_condition="stop at the declared safety boundary",
+            recovery="inspect the same operation id",
+        ).to_dict()
+    )
+
+    assert (restored.risk, restored.monitoring, restored.log_policy) == (
+        risk,
+        monitoring,
+        log_policy,
+    )
+
+
+def test_operation_decision_requires_bounded_text_and_matching_policy() -> None:
+    """UT-008: persisted operation decisions are complete and risk-driven."""
+    payload = LongRunningOperationArtifact(
+        operation_id="op-123",
+        state=LongRunningOperationState.RUNNING,
+        risk=OperationRisk.HIGH,
+        monitoring=OperationMonitoring.ACTIVE,
+        log_policy=OperationLogPolicy.FILTERED_STREAM,
+        stop_condition="stop external mutation",
+        recovery="restore from backup",
+    ).to_dict()
+    assert LongRunningOperationArtifact.from_dict(payload).risk == OperationRisk.HIGH
+
+    payload["stop_condition"] = ""
+    with pytest.raises(ValueError, match="stop_condition"):
+        LongRunningOperationArtifact.from_dict(payload)
+
+    payload["stop_condition"] = "stop external mutation"
+    payload["monitoring"] = "periodic"
+    with pytest.raises(ValueError, match="monitoring"):
+        LongRunningOperationArtifact.from_dict(payload)
+
+    payload["monitoring"] = "active"
+    payload.pop("recovery")
+    with pytest.raises(ValueError, match="recovery"):
+        LongRunningOperationArtifact.from_dict(payload)
+
+
+def test_operation_artifact_has_no_implicit_risk_policy() -> None:
+    """UT-007: callers must provide every agent-owned operation decision field."""
+    for name in ("risk", "monitoring", "log_policy", "stop_condition", "recovery"):
+        assert LongRunningOperationArtifact.__dataclass_fields__[name].default is MISSING
+    with pytest.raises(TypeError):
+        LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING)  # type: ignore[call-arg]
 
 
 class TestLongRunningOperationStateEnum:
@@ -41,7 +122,14 @@ class TestLongRunningOperationArtifactParser:
     """Test List item 9: the parser stays a small direct parser, no alias map."""
 
     def test_round_trips_minimal_running_artifact(self) -> None:
-        artifact = LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING)
+        artifact = LongRunningOperationArtifact(
+            state=LongRunningOperationState.RUNNING,
+            risk=OperationRisk.LOW,
+            monitoring=OperationMonitoring.FINAL_ONLY,
+            log_policy=OperationLogPolicy.SUMMARY_ONLY,
+            stop_condition="test operation reaches a terminal state",
+            recovery="inspect the same operation id",
+        )
         restored = LongRunningOperationArtifact.from_dict(artifact.to_dict())
         assert restored.state == LongRunningOperationState.RUNNING
         assert restored.reason == ""
@@ -85,6 +173,7 @@ class TestReasonAndExitCodeAreExplanatoryOnly:
                 "state": "failed",
                 "reason": "process killed",
                 "exit_code": 137,
+                **_OPERATION_DECISION,
             }
         )
         assert artifact.state == LongRunningOperationState.FAILED
@@ -99,6 +188,7 @@ class TestReasonAndExitCodeAreExplanatoryOnly:
                 "state": "failed",
                 "exit_code": 0,
                 "reason": "reported failure despite exit 0",
+                **_OPERATION_DECISION,
             }
         )
         assert artifact.state == LongRunningOperationState.FAILED
@@ -110,19 +200,20 @@ class TestReasonAndExitCodeAreExplanatoryOnly:
                 "state": "succeeded",
                 "exit_code": 1,
                 "reason": "non-zero but reported success",
+                **_OPERATION_DECISION,
             }
         )
         assert artifact.state == LongRunningOperationState.SUCCEEDED
 
     def test_reason_defaults_to_empty_string(self) -> None:
         artifact = LongRunningOperationArtifact.from_dict(
-            {"operation_id": "op-123", "state": "running"}
+            {"operation_id": "op-123", "state": "running", **_OPERATION_DECISION}
         )
         assert artifact.reason == ""
 
     def test_exit_code_defaults_to_none(self) -> None:
         artifact = LongRunningOperationArtifact.from_dict(
-            {"operation_id": "op-123", "state": "running"}
+            {"operation_id": "op-123", "state": "running", **_OPERATION_DECISION}
         )
         assert artifact.exit_code is None
 
@@ -154,7 +245,13 @@ class TestOperationArtifactPersistence:
             state,
             step="develop",
             iteration_dir=iteration_dir,
-            artifact=LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING, reason="tool_timeout"),
+            artifact=LongRunningOperationArtifact(
+                state=LongRunningOperationState.RUNNING, reason="tool_timeout",
+                risk=OperationRisk.LOW, monitoring=OperationMonitoring.FINAL_ONLY,
+                log_policy=OperationLogPolicy.SUMMARY_ONLY,
+                stop_condition="test operation reaches a terminal state",
+                recovery="inspect the same operation id",
+            ),
         )
 
         on_disk = json.loads((iteration_dir / "operation.json").read_text(encoding="utf-8"))
@@ -194,7 +291,11 @@ class TestOperationArtifactPersistence:
             state,
             step="develop",
             iteration_dir=iteration_dir,
-            artifact=LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING),
+            artifact=LongRunningOperationArtifact(
+                state=LongRunningOperationState.RUNNING, risk=OperationRisk.LOW,
+                monitoring=OperationMonitoring.FINAL_ONLY, log_policy=OperationLogPolicy.SUMMARY_ONLY,
+                stop_condition="test operation reaches a terminal state", recovery="inspect the same operation id",
+            ),
         )
 
         # Reuses ArtifactEntry/ArtifactKind.METADATA + record_event; no new
@@ -216,13 +317,21 @@ class TestOperationArtifactPersistence:
             state,
             step="develop",
             iteration_dir=iteration_dir,
-            artifact=LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING),
+            artifact=LongRunningOperationArtifact(
+                state=LongRunningOperationState.RUNNING, risk=OperationRisk.LOW,
+                monitoring=OperationMonitoring.FINAL_ONLY, log_policy=OperationLogPolicy.SUMMARY_ONLY,
+                stop_condition="test operation reaches a terminal state", recovery="inspect the same operation id",
+            ),
         )
         store.write_operation_artifact(
             state,
             step="develop",
             iteration_dir=iteration_dir,
-            artifact=LongRunningOperationArtifact(state=LongRunningOperationState.SUCCEEDED),
+            artifact=LongRunningOperationArtifact(
+                state=LongRunningOperationState.SUCCEEDED, risk=OperationRisk.LOW,
+                monitoring=OperationMonitoring.FINAL_ONLY, log_policy=OperationLogPolicy.SUMMARY_ONLY,
+                stop_condition="test operation reaches a terminal state", recovery="inspect the same operation id",
+            ),
         )
 
         # Still exactly one operation.json for this iteration, now updated.

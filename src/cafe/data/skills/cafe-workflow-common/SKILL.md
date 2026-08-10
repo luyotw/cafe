@@ -143,6 +143,12 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 - A missing, failed, stale, wrong-scope, or dirty-worktree receipt is not reusable. Review routes the exact problem back to develop instead of creating or repairing develop evidence itself.
 - Develop may run targeted tests and failing full attempts while changing code. It creates the reusable final full receipt only after all tracked changes are committed. If that run fails, fix and commit before replacing the receipt; after a passing receipt, do not change HEAD or tracked files.
 
+## Risk-driven operation decisions
+
+- Before launching a long-running operation, the agent records `risk`, `monitoring`, `log_policy`, a stop condition, and recovery guidance in the existing operation artifact.
+- Use `low` / `final-only` / `summary-only` for local checks, `medium` / `periodic` / `incremental-tail` for replayable integration work, and `high` / `active` / `filtered-stream` for difficult-to-reverse work.
+- Runtime commands only persist and inspect this decision. They do not schedule polling, choose when to read logs, or relaunch an existing operation.
+
 ## What Not To Do
 - Do not re-explain the shared workflow model in every phase artifact.
 - Do not invent a new handoff format outside the baton mechanism.

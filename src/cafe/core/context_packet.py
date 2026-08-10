@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -14,6 +15,392 @@ from cafe.core.packet_io import (
 )
 
 CONTEXT_PACKET_SCHEMA_VERSION = 1
+_FALLBACK_DETAILS = {
+    "packet_build_failed": "context packet could not be built",
+    "packet_invalid": "context packet validation failed",
+    "packet_persist_failed": "context packet could not be persisted",
+}
+_FALLBACK_REASONS = frozenset(_FALLBACK_DETAILS)
+_MAX_DIAGNOSTIC_DETAIL = 160
+
+
+def format_context_packet_diagnostic(binding: Mapping[str, Any]) -> str:
+    """Return the shared, sanitized diagnostic used by prompt and status views."""
+    effective_mode = str(binding.get("effective_mode", binding.get("mode", "")))
+    if effective_mode == "packet":
+        return "verified"
+    reason = str(binding.get("fallback_reason") or "")
+    detail = str(binding.get("detail") or "")
+    diagnostic = f"{effective_mode}:{reason}" if reason else effective_mode
+    return f"{diagnostic} ({detail})" if detail else diagnostic
+
+
+def build_context_packet_diagnostics(
+    bindings: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build strict, one-per-relation diagnostics from effective input bindings."""
+    bindings = validate_effective_input_bindings(bindings)
+    grouped: dict[tuple[Any, ...], list[str]] = {}
+    for placeholder, binding in bindings.items():
+        if binding.get("requested_mode") != "packet":
+            continue
+        effective_mode = binding.get("mode")
+        fallback_reason = binding.get("fallback_reason", "")
+        detail = binding.get("detail", "")
+        source = binding.get("source")
+        key = (
+            tuple(sorted(source.items())),
+            str(binding.get("path", "")),
+            effective_mode,
+            fallback_reason,
+            detail,
+        )
+        grouped.setdefault(key, []).append(placeholder)
+
+    diagnostics: list[dict[str, Any]] = []
+    for (source_items, path, effective_mode, fallback_reason, detail), placeholders in grouped.items():
+        diagnostics.append(
+            {
+                "placeholders": sorted(placeholders),
+                "source": dict(source_items),
+                "requested_mode": "packet",
+                "effective_mode": effective_mode,
+                "fallback_reason": fallback_reason or None,
+                "detail": detail or None,
+                "path": path,
+            }
+        )
+    return diagnostics
+
+
+def validate_context_packet_diagnostic(diagnostic: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate a projected record before any status formatter renders it."""
+    required = {
+        "placeholders", "source", "requested_mode", "effective_mode", "fallback_reason", "detail", "path"
+    }
+    if (
+        not isinstance(diagnostic, Mapping)
+        or not required.issubset(diagnostic)
+        or set(diagnostic) - (required | {"consumer", "iteration"})
+    ):
+        raise ValueError("Invalid context packet diagnostic")
+    consumer = diagnostic.get("consumer")
+    if consumer is not None and (
+        not isinstance(consumer, str) or not consumer or len(consumer) > 64
+    ):
+        raise ValueError("Invalid context packet diagnostic")
+    projected_iteration = diagnostic.get("iteration")
+    if projected_iteration is not None and (
+        not isinstance(projected_iteration, int)
+        or isinstance(projected_iteration, bool)
+        or not 1 <= projected_iteration <= 999_999
+    ):
+        raise ValueError("Invalid context packet diagnostic")
+    placeholders = diagnostic.get("placeholders")
+    if (
+        not isinstance(placeholders, list)
+        or not placeholders
+        or any(not isinstance(item, str) or not item for item in placeholders)
+        or len(set(placeholders)) != len(placeholders)
+    ):
+        raise ValueError("Invalid context packet diagnostic")
+    fallback_reason = diagnostic.get("fallback_reason") or ""
+    detail = diagnostic.get("detail") or ""
+    binding = {
+        "requested_mode": diagnostic.get("requested_mode"),
+        "mode": diagnostic.get("effective_mode"),
+        "path": diagnostic.get("path"),
+        "reason": fallback_reason,
+        "fallback_reason": fallback_reason,
+        "detail": detail,
+        "source": diagnostic.get("source"),
+    }
+    validate_effective_input_bindings({placeholders[0]: binding})
+    return dict(diagnostic)
+
+
+def validate_effective_input_bindings(
+    bindings: Mapping[str, Mapping[str, Any]],
+    *,
+    authoritative_inputs: Mapping[str, str | Path] | None = None,
+    packet_requested_placeholders: frozenset[str] | None = None,
+    packet_dir: str | Path | None = None,
+    target_step: str | None = None,
+    iteration: int | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Validate the sole persisted effective-input decision without normalizing it.
+
+    Iteration metadata is agent-writable.  A consumer and status view must therefore
+    accept only the exact runtime-owned packet decision shapes and messages.
+    """
+    if not isinstance(bindings, Mapping):
+        raise ValueError("Invalid persisted context packet decision")
+    if authoritative_inputs is not None and not isinstance(authoritative_inputs, Mapping):
+        raise ValueError("Invalid persisted context packet decision")
+    if packet_requested_placeholders is not None and (
+        not isinstance(packet_requested_placeholders, frozenset)
+        or any(
+            not isinstance(placeholder, str) or not placeholder
+            for placeholder in packet_requested_placeholders
+        )
+    ):
+        raise ValueError("Invalid persisted context packet decision")
+    expected_packet_dir = Path(packet_dir).resolve() if packet_dir is not None else None
+    validated: dict[str, dict[str, Any]] = {}
+    for placeholder, binding in bindings.items():
+        if not isinstance(placeholder, str) or not placeholder or not isinstance(binding, Mapping):
+            raise ValueError("Invalid persisted context packet decision")
+        mode = binding.get("mode")
+        path = binding.get("path")
+        if not isinstance(path, str) or not path:
+            raise ValueError("Invalid persisted context packet decision")
+        if mode == "full":
+            if set(binding) != {"mode", "path"}:
+                raise ValueError("Invalid persisted context packet decision")
+        elif mode in {"packet", "full_fallback"}:
+            if set(binding) != {
+                "requested_mode", "mode", "path", "reason", "fallback_reason", "detail", "source"
+            } or binding.get("requested_mode") != "packet":
+                raise ValueError("Invalid persisted context packet decision")
+            _validate_packet_source(binding.get("source"))
+            reason = binding.get("fallback_reason")
+            detail = binding.get("detail")
+            if not isinstance(reason, str) or not isinstance(detail, str) or len(detail) > _MAX_DIAGNOSTIC_DETAIL:
+                raise ValueError("Invalid persisted context packet decision")
+            if mode == "packet":
+                if binding.get("reason") != "" or reason or detail:
+                    raise ValueError("Invalid persisted context packet decision")
+            elif (
+                reason not in _FALLBACK_REASONS
+                or binding.get("reason") != reason
+                or detail != _FALLBACK_DETAILS[reason]
+            ):
+                raise ValueError("Invalid persisted context packet decision")
+        else:
+            raise ValueError("Invalid persisted context packet decision")
+        validated[placeholder] = dict(binding)
+    _validate_paired_packet_bindings(validated)
+    if authoritative_inputs is not None:
+        _validate_declared_packet_bindings(
+            validated,
+            authoritative_inputs,
+            packet_requested_placeholders,
+        )
+        _validate_declared_paired_bindings(validated, authoritative_inputs)
+        _validate_binding_authority(
+            validated,
+            authoritative_inputs=authoritative_inputs,
+            packet_dir=expected_packet_dir,
+            target_step=target_step,
+            iteration=iteration,
+        )
+    return validated
+
+
+def canonical_context_packet_path(
+    packet_dir: str | Path, placeholders: tuple[str, ...]
+) -> Path:
+    """Return the sole runtime-owned path for one declared packet relation."""
+    if not placeholders:
+        raise ValueError("Invalid persisted context packet decision")
+    relation = _packet_relation(placeholders[0])
+    if any(_packet_relation(placeholder) != relation for placeholder in placeholders):
+        raise ValueError("Invalid persisted context packet decision")
+    return Path(packet_dir) / f"context_{relation}.json"
+
+
+def _packet_relation(placeholder: str) -> str:
+    return placeholder.removesuffix("_path")
+
+
+def _declared_relation_placeholders(
+    placeholder: str, authoritative_inputs: Mapping[str, str | Path]
+) -> tuple[str, ...]:
+    relation = _packet_relation(placeholder)
+    return tuple(
+        declared
+        for declared in authoritative_inputs
+        if _packet_relation(declared) == relation
+    )
+
+
+def _validate_declared_paired_bindings(
+    bindings: Mapping[str, Mapping[str, Any]],
+    authoritative_inputs: Mapping[str, str | Path],
+) -> None:
+    """Require every declared conventional alias pair to share one decision."""
+    checked: set[str] = set()
+    for placeholder in authoritative_inputs:
+        relation = _packet_relation(placeholder)
+        if relation in checked:
+            continue
+        checked.add(relation)
+        declared = _declared_relation_placeholders(placeholder, authoritative_inputs)
+        if len(declared) < 2:
+            continue
+        if any(name not in bindings for name in declared):
+            raise ValueError("Invalid persisted context packet decision")
+        first = bindings[declared[0]]
+        if any(bindings[name] != first for name in declared[1:]):
+            raise ValueError("Invalid persisted context packet decision")
+
+
+def _validate_declared_packet_bindings(
+    bindings: Mapping[str, Mapping[str, Any]],
+    authoritative_inputs: Mapping[str, str | Path],
+    packet_requested_placeholders: frozenset[str] | None,
+) -> None:
+    """Require every active packet policy relation, including singletons."""
+    if packet_requested_placeholders is None:
+        return
+    if not packet_requested_placeholders.issubset(authoritative_inputs):
+        raise ValueError("Invalid persisted context packet decision")
+    if any(placeholder not in bindings for placeholder in packet_requested_placeholders):
+        raise ValueError("Invalid persisted context packet decision")
+    if any(
+        bindings[placeholder].get("requested_mode") != "packet"
+        or bindings[placeholder].get("mode") not in {"packet", "full_fallback"}
+        for placeholder in packet_requested_placeholders
+    ):
+        raise ValueError("Invalid persisted context packet decision")
+
+
+def _validate_paired_packet_bindings(bindings: Mapping[str, Mapping[str, Any]]) -> None:
+    """Reject distinct decisions for placeholders declaring the same packet source."""
+    relations: dict[tuple[Any, ...], Mapping[str, Any]] = {}
+    for binding in bindings.values():
+        if binding.get("requested_mode") != "packet":
+            continue
+        source = binding.get("source")
+        assert isinstance(source, Mapping)  # already shape-validated above
+        relation = tuple(sorted(source.items()))
+        prior = relations.setdefault(relation, binding)
+        if any(
+            binding.get(field) != prior.get(field)
+            for field in ("mode", "path", "reason", "fallback_reason", "detail")
+        ):
+            raise ValueError("Invalid persisted context packet decision")
+
+
+def _validate_binding_authority(
+    bindings: Mapping[str, Mapping[str, Any]],
+    *,
+    authoritative_inputs: Mapping[str, str | Path],
+    packet_dir: Path | None,
+    target_step: str | None,
+    iteration: int | None,
+) -> None:
+    """Bind persisted decisions to their declared source and envelope on disk."""
+    paired: dict[str, Mapping[str, Any]] = {}
+    for placeholder, binding in bindings.items():
+        authority = authoritative_inputs.get(placeholder)
+        if authority is None:
+            raise ValueError("Invalid persisted context packet decision")
+        authority_path = Path(authority).resolve()
+        mode = binding["mode"]
+        if mode == "full":
+            if Path(str(binding["path"])).resolve() != authority_path:
+                raise ValueError("Invalid persisted context packet decision")
+            continue
+        if mode == "full_fallback":
+            if Path(str(binding["path"])).resolve() != authority_path:
+                raise ValueError("Invalid persisted context packet decision")
+            _validate_full_source_metadata(binding["source"], authority_path)
+            _validate_declared_pair(placeholder, binding, paired)
+            continue
+        packet_path = Path(str(binding["path"])).resolve()
+        if packet_dir is not None and packet_path.parent != packet_dir:
+            raise ValueError("Invalid persisted context packet decision")
+        declared_placeholders = _declared_relation_placeholders(placeholder, authoritative_inputs)
+        if packet_dir is not None and packet_path != canonical_context_packet_path(
+            packet_dir, declared_placeholders
+        ).resolve():
+            raise ValueError("Invalid persisted context packet decision")
+        try:
+            packet = json.loads(packet_path.read_text(encoding="utf-8"))
+            validate_context_packet(packet)
+            expected_packet = build_context_packet(
+                source_path=authority,
+                contract_kind=packet["contract"]["kind"],
+                target_step=target_step if target_step is not None else packet["target"]["step"],
+                iteration=iteration if iteration is not None else packet["target"]["iteration"],
+                placeholders=declared_placeholders,
+                source_artifact_name=str(binding["source"]["artifact_name"]),
+                source_artifact_version=int(binding["source"]["artifact_version"]),
+            )
+        except (OSError, json.JSONDecodeError, ValueError, ContractValidationError) as exc:
+            raise ValueError("Invalid persisted context packet decision") from exc
+        source = packet["source"]
+        if (
+            Path(str(source["path"])).resolve() != authority_path
+            or source != binding["source"]
+            or packet != expected_packet
+        ):
+            raise ValueError("Invalid persisted context packet decision")
+        _validate_full_source_metadata(source, authority_path)
+        target = packet["target"]
+        if target_step is not None and target["step"] != target_step:
+            raise ValueError("Invalid persisted context packet decision")
+        if iteration is not None and target["iteration"] != iteration:
+            raise ValueError("Invalid persisted context packet decision")
+        if placeholder not in target["placeholders"]:
+            raise ValueError("Invalid persisted context packet decision")
+        _validate_declared_pair(placeholder, binding, paired)
+
+
+def _validate_full_source_metadata(source: Any, authority_path: Path) -> None:
+    """When available, make fallback provenance agree with the full authority."""
+    if not isinstance(source, Mapping) or "path" not in source:
+        return
+    try:
+        current = file_metadata(authority_path)
+    except OSError as exc:
+        raise ValueError("Invalid persisted context packet decision") from exc
+    source_path = source.get("path")
+    if (
+        not isinstance(source_path, str)
+        or not source_path
+        or Path(source_path).resolve() != authority_path
+        or any(source.get(key) != current[key] for key in ("state", "bytes", "sha256"))
+    ):
+        raise ValueError("Invalid persisted context packet decision")
+
+
+def _validate_declared_pair(
+    placeholder: str,
+    binding: Mapping[str, Any],
+    paired: dict[str, Mapping[str, Any]],
+) -> None:
+    """Keep conventional ``*_file`` / ``*_file_path`` aliases one decision."""
+    relation = placeholder.removesuffix("_path")
+    prior = paired.setdefault(relation, binding)
+    if any(binding.get(field) != prior.get(field) for field in (
+        "mode", "path", "reason", "fallback_reason", "detail", "source"
+    )):
+        raise ValueError("Invalid persisted context packet decision")
+
+
+def _validate_packet_source(source: Any) -> None:
+    if not isinstance(source, Mapping):
+        raise ValueError("Invalid persisted context packet decision")
+    keys = set(source)
+    if keys not in ({"artifact_name", "artifact_version"}, {"artifact_name", "artifact_version", "path", "state", "bytes", "sha256"}):
+        raise ValueError("Invalid persisted context packet decision")
+    if not isinstance(source.get("artifact_name"), str) or not source["artifact_name"]:
+        raise ValueError("Invalid persisted context packet decision")
+    version = source.get("artifact_version")
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        raise ValueError("Invalid persisted context packet decision")
+    if len(keys) == 6 and (
+        source.get("state") != "file"
+        or not isinstance(source.get("path"), str)
+        or not source["path"]
+        or not isinstance(source.get("bytes"), int)
+        or isinstance(source["bytes"], bool)
+        or source["bytes"] < 0
+        or not _valid_sha256(source.get("sha256"))
+    ):
+        raise ValueError("Invalid persisted context packet decision")
 
 
 def build_context_packet(
@@ -154,6 +541,24 @@ def resolve_context_packet(
             source_artifact_name=source_artifact_name,
             source_artifact_version=source_artifact_version,
         )
+    except ContractValidationError:
+        # Invalid source contracts are confirmation failures, not safe packet
+        # fallbacks.  The producer must receive the contract validator's
+        # relation-specific feedback before a consumer can start.
+        raise
+    except OSError:
+        return _context_packet_fallback(
+            source_path, source_artifact_name, source_artifact_version, "packet_build_failed"
+        )
+
+    try:
+        validate_context_packet(packet)
+    except ValueError:
+        return _context_packet_fallback(
+            source_path, source_artifact_name, source_artifact_version, "packet_invalid"
+        )
+
+    try:
         # The deterministic packet derived from the current authority is the
         # trust anchor.  A mutable adjacent receipt cannot approve altered bytes.
         expected_sha256 = sha256_bytes(canonical_json(packet))
@@ -167,10 +572,35 @@ def resolve_context_packet(
             "metadata": metadata,
             "source": dict(packet["source"]),
         }
-    except (ContractValidationError, ValueError, OSError):
-        reason = (
-            "Unable to persist context packet"
-            if not packet_path.exists()
-            else "Invalid or altered context packet"
+    except OSError:
+        return _context_packet_fallback(
+            source_path, source_artifact_name, source_artifact_version, "packet_persist_failed"
         )
-        return {"mode": "full_fallback", "path": Path(source_path).as_posix(), "reason": reason}
+    except ValueError:
+        return _context_packet_fallback(
+            source_path, source_artifact_name, source_artifact_version, "packet_invalid"
+        )
+
+
+def _context_packet_fallback(
+    source_path: str | Path,
+    source_artifact_name: str | None,
+    source_artifact_version: int | None,
+    fallback_reason: str,
+) -> dict[str, Any]:
+    source = {
+        "artifact_name": source_artifact_name or Path(source_path).stem,
+        "artifact_version": source_artifact_version or 1,
+    }
+    try:
+        source.update(file_metadata(Path(source_path)))
+    except OSError:
+        pass
+    return {
+        "mode": "full_fallback",
+        "path": Path(source_path).as_posix(),
+        "reason": fallback_reason,
+        "fallback_reason": fallback_reason,
+        "detail": _FALLBACK_DETAILS[fallback_reason],
+        "source": source,
+    }

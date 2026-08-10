@@ -2,16 +2,92 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.human_tasks import HumanTaskPolicy
 from cafe.skills.loader import SkillLoader
 from cafe.ui.human_tasks import (
+    _validate_packet_contracts_before_confirmation,
     apply_human_task_payload,
     collect_human_task_payload,
     resolve_step_human_task,
 )
+
+
+def test_packet_confirmation_uses_next_runnable_consumer_iteration_for_contract_validation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """IT-001: confirmation uses the consumer's next runnable skill contract."""
+    builtin_root = tmp_path / "builtin"
+    for name, prompt_inputs in (
+        ("first-consumer", "  prompt_inputs: []\n"),
+        (
+            "current-consumer",
+            """  prompt_inputs:
+    - artifacts: [spec]
+      placeholder: spec_file
+      load_policy:
+        - when: {}
+          mode: packet
+          contract_kind: spec
+""",
+        ),
+    ):
+        skill_dir = builtin_root / "skills" / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            f"name: {name}\n"
+            "description: test skill\n"
+            "workflow:\n"
+            f"{prompt_inputs}"
+            "---\n",
+            encoding="utf-8",
+        )
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+    monkeypatch.setattr("cafe.ui.human_tasks.SkillLoader", lambda: loader)
+    invalid_spec = tmp_path / "spec.md"
+    invalid_spec.write_text("# Missing downstream contract\n", encoding="utf-8")
+
+    rejection = _validate_packet_contracts_before_confirmation(
+        playbook_data={
+            "steps": {
+                "spec": {"output_artifact": "spec"},
+                "develop": {
+                    "input_artifacts": ["spec"],
+                    "skill": {"1": "first-consumer", "2": "current-consumer"},
+                },
+            }
+        },
+        blackboard=SimpleNamespace(artifacts={"spec": SimpleNamespace(path=invalid_spec)}),
+        issue_dir=_iteration_history(tmp_path, producer=1, consumer=1),
+        producer_step="spec",
+        correction_guidance="repair the contract",
+    )
+
+    assert rejection is not None
+    assert "spec -> develop" in rejection.message
+
+
+def _iteration_history(tmp_path: Path, *, producer: int, consumer: int) -> Path:
+    """Create completed producer and consumer iteration histories."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    for step_name, count in (("spec", producer), ("develop", consumer)):
+        for iteration in range(1, count + 1):
+            iteration_dir = issue_dir / step_name / f"iteration_{iteration:03d}"
+            iteration_dir.mkdir(parents=True)
+            (iteration_dir / "iteration.json").write_text(
+                json.dumps({"iteration": iteration, "end_time": "done"}),
+                encoding="utf-8",
+            )
+    return issue_dir
 
 
 def test_custom_step_resolves_its_skill_owned_human_task(tmp_path: Path) -> None:

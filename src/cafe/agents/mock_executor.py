@@ -49,8 +49,6 @@ class MockAgentExecutor:
         tools: Optional[List[str]] = None,
         json_content_extractor: Optional[Callable] = None,
         streaming_output_file: Optional[str] = None,
-        max_read_only_commands: Optional[int] = None,
-        max_initial_read_only_commands: Optional[int] = None,
     ) -> AgentResponse:
         """Execute with predefined response.
 
@@ -59,8 +57,6 @@ class MockAgentExecutor:
             tools: Tool names (saved but not used)
             json_content_extractor: JSON extractor (not used)
             streaming_output_file: Streaming output file (not used in mock)
-            max_read_only_commands: Between-edit progress limit (not used in mock)
-            max_initial_read_only_commands: Initial discovery limit (not used in mock)
 
         Returns:
             AgentResponse with response, token_usage, and permission_denials

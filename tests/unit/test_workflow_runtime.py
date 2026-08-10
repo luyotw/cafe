@@ -9,11 +9,34 @@ from cafe.core.blackboard import (
     BlackboardStore,
     HandoffIntent,
     HandoffOwner,
-    LongRunningOperationArtifact,
+    LongRunningOperationArtifact as _LongRunningOperationArtifact,
     LongRunningOperationState,
+    OperationLogPolicy,
+    OperationMonitoring,
+    OperationRisk,
 )
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+
+_OPERATION_DECISION = {
+    "risk": "low",
+    "monitoring": "final-only",
+    "log_policy": "summary-only",
+    "stop_condition": "operation reaches a terminal state",
+    "recovery": "inspect the same operation id",
+}
+
+
+def LongRunningOperationArtifact(**kwargs):
+    """Create explicit test operation decisions without production defaults."""
+    return _LongRunningOperationArtifact(
+        risk=OperationRisk.LOW,
+        monitoring=OperationMonitoring.FINAL_ONLY,
+        log_policy=OperationLogPolicy.SUMMARY_ONLY,
+        stop_condition="test operation reaches a terminal state",
+        recovery="inspect the same operation id",
+        **kwargs,
+    )
 
 
 def _write_baton(
@@ -3415,11 +3438,8 @@ def test_short_running_step_without_operation_artifact_is_unaffected(tmp_path: P
 def test_generic_agent_error_does_not_create_operation_artifact(tmp_path: Path) -> None:
     """A generic/noncritical agent error is not a characterized long-running signal.
 
-    Only ``agent_timeout`` (raised by ``AgentExecutor`` when its own idle or
-    post-output wait timeout kills the process) is eligible to create a
-    ``running`` operation artifact; an ordinary exception with no such
-    classification must retain existing ``INTERRUPTED`` behavior with no
-    operation artifact, so a normal failure never pins resume forever.
+    An ordinary exception must retain existing ``INTERRUPTED`` behavior with
+    no operation artifact, so a normal failure never pins resume forever.
     """
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-generic-error"
     playbook = {
@@ -3451,10 +3471,8 @@ def test_generic_agent_error_does_not_create_operation_artifact(tmp_path: Path) 
     assert call_count[0] == 1
 
 
-def test_agent_timeout_records_running_operation_artifact_automatically(tmp_path: Path) -> None:
-    """Integration Test 1: a characterized agent-timeout interruption leaves exactly one
-    running operation.json instead of only NO_STATUS_CODE, with a metadata artifact/event
-    on the blackboard."""
+def test_agent_timeout_cannot_fabricate_an_operation_policy(tmp_path: Path) -> None:
+    """A timeout must not manufacture an operation risk decision after launch."""
     from cafe.agents.executor import AgentExecutionError
 
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-auto-record"
@@ -3482,16 +3500,10 @@ def test_agent_timeout_records_running_operation_artifact_automatically(tmp_path
     assert result.completed is False
     assert result.final_status_code.startswith("INTERRUPTED")
     iteration_dir = issue_dir / "develop" / "iteration_001"
-    operation_files = list(iteration_dir.glob("operation.json"))
-    assert len(operation_files) == 1
-    operation_data = json.loads((iteration_dir / "operation.json").read_text(encoding="utf-8"))
-    assert operation_data["state"] == "running"
+    assert not (iteration_dir / "operation.json").exists()
 
     bb = BlackboardStore(issue_dir).load_or_create("develop")
-    assert any(
-        e.event_type == "long_running_operation" and e.data.get("state") == "running"
-        for e in bb.events
-    )
+    assert not any(e.event_type == "long_running_operation" for e in bb.events)
     assert call_count[0] == 1
 
 
@@ -3628,7 +3640,13 @@ def test_hand_edited_operation_artifact_is_not_trusted(tmp_path: Path) -> None:
     # matching "develop_operation" metadata artifact is recorded.
     (iteration_dir / "operation.json").write_text(
         json.dumps(
-            {"operation_id": "forged-op", "state": "succeeded", "reason": "", "exit_code": 0}
+            {
+                "operation_id": "forged-op",
+                "state": "succeeded",
+                "reason": "",
+                "exit_code": 0,
+                **_OPERATION_DECISION,
+            }
         ),
         encoding="utf-8",
     )
@@ -3691,7 +3709,13 @@ def test_stale_metadata_artifact_from_earlier_iteration_is_not_trusted(tmp_path:
     # Hand-written, never passed through write_operation_artifact for this iteration.
     (new_iteration_dir / "operation.json").write_text(
         json.dumps(
-            {"operation_id": "forged-op", "state": "succeeded", "reason": "", "exit_code": 0}
+            {
+                "operation_id": "forged-op",
+                "state": "succeeded",
+                "reason": "",
+                "exit_code": 0,
+                **_OPERATION_DECISION,
+            }
         ),
         encoding="utf-8",
     )
@@ -3747,6 +3771,7 @@ def test_recorded_operation_artifact_state_mismatch_is_not_trusted(tmp_path: Pat
                 "state": "succeeded",
                 "reason": "",
                 "exit_code": 0,
+                **_OPERATION_DECISION,
             }
         ),
         encoding="utf-8",
@@ -3776,9 +3801,8 @@ def test_status_code_missing_does_not_create_operation_artifact(tmp_path: Path) 
     A normal short step that simply omits a baton/status code must not be
     classified as a long-running operation -- otherwise resume would be
     pinned to that step forever waiting for a ``running`` operation that
-    will never resolve. Only a characterized ``agent_timeout`` signal (see
-    ``test_agent_timeout_records_running_operation_artifact_automatically``)
-    creates an operation artifact.
+    will never resolve. Only an explicit, pre-launch operation decision can
+    create an operation artifact.
     """
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-status-missing-operation"
     playbook = {

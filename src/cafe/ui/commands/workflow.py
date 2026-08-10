@@ -452,6 +452,13 @@ def status() -> None:
         display = SummaryDisplay()
         display.render_table(entries)
 
+        load_context_packets = getattr(service, "load_context_packets", None)
+        context_packets = display.format_context_packets(
+            load_context_packets(issue_name) if callable(load_context_packets) else []
+        )
+        if context_packets:
+            console.print(context_packets)
+
         # Display aggregated model token usage summary
         display.render_model_summary_table(entries)
 

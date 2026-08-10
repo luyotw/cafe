@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+
+import pytest
 from types import SimpleNamespace
 
 from cafe.core.blackboard import BlackboardStore
+from cafe.core.downstream_contract import ContractValidationError
 from cafe.core.types import AgentCLI, TokenUsage
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
@@ -338,11 +341,8 @@ BODY-ONLY-SENTINEL GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
         git_ops=_GitOps(),
         role_agent_map={"researcher": "David"},
     )
-    second.execute_step("assemble", step, state)
-
-    assert "compact_brief=full_fallback" in second_manager.prompts[0]
-    assert str(packet_source) in second_manager.prompts[0]
-    assert "full_record=full" in second_manager.prompts[0]
+    with pytest.raises(ContractValidationError):
+        second.execute_step("assemble", step, state)
 
     packet_source.write_text(
         """# Brief
@@ -386,10 +386,8 @@ GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
         git_ops=_GitOps(),
         role_agent_map={"researcher": "David"},
     )
-    empty_table_executor.execute_step("assemble", step, state)
-
-    assert "compact_brief=full_fallback" in empty_table_manager.prompts[0]
-    assert str(packet_source) in empty_table_manager.prompts[0]
+    with pytest.raises(ContractValidationError):
+        empty_table_executor.execute_step("assemble", step, state)
 
 
 def test_packaged_workflow_uses_full_then_packet_then_legacy_fallback(
@@ -489,9 +487,8 @@ def test_packaged_workflow_uses_full_then_packet_then_legacy_fallback(
     assert Path(final_host_inputs["plan_file"]).resolve() == plan
 
     spec.write_text("# Legacy confirmed artifact\n", encoding="utf-8")
-    legacy_correction = run("develop")
-    assert "spec_file=full_fallback" in legacy_correction.prompts[0]
-    assert "plan_file=packet" in legacy_correction.prompts[0]
+    with pytest.raises(ContractValidationError):
+        run("develop")
 
 
 def test_workflow_replace_removes_stale_native_skills(tmp_path: Path, monkeypatch) -> None:

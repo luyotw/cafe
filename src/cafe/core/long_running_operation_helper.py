@@ -20,8 +20,11 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 from cafe.core.blackboard import (
     BlackboardStore,
     LongRunningOperationArtifact,
+    OperationLogPolicy,
+    OperationMonitoring,
+    OperationRisk,
     LongRunningOperationState,
-    operation_receipt_path,
+    validate_operation_decision,
 )
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -183,8 +186,13 @@ def run_operation_command(
     step: str,
     iteration_dir: Path,
     command: Sequence[str],
-    cwd: Optional[Path] = None,
     playbook: Dict[str, Any],
+    risk: OperationRisk,
+    monitoring: OperationMonitoring,
+    log_policy: OperationLogPolicy,
+    stop_condition: str,
+    recovery: str,
+    cwd: Optional[Path] = None,
     reason: str = "operation_helper_launch",
 ) -> OperationLaunchResult:
     """Launch one supervised command for one workflow iteration.
@@ -194,6 +202,13 @@ def run_operation_command(
     """
     if not command:
         raise ValueError("operation command must not be empty")
+    validate_operation_decision(
+        risk=risk,
+        monitoring=monitoring,
+        log_policy=log_policy,
+        stop_condition=stop_condition,
+        recovery=recovery,
+    )
     issue_dir = Path(issue_dir)
     iteration_dir = Path(iteration_dir)
     cwd_path = Path(cwd) if cwd is not None else Path.cwd()
@@ -217,6 +232,11 @@ def run_operation_command(
             artifact=LongRunningOperationArtifact(
                 state=LongRunningOperationState.RUNNING,
                 reason=reason,
+                risk=risk,
+                monitoring=monitoring,
+                log_policy=log_policy,
+                stop_condition=stop_condition,
+                recovery=recovery,
             ),
         )
     finally:

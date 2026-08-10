@@ -51,6 +51,16 @@ def test_operation_run_cli_loads_playbook_and_delegates(monkeypatch, tmp_path: P
             "develop",
             "--iteration-dir",
             str(iteration_dir),
+            "--risk",
+            "low",
+            "--monitoring",
+            "final-only",
+            "--log-policy",
+            "summary-only",
+            "--stop-condition",
+            "test completes",
+            "--recovery",
+            "rerun safely",
             "--",
             "true",
         ],
@@ -60,7 +70,57 @@ def test_operation_run_cli_loads_playbook_and_delegates(monkeypatch, tmp_path: P
     assert calls
     assert calls[0]["playbook"]["steps"]
     assert calls[0]["command"] == ["true"]
+    assert calls[0]["stop_condition"] == "test completes"
+    assert calls[0]["recovery"] == "rerun safely"
     assert "op-test" in result.stdout
+
+
+def test_operation_run_cli_requires_complete_compatible_risk_decision(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """UT-008: the public launcher rejects incomplete or mismatched policies."""
+    called = False
+
+    def fake_run_operation_command(**kwargs: object) -> object:
+        nonlocal called
+        called = True
+        return SimpleNamespace()
+
+    monkeypatch.setattr(operation_command, "run_operation_command", fake_run_operation_command)
+    issue_dir = tmp_path / "issue"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    result = runner.invoke(
+        app,
+        [
+            "operation", "run", "--issue-dir", str(issue_dir), "--step", "develop",
+            "--iteration-dir", str(iteration_dir), "--risk", "high", "--monitoring",
+            "final-only", "--log-policy", "summary-only", "--stop-condition", "halt",
+            "--recovery", "restore", "--", "true",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert called is False
+
+
+def test_operation_run_cli_rejects_an_omitted_agent_policy(monkeypatch, tmp_path: Path) -> None:
+    called = False
+    monkeypatch.setattr(
+        operation_command,
+        "run_operation_command",
+        lambda **_kwargs: called,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "operation", "run", "--issue-dir", str(tmp_path / "issue"), "--step", "develop",
+            "--iteration-dir", str(tmp_path / "iteration"), "--", "true",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert called is False
 
 
 def test_operation_status_cli_loads_playbook_and_delegates(monkeypatch, tmp_path: Path) -> None:

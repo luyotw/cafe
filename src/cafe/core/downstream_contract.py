@@ -129,7 +129,7 @@ def extract_downstream_contract(path: str | Path, *, kind: str) -> DownstreamCon
     """Return the exact contract bytes after validating the fixed schema.
 
     Invalid or legacy sources raise ``ContractValidationError`` so callers can
-    expose the original complete file as a relationship-local fallback.
+    reject confirmation for the declared relationship before consumer launch.
     """
     if kind not in _SCHEMAS:
         raise ContractValidationError(f"Unsupported contract kind: {kind}")

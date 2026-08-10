@@ -16,11 +16,26 @@ from cafe.core.blackboard import (
     BlackboardStore,
     HandoffIntent,
     HandoffOwner,
-    LongRunningOperationArtifact,
+    LongRunningOperationArtifact as _LongRunningOperationArtifact,
     LongRunningOperationState,
+    OperationLogPolicy,
+    OperationMonitoring,
+    OperationRisk,
     operation_artifact_path,
     operation_receipt_path,
 )
+
+
+def LongRunningOperationArtifact(**kwargs):
+    """Create explicit test operation decisions without production defaults."""
+    return _LongRunningOperationArtifact(
+        risk=OperationRisk.LOW,
+        monitoring=OperationMonitoring.FINAL_ONLY,
+        log_policy=OperationLogPolicy.SUMMARY_ONLY,
+        stop_condition="test operation reaches a terminal state",
+        recovery="inspect the same operation id",
+        **kwargs,
+    )
 from cafe.core.hooks import HookResult
 from cafe.core.resume_user_input import CONTINUE_USER_INPUT
 from cafe.core.session_continuation import (
@@ -54,7 +69,7 @@ class FakeAgentManager:
         self.prompts: list[str] = []
         self.allowed_tools_calls: list[list[str] | None] = []
         self.allowed_directories_calls: list[list[str] | None] = []
-        self.max_read_only_commands_calls: list[int | None] = []
+        self.execute_call_count = 0
         self.preview_calls: list[list[str] | None] = []
         self.agent = SimpleNamespace(
             config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="session-1", model=None)
@@ -89,14 +104,13 @@ class FakeAgentManager:
         allowed_directories=None,
         streaming_output_file=None,
         phase_name=None,
-        max_read_only_commands=None,
     ):
         self.prompts.append(prompt)
         self.allowed_tools_calls.append(list(allowed_tools) if allowed_tools is not None else None)
         self.allowed_directories_calls.append(
             list(allowed_directories) if allowed_directories is not None else None
         )
-        self.max_read_only_commands_calls.append(max_read_only_commands)
+        self.execute_call_count += 1
         response = next(self._responses)
         if self.on_execute is not None:
             self.on_execute(
@@ -307,7 +321,6 @@ def test_generic_step_passes_declared_read_only_guard_to_agent_manager(
                 "valid_intents": ["confirmed"],
                 "behavior": {
                     "completion": "status_code",
-                    "max_read_only_commands": 7,
                 },
                 "on": {"await_agent": "_done"},
             }
@@ -327,7 +340,7 @@ def test_generic_step_passes_declared_read_only_guard_to_agent_manager(
 
     executor.execute_step("build", playbook["steps"]["build"], state)
 
-    assert agent_manager.max_read_only_commands_calls == [7]
+    assert agent_manager.execute_call_count == 1
 
 
 def test_generic_step_forwards_declared_read_only_guard_on_checklist_retry(
@@ -346,7 +359,7 @@ def test_generic_step_forwards_declared_read_only_guard_on_checklist_retry(
             result = super().execute(*args, **kwargs)
             checklist.write_text(
                 "[ ] complete task\n"
-                if len(self.max_read_only_commands_calls) == 1
+                if self.execute_call_count == 1
                 else "[x] complete task\n",
                 encoding="utf-8",
             )
@@ -364,7 +377,6 @@ def test_generic_step_forwards_declared_read_only_guard_on_checklist_retry(
                 "valid_intents": ["confirmed"],
                 "behavior": {
                     "completion": "status_code",
-                    "max_read_only_commands": 7,
                 },
                 "on": {"await_agent": "_done"},
             }
@@ -395,7 +407,7 @@ def test_generic_step_forwards_declared_read_only_guard_on_checklist_retry(
 
     executor.execute_step("build", playbook["steps"]["build"], state)
 
-    assert agent_manager.max_read_only_commands_calls == [7, 7]
+    assert agent_manager.execute_call_count == 2
 
 
 def test_resolve_agent_name_uses_phase_config_name(tmp_path: Path, monkeypatch) -> None:
@@ -4703,7 +4715,6 @@ def test_checklist_retry_receives_exact_session_and_phase_name(
         prompt="prompt",
         user_input="",
         valid_intents=[PhaseStatusCode.CONFIRMED],
-        max_read_only_commands=7,
         max_retries=1,
     )
 
@@ -4712,7 +4723,7 @@ def test_checklist_retry_receives_exact_session_and_phase_name(
     assert manager.received[0][0].policy == SessionContinuationPolicy.RESUME_EXACT
     assert manager.received[0][0].session_id == "fresh-session"
     assert manager.received[0][1] == "spec"
-    assert manager.max_read_only_commands_calls == [7]
+    assert manager.execute_call_count == 1
 
 
 def test_checklist_retry_accumulates_raw_iteration_telemetry(
@@ -4778,3 +4789,375 @@ def test_checklist_retry_accumulates_raw_iteration_telemetry(
     assert passed is True
     assert context["stats"]["cache_write_input_tokens"] == 7
     assert context["stats"]["reasoning_output_tokens"] == 10
+
+
+def test_persisted_packet_decision_rejects_malformed_iteration_metadata(tmp_path: Path) -> None:
+    """UT-005: takeover must never derive a replacement packet decision."""
+    iteration_dir = tmp_path / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "iteration.json").write_text("{broken", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="context packet decision"):
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+            iteration_dir,
+            require_persisted_packet_decision=True,
+        )
+
+
+def test_persisted_packet_decision_rejects_missing_effective_inputs(tmp_path: Path) -> None:
+    """UT-004: an interrupted iteration cannot replace a lost packet decision."""
+    iteration_dir = tmp_path / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps({"iteration": 1}), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="context packet decision"):
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+            iteration_dir,
+            require_persisted_packet_decision=True,
+        )
+
+
+def test_persisted_packet_decision_rejects_empty_singleton_packet_binding(
+    tmp_path: Path,
+) -> None:
+    """UT-004: a declared singleton packet policy cannot reload as an empty map."""
+    iteration_dir = tmp_path / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    source = tmp_path / "spec.md"
+    _write_valid_spec_contract(source)
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps({"effective_inputs": {}}), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="context packet decision"):
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+            iteration_dir,
+            require_persisted_packet_decision=True,
+            authoritative_inputs={"packet_spec": source},
+            packet_requested_placeholders=frozenset({"packet_spec"}),
+        )
+
+
+def test_persisted_packet_decision_requires_complete_binding_record(tmp_path: Path) -> None:
+    """UT-005: partial state is unsafe rather than a signal to recompute."""
+    iteration_dir = tmp_path / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps({"effective_inputs": {"spec_file": {"mode": "packet"}}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="context packet decision"):
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(iteration_dir)
+
+
+def _write_valid_spec_contract(path: Path) -> None:
+    path.write_text(
+        "# Source\n\nGOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001\n\n"
+        "## Downstream Contract\n\n- Contract-Version: `1`\n- Artifact-Kind: `spec`\n\n"
+        "### Goals\n| ID | Statement |\n| --- | --- |\n| GOAL-001 | goal |\n\n"
+        "### Non-Goals\n| ID | Statement |\n| --- | --- |\n| NONGOAL-001 | no |\n\n"
+        "### Acceptance Criteria\n| ID | Priority | Statement |\n| --- | --- | --- |\n| AC-001 | must | yes |\n\n"
+        "### Invariants\n| ID | Statement |\n| --- | --- |\n| INV-001 | safe |\n\n"
+        "### Trust Boundaries\n| ID | Statement |\n| --- | --- |\n| TRUST-001 | local |\n",
+        encoding="utf-8",
+    )
+
+
+def test_generic_workflow_preparation_reloads_relative_packet_decision(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """UT-004: normal relative artifacts survive production packet preparation."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-relative-packet"
+    source = issue_dir / "spec" / "iteration_001" / "output.md"
+    source.parent.mkdir(parents=True)
+    _write_valid_spec_contract(source)
+    relative_source = source.relative_to(tmp_path).as_posix()
+
+    skill_dir = tmp_path / ".cafe" / "skills" / "cafe-develop"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: cafe-develop
+description: packet preparation test skill
+workflow:
+  prompt_inputs:
+    - artifacts: [spec]
+      placeholder: spec_file
+      load_policy: [{mode: packet, contract_kind: spec}]
+    - artifacts: [spec]
+      placeholder: spec_file_path
+      load_policy: [{mode: packet, contract_kind: spec}]
+---
+
+Prepare packet inputs.
+""",
+        encoding="utf-8",
+    )
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "develop": {
+                "skill": "cafe-develop",
+                "role": "developer",
+                "input_artifacts": ["spec"],
+                "output_artifact": "code",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["await_agent"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    store.set_artifact(state, "spec", relative_source)
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-relative-packet",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("await_agent"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("develop", playbook["steps"]["develop"], state)
+
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    persisted = json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))[
+        "effective_inputs"
+    ]
+    assert persisted["spec_file"] == persisted["spec_file_path"]
+    assert persisted["spec_file"]["source"]["path"] == relative_source
+
+    reloaded_context = executor._build_context(
+        step_name="develop",
+        step_def=playbook["steps"]["develop"],
+        blackboard_state=state,
+        agent_name="David",
+        output_file=iteration_dir / "output.md",
+    )
+
+    assert reloaded_context["spec_file"] == reloaded_context["spec_file_path"]
+    assert reloaded_context["input_loading_modes"] == "spec_file=packet, spec_file_path=packet"
+    assert json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))["effective_inputs"] == persisted
+
+
+def test_primary_and_backup_reject_persisted_full_active_packet_binding(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """UT-004: neither execution path may replace an active packet decision with full."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-full-packet-binding"
+    source = issue_dir / "spec" / "iteration_001" / "output.md"
+    source.parent.mkdir(parents=True)
+    _write_valid_spec_contract(source)
+    skill_dir = tmp_path / ".cafe" / "skills" / "cafe-develop"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: cafe-develop
+description: packet validation test skill
+workflow:
+  prompt_inputs:
+    - artifacts: [spec]
+      placeholder: spec_file
+      load_policy: [{mode: packet, contract_kind: spec}]
+    - artifacts: [spec]
+      placeholder: spec_file_path
+      load_policy: [{mode: packet, contract_kind: spec}]
+---
+
+Reject tampered persisted packet decisions.
+""",
+        encoding="utf-8",
+    )
+    step = {
+        "skill": "cafe-develop",
+        "role": "developer",
+        "input_artifacts": ["spec"],
+        "output_artifact": "code",
+        "valid_intents": ["await_agent"],
+        "on": {"await_agent": "_done"},
+    }
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {"develop": step},
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    store.set_artifact(state, "spec", str(source))
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-full-packet-binding",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("await_agent"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    executor.iteration = 1
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    full_binding = {"mode": "full", "path": str(source)}
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps(
+            {
+                "effective_inputs": {
+                    "spec_file": full_binding,
+                    "spec_file_path": full_binding,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="persisted context packet decision"):
+        executor._build_context(
+            step_name="develop",
+            step_def=step,
+            blackboard_state=state,
+            agent_name="David",
+            output_file=iteration_dir / "output.md",
+        )
+    with pytest.raises(ValueError, match="persisted context packet decision"):
+        executor._build_backup_takeover_context(
+            error="primary failed",
+            step_name="develop",
+            step_def=step,
+            blackboard_state=state,
+            output_file=iteration_dir / "output.md",
+            checklist_file=iteration_dir / "checklist.md",
+            iteration_dir=iteration_dir,
+        )
+
+
+def test_persisted_packet_binding_must_match_declared_authority_and_envelope(
+    tmp_path: Path,
+) -> None:
+    """UT-004: takeover cannot redirect a packet binding to another source."""
+    from cafe.skills.contracts import SkillWorkflowContract, resolve_effective_prompt_inputs
+
+    source = tmp_path / "spec.md"
+    other = tmp_path / "other.md"
+    _write_valid_spec_contract(source)
+    other.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    contract = SkillWorkflowContract.model_validate(
+        {"prompt_inputs": [
+            {"artifacts": ["spec"], "placeholder": "spec_file", "load_policy": [{"mode": "packet", "contract_kind": "spec"}]},
+            {"artifacts": ["spec"], "placeholder": "spec_file_path", "load_policy": [{"mode": "packet", "contract_kind": "spec"}]},
+        ]}
+    )
+    iteration_dir = tmp_path / "develop" / "iteration_001"
+    effective = resolve_effective_prompt_inputs(
+        contract, {"spec": source}, step="develop", iteration=1, feedback=False, packet_dir=iteration_dir
+    )
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps({"effective_inputs": effective}), encoding="utf-8"
+    )
+
+    loaded = GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+        iteration_dir,
+        require_persisted_packet_decision=True,
+        authoritative_inputs={"spec_file": source, "spec_file_path": source},
+        target_step="develop",
+        iteration=1,
+    )
+    assert loaded == effective
+
+    original = json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))
+    packet_path = Path(original["effective_inputs"]["spec_file"]["path"])
+    original_packet = packet_path.read_text(encoding="utf-8")
+
+    tampered = json.loads(json.dumps(original))
+    tampered["effective_inputs"]["spec_file_path"]["path"] = str(other)
+    (iteration_dir / "iteration.json").write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(ValueError, match="context packet decision"):
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+            iteration_dir,
+            require_persisted_packet_decision=True,
+            authoritative_inputs={"spec_file": source, "spec_file_path": source},
+            target_step="develop",
+            iteration=1,
+        )
+
+    tampered = json.loads(json.dumps(original))
+    tampered["effective_inputs"].pop("spec_file_path")
+    (iteration_dir / "iteration.json").write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(ValueError, match="context packet decision"):
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+            iteration_dir,
+            require_persisted_packet_decision=True,
+            authoritative_inputs={"spec_file": source, "spec_file_path": source},
+            target_step="develop",
+            iteration=1,
+        )
+
+    tampered_packet = json.loads(original_packet)
+    tampered_packet["contract"]["bytes"] = "agent-substituted contract"
+    tampered_packet["contract"]["sha256"] = __import__("hashlib").sha256(
+        tampered_packet["contract"]["bytes"].encode("utf-8")
+    ).hexdigest()
+    packet_path.write_text(json.dumps(tampered_packet), encoding="utf-8")
+    (iteration_dir / "iteration.json").write_text(json.dumps(original), encoding="utf-8")
+    with pytest.raises(ValueError, match="context packet decision"):
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+            iteration_dir,
+            require_persisted_packet_decision=True,
+            authoritative_inputs={"spec_file": source, "spec_file_path": source},
+            target_step="develop",
+            iteration=1,
+        )
+
+    packet_path.write_text(original_packet, encoding="utf-8")
+    replacement = iteration_dir / "agent-selected-packet.json"
+    replacement.write_text(original_packet, encoding="utf-8")
+    tampered = json.loads(json.dumps(original))
+    for binding in tampered["effective_inputs"].values():
+        binding["path"] = str(replacement)
+    (iteration_dir / "iteration.json").write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(ValueError, match="context packet decision"):
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+            iteration_dir,
+            require_persisted_packet_decision=True,
+            authoritative_inputs={"spec_file": source, "spec_file_path": source},
+            target_step="develop",
+            iteration=1,
+        )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("fallback_reason", "contract_invalid"),
+        ("reason", "packet_persist_failed"),
+        ("detail", "agent supplied secret"),
+        ("source", {"artifact_name": "spec", "artifact_version": "one"}),
+    ],
+)
+def test_persisted_packet_decision_fails_closed_on_tampered_runtime_fields(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    """UT-004: primary/backup/retry/resume share the same strict loader."""
+    iteration_dir = tmp_path / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    binding = {
+        "requested_mode": "packet", "mode": "full_fallback", "path": "spec.md",
+        "source": {"artifact_name": "spec", "artifact_version": 1},
+        "reason": "packet_invalid", "fallback_reason": "packet_invalid",
+        "detail": "context packet validation failed",
+    }
+    binding[field] = value
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps({"effective_inputs": {"spec_file": binding}}), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="context packet decision"):
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+            iteration_dir, require_persisted_packet_decision=True
+        )

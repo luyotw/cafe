@@ -388,6 +388,42 @@ def resolve_prompt_inputs(
     return resolved
 
 
+def resolve_packet_requested_placeholders(
+    contract: SkillWorkflowContract,
+    artifacts: Mapping[str, Any],
+    *,
+    step: str,
+    iteration: int,
+    feedback: bool,
+    authoritative_inputs: Mapping[str, str | Path] | None = None,
+) -> frozenset[str]:
+    """Return authoritative placeholders whose active policy requires a packet."""
+    authoritative = (
+        resolve_prompt_inputs(contract, artifacts)
+        if authoritative_inputs is None
+        else authoritative_inputs
+    )
+    return frozenset(
+        mapping.placeholder
+        for mapping in contract.prompt_inputs
+        if mapping.placeholder in authoritative
+        and (selected := next(
+            (
+                policy
+                for policy in mapping.load_policy
+                if policy.when.matches(
+                    step=step,
+                    iteration=iteration,
+                    artifacts=artifacts,
+                    feedback=feedback,
+                )
+            ),
+            None,
+        )) is not None
+        and selected.mode == "packet"
+    )
+
+
 def resolve_effective_prompt_inputs(
     contract: SkillWorkflowContract,
     artifacts: Mapping[str, Any],
@@ -399,10 +435,15 @@ def resolve_effective_prompt_inputs(
 ) -> dict[str, dict[str, str]]:
     """Resolve declared input relationships without relying on artifact names.
 
-    Packet failures are deliberately local: other inputs remain in their
-    declared mode and the affected input exposes its complete source path.
+    Safe packet construction failures remain local: other inputs retain their
+    declared mode and the affected input uses its complete source. Invalid
+    contracts instead reject confirmation before the consumer can start.
     """
-    from cafe.core.context_packet import resolve_context_packet
+    from cafe.core.context_packet import (
+        canonical_context_packet_path,
+        resolve_context_packet,
+        validate_effective_input_bindings,
+    )
 
     result: dict[str, dict[str, str]] = {}
     relationships: list[tuple[PromptInputContract, str, str, int, PromptInputLoadPolicy | None]] = (
@@ -460,7 +501,7 @@ def resolve_effective_prompt_inputs(
             mapping.placeholder
             for mapping, _source, _source_name, _source_version, _policy in group
         )
-        packet_path = Path(packet_dir) / f"context_{placeholders[0]}.json"
+        packet_path = canonical_context_packet_path(Path(packet_dir), placeholders)
         resolved = resolve_context_packet(
             source_path=source,
             contract_kind=contract_kind,
@@ -472,11 +513,29 @@ def resolve_effective_prompt_inputs(
             source_artifact_version=source_version,
         )
         binding = {
+            "requested_mode": "packet",
             "mode": str(resolved["mode"]),
             "path": str(resolved["path"]),
             "reason": str(resolved.get("reason", "")),
+            "fallback_reason": str(resolved.get("fallback_reason", "")),
+            "detail": str(resolved.get("detail", "")),
             "source": dict(resolved.get("source", {})),
         }
         for mapping, _source, _source_name, _source_version, _policy in group:
             result[mapping.placeholder] = dict(binding)
-    return result
+    # Use the same fail-closed validator as persisted primary and takeover
+    # paths so a full/packet/fallback alias split never reaches a consumer.
+    return validate_effective_input_bindings(
+        result,
+        authoritative_inputs=resolve_prompt_inputs(contract, artifacts),
+        packet_requested_placeholders=resolve_packet_requested_placeholders(
+            contract,
+            artifacts,
+            step=step,
+            iteration=iteration,
+            feedback=feedback,
+        ),
+        packet_dir=packet_dir,
+        target_step=step,
+        iteration=iteration,
+    )

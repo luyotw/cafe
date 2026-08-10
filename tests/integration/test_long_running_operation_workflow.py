@@ -22,8 +22,10 @@ from pathlib import Path
 
 from cafe.agents.executor import AgentExecutionError
 from cafe.core.blackboard import (
-    BlackboardStore,
     LongRunningOperationState,
+    OperationLogPolicy,
+    OperationMonitoring,
+    OperationRisk,
 )
 from cafe.core.long_running_operation_helper import (
     get_operation_status,
@@ -38,6 +40,14 @@ _PLAYBOOK = {
         "develop": {"skill": "develop", "role": "developer", "on": {"await_agent": "review"}},
         "review": {"skill": "review", "role": "developer", "on": {"confirmed": "_done"}},
     },
+}
+
+_LOW_OPERATION_DECISION = {
+    "risk": OperationRisk.LOW,
+    "monitoring": OperationMonitoring.FINAL_ONLY,
+    "log_policy": OperationLogPolicy.SUMMARY_ONLY,
+    "stop_condition": "stop at the declared test boundary",
+    "recovery": "inspect the same operation id",
 }
 
 
@@ -59,7 +69,7 @@ def _write_baton(issue_dir: Path, *, from_step: str, to_step: str) -> None:
     )
 
 
-def test_runtime_rechecks_operation_created_inside_executor_before_no_status_fallback(
+def test_low_risk_silent_single_launch_journey(
     tmp_path: Path,
 ) -> None:
     """Executable reproduction for issue #386's NO_STATUS_CODE gap.
@@ -99,6 +109,7 @@ def test_runtime_rechecks_operation_created_inside_executor_before_no_status_fal
             cwd=tmp_path,
             playbook=_PLAYBOOK,
             reason="same_run_real_helper_probe",
+            **_LOW_OPERATION_DECISION,
         )
         assert launched.started is True
         return StepExecutionResult(response="waiting for tracked operation", artifacts={})
@@ -112,7 +123,11 @@ def test_runtime_rechecks_operation_created_inside_executor_before_no_status_fal
 
     assert first_result.final_status_code == "OPERATION_RUNNING"
     assert executor_calls == 1
-    assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "running"
+    persisted = json.loads((iteration_dir / "operation.json").read_text())
+    assert persisted["state"] == "running"
+    assert (persisted["risk"], persisted["monitoring"], persisted["log_policy"]) == (
+        "low", "final-only", "summary-only"
+    )
 
     def duplicate_launch_executor(
         step_name: str, step_def: dict, state: object
@@ -167,6 +182,7 @@ def test_runtime_run_rechecks_helper_liveness_and_marks_lost_without_manual_stat
             cwd=tmp_path,
             playbook=_PLAYBOOK,
             reason="runtime_liveness_probe",
+            **_LOW_OPERATION_DECISION,
         )
         launched_operations.append(launched)
         assert launched.started is True
@@ -259,6 +275,7 @@ def test_succeeded_operation_without_phase_artifacts_runs_finalize_only_once(
                 cwd=tmp_path,
                 playbook=_PLAYBOOK,
                 reason="finalize_only_long_command",
+                **_LOW_OPERATION_DECISION,
             )
             assert launched.started is True
             return StepExecutionResult(response="waiting for tracked operation", artifacts={})
@@ -348,6 +365,7 @@ def test_run_operation_command_claims_single_operation_atomically(tmp_path: Path
             cwd=tmp_path,
             playbook=_PLAYBOOK,
             reason="atomic_claim_probe",
+            **_LOW_OPERATION_DECISION,
         )
 
     threads = [threading.Thread(target=lambda: results.append(launch())) for _ in range(2)]
@@ -362,7 +380,7 @@ def test_run_operation_command_claims_single_operation_atomically(tmp_path: Path
     assert len({result.operation.operation_id for result in results}) == 1
 
 
-def test_production_helper_owns_launch_status_and_terminal_receipt_for_success(
+def test_medium_risk_replayable_journey_preserves_policy_and_single_launch(
     tmp_path: Path,
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-helper-success"
@@ -419,6 +437,11 @@ iteration_dir.mkdir(parents=True, exist_ok=True)
         cwd=tmp_path,
         playbook=_PLAYBOOK,
         reason="integration_fake_long_command",
+        risk=OperationRisk.MEDIUM,
+        monitoring=OperationMonitoring.PERIODIC,
+        log_policy=OperationLogPolicy.INCREMENTAL_TAIL,
+        stop_condition="stop if the integration fixture reports failure",
+        recovery="inspect the same operation id before retrying",
     )
     duplicate = run_operation_command(
         issue_dir=issue_dir,
@@ -434,6 +457,11 @@ iteration_dir.mkdir(parents=True, exist_ok=True)
         cwd=tmp_path,
         playbook=_PLAYBOOK,
         reason="integration_fake_long_command",
+        risk=OperationRisk.MEDIUM,
+        monitoring=OperationMonitoring.PERIODIC,
+        log_policy=OperationLogPolicy.INCREMENTAL_TAIL,
+        stop_condition="stop if the integration fixture reports failure",
+        recovery="inspect the same operation id before retrying",
     )
     assert duplicate.operation.operation_id == launched.operation.operation_id
     assert duplicate.started is False
@@ -475,6 +503,11 @@ iteration_dir.mkdir(parents=True, exist_ok=True)
         )
     assert status.state == LongRunningOperationState.SUCCEEDED
     assert status.exit_code == 0
+    assert (status.risk, status.monitoring, status.log_policy) == (
+        OperationRisk.MEDIUM,
+        OperationMonitoring.PERIODIC,
+        OperationLogPolicy.INCREMENTAL_TAIL,
+    )
 
     second_result = BlackboardWorkflowRuntime(
         issue_dir=issue_dir, playbook=_PLAYBOOK, executor=duplicate_launch_executor
@@ -504,6 +537,7 @@ def test_production_helper_records_nonzero_exit_as_failed(tmp_path: Path) -> Non
         cwd=tmp_path,
         playbook=_PLAYBOOK,
         reason="integration_fake_failed_command",
+        **_LOW_OPERATION_DECISION,
     )
     assert launched.started is True
 
@@ -539,7 +573,7 @@ def test_production_helper_records_nonzero_exit_as_failed(tmp_path: Path) -> Non
     assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "failed"
 
 
-def test_production_helper_marks_lost_when_handle_identity_is_unverifiable(
+def test_high_risk_explicit_stop_and_recovery_journey_preserves_policy(
     tmp_path: Path,
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-helper-lost"
@@ -564,6 +598,11 @@ def test_production_helper_marks_lost_when_handle_identity_is_unverifiable(
         cwd=tmp_path,
         playbook=_PLAYBOOK,
         reason="integration_fake_lost_command",
+        risk=OperationRisk.HIGH,
+        monitoring=OperationMonitoring.ACTIVE,
+        log_policy=OperationLogPolicy.FILTERED_STREAM,
+        stop_condition="stop if the fake high-risk operation cannot be verified",
+        recovery="inspect the same operation id before recovery",
     )
     assert launched.started is True
     deadline = time.time() + 2
@@ -619,12 +658,19 @@ def test_production_helper_marks_lost_when_handle_identity_is_unverifiable(
     ).run(start_step="develop", single_step=True)
 
     assert result.final_status_code == "OPERATION_LOST"
-    assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "lost"
+    persisted = json.loads((iteration_dir / "operation.json").read_text())
+    assert persisted["state"] == "lost"
+    assert (persisted["risk"], persisted["monitoring"], persisted["log_policy"]) == (
+        "high", "active", "filtered-stream"
+    )
+    assert persisted["stop_condition"] == "stop if the fake high-risk operation cannot be verified"
+    assert persisted["recovery"] == "inspect the same operation id before recovery"
 
 
-def test_agent_writable_completion_evidence_without_receipt_does_not_promote_to_succeeded(
+def test_agent_timeout_without_a_launch_decision_creates_no_operation(
     tmp_path: Path,
 ) -> None:
+    """A timeout cannot create a low-risk policy or an operation identity."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-journey-no-receipt"
 
     def crashing_executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
@@ -637,32 +683,19 @@ def test_agent_writable_completion_evidence_without_receipt_does_not_promote_to_
             "agent did not produce output before the execution timeout", error_type="timeout"
         )
 
-    BlackboardWorkflowRuntime(
+    result = BlackboardWorkflowRuntime(
         issue_dir=issue_dir, playbook=_PLAYBOOK, executor=crashing_executor
     ).run(start_step="develop", single_step=True)
 
     iteration_dir = issue_dir / "develop" / "iteration_001"
-    (iteration_dir / "output.md").write_text("# agent-authored\n", encoding="utf-8")
-    (iteration_dir / "checklist.md").write_text("- [x] done\n", encoding="utf-8")
-    _write_baton(issue_dir, from_step="develop", to_step="review")
-
-    def duplicate_launch_executor(
-        step_name: str, step_def: dict, state: object
-    ) -> StepExecutionResult:
-        raise AssertionError(f"executor must not be invoked again for {step_name}")
-
-    result = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir, playbook=_PLAYBOOK, executor=duplicate_launch_executor
-    ).run(start_step="develop", single_step=True)
-
-    assert result.final_status_code == "OPERATION_LOST"
-    assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "lost"
+    assert result.final_status_code.startswith("INTERRUPTED")
+    assert not (iteration_dir / "operation.json").exists()
 
 
-def test_agent_timeout_without_helper_evidence_becomes_lost_without_duplicate_launch(
+def test_timeout_does_not_block_a_later_explicit_operation_launch(
     tmp_path: Path,
 ) -> None:
-    """Timeout-created operation state must not stay running without helper evidence."""
+    """A later agent invocation remains responsible for any new launch decision."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-journey-still-running"
 
     def crashing_executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
@@ -680,16 +713,16 @@ def test_agent_timeout_without_helper_evidence_becomes_lost_without_duplicate_la
     )
     first_run.run(start_step="develop", single_step=True)
 
-    def duplicate_launch_executor(
+    def explicit_operation_executor(
         step_name: str, step_def: dict, state: object
     ) -> StepExecutionResult:
-        raise AssertionError(f"executor must not be invoked again for {step_name}")
+        return StepExecutionResult(response="completed", artifacts={}, status_code="confirmed")
 
     second_run = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir, playbook=_PLAYBOOK, executor=duplicate_launch_executor
+        issue_dir=issue_dir, playbook=_PLAYBOOK, executor=explicit_operation_executor
     )
     second_result = second_run.run(start_step="develop", single_step=True)
 
-    assert second_result.final_status_code == "OPERATION_LOST"
+    assert second_result.final_status_code == "confirmed"
     iteration_dir = issue_dir / "develop" / "iteration_001"
-    assert json.loads((iteration_dir / "operation.json").read_text())["state"] == "lost"
+    assert not (iteration_dir / "operation.json").exists()

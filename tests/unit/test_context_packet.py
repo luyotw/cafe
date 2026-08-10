@@ -4,7 +4,13 @@ import pytest
 
 import json
 
-from cafe.core.context_packet import resolve_context_packet, validate_context_packet
+from cafe.core.context_packet import (
+    build_context_packet_diagnostics,
+    resolve_context_packet,
+    validate_context_packet,
+    validate_effective_input_bindings,
+)
+from cafe.core.downstream_contract import ContractValidationError
 from cafe.skills.contracts import SkillWorkflowContract, resolve_effective_prompt_inputs
 
 
@@ -71,15 +77,77 @@ def test_packet_relationship_falls_back_without_affecting_other_inputs(tmp_path:
     assert resolved["packet_spec"]["source"]["artifact_version"] == 1
     assert resolved["full_notes"] == {"mode": "full", "path": str(tmp_path / "notes.md")}
     source.write_text("# legacy", encoding="utf-8")
-    fallback = resolve_context_packet(
-        source_path=source,
-        contract_kind="spec",
-        target_step="custom",
-        iteration=2,
-        placeholders=("packet_spec",),
-        packet_path=tmp_path / "new.json",
-    )
-    assert fallback["mode"] == "full_fallback"
+    with pytest.raises(ContractValidationError):
+        resolve_context_packet(
+            source_path=source,
+            contract_kind="spec",
+            target_step="custom",
+            iteration=2,
+            placeholders=("packet_spec",),
+            packet_path=tmp_path / "new.json",
+        )
+
+
+def test_singleton_packet_placeholder_is_required_by_active_policy(tmp_path: Path) -> None:
+    """UT-004: an empty persisted decision cannot omit a singleton packet input."""
+    source = tmp_path / "spec.md"
+    source.write_text(_spec(), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="context packet decision"):
+        validate_effective_input_bindings(
+            {},
+            authoritative_inputs={"packet_spec": source},
+            packet_requested_placeholders=frozenset({"packet_spec"}),
+        )
+
+
+@pytest.mark.parametrize(
+    "placeholders",
+    [
+        frozenset({"packet_spec"}),
+        frozenset({"packet_spec", "packet_spec_path"}),
+    ],
+)
+def test_active_packet_placeholder_rejects_plain_full_binding(
+    tmp_path: Path,
+    placeholders: frozenset[str],
+) -> None:
+    """UT-004: persisted active packet relations cannot silently become full."""
+    source = tmp_path / "spec.md"
+    source.write_text(_spec(), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="persisted context packet decision"):
+        validate_effective_input_bindings(
+            {
+                placeholder: {"mode": "full", "path": str(source)}
+                for placeholder in placeholders
+            },
+            authoritative_inputs={placeholder: source for placeholder in placeholders},
+            packet_requested_placeholders=placeholders,
+        )
+
+
+def test_packet_completeness_ignores_unrequested_optional_full_input(tmp_path: Path) -> None:
+    """UT-004: active packet policies do not require unrelated full bindings."""
+    source = tmp_path / "spec.md"
+    notes = tmp_path / "notes.md"
+    source.write_text(_spec(), encoding="utf-8")
+    notes.write_text("optional notes", encoding="utf-8")
+    packet_binding = {
+        "requested_mode": "packet",
+        "mode": "full_fallback",
+        "path": str(source),
+        "reason": "packet_invalid",
+        "fallback_reason": "packet_invalid",
+        "detail": "context packet validation failed",
+        "source": {"artifact_name": "spec", "artifact_version": 1},
+    }
+
+    assert validate_effective_input_bindings(
+        {"packet_spec": packet_binding},
+        authoritative_inputs={"packet_spec": source, "optional_notes": notes},
+        packet_requested_placeholders=frozenset({"packet_spec"}),
+    ) == {"packet_spec": packet_binding}
 
 
 def test_paired_placeholders_share_one_effective_packet_binding(tmp_path: Path) -> None:
@@ -124,6 +192,103 @@ def test_paired_placeholders_share_one_effective_packet_binding(tmp_path: Path) 
     ]
 
 
+def test_paired_placeholders_reject_a_full_and_packet_split(tmp_path: Path) -> None:
+    """UT-004: a declared alias pair owns one effective-input decision."""
+    source = tmp_path / "spec.md"
+    source.write_text(_spec(), encoding="utf-8")
+    contract = SkillWorkflowContract.model_validate(
+        {
+            "prompt_inputs": [
+                {"artifacts": ["spec"], "placeholder": "spec_file"},
+                {
+                    "artifacts": ["spec"],
+                    "placeholder": "spec_file_path",
+                    "load_policy": [{"mode": "packet", "contract_kind": "spec"}],
+                },
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="persisted context packet decision"):
+        resolve_effective_prompt_inputs(
+            contract,
+            {"spec": source},
+            step="custom",
+            iteration=1,
+            feedback=False,
+            packet_dir=tmp_path / "packets",
+        )
+
+
+def test_packet_diagnostics_are_strict_and_deduplicate_paired_bindings() -> None:
+    """One requested relation produces one validated, durable diagnostic."""
+    bindings = {
+        "spec_file": {
+            "requested_mode": "packet",
+            "mode": "full_fallback",
+            "path": "spec.md",
+            "source": {"artifact_name": "spec", "artifact_version": 2},
+            "reason": "packet_invalid",
+            "fallback_reason": "packet_invalid",
+            "detail": "context packet validation failed",
+        },
+        "spec_file_path": {
+            "requested_mode": "packet",
+            "mode": "full_fallback",
+            "path": "spec.md",
+            "source": {"artifact_name": "spec", "artifact_version": 2},
+            "reason": "packet_invalid",
+            "fallback_reason": "packet_invalid",
+            "detail": "context packet validation failed",
+        },
+    }
+
+    diagnostics = build_context_packet_diagnostics(bindings)
+
+    assert diagnostics == [
+        {
+            "placeholders": ["spec_file", "spec_file_path"],
+            "source": {"artifact_name": "spec", "artifact_version": 2},
+            "requested_mode": "packet",
+            "effective_mode": "full_fallback",
+            "fallback_reason": "packet_invalid",
+            "detail": "context packet validation failed",
+            "path": "spec.md",
+        }
+    ]
+    bindings["spec_file"]["fallback_reason"] = "untrusted-agent-text"
+    with pytest.raises(ValueError, match="persisted context packet decision"):
+        build_context_packet_diagnostics(bindings)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"fallback_reason": "contract_invalid"},
+        {"reason": "packet_persist_failed"},
+        {"detail": "agent supplied secret: abc"},
+        {"detail": "x" * 161},
+        {"source": {"artifact_name": "spec", "artifact_version": "two"}},
+    ],
+)
+def test_persisted_packet_bindings_reject_agent_tampering(mutation: dict[str, object]) -> None:
+    """UT-004: only runtime-owned fallback values can survive persistence."""
+    binding = {
+        "requested_mode": "packet",
+        "mode": "full_fallback",
+        "path": "spec.md",
+        "source": {"artifact_name": "spec", "artifact_version": 2},
+        "reason": "packet_invalid",
+        "fallback_reason": "packet_invalid",
+        "detail": "context packet validation failed",
+    }
+    binding.update(mutation)
+
+    with pytest.raises(ValueError, match="persisted context packet decision"):
+        build_context_packet_diagnostics({"spec_file": binding})
+
+
+
 def test_packet_rejects_extra_envelope_fields_and_persisted_format_tampering(
     tmp_path: Path,
 ) -> None:
@@ -154,6 +319,8 @@ def test_packet_rejects_extra_envelope_fields_and_persisted_format_tampering(
         packet_path=packet_path,
     )
     assert fallback["mode"] == "full_fallback"
+    assert fallback["fallback_reason"] == "packet_invalid"
+    assert fallback["detail"] == "context packet validation failed"
 
 
 def test_packet_tampering_cannot_be_approved_by_rewriting_a_sidecar_receipt(tmp_path: Path) -> None:
@@ -184,6 +351,33 @@ def test_packet_tampering_cannot_be_approved_by_rewriting_a_sidecar_receipt(tmp_
         packet_path=packet_path,
     )
     assert fallback["mode"] == "full_fallback"
+    assert fallback["fallback_reason"] == "packet_invalid"
+    assert fallback["detail"] == "context packet validation failed"
+
+
+def test_packet_validation_failure_has_the_exact_boundary_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT-003: invalid envelopes retain the fixed, sanitized failure reason."""
+    source = tmp_path / "spec.md"
+    source.write_text(_spec(), encoding="utf-8")
+    monkeypatch.setattr(
+        "cafe.core.context_packet.validate_context_packet",
+        lambda _packet: (_ for _ in ()).throw(ValueError("untrusted detail")),
+    )
+
+    resolved = resolve_context_packet(
+        source_path=source,
+        contract_kind="spec",
+        target_step="custom",
+        iteration=2,
+        placeholders=("packet_spec",),
+        packet_path=tmp_path / "packet.json",
+    )
+
+    assert resolved["mode"] == "full_fallback"
+    assert resolved["fallback_reason"] == "packet_invalid"
+    assert resolved["detail"] == "context packet validation failed"
 
 
 def test_packet_persistence_errors_fall_back_to_authoritative_source(
@@ -205,8 +399,30 @@ def test_packet_persistence_errors_fall_back_to_authoritative_source(
         packet_path=tmp_path / "packet.json",
     )
 
-    assert resolved == {
-        "mode": "full_fallback",
-        "path": str(source),
-        "reason": "Unable to persist context packet",
-    }
+    assert resolved["mode"] == "full_fallback"
+    assert resolved["path"] == str(source)
+    assert resolved["fallback_reason"] == "packet_persist_failed"
+    assert resolved["detail"] == "context packet could not be persisted"
+
+
+def test_packet_build_failures_use_the_build_boundary_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "spec.md"
+    source.write_text(_spec(), encoding="utf-8")
+    monkeypatch.setattr(
+        "cafe.core.context_packet.build_context_packet",
+        lambda **_kwargs: (_ for _ in ()).throw(OSError("source unavailable")),
+    )
+
+    resolved = resolve_context_packet(
+        source_path=source,
+        contract_kind="spec",
+        target_step="custom",
+        iteration=2,
+        placeholders=("packet_spec",),
+        packet_path=tmp_path / "packet.json",
+    )
+
+    assert resolved["fallback_reason"] == "packet_build_failed"
+    assert resolved["detail"] == "context packet could not be built"

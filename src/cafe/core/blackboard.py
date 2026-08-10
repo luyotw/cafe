@@ -66,6 +66,24 @@ class LongRunningOperationState(str, Enum):
     LOST = "lost"
 
 
+class OperationRisk(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class OperationMonitoring(str, Enum):
+    FINAL_ONLY = "final-only"
+    PERIODIC = "periodic"
+    ACTIVE = "active"
+
+
+class OperationLogPolicy(str, Enum):
+    SUMMARY_ONLY = "summary-only"
+    INCREMENTAL_TAIL = "incremental-tail"
+    FILTERED_STREAM = "filtered-stream"
+
+
 def operation_artifact_path(iteration_dir: Path) -> Path:
     """Fixed one-per-iteration path: ``iteration_dir/operation.json``."""
     return Path(iteration_dir) / OPERATION_ARTIFACT_FILENAME
@@ -85,11 +103,25 @@ class LongRunningOperationArtifact:
     """
 
     state: LongRunningOperationState
+    risk: OperationRisk
+    monitoring: OperationMonitoring
+    log_policy: OperationLogPolicy
+    stop_condition: str
+    recovery: str
     reason: str = ""
     exit_code: Optional[int] = None
     operation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
+
+    def __post_init__(self) -> None:
+        validate_operation_decision(
+            risk=self.risk,
+            monitoring=self.monitoring,
+            log_policy=self.log_policy,
+            stop_condition=self.stop_condition,
+            recovery=self.recovery,
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -99,6 +131,11 @@ class LongRunningOperationArtifact:
             "exit_code": self.exit_code,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "risk": self.risk.value,
+            "monitoring": self.monitoring.value,
+            "log_policy": self.log_policy.value,
+            "stop_condition": self.stop_condition,
+            "recovery": self.recovery,
         }
 
     @classmethod
@@ -132,14 +169,70 @@ class LongRunningOperationArtifact:
         else:
             raise ValueError(f"operation.json exit_code must be an integer, got {raw_exit_code!r}")
 
-        return cls(
+        artifact = cls(
             state=state,
             reason=str(data.get("reason", "")),
             exit_code=exit_code,
             operation_id=operation_id,
             created_at=str(data.get("created_at", _now_iso())),
             updated_at=str(data.get("updated_at", _now_iso())),
+            risk=_strict_operation_value(data, "risk", OperationRisk),
+            monitoring=_strict_operation_value(data, "monitoring", OperationMonitoring),
+            log_policy=_strict_operation_value(data, "log_policy", OperationLogPolicy),
+            stop_condition=_required_operation_text(data.get("stop_condition"), "stop_condition"),
+            recovery=_required_operation_text(data.get("recovery"), "recovery"),
         )
+        validate_operation_decision(
+            risk=artifact.risk,
+            monitoring=artifact.monitoring,
+            log_policy=artifact.log_policy,
+            stop_condition=artifact.stop_condition,
+            recovery=artifact.recovery,
+        )
+        return artifact
+
+
+def _strict_operation_value(data: Dict[str, Any], field_name: str, enum: Any) -> Any:
+    if field_name not in data:
+        raise ValueError(f"operation.json is missing required field {field_name!r}")
+    value = data[field_name]
+    try:
+        return enum(str(value))
+    except ValueError as exc:
+        raise ValueError(f"operation.json {field_name} has unsupported value {value!r}") from exc
+
+
+def _bounded_operation_text(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or len(value) > 240:
+        raise ValueError(f"operation.json {field_name} must be bounded text")
+    return value
+
+
+def _required_operation_text(value: Any, field_name: str) -> str:
+    text = _bounded_operation_text(value, field_name)
+    if not text.strip():
+        raise ValueError(f"operation.json {field_name} must be non-empty")
+    return text
+
+
+def validate_operation_decision(
+    *,
+    risk: OperationRisk,
+    monitoring: OperationMonitoring,
+    log_policy: OperationLogPolicy,
+    stop_condition: str,
+    recovery: str,
+) -> None:
+    """Validate an agent-owned risk decision before an operation is claimed."""
+    expected = {
+        OperationRisk.LOW: (OperationMonitoring.FINAL_ONLY, OperationLogPolicy.SUMMARY_ONLY),
+        OperationRisk.MEDIUM: (OperationMonitoring.PERIODIC, OperationLogPolicy.INCREMENTAL_TAIL),
+        OperationRisk.HIGH: (OperationMonitoring.ACTIVE, OperationLogPolicy.FILTERED_STREAM),
+    }[risk]
+    if (monitoring, log_policy) != expected:
+        raise ValueError(f"operation decision monitoring/log_policy must match risk={risk.value}")
+    _required_operation_text(stop_condition, "stop_condition")
+    _required_operation_text(recovery, "recovery")
 
 
 @dataclass
@@ -288,9 +381,9 @@ class HandoffContract:
         current_step: str | None,
     ) -> "HandoffContract":
         required_fields = ["version", "to_owner", "to_step", "intent"]
-        for field in required_fields:
-            if field not in data:
-                raise BatonRejected(field=field, invalid_value="", valid_values=[])
+        for required_field in required_fields:
+            if required_field not in data:
+                raise BatonRejected(field=required_field, invalid_value="", valid_values=[])
 
         try:
             version = int(data["version"])
