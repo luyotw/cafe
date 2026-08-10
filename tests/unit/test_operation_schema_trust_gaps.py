@@ -9,8 +9,11 @@ from cafe.core.blackboard import (
     BlackboardStore,
     HandoffIntent,
     HandoffOwner,
-    LongRunningOperationArtifact,
+    LongRunningOperationArtifact as _LongRunningOperationArtifact,
     LongRunningOperationState,
+    OperationLogPolicy,
+    OperationMonitoring,
+    OperationRisk,
     operation_receipt_path,
 )
 from cafe.core.long_running_operation_helper import get_operation_status
@@ -26,9 +29,20 @@ _PLAYBOOK = {
 _RUNNER = CliRunner()
 
 
+def LongRunningOperationArtifact(**kwargs):
+    return _LongRunningOperationArtifact(
+        risk=OperationRisk.LOW,
+        monitoring=OperationMonitoring.FINAL_ONLY,
+        log_policy=OperationLogPolicy.SUMMARY_ONLY,
+        stop_condition="test operation reaches a terminal state",
+        recovery="inspect the same operation id",
+        **kwargs,
+    )
+
+
 def _write_running_operation(
     issue_dir: Path, iteration_dir: Path, operation_id: str = "op-1"
-) -> LongRunningOperationArtifact:
+) -> _LongRunningOperationArtifact:
     iteration_dir.mkdir(parents=True, exist_ok=True)
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("develop")
@@ -279,7 +293,7 @@ def test_terminal_receipt_without_blackboard_metadata_is_untrusted(tmp_path: Pat
         executor=lambda *_args, **_kwargs: None,
     )
 
-    assert isinstance(receipt, LongRunningOperationArtifact)
+    assert isinstance(receipt, _LongRunningOperationArtifact)
     assert not runtime._operation_receipt_trusted(
         current_step="develop",
         iteration_dir=iteration_dir,
@@ -318,7 +332,7 @@ def test_terminal_receipt_with_mismatched_blackboard_metadata_is_untrusted(
         executor=lambda *_args, **_kwargs: None,
     )
 
-    assert isinstance(receipt, LongRunningOperationArtifact)
+    assert isinstance(receipt, _LongRunningOperationArtifact)
     assert not runtime._operation_receipt_trusted(
         current_step="develop",
         iteration_dir=iteration_dir,
@@ -356,7 +370,7 @@ def test_terminal_receipt_with_wrong_blackboard_path_is_untrusted(tmp_path: Path
         executor=lambda *_args, **_kwargs: None,
     )
 
-    assert isinstance(receipt, LongRunningOperationArtifact)
+    assert isinstance(receipt, _LongRunningOperationArtifact)
     assert not runtime._operation_receipt_trusted(
         current_step="develop",
         iteration_dir=iteration_dir,

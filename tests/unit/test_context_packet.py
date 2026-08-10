@@ -137,16 +137,18 @@ def test_packet_diagnostics_are_strict_and_deduplicate_paired_bindings() -> None
             "mode": "full_fallback",
             "path": "spec.md",
             "source": {"artifact_name": "spec", "artifact_version": 2},
+            "reason": "packet_invalid",
             "fallback_reason": "packet_invalid",
-            "detail": "contract validation failed",
+            "detail": "context packet validation failed",
         },
         "spec_file_path": {
             "requested_mode": "packet",
             "mode": "full_fallback",
             "path": "spec.md",
             "source": {"artifact_name": "spec", "artifact_version": 2},
+            "reason": "packet_invalid",
             "fallback_reason": "packet_invalid",
-            "detail": "contract validation failed",
+            "detail": "context packet validation failed",
         },
     }
 
@@ -159,17 +161,41 @@ def test_packet_diagnostics_are_strict_and_deduplicate_paired_bindings() -> None
             "requested_mode": "packet",
             "effective_mode": "full_fallback",
             "fallback_reason": "packet_invalid",
-            "detail": "contract validation failed",
+            "detail": "context packet validation failed",
             "path": "spec.md",
         }
     ]
     bindings["spec_file"]["fallback_reason"] = "untrusted-agent-text"
-    with pytest.raises(ValueError, match="fallback reason"):
+    with pytest.raises(ValueError, match="persisted context packet decision"):
         build_context_packet_diagnostics(bindings)
 
-    bindings["spec_file"]["fallback_reason"] = "contract_invalid"
-    with pytest.raises(ValueError, match="fallback reason"):
-        build_context_packet_diagnostics(bindings)
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"fallback_reason": "contract_invalid"},
+        {"reason": "packet_persist_failed"},
+        {"detail": "agent supplied secret: abc"},
+        {"detail": "x" * 161},
+        {"source": {"artifact_name": "spec", "artifact_version": "two"}},
+    ],
+)
+def test_persisted_packet_bindings_reject_agent_tampering(mutation: dict[str, object]) -> None:
+    """UT-004: only runtime-owned fallback values can survive persistence."""
+    binding = {
+        "requested_mode": "packet",
+        "mode": "full_fallback",
+        "path": "spec.md",
+        "source": {"artifact_name": "spec", "artifact_version": 2},
+        "reason": "packet_invalid",
+        "fallback_reason": "packet_invalid",
+        "detail": "context packet validation failed",
+    }
+    binding.update(mutation)
+
+    with pytest.raises(ValueError, match="persisted context packet decision"):
+        build_context_packet_diagnostics({"spec_file": binding})
+
 
 
 def test_packet_rejects_extra_envelope_fields_and_persisted_format_tampering(
@@ -257,3 +283,26 @@ def test_packet_persistence_errors_fall_back_to_authoritative_source(
     assert resolved["path"] == str(source)
     assert resolved["fallback_reason"] == "packet_persist_failed"
     assert resolved["detail"] == "context packet could not be persisted"
+
+
+def test_packet_build_failures_use_the_build_boundary_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "spec.md"
+    source.write_text(_spec(), encoding="utf-8")
+    monkeypatch.setattr(
+        "cafe.core.context_packet.build_context_packet",
+        lambda **_kwargs: (_ for _ in ()).throw(OSError("source unavailable")),
+    )
+
+    resolved = resolve_context_packet(
+        source_path=source,
+        contract_kind="spec",
+        target_step="custom",
+        iteration=2,
+        placeholders=("packet_spec",),
+        packet_path=tmp_path / "packet.json",
+    )
+
+    assert resolved["fallback_reason"] == "packet_build_failed"
+    assert resolved["detail"] == "context packet could not be built"

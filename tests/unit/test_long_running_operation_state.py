@@ -8,6 +8,7 @@ helpers rather than a new registry.
 """
 
 import json
+from dataclasses import MISSING
 from pathlib import Path
 
 import pytest
@@ -93,6 +94,14 @@ def test_operation_decision_requires_bounded_text_and_matching_policy() -> None:
         LongRunningOperationArtifact.from_dict(payload)
 
 
+def test_operation_artifact_has_no_implicit_risk_policy() -> None:
+    """UT-007: callers must provide every agent-owned operation decision field."""
+    for name in ("risk", "monitoring", "log_policy", "stop_condition", "recovery"):
+        assert LongRunningOperationArtifact.__dataclass_fields__[name].default is MISSING
+    with pytest.raises(TypeError):
+        LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING)  # type: ignore[call-arg]
+
+
 class TestLongRunningOperationStateEnum:
     """Test List item 8: the enum accepts only the four documented values."""
 
@@ -113,7 +122,14 @@ class TestLongRunningOperationArtifactParser:
     """Test List item 9: the parser stays a small direct parser, no alias map."""
 
     def test_round_trips_minimal_running_artifact(self) -> None:
-        artifact = LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING)
+        artifact = LongRunningOperationArtifact(
+            state=LongRunningOperationState.RUNNING,
+            risk=OperationRisk.LOW,
+            monitoring=OperationMonitoring.FINAL_ONLY,
+            log_policy=OperationLogPolicy.SUMMARY_ONLY,
+            stop_condition="test operation reaches a terminal state",
+            recovery="inspect the same operation id",
+        )
         restored = LongRunningOperationArtifact.from_dict(artifact.to_dict())
         assert restored.state == LongRunningOperationState.RUNNING
         assert restored.reason == ""
@@ -229,7 +245,13 @@ class TestOperationArtifactPersistence:
             state,
             step="develop",
             iteration_dir=iteration_dir,
-            artifact=LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING, reason="tool_timeout"),
+            artifact=LongRunningOperationArtifact(
+                state=LongRunningOperationState.RUNNING, reason="tool_timeout",
+                risk=OperationRisk.LOW, monitoring=OperationMonitoring.FINAL_ONLY,
+                log_policy=OperationLogPolicy.SUMMARY_ONLY,
+                stop_condition="test operation reaches a terminal state",
+                recovery="inspect the same operation id",
+            ),
         )
 
         on_disk = json.loads((iteration_dir / "operation.json").read_text(encoding="utf-8"))
@@ -269,7 +291,11 @@ class TestOperationArtifactPersistence:
             state,
             step="develop",
             iteration_dir=iteration_dir,
-            artifact=LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING),
+            artifact=LongRunningOperationArtifact(
+                state=LongRunningOperationState.RUNNING, risk=OperationRisk.LOW,
+                monitoring=OperationMonitoring.FINAL_ONLY, log_policy=OperationLogPolicy.SUMMARY_ONLY,
+                stop_condition="test operation reaches a terminal state", recovery="inspect the same operation id",
+            ),
         )
 
         # Reuses ArtifactEntry/ArtifactKind.METADATA + record_event; no new
@@ -291,13 +317,21 @@ class TestOperationArtifactPersistence:
             state,
             step="develop",
             iteration_dir=iteration_dir,
-            artifact=LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING),
+            artifact=LongRunningOperationArtifact(
+                state=LongRunningOperationState.RUNNING, risk=OperationRisk.LOW,
+                monitoring=OperationMonitoring.FINAL_ONLY, log_policy=OperationLogPolicy.SUMMARY_ONLY,
+                stop_condition="test operation reaches a terminal state", recovery="inspect the same operation id",
+            ),
         )
         store.write_operation_artifact(
             state,
             step="develop",
             iteration_dir=iteration_dir,
-            artifact=LongRunningOperationArtifact(state=LongRunningOperationState.SUCCEEDED),
+            artifact=LongRunningOperationArtifact(
+                state=LongRunningOperationState.SUCCEEDED, risk=OperationRisk.LOW,
+                monitoring=OperationMonitoring.FINAL_ONLY, log_policy=OperationLogPolicy.SUMMARY_ONLY,
+                stop_condition="test operation reaches a terminal state", recovery="inspect the same operation id",
+            ),
         )
 
         # Still exactly one operation.json for this iteration, now updated.

@@ -16,11 +16,26 @@ from cafe.core.blackboard import (
     BlackboardStore,
     HandoffIntent,
     HandoffOwner,
-    LongRunningOperationArtifact,
+    LongRunningOperationArtifact as _LongRunningOperationArtifact,
     LongRunningOperationState,
+    OperationLogPolicy,
+    OperationMonitoring,
+    OperationRisk,
     operation_artifact_path,
     operation_receipt_path,
 )
+
+
+def LongRunningOperationArtifact(**kwargs):
+    """Create explicit test operation decisions without production defaults."""
+    return _LongRunningOperationArtifact(
+        risk=OperationRisk.LOW,
+        monitoring=OperationMonitoring.FINAL_ONLY,
+        log_policy=OperationLogPolicy.SUMMARY_ONLY,
+        stop_condition="test operation reaches a terminal state",
+        recovery="inspect the same operation id",
+        **kwargs,
+    )
 from cafe.core.hooks import HookResult
 from cafe.core.resume_user_input import CONTINUE_USER_INPUT
 from cafe.core.session_continuation import (
@@ -4815,3 +4830,35 @@ def test_persisted_packet_decision_requires_complete_binding_record(tmp_path: Pa
 
     with pytest.raises(ValueError, match="context packet decision"):
         GenericWorkflowStepExecutor._load_persisted_effective_inputs(iteration_dir)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("fallback_reason", "contract_invalid"),
+        ("reason", "packet_persist_failed"),
+        ("detail", "agent supplied secret"),
+        ("source", {"artifact_name": "spec", "artifact_version": "one"}),
+    ],
+)
+def test_persisted_packet_decision_fails_closed_on_tampered_runtime_fields(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    """UT-004: primary/backup/retry/resume share the same strict loader."""
+    iteration_dir = tmp_path / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    binding = {
+        "requested_mode": "packet", "mode": "full_fallback", "path": "spec.md",
+        "source": {"artifact_name": "spec", "artifact_version": 1},
+        "reason": "packet_invalid", "fallback_reason": "packet_invalid",
+        "detail": "context packet validation failed",
+    }
+    binding[field] = value
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps({"effective_inputs": {"spec_file": binding}}), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="context packet decision"):
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+            iteration_dir, require_persisted_packet_decision=True
+        )

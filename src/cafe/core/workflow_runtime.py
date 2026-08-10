@@ -21,9 +21,6 @@ from cafe.core.blackboard import (
     HandoffIntent,
     HandoffOwner,
     LongRunningOperationArtifact,
-    OperationLogPolicy,
-    OperationMonitoring,
-    OperationRisk,
     LongRunningOperationState,
     operation_artifact_path,
     operation_receipt_path,
@@ -440,51 +437,6 @@ class BlackboardWorkflowRuntime:
             return str(to_step)
         return None
 
-    # Only a characterized timeout/background signal is eligible to create a
-    # durable ``running`` operation. ``agent_timeout`` is raised by
-    # ``AgentExecutor`` when its own idle or post-output wait timeout kills
-    # the process without a more specific classification (see
-    # ``executor.py``'s ``error_type = "timeout"``). Ordinary agent errors,
-    # an explicit Ctrl-C, the separate PR-publish error path, and a plain
-    # missing status code/baton are NOT long-running signals and must keep
-    # existing ``NO_STATUS_CODE`` / error behavior instead of pinning resume.
-    _OPERATION_ELIGIBLE_INTERRUPT_REASONS = {"agent_timeout"}
-
-    def _maybe_record_operation_running(self, *, current_step: str, reason: str) -> None:
-        """Leave a durable ``running`` operation artifact for a recoverable interruption.
-
-        Only a characterized timeout/background signal gets an operation
-        artifact; everything else keeps existing interrupted/error behavior.
-        At most one operation artifact is ever written per iteration.
-        """
-        if reason not in self._OPERATION_ELIGIBLE_INTERRUPT_REASONS:
-            return
-        iteration_dir = self._latest_iteration_dir(current_step)
-        if iteration_dir is None:
-            return
-        try:
-            existing = self.blackboard_store.read_operation_artifact(iteration_dir)
-        except (ValueError, json.JSONDecodeError, OSError):
-            # Leave a malformed artifact alone; resume reconciliation will
-            # surface it as a schema error instead of silently overwriting it.
-            return
-        if existing is not None:
-            return
-        self.blackboard_store.write_operation_artifact(
-            self.blackboard,
-            step=current_step,
-            iteration_dir=iteration_dir,
-            artifact=LongRunningOperationArtifact(
-                state=LongRunningOperationState.RUNNING,
-                reason=reason,
-                risk=OperationRisk.LOW,
-                monitoring=OperationMonitoring.FINAL_ONLY,
-                log_policy=OperationLogPolicy.SUMMARY_ONLY,
-                stop_condition="operation reaches a terminal state",
-                recovery="inspect the same operation id",
-            ),
-        )
-
     def record_long_running_operation_receipt(
         self,
         *,
@@ -617,7 +569,6 @@ class BlackboardWorkflowRuntime:
 
     def _restore_interrupted_step_handoff(self, *, current_step: str, reason: str) -> None:
         """Keep the baton pinned to the interrupted step when recovery fails."""
-        self._maybe_record_operation_running(current_step=current_step, reason=reason)
         self.blackboard_store.set_current_step(self.blackboard, current_step)
         self.blackboard_store.update_handoff_contract(
             self.blackboard,
@@ -2305,11 +2256,9 @@ class BlackboardWorkflowRuntime:
                             )
                             # The agent returned with neither a status code
                             # nor a baton. This is ordinary NO_STATUS_CODE
-                            # behavior, not a characterized long-running
-                            # signal, so no operation artifact is created
-                            # here: only ``agent_timeout`` (see
-                            # ``_OPERATION_ELIGIBLE_INTERRUPT_REASONS``)
-                            # creates a durable ``running`` record.
+                            # behavior, not a long-running operation signal.
+                            # The runtime never fabricates an agent-owned
+                            # operation policy after an interruption.
                             return PlaybookRunResult(
                                 final_step=current_step,
                                 final_status_code="NO_STATUS_CODE",

@@ -15,9 +15,11 @@ def test_context_packet_status_uses_the_shared_sanitized_diagnostic() -> None:
             {
                 "consumer": "develop",
                 "iteration": 1,
-                "source": {"artifact_name": "plan"},
+                "placeholders": ["plan_file"],
+                "source": {"artifact_name": "plan", "artifact_version": 1},
                 "requested_mode": "packet",
                 "effective_mode": "full_fallback",
+                "path": "plan.md",
                 "fallback_reason": "packet_invalid",
                 "detail": "context packet validation failed",
             }
@@ -25,6 +27,12 @@ def test_context_packet_status_uses_the_shared_sanitized_diagnostic() -> None:
     )
 
     assert "full_fallback:packet_invalid (context packet validation failed)" in rendered
+
+
+def test_context_packet_status_omits_untrusted_diagnostic_detail() -> None:
+    assert SummaryDisplay().format_context_packets(
+        [{"detail": "raw secret from an agent"}]
+    ) == ""
 
 
 class TestFormatPhaseEntry:

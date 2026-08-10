@@ -1,7 +1,6 @@
 """Service layer for cafe summary command."""
 
 import json
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
@@ -145,12 +144,16 @@ class SummaryService:
                     raw = json.loads(path.read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError):
                     continue
-                diagnostics = raw.get("context_packets") if isinstance(raw, dict) else None
-                if not isinstance(diagnostics, list):
+                if not isinstance(raw, dict):
+                    continue
+                try:
+                    from cafe.core.context_packet import build_context_packet_diagnostics
+
+                    diagnostics = build_context_packet_diagnostics(raw.get("effective_inputs", {}))
+                except ValueError:
+                    # Never leak an agent-authored diagnostic record.
                     continue
                 for diagnostic in diagnostics:
-                    if not isinstance(diagnostic, dict):
-                        continue
                     packets.append(
                         {
                             "consumer": phase_dir.name,

@@ -53,11 +53,11 @@ def run(
     playbook: str = typer.Option("default", "--playbook", help="Playbook name"),
     cwd: Optional[Path] = typer.Option(None, "--cwd", help="Working directory for the command"),
     reason: str = typer.Option("operation_helper_launch", "--reason", help="Operation reason"),
-    risk: OperationRisk = typer.Option(OperationRisk.LOW, "--risk"),
-    monitoring: OperationMonitoring = typer.Option(OperationMonitoring.FINAL_ONLY, "--monitoring"),
-    log_policy: OperationLogPolicy = typer.Option(OperationLogPolicy.SUMMARY_ONLY, "--log-policy"),
-    stop_condition: str = typer.Option("", "--stop-condition"),
-    recovery: str = typer.Option("", "--recovery"),
+    risk: OperationRisk = typer.Option(..., "--risk"),
+    monitoring: OperationMonitoring = typer.Option(..., "--monitoring"),
+    log_policy: OperationLogPolicy = typer.Option(..., "--log-policy"),
+    stop_condition: str = typer.Option(..., "--stop-condition"),
+    recovery: str = typer.Option(..., "--recovery"),
 ) -> None:
     """Launch one supervised command for the current iteration.
 

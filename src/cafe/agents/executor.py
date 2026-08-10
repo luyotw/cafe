@@ -3,13 +3,11 @@
 import json
 import re
 import subprocess
-from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Optional
 
 from cafe.agents.cli import AbstractCLI, ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
 from cafe.agents.diagnostics import sanitize_error_excerpt
 from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, PermissionDenial, TokenUsage
-from cafe.utils.git_utils import get_repo_root, to_git_ignore_path, to_relative_path
 
 
 class AgentExecutionError(Exception):
@@ -799,57 +797,6 @@ class AgentExecutor:
 
         return permission_denials
 
-    @staticmethod
-    def _classify_stream_activity(data: dict) -> Optional[str]:
-        """Classify Codex stream events for the no-progress guard."""
-        if data.get("type") != "item.completed":
-            return None
-        item = data.get("item")
-        if not isinstance(item, dict):
-            return None
-
-        item_type = str(item.get("type", ""))
-        if item_type in {"file_change", "file_write", "edit", "write"}:
-            return "mutation"
-        if item_type != "command_execution":
-            return None
-
-        lowered = str(item.get("command", "")).lower()
-        mutation_patterns = (
-            r"\bapply_patch\b",
-            r"\bsed\b[^\n]*\s-i(?:\s|$)",
-            r"\bperl\b[^\n]*\s-pi(?:\s|$)",
-            r"\b(?:touch|mkdir|rm|mv|cp|tee)\b",
-            r"\bgit\s+(?:add|commit|mv|rm|apply)\b",
-        )
-        if any(re.search(pattern, lowered) for pattern in mutation_patterns):
-            return "mutation"
-
-        # Codex may report shell-based writes only as command_execution events
-        # instead of emitting a separate file_change event. Detect output
-        # redirection to workspace paths while ignoring diagnostic redirects.
-        first_line = lowered.splitlines()[0] if lowered else ""
-        redirection_targets = re.findall(
-            r"(?:^|[\s;&|])(?:\d*)>>?\s*[\"']?([^\s;|\"']+)",
-            first_line,
-        )
-        for target in redirection_targets:
-            if target in {"&1", "&2"} or target.isdigit():
-                continue
-            if target.startswith(("/dev/", "/tmp/")):
-                continue
-            return "mutation"
-
-        test_patterns = (
-            r"\bpytest\b",
-            r"\bpython(?:3)?\s+-m\s+(?:pytest|unittest)\b",
-            r"\b(?:tox|nox|jest|vitest)\b",
-            r"\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b",
-        )
-        if any(re.search(pattern, lowered) for pattern in test_patterns):
-            return None
-        return "read_only"
-
     def _execute_with_streaming(
         self,
         cmd: List[str],
@@ -951,8 +898,6 @@ class AgentExecutor:
         session_id = None
         model: Optional[str] = None
         permission_denials: List[PermissionDenial] = []
-        read_only_command_count = 0
-        mutation_seen = False
 
         # Add idle timeout to prevent hanging when process stops outputting
         import select
@@ -1220,7 +1165,7 @@ class AgentExecutor:
             try:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                print(f"⚠️  Process did not respond to SIGTERM, sending SIGKILL...")
+                print("⚠️  Process did not respond to SIGTERM, sending SIGKILL...")
                 process.kill()
                 process.wait(timeout=2)
             # Close streaming file handle if open
@@ -1239,13 +1184,13 @@ class AgentExecutor:
             try:
                 returncode = process.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                print(f"⚠️  Process did not respond to SIGTERM, sending SIGKILL...")
+                print("⚠️  Process did not respond to SIGTERM, sending SIGKILL...")
                 process.kill()
                 try:
                     returncode = process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
                     # If even kill doesn't work, something is very wrong
-                    print(f"❌ Process could not be killed, giving up...")
+                    print("❌ Process could not be killed, giving up...")
                     returncode = -1
 
             # Read stderr after termination

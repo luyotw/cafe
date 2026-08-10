@@ -103,16 +103,25 @@ class LongRunningOperationArtifact:
     """
 
     state: LongRunningOperationState
+    risk: OperationRisk
+    monitoring: OperationMonitoring
+    log_policy: OperationLogPolicy
+    stop_condition: str
+    recovery: str
     reason: str = ""
     exit_code: Optional[int] = None
     operation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
-    risk: OperationRisk = OperationRisk.LOW
-    monitoring: OperationMonitoring = OperationMonitoring.FINAL_ONLY
-    log_policy: OperationLogPolicy = OperationLogPolicy.SUMMARY_ONLY
-    stop_condition: str = "operation reaches a terminal state"
-    recovery: str = "inspect the same operation id"
+
+    def __post_init__(self) -> None:
+        validate_operation_decision(
+            risk=self.risk,
+            monitoring=self.monitoring,
+            log_policy=self.log_policy,
+            stop_condition=self.stop_condition,
+            recovery=self.recovery,
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -372,9 +381,9 @@ class HandoffContract:
         current_step: str | None,
     ) -> "HandoffContract":
         required_fields = ["version", "to_owner", "to_step", "intent"]
-        for field in required_fields:
-            if field not in data:
-                raise BatonRejected(field=field, invalid_value="", valid_values=[])
+        for required_field in required_fields:
+            if required_field not in data:
+                raise BatonRejected(field=required_field, invalid_value="", valid_values=[])
 
         try:
             version = int(data["version"])

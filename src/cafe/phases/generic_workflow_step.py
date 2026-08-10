@@ -601,23 +601,9 @@ class GenericWorkflowStepExecutor(Phase):
             return None
         persisted = raw.get("effective_inputs")
         if isinstance(persisted, dict):
-            result: dict[str, dict[str, Any]] = {}
-            for placeholder, binding in persisted.items():
-                if not isinstance(placeholder, str) or not placeholder or not isinstance(binding, dict):
-                    raise ValueError("Invalid persisted context packet decision")
-                mode = binding.get("mode")
-                path_value = binding.get("path")
-                if mode not in {"full", "packet", "full_fallback"} or not isinstance(
-                    path_value, str
-                ) or not path_value:
-                    raise ValueError("Invalid persisted context packet decision")
-                if mode in {"packet", "full_fallback"} and (
-                    binding.get("requested_mode") != "packet"
-                    or not isinstance(binding.get("source"), dict)
-                ):
-                    raise ValueError("Invalid persisted context packet decision")
-                result[placeholder] = dict(binding)
-            return result
+            from cafe.core.context_packet import validate_effective_input_bindings
+
+            return validate_effective_input_bindings(persisted)
         raise ValueError("Invalid persisted context packet decision")
 
     @staticmethod
@@ -649,7 +635,7 @@ class GenericWorkflowStepExecutor(Phase):
         iteration_dir: Path, effective_inputs: Mapping[str, Mapping[str, Any]]
     ) -> None:
         """Persist the validated packet decision in the consumer's sole iteration record."""
-        diagnostics = build_context_packet_diagnostics(effective_inputs)
+        build_context_packet_diagnostics(effective_inputs)
         path = iteration_dir / "iteration.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -659,8 +645,9 @@ class GenericWorkflowStepExecutor(Phase):
         if not isinstance(raw, dict):
             raise ValueError("Invalid iteration metadata for context packet diagnostics")
         raw["effective_inputs"] = {key: dict(value) for key, value in effective_inputs.items()}
-        if diagnostics:
-            raw["context_packets"] = diagnostics
+        # ``effective_inputs`` is the only persisted decision.  Discard the
+        # obsolete projection so status cannot diverge from launch inputs.
+        raw.pop("context_packets", None)
         path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _load_iteration_user_input_candidate(self, step_name: str) -> str:

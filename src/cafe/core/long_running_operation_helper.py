@@ -24,7 +24,6 @@ from cafe.core.blackboard import (
     OperationMonitoring,
     OperationRisk,
     LongRunningOperationState,
-    operation_receipt_path,
     validate_operation_decision,
 )
 from cafe.core.workflow_models import StepExecutionResult
@@ -187,14 +186,14 @@ def run_operation_command(
     step: str,
     iteration_dir: Path,
     command: Sequence[str],
-    cwd: Optional[Path] = None,
     playbook: Dict[str, Any],
+    risk: OperationRisk,
+    monitoring: OperationMonitoring,
+    log_policy: OperationLogPolicy,
+    stop_condition: str,
+    recovery: str,
+    cwd: Optional[Path] = None,
     reason: str = "operation_helper_launch",
-    risk: OperationRisk = OperationRisk.LOW,
-    monitoring: OperationMonitoring = OperationMonitoring.FINAL_ONLY,
-    log_policy: OperationLogPolicy = OperationLogPolicy.SUMMARY_ONLY,
-    stop_condition: str = "operation reaches a terminal state",
-    recovery: str = "inspect the same operation id",
 ) -> OperationLaunchResult:
     """Launch one supervised command for one workflow iteration.
 
