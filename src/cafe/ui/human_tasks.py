@@ -246,9 +246,9 @@ def apply_human_task_payload(
         _validate_packet_contracts_before_confirmation(
             playbook_data=playbook_data,
             blackboard=blackboard,
+            issue_dir=issue_dir,
             producer_step=from_step,
             correction_guidance=policy.correction_guidance,
-            iteration=iteration,
         )
         if trigger == "confirm_output" and continuation != from_step
         else None
@@ -302,9 +302,9 @@ def _validate_packet_contracts_before_confirmation(
     *,
     playbook_data: Mapping[str, Any],
     blackboard: Any,
+    issue_dir: Path,
     producer_step: str,
     correction_guidance: str,
-    iteration: int,
 ) -> Optional[HumanTaskRejection]:
     """Reject confirmation when a declared packet consumer lacks a valid source contract."""
     raw_steps = playbook_data.get("steps")
@@ -332,7 +332,10 @@ def _validate_packet_contracts_before_confirmation(
             or artifact_name not in input_artifacts
         ):
             continue
-        skill_name = _select_skill_name(consumer, iteration)
+        consumer_iteration = latest_step_iteration(
+            issue_dir=issue_dir, step_name=consumer_step
+        )
+        skill_name = _select_skill_name(consumer, consumer_iteration)
         contract = SkillLoader().get_workflow_contract(skill_name)
         packet_kinds = {
             policy.contract_kind

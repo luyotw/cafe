@@ -19,7 +19,7 @@ from cafe.ui.human_tasks import (
 def test_packet_confirmation_uses_consumer_iteration_for_contract_validation(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """IT-001: confirmation validates the packet contract used by this iteration."""
+    """IT-001: confirmation uses the consumer's own current skill contract."""
     builtin_root = tmp_path / "builtin"
     for name, prompt_inputs in (
         ("first-consumer", "  prompt_inputs: []\n"),
@@ -61,18 +61,27 @@ def test_packet_confirmation_uses_consumer_iteration_for_contract_validation(
                 "spec": {"output_artifact": "spec"},
                 "develop": {
                     "input_artifacts": ["spec"],
-                    "skill": {"1": "first-consumer", "default": "current-consumer"},
+                    "skill": {"1": "first-consumer", "2": "current-consumer"},
                 },
             }
         },
         blackboard=SimpleNamespace(artifacts={"spec": SimpleNamespace(path=invalid_spec)}),
+        issue_dir=_iteration_history(tmp_path, producer=1, consumer=2),
         producer_step="spec",
         correction_guidance="repair the contract",
-        iteration=2,
     )
 
     assert rejection is not None
     assert "spec -> develop" in rejection.message
+
+
+def _iteration_history(tmp_path: Path, *, producer: int, consumer: int) -> Path:
+    """Create independent producer and consumer iteration histories."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    for step_name, count in (("spec", producer), ("develop", consumer)):
+        for iteration in range(1, count + 1):
+            (issue_dir / step_name / f"iteration_{iteration:03d}").mkdir(parents=True)
+    return issue_dir
 
 
 def test_custom_step_resolves_its_skill_owned_human_task(tmp_path: Path) -> None:
