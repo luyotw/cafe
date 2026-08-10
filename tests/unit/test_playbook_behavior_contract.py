@@ -1,14 +1,18 @@
 """Behavior-contract tests for arbitrary playbook step names."""
 
+import ast
 import inspect
-import re
 
 import pytest
 
+from cafe.core import workflow_runtime
+from cafe.core.hooks import native as native_hooks
 from cafe.core.playbook import PlaybookDefinition, resolve_step_behavior
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
-from cafe.core.hooks.native import GitHubIssueFetcher, GitHubPRCreator, _publish_requested
+from cafe.core.hooks.native import _publish_requested
+from cafe.phases import generic_phase, generic_workflow_step
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.ui import cli_shared
 
 
 def _playbook(*, build_behavior=None, defaults=None):
@@ -181,16 +185,66 @@ def test_custom_named_publish_hook_accepts_declared_terminal_baton(tmp_path):
     )
 
 
-def test_runtime_hooks_do_not_compare_steps_to_default_workflow_names():
-    """UT-010: a bounded runtime source audit rejects name-derived behavior."""
-    issue_fetcher_source = inspect.getsource(GitHubIssueFetcher.run)
-    pr_creator_source = inspect.getsource(GitHubPRCreator._prepare_input)
+_DEFAULT_WORKFLOW_STEPS = frozenset({"spec", "plan", "develop", "review", "pr"})
+_STEP_IDENTITY_NAMES = frozenset({"step_name", "active_step", "current_step", "phase_name"})
+_RUNTIME_LIFECYCLE_MODULES = (
+    native_hooks,
+    workflow_runtime,
+    generic_phase,
+    generic_workflow_step,
+    cli_shared,
+)
 
-    assert not re.search(
-        r"step_name\s*(?:==|!=)\s*['\"](?:spec|plan|develop|review|pr)['\"]",
-        issue_fetcher_source,
+
+def _node_contains_step_identity(node):
+    return any(
+        (isinstance(child, ast.Name) and child.id in _STEP_IDENTITY_NAMES)
+        or (isinstance(child, ast.Constant) and child.value == "step_name")
+        for child in ast.walk(node)
     )
-    assert not re.search(
-        r"str\(kwargs\.get\(['\"]step_name['\"]\)\s+or\s+['\"]pr['\"]\)",
-        pr_creator_source,
-    )
+
+
+def _workflow_step_literals(node):
+    return {
+        child.value
+        for child in ast.walk(node)
+        if isinstance(child, ast.Constant) and child.value in _DEFAULT_WORKFLOW_STEPS
+    }
+
+
+def _fixed_name_step_policy_violations(module):
+    """Return runtime branches that infer behavior from legacy workflow names."""
+    tree = ast.parse(inspect.getsource(module))
+    violations = []
+
+    for node in ast.walk(tree):
+        uses_step_identity = _node_contains_step_identity(node)
+        fixed_names = _workflow_step_literals(node)
+        if not uses_step_identity or not fixed_names:
+            continue
+
+        if isinstance(node, (ast.Compare, ast.IfExp)):
+            violations.append((node.lineno, sorted(fixed_names)))
+        elif isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+            violations.append((node.lineno, sorted(fixed_names)))
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and len(node.args) >= 2
+        ):
+            violations.append((node.lineno, sorted(fixed_names)))
+
+    return violations
+
+
+def test_runtime_and_lifecycle_modules_do_not_infer_behavior_from_default_step_names():
+    """UT-010: bounded runtime/lifecycle policy forbids fixed-name behavior branches."""
+    violations = {
+        module.__name__: _fixed_name_step_policy_violations(module)
+        for module in _RUNTIME_LIFECYCLE_MODULES
+    }
+
+    assert violations == {
+        module.__name__: [] for module in _RUNTIME_LIFECYCLE_MODULES
+    }

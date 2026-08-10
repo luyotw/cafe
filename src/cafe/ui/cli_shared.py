@@ -190,13 +190,7 @@ def check_agent_clis_available(
                 context=f"file={phase_config_file} step={active_step} field=clis",
             )
 
-        target_role = active_role or phase_resolution.role or {
-            "spec": "pm",
-            "plan": "developer",
-            "develop": "developer",
-            "review": "reviewer",
-            "pr": "developer",
-        }.get(active_step)
+        target_role = active_role or phase_resolution.role
         if target_role:
             return _check_chain(
                 _configured_chain(_role_config(target_role, "copilot")),
