@@ -220,6 +220,18 @@ steps:
         assert result.exit_code == 0
         assert "repair, release" in result.stdout
 
+    def test_ls_surfaces_invalid_configured_playbook(self, temp_issues_dir):
+        """UT-009: configured-playbook failures are never displayed as empty."""
+        issue = temp_issues_dir / "broken-issue"
+        issue.mkdir()
+        (issue / "issue.yaml").write_text("playbook: missing-flow\n", encoding="utf-8")
+
+        result = runner.invoke(app, ["ls"])
+
+        assert result.exit_code == 0
+        assert "broken-issue" in result.stdout
+        assert "could not be loaded" in result.stdout
+
 
 class TestRmCommand:
     """Test rm command."""

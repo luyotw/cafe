@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from cafe.agents.executor import AgentExecutionError
@@ -64,6 +65,26 @@ steps:
     )
     assert _resolve_issue_playbook_name("custom-issue") == "release-flow"
     assert _load_issue_step_names("custom-issue") == ["prepare", "deploy"]
+
+
+@pytest.mark.parametrize(
+    ("filename", "contents"),
+    [
+        ("blackboard.json", "{not json"),
+        ("issue.yaml", "playbook: [not valid"),
+    ],
+)
+def test_issue_playbook_resolution_rejects_unreadable_persisted_metadata(
+    tmp_path: Path, monkeypatch, filename: str, contents: str
+) -> None:
+    """UT-009: resume never replaces present broken metadata with ``default``."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "broken-issue"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / filename).write_text(contents, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unreadable workflow metadata"):
+        _resolve_issue_playbook_name("broken-issue")
 
 
 def _result(

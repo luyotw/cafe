@@ -566,27 +566,30 @@ _get_latest_versioned_file = get_latest_versioned_file
 
 
 def _resolve_issue_playbook_name(issue_name: str) -> str:
-    """Resolve the playbook id associated with an issue."""
+    """Resolve an issue playbook without hiding persisted metadata failures."""
     issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
     blackboard_file = issue_dir / "blackboard.json"
     if blackboard_file.exists():
         try:
             raw = json.loads(blackboard_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            raw = {}
-        if isinstance(raw, dict) and raw.get("playbook_id"):
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Issue {issue_name!r} has unreadable workflow metadata") from exc
+        if not isinstance(raw, dict):
+            raise ValueError(f"Issue {issue_name!r} has unreadable workflow metadata")
+        if raw.get("playbook_id"):
             return str(raw["playbook_id"])
 
     issue_config_file = issue_dir / "issue.yaml"
     if issue_config_file.exists():
         try:
             config = yaml.safe_load(issue_config_file.read_text(encoding="utf-8")) or {}
-        except (OSError, yaml.YAMLError):
-            config = {}
-        if isinstance(config, dict):
-            configured_playbook = config.get("playbook_id") or config.get("playbook")
-            if configured_playbook:
-                return str(configured_playbook)
+        except (OSError, yaml.YAMLError) as exc:
+            raise ValueError(f"Issue {issue_name!r} has unreadable workflow metadata") from exc
+        if not isinstance(config, dict):
+            raise ValueError(f"Issue {issue_name!r} has unreadable workflow metadata")
+        configured_playbook = config.get("playbook_id") or config.get("playbook")
+        if configured_playbook:
+            return str(configured_playbook)
     return "default"
 
 

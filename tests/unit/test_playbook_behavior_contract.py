@@ -1,10 +1,13 @@
 """Behavior-contract tests for arbitrary playbook step names."""
 
+import inspect
+import re
+
 import pytest
 
 from cafe.core.playbook import PlaybookDefinition, resolve_step_behavior
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
-from cafe.core.hooks.native import _publish_requested
+from cafe.core.hooks.native import GitHubIssueFetcher, _publish_requested
 
 
 def _playbook(*, build_behavior=None, defaults=None):
@@ -163,4 +166,14 @@ def test_custom_named_publish_hook_accepts_declared_terminal_baton(tmp_path):
             "publish_confirmation": True,
             "next_step_path": str(baton_file),
         },
+    )
+
+
+def test_runtime_hooks_do_not_compare_steps_to_default_workflow_names():
+    """UT-010: a bounded runtime source audit rejects name-derived behavior."""
+    source = inspect.getsource(GitHubIssueFetcher.run)
+
+    assert not re.search(
+        r"step_name\s*(?:==|!=)\s*['\"](?:spec|plan|develop|review|pr)['\"]",
+        source,
     )

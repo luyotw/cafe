@@ -922,7 +922,7 @@ class InitialInputProviderResolver(NoOpHook):
 
 
 class GitHubIssueFetcher(NoOpHook):
-    """Compatibility adapter for legacy ``spec`` initial-input hooks."""
+    """Compatibility adapter for legacy initial-input hooks."""
 
     name = "GitHubIssueFetcher"
 
@@ -932,7 +932,7 @@ class GitHubIssueFetcher(NoOpHook):
         phase = kwargs.get("phase")
         step_name = str(kwargs.get("step_name") or "")
         output_file: Optional[Path] = kwargs.get("output_file")
-        if phase is None or step_name != "spec" or output_file is None:
+        if phase is None or output_file is None:
             return HookResult()
         if getattr(phase, "iteration", 0) != 1:
             return HookResult()
@@ -971,7 +971,10 @@ class GitHubIssueFetcher(NoOpHook):
         legacy_step_def = dict(kwargs.get("step_def") or {})
         legacy_step_def["initial_input"] = {
             "providers": [MANUAL_TEXT_PROVIDER, GITHUB_ISSUE_PROVIDER],
-            "bind": {"artifact": "spec", "prompt_context": "user_input"},
+            "bind": {
+                "artifact": legacy_step_def.get("output_artifact", step_name),
+                "prompt_context": "user_input",
+            },
         }
         resolver_kwargs = dict(kwargs)
         resolver_kwargs.update(

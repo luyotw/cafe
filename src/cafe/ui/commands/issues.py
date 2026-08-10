@@ -206,10 +206,12 @@ def list_issues() -> None:
         # visible; metadata-absent issues retain the legacy fallback inside
         # the shared resolver.
         issue_name = str(issue.relative_to(issues_dir))
+        step_resolution_error = None
         try:
             phase_names = _load_issue_step_names(issue_name)
-        except ValueError:
+        except ValueError as exc:
             phase_names = []
+            step_resolution_error = str(exc)
 
         # Check which phases exist
         # If worktree_path exists, read phases from worktree location
@@ -235,7 +237,11 @@ def list_issues() -> None:
                 if phase_dir.exists():
                     phases.append(phase)
 
-        phases_str = ", ".join(phases) if phases else "empty"
+        phases_str = (
+            step_resolution_error
+            if step_resolution_error is not None
+            else ", ".join(phases) if phases else "empty"
+        )
 
         # Get last modified time
         mtime = datetime.fromtimestamp(issue.stat().st_mtime)
