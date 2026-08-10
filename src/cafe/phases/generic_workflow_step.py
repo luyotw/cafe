@@ -497,7 +497,15 @@ class GenericWorkflowStepExecutor(Phase):
             )
             if packet_requested:
                 raise ValueError("Missing pre-launch context packet decision for backup takeover")
-            resolved_inputs = {}
+            input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
+            resolved_inputs = resolve_effective_prompt_inputs(
+                contract,
+                input_artifacts,
+                step=step_name,
+                iteration=self.iteration,
+                feedback=bool(input_artifacts.get("review_feedback") or input_artifacts.get("pr_result")),
+                packet_dir=iteration_dir,
+            )
         workspace: dict[str, Any] = {}
         try:
             workspace["head"] = self.git_ops.run_git("rev-parse", "HEAD")
@@ -1172,7 +1180,7 @@ class GenericWorkflowStepExecutor(Phase):
             }
         )
         context["input_loading_modes"] = ", ".join(
-            f"{placeholder}={format_context_packet_diagnostic(binding)}"
+            f"{placeholder}={binding['mode'] if binding['mode'] != 'full_fallback' else format_context_packet_diagnostic(binding)}"
             for placeholder, binding in sorted(effective_inputs.items())
         )
         self._add_template_context(

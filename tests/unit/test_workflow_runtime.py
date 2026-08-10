@@ -15,6 +15,14 @@ from cafe.core.blackboard import (
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 
+_OPERATION_DECISION = {
+    "risk": "low",
+    "monitoring": "final-only",
+    "log_policy": "summary-only",
+    "stop_condition": "operation reaches a terminal state",
+    "recovery": "inspect the same operation id",
+}
+
 
 def _write_baton(
     issue_dir: Path,
@@ -3628,7 +3636,13 @@ def test_hand_edited_operation_artifact_is_not_trusted(tmp_path: Path) -> None:
     # matching "develop_operation" metadata artifact is recorded.
     (iteration_dir / "operation.json").write_text(
         json.dumps(
-            {"operation_id": "forged-op", "state": "succeeded", "reason": "", "exit_code": 0}
+            {
+                "operation_id": "forged-op",
+                "state": "succeeded",
+                "reason": "",
+                "exit_code": 0,
+                **_OPERATION_DECISION,
+            }
         ),
         encoding="utf-8",
     )
@@ -3691,7 +3705,13 @@ def test_stale_metadata_artifact_from_earlier_iteration_is_not_trusted(tmp_path:
     # Hand-written, never passed through write_operation_artifact for this iteration.
     (new_iteration_dir / "operation.json").write_text(
         json.dumps(
-            {"operation_id": "forged-op", "state": "succeeded", "reason": "", "exit_code": 0}
+            {
+                "operation_id": "forged-op",
+                "state": "succeeded",
+                "reason": "",
+                "exit_code": 0,
+                **_OPERATION_DECISION,
+            }
         ),
         encoding="utf-8",
     )
@@ -3747,6 +3767,7 @@ def test_recorded_operation_artifact_state_mismatch_is_not_trusted(tmp_path: Pat
                 "state": "succeeded",
                 "reason": "",
                 "exit_code": 0,
+                **_OPERATION_DECISION,
             }
         ),
         encoding="utf-8",
