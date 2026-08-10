@@ -4832,6 +4832,61 @@ def test_persisted_packet_decision_requires_complete_binding_record(tmp_path: Pa
         GenericWorkflowStepExecutor._load_persisted_effective_inputs(iteration_dir)
 
 
+def test_persisted_packet_binding_must_match_declared_authority_and_envelope(
+    tmp_path: Path,
+) -> None:
+    """UT-004: takeover cannot redirect a packet binding to another source."""
+    from cafe.skills.contracts import SkillWorkflowContract, resolve_effective_prompt_inputs
+
+    source = tmp_path / "spec.md"
+    other = tmp_path / "other.md"
+    source.write_text(
+        "# Source\n\nGOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001\n\n"
+        "## Downstream Contract\n\n- Contract-Version: `1`\n- Artifact-Kind: `spec`\n\n"
+        "### Goals\n| ID | Statement |\n| --- | --- |\n| GOAL-001 | goal |\n\n"
+        "### Non-Goals\n| ID | Statement |\n| --- | --- |\n| NONGOAL-001 | no |\n\n"
+        "### Acceptance Criteria\n| ID | Priority | Statement |\n| --- | --- | --- |\n| AC-001 | must | yes |\n\n"
+        "### Invariants\n| ID | Statement |\n| --- | --- |\n| INV-001 | safe |\n\n"
+        "### Trust Boundaries\n| ID | Statement |\n| --- | --- |\n| TRUST-001 | local |\n",
+        encoding="utf-8",
+    )
+    other.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    contract = SkillWorkflowContract.model_validate(
+        {"prompt_inputs": [
+            {"artifacts": ["spec"], "placeholder": "spec_file", "load_policy": [{"mode": "packet", "contract_kind": "spec"}]},
+            {"artifacts": ["spec"], "placeholder": "spec_file_path", "load_policy": [{"mode": "packet", "contract_kind": "spec"}]},
+        ]}
+    )
+    iteration_dir = tmp_path / "develop" / "iteration_001"
+    effective = resolve_effective_prompt_inputs(
+        contract, {"spec": source}, step="develop", iteration=1, feedback=False, packet_dir=iteration_dir
+    )
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps({"effective_inputs": effective}), encoding="utf-8"
+    )
+
+    loaded = GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+        iteration_dir,
+        require_persisted_packet_decision=True,
+        authoritative_inputs={"spec_file": source, "spec_file_path": source},
+        target_step="develop",
+        iteration=1,
+    )
+    assert loaded == effective
+
+    tampered = json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))
+    tampered["effective_inputs"]["spec_file_path"]["path"] = str(other)
+    (iteration_dir / "iteration.json").write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(ValueError, match="context packet decision"):
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+            iteration_dir,
+            require_persisted_packet_decision=True,
+            authoritative_inputs={"spec_file": source, "spec_file_path": source},
+            target_step="develop",
+            iteration=1,
+        )
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

@@ -492,6 +492,7 @@ class GenericWorkflowStepExecutor(Phase):
             self._resolve_skill_name(step_def, self.iteration)
         )
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
+        authoritative_inputs = resolve_prompt_inputs(contract, input_artifacts)
         packet_requested = self._requires_persisted_packet_decision(
             contract,
             input_artifacts,
@@ -504,6 +505,9 @@ class GenericWorkflowStepExecutor(Phase):
         resolved_inputs = self._load_persisted_effective_inputs(
             iteration_dir,
             require_persisted_packet_decision=packet_requested,
+            authoritative_inputs=authoritative_inputs,
+            target_step=step_name,
+            iteration=self.iteration,
         )
         if resolved_inputs is None:
             if packet_requested:
@@ -583,7 +587,12 @@ class GenericWorkflowStepExecutor(Phase):
 
     @staticmethod
     def _load_persisted_effective_inputs(
-        iteration_dir: Path, *, require_persisted_packet_decision: bool = False
+        iteration_dir: Path,
+        *,
+        require_persisted_packet_decision: bool = False,
+        authoritative_inputs: Mapping[str, str | Path] | None = None,
+        target_step: str | None = None,
+        iteration: int | None = None,
     ) -> dict[str, dict[str, Any]] | None:
         """Reuse pre-launch packet decisions instead of resolving them during takeover."""
         path = iteration_dir / "iteration.json"
@@ -603,7 +612,13 @@ class GenericWorkflowStepExecutor(Phase):
         if isinstance(persisted, dict):
             from cafe.core.context_packet import validate_effective_input_bindings
 
-            return validate_effective_input_bindings(persisted)
+            return validate_effective_input_bindings(
+                persisted,
+                authoritative_inputs=authoritative_inputs,
+                packet_dir=iteration_dir,
+                target_step=target_step,
+                iteration=iteration,
+            )
         raise ValueError("Invalid persisted context packet decision")
 
     @staticmethod
@@ -1195,6 +1210,9 @@ class GenericWorkflowStepExecutor(Phase):
                 iteration=self.iteration,
                 feedback=feedback,
             ),
+            authoritative_inputs=authoritative_inputs,
+            target_step=step_name,
+            iteration=self.iteration,
         )
         if effective_inputs is None:
             effective_inputs = resolve_effective_prompt_inputs(

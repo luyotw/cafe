@@ -3438,11 +3438,8 @@ def test_short_running_step_without_operation_artifact_is_unaffected(tmp_path: P
 def test_generic_agent_error_does_not_create_operation_artifact(tmp_path: Path) -> None:
     """A generic/noncritical agent error is not a characterized long-running signal.
 
-    Only ``agent_timeout`` (raised by ``AgentExecutor`` when its own idle or
-    post-output wait timeout kills the process) is eligible to create a
-    ``running`` operation artifact; an ordinary exception with no such
-    classification must retain existing ``INTERRUPTED`` behavior with no
-    operation artifact, so a normal failure never pins resume forever.
+    An ordinary exception must retain existing ``INTERRUPTED`` behavior with
+    no operation artifact, so a normal failure never pins resume forever.
     """
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-generic-error"
     playbook = {
@@ -3804,9 +3801,8 @@ def test_status_code_missing_does_not_create_operation_artifact(tmp_path: Path) 
     A normal short step that simply omits a baton/status code must not be
     classified as a long-running operation -- otherwise resume would be
     pinned to that step forever waiting for a ``running`` operation that
-    will never resolve. Only a characterized ``agent_timeout`` signal (see
-    ``test_agent_timeout_records_running_operation_artifact_automatically``)
-    creates an operation artifact.
+    will never resolve. Only an explicit, pre-launch operation decision can
+    create an operation artifact.
     """
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-status-missing-operation"
     playbook = {

@@ -260,6 +260,31 @@ def test_packet_tampering_cannot_be_approved_by_rewriting_a_sidecar_receipt(tmp_
     assert fallback["mode"] == "full_fallback"
 
 
+def test_packet_validation_failure_has_the_exact_boundary_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT-003: invalid envelopes retain the fixed, sanitized failure reason."""
+    source = tmp_path / "spec.md"
+    source.write_text(_spec(), encoding="utf-8")
+    monkeypatch.setattr(
+        "cafe.core.context_packet.validate_context_packet",
+        lambda _packet: (_ for _ in ()).throw(ValueError("untrusted detail")),
+    )
+
+    resolved = resolve_context_packet(
+        source_path=source,
+        contract_kind="spec",
+        target_step="custom",
+        iteration=2,
+        placeholders=("packet_spec",),
+        packet_path=tmp_path / "packet.json",
+    )
+
+    assert resolved["mode"] == "full_fallback"
+    assert resolved["fallback_reason"] == "packet_invalid"
+    assert resolved["detail"] == "context packet validation failed"
+
+
 def test_packet_persistence_errors_fall_back_to_authoritative_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

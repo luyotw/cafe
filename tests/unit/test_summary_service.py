@@ -44,12 +44,35 @@ def test_context_packet_status_projects_only_strict_effective_inputs(tmp_path, m
 
     assert len(packets) == 1
     assert packets[0]["fallback_reason"] == "packet_invalid"
+    assert packets[0]["consumer"] == "develop"
+    assert packets[0]["iteration"] == 1
     assert "secret" not in str(packets)
     effective["plan_file"]["detail"] = "untrusted secret"
     (iteration / "iteration.json").write_text(
         json.dumps({"iteration": 1, "effective_inputs": effective}), encoding="utf-8"
     )
     assert SummaryService().load_context_packets("demo") == []
+
+
+def test_context_packet_status_derives_bounded_consumer_iteration_from_runtime_path(tmp_path, monkeypatch) -> None:
+    """IT-003: status ignores agent-authored consumer and iteration projections."""
+    from cafe.services.summary_service import SummaryService
+
+    monkeypatch.chdir(tmp_path)
+    iteration = tmp_path / ".cafe/issues/demo/develop/iteration_002"
+    iteration.mkdir(parents=True)
+    binding = {
+        "requested_mode": "packet", "mode": "full_fallback", "path": "plan.md",
+        "source": {"artifact_name": "plan", "artifact_version": 1},
+        "reason": "packet_invalid", "fallback_reason": "packet_invalid",
+        "detail": "context packet validation failed",
+    }
+    (iteration / "iteration.json").write_text(
+        json.dumps({"iteration": {"unbounded": "agent value"}, "effective_inputs": {"plan": binding}}),
+        encoding="utf-8",
+    )
+
+    assert SummaryService().load_context_packets("demo")[0]["iteration"] == 2
 
 
 class TestGetCurrentIssue:

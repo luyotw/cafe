@@ -1253,11 +1253,9 @@ class AgentExecutor:
                     combined_output,
                 )
 
-                # A characterized timeout/background signal: our own idle or
-                # post-output wait timeout killed the process and no more
-                # specific classification (rate limit, etc.) matched. This is
-                # the one signal the workflow runtime treats as eligible for
-                # a durable long-running "running" operation record.
+                # Preserve the executor-local timeout classification for
+                # reporting. A durable operation can only originate from an
+                # explicit, pre-launch operation decision.
                 if error_type is None and (idle_timeout_triggered or post_output_timeout_triggered):
                     error_type = "timeout"
                     display_message = (
