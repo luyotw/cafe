@@ -121,44 +121,12 @@ def test_omitted_behavior_uses_same_universal_defaults_for_any_step_name(step_na
     assert behavior.runtime_tool_grants == []
 
 
-def test_read_only_progress_guard_is_declarative_and_name_independent():
-    """UT-002: equally declared arbitrary steps receive the same guard."""
-    model = PlaybookDefinition.model_validate(
-        {
-            "playbook": {"id": "arbitrary"},
-            "steps": {
-                "build": {
-                    "skill": "cafe-develop",
-                    "role": "developer",
-                    "behavior": {"max_read_only_commands": 20},
-                    "on": {"await_agent": "verify"},
-                },
-                "assemble": {
-                    "skill": "cafe-develop",
-                    "role": "developer",
-                    "behavior": {"max_read_only_commands": 20},
-                    "on": {"await_agent": "verify"},
-                },
-                "verify": {
-                    "skill": "cafe-review",
-                    "role": "reviewer",
-                    "on": {"await_agent": "build"},
-                },
-            },
-        }
-    )
-
-    assert resolve_step_behavior(model, "build").max_read_only_commands == 20
-    assert resolve_step_behavior(model, "assemble").max_read_only_commands == 20
-    assert resolve_step_behavior(model, "verify").max_read_only_commands is None
-
-
-@pytest.mark.parametrize("playbook_id", ["default", "simple", "tdd", "hotfix"])
-def test_bundled_implementation_steps_preserve_read_only_progress_guard(playbook_id):
-    """UT-008: bundled workflows explicitly preserve develop-step protection."""
-    playbook = PlaybookLoader().load_model(playbook_id).model
-
-    assert resolve_step_behavior(playbook, "develop").max_read_only_commands == 20
+def test_behavior_contract_rejects_removed_read_only_budget():
+    """UT-007: public playbook declarations cannot reintroduce a global edit guard."""
+    with pytest.raises(ValueError, match="max_read_only_commands"):
+        PlaybookDefinition.model_validate(
+            _playbook(build_behavior={"max_read_only_commands": 20})
+        )
 
 
 def test_behavior_contract_rejects_unknown_grant_and_unknown_feedback_target():

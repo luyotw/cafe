@@ -862,17 +862,11 @@ class TestStreamingExecution:
         with patch("subprocess.Popen", return_value=mock_process), patch(
             "sys.platform", "win32"
         ):
-            with pytest.raises(AgentExecutionError) as exc_info:
-                executor._execute_with_streaming(
-                    cmd=["codex", "exec", "prompt"],
-                    cli_name="Codex",
-                    parse_stream_json=True,
-                    max_read_only_commands=3,
-                )
+            executor._execute_with_streaming(
+                cmd=["codex", "exec", "prompt"], cli_name="Codex", parse_stream_json=True
+            )
 
-        assert exc_info.value.error_type == "read_only_budget_exceeded"
-        assert executor.config.session_id == "thread-budget"
-        mock_process.terminate.assert_called_once()
+        mock_process.terminate.assert_not_called()
 
     def test_streaming_read_only_budget_resets_after_each_file_change(self) -> None:
         config = AgentConfig(name="David", cli=AgentCLI.CODEX)
@@ -897,7 +891,6 @@ class TestStreamingExecution:
                 cmd=["codex", "exec", "prompt"],
                 cli_name="Codex",
                 parse_stream_json=True,
-                max_read_only_commands=2,
             )
 
         mock_process.terminate.assert_not_called()
@@ -921,16 +914,11 @@ class TestStreamingExecution:
         with patch("subprocess.Popen", return_value=mock_process), patch(
             "sys.platform", "win32"
         ):
-            with pytest.raises(AgentExecutionError) as exc_info:
-                executor._execute_with_streaming(
-                    cmd=["codex", "exec", "prompt"],
-                    cli_name="Codex",
-                    parse_stream_json=True,
-                    max_read_only_commands=2,
-                )
+            executor._execute_with_streaming(
+                cmd=["codex", "exec", "prompt"], cli_name="Codex", parse_stream_json=True
+            )
 
-        assert exc_info.value.error_type == "read_only_budget_exceeded"
-        mock_process.terminate.assert_called_once()
+        mock_process.terminate.assert_not_called()
 
     def test_streaming_read_only_budget_detects_shell_redirection_edit(self) -> None:
         config = AgentConfig(name="David", cli=AgentCLI.CODEX)
@@ -958,8 +946,6 @@ class TestStreamingExecution:
                 cmd=["codex", "exec", "prompt"],
                 cli_name="Codex",
                 parse_stream_json=True,
-                max_read_only_commands=10,
-                max_initial_read_only_commands=1,
             )
 
         mock_process.terminate.assert_not_called()

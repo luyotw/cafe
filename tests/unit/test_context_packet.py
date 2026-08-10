@@ -4,7 +4,11 @@ import pytest
 
 import json
 
-from cafe.core.context_packet import resolve_context_packet, validate_context_packet
+from cafe.core.context_packet import (
+    build_context_packet_diagnostics,
+    resolve_context_packet,
+    validate_context_packet,
+)
 from cafe.skills.contracts import SkillWorkflowContract, resolve_effective_prompt_inputs
 
 
@@ -124,6 +128,45 @@ def test_paired_placeholders_share_one_effective_packet_binding(tmp_path: Path) 
     ]
 
 
+def test_packet_diagnostics_are_strict_and_deduplicate_paired_bindings() -> None:
+    """One requested relation produces one validated, durable diagnostic."""
+    bindings = {
+        "spec_file": {
+            "requested_mode": "packet",
+            "mode": "full_fallback",
+            "path": "spec.md",
+            "source": {"artifact_name": "spec", "artifact_version": 2},
+            "fallback_reason": "contract_invalid",
+            "detail": "contract validation failed",
+        },
+        "spec_file_path": {
+            "requested_mode": "packet",
+            "mode": "full_fallback",
+            "path": "spec.md",
+            "source": {"artifact_name": "spec", "artifact_version": 2},
+            "fallback_reason": "contract_invalid",
+            "detail": "contract validation failed",
+        },
+    }
+
+    diagnostics = build_context_packet_diagnostics(bindings)
+
+    assert diagnostics == [
+        {
+            "placeholders": ["spec_file", "spec_file_path"],
+            "source": {"artifact_name": "spec", "artifact_version": 2},
+            "requested_mode": "packet",
+            "effective_mode": "full_fallback",
+            "fallback_reason": "contract_invalid",
+            "detail": "contract validation failed",
+            "path": "spec.md",
+        }
+    ]
+    bindings["spec_file"]["fallback_reason"] = "untrusted-agent-text"
+    with pytest.raises(ValueError, match="fallback reason"):
+        build_context_packet_diagnostics(bindings)
+
+
 def test_packet_rejects_extra_envelope_fields_and_persisted_format_tampering(
     tmp_path: Path,
 ) -> None:
@@ -205,8 +248,7 @@ def test_packet_persistence_errors_fall_back_to_authoritative_source(
         packet_path=tmp_path / "packet.json",
     )
 
-    assert resolved == {
-        "mode": "full_fallback",
-        "path": str(source),
-        "reason": "Unable to persist context packet",
-    }
+    assert resolved["mode"] == "full_fallback"
+    assert resolved["path"] == str(source)
+    assert resolved["fallback_reason"] == "packet_persist_failed"
+    assert resolved["detail"] == "context packet could not be persisted"

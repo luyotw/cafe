@@ -61,6 +61,7 @@ from cafe.skills.contracts import (
     resolve_prompt_inputs,
 )
 from cafe.skills.loader import SkillLoader, canonical_skill_name
+from cafe.core.context_packet import build_context_packet_diagnostics
 from cafe.templates.manager import TemplateManager
 from cafe.utils.git_utils import get_git_toplevel, get_repo_root, to_cwd_relative_path
 from cafe.utils.phase_config import load_phase_step_model
@@ -308,7 +309,6 @@ class GenericWorkflowStepExecutor(Phase):
                     persist_status=False,
                     allowed_tools=attempt_allowed_tools,
                     phase_specific_data=phase_specific_data,
-                    max_read_only_commands=behavior.max_read_only_commands,
                     backup_context_callback=lambda error: self._build_backup_takeover_context(
                         error=error,
                         step_name=step_name,
@@ -392,7 +392,6 @@ class GenericWorkflowStepExecutor(Phase):
                     user_input=resolved_user_input,
                     valid_intents=valid_intents,
                     allowed_tools=allowed_tools,
-                    max_read_only_commands=behavior.max_read_only_commands,
                     max_retries=3,
                 )
             )
@@ -490,14 +489,16 @@ class GenericWorkflowStepExecutor(Phase):
             self._resolve_skill_name(step_def, self.iteration)
         )
         inputs = self._step_input_artifacts(step_def, blackboard_state)
-        resolved_inputs = resolve_effective_prompt_inputs(
-            contract,
-            inputs,
-            step=step_name,
-            iteration=self.iteration,
-            feedback=bool(inputs.get("review_feedback") or inputs.get("pr_result")),
-            packet_dir=iteration_dir,
-        )
+        resolved_inputs = self._load_persisted_effective_inputs(iteration_dir)
+        if not resolved_inputs:
+            resolved_inputs = resolve_effective_prompt_inputs(
+                contract,
+                inputs,
+                step=step_name,
+                iteration=self.iteration,
+                feedback=bool(inputs.get("review_feedback") or inputs.get("pr_result")),
+                packet_dir=iteration_dir,
+            )
         workspace: dict[str, Any] = {}
         try:
             workspace["head"] = self.git_ops.run_git("rev-parse", "HEAD")
@@ -560,6 +561,68 @@ class GenericWorkflowStepExecutor(Phase):
             workspace=workspace,
         )
         return json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
+
+    @staticmethod
+    def _load_persisted_effective_inputs(iteration_dir: Path) -> dict[str, dict[str, str]]:
+        """Reuse pre-launch packet decisions instead of resolving them during takeover."""
+        path = iteration_dir / "iteration.json"
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        persisted = raw.get("effective_inputs") if isinstance(raw, dict) else None
+        if isinstance(persisted, dict):
+            try:
+                return {
+                    str(placeholder): dict(binding)
+                    for placeholder, binding in persisted.items()
+                    if isinstance(placeholder, str) and isinstance(binding, dict)
+                }
+            except (TypeError, ValueError):
+                return {}
+        diagnostics = raw.get("context_packets") if isinstance(raw, dict) else None
+        if not isinstance(diagnostics, list):
+            return {}
+        result: dict[str, dict[str, str]] = {}
+        for diagnostic in diagnostics:
+            if not isinstance(diagnostic, dict):
+                return {}
+            placeholders = diagnostic.get("placeholders")
+            if not isinstance(placeholders, list):
+                return {}
+            binding = {
+                "requested_mode": "packet",
+                "mode": str(diagnostic.get("effective_mode", "")),
+                "path": str(diagnostic.get("path", "")),
+                "reason": str(diagnostic.get("fallback_reason") or ""),
+                "fallback_reason": str(diagnostic.get("fallback_reason") or ""),
+                "detail": str(diagnostic.get("detail") or ""),
+                "source": dict(diagnostic.get("source") or {}),
+            }
+            for placeholder in placeholders:
+                if not isinstance(placeholder, str) or not placeholder:
+                    return {}
+                result[placeholder] = dict(binding)
+        return result
+
+    @staticmethod
+    def _persist_context_packet_diagnostics(
+        iteration_dir: Path, effective_inputs: Mapping[str, Mapping[str, Any]]
+    ) -> None:
+        """Persist the validated packet decision in the consumer's sole iteration record."""
+        diagnostics = build_context_packet_diagnostics(effective_inputs)
+        path = iteration_dir / "iteration.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("Unable to persist context packet diagnostics") from exc
+        if not isinstance(raw, dict):
+            raise ValueError("Invalid iteration metadata for context packet diagnostics")
+        raw["effective_inputs"] = {key: dict(value) for key, value in effective_inputs.items()}
+        if diagnostics:
+            raw["context_packets"] = diagnostics
+        path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _load_iteration_user_input_candidate(self, step_name: str) -> str:
         """Load raw user input before resume-token optimization."""
@@ -1096,16 +1159,19 @@ class GenericWorkflowStepExecutor(Phase):
             placeholder: self._display_path(Path(path))
             for placeholder, path in authoritative_inputs.items()
         }
-        effective_inputs = resolve_effective_prompt_inputs(
-            contract,
-            input_artifacts,
-            step=step_name,
-            iteration=self.iteration,
-            feedback=bool(
-                input_artifacts.get("review_feedback") or input_artifacts.get("pr_result")
-            ),
-            packet_dir=output_file.parent,
-        )
+        effective_inputs = self._load_persisted_effective_inputs(output_file.parent)
+        if not effective_inputs:
+            effective_inputs = resolve_effective_prompt_inputs(
+                contract,
+                input_artifacts,
+                step=step_name,
+                iteration=self.iteration,
+                feedback=bool(
+                    input_artifacts.get("review_feedback") or input_artifacts.get("pr_result")
+                ),
+                packet_dir=output_file.parent,
+            )
+            self._persist_context_packet_diagnostics(output_file.parent, effective_inputs)
         context.update(
             {
                 placeholder: self._display_path(Path(binding["path"]))

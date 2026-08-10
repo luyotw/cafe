@@ -66,6 +66,24 @@ class LongRunningOperationState(str, Enum):
     LOST = "lost"
 
 
+class OperationRisk(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class OperationMonitoring(str, Enum):
+    FINAL_ONLY = "final-only"
+    PERIODIC = "periodic"
+    ACTIVE = "active"
+
+
+class OperationLogPolicy(str, Enum):
+    SUMMARY_ONLY = "summary-only"
+    INCREMENTAL_TAIL = "incremental-tail"
+    FILTERED_STREAM = "filtered-stream"
+
+
 def operation_artifact_path(iteration_dir: Path) -> Path:
     """Fixed one-per-iteration path: ``iteration_dir/operation.json``."""
     return Path(iteration_dir) / OPERATION_ARTIFACT_FILENAME
@@ -90,6 +108,11 @@ class LongRunningOperationArtifact:
     operation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
+    risk: OperationRisk = OperationRisk.LOW
+    monitoring: OperationMonitoring = OperationMonitoring.FINAL_ONLY
+    log_policy: OperationLogPolicy = OperationLogPolicy.SUMMARY_ONLY
+    stop_condition: str = ""
+    recovery: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -99,6 +122,11 @@ class LongRunningOperationArtifact:
             "exit_code": self.exit_code,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "risk": self.risk.value,
+            "monitoring": self.monitoring.value,
+            "log_policy": self.log_policy.value,
+            "stop_condition": self.stop_condition,
+            "recovery": self.recovery,
         }
 
     @classmethod
@@ -139,7 +167,30 @@ class LongRunningOperationArtifact:
             operation_id=operation_id,
             created_at=str(data.get("created_at", _now_iso())),
             updated_at=str(data.get("updated_at", _now_iso())),
+            risk=_strict_operation_value(data, "risk", OperationRisk, OperationRisk.LOW),
+            monitoring=_strict_operation_value(
+                data, "monitoring", OperationMonitoring, OperationMonitoring.FINAL_ONLY
+            ),
+            log_policy=_strict_operation_value(
+                data, "log_policy", OperationLogPolicy, OperationLogPolicy.SUMMARY_ONLY
+            ),
+            stop_condition=_bounded_operation_text(data.get("stop_condition", ""), "stop_condition"),
+            recovery=_bounded_operation_text(data.get("recovery", ""), "recovery"),
         )
+
+
+def _strict_operation_value(data: Dict[str, Any], field_name: str, enum: Any, default: Any) -> Any:
+    value = data.get(field_name, default.value)
+    try:
+        return enum(str(value))
+    except ValueError as exc:
+        raise ValueError(f"operation.json {field_name} has unsupported value {value!r}") from exc
+
+
+def _bounded_operation_text(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or len(value) > 240:
+        raise ValueError(f"operation.json {field_name} must be bounded text")
+    return value
 
 
 @dataclass

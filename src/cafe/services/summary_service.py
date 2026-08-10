@@ -130,6 +130,36 @@ class SummaryService:
         """
         return self._load_errors
 
+    def load_context_packets(self, issue_name: str) -> List[Dict[str, Any]]:
+        """Project only persisted packet relations from consumer iteration records."""
+        issue_dir = self.issues_root / issue_name
+        packets: List[Dict[str, Any]] = []
+        if not issue_dir.exists():
+            return packets
+        for phase_dir in sorted(path for path in issue_dir.iterdir() if path.is_dir()):
+            for iteration_dir in sorted(phase_dir.glob("iteration_*")):
+                path = iteration_dir / "iteration.json"
+                if not path.exists():
+                    continue
+                try:
+                    raw = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                diagnostics = raw.get("context_packets") if isinstance(raw, dict) else None
+                if not isinstance(diagnostics, list):
+                    continue
+                for diagnostic in diagnostics:
+                    if not isinstance(diagnostic, dict):
+                        continue
+                    packets.append(
+                        {
+                            "consumer": phase_dir.name,
+                            "iteration": raw.get("iteration"),
+                            **diagnostic,
+                        }
+                    )
+        return packets
+
     def _load_workflow_state(self, issue_name: str) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
         """Load the current workflow pointer and baton contract if available."""
         issue_dir = self.issues_root / issue_name

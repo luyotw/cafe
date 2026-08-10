@@ -14,6 +14,55 @@ from cafe.core.packet_io import (
 )
 
 CONTEXT_PACKET_SCHEMA_VERSION = 1
+_FALLBACK_REASONS = frozenset({"contract_invalid", "packet_persist_failed", "packet_invalid"})
+_MAX_DIAGNOSTIC_DETAIL = 160
+
+
+def build_context_packet_diagnostics(
+    bindings: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build strict, one-per-relation diagnostics from effective input bindings."""
+    grouped: dict[tuple[Any, ...], list[str]] = {}
+    for placeholder, binding in bindings.items():
+        if binding.get("requested_mode") != "packet":
+            continue
+        effective_mode = binding.get("mode")
+        fallback_reason = binding.get("fallback_reason", "")
+        detail = binding.get("detail", "")
+        if effective_mode not in {"packet", "full_fallback"}:
+            raise ValueError("Invalid context packet effective mode")
+        if effective_mode == "packet" and (fallback_reason or detail):
+            raise ValueError("Verified context packet cannot have a fallback reason")
+        if effective_mode == "full_fallback" and fallback_reason not in _FALLBACK_REASONS:
+            raise ValueError("Invalid context packet fallback reason")
+        if not isinstance(detail, str) or len(detail) > _MAX_DIAGNOSTIC_DETAIL:
+            raise ValueError("Invalid context packet diagnostic detail")
+        source = binding.get("source")
+        if not isinstance(source, Mapping):
+            raise ValueError("Invalid context packet diagnostic source")
+        key = (
+            tuple(sorted(source.items())),
+            str(binding.get("path", "")),
+            effective_mode,
+            fallback_reason,
+            detail,
+        )
+        grouped.setdefault(key, []).append(placeholder)
+
+    diagnostics: list[dict[str, Any]] = []
+    for (source_items, path, effective_mode, fallback_reason, detail), placeholders in grouped.items():
+        diagnostics.append(
+            {
+                "placeholders": sorted(placeholders),
+                "source": dict(source_items),
+                "requested_mode": "packet",
+                "effective_mode": effective_mode,
+                "fallback_reason": fallback_reason or None,
+                "detail": detail or None,
+                "path": path,
+            }
+        )
+    return diagnostics
 
 
 def build_context_packet(
@@ -167,10 +216,23 @@ def resolve_context_packet(
             "metadata": metadata,
             "source": dict(packet["source"]),
         }
-    except (ContractValidationError, ValueError, OSError):
-        reason = (
-            "Unable to persist context packet"
-            if not packet_path.exists()
-            else "Invalid or altered context packet"
-        )
-        return {"mode": "full_fallback", "path": Path(source_path).as_posix(), "reason": reason}
+    except ContractValidationError:
+        fallback_reason = "contract_invalid"
+        detail = "source contract failed validation"
+    except OSError:
+        fallback_reason = "packet_persist_failed"
+        detail = "context packet could not be persisted"
+    except ValueError:
+        fallback_reason = "packet_invalid"
+        detail = "context packet validation failed"
+    return {
+        "mode": "full_fallback",
+        "path": Path(source_path).as_posix(),
+        "reason": fallback_reason,
+        "fallback_reason": fallback_reason,
+        "detail": detail,
+        "source": {
+            "artifact_name": source_artifact_name or Path(source_path).stem,
+            "artifact_version": source_artifact_version or 1,
+        },
+    }

@@ -472,9 +472,12 @@ def resolve_effective_prompt_inputs(
             source_artifact_version=source_version,
         )
         binding = {
+            "requested_mode": "packet",
             "mode": str(resolved["mode"]),
             "path": str(resolved["path"]),
             "reason": str(resolved.get("reason", "")),
+            "fallback_reason": str(resolved.get("fallback_reason", "")),
+            "detail": str(resolved.get("detail", "")),
             "source": dict(resolved.get("source", {})),
         }
         for mapping, _source, _source_name, _source_version, _policy in group:

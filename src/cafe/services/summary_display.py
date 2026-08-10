@@ -1,6 +1,6 @@
 """Display formatter for cafe summary timeline."""
 
-from typing import List, Optional
+from typing import Any, List, Mapping, Optional
 
 from cafe.services.timeline_builder import TimelineEntry
 from cafe.services.time_formatter import format_timestamp_local, format_timestamp_utc, format_duration, calculate_elapsed_time
@@ -44,6 +44,29 @@ class SummaryDisplay:
         if count is None or count == 0:
             return "--"
         return f"{count:,}"
+
+    def format_context_packets(self, packets: List[Mapping[str, Any]]) -> str:
+        """Render the independent, narrow Context Packets read model."""
+        if not packets:
+            return ""
+        lines = ["Context Packets", "Consumer | Source | Requested | Effective | Reason"]
+        for packet in packets:
+            source = packet.get("source")
+            source_name = source.get("artifact_name", "unknown") if isinstance(source, Mapping) else "unknown"
+            consumer = f"{packet.get('consumer', 'unknown')}#{packet.get('iteration', '?')}"
+            reason = packet.get("fallback_reason") or ""
+            lines.append(
+                " | ".join(
+                    [
+                        consumer,
+                        str(source_name),
+                        str(packet.get("requested_mode", "")),
+                        str(packet.get("effective_mode", "")),
+                        str(reason),
+                    ]
+                )
+            )
+        return "\n".join(lines)
 
     def _format_entry(self, entry: TimelineEntry, prefix: str) -> str:
         """Format an entry for display with the given prefix.

@@ -54,7 +54,7 @@ class FakeAgentManager:
         self.prompts: list[str] = []
         self.allowed_tools_calls: list[list[str] | None] = []
         self.allowed_directories_calls: list[list[str] | None] = []
-        self.max_read_only_commands_calls: list[int | None] = []
+        self.execute_call_count = 0
         self.preview_calls: list[list[str] | None] = []
         self.agent = SimpleNamespace(
             config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="session-1", model=None)
@@ -89,14 +89,13 @@ class FakeAgentManager:
         allowed_directories=None,
         streaming_output_file=None,
         phase_name=None,
-        max_read_only_commands=None,
     ):
         self.prompts.append(prompt)
         self.allowed_tools_calls.append(list(allowed_tools) if allowed_tools is not None else None)
         self.allowed_directories_calls.append(
             list(allowed_directories) if allowed_directories is not None else None
         )
-        self.max_read_only_commands_calls.append(max_read_only_commands)
+        self.execute_call_count += 1
         response = next(self._responses)
         if self.on_execute is not None:
             self.on_execute(
@@ -307,7 +306,6 @@ def test_generic_step_passes_declared_read_only_guard_to_agent_manager(
                 "valid_intents": ["confirmed"],
                 "behavior": {
                     "completion": "status_code",
-                    "max_read_only_commands": 7,
                 },
                 "on": {"await_agent": "_done"},
             }
@@ -327,7 +325,7 @@ def test_generic_step_passes_declared_read_only_guard_to_agent_manager(
 
     executor.execute_step("build", playbook["steps"]["build"], state)
 
-    assert agent_manager.max_read_only_commands_calls == [7]
+    assert agent_manager.execute_call_count == 1
 
 
 def test_generic_step_forwards_declared_read_only_guard_on_checklist_retry(
@@ -346,7 +344,7 @@ def test_generic_step_forwards_declared_read_only_guard_on_checklist_retry(
             result = super().execute(*args, **kwargs)
             checklist.write_text(
                 "[ ] complete task\n"
-                if len(self.max_read_only_commands_calls) == 1
+                if self.execute_call_count == 1
                 else "[x] complete task\n",
                 encoding="utf-8",
             )
@@ -364,7 +362,6 @@ def test_generic_step_forwards_declared_read_only_guard_on_checklist_retry(
                 "valid_intents": ["confirmed"],
                 "behavior": {
                     "completion": "status_code",
-                    "max_read_only_commands": 7,
                 },
                 "on": {"await_agent": "_done"},
             }
@@ -395,7 +392,7 @@ def test_generic_step_forwards_declared_read_only_guard_on_checklist_retry(
 
     executor.execute_step("build", playbook["steps"]["build"], state)
 
-    assert agent_manager.max_read_only_commands_calls == [7, 7]
+    assert agent_manager.execute_call_count == 2
 
 
 def test_resolve_agent_name_uses_phase_config_name(tmp_path: Path, monkeypatch) -> None:
@@ -4703,7 +4700,6 @@ def test_checklist_retry_receives_exact_session_and_phase_name(
         prompt="prompt",
         user_input="",
         valid_intents=[PhaseStatusCode.CONFIRMED],
-        max_read_only_commands=7,
         max_retries=1,
     )
 
@@ -4712,7 +4708,7 @@ def test_checklist_retry_receives_exact_session_and_phase_name(
     assert manager.received[0][0].policy == SessionContinuationPolicy.RESUME_EXACT
     assert manager.received[0][0].session_id == "fresh-session"
     assert manager.received[0][1] == "spec"
-    assert manager.max_read_only_commands_calls == [7]
+    assert manager.execute_call_count == 1
 
 
 def test_checklist_retry_accumulates_raw_iteration_telemetry(

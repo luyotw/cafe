@@ -229,7 +229,6 @@ class StepBehaviorDeclaration(BaseModel):
     feedback_target: Optional[str] = None
     context_providers: Optional[List[str]] = None
     runtime_tool_grants: Optional[List[str]] = None
-    max_read_only_commands: Optional[int] = Field(default=None, ge=1)
 
     @field_validator("context_providers", "runtime_tool_grants")
     @classmethod
@@ -262,7 +261,6 @@ class EffectiveStepBehavior(BaseModel):
     feedback_target: Optional[str] = None
     context_providers: List[str] = Field(default_factory=list)
     runtime_tool_grants: List[str] = Field(default_factory=list)
-    max_read_only_commands: Optional[int] = None
 
 
 def _behavior_value(
@@ -614,9 +612,6 @@ def resolve_step_behavior(
         feedback_target=_behavior_value(defaults, override, "feedback_target", None),
         context_providers=_behavior_value(defaults, override, "context_providers", []),
         runtime_tool_grants=_behavior_value(defaults, override, "runtime_tool_grants", []),
-        max_read_only_commands=_behavior_value(
-            defaults, override, "max_read_only_commands", None
-        ),
     )
 
 

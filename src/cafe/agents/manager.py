@@ -417,7 +417,6 @@ class AgentManager:
         phase_name: Optional[str] = None,
         continuation: Optional[SessionContinuation] = None,
         backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
-        max_read_only_commands: Optional[int] = None,
     ) -> Tuple[str, TokenUsage, List, Optional[List[str]], List[str], Optional[str]]:
         """Execute prompt with specified agent.
 
@@ -428,7 +427,6 @@ class AgentManager:
             allowed_directories: List of allowed directories
             streaming_output_file: Optional file path to write streaming output line-by-line
             phase_name: Current phase name for phase-specific model lookup in backup agents
-            max_read_only_commands: Declared read-only progress guard limit, if enabled
 
         Returns:
             Tuple of (agent's response, token usage, permission denials, cli_command_args, streaming_log, model)
@@ -470,28 +468,17 @@ class AgentManager:
 
         # Track if we've already retried for session conflict
         retried = False
-        read_only_budget_retried = False
         transient_retry_done = False
         primary_attempt = 1
         attempt_prompt = prompt
-        read_only_command_limit = max_read_only_commands
-        initial_read_only_command_limit = None
 
         while True:
             try:
-                execute_kwargs = {}
-                if read_only_command_limit is not None:
-                    execute_kwargs["max_read_only_commands"] = read_only_command_limit
-                if initial_read_only_command_limit is not None:
-                    execute_kwargs["max_initial_read_only_commands"] = (
-                        initial_read_only_command_limit
-                    )
                 agent_response = executor.execute(
                     attempt_prompt,
                     allowed_tools,
                     allowed_directories,
                     streaming_output_file,
-                    **execute_kwargs,
                 )
                 break  # Success, exit loop
             except AgentExecutionError as e:
@@ -503,17 +490,6 @@ class AgentManager:
                 )
                 # Handle session conflict (only retry once)
                 if (
-                    getattr(e, "error_type", None) == "read_only_budget_exceeded"
-                    and not read_only_budget_retried
-                ):
-                    read_only_budget_retried = True
-                    attempt_prompt = self.READ_ONLY_RETRY_PROMPT
-                    initial_read_only_command_limit = self.READ_ONLY_RETRY_LIMIT
-                    print(
-                        "⚠️  Resuming the session once with an immediate-edit instruction..."
-                    )
-                    primary_attempt += 1
-                elif (
                     hasattr(e, "error_type") and e.error_type == "SESSION_CONFLICT" and not retried
                 ):
                     retried = True
@@ -541,7 +517,6 @@ class AgentManager:
                         streaming_output_file=streaming_output_file,
                         phase_name=phase_name,
                         continuation=continuation,
-                        max_read_only_commands=read_only_command_limit,
                         backup_context_callback=backup_context_callback,
                     )
                     break  # Backup succeeded, exit loop
@@ -650,7 +625,6 @@ class AgentManager:
         streaming_output_file: Optional[str] = None,
         phase_name: Optional[str] = None,
         continuation: Optional[SessionContinuation] = None,
-        max_read_only_commands: Optional[int] = None,
         backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
     ) -> "AgentResponse":
         """Try backup agents in order until one succeeds or all fail.
@@ -763,15 +737,11 @@ class AgentManager:
             transient_retry_done = False
             while True:
                 try:
-                    execute_kwargs = {}
-                    if max_read_only_commands is not None:
-                        execute_kwargs["max_read_only_commands"] = max_read_only_commands
                     agent_response = backup_executor.execute(
                         backup_prompt,
                         allowed_tools,
                         allowed_directories,
                         streaming_output_file,
-                        **execute_kwargs,
                     )
                     if agent_response.cli is None:
                         agent_response.cli = entry.cli

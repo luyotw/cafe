@@ -452,6 +452,10 @@ def status() -> None:
         display = SummaryDisplay()
         display.render_table(entries)
 
+        context_packets = display.format_context_packets(service.load_context_packets(issue_name))
+        if context_packets:
+            console.print(context_packets)
+
         # Display aggregated model token usage summary
         display.render_model_summary_table(entries)
 

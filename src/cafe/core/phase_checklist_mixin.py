@@ -28,7 +28,6 @@ class PhaseChecklistMixin:
         user_input: str,
         valid_intents: List[PhaseStatusCode],
         allowed_tools: Optional[List[str]] = None,
-        max_read_only_commands: Optional[int] = None,
         max_retries: int = 3,
     ) -> tuple[str, Optional[PhaseStatusCode], bool]:
         """Validate checklist completion and retry if incomplete.
@@ -42,7 +41,6 @@ class PhaseChecklistMixin:
             user_input: User input for this iteration
             valid_intents: Valid status codes for this phase
             allowed_tools: Tools available to agent
-            max_read_only_commands: Declared read-only progress guard limit, if enabled
             max_retries: Maximum number of retry attempts (default: 3)
 
         Returns:
@@ -146,8 +144,6 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
                     execute_kwargs["phase_name"] = getattr(self, "phase_name", None)
                 if self._call_accepts_keyword(execute_method, "continuation"):
                     execute_kwargs["continuation"] = self._current_session_continuation()
-                if self._call_accepts_keyword(execute_method, "max_read_only_commands"):
-                    execute_kwargs["max_read_only_commands"] = max_read_only_commands
                 retry_response, retry_token_usage, _, _, retry_streaming_log, retry_model = (
                     self.agent_manager.execute(
                         agent_name,

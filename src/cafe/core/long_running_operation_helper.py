@@ -20,6 +20,9 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 from cafe.core.blackboard import (
     BlackboardStore,
     LongRunningOperationArtifact,
+    OperationLogPolicy,
+    OperationMonitoring,
+    OperationRisk,
     LongRunningOperationState,
     operation_receipt_path,
 )
@@ -186,6 +189,11 @@ def run_operation_command(
     cwd: Optional[Path] = None,
     playbook: Dict[str, Any],
     reason: str = "operation_helper_launch",
+    risk: OperationRisk = OperationRisk.LOW,
+    monitoring: OperationMonitoring = OperationMonitoring.FINAL_ONLY,
+    log_policy: OperationLogPolicy = OperationLogPolicy.SUMMARY_ONLY,
+    stop_condition: str = "",
+    recovery: str = "",
 ) -> OperationLaunchResult:
     """Launch one supervised command for one workflow iteration.
 
@@ -217,6 +225,11 @@ def run_operation_command(
             artifact=LongRunningOperationArtifact(
                 state=LongRunningOperationState.RUNNING,
                 reason=reason,
+                risk=risk,
+                monitoring=monitoring,
+                log_policy=log_policy,
+                stop_condition=stop_condition,
+                recovery=recovery,
             ),
         )
     finally:
