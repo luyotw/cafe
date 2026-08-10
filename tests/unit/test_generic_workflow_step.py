@@ -4947,6 +4947,96 @@ Prepare packet inputs.
     assert json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))["effective_inputs"] == persisted
 
 
+def test_primary_and_backup_reject_persisted_full_active_packet_binding(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """UT-004: neither execution path may replace an active packet decision with full."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-full-packet-binding"
+    source = issue_dir / "spec" / "iteration_001" / "output.md"
+    source.parent.mkdir(parents=True)
+    _write_valid_spec_contract(source)
+    skill_dir = tmp_path / ".cafe" / "skills" / "cafe-develop"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: cafe-develop
+description: packet validation test skill
+workflow:
+  prompt_inputs:
+    - artifacts: [spec]
+      placeholder: spec_file
+      load_policy: [{mode: packet, contract_kind: spec}]
+    - artifacts: [spec]
+      placeholder: spec_file_path
+      load_policy: [{mode: packet, contract_kind: spec}]
+---
+
+Reject tampered persisted packet decisions.
+""",
+        encoding="utf-8",
+    )
+    step = {
+        "skill": "cafe-develop",
+        "role": "developer",
+        "input_artifacts": ["spec"],
+        "output_artifact": "code",
+        "valid_intents": ["await_agent"],
+        "on": {"await_agent": "_done"},
+    }
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {"develop": step},
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    store.set_artifact(state, "spec", str(source))
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-full-packet-binding",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("await_agent"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    executor.iteration = 1
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    full_binding = {"mode": "full", "path": str(source)}
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps(
+            {
+                "effective_inputs": {
+                    "spec_file": full_binding,
+                    "spec_file_path": full_binding,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="persisted context packet decision"):
+        executor._build_context(
+            step_name="develop",
+            step_def=step,
+            blackboard_state=state,
+            agent_name="David",
+            output_file=iteration_dir / "output.md",
+        )
+    with pytest.raises(ValueError, match="persisted context packet decision"):
+        executor._build_backup_takeover_context(
+            error="primary failed",
+            step_name="develop",
+            step_def=step,
+            blackboard_state=state,
+            output_file=iteration_dir / "output.md",
+            checklist_file=iteration_dir / "checklist.md",
+            iteration_dir=iteration_dir,
+        )
+
+
 def test_persisted_packet_binding_must_match_declared_authority_and_envelope(
     tmp_path: Path,
 ) -> None:

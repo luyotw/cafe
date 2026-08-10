@@ -101,6 +101,32 @@ def test_singleton_packet_placeholder_is_required_by_active_policy(tmp_path: Pat
         )
 
 
+@pytest.mark.parametrize(
+    "placeholders",
+    [
+        frozenset({"packet_spec"}),
+        frozenset({"packet_spec", "packet_spec_path"}),
+    ],
+)
+def test_active_packet_placeholder_rejects_plain_full_binding(
+    tmp_path: Path,
+    placeholders: frozenset[str],
+) -> None:
+    """UT-004: persisted active packet relations cannot silently become full."""
+    source = tmp_path / "spec.md"
+    source.write_text(_spec(), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="persisted context packet decision"):
+        validate_effective_input_bindings(
+            {
+                placeholder: {"mode": "full", "path": str(source)}
+                for placeholder in placeholders
+            },
+            authoritative_inputs={placeholder: source for placeholder in placeholders},
+            packet_requested_placeholders=placeholders,
+        )
+
+
 def test_packet_completeness_ignores_unrequested_optional_full_input(tmp_path: Path) -> None:
     """UT-004: active packet policies do not require unrelated full bindings."""
     source = tmp_path / "spec.md"

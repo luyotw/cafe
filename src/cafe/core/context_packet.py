@@ -257,6 +257,12 @@ def _validate_declared_packet_bindings(
         raise ValueError("Invalid persisted context packet decision")
     if any(placeholder not in bindings for placeholder in packet_requested_placeholders):
         raise ValueError("Invalid persisted context packet decision")
+    if any(
+        bindings[placeholder].get("requested_mode") != "packet"
+        or bindings[placeholder].get("mode") not in {"packet", "full_fallback"}
+        for placeholder in packet_requested_placeholders
+    ):
+        raise ValueError("Invalid persisted context packet decision")
 
 
 def _validate_paired_packet_bindings(bindings: Mapping[str, Mapping[str, Any]]) -> None:
