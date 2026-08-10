@@ -137,6 +137,7 @@ class TestSetupAgentsPhaseAware:
         (tmp_path / ".cafe" / "phases.yaml").write_text(
             """
 spec:
+  role: pm
   clis:
     - cli: copilot
       model: claude-3-haiku-20240307
