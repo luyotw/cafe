@@ -1120,6 +1120,18 @@ class GenericWorkflowStepExecutor(Phase):
             contract=contract,
         )
 
+        if "workflow_metadata" in behavior.context_providers:
+            context["workflow_metadata"] = json.dumps(
+                {
+                    "entry_point": str(
+                        playbook.get("entry_point") or next(iter(playbook.get("steps", {})), "")
+                    ),
+                    "playbook_id": str(playbook.get("playbook", {}).get("id", "")),
+                    "steps": valid_to_steps[:-2],
+                },
+                sort_keys=True,
+            )
+
         if "git_history" in behavior.context_providers:
             base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
             resolved_base = str(base_branch or self.git_ops.get_default_base_branch())

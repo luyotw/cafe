@@ -102,6 +102,11 @@ def _resolve_selected_playbook(*a, **kw):
     from cafe.ui.cli import _resolve_selected_playbook as _fn
     return _fn(*a, **kw)
 
+
+def _resolve_issue_playbook_name(*a, **kw):
+    from cafe.ui.cli import _resolve_issue_playbook_name as _fn
+    return _fn(*a, **kw)
+
 console = Console()
 
 _USER_INPUT_HELP = (
@@ -609,7 +614,20 @@ def workflow(
             raise typer.Exit(1)
         issue_name = resolved.issue_name
         issue_dir = cafe_dir / "issues" / issue_name
-        selected_playbook = _resolve_selected_playbook(playbook)
+        # An explicit flag starts a requested playbook; otherwise an existing
+        # issue must resume the playbook persisted in its own workflow state.
+        has_issue_workflow = (issue_dir / "blackboard.json").exists() or (
+            issue_dir / "issue.yaml"
+        ).exists()
+        selected_playbook = (
+            _resolve_selected_playbook(playbook)
+            if playbook
+            else (
+                _resolve_issue_playbook_name(issue_name)
+                if has_issue_workflow
+                else _resolve_selected_playbook(None)
+            )
+        )
         config_manager = _get_ConfigManager()(".cafe")
         try:
             config_manager.load_config()

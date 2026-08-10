@@ -3277,6 +3277,52 @@ steps:
         assert executed_steps == ["develop", "pr"]
 
 
+def test_workflow_resume_uses_the_issue_owned_playbook_before_global_config(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """UT-009: an existing issue resumes its recorded workflow, not global config."""
+    monkeypatch.chdir(tmp_path)
+    cafe_dir = tmp_path / ".cafe"
+    issue_dir = cafe_dir / "issues" / "issue-owned-flow"
+    issue_dir.mkdir(parents=True)
+    (cafe_dir / "config.yaml").write_text("playbook: default\n", encoding="utf-8")
+    (issue_dir / "issue.yaml").write_text("playbook: release-flow\n", encoding="utf-8")
+    playbook_dir = cafe_dir / "playbooks"
+    playbook_dir.mkdir()
+    (playbook_dir / "release-flow.yaml").write_text(
+        """
+playbook:
+  id: release-flow
+steps:
+  ship:
+    skill: cafe-develop
+    role: developer
+    on: {await_agent: _done}
+""".strip(),
+        encoding="utf-8",
+    )
+    executed_steps: list[str] = []
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor") as mock_builder,
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-owned-flow"
+        mock_git_cls.return_value = git
+        executor = MagicMock()
+        executor.execute_step.side_effect = lambda step_name, step_def, state, **kwargs: (
+            executed_steps.append(step_name)
+            or _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
+        )
+        mock_builder.return_value = executor
+
+        result = runner.invoke(app, ["workflow", "--issue", "issue-owned-flow", "--execute"])
+
+    assert result.exit_code == 0, result.output
+    assert executed_steps == ["ship"]
+
+
 def test_workflow_execute_syncs_active_issue_on_healthy_branch(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     cafe_dir = tmp_path / ".cafe"

@@ -58,6 +58,8 @@ class _BatonWritingAgentManager:
 
     def __init__(self, issue_dir: Path) -> None:
         self.issue_dir = issue_dir
+        self.prompts: list[str] = []
+        self.allowed_tools_calls: list[list[str] | None] = []
         self.agent = SimpleNamespace(
             config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="integration-test", model=None)
         )
@@ -66,6 +68,8 @@ class _BatonWritingAgentManager:
         return self.agent
 
     def execute(self, _name: str, _prompt: str, **_kwargs):
+        self.prompts.append(_prompt)
+        self.allowed_tools_calls.append(_kwargs.get("allowed_tools"))
         state = BlackboardStore(self.issue_dir).load_or_create("release")
         BlackboardStore(self.issue_dir).update_handoff_contract(
             state,
@@ -153,6 +157,8 @@ steps:
       completion: baton
       publish_confirmation: true
       feedback_target: repair
+      context_providers: [workflow_metadata]
+      runtime_tool_grants: [git_inspection]
     hooks:
       prepare_input: [UserInputCollector]
       publish_output: [GitHubPRCreator]
@@ -162,12 +168,13 @@ steps:
     )
     playbook = PlaybookLoader().load("release-flow")
 
+    agent_manager = _BatonWritingAgentManager(issue_dir)
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="release-journey",
         playbook=playbook,
         generic_phase=_build_integration_generic_phase(tmp_path),
-        agent_manager=_BatonWritingAgentManager(issue_dir),
+        agent_manager=agent_manager,
         git_ops=_GitOperations(),
         role_agent_map={"developer": "David"},
     )
@@ -197,6 +204,8 @@ steps:
         ).run(start_step="release")
 
     assert result.completed is True
+    assert '"playbook_id": "release-flow"' in agent_manager.prompts[0]
+    assert "bash(git status)" in (agent_manager.allowed_tools_calls[0] or [])
     assert _load_issue_step_names("release-journey") == ["repair", "release"]
 
     iteration_dir = issue_dir / "release" / "iteration_001"

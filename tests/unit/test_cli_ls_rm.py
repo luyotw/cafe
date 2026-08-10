@@ -195,6 +195,31 @@ class TestLsCommand:
             assert "empty" not in line
         assert ".cafe/worktrees/issue27" in result.stdout
 
+    def test_ls_displays_custom_playbook_step_directories(self, temp_issues_dir):
+        """UT-009: issue display derives phases from the configured playbook."""
+        issue = temp_issues_dir / "release-issue"
+        issue.mkdir()
+        (issue / "issue.yaml").write_text("playbook: release-flow\n", encoding="utf-8")
+        (issue / "repair").mkdir()
+        (issue / "release").mkdir()
+        playbook_dir = temp_issues_dir.parent / "playbooks"
+        playbook_dir.mkdir()
+        (playbook_dir / "release-flow.yaml").write_text(
+            """
+playbook:
+  id: release-flow
+steps:
+  repair: {skill: cafe-develop, role: developer, on: {await_agent: release}}
+  release: {skill: cafe-pr, role: developer, on: {await_agent: _done}}
+""".strip(),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(app, ["ls"])
+
+        assert result.exit_code == 0
+        assert "repair, release" in result.stdout
+
 
 class TestRmCommand:
     """Test rm command."""
