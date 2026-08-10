@@ -4783,7 +4783,25 @@ def test_persisted_packet_decision_rejects_malformed_iteration_metadata(tmp_path
     (iteration_dir / "iteration.json").write_text("{broken", encoding="utf-8")
 
     with pytest.raises(ValueError, match="context packet decision"):
-        GenericWorkflowStepExecutor._load_persisted_effective_inputs(iteration_dir)
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+            iteration_dir,
+            require_persisted_packet_decision=True,
+        )
+
+
+def test_persisted_packet_decision_rejects_missing_effective_inputs(tmp_path: Path) -> None:
+    """UT-004: an interrupted iteration cannot replace a lost packet decision."""
+    iteration_dir = tmp_path / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps({"iteration": 1}), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="context packet decision"):
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+            iteration_dir,
+            require_persisted_packet_decision=True,
+        )
 
 
 def test_persisted_packet_decision_requires_complete_binding_record(tmp_path: Path) -> None:

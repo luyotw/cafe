@@ -32,6 +32,39 @@ _OPERATION_DECISION = {
 }
 
 
+@pytest.mark.parametrize(
+    ("risk", "monitoring", "log_policy"),
+    [
+        (OperationRisk.LOW, OperationMonitoring.FINAL_ONLY, OperationLogPolicy.SUMMARY_ONLY),
+        (OperationRisk.MEDIUM, OperationMonitoring.PERIODIC, OperationLogPolicy.INCREMENTAL_TAIL),
+        (OperationRisk.HIGH, OperationMonitoring.ACTIVE, OperationLogPolicy.FILTERED_STREAM),
+    ],
+)
+def test_operation_decision_accepts_each_risk_policy(
+    risk: OperationRisk,
+    monitoring: OperationMonitoring,
+    log_policy: OperationLogPolicy,
+) -> None:
+    """UT-008: every documented risk level has one compatible policy."""
+    restored = LongRunningOperationArtifact.from_dict(
+        LongRunningOperationArtifact(
+            operation_id="op-123",
+            state=LongRunningOperationState.RUNNING,
+            risk=risk,
+            monitoring=monitoring,
+            log_policy=log_policy,
+            stop_condition="stop at the declared safety boundary",
+            recovery="inspect the same operation id",
+        ).to_dict()
+    )
+
+    assert (restored.risk, restored.monitoring, restored.log_policy) == (
+        risk,
+        monitoring,
+        log_policy,
+    )
+
+
 def test_operation_decision_requires_bounded_text_and_matching_policy() -> None:
     """UT-008: persisted operation decisions are complete and risk-driven."""
     payload = LongRunningOperationArtifact(

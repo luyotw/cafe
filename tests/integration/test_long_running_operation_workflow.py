@@ -22,8 +22,10 @@ from pathlib import Path
 
 from cafe.agents.executor import AgentExecutionError
 from cafe.core.blackboard import (
-    BlackboardStore,
     LongRunningOperationState,
+    OperationLogPolicy,
+    OperationMonitoring,
+    OperationRisk,
 )
 from cafe.core.long_running_operation_helper import (
     get_operation_status,
@@ -419,6 +421,11 @@ iteration_dir.mkdir(parents=True, exist_ok=True)
         cwd=tmp_path,
         playbook=_PLAYBOOK,
         reason="integration_fake_long_command",
+        risk=OperationRisk.MEDIUM,
+        monitoring=OperationMonitoring.PERIODIC,
+        log_policy=OperationLogPolicy.INCREMENTAL_TAIL,
+        stop_condition="stop if the integration fixture reports failure",
+        recovery="inspect the same operation id before retrying",
     )
     duplicate = run_operation_command(
         issue_dir=issue_dir,
@@ -475,6 +482,11 @@ iteration_dir.mkdir(parents=True, exist_ok=True)
         )
     assert status.state == LongRunningOperationState.SUCCEEDED
     assert status.exit_code == 0
+    assert (status.risk, status.monitoring, status.log_policy) == (
+        OperationRisk.MEDIUM,
+        OperationMonitoring.PERIODIC,
+        OperationLogPolicy.INCREMENTAL_TAIL,
+    )
 
     second_result = BlackboardWorkflowRuntime(
         issue_dir=issue_dir, playbook=_PLAYBOOK, executor=duplicate_launch_executor

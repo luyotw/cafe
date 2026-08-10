@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import (
@@ -17,6 +17,10 @@ from cafe.core.blackboard import (
     HandoffOwner,
 )
 from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
+from cafe.core.context_packet import (
+    build_context_packet_diagnostics,
+    format_context_packet_diagnostic,
+)
 from cafe.core.delta_packet import (
     build_delta_packet,
     inline_delta_packet,
@@ -61,7 +65,6 @@ from cafe.skills.contracts import (
     resolve_prompt_inputs,
 )
 from cafe.skills.loader import SkillLoader, canonical_skill_name
-from cafe.core.context_packet import build_context_packet_diagnostics, format_context_packet_diagnostic
 from cafe.templates.manager import TemplateManager
 from cafe.utils.git_utils import get_git_toplevel, get_repo_root, to_cwd_relative_path
 from cafe.utils.phase_config import load_phase_step_model
@@ -488,22 +491,31 @@ class GenericWorkflowStepExecutor(Phase):
         contract = self._get_skill_loader().get_workflow_contract(
             self._resolve_skill_name(step_def, self.iteration)
         )
-        resolved_inputs = self._load_persisted_effective_inputs(iteration_dir)
+        input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
+        packet_requested = self._requires_persisted_packet_decision(
+            contract,
+            input_artifacts,
+            step=step_name,
+            iteration=self.iteration,
+            feedback=bool(
+                input_artifacts.get("review_feedback") or input_artifacts.get("pr_result")
+            ),
+        )
+        resolved_inputs = self._load_persisted_effective_inputs(
+            iteration_dir,
+            require_persisted_packet_decision=packet_requested,
+        )
         if resolved_inputs is None:
-            packet_requested = any(
-                policy.mode == "packet"
-                for prompt_input in contract.prompt_inputs
-                for policy in prompt_input.load_policy
-            )
             if packet_requested:
                 raise ValueError("Missing pre-launch context packet decision for backup takeover")
-            input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
             resolved_inputs = resolve_effective_prompt_inputs(
                 contract,
                 input_artifacts,
                 step=step_name,
                 iteration=self.iteration,
-                feedback=bool(input_artifacts.get("review_feedback") or input_artifacts.get("pr_result")),
+                feedback=bool(
+                    input_artifacts.get("review_feedback") or input_artifacts.get("pr_result")
+                ),
                 packet_dir=iteration_dir,
             )
         workspace: dict[str, Any] = {}
@@ -571,7 +583,7 @@ class GenericWorkflowStepExecutor(Phase):
 
     @staticmethod
     def _load_persisted_effective_inputs(
-        iteration_dir: Path,
+        iteration_dir: Path, *, require_persisted_packet_decision: bool = False
     ) -> dict[str, dict[str, Any]] | None:
         """Reuse pre-launch packet decisions instead of resolving them during takeover."""
         path = iteration_dir / "iteration.json"
@@ -584,6 +596,8 @@ class GenericWorkflowStepExecutor(Phase):
         if not isinstance(raw, dict):
             raise ValueError("Invalid persisted context packet decision")
         if "effective_inputs" not in raw:
+            if require_persisted_packet_decision:
+                raise ValueError("Invalid persisted context packet decision")
             return None
         persisted = raw.get("effective_inputs")
         if isinstance(persisted, dict):
@@ -605,6 +619,30 @@ class GenericWorkflowStepExecutor(Phase):
                 result[placeholder] = dict(binding)
             return result
         raise ValueError("Invalid persisted context packet decision")
+
+    @staticmethod
+    def _requires_persisted_packet_decision(
+        contract: SkillWorkflowContract,
+        artifacts: Mapping[str, Any],
+        *,
+        step: str,
+        iteration: int,
+        feedback: bool,
+    ) -> bool:
+        """Return whether this invocation has a declared packet relationship."""
+        authoritative_inputs = resolve_prompt_inputs(contract, artifacts)
+        return any(
+            mapping.placeholder in authoritative_inputs
+            and policy.mode == "packet"
+            and policy.when.matches(
+                step=step,
+                iteration=iteration,
+                artifacts=artifacts,
+                feedback=feedback,
+            )
+            for mapping in contract.prompt_inputs
+            for policy in mapping.load_policy
+        )
 
     @staticmethod
     def _persist_context_packet_diagnostics(
@@ -1160,16 +1198,24 @@ class GenericWorkflowStepExecutor(Phase):
             placeholder: self._display_path(Path(path))
             for placeholder, path in authoritative_inputs.items()
         }
-        effective_inputs = self._load_persisted_effective_inputs(output_file.parent)
+        feedback = bool(input_artifacts.get("review_feedback") or input_artifacts.get("pr_result"))
+        effective_inputs = self._load_persisted_effective_inputs(
+            output_file.parent,
+            require_persisted_packet_decision=self._requires_persisted_packet_decision(
+                contract,
+                input_artifacts,
+                step=step_name,
+                iteration=self.iteration,
+                feedback=feedback,
+            ),
+        )
         if effective_inputs is None:
             effective_inputs = resolve_effective_prompt_inputs(
                 contract,
                 input_artifacts,
                 step=step_name,
                 iteration=self.iteration,
-                feedback=bool(
-                    input_artifacts.get("review_feedback") or input_artifacts.get("pr_result")
-                ),
+                feedback=feedback,
                 packet_dir=output_file.parent,
             )
             self._persist_context_packet_diagnostics(output_file.parent, effective_inputs)

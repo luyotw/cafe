@@ -399,8 +399,9 @@ def resolve_effective_prompt_inputs(
 ) -> dict[str, dict[str, str]]:
     """Resolve declared input relationships without relying on artifact names.
 
-    Packet failures are deliberately local: other inputs remain in their
-    declared mode and the affected input exposes its complete source path.
+    Safe packet construction failures remain local: other inputs retain their
+    declared mode and the affected input uses its complete source. Invalid
+    contracts instead reject confirmation before the consumer can start.
     """
     from cafe.core.context_packet import resolve_context_packet
 
