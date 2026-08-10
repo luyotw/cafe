@@ -322,7 +322,13 @@ def _validate_full_source_metadata(source: Any, authority_path: Path) -> None:
         current = file_metadata(authority_path)
     except OSError as exc:
         raise ValueError("Invalid persisted context packet decision") from exc
-    if any(source.get(key) != value for key, value in current.items()):
+    source_path = source.get("path")
+    if (
+        not isinstance(source_path, str)
+        or not source_path
+        or Path(source_path).resolve() != authority_path
+        or any(source.get(key) != current[key] for key in ("state", "bytes", "sha256"))
+    ):
         raise ValueError("Invalid persisted context packet decision")
 
 

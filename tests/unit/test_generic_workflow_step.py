@@ -4832,15 +4832,8 @@ def test_persisted_packet_decision_requires_complete_binding_record(tmp_path: Pa
         GenericWorkflowStepExecutor._load_persisted_effective_inputs(iteration_dir)
 
 
-def test_persisted_packet_binding_must_match_declared_authority_and_envelope(
-    tmp_path: Path,
-) -> None:
-    """UT-004: takeover cannot redirect a packet binding to another source."""
-    from cafe.skills.contracts import SkillWorkflowContract, resolve_effective_prompt_inputs
-
-    source = tmp_path / "spec.md"
-    other = tmp_path / "other.md"
-    source.write_text(
+def _write_valid_spec_contract(path: Path) -> None:
+    path.write_text(
         "# Source\n\nGOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001\n\n"
         "## Downstream Contract\n\n- Contract-Version: `1`\n- Artifact-Kind: `spec`\n\n"
         "### Goals\n| ID | Statement |\n| --- | --- |\n| GOAL-001 | goal |\n\n"
@@ -4850,6 +4843,98 @@ def test_persisted_packet_binding_must_match_declared_authority_and_envelope(
         "### Trust Boundaries\n| ID | Statement |\n| --- | --- |\n| TRUST-001 | local |\n",
         encoding="utf-8",
     )
+
+
+def test_generic_workflow_preparation_reloads_relative_packet_decision(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """UT-004: normal relative artifacts survive production packet preparation."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-relative-packet"
+    source = issue_dir / "spec" / "iteration_001" / "output.md"
+    source.parent.mkdir(parents=True)
+    _write_valid_spec_contract(source)
+    relative_source = source.relative_to(tmp_path).as_posix()
+
+    skill_dir = tmp_path / ".cafe" / "skills" / "cafe-develop"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: cafe-develop
+description: packet preparation test skill
+workflow:
+  prompt_inputs:
+    - artifacts: [spec]
+      placeholder: spec_file
+      load_policy: [{mode: packet, contract_kind: spec}]
+    - artifacts: [spec]
+      placeholder: spec_file_path
+      load_policy: [{mode: packet, contract_kind: spec}]
+---
+
+Prepare packet inputs.
+""",
+        encoding="utf-8",
+    )
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "develop": {
+                "skill": "cafe-develop",
+                "role": "developer",
+                "input_artifacts": ["spec"],
+                "output_artifact": "code",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["await_agent"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    store.set_artifact(state, "spec", relative_source)
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-relative-packet",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("await_agent"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("develop", playbook["steps"]["develop"], state)
+
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    persisted = json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))[
+        "effective_inputs"
+    ]
+    assert persisted["spec_file"] == persisted["spec_file_path"]
+    assert persisted["spec_file"]["source"]["path"] == relative_source
+
+    reloaded_context = executor._build_context(
+        step_name="develop",
+        step_def=playbook["steps"]["develop"],
+        blackboard_state=state,
+        agent_name="David",
+        output_file=iteration_dir / "output.md",
+    )
+
+    assert reloaded_context["spec_file"] == reloaded_context["spec_file_path"]
+    assert reloaded_context["input_loading_modes"] == "spec_file=packet, spec_file_path=packet"
+    assert json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))["effective_inputs"] == persisted
+
+
+def test_persisted_packet_binding_must_match_declared_authority_and_envelope(
+    tmp_path: Path,
+) -> None:
+    """UT-004: takeover cannot redirect a packet binding to another source."""
+    from cafe.skills.contracts import SkillWorkflowContract, resolve_effective_prompt_inputs
+
+    source = tmp_path / "spec.md"
+    other = tmp_path / "other.md"
+    _write_valid_spec_contract(source)
     other.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     contract = SkillWorkflowContract.model_validate(
         {"prompt_inputs": [
