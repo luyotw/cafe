@@ -9,7 +9,14 @@ import pytest
 
 from cafe.agents.executor import AgentExecutionError
 from cafe.agents.manager import AgentManager
-from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore
+from cafe.core.blackboard import (
+    ArtifactEntry,
+    ArtifactKind,
+    BlackboardStore,
+    OperationLogPolicy,
+    OperationMonitoring,
+    OperationRisk,
+)
 from cafe.core.long_running_operation_helper import get_operation_status, run_operation_command
 from cafe.core.types import (
     AgentCLI,
@@ -233,6 +240,11 @@ def test_cold_backup_chain_status_checks_a_running_operation_before_takeover(
         cwd=tmp_path,
         playbook=executor.playbook,
         reason="cold_backup_integration",
+        risk=OperationRisk.MEDIUM,
+        monitoring=OperationMonitoring.PERIODIC,
+        log_policy=OperationLogPolicy.INCREMENTAL_TAIL,
+        stop_condition="stop if the cold-backup fixture fails",
+        recovery="inspect the same operation id before retrying",
     )
     assert launched.started is True
     primary_error = AgentExecutionError("primary rate limit", error_type="rate_limit")
