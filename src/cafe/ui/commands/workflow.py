@@ -452,7 +452,10 @@ def status() -> None:
         display = SummaryDisplay()
         display.render_table(entries)
 
-        context_packets = display.format_context_packets(service.load_context_packets(issue_name))
+        load_context_packets = getattr(service, "load_context_packets", None)
+        context_packets = display.format_context_packets(
+            load_context_packets(issue_name) if callable(load_context_packets) else []
+        )
         if context_packets:
             console.print(context_packets)
 
