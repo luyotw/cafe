@@ -276,6 +276,17 @@ def _behavior_value(
     return fallback if value is None else value
 
 
+def _behavior_sequence(
+    defaults: StepBehaviorDeclaration, override: StepBehaviorDeclaration, field_name: str
+) -> List[str]:
+    """Merge additive runtime selections while retaining declaration order."""
+    return list(
+        dict.fromkeys(
+            [*(getattr(defaults, field_name) or []), *(getattr(override, field_name) or [])]
+        )
+    )
+
+
 class StepConfig(BaseModel):
     """One playbook step."""
 
@@ -606,8 +617,8 @@ def resolve_step_behavior(
         completion=_behavior_value(defaults, override, "completion", "status_code"),
         publish_confirmation=_behavior_value(defaults, override, "publish_confirmation", False),
         feedback_target=_behavior_value(defaults, override, "feedback_target", None),
-        context_providers=list(_behavior_value(defaults, override, "context_providers", [])),
-        runtime_tool_grants=list(_behavior_value(defaults, override, "runtime_tool_grants", [])),
+        context_providers=_behavior_sequence(defaults, override, "context_providers"),
+        runtime_tool_grants=_behavior_sequence(defaults, override, "runtime_tool_grants"),
     )
 
 

@@ -55,7 +55,28 @@ def test_behavior_contract_merges_defaults_for_arbitrary_step_names():
     assert behavior.publish_confirmation is True
     assert behavior.feedback_target == "verify"
     assert behavior.context_providers == ["workflow_metadata"]
-    assert behavior.runtime_tool_grants == ["git_inspection"]
+    assert behavior.runtime_tool_grants == ["web_research", "git_inspection"]
+
+
+def test_behavior_contract_combines_declared_provider_and_grant_layers():
+    """UT-002/UT-006/UT-007: step additions retain playbook-wide grants."""
+    model = PlaybookDefinition.model_validate(
+        _playbook(
+            defaults={
+                "context_providers": ["workflow_metadata"],
+                "runtime_tool_grants": ["web_research"],
+            },
+            build_behavior={
+                "context_providers": ["git_history"],
+                "runtime_tool_grants": ["git_inspection"],
+            },
+        )
+    )
+
+    behavior = resolve_step_behavior(model, "build")
+
+    assert behavior.context_providers == ["workflow_metadata", "git_history"]
+    assert behavior.runtime_tool_grants == ["web_research", "git_inspection"]
 
 
 @pytest.mark.parametrize("step_name", ["assemble", "quality_gate"])
