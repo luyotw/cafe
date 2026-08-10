@@ -172,6 +172,7 @@ def validate_effective_input_bindings(
         validated[placeholder] = dict(binding)
     _validate_paired_packet_bindings(validated)
     if authoritative_inputs is not None:
+        _validate_declared_paired_bindings(validated, authoritative_inputs)
         _validate_binding_authority(
             validated,
             authoritative_inputs=authoritative_inputs,
@@ -180,6 +181,54 @@ def validate_effective_input_bindings(
             iteration=iteration,
         )
     return validated
+
+
+def canonical_context_packet_path(
+    packet_dir: str | Path, placeholders: tuple[str, ...]
+) -> Path:
+    """Return the sole runtime-owned path for one declared packet relation."""
+    if not placeholders:
+        raise ValueError("Invalid persisted context packet decision")
+    relation = _packet_relation(placeholders[0])
+    if any(_packet_relation(placeholder) != relation for placeholder in placeholders):
+        raise ValueError("Invalid persisted context packet decision")
+    return Path(packet_dir) / f"context_{relation}.json"
+
+
+def _packet_relation(placeholder: str) -> str:
+    return placeholder.removesuffix("_path")
+
+
+def _declared_relation_placeholders(
+    placeholder: str, authoritative_inputs: Mapping[str, str | Path]
+) -> tuple[str, ...]:
+    relation = _packet_relation(placeholder)
+    return tuple(
+        declared
+        for declared in authoritative_inputs
+        if _packet_relation(declared) == relation
+    )
+
+
+def _validate_declared_paired_bindings(
+    bindings: Mapping[str, Mapping[str, Any]],
+    authoritative_inputs: Mapping[str, str | Path],
+) -> None:
+    """Require every declared conventional alias pair to share one decision."""
+    checked: set[str] = set()
+    for placeholder in authoritative_inputs:
+        relation = _packet_relation(placeholder)
+        if relation in checked:
+            continue
+        checked.add(relation)
+        declared = _declared_relation_placeholders(placeholder, authoritative_inputs)
+        if len(declared) < 2:
+            continue
+        if any(name not in bindings for name in declared):
+            raise ValueError("Invalid persisted context packet decision")
+        first = bindings[declared[0]]
+        if any(bindings[name] != first for name in declared[1:]):
+            raise ValueError("Invalid persisted context packet decision")
 
 
 def _validate_paired_packet_bindings(bindings: Mapping[str, Mapping[str, Any]]) -> None:
@@ -228,13 +277,31 @@ def _validate_binding_authority(
         packet_path = Path(str(binding["path"])).resolve()
         if packet_dir is not None and packet_path.parent != packet_dir:
             raise ValueError("Invalid persisted context packet decision")
+        declared_placeholders = _declared_relation_placeholders(placeholder, authoritative_inputs)
+        if packet_dir is not None and packet_path != canonical_context_packet_path(
+            packet_dir, declared_placeholders
+        ).resolve():
+            raise ValueError("Invalid persisted context packet decision")
         try:
             packet = json.loads(packet_path.read_text(encoding="utf-8"))
             validate_context_packet(packet)
-        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            expected_packet = build_context_packet(
+                source_path=authority,
+                contract_kind=packet["contract"]["kind"],
+                target_step=target_step if target_step is not None else packet["target"]["step"],
+                iteration=iteration if iteration is not None else packet["target"]["iteration"],
+                placeholders=declared_placeholders,
+                source_artifact_name=str(binding["source"]["artifact_name"]),
+                source_artifact_version=int(binding["source"]["artifact_version"]),
+            )
+        except (OSError, json.JSONDecodeError, ValueError, ContractValidationError) as exc:
             raise ValueError("Invalid persisted context packet decision") from exc
         source = packet["source"]
-        if Path(str(source["path"])).resolve() != authority_path or source != binding["source"]:
+        if (
+            Path(str(source["path"])).resolve() != authority_path
+            or source != binding["source"]
+            or packet != expected_packet
+        ):
             raise ValueError("Invalid persisted context packet decision")
         _validate_full_source_metadata(source, authority_path)
         target = packet["target"]

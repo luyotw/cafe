@@ -129,6 +129,34 @@ def test_paired_placeholders_share_one_effective_packet_binding(tmp_path: Path) 
     ]
 
 
+def test_paired_placeholders_reject_a_full_and_packet_split(tmp_path: Path) -> None:
+    """UT-004: a declared alias pair owns one effective-input decision."""
+    source = tmp_path / "spec.md"
+    source.write_text(_spec(), encoding="utf-8")
+    contract = SkillWorkflowContract.model_validate(
+        {
+            "prompt_inputs": [
+                {"artifacts": ["spec"], "placeholder": "spec_file"},
+                {
+                    "artifacts": ["spec"],
+                    "placeholder": "spec_file_path",
+                    "load_policy": [{"mode": "packet", "contract_kind": "spec"}],
+                },
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="persisted context packet decision"):
+        resolve_effective_prompt_inputs(
+            contract,
+            {"spec": source},
+            step="custom",
+            iteration=1,
+            feedback=False,
+            packet_dir=tmp_path / "packets",
+        )
+
+
 def test_packet_diagnostics_are_strict_and_deduplicate_paired_bindings() -> None:
     """One requested relation produces one validated, durable diagnostic."""
     bindings = {
@@ -228,6 +256,8 @@ def test_packet_rejects_extra_envelope_fields_and_persisted_format_tampering(
         packet_path=packet_path,
     )
     assert fallback["mode"] == "full_fallback"
+    assert fallback["fallback_reason"] == "packet_invalid"
+    assert fallback["detail"] == "context packet validation failed"
 
 
 def test_packet_tampering_cannot_be_approved_by_rewriting_a_sidecar_receipt(tmp_path: Path) -> None:
@@ -258,6 +288,8 @@ def test_packet_tampering_cannot_be_approved_by_rewriting_a_sidecar_receipt(tmp_
         packet_path=packet_path,
     )
     assert fallback["mode"] == "full_fallback"
+    assert fallback["fallback_reason"] == "packet_invalid"
+    assert fallback["detail"] == "context packet validation failed"
 
 
 def test_packet_validation_failure_has_the_exact_boundary_diagnostic(

@@ -4874,8 +4874,56 @@ def test_persisted_packet_binding_must_match_declared_authority_and_envelope(
     )
     assert loaded == effective
 
-    tampered = json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))
+    original = json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))
+    packet_path = Path(original["effective_inputs"]["spec_file"]["path"])
+    original_packet = packet_path.read_text(encoding="utf-8")
+
+    tampered = json.loads(json.dumps(original))
     tampered["effective_inputs"]["spec_file_path"]["path"] = str(other)
+    (iteration_dir / "iteration.json").write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(ValueError, match="context packet decision"):
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+            iteration_dir,
+            require_persisted_packet_decision=True,
+            authoritative_inputs={"spec_file": source, "spec_file_path": source},
+            target_step="develop",
+            iteration=1,
+        )
+
+    tampered = json.loads(json.dumps(original))
+    tampered["effective_inputs"].pop("spec_file_path")
+    (iteration_dir / "iteration.json").write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(ValueError, match="context packet decision"):
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+            iteration_dir,
+            require_persisted_packet_decision=True,
+            authoritative_inputs={"spec_file": source, "spec_file_path": source},
+            target_step="develop",
+            iteration=1,
+        )
+
+    tampered_packet = json.loads(original_packet)
+    tampered_packet["contract"]["bytes"] = "agent-substituted contract"
+    tampered_packet["contract"]["sha256"] = __import__("hashlib").sha256(
+        tampered_packet["contract"]["bytes"].encode("utf-8")
+    ).hexdigest()
+    packet_path.write_text(json.dumps(tampered_packet), encoding="utf-8")
+    (iteration_dir / "iteration.json").write_text(json.dumps(original), encoding="utf-8")
+    with pytest.raises(ValueError, match="context packet decision"):
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+            iteration_dir,
+            require_persisted_packet_decision=True,
+            authoritative_inputs={"spec_file": source, "spec_file_path": source},
+            target_step="develop",
+            iteration=1,
+        )
+
+    packet_path.write_text(original_packet, encoding="utf-8")
+    replacement = iteration_dir / "agent-selected-packet.json"
+    replacement.write_text(original_packet, encoding="utf-8")
+    tampered = json.loads(json.dumps(original))
+    for binding in tampered["effective_inputs"].values():
+        binding["path"] = str(replacement)
     (iteration_dir / "iteration.json").write_text(json.dumps(tampered), encoding="utf-8")
     with pytest.raises(ValueError, match="context packet decision"):
         GenericWorkflowStepExecutor._load_persisted_effective_inputs(
