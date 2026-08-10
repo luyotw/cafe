@@ -123,6 +123,7 @@ def validate_effective_input_bindings(
     bindings: Mapping[str, Mapping[str, Any]],
     *,
     authoritative_inputs: Mapping[str, str | Path] | None = None,
+    packet_requested_placeholders: frozenset[str] | None = None,
     packet_dir: str | Path | None = None,
     target_step: str | None = None,
     iteration: int | None = None,
@@ -135,6 +136,14 @@ def validate_effective_input_bindings(
     if not isinstance(bindings, Mapping):
         raise ValueError("Invalid persisted context packet decision")
     if authoritative_inputs is not None and not isinstance(authoritative_inputs, Mapping):
+        raise ValueError("Invalid persisted context packet decision")
+    if packet_requested_placeholders is not None and (
+        not isinstance(packet_requested_placeholders, frozenset)
+        or any(
+            not isinstance(placeholder, str) or not placeholder
+            for placeholder in packet_requested_placeholders
+        )
+    ):
         raise ValueError("Invalid persisted context packet decision")
     expected_packet_dir = Path(packet_dir).resolve() if packet_dir is not None else None
     validated: dict[str, dict[str, Any]] = {}
@@ -172,6 +181,11 @@ def validate_effective_input_bindings(
         validated[placeholder] = dict(binding)
     _validate_paired_packet_bindings(validated)
     if authoritative_inputs is not None:
+        _validate_declared_packet_bindings(
+            validated,
+            authoritative_inputs,
+            packet_requested_placeholders,
+        )
         _validate_declared_paired_bindings(validated, authoritative_inputs)
         _validate_binding_authority(
             validated,
@@ -229,6 +243,20 @@ def _validate_declared_paired_bindings(
         first = bindings[declared[0]]
         if any(bindings[name] != first for name in declared[1:]):
             raise ValueError("Invalid persisted context packet decision")
+
+
+def _validate_declared_packet_bindings(
+    bindings: Mapping[str, Mapping[str, Any]],
+    authoritative_inputs: Mapping[str, str | Path],
+    packet_requested_placeholders: frozenset[str] | None,
+) -> None:
+    """Require every active packet policy relation, including singletons."""
+    if packet_requested_placeholders is None:
+        return
+    if not packet_requested_placeholders.issubset(authoritative_inputs):
+        raise ValueError("Invalid persisted context packet decision")
+    if any(placeholder not in bindings for placeholder in packet_requested_placeholders):
+        raise ValueError("Invalid persisted context packet decision")
 
 
 def _validate_paired_packet_bindings(bindings: Mapping[str, Mapping[str, Any]]) -> None:

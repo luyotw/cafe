@@ -62,6 +62,7 @@ from cafe.skills.contracts import (
     DeclaredArtifactError,
     SkillWorkflowContract,
     resolve_effective_prompt_inputs,
+    resolve_packet_requested_placeholders,
     resolve_prompt_inputs,
 )
 from cafe.skills.loader import SkillLoader, canonical_skill_name
@@ -493,7 +494,7 @@ class GenericWorkflowStepExecutor(Phase):
         )
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
         authoritative_inputs = resolve_prompt_inputs(contract, input_artifacts)
-        packet_requested = self._requires_persisted_packet_decision(
+        packet_requested_placeholders = self._packet_requested_placeholders(
             contract,
             input_artifacts,
             step=step_name,
@@ -501,16 +502,18 @@ class GenericWorkflowStepExecutor(Phase):
             feedback=bool(
                 input_artifacts.get("review_feedback") or input_artifacts.get("pr_result")
             ),
+            authoritative_inputs=authoritative_inputs,
         )
         resolved_inputs = self._load_persisted_effective_inputs(
             iteration_dir,
-            require_persisted_packet_decision=packet_requested,
+            require_persisted_packet_decision=bool(packet_requested_placeholders),
             authoritative_inputs=authoritative_inputs,
+            packet_requested_placeholders=packet_requested_placeholders,
             target_step=step_name,
             iteration=self.iteration,
         )
         if resolved_inputs is None:
-            if packet_requested:
+            if packet_requested_placeholders:
                 raise ValueError("Missing pre-launch context packet decision for backup takeover")
             resolved_inputs = resolve_effective_prompt_inputs(
                 contract,
@@ -591,6 +594,7 @@ class GenericWorkflowStepExecutor(Phase):
         *,
         require_persisted_packet_decision: bool = False,
         authoritative_inputs: Mapping[str, str | Path] | None = None,
+        packet_requested_placeholders: frozenset[str] | None = None,
         target_step: str | None = None,
         iteration: int | None = None,
     ) -> dict[str, dict[str, Any]] | None:
@@ -615,6 +619,7 @@ class GenericWorkflowStepExecutor(Phase):
             return validate_effective_input_bindings(
                 persisted,
                 authoritative_inputs=authoritative_inputs,
+                packet_requested_placeholders=packet_requested_placeholders,
                 packet_dir=iteration_dir,
                 target_step=target_step,
                 iteration=iteration,
@@ -622,27 +627,23 @@ class GenericWorkflowStepExecutor(Phase):
         raise ValueError("Invalid persisted context packet decision")
 
     @staticmethod
-    def _requires_persisted_packet_decision(
+    def _packet_requested_placeholders(
         contract: SkillWorkflowContract,
         artifacts: Mapping[str, Any],
         *,
         step: str,
         iteration: int,
         feedback: bool,
-    ) -> bool:
-        """Return whether this invocation has a declared packet relationship."""
-        authoritative_inputs = resolve_prompt_inputs(contract, artifacts)
-        return any(
-            mapping.placeholder in authoritative_inputs
-            and policy.mode == "packet"
-            and policy.when.matches(
-                step=step,
-                iteration=iteration,
-                artifacts=artifacts,
-                feedback=feedback,
-            )
-            for mapping in contract.prompt_inputs
-            for policy in mapping.load_policy
+        authoritative_inputs: Mapping[str, str | Path],
+    ) -> frozenset[str]:
+        """Resolve the active packet policies from the skill-owned contract."""
+        return resolve_packet_requested_placeholders(
+            contract,
+            artifacts,
+            step=step,
+            iteration=iteration,
+            feedback=feedback,
+            authoritative_inputs=authoritative_inputs,
         )
 
     @staticmethod
@@ -1201,16 +1202,19 @@ class GenericWorkflowStepExecutor(Phase):
             for placeholder, path in authoritative_inputs.items()
         }
         feedback = bool(input_artifacts.get("review_feedback") or input_artifacts.get("pr_result"))
+        packet_requested_placeholders = self._packet_requested_placeholders(
+            contract,
+            input_artifacts,
+            step=step_name,
+            iteration=self.iteration,
+            feedback=feedback,
+            authoritative_inputs=authoritative_inputs,
+        )
         effective_inputs = self._load_persisted_effective_inputs(
             output_file.parent,
-            require_persisted_packet_decision=self._requires_persisted_packet_decision(
-                contract,
-                input_artifacts,
-                step=step_name,
-                iteration=self.iteration,
-                feedback=feedback,
-            ),
+            require_persisted_packet_decision=bool(packet_requested_placeholders),
             authoritative_inputs=authoritative_inputs,
+            packet_requested_placeholders=packet_requested_placeholders,
             target_step=step_name,
             iteration=self.iteration,
         )

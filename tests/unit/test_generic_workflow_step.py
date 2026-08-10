@@ -4819,6 +4819,27 @@ def test_persisted_packet_decision_rejects_missing_effective_inputs(tmp_path: Pa
         )
 
 
+def test_persisted_packet_decision_rejects_empty_singleton_packet_binding(
+    tmp_path: Path,
+) -> None:
+    """UT-004: a declared singleton packet policy cannot reload as an empty map."""
+    iteration_dir = tmp_path / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    source = tmp_path / "spec.md"
+    _write_valid_spec_contract(source)
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps({"effective_inputs": {}}), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="context packet decision"):
+        GenericWorkflowStepExecutor._load_persisted_effective_inputs(
+            iteration_dir,
+            require_persisted_packet_decision=True,
+            authoritative_inputs={"packet_spec": source},
+            packet_requested_placeholders=frozenset({"packet_spec"}),
+        )
+
+
 def test_persisted_packet_decision_requires_complete_binding_record(tmp_path: Path) -> None:
     """UT-005: partial state is unsafe rather than a signal to recompute."""
     iteration_dir = tmp_path / "develop" / "iteration_001"

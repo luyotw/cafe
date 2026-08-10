@@ -388,6 +388,42 @@ def resolve_prompt_inputs(
     return resolved
 
 
+def resolve_packet_requested_placeholders(
+    contract: SkillWorkflowContract,
+    artifacts: Mapping[str, Any],
+    *,
+    step: str,
+    iteration: int,
+    feedback: bool,
+    authoritative_inputs: Mapping[str, str | Path] | None = None,
+) -> frozenset[str]:
+    """Return authoritative placeholders whose active policy requires a packet."""
+    authoritative = (
+        resolve_prompt_inputs(contract, artifacts)
+        if authoritative_inputs is None
+        else authoritative_inputs
+    )
+    return frozenset(
+        mapping.placeholder
+        for mapping in contract.prompt_inputs
+        if mapping.placeholder in authoritative
+        and (selected := next(
+            (
+                policy
+                for policy in mapping.load_policy
+                if policy.when.matches(
+                    step=step,
+                    iteration=iteration,
+                    artifacts=artifacts,
+                    feedback=feedback,
+                )
+            ),
+            None,
+        )) is not None
+        and selected.mode == "packet"
+    )
+
+
 def resolve_effective_prompt_inputs(
     contract: SkillWorkflowContract,
     artifacts: Mapping[str, Any],
@@ -492,6 +528,13 @@ def resolve_effective_prompt_inputs(
     return validate_effective_input_bindings(
         result,
         authoritative_inputs=resolve_prompt_inputs(contract, artifacts),
+        packet_requested_placeholders=resolve_packet_requested_placeholders(
+            contract,
+            artifacts,
+            step=step,
+            iteration=iteration,
+            feedback=feedback,
+        ),
         packet_dir=packet_dir,
         target_step=step,
         iteration=iteration,

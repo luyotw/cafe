@@ -8,6 +8,7 @@ from cafe.core.context_packet import (
     build_context_packet_diagnostics,
     resolve_context_packet,
     validate_context_packet,
+    validate_effective_input_bindings,
 )
 from cafe.core.downstream_contract import ContractValidationError
 from cafe.skills.contracts import SkillWorkflowContract, resolve_effective_prompt_inputs
@@ -85,6 +86,42 @@ def test_packet_relationship_falls_back_without_affecting_other_inputs(tmp_path:
             placeholders=("packet_spec",),
             packet_path=tmp_path / "new.json",
         )
+
+
+def test_singleton_packet_placeholder_is_required_by_active_policy(tmp_path: Path) -> None:
+    """UT-004: an empty persisted decision cannot omit a singleton packet input."""
+    source = tmp_path / "spec.md"
+    source.write_text(_spec(), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="context packet decision"):
+        validate_effective_input_bindings(
+            {},
+            authoritative_inputs={"packet_spec": source},
+            packet_requested_placeholders=frozenset({"packet_spec"}),
+        )
+
+
+def test_packet_completeness_ignores_unrequested_optional_full_input(tmp_path: Path) -> None:
+    """UT-004: active packet policies do not require unrelated full bindings."""
+    source = tmp_path / "spec.md"
+    notes = tmp_path / "notes.md"
+    source.write_text(_spec(), encoding="utf-8")
+    notes.write_text("optional notes", encoding="utf-8")
+    packet_binding = {
+        "requested_mode": "packet",
+        "mode": "full_fallback",
+        "path": str(source),
+        "reason": "packet_invalid",
+        "fallback_reason": "packet_invalid",
+        "detail": "context packet validation failed",
+        "source": {"artifact_name": "spec", "artifact_version": 1},
+    }
+
+    assert validate_effective_input_bindings(
+        {"packet_spec": packet_binding},
+        authoritative_inputs={"packet_spec": source, "optional_notes": notes},
+        packet_requested_placeholders=frozenset({"packet_spec"}),
+    ) == {"packet_spec": packet_binding}
 
 
 def test_paired_placeholders_share_one_effective_packet_binding(tmp_path: Path) -> None:
