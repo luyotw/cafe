@@ -231,7 +231,7 @@ def _fixed_name_step_policy_violations(module):
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
             and node.func.attr == "get"
-            and len(node.args) >= 2
+            and node.args
         ):
             violations.append((node.lineno, sorted(fixed_names)))
 

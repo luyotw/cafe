@@ -305,13 +305,7 @@ def setup_agents(
                     return role.strip()
         except Exception:
             pass
-        return {
-            "spec": "pm",
-            "plan": "developer",
-            "develop": "developer",
-            "review": "reviewer",
-            "pr": "developer",
-        }.get(phase_name)
+        return None
 
     phase_target_role = _resolve_phase_target_role()
 
