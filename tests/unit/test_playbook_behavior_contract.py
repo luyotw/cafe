@@ -7,7 +7,8 @@ import pytest
 
 from cafe.core.playbook import PlaybookDefinition, resolve_step_behavior
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
-from cafe.core.hooks.native import GitHubIssueFetcher, _publish_requested
+from cafe.core.hooks.native import GitHubIssueFetcher, GitHubPRCreator, _publish_requested
+from cafe.playbooks.loader import PlaybookLoader
 
 
 def _playbook(*, build_behavior=None, defaults=None):
@@ -81,6 +82,17 @@ def test_behavior_contract_step_values_override_playbook_defaults():
 
     assert behavior.context_providers == ["git_history"]
     assert behavior.runtime_tool_grants == ["git_inspection"]
+
+
+@pytest.mark.parametrize("playbook_id", ["tdd", "hotfix"])
+def test_bundled_review_steps_preserve_declared_runtime_review_grants(playbook_id):
+    """UT-007: bundled review steps retain their declared inspection capabilities."""
+    playbook = PlaybookLoader().load_model(playbook_id).model
+
+    assert resolve_step_behavior(playbook, "review").runtime_tool_grants == [
+        "web_research",
+        "git_inspection",
+    ]
 
 
 @pytest.mark.parametrize("step_name", ["assemble", "quality_gate"])
@@ -171,9 +183,14 @@ def test_custom_named_publish_hook_accepts_declared_terminal_baton(tmp_path):
 
 def test_runtime_hooks_do_not_compare_steps_to_default_workflow_names():
     """UT-010: a bounded runtime source audit rejects name-derived behavior."""
-    source = inspect.getsource(GitHubIssueFetcher.run)
+    issue_fetcher_source = inspect.getsource(GitHubIssueFetcher.run)
+    pr_creator_source = inspect.getsource(GitHubPRCreator._prepare_input)
 
     assert not re.search(
         r"step_name\s*(?:==|!=)\s*['\"](?:spec|plan|develop|review|pr)['\"]",
-        source,
+        issue_fetcher_source,
+    )
+    assert not re.search(
+        r"str\(kwargs\.get\(['\"]step_name['\"]\)\s+or\s+['\"]pr['\"]\)",
+        pr_creator_source,
     )

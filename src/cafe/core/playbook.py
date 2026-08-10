@@ -276,17 +276,6 @@ def _behavior_value(
     return fallback if value is None else value
 
 
-def _behavior_sequence(
-    defaults: StepBehaviorDeclaration, override: StepBehaviorDeclaration, field_name: str
-) -> List[str]:
-    """Merge additive runtime selections while retaining declaration order."""
-    return list(
-        dict.fromkeys(
-            [*(getattr(defaults, field_name) or []), *(getattr(override, field_name) or [])]
-        )
-    )
-
-
 class StepConfig(BaseModel):
     """One playbook step."""
 

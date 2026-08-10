@@ -1181,7 +1181,9 @@ class GitHubPRCreator(NoOpHook):
         if not formatted_comments:
             return HookResult(context_updates=context_updates)
 
-        phase.step_user_inputs[str(kwargs.get("step_name") or "pr")] = formatted_comments
+        step_name = kwargs.get("step_name")
+        if isinstance(step_name, str) and step_name:
+            phase.step_user_inputs[step_name] = formatted_comments
         context_updates["user_input"] = formatted_comments
         context_updates["pr_comment_count"] = str(len(unresolved_comments))
         context_updates["pr_mode"] = "comments"

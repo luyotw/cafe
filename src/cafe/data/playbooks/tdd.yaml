@@ -137,6 +137,8 @@ steps:
     type: skill
     skill: cafe-review
     role: reviewer
+    behavior:
+      runtime_tool_grants: [web_research, git_inspection]
     handoff_label: "Run review again"
     chat_role: reviewer
     assignee_type: agent
