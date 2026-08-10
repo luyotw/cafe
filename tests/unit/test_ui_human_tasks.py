@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,10 +17,10 @@ from cafe.ui.human_tasks import (
 )
 
 
-def test_packet_confirmation_uses_consumer_iteration_for_contract_validation(
+def test_packet_confirmation_uses_next_runnable_consumer_iteration_for_contract_validation(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """IT-001: confirmation uses the consumer's own current skill contract."""
+    """IT-001: confirmation uses the consumer's next runnable skill contract."""
     builtin_root = tmp_path / "builtin"
     for name, prompt_inputs in (
         ("first-consumer", "  prompt_inputs: []\n"),
@@ -66,7 +67,7 @@ def test_packet_confirmation_uses_consumer_iteration_for_contract_validation(
             }
         },
         blackboard=SimpleNamespace(artifacts={"spec": SimpleNamespace(path=invalid_spec)}),
-        issue_dir=_iteration_history(tmp_path, producer=1, consumer=2),
+        issue_dir=_iteration_history(tmp_path, producer=1, consumer=1),
         producer_step="spec",
         correction_guidance="repair the contract",
     )
@@ -76,11 +77,16 @@ def test_packet_confirmation_uses_consumer_iteration_for_contract_validation(
 
 
 def _iteration_history(tmp_path: Path, *, producer: int, consumer: int) -> Path:
-    """Create independent producer and consumer iteration histories."""
+    """Create completed producer and consumer iteration histories."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     for step_name, count in (("spec", producer), ("develop", consumer)):
         for iteration in range(1, count + 1):
-            (issue_dir / step_name / f"iteration_{iteration:03d}").mkdir(parents=True)
+            iteration_dir = issue_dir / step_name / f"iteration_{iteration:03d}"
+            iteration_dir.mkdir(parents=True)
+            (iteration_dir / "iteration.json").write_text(
+                json.dumps({"iteration": iteration, "end_time": "done"}),
+                encoding="utf-8",
+            )
     return issue_dir
 
 
