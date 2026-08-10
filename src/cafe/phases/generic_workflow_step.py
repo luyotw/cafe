@@ -1062,6 +1062,7 @@ class GenericWorkflowStepExecutor(Phase):
             str(k): ("done" if str(v) in ("_done", "done") else str(v)) for k, v in step_on.items()
         }
         valid_baton_intents = effective_step_handoff_intents(step_def)
+        behavior = resolve_step_behavior(playbook, step_name)
         context = {
             "agent_file": AgentManager.get_agent_file_path(agent_name, role_dir),
             "handoff_summary": getattr(blackboard_state, "handoff_summary", ""),
@@ -1076,6 +1077,7 @@ class GenericWorkflowStepExecutor(Phase):
             "valid_to_steps": ", ".join(valid_to_steps),
             "valid_baton_intents": ", ".join(valid_baton_intents),
             "step_transitions": ", ".join(f"{i}→{s}" for i, s in step_transitions.items()),
+            "publish_confirmation": behavior.publish_confirmation,
         }
 
         skill_name = self._resolve_skill_name(step_def, self.iteration)
@@ -1118,7 +1120,7 @@ class GenericWorkflowStepExecutor(Phase):
             contract=contract,
         )
 
-        if "git_history" in resolve_step_behavior(playbook, step_name).context_providers:
+        if "git_history" in behavior.context_providers:
             base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
             resolved_base = str(base_branch or self.git_ops.get_default_base_branch())
             context["base_branch"] = resolved_base

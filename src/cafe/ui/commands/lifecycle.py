@@ -1572,6 +1572,17 @@ def reset(
             console.print(f"[red]Error: Failed to get current branch: {e}[/red]")
             raise typer.Exit(1)
 
+        # Lifecycle commands operate on the issue's declared workflow.  The
+        # shared resolver retains the legacy list only when metadata is absent
+        # and surfaces configured-playbook failures instead of hiding them.
+        from cafe.ui.cli_shared import _load_issue_step_names
+
+        try:
+            valid_phases = _load_issue_step_names(issue_name)
+        except ValueError as exc:
+            console.print(f"[red]Error: {exc}[/red]")
+            raise typer.Exit(1) from exc
+
         # 2. If phase not provided, find the last phase with iterations based on end_time or timestamp
         if phase is None:
             from datetime import datetime
@@ -1583,7 +1594,7 @@ def reset(
             latest_time = None
 
             # Check all phases to find the one with the latest end_time (or timestamp if incomplete)
-            for phase_name in VALID_PHASES:
+            for phase_name in valid_phases:
                 iterations = service.load_iteration_statuses(issue_name, phase_name)
                 if not iterations:
                     continue
@@ -1608,9 +1619,9 @@ def reset(
             console.print(f"[dim]Auto-detected last phase: {phase}[/dim]")
 
         # 3. Validate phase name
-        if phase not in VALID_PHASES:
+        if phase not in valid_phases:
             console.print(f"[red]Error: Invalid phase '{phase}'[/red]")
-            console.print(f"[dim]Valid phases: {', '.join(VALID_PHASES)}[/dim]")
+            console.print(f"[dim]Valid phases: {', '.join(valid_phases)}[/dim]")
             raise typer.Exit(1)
 
         # 4. Verify phase directory exists

@@ -14,6 +14,7 @@ from rich.console import Console
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.issue_resolution import ActiveIssueResolutionError, resolve_active_issue
+from cafe.core.playbook import resolve_step_behavior
 from cafe.core.types import CriticalPhaseError
 from cafe.core.workflow_models import StepExecutionResult, StepInterrupted
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -637,7 +638,7 @@ def workflow(
             output_path = issue_dir / step_name / "output.md"
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_text(f"# {step_name}\n\nDry-run output\n", encoding="utf-8")
-            if step_name == "pr":
+            if resolve_step_behavior(playbook_data, step_name).publish_confirmation:
                 store = BlackboardStore(issue_dir)
                 blackboard = store.load_or_create(
                     str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
@@ -645,7 +646,7 @@ def workflow(
                 )
                 store.update_handoff_contract(
                     blackboard,
-                    from_step="pr",
+                    from_step=step_name,
                     to_owner=HandoffOwner.DONE,
                     to_step="done",
                     intent=HandoffIntent.WORKFLOW_COMPLETE,
@@ -1001,10 +1002,13 @@ def workflow(
             if (
                 not single_step
                 and result.final_status_code != "BATON_POSITION_REALIGNED"
-                and latest_blackboard.current_step == "pr"
-                and effective_start_step != "pr"
+                and latest_blackboard.current_step in playbook_data["steps"]
+                and resolve_step_behavior(
+                    playbook_data, latest_blackboard.current_step
+                ).publish_confirmation
+                and effective_start_step != latest_blackboard.current_step
             ):
-                pending_start_step = "pr"
+                pending_start_step = latest_blackboard.current_step
                 continue
             if interactive and not dry_run and not single_step and latest_blackboard.current_step == "user":
                 pending_start_step = "user"

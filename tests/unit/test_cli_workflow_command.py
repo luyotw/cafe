@@ -167,6 +167,52 @@ def test_workflow_command_runs_dry_mode(tmp_path: Path, monkeypatch) -> None:
         assert blackboard_file.exists()
 
 
+def test_workflow_dry_mode_completes_declared_custom_publish_step(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """IT-001: dry execution recognizes publish behavior, not a step name."""
+    monkeypatch.chdir(tmp_path)
+    playbook_dir = tmp_path / ".cafe" / "playbooks"
+    playbook_dir.mkdir(parents=True)
+    (playbook_dir / "custom.yaml").write_text(
+        """
+playbook:
+  id: custom
+steps:
+  release:
+    skill: cafe-pr
+    role: developer
+    capability_requests: [cafe.pr.publish]
+    behavior:
+      completion: baton
+      publish_confirmation: true
+    on:
+      await_agent: _done
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-custom-publish"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "custom", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "Workflow completed" in result.stdout
+    blackboard = json.loads(
+        (
+            tmp_path
+            / ".cafe"
+            / "issues"
+            / "issue-custom-publish"
+            / "blackboard.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert blackboard["current_step"] == "done"
+
+
 def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     executed_steps: list[str] = []

@@ -4,6 +4,7 @@ import pytest
 
 from cafe.core.playbook import PlaybookDefinition, resolve_step_behavior
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+from cafe.core.hooks.native import _publish_requested
 
 
 def _playbook(*, build_behavior=None, defaults=None):
@@ -129,3 +130,28 @@ def test_custom_named_publish_step_uses_declared_baton_and_receipt_contract(tmp_
     assert runtime._is_baton_driven_step("build") is True
     assert runtime._required_capability_ids("build") == ["cafe.pr.publish"]
     assert runtime._is_baton_driven_step("verify") is False
+
+
+def test_custom_named_publish_hook_accepts_declared_terminal_baton(tmp_path):
+    """UT-004: native publish hooks consume the declaration, not ``pr``."""
+    baton_file = tmp_path / "next_step.txt"
+    baton_file.write_text(
+        """{
+  "version": 1,
+  "from_step": "release",
+  "to_owner": "done",
+  "to_step": "done",
+  "intent": "workflow_complete"
+}""",
+        encoding="utf-8",
+    )
+
+    assert _publish_requested(
+        phase=object(),
+        step_name="release",
+        status_code="",
+        context={
+            "publish_confirmation": True,
+            "next_step_path": str(baton_file),
+        },
+    )
