@@ -1118,7 +1118,7 @@ class GenericWorkflowStepExecutor(Phase):
             contract=contract,
         )
 
-        if "git_history" in resolve_step_behavior(self.playbook, step_name).context_providers:
+        if "git_history" in resolve_step_behavior(playbook, step_name).context_providers:
             base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
             resolved_base = str(base_branch or self.git_ops.get_default_base_branch())
             context["base_branch"] = resolved_base
