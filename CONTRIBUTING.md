@@ -72,17 +72,20 @@ You can contribute to this project in several ways:
 
 ## Testing policy (workflow)
 
-Plan, develop, and review skills enforce a **test invariants** policy: tests should protect business rules and user-journey outcomes, not fragile UI structure. See `src/cafe/data/skills/plan/references/test_invariants_policy.md` for what to test, what to avoid, and examples.
+Plan, develop, and review skills enforce a **test invariants** policy: tests should protect business rules and user-journey outcomes, not fragile UI structure. See `src/cafe/data/skills/cafe-plan/references/test_invariants_policy.md` for what to test, what to avoid, and examples.
 
 ## Pre-release Verification
 
 Before cutting a release or merging large changes to builtin skills, playbooks, or agents, run the builtin tooling audit:
 
 ```bash
-cafe audit
+./scripts/release-check.sh
 ```
 
-This command checks that all builtin skills and playbooks are internally consistent (agent files exist, placeholder conventions are met, hooks are registered and executable, and baton intents are valid). It exits non-zero if any check fails. Run it again after fixing any reported gaps to confirm they are resolved.
+This release gate runs the complete coverage suite, critical lint checks, the
+builtin tooling audit, strict skill validation, package builds, and a clean
+wheel-install smoke test. It exits non-zero if any check fails. Run it again
+after fixing any reported gaps to confirm they are resolved.
 
 ## Workflow behavior
 

@@ -118,6 +118,7 @@ CAFE can fetch requirements directly from GitHub Issues and automatically genera
 
 ### Agent CLI Tools (at least one is required)
 - [Claude CLI](https://claude.com/product/claude-code)
+- [OpenAI Codex CLI](https://developers.openai.com/codex/cli)
 - [GitHub Copilot CLI](https://github.com/features/copilot/cli)
 - [Cursor CLI](https://cursor.com/zh-Hant/cli)
 - [Gemini CLI](https://geminicli.com/)
@@ -233,7 +234,7 @@ developer:
       develop: sonnet
     - cli: codex             # First fallback
       model: o4-mini
-  - cli: cursor-agent      # Second fallback
+    - cli: cursor-agent      # Second fallback
 ```
 
 ### Phase Configuration

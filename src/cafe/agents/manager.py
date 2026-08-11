@@ -553,10 +553,6 @@ class AgentManager:
         if token_usage.turn_usages:
             self._total_token_usage.turn_usages.extend(token_usage.turn_usages)
 
-        # Track latest model (only in execute, not execute_current which doesn't return model)
-        if "model" in locals() and model:
-            self._last_model = model
-
         # For duration, accumulate the values
         if token_usage.duration_ms is not None:
             if self._total_token_usage.duration_ms is None:
@@ -865,10 +861,6 @@ class AgentManager:
         self._total_token_usage.cache_read_input_tokens += token_usage.cache_read_input_tokens
         self._total_token_usage.reasoning_output_tokens += token_usage.reasoning_output_tokens
         self._total_token_usage.total_cost_usd += token_usage.total_cost_usd
-
-        # Track latest model (only in execute, not execute_current which doesn't return model)
-        if "model" in locals() and model:
-            self._last_model = model
 
         # For duration, accumulate the values
         if token_usage.duration_ms is not None:

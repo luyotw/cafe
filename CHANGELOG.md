@@ -2,6 +2,54 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-08-11
+
+### Breaking changes
+
+- Removed the legacy `cafe spec`, `plan`, `develop`, `review`, and `pr`
+  commands. Use `cafe make` or `cafe workflow --start-step <step> --execute`.
+- Made workflow baton files strict JSON contracts. Plain step names,
+  `key=value` batons, and legacy baton aliases are rejected.
+- Namespaced bundled workflow skills with the `cafe-` prefix and moved workflow
+  behavior to declarative skill and playbook contracts.
+
+See [the v0.3.0 migration guide](docs/releases/v0.3.0.md) before upgrading an
+installation with unfinished v0.2.x workflows or custom playbooks.
+
+### Added
+
+- Declarative prepare fields, human tasks, phase configuration, alignment
+  checkpoints, and non-software playbooks.
+- Fresh correction sessions with deterministic delta and context packets.
+- Persistent long-running operation state, risk-driven monitoring, and
+  `cafe operation status`.
+- Verification receipts shared between develop and review.
+- Automatic transactional synchronization of bundled global workflow skills.
+- Codex cached-input, cache-write, reasoning-token, and provider-reported cost
+  telemetry.
+- A release gate that verifies coverage, contracts, package contents, and a
+  clean wheel installation.
+
+### Changed
+
+- Renamed the workflow summary command to `cafe status`.
+- Made CLI fallback, correction routing, and targeted human-task revisions
+  explicit and declarative.
+- Reduced repeated document loading and correction-review work while preserving
+  root-cause and sibling-path review coverage.
+
+### Fixed
+
+- Corrected worktree configuration, agent permission, fallback classification,
+  session continuation, PR publish, and user-handoff edge cases.
+- Declared `click` as a direct runtime dependency so a clean wheel installation
+  can start the CLI.
+
+### Known issues
+
+- Worktree-mode `cafe restore` remains covered by an expected-failure test while
+  its project-path resolution is pending correction.
+
 ## [0.2.1]
 
 ### Added
@@ -220,6 +268,7 @@ Major milestone release: deep refactor of CAFE's workflow engine from hardcoded 
 - Interactive phase management with checklist validation
 - GitHub integration for issue and PR management
 
+[0.3.0]: https://github.com/luyotw/cafe/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/luyotw/cafe/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/luyotw/cafe/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/luyotw/cafe/compare/v0.1.5...v0.1.6
