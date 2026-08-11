@@ -1,7 +1,7 @@
 ---
 name: cafe-workflow-common
 description: Use this skill at the start of any CAFE workflow phase to load the bounded workflow digest, identify the current baton state, and ground the phase in shared context before reading phase-specific artifacts.
-version: 1.4.0
+version: 1.5.0
 ---
 
 # Workflow Common
@@ -168,6 +168,7 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 | develop ↔ review disagreements and user arbitration | This skill (**Develop and review disagreement protocol**) |
 | Bounded code/search output and generated-log exclusions | This skill (**Bounded repository inspection**) |
 | Reuse of final full-test evidence across develop → review | This skill (**Develop-to-review verification receipts**) |
+| Issue decomposition assessment contract and phase-agent boundary | `references/issue_decomposition.md` |
 
 ## Confirming spec and plan with the user
 

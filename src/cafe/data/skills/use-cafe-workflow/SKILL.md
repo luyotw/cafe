@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.13.0
+version: 1.14.0
 ---
 
 # Use CAFE Workflow
@@ -26,6 +26,7 @@ situation. Resolve every path relative to this `SKILL.md`.
 | Start or resume before the first `cafe make`; answer a locale or kickoff question | `references/kickoff.md` and `references/strategic_context.md` |
 | Run, resume, inspect, retry, or recover ordinary workflow work | `references/running_workflow.md` |
 | Handle `to_owner=user`, confirmation, clarification, permission, or alignment | `references/handoffs_and_alignment.md`; also read `references/strategic_context.md` |
+| Start or resume linked work; confirm a spec or plan with an issue-decomposition assessment | `references/issue_decomposition.md`; also read `references/strategic_context.md` and `references/handoffs_and_alignment.md` |
 | Diagnose incorrect workflow behavior or choose a repair layer | `references/diagnosis_and_repair.md`; also read the relevant runtime reference above |
 | Review or ship after the PR phase | `references/convergent_pr_review.md`; also read `references/strategic_context.md` |
 | Measure fresh-versus-resumed correction efficiency | `references/correction_ab_experiment.md` |
@@ -47,6 +48,9 @@ Do not preload unrelated references.
 - Treat planned output confirmation, reactive user handoffs, and semantic
   alignment as separate decisions. The driver owns alignment; phase agents do
   not approve themselves.
+- Validate issue-decomposition assessments before confirming spec or plan;
+  coordinate any authorized split through existing authority boundaries and
+  reconstruct linked-work position from durable records.
 - Prefer `cafe make`. Use a focused `cafe workflow --execute --start-step
   <step>` only for a bounded retry or diagnosis.
 - Do not manually edit workflow artifacts, blackboard state, or
@@ -97,3 +101,5 @@ Do not preload unrelated references.
 - `references/diagnosis_and_repair.md` — bounded classification and disposition.
 - `references/convergent_pr_review.md` — batched final review, merge, close, teardown.
 - `references/correction_ab_experiment.md` — controlled efficiency experiment.
+- `references/issue_decomposition.md` — assessment validation, authority,
+  delivery gate, and durable project position.

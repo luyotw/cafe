@@ -12,6 +12,18 @@
 - [File/component 1]
 - [File/component 2]
 
+## Issue Decomposition Assessment
+
+- Decision: `keep` or `split`
+- Rationale: [Repository evidence for keeping or splitting delivery]
+- Current issue scope: [Independently acceptable outcome to deliver now]
+- Trigger: [none, product scope, or implementation scope]
+
+### Proposed follow-up issues
+
+| Title | Goal | Depends on | Scope boundary | Non-goals | Definition of Done |
+| --- | --- | --- | --- | --- | --- |
+
 ## Negative space
 
 > Fill after investigation. List obvious-but-declined additions (extra deps, refactors, new abstractions) with one-line reasons. If N/A: "No scope expansion beyond the bug fix."

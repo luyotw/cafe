@@ -33,6 +33,7 @@ def test_use_cafe_workflow_uses_progressive_disclosure() -> None:
         "diagnosis_and_repair.md",
         "convergent_pr_review.md",
         "correction_ab_experiment.md",
+        "issue_decomposition.md",
     )
 
     assert "## Progressive disclosure" in skill

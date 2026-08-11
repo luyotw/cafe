@@ -13,7 +13,7 @@ def test_packaged_workflow_common_uses_bounded_digest() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-workflow-common")
 
-    assert "version: 1.4.0" in text
+    assert "version: 1.5.0" in text
     assert "Bounded blackboard digest" in text
     assert "Do **not** read or print the whole file" in text
     assert "Do not skip the blackboard read" not in text
@@ -31,6 +31,20 @@ def test_packaged_develop_skill_has_risk_driven_operation_guidance() -> None:
     assert "不得繼續探索" not in text
     assert "任兩次實質修改之間" not in text
     assert "3 次唯讀呼叫內" not in text
+
+
+def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
+    """Skill metadata tracks the delivered decomposition behavior."""
+    builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
+
+    expected_versions = {
+        "cafe-spec": "1.2.0",
+        "cafe-plan": "1.2.0",
+        "cafe-workflow-common": "1.5.0",
+        "use-cafe-workflow": "1.14.0",
+    }
+    for name, version in expected_versions.items():
+        assert f"version: {version}" in _skill_text(builtin_root, name)
 
 
 def test_packaged_develop_skill_checks_complete_production_wiring() -> None:

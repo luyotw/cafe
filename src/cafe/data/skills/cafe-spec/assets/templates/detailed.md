@@ -8,6 +8,18 @@
 
 [Context about why this feature/change is needed]
 
+## Issue Decomposition Assessment
+
+- Decision: `keep` or `split`
+- Rationale: [Why this remains one outcome or needs slicing]
+- Current issue scope: [Independently acceptable outcome to deliver now]
+- Trigger: [none, product scope, or implementation scope]
+
+### Proposed follow-up issues
+
+| Title | Goal | Depends on | Scope boundary | Non-goals | Definition of Done |
+| --- | --- | --- | --- | --- | --- |
+
 ## User Stories
 
 - As a [user type], I want [goal] so that [benefit]
