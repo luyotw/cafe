@@ -29,6 +29,7 @@
 [ ] Confirm: Verified all requirements are met, nothing missed
 
 ## Code Quality Review
+[ ] Trace each candidate defect to its root cause, inspect directly related modes, aliases, entry points, and lifecycle paths in the same pass, and consolidate sibling symptoms into one actionable finding
 [ ] Check conformance to existing project coding style
 [ ] Check if existing code patterns and utilities were reused
 [ ] Check for code duplication or excessive duplicate code

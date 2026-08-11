@@ -63,6 +63,29 @@ def test_develop_and_review_share_machine_checked_full_test_receipt() -> None:
         ]
 
 
+def test_review_corrections_close_root_causes_without_restarting_full_audit() -> None:
+    review = (SKILLS / "cafe-review/SKILL.md").read_text(encoding="utf-8")
+    review_steps = (SKILLS / "cafe-review/references/execution_steps.md").read_text(
+        encoding="utf-8"
+    )
+    correction = (
+        SKILLS / "cafe-review/references/correction_review_strategy.md"
+    ).read_text(encoding="utf-8")
+
+    contract = yaml.safe_load(review.split("---", 2)[1])["workflow"]["checklist"]
+    assert contract["variants"][0]["when"] == {"iteration": 1}
+    assert contract["variants"][1]["when"] == {"min_iteration": 2}
+    assert contract["variants"][1]["sections"][0] == {
+        "reference": "correction_review_strategy.md"
+    }
+    assert "Trace each candidate defect to its root cause" in review_steps
+    assert "re-verify every prior finding item by item" in correction
+    assert "directly related equivalence classes in one pass" in correction
+    assert "do not drip-feed sibling cases" in correction
+    assert "do not restart an unrelated repository-wide audit" in correction
+    assert "one bounded closure sweep" in correction
+
+
 def _arm(*, policy: str, credits: float, quality: bool = True) -> dict[str, object]:
     return {
         "policy": policy,

@@ -1,7 +1,7 @@
 ---
 name: cafe-review
 description: "審查程式碼品質與風險"
-version: 1.2.0
+version: 1.3.0
 workflow:
   required_tools:
     - "Bash(cafe verification check:*)"
@@ -49,8 +49,13 @@ workflow:
       spec_comparison_instruction: spec_comparison_instruction.md
       verification_receipt_instruction: verification_receipt_instruction.md
     variants:
-      - when: {}
+      - when: {iteration: 1}
         sections:
+          - reference: execution_steps.md
+          - optional_checklist: basic_principles.md
+      - when: {min_iteration: 2}
+        sections:
+          - reference: correction_review_strategy.md
           - reference: execution_steps.md
           - optional_checklist: basic_principles.md
     include_role_guidance: true
