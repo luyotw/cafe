@@ -3,6 +3,18 @@
 ## Goal
 Add a "forgot password" link to the login page
 
+## Issue Decomposition Assessment
+
+- Decision: `keep` or `split`
+- Rationale: [Repository evidence for keeping or splitting delivery]
+- Current issue scope: [Independently acceptable outcome to deliver now]
+- Trigger: [none, product scope, or implementation scope]
+
+### Proposed follow-up issues
+
+| Title | Goal | Depends on | Scope boundary | Definition of Done |
+| --- | --- | --- | --- | --- |
+
 ## Negative space
 
 - **Not adding:** [dependency or abstraction declined] — [one-line reason]

@@ -80,6 +80,14 @@ bash scripts/sync_github.sh --help
 
 ### Common rules
 
+- Before requirements output is confirmed, assess product-scope decomposition
+  using `cafe-workflow-common/references/issue_decomposition.md`. Determine
+  whether the request contains independently acceptable product capabilities,
+  scopes, or confirmation cycles. Use its exact `Decision: `keep` or `split``,
+  `Rationale`, `Current issue scope`, `Trigger`, and follow-up table fields:
+  `Title`, `Goal`, `Depends on`, `Scope boundary`, and `Definition of Done`.
+  For `split`, retain a useful current outcome and non-overlapping follow-ups;
+  recommend only and never create issues, update a roadmap, or change priority.
 - User 確認暫停、交給 `plan` 前是否執行 GitHub sync、以及 baton 順序：請依 shared skill「cafe-workflow-common」的 **Confirming spec and plan with the user**、**Where policies live**，並搭配 `cafe-github_sync` skill；本 skill 不重複敘述。
 - 第一次草稿需 user 確認時：把 blackboard `current_step` 改成 `user`，並把 next-step baton 寫入 `user`，不要直接交給 `plan`（其餘細節以 cafe-workflow-common 為準）。
 - 後續輪若仍需 user 再看一輪：同樣把 next-step baton 寫入 `user`。

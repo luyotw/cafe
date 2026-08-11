@@ -1,5 +1,17 @@
 ## Implementation Analysis
 
+## Issue Decomposition Assessment
+
+- Decision: `keep` or `split`
+- Rationale: [Repository evidence for keeping or splitting delivery]
+- Current issue scope: [Independently acceptable outcome to deliver now]
+- Trigger: [none, product scope, or implementation scope]
+
+### Proposed follow-up issues
+
+| Title | Goal | Depends on | Scope boundary | Definition of Done |
+| --- | --- | --- | --- | --- |
+
 ### Negative space
 
 > What we are **not** introducing, and why. If nothing obvious applies, state explicitly (e.g. "No additional runtime deps; template-only change.").
