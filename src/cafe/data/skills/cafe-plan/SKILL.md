@@ -1,7 +1,7 @@
 ---
 name: cafe-plan
 description: "產出可執行的開發計畫"
-version: 1.1.0
+version: 1.2.0
 workflow:
   human_tasks:
     - id: development-guide
@@ -73,14 +73,13 @@ bash scripts/sync_github.sh --help
 - 嚴格遵守 TDD，避免直接寫程式碼
 - 產出計畫前必須完成 **`## Test List`**（`Unit tests (N)` 與 `Integration tests (M)`，每項有標籤並對應 invariant 或 user journey；N 或 M 為 0 時簡述原因）
 - 撰寫 Test List 與斷言規則時請閱讀 `references/test_invariants_policy.md`（integration 以 journey/invariant 描述，不以 UI component 列項）
-- Before plan output is confirmed, assess implementation-scope decomposition
-  using repository evidence and `cafe-workflow-common/references/issue_decomposition.md`.
-  Use its exact `Decision: `keep` or `split``, `Rationale`, `Current issue scope`,
-  `Trigger`, and follow-up table fields: `Title`, `Goal`, `Depends on`, `Scope boundary`,
-  `Non-goals`, and `Definition of Done`. Planning may refine dependency order
-  but must not silently change confirmed product scope; recommend only and do
-  not create issues, update roadmaps, change priority, or allow an unresolved
-  split to advance to develop.
+- 在計畫輸出確認前，請依儲存庫證據及 shared skill「cafe-workflow-common」的
+  `references/issue_decomposition.md` 評估實作範圍的拆分需求。請使用其中固定的
+  `Decision: `keep` or `split``, `Rationale`, `Current issue scope`、`Trigger`
+  及後續 issue 表格欄位：`Title`、`Goal`、`Depends on`、`Scope boundary`、
+  `Non-goals` 與 `Definition of Done`。計畫可調整相依順序，但不得悄悄改變已確認的
+  產品範圍；僅提出建議，不建立 issue、更新路線圖、變更優先順序，也不得讓尚未解決的
+  `split` 進入 develop。
 - 延續既有計畫格式與使用者需求
 - User 確認暫停、交給 `develop` 前是否執行 GitHub sync、以及 baton 順序：請依 shared skill「cafe-workflow-common」的 **Confirming spec and plan with the user**、**Where policies live**，並搭配 `cafe-github_sync` skill 的腳本說明；本 skill 不重複敘述。
 - 計畫草稿需 user 確認時：把 next-step baton 寫入 `user`，不要直接交給 `develop`（其餘細節以 cafe-workflow-common 為準）。

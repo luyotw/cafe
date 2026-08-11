@@ -1,7 +1,7 @@
 ---
 name: cafe-workflow-common
 description: Use this skill at the start of any CAFE workflow phase to load the bounded workflow digest, identify the current baton state, and ground the phase in shared context before reading phase-specific artifacts.
-version: 1.4.0
+version: 1.5.0
 ---
 
 # Workflow Common

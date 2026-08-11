@@ -61,10 +61,14 @@ def test_phase_roles_assess_distinct_scope_without_external_mutation() -> None:
     spec = _read("cafe-spec/SKILL.md")
     plan = _read("cafe-plan/SKILL.md")
 
-    assert "independently acceptable product capabilities" in spec
-    assert "implementation-scope" in plan
-    assert "repository evidence" in plan
-    assert "must not silently change confirmed product scope" in plan
+    assert "產品範圍的拆分需求" in spec
+    assert "可獨立接受的產品能力、範圍或確認週期" in spec
+    assert "實作範圍的拆分需求" in plan
+    assert "儲存庫證據" in plan
+    assert "不得悄悄改變已確認的" in plan
+    assert "產品範圍" in plan
+    assert "shared skill「cafe-workflow-common」" in spec
+    assert "shared skill「cafe-workflow-common」" in plan
     assert "Phase agents recommend only" in contract
     assert "never create issues, update roadmaps, change priority" in _normalized(contract)
 
