@@ -13,8 +13,8 @@ The requirements and planning stages use this stable assessment structure:
 - Current issue scope
 - Trigger
 
-| Title | Goal | Depends on | Scope boundary | Definition of Done |
-| --- | --- | --- | --- | --- |
+| Title | Goal | Depends on | Scope boundary | Non-goals | Definition of Done |
+| --- | --- | --- | --- | --- | --- |
 
 Before confirming, compare the newest assessment with the confirmed
 requirement, relevant strategic documents, repository evidence, and existing
@@ -33,7 +33,8 @@ Resolve the mandate and required authority first. Ask the user only if the
 proposal changes an escalated decision, including product scope, priority,
 cost, or external commitments. Only then coordinate follow-up issue creation or
 updates, roadmap updates, and dependency order through existing trusted
-mechanisms.
+mechanisms. Each driver-created follow-up issue records its explicit
+dependencies, scope boundary, non-goals, and Definition of Done.
 
 When `split` leaves the current issue too broad, the current issue is narrowed
 to an independently acceptable, deliverable, and reviewable outcome. It must

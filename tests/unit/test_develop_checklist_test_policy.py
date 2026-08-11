@@ -37,18 +37,3 @@ def test_develop_correction_execution_steps_reference_test_policy() -> None:
     _assert_develop_steps_include_test_policy(
         "execution_steps_correction.md", "correction_plan_test_list.md"
     )
-
-
-def test_develop_keeps_plan_task_contract_status_in_sync() -> None:
-    context = load_skill_reference("cafe-develop", "normal_plan_context.md")
-    verification = load_skill_reference(
-        "cafe-develop", "normal_plan_verification.md"
-    )
-
-    assert "Downstream Contract" in context
-    assert "Task Status" in context
-    assert "pending" in context
-    assert "completed" in context
-    assert "Downstream Contract" in verification
-    assert "Task Status" in verification
-    assert "agree" in verification

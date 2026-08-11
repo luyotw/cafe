@@ -77,6 +77,7 @@ def test_driver_requires_authority_and_narrowed_scope_before_delivery() -> None:
         "required authority",
         "current issue is narrowed",
         "must not enter develop",
+        "Non-goals",
     ):
         assert rule in normalized
 
