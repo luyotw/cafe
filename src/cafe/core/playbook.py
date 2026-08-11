@@ -1114,10 +1114,21 @@ def _validate_step_human_tasks(
                 "is not declared in its transitions"
             )
         for skill_name, contract in zip(selectors, contracts):
-            if not any(policy.id == binding.task_id for policy in contract.human_tasks):
+            matching_policies = [
+                policy for policy in contract.human_tasks if policy.id == binding.task_id
+            ]
+            if not matching_policies:
                 raise ValueError(
                     f"Step '{step_name}', skill {canonical_skill_name(str(skill_name))!r}: "
                     f"unknown human task {binding.task_id!r}"
+                )
+            policy = matching_policies[0]
+            if any(decision.requires_target for decision in policy.decisions) and not (
+                binding.allowed_targets or policy.allowed_targets
+            ):
+                raise ValueError(
+                    f"Step '{step_name}', skill {canonical_skill_name(str(skill_name))!r}: "
+                    f"human task {binding.task_id!r} requires allowed_targets"
                 )
         for target in [*binding.outcomes.values(), *binding.allowed_targets]:
             if target != DONE_TARGET and target not in steps:

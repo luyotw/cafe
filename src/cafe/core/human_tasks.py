@@ -46,6 +46,7 @@ class HumanTaskDecision(BaseModel):
     id: str
     label: str
     requires_feedback: bool = False
+    requires_target: bool = False
 
     @field_validator("id", "label")
     @classmethod
@@ -252,9 +253,22 @@ def validate_human_task_completion(
         if selected is None:
             return _reject(policy, "Choose one of the declared decisions.")
         feedback = str(payload.get("feedback") or "").strip() or None
+        target = str(payload.get("target") or "").strip() or None
         if selected.requires_feedback and not feedback:
             return _reject(policy, "This decision requires feedback.")
-        return HumanTaskCompletion(task_id=policy.id, decision=decision, feedback=feedback)
+        if selected.requires_target:
+            if not target:
+                return _reject(policy, "This decision requires a target.")
+            if target not in policy.allowed_targets:
+                return _reject(policy, "Choose a target declared by this task.")
+        elif target:
+            return _reject(policy, "This decision does not accept a target.")
+        return HumanTaskCompletion(
+            task_id=policy.id,
+            decision=decision,
+            feedback=feedback,
+            target=target,
+        )
     if policy.input_schema == "target":
         target = str(payload.get("target") or "").strip()
         if target not in policy.allowed_targets:

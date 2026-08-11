@@ -123,10 +123,22 @@ def collect_human_task_payload(
             choices.append({"name": f"Chat with {agent_name or role}", "value": "chat"})
         decision = prompt_list(policy.prompt, choices, default=None)
         selected = next((item for item in policy.decisions if item.id == decision), None)
+        target = None
+        if selected is not None and selected.requires_target:
+            target = prompt_list(
+                policy.prompt,
+                [{"name": item, "value": item} for item in policy.allowed_targets],
+                default=None,
+            )
         feedback = ""
         if selected is not None and selected.requires_feedback:
             feedback = prompt_multiline(policy.prompt).strip()
-        return {"task": policy.id, "decision": decision, "feedback": feedback}
+        return {
+            "task": policy.id,
+            "decision": decision,
+            "target": target,
+            "feedback": feedback,
+        }
     if policy.input_schema == "target":
         target = prompt_list(
             policy.prompt,
@@ -271,7 +283,12 @@ def apply_human_task_payload(
 
     agent_input = completion.agent_input()
     if agent_input:
-        _write_next_iteration_user_input(issue_dir=issue_dir, step_name=from_step, text=agent_input)
+        input_step = continuation if completion.feedback and continuation != "_done" else from_step
+        _write_next_iteration_user_input(
+            issue_dir=issue_dir,
+            step_name=input_step,
+            text=agent_input,
+        )
     is_done = continuation == "_done"
     store.set_current_step(blackboard, "done" if is_done else continuation)
     store.set_handoff_summary(blackboard, f"Completed human task {policy.id} for {from_step}")

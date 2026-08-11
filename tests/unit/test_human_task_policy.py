@@ -164,6 +164,74 @@ def test_invalid_completion_has_no_continuation(payload: str) -> None:
     assert isinstance(result, HumanTaskRejection)
 
 
+def test_revision_decision_requires_declared_target_and_feedback() -> None:
+    """One revision choice can safely route to any playbook-allowed phase."""
+    policy = HumanTaskPolicy.model_validate(
+        {
+            "id": "review",
+            "pattern": "confirm_output",
+            "prompt": "Review output",
+            "input_schema": "decision",
+            "decisions": [
+                {"id": "confirm", "label": "Approve"},
+                {
+                    "id": "revise",
+                    "label": "Revise",
+                    "requires_feedback": True,
+                    "requires_target": True,
+                },
+            ],
+            "allowed_targets": ["build", "knowledge"],
+        }
+    )
+
+    completion = validate_human_task_completion(
+        policy,
+        {
+            "task": "review",
+            "decision": "revise",
+            "target": "build",
+            "feedback": "Repair the source mapping.",
+        },
+    )
+
+    assert completion == HumanTaskCompletion(
+        task_id="review",
+        decision="revise",
+        target="build",
+        feedback="Repair the source mapping.",
+    )
+    assert (
+        resolve_human_task_continuation(
+            policy=policy,
+            binding=HumanTaskBinding(
+                trigger="confirm_output",
+                task_id="review",
+                outcomes={"confirm": "closeout"},
+                allowed_targets=("build", "knowledge"),
+            ),
+            completion=completion,
+            playbook_steps=["build", "knowledge", "closeout"],
+        )
+        == "build"
+    )
+
+    invalid_payloads = [
+        {"task": "review", "decision": "revise", "feedback": "Missing target"},
+        {
+            "task": "review",
+            "decision": "revise",
+            "target": "closeout",
+            "feedback": "Target is not allowed",
+        },
+        {"task": "review", "decision": "confirm", "target": "build"},
+    ]
+    assert all(
+        isinstance(validate_human_task_completion(policy, payload), HumanTaskRejection)
+        for payload in invalid_payloads
+    )
+
+
 def test_continuation_must_be_declared_by_binding_and_playbook() -> None:
     """A decision cannot use an undeclared or unavailable target."""
     policy = HumanTaskPolicy.model_validate(

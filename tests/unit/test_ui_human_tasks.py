@@ -265,6 +265,46 @@ def test_inline_single_choice_uses_declared_options(monkeypatch) -> None:
     assert calls == [("Choose one channel", ["Email", "Events"])]
 
 
+def test_interactive_revision_collects_target_and_feedback(monkeypatch) -> None:
+    """A routed revision collects one allowed phase and its required feedback."""
+    decisions = iter(["revise", "build"])
+    monkeypatch.setattr(
+        "cafe.ui.inquirer_prompts.prompt_list",
+        lambda *_args, **_kwargs: next(decisions),
+    )
+    monkeypatch.setattr(
+        "cafe.ui.inquirer_prompts.prompt_multiline",
+        lambda *_args, **_kwargs: "Repair the source mapping.",
+    )
+    policy = HumanTaskPolicy.model_validate(
+        {
+            "id": "review",
+            "pattern": "confirm_output",
+            "prompt": "Review output",
+            "input_schema": "decision",
+            "decisions": [
+                {"id": "confirm", "label": "Approve"},
+                {
+                    "id": "revise",
+                    "label": "Revise",
+                    "requires_feedback": True,
+                    "requires_target": True,
+                },
+            ],
+            "allowed_targets": ["build", "knowledge"],
+        }
+    )
+
+    payload = collect_human_task_payload(policy)
+
+    assert payload == {
+        "task": "review",
+        "decision": "revise",
+        "target": "build",
+        "feedback": "Repair the source mapping.",
+    }
+
+
 def test_command_completion_uses_the_same_policy_and_declared_destination(tmp_path: Path) -> None:
     """A JSON response advances only through its policy's permitted continuation."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
@@ -309,6 +349,58 @@ def test_command_completion_uses_the_same_policy_and_declared_destination(tmp_pa
     assert reloaded.current_step == "plan"
     assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
     assert reloaded.handoff_contract.to_step == "plan"
+
+
+def test_cross_step_revision_feedback_is_written_for_the_selected_target(tmp_path: Path) -> None:
+    """Feedback follows a cross-step revision route instead of staying at the review step."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "cross-step-revision"
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("spec", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.CONFIRM_OUTPUT,
+        source="test",
+    )
+    playbook = {
+        "steps": {
+            "spec": {
+                "skill": "cafe-spec",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "output-review",
+                        "outcomes": {"confirm": "plan", "revise": "develop"},
+                    }
+                ],
+            },
+            "plan": {"skill": "cafe-plan"},
+            "develop": {"skill": "cafe-develop"},
+        }
+    }
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=blackboard,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "output-review",
+            "decision": "revise",
+            "feedback": "Repair the upstream source mapping.",
+        },
+        source="command",
+    )
+
+    assert result.target == "develop"
+    assert (issue_dir / "develop" / "iteration_001" / "user_input.md").read_text(
+        encoding="utf-8"
+    ) == "Repair the upstream source mapping."
+    assert not (issue_dir / "spec" / "iteration_001" / "user_input.md").exists()
 
 
 def test_dynamic_xml_questions_reject_incomplete_command_answers(tmp_path: Path) -> None:

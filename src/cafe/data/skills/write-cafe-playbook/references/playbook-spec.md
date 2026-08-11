@@ -132,6 +132,22 @@ human_tasks:
 - Do not put prompts, decision labels, questions, or validation rules in the
   playbook. Those belong to the skill policy. A binding may only override prompt
   or correction copy and constrain allowed targets.
+- When the selected policy has one `revise` decision with
+  `requires_target: true`, keep the normal continuation in `outcomes` and list
+  every valid correction destination in `allowed_targets`:
+
+  ```yaml
+  human_tasks:
+    - trigger: confirm_output
+      task_id: output-review
+      outcomes: {confirm: closeout}
+      allowed_targets: [build, review, knowledge]
+  ```
+
+  A revision payload must include `decision: revise`, one listed `target`, and
+  the policy-required `feedback`. Runtime writes that feedback for the selected
+  target phase. Only list phases whose declared input artifacts are already
+  available at the gate.
 - CLI `--user-input` supplies the same payload as the interactive UI: JSON
   objects using `task` plus `decision`, `answers`, `feedback`, or `target` as
   required by the selected policy. Plain text is accepted only for a feedback

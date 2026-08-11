@@ -115,8 +115,13 @@ workflow:
   `answer_questions` → `answers`, `revision_feedback` → `feedback`,
   `no_changes_needed` → `decision`, and `select_next_step` → `target`.
 - Decision policies declare every choice; `requires_feedback: true` makes the
-  feedback field mandatory for that choice. Answer policies use inline questions
-  or `questions_from_xml: true`; target policies declare `allowed_targets`.
+  feedback field mandatory for that choice. A decision may also declare
+  `requires_target: true`; the playbook binding must then declare
+  `allowed_targets`, and the response must include both the selected `target`
+  and any required `feedback`. This lets one reusable `revise` decision route to
+  any playbook-approved phase without copying the graph into the skill. Answer
+  policies use inline questions or `questions_from_xml: true`; target policies
+  declare `allowed_targets`.
 - `required: false` is only for optional feedback. Use `correction_guidance` for
   the actionable message shown after invalid interactive or command input.
 - Keep policy identifiers stable. Do not duplicate a policy's wording or input

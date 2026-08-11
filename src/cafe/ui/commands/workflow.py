@@ -854,12 +854,17 @@ def workflow(
                 explicit_start_step_pending = False
             if not dry_run and active_step in {"user", "done"}:
                 handoff_contract = getattr(blackboard, "handoff_contract", None)
-                waiting_for_alignment = (
+                # A phase-authored user baton is authoritative. A bootstrap
+                # baton only mirrors a legacy current_step and may still need
+                # unfinished-iteration recovery.
+                waiting_for_user_handoff = (
                     handoff_contract is not None
-                    and handoff_contract.intent == HandoffIntent.ALIGNMENT_CHECKPOINT
+                    and handoff_contract.to_owner == HandoffOwner.USER
+                    and handoff_contract.to_step == "user"
+                    and handoff_contract.source != "bootstrap"
                 )
                 incomplete_step = None
-                if not waiting_for_alignment:
+                if not waiting_for_user_handoff:
                     incomplete_step = _find_incomplete_workflow_step(
                         issue_dir=issue_dir,
                         playbook_data=playbook_data,
@@ -881,7 +886,7 @@ def workflow(
                     )
                     continue
                 external_step = None
-                if not waiting_for_alignment:
+                if not waiting_for_user_handoff:
                     external_step = _find_external_resume_step(
                         issue_dir=issue_dir,
                         playbook_data=playbook_data,
