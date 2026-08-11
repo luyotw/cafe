@@ -14,6 +14,7 @@ workflow:
         - id: disagree
           label: Request further changes
           requires_feedback: true
+          correction: true
     - id: clarification-feedback
       pattern: revision_feedback
       prompt: Provide the clarification or implementation feedback needed to continue.

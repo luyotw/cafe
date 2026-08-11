@@ -255,6 +255,10 @@ def apply_human_task_payload(
         )
         return HumanTaskApplication(target=None, policy=policy, rejection=continuation)
 
+    selected_decision = next(
+        (item for item in policy.decisions if item.id == completion.decision), None
+    )
+    is_correction = selected_decision is not None and selected_decision.correction
     qualification_rejection = (
         _validate_packet_contracts_before_confirmation(
             playbook_data=playbook_data,
@@ -263,7 +267,11 @@ def apply_human_task_payload(
             producer_step=from_step,
             correction_guidance=policy.correction_guidance,
         )
-        if trigger == "confirm_output" and continuation != from_step
+        if (
+            trigger == "confirm_output"
+            and continuation != from_step
+            and not is_correction
+        )
         else None
     )
     if qualification_rejection is not None:
@@ -376,8 +384,8 @@ def _validate_packet_contracts_before_confirmation(
 
 def _write_next_iteration_user_input(*, issue_dir: Path, step_name: str, text: str) -> None:
     step_dir = issue_dir / step_name
-    iteration_dirs = sorted(step_dir.glob("iteration_*")) if step_dir.exists() else []
-    target = step_dir / f"iteration_{len(iteration_dirs) + 1:03d}"
+    iteration = next_runnable_iteration_number(step_dir)
+    target = step_dir / f"iteration_{iteration:03d}"
     target.mkdir(parents=True, exist_ok=True)
     (target / "user_input.md").write_text(text, encoding="utf-8")
 

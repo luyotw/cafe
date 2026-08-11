@@ -109,13 +109,16 @@ workflow:
         - id: revise
           label: Request revision
           requires_feedback: true
+          correction: true
 ```
 
 - The valid patterns and matching schemas are: `confirm_output` → `decision`,
   `answer_questions` → `answers`, `revision_feedback` → `feedback`,
   `no_changes_needed` → `decision`, and `select_next_step` → `target`.
-- Decision policies declare every choice; `requires_feedback: true` makes the
-  feedback field mandatory for that choice. A decision may also declare
+- Decision policies declare every choice. `requires_feedback: true` makes the
+  feedback field mandatory for that choice but does not imply routing
+  semantics. Declare `correction: true` only for a repair choice that must stay
+  routable while the current output or packet is invalid. A decision may also declare
   `requires_target: true`; the playbook binding must then declare
   `allowed_targets`, and the response must include both the selected `target`
   and any required `feedback`. This lets one reusable `revise` decision route to

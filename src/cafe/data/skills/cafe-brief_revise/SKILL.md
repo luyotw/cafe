@@ -14,6 +14,7 @@ workflow:
         - id: revise
           label: Request brief revision
           requires_feedback: true
+          correction: true
     - id: editorial-clarification
       pattern: answer_questions
       prompt: Answer the editorial clarification questions.

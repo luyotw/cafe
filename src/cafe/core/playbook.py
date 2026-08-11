@@ -1124,11 +1124,11 @@ def _validate_step_human_tasks(
                 )
             policy = matching_policies[0]
             if any(decision.requires_target for decision in policy.decisions) and not (
-                binding.allowed_targets or policy.allowed_targets
+                binding.allowed_targets
             ):
                 raise ValueError(
                     f"Step '{step_name}', skill {canonical_skill_name(str(skill_name))!r}: "
-                    f"human task {binding.task_id!r} requires allowed_targets"
+                    f"human task {binding.task_id!r} requires allowed_targets on the binding"
                 )
         for target in [*binding.outcomes.values(), *binding.allowed_targets]:
             if target != DONE_TARGET and target not in steps:

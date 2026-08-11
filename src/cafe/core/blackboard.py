@@ -348,6 +348,11 @@ class HandoffContract:
     created_at: str = field(default_factory=_now_iso)
     source: str = "unknown"
 
+    @property
+    def has_meaningful_source(self) -> bool:
+        """Whether this baton was explicitly authored rather than bootstrapped."""
+        return self.source not in {"", "unknown", "bootstrap", "chat.bootstrap"}
+
     def to_next_step_dict(self) -> Dict[str, Any]:
         """Return the strict persisted next_step.txt contract."""
         return {

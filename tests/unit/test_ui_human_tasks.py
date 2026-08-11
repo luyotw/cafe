@@ -6,7 +6,15 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+import pytest
+
+from cafe.core.blackboard import (
+    ArtifactEntry,
+    ArtifactKind,
+    BlackboardStore,
+    HandoffIntent,
+    HandoffOwner,
+)
 from cafe.core.human_tasks import HumanTaskPolicy
 from cafe.skills.loader import SkillLoader
 from cafe.ui.human_tasks import (
@@ -401,6 +409,369 @@ def test_cross_step_revision_feedback_is_written_for_the_selected_target(tmp_pat
         encoding="utf-8"
     ) == "Repair the upstream source mapping."
     assert not (issue_dir / "spec" / "iteration_001" / "user_input.md").exists()
+
+
+def test_cross_step_revision_feedback_reuses_unfinished_target_iteration(tmp_path: Path) -> None:
+    """Feedback is written where the target phase executor will resume."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "unfinished-cross-step-revision"
+    target_iteration = issue_dir / "develop" / "iteration_001"
+    target_iteration.mkdir(parents=True)
+    (target_iteration / "iteration.json").write_text(
+        json.dumps({"iteration": 1, "step_name": "develop"}), encoding="utf-8"
+    )
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("spec", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.CONFIRM_OUTPUT,
+        source="test",
+    )
+    playbook = {
+        "steps": {
+            "spec": {
+                "skill": "cafe-spec",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "output-review",
+                        "outcomes": {"confirm": "plan", "revise": "develop"},
+                    }
+                ],
+            },
+            "plan": {"skill": "cafe-plan"},
+            "develop": {"skill": "cafe-develop"},
+        }
+    }
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=blackboard,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "output-review",
+            "decision": "revise",
+            "feedback": "Resume and repair this iteration.",
+        },
+        source="command",
+    )
+
+    assert result.target == "develop"
+    assert (target_iteration / "user_input.md").read_text(encoding="utf-8") == (
+        "Resume and repair this iteration."
+    )
+    assert not (issue_dir / "develop" / "iteration_002").exists()
+
+
+def test_cross_step_revision_feedback_replaces_pending_input_without_state(
+    tmp_path: Path,
+) -> None:
+    """A retry updates the same iteration the executor will run next."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "pending-input-revision"
+    target_iteration = issue_dir / "develop" / "iteration_001"
+    target_iteration.mkdir(parents=True)
+    (target_iteration / "user_input.md").write_text("Old feedback", encoding="utf-8")
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("spec", playbook_id="default")
+    playbook = {
+        "steps": {
+            "spec": {
+                "skill": "cafe-spec",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "output-review",
+                        "outcomes": {"confirm": "plan", "revise": "develop"},
+                    }
+                ],
+            },
+            "plan": {"skill": "cafe-plan"},
+            "develop": {"skill": "cafe-develop"},
+        }
+    }
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=blackboard,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "output-review",
+            "decision": "revise",
+            "feedback": "New feedback",
+        },
+        source="command",
+    )
+
+    assert result.target == "develop"
+    assert (target_iteration / "user_input.md").read_text(encoding="utf-8") == (
+        "New feedback"
+    )
+    assert not (issue_dir / "develop" / "iteration_002").exists()
+
+
+@pytest.mark.parametrize("requires_target", [True, False], ids=["targeted", "fixed-outcome"])
+def test_revision_bypasses_packet_confirmation_gate(
+    tmp_path: Path, monkeypatch, requires_target: bool
+) -> None:
+    """A correction route remains available when its source packet is invalid."""
+    builtin_root = tmp_path / "builtin"
+    review_skill = builtin_root / "skills" / "targeted-review"
+    review_skill.mkdir(parents=True)
+    (review_skill / "SKILL.md").write_text(
+        f"""---
+name: targeted-review
+description: targeted review
+workflow:
+  human_tasks:
+    - id: review-output
+      pattern: confirm_output
+      prompt: Review output
+      input_schema: decision
+      decisions:
+        - id: confirm
+          label: Confirm
+        - id: revise
+          label: Revise
+          requires_feedback: true
+          requires_target: {str(requires_target).lower()}
+          correction: true
+---
+""",
+        encoding="utf-8",
+    )
+    consumer_skill = builtin_root / "skills" / "packet-consumer"
+    consumer_skill.mkdir(parents=True)
+    (consumer_skill / "SKILL.md").write_text(
+        """---
+name: packet-consumer
+description: packet consumer
+workflow:
+  prompt_inputs:
+    - artifacts: [knowledge]
+      placeholder: knowledge_file
+      load_policy:
+        - when: {}
+          mode: packet
+          contract_kind: spec
+---
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+    monkeypatch.setattr("cafe.ui.human_tasks.SkillLoader", lambda: loader)
+    issue_dir = tmp_path / ".cafe" / "issues" / "invalid-packet-revision"
+    invalid_packet = tmp_path / "invalid-knowledge.md"
+    invalid_packet.write_text("# Missing spec packet\n", encoding="utf-8")
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("review", playbook_id="default")
+    blackboard.artifacts["knowledge"] = ArtifactEntry(
+        name="knowledge",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="review",
+        path=str(invalid_packet),
+    )
+    outcomes = {"confirm": "closeout"}
+    if not requires_target:
+        outcomes["revise"] = "build"
+    playbook = {
+        "steps": {
+            "review": {
+                "skill": "targeted-review",
+                "output_artifact": "knowledge",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "review-output",
+                        "outcomes": outcomes,
+                        "allowed_targets": ["build", "knowledge"],
+                    }
+                ],
+            },
+            "build": {"skill": "targeted-review"},
+            "knowledge": {"skill": "targeted-review"},
+            "closeout": {
+                "skill": "packet-consumer",
+                "input_artifacts": ["knowledge"],
+            },
+        }
+    }
+
+    raw_payload = {
+        "task": "review-output",
+        "decision": "revise",
+        "feedback": "Repair the invalid packet.",
+    }
+    if requires_target:
+        raw_payload["target"] = "build"
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=blackboard,
+        from_step="review",
+        trigger="confirm_output",
+        raw_payload=raw_payload,
+        source="command",
+    )
+
+    assert result.rejection is None
+    assert result.target == "build"
+    assert (issue_dir / "build" / "iteration_001" / "user_input.md").read_text(
+        encoding="utf-8"
+    ) == "Repair the invalid packet."
+
+
+def test_feedback_required_approval_still_qualifies_packet(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Input requirements do not turn an approval into a correction route."""
+    builtin_root = tmp_path / "builtin"
+    review_skill = builtin_root / "skills" / "reasoned-approval"
+    review_skill.mkdir(parents=True)
+    (review_skill / "SKILL.md").write_text(
+        """---
+name: reasoned-approval
+description: reasoned approval
+workflow:
+  human_tasks:
+    - id: review-output
+      pattern: confirm_output
+      prompt: Review output
+      input_schema: decision
+      decisions:
+        - id: confirm_with_reason
+          label: Confirm with reason
+          requires_feedback: true
+---
+""",
+        encoding="utf-8",
+    )
+    consumer_skill = builtin_root / "skills" / "packet-consumer"
+    consumer_skill.mkdir(parents=True)
+    (consumer_skill / "SKILL.md").write_text(
+        """---
+name: packet-consumer
+description: packet consumer
+workflow:
+  prompt_inputs:
+    - artifacts: [spec]
+      placeholder: spec_file
+      load_policy:
+        - when: {}
+          mode: packet
+          contract_kind: spec
+---
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+    monkeypatch.setattr("cafe.ui.human_tasks.SkillLoader", lambda: loader)
+    invalid_packet = tmp_path / "invalid-spec.md"
+    invalid_packet.write_text("# Missing packet\n", encoding="utf-8")
+    issue_dir = tmp_path / ".cafe" / "issues" / "reasoned-approval"
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("review", playbook_id="default")
+    blackboard.artifacts["spec"] = ArtifactEntry(
+        name="spec",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="review",
+        path=str(invalid_packet),
+    )
+    playbook = {
+        "steps": {
+            "review": {
+                "skill": "reasoned-approval",
+                "output_artifact": "spec",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "review-output",
+                        "outcomes": {"confirm_with_reason": "closeout"},
+                    }
+                ],
+            },
+            "closeout": {
+                "skill": "packet-consumer",
+                "input_artifacts": ["spec"],
+            },
+        }
+    }
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=blackboard,
+        from_step="review",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "review-output",
+            "decision": "confirm_with_reason",
+            "feedback": "The review rationale.",
+        },
+        source="command",
+    )
+
+    assert result.rejection is not None
+    assert "Cannot confirm" in result.rejection.message
+
+
+def test_confirmation_does_not_overwrite_unfinished_producer_input(tmp_path: Path) -> None:
+    """An approval routes forward without becoming another phase input."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "unfinished-confirmation"
+    producer_iteration = issue_dir / "spec" / "iteration_001"
+    producer_iteration.mkdir(parents=True)
+    (producer_iteration / "iteration.json").write_text(
+        json.dumps({"iteration": 1, "step_name": "spec"}), encoding="utf-8"
+    )
+    original_input = producer_iteration / "user_input.md"
+    original_input.write_text("Original requirements", encoding="utf-8")
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("spec", playbook_id="default")
+    playbook = {
+        "steps": {
+            "spec": {
+                "skill": "cafe-spec",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "output-review",
+                        "outcomes": {"confirm": "plan", "revise": "spec"},
+                    }
+                ],
+            },
+            "plan": {"skill": "cafe-plan"},
+        }
+    }
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=blackboard,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload={"task": "output-review", "decision": "confirm"},
+        source="command",
+    )
+
+    assert result.target == "plan"
+    assert original_input.read_text(encoding="utf-8") == "Original requirements"
+    assert not (issue_dir / "spec" / "iteration_002").exists()
 
 
 def test_dynamic_xml_questions_reject_incomplete_command_answers(tmp_path: Path) -> None:

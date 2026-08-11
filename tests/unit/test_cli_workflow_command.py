@@ -507,6 +507,9 @@ def test_workflow_command_resume_user_input_targets_handoff_from_step(
 </questions>""",
         encoding="utf-8",
     )
+    (questions_dir / "iteration.json").write_text(
+        json.dumps({"iteration": 1, "end_time": "done"}), encoding="utf-8"
+    )
     store = BlackboardStore(issue_dir)
     blackboard = store.load_or_create("user", playbook_id="default")
     store.set_current_step(blackboard, "user")
@@ -2549,6 +2552,9 @@ def test_user_phase_need_clarification_collects_questions_and_resumes_step(
 """,
         encoding="utf-8",
     )
+    (spec_iter_dir / "iteration.json").write_text(
+        json.dumps({"iteration": 1, "end_time": "done"}), encoding="utf-8"
+    )
     playbook_data = {
         "playbook": {"id": "default"},
         "roles": {"pm": {"default_agent": "Roger"}},
@@ -2883,8 +2889,62 @@ def test_workflow_user_handoff_precedes_incomplete_iteration_resume(
     mock_find_incomplete.assert_not_called()
 
 
+@pytest.mark.parametrize("source", ["chat.bootstrap", "unknown"])
+def test_nonmeaningful_user_handoff_does_not_hide_incomplete_iteration(
+    tmp_path: Path, monkeypatch, source: str
+) -> None:
+    """Bootstrap/default baton metadata cannot outrank runnable phase state."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / f"issue-{source.replace('.', '-')}"
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("spec", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.MANUAL_HANDOFF,
+        source=source,
+    )
+    executed_steps: list[str] = []
+
+    class FakeExecutor:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
+            executed_steps.append(step_name)
+            return _result(
+                status_code="need_clarification",
+                step_name=step_name,
+                step_def=step_def,
+            )
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+        patch(
+            "cafe.ui.cli._find_incomplete_workflow_step", return_value="develop"
+        ) as mock_find_incomplete,
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = issue_dir.name
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "default", "--execute", "--single-step"],
+        )
+
+    assert result.exit_code == 0
+    assert "Resuming unfinished iteration" in result.stdout
+    assert executed_steps == ["develop"]
+    mock_find_incomplete.assert_called_once()
+
+
+@pytest.mark.parametrize("source", ["test", "unknown"])
 def test_workflow_alignment_decision_precedes_incomplete_iteration_resume(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, source: str
 ) -> None:
     monkeypatch.chdir(tmp_path)
     executed_steps: list[str] = []
@@ -2924,7 +2984,7 @@ def test_workflow_alignment_decision_precedes_incomplete_iteration_resume(
         to_step="user",
         intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
         status_code="alignment_checkpoint",
-        source="test",
+        source=source,
     )
 
     class FakeExecutor:

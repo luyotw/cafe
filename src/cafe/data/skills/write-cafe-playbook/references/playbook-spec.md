@@ -133,7 +133,7 @@ human_tasks:
   playbook. Those belong to the skill policy. A binding may only override prompt
   or correction copy and constrain allowed targets.
 - When the selected policy has one `revise` decision with
-  `requires_target: true`, keep the normal continuation in `outcomes` and list
+  `correction: true` and `requires_target: true`, keep the normal continuation in `outcomes` and list
   every valid correction destination in `allowed_targets`:
 
   ```yaml

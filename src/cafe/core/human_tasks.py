@@ -47,6 +47,7 @@ class HumanTaskDecision(BaseModel):
     label: str
     requires_feedback: bool = False
     requires_target: bool = False
+    correction: bool = False
 
     @field_validator("id", "label")
     @classmethod
@@ -193,9 +194,7 @@ class HumanTaskCompletion:
             return "\n".join(
                 f"{question}: {', '.join(answer)}" for question, answer in self.answers.items()
             )
-        if self.decision:
-            return self.decision
-        return self.target or ""
+        return ""
 
 
 @dataclass(frozen=True)
@@ -306,14 +305,15 @@ def resolve_human_task_continuation(
     playbook_steps: Sequence[str],
 ) -> str | HumanTaskRejection:
     """Return only a step explicitly declared by the binding and playbook."""
-    key = completion.target or completion.decision or "submit"
-    target = binding.outcomes.get(key)
-    if target is None and completion.target is not None:
+    if completion.target is not None:
         target = completion.target
+    else:
+        key = completion.decision or "submit"
+        target = binding.outcomes.get(key)
     if not target:
         return _reject(policy, "This response has no declared continuation.")
     allowed = set(binding.allowed_targets or policy.allowed_targets)
-    if allowed and target not in allowed:
+    if completion.target is not None and allowed and target not in allowed:
         return _reject(policy, "The selected continuation is not permitted by this task.")
     if target != "_done" and target not in set(playbook_steps):
         return _reject(policy, "The selected continuation is not declared by this playbook.")

@@ -100,6 +100,9 @@ def test_interactive_and_json_answers_normalize_to_the_same_completion() -> None
     )
     assert interactive.agent_input() == "source: Papers"
 
+    approval = HumanTaskCompletion(task_id="review", decision="confirm")
+    assert approval.agent_input() == ""
+
 
 def test_dynamic_question_answers_require_every_current_xml_question() -> None:
     """The caller-provided XML contract governs both interactive and command answers."""
@@ -179,6 +182,7 @@ def test_revision_decision_requires_declared_target_and_feedback() -> None:
                     "label": "Revise",
                     "requires_feedback": True,
                     "requires_target": True,
+                    "correction": True,
                 },
             ],
             "allowed_targets": ["build", "knowledge"],
@@ -212,6 +216,39 @@ def test_revision_decision_requires_declared_target_and_feedback() -> None:
             ),
             completion=completion,
             playbook_steps=["build", "knowledge", "closeout"],
+        )
+        == "build"
+    )
+    assert (
+        resolve_human_task_continuation(
+            policy=policy,
+            binding=HumanTaskBinding(
+                trigger="confirm_output",
+                task_id="review",
+                outcomes={"confirm": "closeout"},
+                allowed_targets=("build", "knowledge"),
+            ),
+            completion=HumanTaskCompletion(task_id="review", decision="confirm"),
+            playbook_steps=["build", "knowledge", "closeout"],
+        )
+        == "closeout"
+    )
+    assert (
+        resolve_human_task_continuation(
+            policy=policy,
+            binding=HumanTaskBinding(
+                trigger="confirm_output",
+                task_id="review",
+                outcomes={"build": "knowledge"},
+                allowed_targets=("build", "knowledge"),
+            ),
+            completion=HumanTaskCompletion(
+                task_id="review",
+                decision="revise",
+                target="build",
+                feedback="Repair build.",
+            ),
+            playbook_steps=["build", "knowledge"],
         )
         == "build"
     )

@@ -758,7 +758,7 @@ def _consume_pending_chat_handoff(
     # `next_step.txt` is now persistent from workflow initialization onward.
     # Ignore the bootstrap/persistent baton itself; only consume a chat-authored
     # pending structured handoff when the baton meaning is real.
-    if contract.source in {"bootstrap", "chat.bootstrap"}:
+    if not contract.has_meaningful_source and contract.to_step == blackboard.current_step:
         return None
 
     target_step = contract.to_step

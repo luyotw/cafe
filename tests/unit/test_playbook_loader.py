@@ -341,6 +341,64 @@ steps:
         loader.load_model("missing-human-task-targets")
 
 
+def test_playbook_requires_revision_targets_on_the_binding(tmp_path: Path) -> None:
+    """A skill cannot silently own the playbook's correction graph."""
+    builtin_root = tmp_path / "builtin"
+    skill_dir = builtin_root / "skills" / "reviewer"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: reviewer
+description: reviewer
+workflow:
+  human_tasks:
+    - id: review-output
+      pattern: confirm_output
+      prompt: Review output
+      input_schema: decision
+      decisions:
+        - id: confirm
+          label: Approve
+        - id: revise
+          label: Revise
+          requires_feedback: true
+          requires_target: true
+      allowed_targets: [review]
+---
+""",
+        encoding="utf-8",
+    )
+    _write_playbook(
+        builtin_root / "playbooks",
+        "skill-owned-human-task-targets",
+        """
+playbook: {id: skill-owned-human-task-targets}
+steps:
+  review:
+    role: reviewer
+    skill: reviewer
+    human_tasks:
+      - trigger: confirm_output
+        task_id: review-output
+        outcomes: {confirm: closeout}
+    on: {confirm_output: review, await_agent: closeout}
+  closeout:
+    role: reviewer
+    skill: reviewer
+    on: {await_agent: _done}
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="allowed_targets on the binding"):
+        loader.load_model("skill-owned-human-task-targets")
+
+
 def test_load_uses_project_override(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
     global_root = tmp_path / "global"

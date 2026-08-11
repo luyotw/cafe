@@ -861,7 +861,10 @@ def workflow(
                     handoff_contract is not None
                     and handoff_contract.to_owner == HandoffOwner.USER
                     and handoff_contract.to_step == "user"
-                    and handoff_contract.source != "bootstrap"
+                    and (
+                        handoff_contract.has_meaningful_source
+                        or handoff_contract.intent == HandoffIntent.ALIGNMENT_CHECKPOINT
+                    )
                 )
                 incomplete_step = None
                 if not waiting_for_user_handoff:

@@ -14,6 +14,7 @@ workflow:
         - id: revise
           label: Request revision
           requires_feedback: true
+          correction: true
     - id: clarification-answers
       pattern: answer_questions
       prompt: Answer the requested clarification questions.
