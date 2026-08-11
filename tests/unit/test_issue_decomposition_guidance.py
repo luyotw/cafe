@@ -44,9 +44,15 @@ def test_stable_assessment_contract_is_shared_by_roles_templates_and_driver() ->
         "Depends on",
         "Definition of Done",
     )
+    follow_up_schema = (
+        "| Title | Goal | Depends on | Scope boundary | Non-goals | Definition of Done |"
+    )
     for surface in map(_normalized, surfaces):
         for field in fields:
             assert field in surface
+
+    for surface in map(_normalized, [contract, driver, *surfaces[4:]]):
+        assert follow_up_schema in surface
 
 
 def test_phase_roles_assess_distinct_scope_without_external_mutation() -> None:

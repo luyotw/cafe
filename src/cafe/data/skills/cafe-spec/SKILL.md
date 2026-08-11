@@ -85,7 +85,8 @@ bash scripts/sync_github.sh --help
   whether the request contains independently acceptable product capabilities,
   scopes, or confirmation cycles. Use its exact `Decision: `keep` or `split``,
   `Rationale`, `Current issue scope`, `Trigger`, and follow-up table fields:
-  `Title`, `Goal`, `Depends on`, `Scope boundary`, and `Definition of Done`.
+  `Title`, `Goal`, `Depends on`, `Scope boundary`, `Non-goals`, and
+  `Definition of Done`.
   For `split`, retain a useful current outcome and non-overlapping follow-ups;
   recommend only and never create issues, update a roadmap, or change priority.
 - User 確認暫停、交給 `plan` 前是否執行 GitHub sync、以及 baton 順序：請依 shared skill「cafe-workflow-common」的 **Confirming spec and plan with the user**、**Where policies live**，並搭配 `cafe-github_sync` skill；本 skill 不重複敘述。

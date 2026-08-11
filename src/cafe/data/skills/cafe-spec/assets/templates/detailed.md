@@ -17,8 +17,8 @@
 
 ### Proposed follow-up issues
 
-| Title | Goal | Depends on | Scope boundary | Definition of Done |
-| --- | --- | --- | --- | --- |
+| Title | Goal | Depends on | Scope boundary | Non-goals | Definition of Done |
+| --- | --- | --- | --- | --- | --- |
 
 ## User Stories
 

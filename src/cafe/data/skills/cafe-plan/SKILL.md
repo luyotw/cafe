@@ -77,7 +77,7 @@ bash scripts/sync_github.sh --help
   using repository evidence and `cafe-workflow-common/references/issue_decomposition.md`.
   Use its exact `Decision: `keep` or `split``, `Rationale`, `Current issue scope`,
   `Trigger`, and follow-up table fields: `Title`, `Goal`, `Depends on`, `Scope boundary`,
-  and `Definition of Done`. Planning may refine dependency order
+  `Non-goals`, and `Definition of Done`. Planning may refine dependency order
   but must not silently change confirmed product scope; recommend only and do
   not create issues, update roadmaps, change priority, or allow an unresolved
   split to advance to develop.

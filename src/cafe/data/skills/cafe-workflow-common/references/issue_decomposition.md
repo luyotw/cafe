@@ -16,15 +16,15 @@ project records.
 
 ### Proposed follow-up issues
 
-| Title | Goal | Depends on | Scope boundary | Definition of Done |
-| --- | --- | --- | --- | --- |
+| Title | Goal | Depends on | Scope boundary | Non-goals | Definition of Done |
+| --- | --- | --- | --- | --- | --- |
 ```
 
 For `keep`, state why the issue remains a cohesive, reviewable outcome and use
 `none` for the trigger. For `split`, retain a useful, independently acceptable
 outcome in the current issue and propose non-overlapping follow-up outcomes.
-Every follow-up must state its outcome, dependency, scope boundary, and
-Definition of Done; reject vague or unsupported proposals.
+Every follow-up must state its outcome, dependency, scope boundary, non-goals,
+and Definition of Done; reject vague or unsupported proposals.
 
 ## Role boundaries
 

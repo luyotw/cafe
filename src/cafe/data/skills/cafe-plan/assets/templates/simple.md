@@ -12,8 +12,8 @@ Add a "forgot password" link to the login page
 
 ### Proposed follow-up issues
 
-| Title | Goal | Depends on | Scope boundary | Definition of Done |
-| --- | --- | --- | --- | --- |
+| Title | Goal | Depends on | Scope boundary | Non-goals | Definition of Done |
+| --- | --- | --- | --- | --- | --- |
 
 ## Negative space
 
