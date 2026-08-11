@@ -4,11 +4,13 @@
 [ ] Carefully read .cafe/issues/test/spec/iteration_001/output.md and .cafe/issues/test/plan/iteration_001/output.md
 [ ] Execute development tasks in strict order according to the plan
 [ ] Mark each completed task as checked in .cafe/issues/test/plan/iteration_001/output.md (change - [ ] to - [x])
+[ ] When .cafe/issues/test/plan/iteration_001/output.md contains a versioned **Downstream Contract**, update the matching **Task Status** row from `pending` to `completed` with each task checkbox; preserve every other contract field
 [ ] Follow existing commit message style, commit multiple times if needed
 [ ] Do NOT modify commits from other branches
 [ ] Confirm: Maximized code reuse by looking for existing patterns and utilities
 [ ] Confirm: Commit messages strictly match existing format, language, and structure
 [ ] Confirm: All tasks in .cafe/issues/test/plan/iteration_001/output.md are marked [x]
+[ ] Confirm: Plan task checkboxes and **Downstream Contract** **Task Status** rows agree before handoff
 [ ] Read the plan **Test List** (`## Test List` in .cafe/issues/test/plan/iteration_001/output.md); every new or changed test maps to a listed item (update the plan first if scope changed)
 [ ] Confirm: New/changed tests assert **invariants** (business rules, journey outcomes)—not UI copy, CSS classes, DOM structure, or internal state shape unless the spec explicitly requires it
 [ ] Confirm: Unit tests target extractable pure business logic in shared library modules when applicable; integration tests are named by **user journey** and **invariant outcome**, not by UI component
