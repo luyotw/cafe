@@ -21,6 +21,11 @@
 [ ] Update blackboard and next-step baton to hand off to the next workflow target
 
 
+## Basic Principles
+
+[ ] 新增或修改 declaration、設定欄位或共用 runtime 參數時，追蹤 `schema/validation → effective resolver/defaults → production callers` 的完整接線；明確檢查適用的 primary、backup、retry 與 resume 路徑，不適用者需留下理由
+[ ] 為上述接線新增至少一個經過 public caller path 的 regression test，且移除任一必要 forwarding 時該測試必須失敗；只直接測 helper 或手動傳值不足以證明 production 接線
+
 
 ## Agent Guidelines Checklist
 

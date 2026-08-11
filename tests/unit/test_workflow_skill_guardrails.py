@@ -23,7 +23,7 @@ def test_packaged_develop_skill_has_risk_driven_operation_guidance() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-develop")
 
-    assert "version: 1.5.0" in text
+    assert "version: 1.5.1" in text
     assert "low 使用 `final-only`／`summary-only`" in text
     assert "max_read_only_commands" not in text
     assert "20 次" not in text
@@ -31,3 +31,23 @@ def test_packaged_develop_skill_has_risk_driven_operation_guidance() -> None:
     assert "不得繼續探索" not in text
     assert "任兩次實質修改之間" not in text
     assert "3 次唯讀呼叫內" not in text
+
+
+def test_packaged_develop_skill_checks_complete_production_wiring() -> None:
+    reference = (
+        PROJECT_ROOT
+        / "src"
+        / "cafe"
+        / "data"
+        / "skills"
+        / "cafe-develop"
+        / "references"
+        / "basic_principles.md"
+    ).read_text(encoding="utf-8")
+
+    assert "schema/validation" in reference
+    assert "effective resolver/defaults" in reference
+    assert "primary、backup、retry 與 resume" in reference
+    assert "public caller path" in reference
+    assert "移除任一必要 forwarding 時該測試必須失敗" in reference
+    assert "只直接測 helper 或手動傳值不足" in reference

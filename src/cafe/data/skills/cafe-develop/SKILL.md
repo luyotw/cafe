@@ -1,7 +1,7 @@
 ---
 name: cafe-develop
 description: "依計畫進行程式開發與測試"
-version: 1.5.0
+version: 1.5.1
 workflow:
   human_tasks:
     - id: no-change-decision

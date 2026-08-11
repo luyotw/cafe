@@ -23,6 +23,7 @@ from cafe.skills.contracts import SkillWorkflowContract
 from cafe.skills.loader import SkillLoader
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "checklists"
+DEVELOP_BASIC_PRINCIPLES = load_skill_reference("cafe-develop", "basic_principles.md")
 
 REQUIRED_SKILL_REFERENCES = {
     "spec_first": [
@@ -163,6 +164,7 @@ GOLDEN_RUNNERS = {
         develop_file=None,
         checklist_file_path=path,
         correction_mode=False,
+        basic_principles=DEVELOP_BASIC_PRINCIPLES,
         output_file=".cafe/issues/test/develop/iteration_001/output.md",
     ),
     "develop_correction": lambda path: generate_develop_checklist(
@@ -173,6 +175,7 @@ GOLDEN_RUNNERS = {
         checklist_file_path=path,
         correction_mode=True,
         feedback_file_path=".cafe/issues/test/review/iteration_001/output.md",
+        basic_principles=DEVELOP_BASIC_PRINCIPLES,
         output_file=".cafe/issues/test/develop/iteration_001/output.md",
     ),
     "review": lambda path: generate_review_checklist(

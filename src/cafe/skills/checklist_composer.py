@@ -453,7 +453,11 @@ def generate_develop_checklist(
     if basic_principles:
         basic_principles_checklist = convert_to_checklist(basic_principles, "Basic Principles")
 
-    checklist_content = f"{execution_steps}\n{basic_principles_checklist}\n{agent_guidelines}"
+    guidance_separator = "\n\n" if basic_principles_checklist else "\n"
+    checklist_content = (
+        f"{execution_steps}\n{basic_principles_checklist}"
+        f"{guidance_separator}{agent_guidelines}"
+    )
 
     if questions_xml_file:
         xml_questions_instruction = _resolve_xml_questions_instruction(
