@@ -249,6 +249,58 @@ class TestCodexCLIParseResponse:
         ]
         assert permission_denials == []
 
+    @pytest.mark.parametrize("cost_location", ["event", "usage"])
+    def test_parse_response_uses_provider_reported_cost(self, codex_config, cost_location):
+        cli = CodexCLI(codex_config)
+        usage = {
+            "input_tokens": 1_000_000,
+            "cached_input_tokens": 200_000,
+            "output_tokens": 100_000,
+        }
+        event = {"type": "turn.completed", "usage": usage}
+        if cost_location == "event":
+            event["total_cost_usd"] = 1.234
+        else:
+            usage["total_cost_usd"] = 1.234
+        output_lines = [
+            json.dumps(event),
+        ]
+
+        _, token_usage, _ = cli.parse_response(output_lines)
+
+        assert token_usage.total_cost_usd == pytest.approx(1.234)
+
+    def test_parse_response_uses_cost_event_after_turn_completion(self, codex_config):
+        cli = CodexCLI(codex_config)
+        output_lines = [
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {"input_tokens": 100, "output_tokens": 10},
+                }
+            ),
+            json.dumps({"type": "result", "total_cost_usd": 0.42}),
+        ]
+
+        _, token_usage, _ = cli.parse_response(output_lines)
+
+        assert token_usage.total_cost_usd == pytest.approx(0.42)
+
+    def test_parse_response_leaves_cost_unknown_when_provider_omits_it(self, codex_config):
+        cli = CodexCLI(codex_config)
+        output_lines = [
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {"input_tokens": 1_000_000, "output_tokens": 100_000},
+                }
+            )
+        ]
+
+        _, token_usage, _ = cli.parse_response(output_lines)
+
+        assert token_usage.total_cost_usd == 0.0
+
     def test_parse_response_ignores_invalid_json(self, codex_config):
         cli = CodexCLI(codex_config)
         output_lines = [
