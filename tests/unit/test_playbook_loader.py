@@ -76,8 +76,10 @@ workflow:
     assert loader.load_model("custom").model.steps["receiver"].skill == "receiver"
 
 
-def test_human_feedback_delivery_requires_skill_prompt_exposure(tmp_path: Path) -> None:
-    """UT-006: requested-change delivery reaches the continuation prompt."""
+def test_human_feedback_delivery_requires_effective_skill_prompt_exposure(
+    tmp_path: Path,
+) -> None:
+    """UT-006: every requested-change continuation receives workflow feedback."""
     data_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
     project_root = tmp_path / "project"
     _write_skill(project_root / ".cafe" / "skills", "repair")
@@ -93,7 +95,8 @@ steps:
     human_tasks:
       - trigger: confirm_output
         task_id: local-review
-        outcomes: {approve: _done, request_changes: repair}
+        outcomes: {approve: _done}
+        allowed_targets: [repair]
         feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
     on: {confirm_output: release, await_agent: _done}
   repair:
@@ -107,6 +110,25 @@ steps:
         project_root=project_root,
         global_root=tmp_path / "global",
         builtin_root=data_root,
+    )
+
+    with pytest.raises(ValueError, match="feedback_delivery.*prompt input.*workflow_feedback"):
+        loader.load_model("custom")
+
+    (project_root / ".cafe" / "skills" / "repair" / "SKILL.md").write_text(
+        """---
+name: repair
+description: repair
+workflow:
+  prompt_inputs:
+    - artifacts: [review_feedback, workflow_feedback]
+      placeholder: workflow_feedback_file
+      required: false
+---
+
+# repair
+""",
+        encoding="utf-8",
     )
 
     with pytest.raises(ValueError, match="feedback_delivery.*prompt input.*workflow_feedback"):

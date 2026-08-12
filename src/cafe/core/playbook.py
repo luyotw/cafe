@@ -1109,6 +1109,12 @@ def _validate_feedback_target_prompt_inputs(
     skill_loader: SkillLoader,
 ) -> None:
     """Ensure routed feedback is exposed to every possible target skill."""
+    def receives_workflow_feedback(skill_name: str) -> bool:
+        return any(
+            mapping.artifacts[0] == "workflow_feedback"
+            for mapping in skill_loader.get_workflow_contract(skill_name).prompt_inputs
+        )
+
     for step_name, step in model.steps.items():
         behavior = resolve_step_behavior(model, step_name)
         targets: List[tuple[str, str]] = []
@@ -1119,7 +1125,7 @@ def _validate_feedback_target_prompt_inputs(
                 continue
             targets.extend(
                 ("human_tasks feedback_delivery", target)
-                for target in binding.outcomes.values()
+                for target in [*binding.outcomes.values(), *binding.allowed_targets]
                 if target != DONE_TARGET
             )
 
@@ -1133,10 +1139,7 @@ def _validate_feedback_target_prompt_inputs(
             missing = [
                 canonical_skill_name(skill_name)
                 for skill_name in selectors
-                if not any(
-                    "workflow_feedback" in mapping.artifacts
-                    for mapping in skill_loader.get_workflow_contract(skill_name).prompt_inputs
-                )
+                if not receives_workflow_feedback(skill_name)
             ]
             if missing:
                 raise ValueError(
