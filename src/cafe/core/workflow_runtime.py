@@ -793,9 +793,11 @@ class BlackboardWorkflowRuntime:
                     )
                 except TypeError:
                     execution_result = self.executor(current_step, step_def, self.blackboard)
-            delivered_feedback = feedback_ledger.consume_delivered(
-                entry.source_identity for entry in pending_feedback
-            )
+            delivered_feedback = []
+            if getattr(execution_result, "agent_invoked", False):
+                delivered_feedback = feedback_ledger.consume_delivered(
+                    entry.source_identity for entry in pending_feedback
+                )
             if delivered_feedback:
                 self.blackboard_store.record_event(
                     self.blackboard,

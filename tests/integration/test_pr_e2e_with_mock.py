@@ -4,13 +4,21 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.hooks import HookResult
+from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.types import AgentCLI, TokenUsage
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+from cafe.phases.generic_phase import GenericPhase
+from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.skills.loader import SkillLoader
+from cafe.skills.native_bridge import NativeSkillBridge
 
 
 def _load_default_playbook() -> dict:
@@ -106,7 +114,7 @@ def test_pr_runtime_completes_with_capability_receipt(tmp_path: Path) -> None:
 
 @pytest.mark.e2e
 def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(tmp_path: Path) -> None:
-    """IT-001: GitHub feedback is batched, retried, and delivered exactly once."""
+    """IT-001: feedback survives a pre-agent pause and reaches the target prompt once."""
     from unittest.mock import MagicMock, patch
 
     from cafe.core.hooks.feedback import GitHubPRFeedbackSource
@@ -173,43 +181,97 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(tmp_
     assert len(ledger.pending(target_step="develop")) == 2
     phase.git_ops.get_current_branch.assert_not_called()
 
-    delivered_feedback: list[list[str]] = []
+    class PauseBeforeAgent:
+        name = "PauseBeforeAgent"
 
-    def interrupted_executor(
-        step_name: str, _step_def: dict, _state: object
-    ) -> StepExecutionResult:
-        delivered_feedback.append(
-            [entry.content for entry in ledger.pending(target_step=step_name)]
+        def run(self, **_kwargs):
+            return HookResult(
+                continue_pipeline=False,
+                override_status_code=PhaseStatusCode.NEED_CLARIFICATION,
+            )
+
+    class AgentManager:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+            self.agent = SimpleNamespace(
+                config=SimpleNamespace(cli=AgentCLI.CODEX, session_id=None, model=None)
+            )
+
+        def get_agent(self, _name: str):
+            return self.agent
+
+        def execute(self, _name: str, prompt: str, **_kwargs):
+            self.prompts.append(prompt)
+            return "await_agent", TokenUsage(), [], [], [], None
+
+    class GitOperations:
+        def get_default_base_branch(self) -> str:
+            return "main"
+
+        def get_repo_root(self) -> Path:
+            return tmp_path
+
+    def build_phase(*, paused: bool) -> GenericPhase:
+        data_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
+        skill_loader = SkillLoader(
+            project_root=tmp_path,
+            global_root=tmp_path / "global",
+            builtin_root=data_root,
         )
-        raise KeyboardInterrupt()
+        skill_loader.discover()
+        return GenericPhase(
+            skill_loader,
+            hook_registry={"PauseBeforeAgent": PauseBeforeAgent} if paused else None,
+            skill_bridge=NativeSkillBridge(
+                skill_loader,
+                project_root=tmp_path,
+                home_dir=tmp_path / "home",
+            ),
+        )
 
-    interrupted = BlackboardWorkflowRuntime(
+    paused_playbook = json.loads(json.dumps(playbook))
+    paused_playbook["steps"]["develop"]["hooks"] = {
+        "before_execute": ["PauseBeforeAgent"]
+    }
+    paused_manager = AgentManager()
+    paused_executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
-        playbook=playbook,
-        executor=interrupted_executor,
+        issue_name="pr-feedback",
+        playbook=paused_playbook,
+        generic_phase=build_phase(paused=True),
+        agent_manager=paused_manager,
+        git_ops=GitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=paused_playbook,
+        executor=paused_executor.execute_step,
     ).run(start_step="develop", single_step=True)
 
-    assert interrupted.final_status_code.startswith("INTERRUPTED")
+    assert paused_manager.prompts == []
     assert [entry.content for entry in ledger.pending(target_step="develop")] == [
         "Handle the first boundary.",
         "Handle the second boundary.",
     ]
 
-    def executor(step_name: str, _step_def: dict, _state: object) -> StepExecutionResult:
-        delivered_feedback.append(
-            [entry.content for entry in ledger.pending(target_step=step_name)]
-        )
-        return StepExecutionResult(response="completed", artifacts={}, status_code="confirmed")
-
-    runtime = BlackboardWorkflowRuntime(
+    delivery_manager = AgentManager()
+    delivery_executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="pr-feedback",
+        playbook=playbook,
+        generic_phase=build_phase(paused=False),
+        agent_manager=delivery_manager,
+        git_ops=GitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
-        executor=executor,
-    )
-    runtime.run(start_step="develop", single_step=True)
+        executor=delivery_executor.execute_step,
+    ).run(start_step="develop", single_step=True)
 
-    assert delivered_feedback == [
-        ["Handle the first boundary.", "Handle the second boundary."],
-        ["Handle the first boundary.", "Handle the second boundary."],
-    ]
+    assert len(delivery_manager.prompts) == 1
+    assert "workflow_feedback_file=" in delivery_manager.prompts[0]
+    assert "artifacts/workflow_feedback.json" in delivery_manager.prompts[0]
     assert ledger.pending(target_step="develop") == []

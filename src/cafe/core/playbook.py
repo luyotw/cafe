@@ -812,6 +812,8 @@ def validate_playbook(
                 f"Step '{step_name}': assignee_type={step.assignee_type} (reserved for v0.3)"
             )
 
+    _validate_feedback_target_prompt_inputs(model, skill_loader=skill_loader)
+
     _validate_prepare_metadata(
         model,
         skill_loader=skill_loader,
@@ -1098,6 +1100,49 @@ def _validate_step_required_prompt_inputs(
                     f"required prompt input {mapping.placeholder!r} expects one of "
                     f"[{candidates}], but input_artifacts declares "
                     f"{sorted(declared_artifacts)}"
+                )
+
+
+def _validate_feedback_target_prompt_inputs(
+    model: PlaybookDefinition,
+    *,
+    skill_loader: SkillLoader,
+) -> None:
+    """Ensure routed feedback is exposed to every possible target skill."""
+    for step_name, step in model.steps.items():
+        behavior = resolve_step_behavior(model, step_name)
+        targets: List[tuple[str, str]] = []
+        if behavior.feedback_target is not None:
+            targets.append(("behavior.feedback_target", behavior.feedback_target))
+        for binding in step.human_tasks:
+            if binding.feedback_delivery is None:
+                continue
+            targets.extend(
+                ("human_tasks feedback_delivery", target)
+                for target in binding.outcomes.values()
+                if target != DONE_TARGET
+            )
+
+        for source, target_name in targets:
+            target = model.steps[target_name]
+            selectors = (
+                [target.skill]
+                if isinstance(target.skill, str)
+                else list(target.skill.values())
+            )
+            missing = [
+                canonical_skill_name(skill_name)
+                for skill_name in selectors
+                if not any(
+                    "workflow_feedback" in mapping.artifacts
+                    for mapping in skill_loader.get_workflow_contract(skill_name).prompt_inputs
+                )
+            ]
+            if missing:
+                raise ValueError(
+                    f"Step {step_name!r} {source} target {target_name!r} must declare "
+                    "a prompt input for workflow_feedback; missing from "
+                    f"{missing}"
                 )
 
 

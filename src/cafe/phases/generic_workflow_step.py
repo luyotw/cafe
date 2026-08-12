@@ -380,7 +380,7 @@ class GenericWorkflowStepExecutor(Phase):
             if status_code is None:
                 status_code = StatusCodeParser.extract(response, valid_intents)
 
-        agent_was_invoked = bool(last_prompt)
+        agent_was_invoked = execution.agent_invoked
         if (
             require_status_code
             and agent_was_invoked
@@ -474,6 +474,7 @@ class GenericWorkflowStepExecutor(Phase):
             artifacts=artifacts,
             status_code=effective_status.value if effective_status is not None else None,
             auto_continue=auto_continue,
+            agent_invoked=agent_was_invoked,
             events=events,
         )
 

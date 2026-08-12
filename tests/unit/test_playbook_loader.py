@@ -24,6 +24,113 @@ def _write_playbook(root: Path, name: str, content: str) -> None:
     (root / f"{name}.yaml").write_text(content, encoding="utf-8")
 
 
+def test_feedback_target_requires_skill_prompt_exposure(tmp_path: Path) -> None:
+    """UT-003: routed feedback reaches a target skill's declared prompt input."""
+    builtin_root = tmp_path / "builtin"
+    project_root = tmp_path / "project"
+    _write_skill(builtin_root / "skills", "source")
+    _write_skill(builtin_root / "skills", "receiver")
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "custom",
+        """
+playbook: {id: custom}
+steps:
+  source:
+    role: operator
+    skill: source
+    behavior: {feedback_target: receiver}
+    on: {await_agent: receiver}
+  receiver:
+    role: operator
+    skill: receiver
+    input_artifacts: [workflow_feedback]
+    on: {await_agent: _done}
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="feedback_target.*prompt input.*workflow_feedback"):
+        loader.load_model("custom")
+
+    (builtin_root / "skills" / "receiver" / "SKILL.md").write_text(
+        """---
+name: receiver
+description: receiver
+workflow:
+  prompt_inputs:
+    - artifacts: [workflow_feedback]
+      placeholder: workflow_feedback_file
+      required: false
+---
+
+# receiver
+""",
+        encoding="utf-8",
+    )
+
+    assert loader.load_model("custom").model.steps["receiver"].skill == "receiver"
+
+
+def test_human_feedback_delivery_requires_skill_prompt_exposure(tmp_path: Path) -> None:
+    """UT-006: requested-change delivery reaches the continuation prompt."""
+    data_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
+    project_root = tmp_path / "project"
+    _write_skill(project_root / ".cafe" / "skills", "repair")
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "custom",
+        """
+playbook: {id: custom}
+steps:
+  release:
+    role: developer
+    skill: cafe-pr
+    human_tasks:
+      - trigger: confirm_output
+        task_id: local-review
+        outcomes: {approve: _done, request_changes: repair}
+        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
+    on: {confirm_output: release, await_agent: _done}
+  repair:
+    role: developer
+    skill: repair
+    input_artifacts: [workflow_feedback]
+    on: {await_agent: _done}
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=data_root,
+    )
+
+    with pytest.raises(ValueError, match="feedback_delivery.*prompt input.*workflow_feedback"):
+        loader.load_model("custom")
+
+    (project_root / ".cafe" / "skills" / "repair" / "SKILL.md").write_text(
+        """---
+name: repair
+description: repair
+workflow:
+  prompt_inputs:
+    - artifacts: [workflow_feedback]
+      placeholder: workflow_feedback_file
+      required: false
+---
+
+# repair
+""",
+        encoding="utf-8",
+    )
+
+    assert loader.load_model("custom").model.steps["repair"].skill == "repair"
+
+
 def test_declared_skill_environment_resolves_layers_with_stable_deduplication() -> None:
     """U1/U2 — workflow skills resolve shared, role, and step layers predictably."""
     model = PlaybookDefinition.model_validate(

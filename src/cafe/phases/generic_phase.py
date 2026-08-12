@@ -36,6 +36,7 @@ class GenericPhaseExecution:
     events: List[Dict[str, Any]] = field(default_factory=list)
     artifact_ready: bool = True
     published: bool = False
+    agent_invoked: bool = False
 
 
 class GenericPhase:
@@ -375,6 +376,7 @@ class GenericPhase:
         response = ""
         status_code: Optional[PhaseStatusCode] = None
         goto_target: Optional[str] = None
+        agent_invoked = False
         attempt = 0
         while True:
             prompt = self.build_prompt(
@@ -390,6 +392,7 @@ class GenericPhase:
             if continuation:
                 prompt = f"{prompt}\n\n{continuation}"
             response = agent_executor(prompt)
+            agent_invoked = True
 
             after = self._run_hook_stage(
                 "after_execute",
@@ -415,6 +418,7 @@ class GenericPhase:
                     events=events,
                     artifact_ready=artifact_ready,
                     published=False,
+                    agent_invoked=agent_invoked,
                 )
 
             if not after.retry_requested:
@@ -449,6 +453,7 @@ class GenericPhase:
             events=events,
             artifact_ready=artifact_ready,
             published=published,
+            agent_invoked=agent_invoked,
         )
 
     # Hooks that run on every step regardless of playbook declaration.
