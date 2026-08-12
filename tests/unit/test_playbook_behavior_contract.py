@@ -34,6 +34,7 @@ def _playbook(*, build_behavior=None, defaults=None):
             "verify": {
                 "role": "operator",
                 "skill": "phase",
+                "input_artifacts": ["workflow_feedback"],
                 "on": {"await_agent": "_done"},
             },
         },
@@ -146,6 +147,36 @@ def test_behavior_contract_rejects_unknown_grant_and_unknown_feedback_target():
         PlaybookDefinition.model_validate(
             _playbook(build_behavior={"feedback_target": "missing"})
         )
+
+
+def test_feedback_targets_require_an_explicit_workflow_feedback_consumer():
+    """UT-003: feedback routing fails closed when its target cannot receive it."""
+    payload = _playbook(build_behavior={"feedback_target": "verify"})
+    payload["steps"]["verify"].pop("input_artifacts")
+
+    with pytest.raises(ValueError, match="feedback_target.*workflow_feedback"):
+        PlaybookDefinition.model_validate(payload)
+
+
+def test_human_feedback_delivery_requires_an_explicit_workflow_feedback_consumer():
+    """UT-006: durable human feedback cannot route to an undeclared consumer."""
+    payload = _playbook()
+    payload["steps"]["build"]["human_tasks"] = [
+        {
+            "trigger": "confirm_output",
+            "task_id": "review",
+            "outcomes": {"request_changes": "verify"},
+            "feedback_delivery": {
+                "artifact": "workflow_feedback",
+                "source_kind": "local_review",
+            },
+        }
+    ]
+    payload["steps"]["build"]["on"] = {"confirm_output": "build"}
+    payload["steps"]["verify"].pop("input_artifacts")
+
+    with pytest.raises(ValueError, match="feedback_delivery.*workflow_feedback"):
+        PlaybookDefinition.model_validate(payload)
 
 
 def test_publish_confirmation_requires_the_publish_capability():

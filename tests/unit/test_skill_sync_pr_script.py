@@ -112,7 +112,7 @@ def test_builtin_playbooks_publish_pr_through_sync_hook() -> None:
         "src/cafe/data/playbooks/hotfix.yaml",
     ]:
         content = (project_root / rel_path).read_text(encoding="utf-8")
-        assert "publish_output: [GitHubPRCreator, LocalPRReviewer, PRLinkOpener]" in content
+        assert "publish_output: [GitHubPRCreator, LocalReviewContextProvider, PRLinkOpener]" in content
 def test_sync_pr_rejects_uncommitted_changes(tmp_path: Path) -> None:
     project_root = Path(__file__).resolve().parents[2]
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"

@@ -42,6 +42,7 @@ from cafe.core.status_codes import (
     step_on_declares,
     transition_map_key,
 )
+from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 from cafe.core.workflow_models import (
     BatonRejected,
     PlaybookRunResult,
@@ -1390,6 +1391,8 @@ class BlackboardWorkflowRuntime:
                 "runtime": runtime,
             },
         )
+        feedback_ledger = WorkflowFeedbackLedger(self.issue_dir)
+        pending_feedback = feedback_ledger.pending(target_step=current_step)
 
         try:
             try:
@@ -1410,6 +1413,22 @@ class BlackboardWorkflowRuntime:
                     )
                 except TypeError:
                     execution_result = self.executor(current_step, step_def, self.blackboard)
+            delivered_feedback = []
+            if getattr(execution_result, "agent_invoked", False):
+                delivered_feedback = feedback_ledger.consume_delivered(
+                    entry.source_identity for entry in pending_feedback
+                )
+            if delivered_feedback:
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "workflow_feedback_delivered",
+                    {
+                        "step": current_step,
+                        "source_identities": [
+                            entry.source_identity for entry in delivered_feedback
+                        ],
+                    },
+                )
         except KeyboardInterrupt:
             self.blackboard_store.record_event(
                 self.blackboard,

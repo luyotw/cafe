@@ -148,6 +148,7 @@ steps:
   repair:
     skill: cafe-develop
     role: developer
+    input_artifacts: [workflow_feedback]
     on: {await_agent: release}
   release:
     skill: cafe-develop
@@ -319,6 +320,87 @@ steps:
     assert reset_result.exit_code == 0, reset_result.output
     assert iteration_dir.exists()
     assert not feedback_iteration_dir.exists()
+
+
+def test_default_requested_changes_follow_declared_loop_without_publish_authority(
+    tmp_path: Path,
+) -> None:
+    """IT-003: local feedback is delivered through the loop before trusted publishing."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "default-correction"
+    playbook = PlaybookLoader().load("default")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("pr", playbook_id="default")
+    store.set_current_step(state, "user")
+    store.update_handoff_contract(
+        state,
+        from_step="pr",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.CONFIRM_OUTPUT,
+        source="integration",
+    )
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="pr",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "local-review",
+            "decision": "request_changes",
+            "feedback": "Exercise the declared correction route.",
+        },
+        source="integration",
+    )
+
+    assert result.target == "develop"
+    assert [entry.target_step for entry in WorkflowFeedbackLedger(issue_dir).pending()] == [
+        "develop"
+    ]
+
+    executed_steps: list[str] = []
+
+    def executor(step_name: str, step_def: dict, _state: BlackboardState) -> StepExecutionResult:
+        executed_steps.append(step_name)
+        if step_name == "pr":
+            _write_pr_done_baton(issue_dir)
+            return StepExecutionResult(
+                response="confirmed",
+                artifacts={"pr_result": "pr/output.md"},
+                status_code="confirmed",
+                events=[
+                    {
+                        "type": "capability_receipt",
+                        "capability": "cafe.pr.publish",
+                        "success": True,
+                        "correlation_id": "local-review-correction",
+                        "category": None,
+                        "code": None,
+                    }
+                ],
+            )
+        return StepExecutionResult(
+            response="confirmed",
+            artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+            status_code="confirmed",
+            agent_invoked=True,
+        )
+
+    workflow_result = _run_until_settled(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+        max_transitions=20,
+    )
+
+    assert workflow_result.completed is True
+    assert workflow_result.final_step == "pr"
+    assert executed_steps == ["develop", "review", "pr"]
+    assert WorkflowFeedbackLedger(issue_dir).pending() == []
 
 
 def test_default_parity_and_metadata_absent_lifecycle_boundary(tmp_path: Path, monkeypatch) -> None:

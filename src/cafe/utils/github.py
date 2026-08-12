@@ -1066,42 +1066,6 @@ def get_all_pr_comments(pr_number: int, exclude_ids: Optional[Set[str]] = None) 
     return list(comments_by_id.values())
 
 
-def pr_last_seen_comments_artifact_file(pr_dir: Path) -> Path:
-    """Return artifact path used to persist previously seen PR comment IDs."""
-    return pr_dir / "artifacts" / "pr_last_seen_comments.json"
-
-
-def persist_last_seen_comment_ids(pr_dir: Path, comment_ids: list[str]) -> None:
-    """Persist the latest seen PR comment IDs to a runtime artifact file."""
-    artifact_file = pr_last_seen_comments_artifact_file(pr_dir)
-    artifact_file.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "last_seen_comment_ids": [str(comment_id) for comment_id in comment_ids],
-        "updated_at": datetime.now().astimezone().isoformat(),
-    }
-    artifact_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def load_last_seen_comment_ids_from_artifact(pr_dir: Path) -> Optional[Set[str]]:
-    """Load seen PR comment IDs from the artifact file only."""
-    artifact_file = pr_last_seen_comments_artifact_file(pr_dir)
-    if not artifact_file.exists():
-        return None
-    try:
-        payload = json.loads(artifact_file.read_text(encoding="utf-8"))
-        if isinstance(payload, dict):
-            raw_ids = payload.get("last_seen_comment_ids", [])
-        elif isinstance(payload, list):
-            raw_ids = payload
-        else:
-            raw_ids = []
-        if not isinstance(raw_ids, list):
-            return set()
-        return {str(item) for item in raw_ids}
-    except (json.JSONDecodeError, OSError, TypeError):
-        return set()
-
-
 def build_todo_list_comment(todo_content: str, user_input_path: str) -> str:
     """Build PR comment body with todo list and user_input.md reference."""
     return f"""> 📋 Original review comments: `{user_input_path}`
@@ -1119,7 +1083,6 @@ def post_pr_todo_list(
     """Post the PR todo list as a PR comment when all items are checked."""
     if not post_todo_list:
         return
-
     pr_dir = issue_dir / "pr"
     if not pr_dir.exists():
         return
@@ -1165,99 +1128,3 @@ def post_pr_todo_list(
                 f"[yellow]⚠️  Warning: Failed to post PR todo list as PR comment: {e}[/yellow]"
             )
         return
-
-
-def load_pr_last_seen_comment_ids(pr_dir: Path) -> Set[str]:
-    """Comment IDs already synced for PR resume / external-feedback detection.
-
-    Primary source is ``<pr_dir>/artifacts/pr_last_seen_comments.json`` (written by
-    :func:`persist_last_seen_comment_ids`); legacy fallback scans
-    ``<pr_dir>/iteration_*/context.json`` for ``last_seen_comment_ids``.
-
-    ``get_processed_comment_ids_from_history`` (``pr_comments_processed`` /
-    ``pr_comments_skipped``) is not used here: those fields are not populated in
-    normal runs, so relying on them caused false external resumes.
-    """
-    artifact_ids = load_last_seen_comment_ids_from_artifact(pr_dir)
-    if artifact_ids is not None:
-        return artifact_ids
-
-    if not pr_dir.exists():
-        return set()
-
-    iteration_dirs = sorted(pr_dir.glob("iteration_*"))
-    for iter_dir in reversed(iteration_dirs):
-        context_file = (
-            iter_dir / "iteration.json"
-            if (iter_dir / "iteration.json").exists()
-            else iter_dir / "context.json"
-        )
-        if not context_file.exists():
-            continue
-        try:
-            with open(context_file, encoding="utf-8") as f:
-                context = json.load(f)
-            if isinstance(context, dict) and "last_seen_comment_ids" in context:
-                raw = context["last_seen_comment_ids"]
-                if isinstance(raw, list):
-                    return {str(x) for x in raw}
-        except (json.JSONDecodeError, TypeError, OSError):
-            continue
-
-    return set()
-
-
-def get_processed_comment_ids_from_history(phase_dir: "Path") -> set:
-    """Get all processed and skipped comment IDs from previous iterations' history.
-
-    Loads context.json from all iteration_XXX directories and collects comment IDs
-    from pr_comments_processed and pr_comments_skipped fields.
-
-    Args:
-        phase_dir: Path to the phase directory (e.g., .cafe/issues/issue123/develop)
-
-    Returns:
-        Set of comment IDs that have been processed or skipped in previous iterations
-    """
-    from pathlib import Path
-    import json
-
-    processed_ids = set()
-
-    if not phase_dir.exists():
-        return processed_ids
-
-    # Find all iteration_XXX directories
-    for item in phase_dir.iterdir():
-        if not item.is_dir() or not item.name.startswith("iteration_"):
-            continue
-
-        context_file = (
-            item / "iteration.json"
-            if (item / "iteration.json").exists()
-            else item / "context.json"
-        )
-        if not context_file.exists():
-            continue
-
-        try:
-            with open(context_file, "r", encoding="utf-8") as f:
-                context_data = json.load(f)
-
-            # Collect IDs from pr_comments_processed
-            processed = context_data.get("pr_comments_processed", [])
-            for comment in processed:
-                if "id" in comment:
-                    processed_ids.add(comment["id"])
-
-            # Collect IDs from pr_comments_skipped
-            skipped = context_data.get("pr_comments_skipped", [])
-            for comment in skipped:
-                if "id" in comment:
-                    processed_ids.add(comment["id"])
-
-        except (json.JSONDecodeError, KeyError, TypeError):
-            # Skip files with invalid JSON or unexpected structure
-            continue
-
-    return processed_ids

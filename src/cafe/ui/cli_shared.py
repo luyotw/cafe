@@ -863,8 +863,19 @@ def _find_external_resume_step(
     for step_name, step_def in playbook_data["steps"].items():
         hooks = step_def.get("hooks", {})
         prepare_hooks = hooks.get("prepare_input", [])
-        if "GitHubPRCreator" not in prepare_hooks:
+        if "GitHubPRFeedbackSource" not in prepare_hooks:
             continue
+
+        try:
+            from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+            ledger = WorkflowFeedbackLedger(issue_dir)
+            for entry in ledger.pending():
+                if entry.target_step not in playbook_data["steps"]:
+                    continue
+                return entry.target_step
+        except Exception:
+            return None
 
         try:
             branch_name = git_ops.get_current_branch()
@@ -881,12 +892,16 @@ def _find_external_resume_step(
             return None
 
         try:
-            from cafe.utils.github import load_pr_last_seen_comment_ids
-
-            _get_comments, _filter_comments = _get_github_helpers()
-            exclude_ids = load_pr_last_seen_comment_ids(issue_dir / step_name)
-            comments = _get_comments(int(existing_pr["number"]), exclude_ids=exclude_ids)
-            unresolved_comments = _filter_comments(comments)
+            pr_number = int(existing_pr["number"])
+            prefix = f"github-pr:{pr_number}:"
+            known_comment_ids = {
+                entry.source_identity[len(prefix) :]
+                for entry in ledger.load()
+                if entry.source_identity.startswith(prefix)
+            }
+            get_comments, filter_comments = _get_github_helpers()
+            comments = get_comments(pr_number, exclude_ids=known_comment_ids)
+            unresolved_comments = filter_comments(comments)
         except Exception as exc:
             console.print(
                 "[red]Error:[/red] could not evaluate unresolved PR discussion for external resume "

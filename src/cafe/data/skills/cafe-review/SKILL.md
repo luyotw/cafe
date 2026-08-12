@@ -41,6 +41,9 @@ workflow:
     - artifacts: [review_feedback, pr_result]
       placeholder: feedback_file
       required: false
+    - artifacts: [workflow_feedback]
+      placeholder: workflow_feedback_file
+      required: false
   checklist:
     context_references:
       spec_read_instruction: spec_read_instruction.md

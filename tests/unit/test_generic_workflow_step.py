@@ -403,6 +403,7 @@ def test_generic_step_forwards_declared_read_only_guard_on_checklist_retry(
             response=response,
             status_code=PhaseStatusCode.CONFIRMED,
             goto_target=None,
+            agent_invoked=True,
         )
 
     monkeypatch.setattr(generic_phase, "execute", execute_with_confirmed_status)
