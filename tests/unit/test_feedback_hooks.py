@@ -21,7 +21,7 @@ class _Phase:
         self.step_user_inputs: dict[str, str] = {}
 
 
-def test_github_feedback_source_records_new_unresolved_comments_before_resume(tmp_path: Path) -> None:
+def test_github_feedback_source_records_new_unresolved_comments_for_declared_target(tmp_path: Path) -> None:
     """UT-003/IT-001 — declared intake records durable feedback before exposing it."""
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-348"
     phase = _Phase(issue_dir)
@@ -47,13 +47,14 @@ def test_github_feedback_source_records_new_unresolved_comments_before_resume(tm
             phase=phase,
             step_name="pr",
             blackboard_state=state,
+            step_def={"behavior": {"feedback_target": "repair"}},
         )
 
     assert result.context_updates["pr_number"] == "348"
     assert result.context_updates["user_input"]
     assert phase.step_user_inputs["pr"] == result.context_updates["user_input"]
     assert result.events == [{"type": "workflow_feedback_recorded", "count": 1, "pr_number": "348"}]
-    assert len(WorkflowFeedbackLedger(issue_dir).pending(target_step="develop")) == 1
+    assert len(WorkflowFeedbackLedger(issue_dir).pending(target_step="repair")) == 1
     assert state.artifacts["workflow_feedback"].path.endswith("workflow_feedback.json")
 
 

@@ -72,11 +72,10 @@ class GitHubPRFeedbackSource(NoOpHook):
         behavior = kwargs.get("step_def") or {}
         if isinstance(behavior, dict):
             behavior = behavior.get("behavior") or {}
-        target_step = (
-            str(behavior.get("feedback_target") or "develop")
-            if isinstance(behavior, dict)
-            else "develop"
-        )
+        target = behavior.get("feedback_target") if isinstance(behavior, dict) else None
+        if not isinstance(target, str) or not target.strip():
+            return HookResult(context_updates=context_updates)
+        target_step = target.strip()
 
         try:
             comments = get_all_pr_comments(int(pr_number))

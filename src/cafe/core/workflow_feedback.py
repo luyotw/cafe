@@ -31,6 +31,22 @@ def _required(value: str, *, field: str) -> str:
     return cleaned
 
 
+def _required_bool(value: Any, *, field: str) -> bool:
+    if type(value) is not bool:
+        raise WorkflowFeedbackError(f"workflow feedback {field} must be a boolean")
+    return value
+
+
+def _validate_lifecycle(*, actionable: bool, consumed: bool, resolved: bool) -> None:
+    _required_bool(actionable, field="actionable")
+    _required_bool(consumed, field="consumed")
+    _required_bool(resolved, field="resolved")
+    if actionable and (consumed or resolved):
+        raise WorkflowFeedbackError("consumed or resolved feedback cannot be actionable")
+    if not actionable and not consumed and not resolved:
+        raise WorkflowFeedbackError("inactive feedback must be consumed or resolved")
+
+
 @dataclass(frozen=True)
 class WorkflowFeedbackEntry:
     """One source item and its workflow lifecycle state."""
@@ -44,6 +60,13 @@ class WorkflowFeedbackEntry:
     resolved: bool
     created_at: str
     updated_at: str
+
+    def __post_init__(self) -> None:
+        _validate_lifecycle(
+            actionable=self.actionable,
+            consumed=self.consumed,
+            resolved=self.resolved,
+        )
 
     @classmethod
     def new(
@@ -63,7 +86,7 @@ class WorkflowFeedbackEntry:
             content=_required(content, field="content"),
             actionable=not resolved,
             consumed=False,
-            resolved=bool(resolved),
+            resolved=_required_bool(resolved, field="resolved"),
             created_at=timestamp,
             updated_at=timestamp,
         )
@@ -78,16 +101,14 @@ class WorkflowFeedbackEntry:
                 source_kind=_required(raw["source_kind"], field="source_kind"),
                 target_step=_required(raw["target_step"], field="target_step"),
                 content=_required(raw["content"], field="content"),
-                actionable=bool(raw["actionable"]),
-                consumed=bool(raw["consumed"]),
-                resolved=bool(raw["resolved"]),
+                actionable=_required_bool(raw["actionable"], field="actionable"),
+                consumed=_required_bool(raw["consumed"], field="consumed"),
+                resolved=_required_bool(raw["resolved"], field="resolved"),
                 created_at=_required(raw["created_at"], field="created_at"),
                 updated_at=_required(raw["updated_at"], field="updated_at"),
             )
         except KeyError as exc:
             raise WorkflowFeedbackError(f"workflow feedback entry misses {exc.args[0]}") from exc
-        if entry.actionable and (entry.consumed or entry.resolved):
-            raise WorkflowFeedbackError("consumed or resolved feedback cannot be actionable")
         return entry
 
 

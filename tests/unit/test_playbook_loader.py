@@ -45,6 +45,7 @@ steps:
     role: operator
     skill: source
     behavior: {feedback_target: receiver}
+    hooks: {prepare_input: [GitHubPRFeedbackSource]}
     on: {await_agent: receiver}
   receiver:
     role: operator
@@ -79,6 +80,34 @@ workflow:
     )
 
     assert loader.load_model("custom").model.steps["receiver"].skill == "receiver"
+
+
+def test_github_feedback_source_requires_declared_feedback_target(tmp_path: Path) -> None:
+    """UT-003 — GitHub feedback source steps cannot rely on an implicit destination."""
+    builtin_root = tmp_path / "builtin"
+    project_root = tmp_path / "project"
+    _write_skill(builtin_root / "skills", "source")
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "custom",
+        """
+playbook: {id: custom}
+steps:
+  source:
+    role: operator
+    skill: source
+    hooks: {prepare_input: [GitHubPRFeedbackSource]}
+    on: {await_agent: _done}
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="GitHubPRFeedbackSource.*feedback_target"):
+        loader.load_model("custom")
 
 
 def test_human_feedback_delivery_requires_effective_skill_prompt_exposure(
