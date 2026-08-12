@@ -368,8 +368,35 @@ def test_v2_blackboard_human_resume_completes_across_runtime_instances(
     assert completed.completed is True
     assert agent_steps == ["final"]
 
+    agent_issue_dir = tmp_path / ".cafe" / "issues" / "migrated-agent"
+    agent_issue_dir.mkdir(parents=True)
+    (agent_issue_dir / "blackboard.json").write_text(
+        '{"schema_version": 2, "current_step": "agent", '
+        '"playbook_id": "owner-integration", "workflow_id": "migrated-agent-workflow"}',
+        encoding="utf-8",
+    )
+    agent_result = BlackboardWorkflowRuntime(
+        issue_dir=agent_issue_dir,
+        playbook={
+            "playbook": {"id": "owner-integration"},
+            "steps": {
+                "agent": {
+                    "skill": "phase",
+                    "role": "operator",
+                    "valid_intents": ["confirmed"],
+                    "on": {"await_agent": "_done"},
+                }
+            },
+        },
+        executor=executor,
+    ).run()
 
-@pytest.mark.parametrize("owner", ("agent", "human", "auto"))
+    assert agent_result.completed is True
+    assert BlackboardStore(agent_issue_dir).load_or_create("agent").schema_version == 3
+    assert agent_steps == ["final", "agent"]
+
+
+@pytest.mark.parametrize("owner", ("agent", "human", "auto", "hybrid"))
 def test_loop_limit_persists_for_each_owner_before_a_second_visit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owner: str
 ) -> None:
@@ -384,9 +411,10 @@ def test_loop_limit_persists_for_each_owner_before_a_second_visit(
         "on": {"await_agent": "loop"},
     }
     registry = None
-    if owner == "human":
+    if owner in {"human", "hybrid"}:
+        trigger = "approve" if owner == "hybrid" else "initial"
         binding = HumanTaskBinding(
-            trigger="initial",
+            trigger=trigger,
             task_id="approval",
             outcomes={"accept": "loop"},
         )
@@ -398,7 +426,35 @@ def test_loop_limit_persists_for_each_owner_before_a_second_visit(
             "cafe.ui.human_tasks.resolve_step_human_task",
             lambda **_kwargs: (_approval_policy(), binding),
         )
-        step.update({"human_tasks": [binding.model_dump()], "on": {}})
+        if owner == "human":
+            step.update({"human_tasks": [binding.model_dump()], "on": {}})
+        else:
+            step.update(
+                {
+                    "human_tasks": [binding.model_dump()],
+                    "hybrid": {
+                        "entry_portion": "draft",
+                        "portions": [
+                            {
+                                "id": "draft",
+                                "owner": "agent",
+                                "on": {"await_agent": {"portion": "approve"}},
+                            },
+                            {
+                                "id": "approve",
+                                "owner": "human",
+                                "on": {"accept": {"portion": "final"}},
+                            },
+                            {
+                                "id": "final",
+                                "owner": "agent",
+                                "on": {"await_agent": {"step": "loop"}},
+                            },
+                        ],
+                    },
+                    "on": {},
+                }
+            )
     elif owner == "auto":
         step.update({"automatic": {"executor": "advance", "inputs": {}}})
         registry = AutomaticExecutorRegistry(
@@ -423,7 +479,7 @@ def test_loop_limit_persists_for_each_owner_before_a_second_visit(
         automatic_registry=registry,
     )
     first_runtime.run(start_step="loop", single_step=True)
-    if owner == "human":
+    if owner in {"human", "hybrid"}:
         state = BlackboardStore(issue_dir).load_or_create("loop")
         task = HumanTaskRecordStore(issue_dir).tasks()[0]
         apply_human_task_payload(
@@ -431,10 +487,16 @@ def test_loop_limit_persists_for_each_owner_before_a_second_visit(
             playbook_data=playbook,
             blackboard=state,
             from_step="loop",
-            trigger="initial",
+            trigger="approve" if owner == "hybrid" else "initial",
             raw_payload={"task": "approval", "decision": "accept", "human_task_id": task.id},
             source="integration",
         )
+    if owner == "hybrid":
+        BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            executor=executor,
+        ).run(start_step="loop", single_step=True)
 
     with pytest.raises(RuntimeError, match="max_iterations=1"):
         BlackboardWorkflowRuntime(
@@ -445,4 +507,8 @@ def test_loop_limit_persists_for_each_owner_before_a_second_visit(
         ).run(start_step="loop", single_step=True)
 
     assert BlackboardStore(issue_dir).load_or_create("loop").step_visit_counts == {"loop": 1}
-    assert calls == (["automatic"] if owner == "auto" else ["agent"] if owner == "agent" else [])
+    assert calls == (
+        ["automatic"]
+        if owner == "auto"
+        else ["agent", "agent"] if owner == "hybrid" else ["agent"] if owner == "agent" else []
+    )
