@@ -4,10 +4,15 @@ from pathlib import Path
 
 import pytest
 
+from cafe.core.human_tasks import HumanTaskCompletion
 from cafe.core.playbook import PlaybookDefinition, resolve_playbook_skills
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
-from cafe.ui.human_tasks import resolve_step_human_task
+from cafe.ui.human_tasks import (
+    resolve_step_human_task,
+    resolve_step_human_task_continuation,
+    validate_step_human_task_completion,
+)
 
 
 def _write_skill(root: Path, name: str) -> None:
@@ -79,26 +84,59 @@ workflow:
 def test_human_feedback_delivery_requires_effective_skill_prompt_exposure(
     tmp_path: Path,
 ) -> None:
-    """UT-006: every requested-change continuation receives workflow feedback."""
+    """UT-006: fixed and selected change routes receive workflow feedback."""
     data_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
     project_root = tmp_path / "project"
     _write_skill(project_root / ".cafe" / "skills", "repair")
+    _write_skill(project_root / ".cafe" / "skills", "target-review")
+    (project_root / ".cafe" / "skills" / "target-review" / "SKILL.md").write_text(
+        """---
+name: target-review
+description: target review
+workflow:
+  human_tasks:
+    - id: choose-repair
+      pattern: confirm_output
+      prompt: Choose how to continue.
+      input_schema: decision
+      decisions:
+        - id: approve
+          label: Approve
+        - id: request_changes
+          label: Request changes
+          requires_feedback: true
+          requires_target: true
+---
+
+# target-review
+""",
+        encoding="utf-8",
+    )
     _write_playbook(
         project_root / ".cafe" / "playbooks",
         "custom",
         """
 playbook: {id: custom}
 steps:
-  release:
+  fixed-review:
     role: developer
     skill: cafe-pr
     human_tasks:
       - trigger: confirm_output
         task_id: local-review
+        outcomes: {approve: _done, request_changes: repair}
+        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
+    on: {confirm_output: fixed-review, await_agent: _done}
+  target-review:
+    role: developer
+    skill: target-review
+    human_tasks:
+      - trigger: confirm_output
+        task_id: choose-repair
         outcomes: {approve: _done}
         allowed_targets: [repair]
         feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
-    on: {confirm_output: release, await_agent: _done}
+    on: {confirm_output: target-review, await_agent: _done}
   repair:
     role: developer
     skill: repair
@@ -150,7 +188,59 @@ workflow:
         encoding="utf-8",
     )
 
-    assert loader.load_model("custom").model.steps["repair"].skill == "repair"
+    loaded = loader.load_model("custom")
+    assert loaded.model.steps["repair"].skill == "repair"
+
+    playbook = loader.load("custom")
+    skill_loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=data_root,
+    )
+    fixed_policy, fixed_binding, fixed_completion = validate_step_human_task_completion(
+        playbook_data=playbook,
+        step_name="fixed-review",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "local-review",
+            "decision": "request_changes",
+            "feedback": "Repair the implementation.",
+        },
+        skill_loader=skill_loader,
+    )
+    assert isinstance(fixed_completion, HumanTaskCompletion)
+    assert (
+        resolve_step_human_task_continuation(
+            playbook_data=playbook,
+            policy=fixed_policy,
+            binding=fixed_binding,
+            completion=fixed_completion,
+        )
+        == "repair"
+    )
+
+    target_policy, target_binding, target_completion = validate_step_human_task_completion(
+        playbook_data=playbook,
+        step_name="target-review",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "choose-repair",
+            "decision": "request_changes",
+            "target": "repair",
+            "feedback": "Repair the implementation.",
+        },
+        skill_loader=skill_loader,
+    )
+    assert isinstance(target_completion, HumanTaskCompletion)
+    assert (
+        resolve_step_human_task_continuation(
+            playbook_data=playbook,
+            policy=target_policy,
+            binding=target_binding,
+            completion=target_completion,
+        )
+        == "repair"
+    )
 
 
 def test_declared_skill_environment_resolves_layers_with_stable_deduplication() -> None:
