@@ -34,13 +34,14 @@ def _materialize_default_task(
     *,
     from_step: str,
     trigger: str,
+    workflow_id: str | None = None,
 ):
     playbook = PlaybookLoader().load("default")
     policy, binding = resolve_step_human_task(
         playbook_data=playbook, step_name=from_step, trigger=trigger
     )
     return HumanTaskRecordStore(issue_dir).materialize(
-        workflow_id=state.workflow_id,
+        workflow_id=workflow_id or state.workflow_id,
         step=from_step,
         iteration=1,
         trigger=trigger,
@@ -371,6 +372,39 @@ def test_taskless_legacy_handoffs_continue_through_both_existing_transports(
         assert result.target == "plan"
         assert not (issue_dir / "human_tasks.json").exists()
         assert store.load_or_create("spec").handoff_contract.to_step == "plan"
+
+
+def test_taskless_payload_rejects_another_workflows_durable_records(tmp_path: Path) -> None:
+    """IT-004: an existing durable envelope cannot become a legacy handoff."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "cross-workflow-envelope"
+    playbook = PlaybookLoader().load("default")
+    store, state = _paused_default_state(
+        issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
+    )
+    state.workflow_id = "workflow-A"
+    store.save(state)
+    _materialize_default_task(
+        issue_dir,
+        state,
+        from_step="spec",
+        trigger="confirm_output",
+        workflow_id="workflow-B",
+    )
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload={"task": "output-review", "decision": "confirm"},
+        source="command",
+    )
+
+    assert result.target is None
+    assert result.rejection is not None
+    assert store.load_or_create("spec").current_step == "user"
+    assert HumanTaskRecordStore(issue_dir).results() == ()
 
 
 def test_confirmation_rejects_invalid_declared_packet_contract_for_custom_steps(

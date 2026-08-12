@@ -553,7 +553,10 @@ def _resolve_durable_task(
         return active, None, None
 
     if not matching:
-        return None, None, None
+        return None, None, HumanTaskRejection(
+            message="This response cannot be correlated to a durable human task.",
+            correction_guidance=policy.correction_guidance,
+        )
 
     if submitted_id is None:
         record_store.record_rejection(
