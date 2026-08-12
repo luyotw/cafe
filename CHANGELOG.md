@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [0.3.0] - 2026-08-11
 
+This release opens the v0.3 development cycle. Roadmap capabilities assigned
+to v0.3 are delivered throughout `0.3.x`; the v0.3 completion criteria are the
+exit criteria for `0.4.0`.
+
 ### Breaking changes
 
 - Removed the legacy `cafe spec`, `plan`, `develop`, `review`, and `pr`

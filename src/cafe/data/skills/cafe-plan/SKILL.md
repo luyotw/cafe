@@ -1,7 +1,7 @@
 ---
 name: cafe-plan
 description: "產出可執行的開發計畫"
-version: 1.2.0
+version: 1.3.0
 workflow:
   human_tasks:
     - id: development-guide
@@ -71,6 +71,14 @@ bash scripts/sync_github.sh --help
 ## Instructions
 - 依規格拆解實作步驟，先列測試，再列實作
 - 嚴格遵守 TDD，避免直接寫程式碼
+- 選定執行或部署架構前，除非 repo、規格或本輪對話已有明確證據，否則預設 user
+  不熟悉主機、網路與雲端維運。先透過 `questions.xml` 用生活化問題確認會在哪些裝置與
+  地點使用、個人電腦關機時是否仍需可用、能否接受第三方雲端與可能費用，以及願意承擔的
+  維護程度；只詢問會實質改變方案的最少問題，已有答案不得重問。
+- 收到使用情境後，先用 user 可感知的結果與取捨提出一個適合的預設建議，再說明技術方案；
+  不得假設 user 擁有固定 IP、會讓個人電腦或 NAS 24 小時開機，或能自行維運伺服器。
+  建議外部服務不等於取得採用、付費、建立資源或部署授權；各項授權仍須依既有 mandate 與
+  human-task 規則處理，並在 plan 明列哪些遠端 mutation 需要另行確認。
 - 產出計畫前必須完成 **`## Test List`**（`Unit tests (N)` 與 `Integration tests (M)`，每項有標籤並對應 invariant 或 user journey；N 或 M 為 0 時簡述原因）
 - 撰寫 Test List 與斷言規則時請閱讀 `references/test_invariants_policy.md`（integration 以 journey/invariant 描述，不以 UI component 列項）
 - 在計畫輸出確認前，請依儲存庫證據及 shared skill「cafe-workflow-common」的

@@ -1,7 +1,12 @@
 # CAFE v0.2: Skill-Driven Playbook + Blackboard 架構
 
 本文件是 **v0.2 的 implementation plan / spec**。  
-版本定位、產品邊界、以及 `v0.3+` 的長期演進方向以 [docs/roadmap.md](/Users/YO_1/side_projects/cafe/docs/roadmap.md) 為準；本文件只定義 `v0.2` 要做什麼、怎麼做、以及如何驗收。
+版本定位、產品邊界、以及 `v0.3+` 的長期演進方向以 [docs/roadmap.md](../roadmap.md) 為準；本文件只定義 `v0.2` 要做什麼、怎麼做、以及如何驗收。
+
+版本名稱在本文件中沿用 roadmap 的開發週期語意：`0.N.0` 表示進入
+`v0.N` 週期，該週期能力在 `0.N.x` 逐步交付，並在發布
+`0.(N+1).0` 前滿足完成標準。因此下文標示 `v0.3` 的項目，是
+`0.3.x` 開發週期的交付範圍。
 
 > **備註：** 本檔為 v0.2 架構與驗收紀錄。內文主要 YAML 範例已對齊現行 **intent** 鍵（`on:` 轉移：`await_agent` / `confirm_output` / `need_clarification` / `need_permission` / `manual_handoff` / `no_changes_needed` 等）。下方 `CAFE_GOTO` 章節與「目前待執行項目」、「保留的相容層」段落仍提及 `CAFE_*` 字串，那是 v0.1 → v0.2 過渡的歷史對照，**不是現行操作介面**；請以 `src/cafe/data/playbooks/` 現行檔案為準。
 
@@ -66,7 +71,7 @@ skills/
   develop/
     SKILL.md
     scripts/
-      run_tests.sh        # agent 可手動執行；v0.3 支援自動觸發
+      run_tests.sh        # agent 可手動執行；v0.3 開發週期支援自動觸發
   review/
     SKILL.md
     references/
@@ -141,7 +146,7 @@ class SkillLoader:
 
 ### scripts/ 的使用層級
 
-| 層級 | v0.2 | v0.3 |
+| 層級 | v0.2 | v0.3 開發週期（`0.3.x`） |
 |------|------|------|
 | Agent 手動執行 | ✅ agent 透過 bash 工具跑 `{skill_dir}/scripts/validate.sh` | ✅ |
 | 系統自動執行（hooks） | ❌ | ✅ playbook `hooks:` 欄位觸發 |
@@ -220,12 +225,12 @@ roles:
 
 steps:
   spec:
-    type: skill                  # 預設值，可省略；v0.4 支援 subflow
+    type: skill                  # 預設值，可省略；v0.4 開發週期支援 subflow
     skill:
       "1": spec_first            # 第一次迭代用 spec_first skill
       default: spec_revise       # 後續用 spec_revise skill
     role: pm
-    assignee_type: agent         # v0.2 預設值；v0.3 支援 human / auto
+    assignee_type: agent         # v0.2 預設值；v0.3 開發週期支援 human / auto
     output_artifact: spec
     allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
     hooks:
@@ -548,7 +553,7 @@ class EventEntry:
     timestamp: str
     step: str
     event_type: str            # artifact_updated, decision, goto, error,
-                               # human_task_created, human_task_completed (v0.3 預留)
+                               # human_task_created, human_task_completed（v0.3 開發週期）
     message: str
     data: Optional[dict]
 
@@ -715,11 +720,11 @@ class Blackboard:
 - 一個 issue = 一個 workflow instance
 - `blackboard.json` = 這個 instance 的狀態
 - instance 使用的 playbook 記錄在 config 或 blackboard 中
-- v0.2 不需要 `WorkflowInstance` class，但文件上先定義好，讓 v0.4 的 subflow（「一個 instance 產生子 instance」）能自然落地
+- v0.2 不需要 `WorkflowInstance` class，但文件上先定義好，讓 v0.4 開發週期的 subflow（「一個 instance 產生子 instance」）能自然落地
 
 Runtime store 立場：
 - v0.2~v0.3 以 file-based（`.cafe/issues/` + JSON/YAML/MD）為主
-- v0.4 再評估是否抽離到 structured store（SQLite 或 remote）
+- v0.4 開發週期再評估是否抽離到 structured store（SQLite 或 remote）
 
 ## CAFE_GOTO
 
@@ -1100,11 +1105,11 @@ Artifact 分工：
 
 | 預留項目 | 預留方式 | 預計完整實作版本 |
 |---|---|---|
-| HumanTask | `assignee_type: human` parse + validate，runner 遇到時報錯（見下方） | v0.3（完整 task schema / inbox / assignment） |
-| HumanTask events | EventEntry 的 `event_type` 預留 `human_task_created` / `human_task_completed` | v0.3 |
-| Suspend / Resume | 不綁死在 `interactive_qa`，狀態機不假設人工介入只有 clarification | v0.3 |
-| Subflow | step schema 的 `type: subflow`（parse + validate，不執行） | v0.4 |
-| Object Reference | ArtifactKind 未來可擴充 `OBJECT_REF` | v0.4 |
+| HumanTask | `assignee_type: human` parse + validate，runner 遇到時報錯（見下方） | v0.3 開發週期（`0.3.x`；完整 task schema / inbox / assignment） |
+| HumanTask events | EventEntry 的 `event_type` 預留 `human_task_created` / `human_task_completed` | v0.3 開發週期（`0.3.x`） |
+| Suspend / Resume | 不綁死在 `interactive_qa`，狀態機不假設人工介入只有 clarification | v0.3 開發週期（`0.3.x`） |
+| Subflow | step schema 的 `type: subflow`（parse + validate，不執行） | v0.4 開發週期（`0.4.x`） |
+| Object Reference | ArtifactKind 未來可擴充 `OBJECT_REF` | v0.4 開發週期（`0.4.x`） |
 | Schema Version | `blackboard.json` 的 `schema_version` 欄位，新版可讀舊版 | 全版本 |
 
 ### assignee_type: human / auto 的 v0.2 行為
@@ -1115,18 +1120,18 @@ v0.2 **不賦予 `assignee_type: human` 任何 runtime 語意**，避免過早�
 - **Runner 遇到時報錯**：`"Step 'X' has assignee_type=human, which is not supported in v0.2. Use v0.3+ or change to assignee_type=agent."`
 - **`cafe playbook validate`**：標註 `⚠ Step 'X': assignee_type=human (reserved for v0.3)`
 
-`assignee_type: auto` 同理，v0.2 僅 parse，具體語意等 v0.3 前定義。
+`assignee_type: auto` 同理，v0.2 僅 parse，具體語意在 v0.3 開發週期定義。
 
-這樣保留 schema 表達力和 playbook 驗證價值，但不承諾 runtime semantics。v0.3 再設計完整的 HumanTask model（task schema / inbox / assignment / SLA / 非同步完成）。
+這樣保留 schema 表達力和 playbook 驗證價值，但不承諾 runtime semantics。完整的 HumanTask model（task schema / inbox / assignment / SLA / 非同步完成）在 `0.3.x` 開發週期逐步設計與交付，並作為發布 `0.4.0` 前的完成範圍。
 
 ## v0.2 不做的東西
 
-1. **不做 HumanTask 正式實作** — v0.3 專門做，v0.2 只預留入口
-2. **不做 scripts/ 自動執行** — v0.2.x 或 v0.3 開放 custom hooks via shell script
+1. **不做 HumanTask 正式實作** — 納入 v0.3 開發週期（`0.3.x`），v0.2 只預留入口
+2. **不做 scripts/ 自動執行** — v0.2.x 或 v0.3 開發週期開放 custom hooks via shell script
 3. **不做 AI 驅動編排** — workflow 仍維持確定性編排；agent 只負責產出 artifact / baton，外部副作用由 host capability 執行與驗證
 4. **不做 runtime 動態新增 step** — 所有 step 在 playbook 載入時確定
 5. **不做特化 Phase class** — 全部用 GenericPhase + hooks
-6. **不做 Business Object** — v0.4 才做，且傾向獨立系統（路徑 B），不演化 Blackboard
+6. **不做 Business Object** — 納入 v0.4 開發週期，且傾向獨立系統（路徑 B），不演化 Blackboard
 
 ## 驗證方式
 

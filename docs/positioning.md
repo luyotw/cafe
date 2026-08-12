@@ -84,19 +84,24 @@ When work requires a human to perform an action, make a judgment, approve a risk
 
 ## Roadmap Alignment
 
-- `v0.2`
-  Establish the generic workflow engine foundation: Skill, Playbook, Blackboard, Hook, GenericPhase, PlaybookRunner, and suspend/resume.
+Roadmap labels denote development cycles. `0.N.0` opens the `v0.N` cycle;
+capabilities assigned to that cycle are delivered throughout `0.N.x`, and its
+completion criteria are the exit criteria for `0.(N+1).0`. Release notes and
+migration guides describe what a specific release has already shipped.
 
-- `v0.2.x`
-  Build the supporting surface around custom hooks, tooling, validation, simulation, dry runs, and an initial host-side capability contract prototype.
+- `v0.2` cycle (`0.2.x`, exit criteria met for `0.3.0`)
+  Establish the generic workflow engine foundation—Skill, Playbook, Blackboard,
+  Hook, GenericPhase, PlaybookRunner, and suspend/resume—and build the supporting
+  surface around custom hooks, tooling, validation, simulation, dry runs, and an
+  initial host-side capability contract prototype.
 
-- `v0.3`
+- `v0.3` cycle (`0.3.x`, exit criteria for `0.4.0`)
   Advance into human-agent workflow: HumanTask, trusted capability registry, host-executed script policy, and approval flow.
 
-- `v0.4`
+- `v0.4` cycle (`0.4.x`, exit criteria for `0.5.0`)
   Validate subflows and business object references so workflows can compose recursively.
 
-- `v0.5`
+- `v0.5` cycle
   Evaluate organizational memory, governance, analytics, and operating-layer value.
 
 ## Capability Contract Positioning

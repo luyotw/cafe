@@ -19,6 +19,16 @@ PLAN_EXEC_STEPS = (
     / "references"
     / "execution_steps_iteration_1.md"
 )
+PLAN_REVISION_STEPS = (
+    PROJECT_ROOT
+    / "src"
+    / "cafe"
+    / "data"
+    / "skills"
+    / "cafe-plan"
+    / "references"
+    / "execution_steps_iteration_n.md"
+)
 REVIEW_EXEC_STEPS = (
     PROJECT_ROOT
     / "src"
@@ -62,6 +72,28 @@ def test_plan_execution_steps_require_architecture_sections() -> None:
     assert "Negative space" in steps
     assert "Layering map" in steps
     assert "Dependency ADR" in steps
+
+
+def test_plan_skill_discovers_usage_context_before_unset_architecture() -> None:
+    skill = PLAN_SKILL.read_text(encoding="utf-8")
+
+    assert "預設 user" in skill
+    assert "questions.xml" in skill
+    assert "已有答案不得重問" in skill
+    assert "個人電腦或 NAS 24 小時開機" in skill
+    assert "需要另行確認" in skill
+
+
+@pytest.mark.parametrize("steps_path", [PLAN_EXEC_STEPS, PLAN_REVISION_STEPS])
+def test_plan_checklists_enforce_nontechnical_architecture_discovery(
+    steps_path: Path,
+) -> None:
+    steps = steps_path.read_text(encoding="utf-8")
+
+    assert "non-technical by default" in steps
+    assert "plain-language usage questions" in steps
+    assert "always-on personal computer/NAS" in steps
+    assert "deploy an external service" in steps
 
 
 def test_review_checklist_manifest_diff_vs_dependency_adr() -> None:

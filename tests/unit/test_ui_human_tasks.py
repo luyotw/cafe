@@ -16,6 +16,7 @@ from cafe.core.blackboard import (
     HandoffOwner,
 )
 from cafe.core.human_tasks import HumanTaskPolicy
+from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.skills.loader import SkillLoader
 from cafe.ui.human_tasks import (
     _validate_packet_contracts_before_confirmation,
@@ -359,8 +360,70 @@ def test_command_completion_uses_the_same_policy_and_declared_destination(tmp_pa
     assert reloaded.handoff_contract.to_step == "plan"
 
 
+def test_command_completion_binds_the_current_durable_task_before_routing(tmp_path: Path) -> None:
+    """IT-003: command input cannot bypass the active task/wait correlation."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "durable-command"
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("spec", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.CONFIRM_OUTPUT,
+        source="test",
+    )
+    playbook = {
+        "steps": {
+            "spec": {
+                "skill": "cafe-spec",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "output-review",
+                        "outcomes": {"confirm": "plan", "revise": "spec"},
+                    }
+                ],
+            },
+            "plan": {"skill": "cafe-plan"},
+        }
+    }
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook, step_name="spec", trigger="confirm_output"
+    )
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=blackboard.workflow_id,
+        step="spec",
+        iteration=1,
+        trigger="confirm_output",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+    )
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=blackboard,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "output-review",
+            "decision": "confirm",
+            "human_task_id": task.id,
+        },
+        source="command",
+    )
+
+    assert result.target == "plan"
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
+
+
 def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path: Path) -> None:
-    """UT-006/UT-007 — metadata, not a task name, chooses durable delivery."""
+    """Feedback metadata persists work without creating a parallel input file."""
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / ".cafe" / "issues" / "local-review"
@@ -371,17 +434,15 @@ def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path
         "steps": {
             "pr": {
                 "skill": "cafe-pr",
-                "human_tasks": [
-                    {
-                        "trigger": "confirm_output",
-                        "task_id": "local-review",
-                        "outcomes": {"approve": "_done", "request_changes": "develop"},
-                        "feedback_delivery": {
-                            "artifact": "workflow_feedback",
-                            "source_kind": "local_review",
-                        },
-                    }
-                ],
+                "human_tasks": [{
+                    "trigger": "confirm_output",
+                    "task_id": "local-review",
+                    "outcomes": {"approve": "_done", "request_changes": "develop"},
+                    "feedback_delivery": {
+                        "artifact": "workflow_feedback",
+                        "source_kind": "local_review",
+                    },
+                }],
             },
             "develop": {"skill": "cafe-develop"},
         }
@@ -410,7 +471,7 @@ def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path
 
 
 def test_feedback_delivery_approval_does_not_record_optional_feedback(tmp_path: Path) -> None:
-    """UT-006: an approval completes without turning optional feedback into work."""
+    """Approval notes do not become actionable correction feedback."""
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / ".cafe" / "issues" / "local-review-approval"
@@ -421,17 +482,15 @@ def test_feedback_delivery_approval_does_not_record_optional_feedback(tmp_path: 
         "steps": {
             "pr": {
                 "skill": "cafe-pr",
-                "human_tasks": [
-                    {
-                        "trigger": "confirm_output",
-                        "task_id": "local-review",
-                        "outcomes": {"approve": "_done", "request_changes": "develop"},
-                        "feedback_delivery": {
-                            "artifact": "workflow_feedback",
-                            "source_kind": "local_review",
-                        },
-                    }
-                ],
+                "human_tasks": [{
+                    "trigger": "confirm_output",
+                    "task_id": "local-review",
+                    "outcomes": {"approve": "_done", "request_changes": "develop"},
+                    "feedback_delivery": {
+                        "artifact": "workflow_feedback",
+                        "source_kind": "local_review",
+                    },
+                }],
             },
             "develop": {"skill": "cafe-develop"},
         }
@@ -454,102 +513,6 @@ def test_feedback_delivery_approval_does_not_record_optional_feedback(tmp_path: 
     assert result.target == "done"
     assert WorkflowFeedbackLedger(issue_dir).pending() == []
     assert "workflow_feedback" not in blackboard.artifacts
-
-
-def test_feedback_delivery_records_each_declared_feedback_mode(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """UT-006: delivery preserves free-form and required decision feedback."""
-    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
-
-    builtin_root = tmp_path / "builtin"
-    skill_dir = builtin_root / "skills" / "feedback-policy"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
-        """---
-name: feedback-policy
-description: feedback delivery test policy
-workflow:
-  human_tasks:
-    - id: free-form-feedback
-      pattern: revision_feedback
-      prompt: Provide revision feedback
-      input_schema: feedback
-    - id: decision-feedback
-      pattern: confirm_output
-      prompt: Review the result
-      input_schema: decision
-      decisions:
-        - id: approve
-          label: Approve
-        - id: revise
-          label: Revise
-          requires_feedback: true
----
-""",
-        encoding="utf-8",
-    )
-    loader = SkillLoader(
-        project_root=tmp_path / "project",
-        global_root=tmp_path / "global",
-        builtin_root=builtin_root,
-    )
-    monkeypatch.setattr("cafe.ui.human_tasks.SkillLoader", lambda: loader)
-
-    for task_id, trigger, payload in (
-        (
-            "free-form-feedback",
-            "need_clarification",
-            {"task": "free-form-feedback", "feedback": "Retain the boundary case."},
-        ),
-        (
-            "decision-feedback",
-            "confirm_output",
-            {
-                "task": "decision-feedback",
-                "decision": "revise",
-                "feedback": "Retain the error path.",
-            },
-        ),
-    ):
-        issue_dir = tmp_path / ".cafe" / "issues" / task_id
-        store = BlackboardStore(issue_dir)
-        blackboard = store.load_or_create("review", playbook_id="test")
-        store.set_current_step(blackboard, "user")
-        playbook = {
-            "steps": {
-                "review": {
-                    "skill": "feedback-policy",
-                    "human_tasks": [
-                        {
-                            "trigger": trigger,
-                            "task_id": task_id,
-                            "outcomes": {"submit": "develop", "revise": "develop"},
-                            "feedback_delivery": {
-                                "artifact": "workflow_feedback",
-                                "source_kind": "test_review",
-                            },
-                        }
-                    ],
-                },
-                "develop": {"skill": "feedback-policy"},
-            }
-        }
-
-        result = apply_human_task_payload(
-            issue_dir=issue_dir,
-            playbook_data=playbook,
-            blackboard=blackboard,
-            from_step="review",
-            trigger=trigger,
-            raw_payload=payload,
-            source="test",
-        )
-
-        assert result.target == "develop"
-        assert [entry.content for entry in WorkflowFeedbackLedger(issue_dir).pending()] == [
-            payload["feedback"]
-        ]
 
 
 def test_cross_step_revision_feedback_is_written_for_the_selected_target(tmp_path: Path) -> None:

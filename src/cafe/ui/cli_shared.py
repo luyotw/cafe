@@ -22,6 +22,7 @@ from rich.console import Console
 
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.types import AgentCLI, AgentConfig
 from cafe.core.workflow_models import BatonRejected
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -1058,15 +1059,61 @@ def _handle_declared_human_task_handoff(
         questions_file = iteration_dirs[-1] / "questions.xml" if iteration_dirs else None
         if questions_file is not None and questions_file.exists() and validate_questions_xml(questions_file):
             questions = parse_questions_xml(questions_file)
-    payload = collect_human_task_payload(
-        policy,
-        questions=questions,
-        role=_resolve_step_chat_role(playbook_data, from_step),
-        issue_name=issue_name,
-        agent_name=_resolve_role_agent_name(
-            playbook_data, _resolve_step_chat_role(playbook_data, from_step)
-        ),
+    durable_task_id = None
+    record_store = HumanTaskRecordStore(issue_dir)
+    durable_wait = record_store.active_wait_state(
+        blackboard.workflow_id,
+        step=from_step,
+        trigger=trigger,
+        policy_id=policy.id,
     )
+    recovered_payload: Optional[dict[str, Any]] = None
+    if durable_wait is not None:
+        durable_task_id = durable_wait.task_id
+    elif record_store.exists:
+        iteration = latest_step_iteration(issue_dir=issue_dir, step_name=from_step)
+        latest_iteration = issue_dir / from_step / f"iteration_{iteration:03d}"
+        recovery_iterations = {iteration}
+        if (
+            (latest_iteration / "user_input.md").exists()
+            and not (latest_iteration / "iteration.json").exists()
+            and not (latest_iteration / "context.json").exists()
+        ):
+            recovery_iterations.add(iteration - 1)
+        completed_task = next(
+            (
+                task
+                for task in record_store.tasks()
+                if task.workflow_id == blackboard.workflow_id
+                and task.step == from_step
+                and task.iteration in recovery_iterations
+                and task.trigger == trigger
+                and task.policy_id == policy.id
+                and task.status is HumanTaskStatus.COMPLETED
+            ),
+            None,
+        )
+        if completed_task is not None:
+            recorded_result = record_store.get_result(completed_task.id)
+            if recorded_result is not None:
+                recovered_payload = {
+                    key: recorded_result.payload[key]
+                    for key in ("task", "decision", "answers", "feedback", "target")
+                    if key in recorded_result.payload
+                }
+                recovered_payload["human_task_id"] = completed_task.id
+    payload = recovered_payload
+    if payload is None:
+        payload = collect_human_task_payload(
+            policy,
+            questions=questions,
+            role=_resolve_step_chat_role(playbook_data, from_step),
+            issue_name=issue_name,
+            agent_name=_resolve_role_agent_name(
+                playbook_data, _resolve_step_chat_role(playbook_data, from_step)
+            ),
+            human_task_id=durable_task_id,
+        )
     if isinstance(payload, dict) and payload.get("decision") == "chat":
         from cafe.ui.cli import _consume_pending_chat_handoff, launch_chat_session
 

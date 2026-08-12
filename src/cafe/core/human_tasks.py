@@ -245,6 +245,45 @@ def resolve_human_task_policy(
     return HumanTaskPolicy.model_validate({**policy.model_dump(), **changes})
 
 
+def resolve_step_human_task(
+    *,
+    playbook_data: Mapping[str, Any],
+    step_name: str,
+    trigger: str,
+    skill_loader: Optional[Any] = None,
+    iteration: int = 1,
+) -> tuple[HumanTaskPolicy, HumanTaskBinding]:
+    """Resolve a declared policy/binding pair for runtime and UI callers alike."""
+    raw_steps = playbook_data.get("steps")
+    if not isinstance(raw_steps, Mapping):
+        raise HumanTaskPolicyError("Playbook has no step declarations")
+    raw_step = raw_steps.get(step_name)
+    if not isinstance(raw_step, Mapping):
+        raise HumanTaskPolicyError(f"Unknown playbook step {step_name!r}")
+    raw_bindings = raw_step.get("human_tasks")
+    if not isinstance(raw_bindings, Sequence) or isinstance(raw_bindings, (str, bytes)):
+        raise HumanTaskPolicyError(
+            f"Step {step_name!r} has no declared human task for trigger {trigger!r}"
+        )
+    bindings = [
+        HumanTaskBinding.model_validate(raw)
+        for raw in raw_bindings
+        if isinstance(raw, Mapping) and raw.get("trigger") == trigger
+    ]
+    if len(bindings) != 1:
+        raise HumanTaskPolicyError(
+            f"Step {step_name!r} requires exactly one human task for trigger {trigger!r}"
+        )
+    if skill_loader is None:
+        from cafe.skills.loader import SkillLoader
+
+        skill_loader = SkillLoader()
+    skill_name = _select_step_skill_name(raw_step, iteration)
+    contract = skill_loader.get_workflow_contract(skill_name)
+    policy = resolve_human_task_policy(defaults=contract.human_tasks, binding=bindings[0])
+    return policy, bindings[0]
+
+
 def validate_human_task_completion(
     policy: HumanTaskPolicy,
     raw_payload: str | Mapping[str, Any],
@@ -367,3 +406,21 @@ def _answer_values(value: Any) -> tuple[str, ...]:
 
 def _reject(policy: HumanTaskPolicy, message: str) -> HumanTaskRejection:
     return HumanTaskRejection(message=message, correction_guidance=policy.correction_guidance)
+
+
+def _select_step_skill_name(step_def: Mapping[str, Any], iteration: int) -> str:
+    """Select the existing iteration-aware skill declaration for a task binding."""
+    raw_skill = step_def.get("skill")
+    if isinstance(raw_skill, str) and raw_skill.strip():
+        return raw_skill
+    if isinstance(raw_skill, Mapping):
+        exact = raw_skill.get(str(iteration))
+        if isinstance(exact, str) and exact.strip():
+            return exact
+        default = raw_skill.get("default")
+        if isinstance(default, str) and default.strip():
+            return default
+        for value in raw_skill.values():
+            if isinstance(value, str) and value.strip():
+                return value
+    raise HumanTaskPolicyError("Human-task step must select a skill")
