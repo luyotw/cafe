@@ -55,7 +55,7 @@ def test_versioned_records_round_trip_with_assignment_wait_and_result(tmp_path: 
     assert reloaded.get_assignment(task.id).assignee_type == "user"
     assert wait_state.task_id == task.id
     assert wait_state.released_at is not None
-    assert loaded_result is result
+    assert loaded_result == result
     assert loaded_result.payload["feedback"] == "Keep old handoffs working."
 
 
@@ -120,7 +120,7 @@ def test_terminal_lifecycle_transitions_preserve_the_first_result(tmp_path: Path
             source="command",
         )
 
-    assert repeated is first
+    assert repeated == first
     assert len(store.results()) == 1
     assert store.get_task(cancelled.id).status is HumanTaskStatus.CANCELLED
     assert store.active_wait_state("workflow-one") is None

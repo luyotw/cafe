@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 from cafe.core.workflow_models import BatonRejected
 
 BLACKBOARD_FILENAME = "blackboard.json"
-BLACKBOARD_SCHEMA_VERSION = 1
+BLACKBOARD_SCHEMA_VERSION = 2
 NEXT_STEP_FILENAME = "next_step.txt"
 HANDOFF_CONTRACT_VERSION = 1
 OPERATION_ARTIFACT_FILENAME = "operation.json"
@@ -22,6 +22,16 @@ OPERATION_RECEIPT_FILENAME = "operation_receipt.json"
 
 def _now_iso() -> str:
     return datetime.now().astimezone().isoformat()
+
+
+def _legacy_workflow_id(data: Dict[str, Any], initial_step: str) -> str:
+    """Provide a deterministic in-memory id before the store persists a legacy state."""
+    identity = {
+        "current_step": str(data.get("current_step", initial_step)),
+        "playbook_id": str(data.get("playbook_id", "default")),
+        "updated_at": str(data.get("updated_at", "")),
+    }
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(identity, sort_keys=True)))
 
 
 class ArtifactKind(str, Enum):
@@ -463,6 +473,7 @@ class BlackboardState:
 
     current_step: str
     playbook_id: str = "default"
+    workflow_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     schema_version: int = BLACKBOARD_SCHEMA_VERSION
     artifacts: Dict[str, ArtifactEntry] = field(default_factory=dict)
     events: List[EventEntry] = field(default_factory=list)
@@ -477,6 +488,7 @@ class BlackboardState:
             "schema_version": self.schema_version,
             "current_step": self.current_step,
             "playbook_id": self.playbook_id,
+            "workflow_id": self.workflow_id,
             "artifacts": {name: entry.to_dict() for name, entry in self.artifacts.items()},
             "events": [entry.to_dict() for entry in self.events],
             "decisions": [entry.to_dict() for entry in self.decisions],
@@ -516,7 +528,8 @@ class BlackboardState:
         return cls(
             current_step=str(data.get("current_step", initial_step)),
             playbook_id=str(data.get("playbook_id", "default")),
-            schema_version=int(data.get("schema_version", BLACKBOARD_SCHEMA_VERSION)),
+            workflow_id=str(data.get("workflow_id") or _legacy_workflow_id(data, initial_step)),
+            schema_version=BLACKBOARD_SCHEMA_VERSION,
             artifacts=artifacts,
             events=[EventEntry.from_dict(entry) for entry in data.get("events", [])],
             decisions=[DecisionEntry.from_dict(entry) for entry in data.get("decisions", [])],
@@ -551,6 +564,9 @@ class BlackboardStore:
         if self.file_path.exists():
             raw = json.loads(self.file_path.read_text(encoding="utf-8"))
             state = BlackboardState.from_dict(raw, initial_step=initial_step)
+            if not raw.get("workflow_id"):
+                state.workflow_id = str(uuid.uuid4())
+                self.save(state)
             if not getattr(state, "playbook_id", None):
                 state.playbook_id = playbook_id
                 self.save(state)
