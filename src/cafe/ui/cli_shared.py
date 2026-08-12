@@ -1057,13 +1057,21 @@ def _handle_declared_human_task_handoff(
         durable_task_id = durable_wait.task_id
     elif record_store.exists:
         iteration = latest_step_iteration(issue_dir=issue_dir, step_name=from_step)
+        latest_iteration = issue_dir / from_step / f"iteration_{iteration:03d}"
+        recovery_iterations = {iteration}
+        if (
+            (latest_iteration / "user_input.md").exists()
+            and not (latest_iteration / "iteration.json").exists()
+            and not (latest_iteration / "context.json").exists()
+        ):
+            recovery_iterations.add(iteration - 1)
         completed_task = next(
             (
                 task
                 for task in record_store.tasks()
                 if task.workflow_id == blackboard.workflow_id
                 and task.step == from_step
-                and task.iteration == iteration
+                and task.iteration in recovery_iterations
                 and task.trigger == trigger
                 and task.policy_id == policy.id
                 and task.status is HumanTaskStatus.COMPLETED
