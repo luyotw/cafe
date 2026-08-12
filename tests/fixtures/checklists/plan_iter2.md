@@ -3,6 +3,8 @@
 [ ] Read src/cafe/data/agents/developer/Nick.md to understand your role and native language
 [ ] Read .cafe/issues/test/plan/iteration_001/output.md to review previous plan
 [ ] Review user's feedback (provided below)
+[ ] If feedback changes runtime/deployment assumptions, treat the user as non-technical by default: reuse existing answers, ask only missing plain-language usage questions, and recommend one suitable default before technical details
+[ ] Confirm the revised plan does not assume a fixed IP, an always-on personal computer/NAS, self-managed server expertise, or authorization to adopt/pay for/deploy an external service
 [ ] Integrate feedback and update the plan, DO NOT hint the existence of the previous iterations
 [ ] Keep **Negative space**, **Layering map**, and **Dependency ADR** filled and consistent with the revised plan (explicit "none" if still applicable)
 [ ] Write updated plan to .cafe/issues/test/plan/iteration_002/output.md (NOT in your response)
