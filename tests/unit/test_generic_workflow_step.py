@@ -552,6 +552,79 @@ def test_generic_workflow_step_status_transition_writes_strict_baton_payload(
     }
 
 
+def test_hybrid_portion_restores_canonical_control_files_after_agent_mutation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """UT-010: only the portion-local baton can survive a hybrid agent run."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "hybrid-control-files"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "mixed": {
+                "skill": "develop",
+                "role": "developer",
+                "output_artifact": "code",
+                "allowed_tools": ["Read", "Edit", "Write", "Bash"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+                "hybrid_portion": {"id": "draft"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("mixed")
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "to_owner": "agent",
+                "to_step": "mixed",
+                "intent": "await_agent",
+            }
+        ),
+        encoding="utf-8",
+    )
+    original_baton = (issue_dir / "next_step.txt").read_text(encoding="utf-8")
+
+    def on_execute(*, streaming_output_file: str | None, **_kwargs: object) -> None:
+        assert streaming_output_file is not None
+        (issue_dir / "next_step.txt").write_text("agent-controlled", encoding="utf-8")
+        (issue_dir / "blackboard.json").write_text('{"current_step": "escaped"}', encoding="utf-8")
+        portion_baton = Path(streaming_output_file).parent / "hybrid_portion_baton.json"
+        portion_baton.write_text(
+            json.dumps(
+                {
+                    "from_step": "mixed",
+                    "to_owner": "agent",
+                    "to_step": "mixed",
+                    "intent": "await_agent",
+                    "source": "hybrid_portion:mixed:draft",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="hybrid-control-files",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed", on_execute=on_execute),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    result = executor.execute_step("mixed", playbook["steps"]["mixed"], state)
+
+    reloaded = BlackboardStore(issue_dir).load_or_create("mixed")
+    assert (issue_dir / "next_step.txt").read_text(encoding="utf-8") == original_baton
+    assert reloaded.current_step == "mixed"
+    assert "escaped" not in (issue_dir / "blackboard.json").read_text(encoding="utf-8")
+    assert result.events[-1]["type"] == "hybrid_portion_baton"
+
+
 def test_generic_workflow_step_writes_review_pause_contract(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-review-pause"

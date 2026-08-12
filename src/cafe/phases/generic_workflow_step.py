@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import (
@@ -173,6 +174,31 @@ class GenericWorkflowStepExecutor(Phase):
         )
         return merged
 
+    def _preserve_hybrid_control_files(self, action: Callable[[], Any]) -> Any:
+        """Run an agent call without allowing it to persist canonical workflow control.
+
+        Hybrid portions may retain ordinary source-editing capabilities.  Those
+        capabilities cannot also become authority to route the outer workflow:
+        a portion writes only its private baton, while the runtime restores the
+        canonical baton and blackboard even when the agent call is interrupted.
+        """
+        control_files = (self.issue_dir / "blackboard.json", self.issue_dir / "next_step.txt")
+        snapshots = {path: path.read_bytes() if path.is_file() else None for path in control_files}
+        try:
+            return action()
+        finally:
+            for path, content in snapshots.items():
+                if content is None:
+                    if path.is_dir():
+                        shutil.rmtree(path)
+                    elif path.exists() or path.is_symlink():
+                        path.unlink()
+                    continue
+                if path.is_dir():
+                    shutil.rmtree(path)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+
     def execute(self) -> Any:
         raise NotImplementedError("GenericWorkflowStepExecutor only supports execute_step()")
 
@@ -316,25 +342,32 @@ class GenericWorkflowStepExecutor(Phase):
                 else allowed_tools
             )
             try:
-                response, _ = self._execute_agent_iteration(
-                    agent_name=agent_name,
-                    prompt=prompt,
-                    user_input=resolved_user_input,
-                    valid_intents=valid_intents,
-                    require_status_code=False,
-                    persist_status=False,
-                    allowed_tools=attempt_allowed_tools,
-                    phase_specific_data=phase_specific_data,
-                    backup_context_callback=lambda error: self._build_backup_takeover_context(
-                        error=error,
-                        step_name=step_name,
-                        step_def=step_def,
-                        blackboard_state=blackboard_state,
-                        output_file=output_file,
-                        checklist_file=checklist_file,
-                        iteration_dir=iteration_dir,
-                    ),
-                )
+
+                def execute_agent() -> tuple[str, Optional[PhaseStatusCode]]:
+                    return self._execute_agent_iteration(
+                        agent_name=agent_name,
+                        prompt=prompt,
+                        user_input=resolved_user_input,
+                        valid_intents=valid_intents,
+                        require_status_code=False,
+                        persist_status=False,
+                        allowed_tools=attempt_allowed_tools,
+                        phase_specific_data=phase_specific_data,
+                        backup_context_callback=lambda error: self._build_backup_takeover_context(
+                            error=error,
+                            step_name=step_name,
+                            step_def=step_def,
+                            blackboard_state=blackboard_state,
+                            output_file=output_file,
+                            checklist_file=checklist_file,
+                            iteration_dir=iteration_dir,
+                        ),
+                    )
+
+                if is_hybrid_portion:
+                    response, _ = self._preserve_hybrid_control_files(execute_agent)
+                else:
+                    response, _ = execute_agent()
             finally:
                 # A phase agent can launch a controlled long-running operation,
                 # whose helper publishes runtime-owned metadata while this
@@ -401,15 +434,18 @@ class GenericWorkflowStepExecutor(Phase):
             and self._should_validate_checklist(status_code)
         ):
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
+            validate_completion = lambda: self._validate_and_retry_checklist_completion(
+                agent_name=agent_name,
+                prompt=last_prompt[0] if last_prompt else "",
+                user_input=resolved_user_input,
+                valid_intents=valid_intents,
+                allowed_tools=allowed_tools,
+                max_retries=3,
+            )
             response, validated_status, validation_passed = (
-                self._validate_and_retry_checklist_completion(
-                    agent_name=agent_name,
-                    prompt=last_prompt[0] if last_prompt else "",
-                    user_input=resolved_user_input,
-                    valid_intents=valid_intents,
-                    allowed_tools=allowed_tools,
-                    max_retries=3,
-                )
+                self._preserve_hybrid_control_files(validate_completion)
+                if is_hybrid_portion
+                else validate_completion()
             )
             if validation_passed and validated_status is not None:
                 status_code = validated_status

@@ -28,12 +28,23 @@ class AutomaticExecutorRegistry:
         executors: (
             Mapping[str, Callable[[Mapping[str, Any]], AutomaticExecutionResult]] | None
         ) = None,
+        *,
+        input_validators: Mapping[str, Callable[[Mapping[str, Any]], None]] | None = None,
     ) -> None:
         self._executors = dict(executors or {})
+        self._input_validators = dict(input_validators or {})
 
     def is_registered(self, executor_id: str) -> bool:
         """Return whether a runtime-owned executor is available to this run."""
         return executor_id in self._executors
+
+    def validate_inputs(self, executor_id: str, inputs: Mapping[str, Any]) -> None:
+        """Reject invalid declared input before an automatic step records progress."""
+        if executor_id not in self._executors:
+            raise ValueError(f"automatic executor {executor_id!r} is not registered")
+        validator = self._input_validators.get(executor_id)
+        if validator is not None:
+            validator(dict(inputs))
 
     def execute(self, executor_id: str, inputs: Mapping[str, Any]) -> AutomaticExecutionResult:
         executor = self._executors.get(executor_id)
@@ -49,12 +60,20 @@ class AutomaticExecutorRegistry:
 
 def _declared_transition(inputs: Mapping[str, Any]) -> AutomaticExecutionResult:
     """A safe built-in executor for a declared, data-only transition."""
+    _validate_declared_transition_inputs(inputs)
+    return AutomaticExecutionResult(intent=str(inputs["intent"]).strip())
+
+
+def _validate_declared_transition_inputs(inputs: Mapping[str, Any]) -> None:
+    """Validate the built-in transition without running an automatic step."""
     intent = inputs.get("intent")
     if not isinstance(intent, str) or not intent.strip():
         raise ValueError("automatic transition executor requires a non-empty inputs.intent")
-    return AutomaticExecutionResult(intent=intent.strip())
 
 
 def default_automatic_executor_registry() -> AutomaticExecutorRegistry:
     """Return the closed set of native executors shipped by this runtime."""
-    return AutomaticExecutorRegistry({"declared_transition": _declared_transition})
+    return AutomaticExecutorRegistry(
+        {"declared_transition": _declared_transition},
+        input_validators={"declared_transition": _validate_declared_transition_inputs},
+    )

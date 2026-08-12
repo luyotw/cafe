@@ -285,6 +285,68 @@ def test_automatic_owner_dispatches_registry_without_agent(tmp_path: Path) -> No
     assert automatic_calls == [{"safe": True}]
 
 
+def test_automatic_inputs_are_validated_before_a_visit_is_persisted(tmp_path: Path) -> None:
+    """UT-003: executor-specific automatic input is rejected before runtime state."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "invalid-automatic-input"
+    playbook = {
+        "playbook": {"id": "owner-test"},
+        "steps": {
+            "automatic": {
+                "skill": "phase",
+                "role": "operator",
+                "assignee_type": "auto",
+                "automatic": {"executor": "declared_transition", "inputs": {}},
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="requires a non-empty inputs.intent"):
+        BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            executor=lambda *_args, **_kwargs: pytest.fail("automatic work must not run"),
+        )
+
+    assert BlackboardStore(issue_dir).load_or_create("automatic").step_visit_counts == {}
+
+
+def test_invalid_automatic_result_is_rejected_before_visits_or_artifacts(tmp_path: Path) -> None:
+    """UT-003/UT-006: an undeclared result cannot create workflow progress."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "invalid-automatic-result"
+    playbook = {
+        "playbook": {"id": "owner-test"},
+        "steps": {
+            "automatic": {
+                "skill": "phase",
+                "role": "operator",
+                "assignee_type": "auto",
+                "automatic": {"executor": "invalid-result", "inputs": {}},
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    registry = AutomaticExecutorRegistry(
+        {
+            "invalid-result": lambda _inputs: AutomaticExecutionResult(
+                "undeclared", artifacts={"escaped": "outside-the-contract"}
+            )
+        }
+    )
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args, **_kwargs: pytest.fail("automatic work must not call an agent"),
+        automatic_registry=registry,
+    ).run(start_step="automatic")
+
+    state = BlackboardStore(issue_dir).load_or_create("automatic")
+    assert result.final_status_code == "AUTOMATIC_EXECUTOR_REJECTED"
+    assert state.step_visit_counts == {}
+    assert "escaped" not in state.artifacts
+
+
 def test_unknown_automatic_executor_is_rejected_before_a_visit_is_persisted(tmp_path: Path) -> None:
     """UT-003/IT-002: an undeclared executor cannot mutate workflow progress."""
     issue_dir = tmp_path / ".cafe" / "issues" / "automatic-owner"
@@ -390,10 +452,79 @@ def test_hybrid_owner_resumes_only_its_declared_portion_after_matching_task(
     assert BlackboardStore(issue_dir).load_or_create("mixed").step_visit_counts == {"mixed": 1}
 
 
-def test_hybrid_rejects_a_captured_baton_from_another_portion(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("captured", "explicit_status_code"),
+    [
+        ("{not-json", None),
+        (
+            json.dumps(
+                {
+                    "from_step": "other",
+                    "to_owner": "agent",
+                    "to_step": "mixed",
+                    "intent": "await_agent",
+                    "source": "hybrid_portion:mixed:draft",
+                }
+            ),
+            None,
+        ),
+        (
+            json.dumps(
+                {
+                    "from_step": "mixed",
+                    "to_owner": "user",
+                    "to_step": "mixed",
+                    "intent": "await_agent",
+                    "source": "hybrid_portion:mixed:draft",
+                }
+            ),
+            None,
+        ),
+        (
+            json.dumps(
+                {
+                    "from_step": "mixed",
+                    "to_owner": "agent",
+                    "to_step": "other",
+                    "intent": "await_agent",
+                    "source": "hybrid_portion:mixed:draft",
+                }
+            ),
+            None,
+        ),
+        (
+            json.dumps(
+                {
+                    "from_step": "mixed",
+                    "to_owner": "agent",
+                    "to_step": "mixed",
+                    "intent": "await_agent",
+                    "source": "hybrid_portion:mixed:other",
+                }
+            ),
+            None,
+        ),
+        (
+            json.dumps(
+                {
+                    "from_step": "mixed",
+                    "to_owner": "agent",
+                    "to_step": "mixed",
+                    "intent": "await_agent",
+                    "source": "hybrid_portion:mixed:draft",
+                }
+            ),
+            "need_clarification",
+        ),
+    ],
+)
+def test_hybrid_rejects_malformed_or_conflicting_captured_batons(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    captured: str,
+    explicit_status_code: str | None,
 ) -> None:
-    """UT-010: a portion-local completion cannot impersonate another boundary."""
+    """UT-010: only an unambiguous declared portion completion can proceed."""
     issue_dir = tmp_path / ".cafe" / "issues" / "hybrid-baton"
     binding = HumanTaskBinding(trigger="approve", task_id="approval", outcomes={"accept": "mixed"})
     playbook = {
@@ -428,22 +559,13 @@ def test_hybrid_rejects_a_captured_baton_from_another_portion(
         playbook=playbook,
         executor=lambda *_args, **_kwargs: pytest.fail("captured result bypasses the agent"),
     )
-    captured = json.dumps(
-        {
-            "from_step": "mixed",
-            "to_owner": "agent",
-            "to_step": "mixed",
-            "intent": "await_agent",
-            "source": "hybrid_portion:mixed:other",
-        }
-    )
     frame = StepIterationFrame(
         execution_result=SimpleNamespace(
             events=[{"type": "hybrid_portion_baton", "payload": captured}]
         ),
         response="",
         artifacts={},
-        explicit_status_code=None,
+        explicit_status_code=explicit_status_code,
         auto_continue=False,
     )
     monkeypatch.setattr(runtime, "_execute_one_iteration", lambda **_kwargs: frame)

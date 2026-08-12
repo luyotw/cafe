@@ -583,7 +583,7 @@ def workflow(
     ),
     single_step: bool = typer.Option(False, "--single-step", help="Run only one playbook step"),
     dry_run: bool = typer.Option(
-        True, "--dry-run/--execute", help="Run with built-in dry executor"
+        True, "--dry-run/--execute", help="Preview the read-only workflow simulation"
     ),
     user_input: Optional[str] = typer.Option(
         None,

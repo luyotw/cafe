@@ -176,12 +176,18 @@ class BlackboardWorkflowRuntime:
                 continue
             declaration = step_def.get("automatic")
             executor_id = declaration.get("executor") if isinstance(declaration, dict) else None
+            inputs = declaration.get("inputs") if isinstance(declaration, dict) else None
             if not isinstance(executor_id, str) or not self.automatic_registry.is_registered(
                 executor_id
             ):
                 raise ValueError(
                     f"Step '{step_name}' automatic executor {executor_id!r} is not registered"
                 )
+            if not isinstance(inputs, dict):
+                raise ValueError(
+                    f"Step '{step_name}' has an invalid automatic executor declaration"
+                )
+            self.automatic_registry.validate_inputs(executor_id, inputs)
 
     @staticmethod
     def _extract_goto_target(response: str) -> Optional[str]:
@@ -766,8 +772,10 @@ class BlackboardWorkflowRuntime:
             raise RuntimeError(f"Step has unsupported assignee_type={owner!r}")
         return owner
 
-    def _record_step_visit(self, *, current_step: str, step_def: Dict, runtime: str) -> int:
-        """Persist the top-level visit before any owner-specific side effect."""
+    def _ensure_step_visit_within_limit(
+        self, *, current_step: str, step_def: Dict, runtime: str
+    ) -> int:
+        """Return the next visit number or fail before an owner performs work."""
         visits = self.blackboard.step_visit_counts
         visit_count = visits.get(current_step, 0) + 1
         max_iterations = self._resolve_step_iteration_limit(step_def)
@@ -783,6 +791,16 @@ class BlackboardWorkflowRuntime:
                 },
             )
             raise RuntimeError(f"Step '{current_step}' exceeded max_iterations={max_iterations}")
+        return visit_count
+
+    def _record_step_visit(self, *, current_step: str, step_def: Dict, runtime: str) -> int:
+        """Persist the top-level visit before any owner-specific side effect."""
+        visit_count = self._ensure_step_visit_within_limit(
+            current_step=current_step,
+            step_def=step_def,
+            runtime=runtime,
+        )
+        visits = self.blackboard.step_visit_counts
         visits[current_step] = visit_count
         self.blackboard_store.save(self.blackboard)
         return visit_count
@@ -924,9 +942,10 @@ class BlackboardWorkflowRuntime:
             final_step=current_step, final_status_code=status_code, completed=False
         )
 
-    def _run_auto_owned_step(
-        self, *, current_step: str, step_def: Dict, visit_count: int, runtime: str
-    ) -> PlaybookRunResult:
+    def _prepare_auto_owned_step(
+        self, *, current_step: str, step_def: Dict
+    ) -> AutomaticExecutionResult | PlaybookRunResult:
+        """Execute and validate a trusted automatic result before workflow mutation."""
         declaration = step_def.get("automatic")
         if not isinstance(declaration, dict):
             raise RuntimeError(f"Step '{current_step}' has no automatic executor declaration")
@@ -950,6 +969,45 @@ class BlackboardWorkflowRuntime:
                 completed=False,
                 detail=str(exc),
             )
+
+        next_step, _transition_source = self._resolve_next_step(
+            current_step=current_step,
+            response="",
+            status_code=result.intent,
+        )
+        if next_step is None or (
+            next_step not in {"done", "_done"} and next_step not in self.steps
+        ):
+            reason = (
+                f"automatic executor {executor_id!r} returned undeclared intent {result.intent!r}"
+                if next_step is None
+                else f"automatic executor {executor_id!r} targeted unknown step {next_step!r}"
+            )
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "automatic_step_rejected",
+                {"step": current_step, "executor": executor_id, "reason": reason},
+            )
+            return PlaybookRunResult(
+                final_step=current_step,
+                final_status_code="AUTOMATIC_EXECUTOR_REJECTED",
+                completed=False,
+                detail=reason,
+            )
+        return result
+
+    def _run_auto_owned_step(
+        self,
+        *,
+        current_step: str,
+        step_def: Dict,
+        visit_count: int,
+        runtime: str,
+        result: AutomaticExecutionResult,
+    ) -> PlaybookRunResult:
+        """Persist a previously validated automatic completion."""
+        declaration = step_def["automatic"]
+        executor_id = declaration["executor"]
         self._store_artifacts(result.artifacts)
         self.blackboard_store.record_event(
             self.blackboard,
@@ -1264,6 +1322,20 @@ class BlackboardWorkflowRuntime:
         owner = self._owner_for_step(step_def)
         if owner == "agent":
             return None
+        automatic_result: AutomaticExecutionResult | None = None
+        if owner == "auto":
+            self._ensure_step_visit_within_limit(
+                current_step=current_step,
+                step_def=step_def,
+                runtime=runtime,
+            )
+            prepared = self._prepare_auto_owned_step(
+                current_step=current_step,
+                step_def=step_def,
+            )
+            if isinstance(prepared, PlaybookRunResult):
+                return prepared
+            automatic_result = prepared
         cursor = self.blackboard.ownership_cursor
         if (
             owner == "hybrid"
@@ -1284,11 +1356,13 @@ class BlackboardWorkflowRuntime:
                 runtime=runtime,
             )
         if owner == "auto":
+            assert automatic_result is not None
             return self._run_auto_owned_step(
                 current_step=current_step,
                 step_def=step_def,
                 visit_count=visit_count,
                 runtime=runtime,
+                result=automatic_result,
             )
         return self._run_hybrid_owned_step(
             current_step=current_step, step_def=step_def, visit_count=visit_count, runtime=runtime
