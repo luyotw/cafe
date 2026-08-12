@@ -147,6 +147,7 @@ class HumanTaskBinding(BaseModel):
     allowed_targets: tuple[str, ...] = ()
     prompt: Optional[str] = None
     correction_guidance: Optional[str] = None
+    feedback_delivery: Optional["HumanTaskFeedbackDelivery"] = None
 
     @field_validator("trigger", "task_id")
     @classmethod
@@ -170,6 +171,23 @@ class HumanTaskBinding(BaseModel):
         if len(set(cleaned)) != len(cleaned):
             raise ValueError("allowed targets must be unique")
         return cleaned
+
+
+class HumanTaskFeedbackDelivery(BaseModel):
+    """Optional durable-feedback delivery selected by a step binding."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    artifact: Literal["workflow_feedback"]
+    source_kind: str
+
+    @field_validator("source_kind")
+    @classmethod
+    def _validate_source_kind(cls, value: str) -> str:
+        return _non_empty(value, field_name="source_kind")
+
+
+HumanTaskBinding.model_rebuild()
 
 
 class HumanTaskPolicyError(ValueError):

@@ -7,7 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.blackboard import (
+    ArtifactEntry,
+    ArtifactKind,
+    BlackboardStore,
+    HandoffIntent,
+    HandoffOwner,
+)
 from cafe.core.downstream_contract import ContractValidationError, extract_downstream_contract
 from cafe.core.human_tasks import (
     HumanTaskBinding,
@@ -21,6 +27,7 @@ from cafe.core.human_tasks import (
     validate_human_task_completion,
 )
 from cafe.core.phase_state_mixin import next_runnable_iteration_number
+from cafe.core.workflow_feedback import WorkflowFeedbackError, WorkflowFeedbackLedger
 from cafe.skills.loader import SkillLoader
 
 
@@ -289,7 +296,48 @@ def apply_human_task_payload(
             target=None, policy=policy, rejection=qualification_rejection
         )
 
-    agent_input = completion.agent_input()
+    if binding.feedback_delivery is not None and completion.feedback:
+        ledger = WorkflowFeedbackLedger(issue_dir)
+        try:
+            ledger.record(
+                source_identity=(
+                    f"{binding.feedback_delivery.source_kind}:{from_step}:{policy.id}:{iteration}"
+                ),
+                source_kind=binding.feedback_delivery.source_kind,
+                target_step=continuation,
+                content=completion.feedback,
+            )
+            previous = getattr(blackboard, "artifacts", {}).get(
+                binding.feedback_delivery.artifact
+            )
+            store.put_artifact(
+                blackboard,
+                ArtifactEntry(
+                    name=binding.feedback_delivery.artifact,
+                    kind=ArtifactKind.DOCUMENT,
+                    version=(previous.version + 1) if previous else 1,
+                    updated_by="human_task",
+                    path=str(ledger.path),
+                ),
+            )
+        except WorkflowFeedbackError as exc:
+            rejection = HumanTaskRejection(
+                message="Feedback could not be stored; the review remains paused.",
+                correction_guidance=policy.correction_guidance,
+            )
+            store.record_event(
+                blackboard,
+                "human_task_rejected",
+                {
+                    "step": from_step,
+                    "trigger": trigger,
+                    "task_id": policy.id,
+                    "reason": str(exc),
+                },
+            )
+            return HumanTaskApplication(target=None, policy=policy, rejection=rejection)
+
+    agent_input = "" if binding.feedback_delivery is not None else completion.agent_input()
     if agent_input:
         input_step = continuation if completion.feedback and continuation != "_done" else from_step
         _write_next_iteration_user_input(

@@ -28,7 +28,7 @@ from cafe.templates.manager import TemplateManager
 
 DONE_TARGET = "_done"
 SCRIPT_HOOK_STAGES = {"before_execute", "after_execute"}
-RUNTIME_CONTEXT_PROVIDERS = frozenset({"workflow_metadata", "git_history"})
+RUNTIME_CONTEXT_PROVIDERS = frozenset({"workflow_metadata", "git_history", "local_review"})
 RUNTIME_TOOL_GRANTS = frozenset({"web_research", "git_inspection"})
 
 RigorLevel = Literal["low", "medium", "high"]
@@ -1123,6 +1123,15 @@ def _validate_step_human_tasks(
                     f"unknown human task {binding.task_id!r}"
                 )
             policy = matching_policies[0]
+            if binding.feedback_delivery is not None and not (
+                policy.input_schema == "feedback"
+                or any(decision.requires_feedback for decision in policy.decisions)
+            ):
+                raise ValueError(
+                    f"Step '{step_name}', skill {canonical_skill_name(str(skill_name))!r}: "
+                    f"human task {binding.task_id!r} cannot deliver feedback because its policy "
+                    "does not collect feedback"
+                )
             if any(decision.requires_target for decision in policy.decisions) and not (
                 binding.allowed_targets
             ):

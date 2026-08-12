@@ -1420,12 +1420,17 @@ def test_builtin_hotfix_and_simple_playbooks_load() -> None:
     assert hotfix.entry_point == "develop"
     assert list(hotfix.steps.keys()) == ["develop", "review", "pr"]
     assert hotfix.steps["review"].max_iterations == 1
-    assert hotfix.steps["develop"].input_artifacts == ["review_feedback", "pr_result"]
+    assert hotfix.steps["develop"].input_artifacts == [
+        "review_feedback",
+        "pr_result",
+        "workflow_feedback",
+    ]
     assert tdd.steps["develop"].input_artifacts == [
         "spec",
         "plan",
         "review_feedback",
         "pr_result",
+        "workflow_feedback",
     ]
 
     assert simple.entry_point == "spec"

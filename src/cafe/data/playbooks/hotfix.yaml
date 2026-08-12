@@ -60,7 +60,7 @@ steps:
     skill: cafe-develop
     role: developer
     assignee_type: agent
-    input_artifacts: [review_feedback, pr_result]
+    input_artifacts: [review_feedback, pr_result, workflow_feedback]
     output_artifact: code
     human_tasks:
       - trigger: need_clarification
@@ -83,7 +83,7 @@ steps:
     behavior:
       runtime_tool_grants: [web_research, git_inspection]
     assignee_type: agent
-    input_artifacts: [code]
+    input_artifacts: [code, workflow_feedback]
     output_artifact: review_feedback
     human_tasks:
       - trigger: need_clarification
@@ -105,20 +105,26 @@ steps:
     skill: cafe-pr
     role: developer
     assignee_type: agent
-    input_artifacts: [code, review_feedback]
+    input_artifacts: [code, review_feedback, workflow_feedback]
     output_artifact: pr_result
     behavior:
       completion: baton
       publish_confirmation: true
       feedback_target: develop
-      context_providers: [git_history]
+      context_providers: [git_history, local_review]
     capability_requests: [cafe.pr.publish]
     allowed_tools: [Read, Edit, Write, Grep, Glob]
     allowed_goto: [develop, review]
     hooks:
-      prepare_input: [GitHubPRCreator, UserInputCollector]
-      publish_output: [GitHubPRCreator, LocalPRReviewer, PRLinkOpener]
+      prepare_input: [GitHubPRCreator, GitHubPRFeedbackSource, UserInputCollector]
+      publish_output: [GitHubPRCreator, LocalReviewContextProvider, PRLinkOpener]
+    human_tasks:
+      - trigger: confirm_output
+        task_id: local-review
+        outcomes: {approve: _done, request_changes: develop}
+        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
     "on":
+      confirm_output: pr
       await_agent: _done
       need_permission: pr
       manual_handoff: develop

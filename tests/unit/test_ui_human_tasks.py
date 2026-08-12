@@ -359,6 +359,56 @@ def test_command_completion_uses_the_same_policy_and_declared_destination(tmp_pa
     assert reloaded.handoff_contract.to_step == "plan"
 
 
+def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path: Path) -> None:
+    """UT-006/UT-007 — metadata, not a task name, chooses durable delivery."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "local-review"
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("pr", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    playbook = {
+        "steps": {
+            "pr": {
+                "skill": "cafe-pr",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "local-review",
+                        "outcomes": {"approve": "_done", "request_changes": "develop"},
+                        "feedback_delivery": {
+                            "artifact": "workflow_feedback",
+                            "source_kind": "local_review",
+                        },
+                    }
+                ],
+            },
+            "develop": {"skill": "cafe-develop"},
+        }
+    }
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=blackboard,
+        from_step="pr",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "local-review",
+            "decision": "request_changes",
+            "feedback": "Cover the empty input boundary.",
+        },
+        source="command",
+    )
+
+    assert result.target == "develop"
+    assert [entry.content for entry in WorkflowFeedbackLedger(issue_dir).pending()] == [
+        "Cover the empty input boundary."
+    ]
+    assert "workflow_feedback" in blackboard.artifacts
+    assert not (issue_dir / "develop" / "iteration_001" / "user_input.md").exists()
+
+
 def test_cross_step_revision_feedback_is_written_for_the_selected_target(tmp_path: Path) -> None:
     """Feedback follows a cross-step revision route instead of staying at the review step."""
     issue_dir = tmp_path / ".cafe" / "issues" / "cross-step-revision"

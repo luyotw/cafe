@@ -52,6 +52,36 @@ def test_policy_accepts_each_supported_response_pattern(
     assert policy.input_schema == input_schema
 
 
+def test_feedback_delivery_binding_is_strict_and_uses_the_canonical_artifact() -> None:
+    """UT-004 — delivery metadata cannot silently bind an arbitrary artifact."""
+    binding = HumanTaskBinding.model_validate(
+        {
+            "trigger": "confirm_output",
+            "task_id": "local-review",
+            "outcomes": {"request_changes": "develop"},
+            "feedback_delivery": {
+                "artifact": "workflow_feedback",
+                "source_kind": "local_review",
+            },
+        }
+    )
+
+    assert binding.feedback_delivery is not None
+    for malformed in (
+        {"artifact": "user_input", "source_kind": "local_review"},
+        {"artifact": "workflow_feedback", "source_kind": " "},
+        {"artifact": "workflow_feedback", "source_kind": "local_review", "target": "develop"},
+    ):
+        with pytest.raises(ValidationError):
+            HumanTaskBinding.model_validate(
+                {
+                    "trigger": "confirm_output",
+                    "task_id": "local-review",
+                    "feedback_delivery": malformed,
+                }
+            )
+
+
 @pytest.mark.parametrize(
     "payload",
     [

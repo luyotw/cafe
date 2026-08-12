@@ -1260,6 +1260,15 @@ class GenericWorkflowStepExecutor(Phase):
                 resolved_base,
             )
 
+        if "local_review" in behavior.context_providers:
+            base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
+            context["review_base"] = str(base_branch or self.git_ops.get_default_base_branch())
+            context["review_head"] = "HEAD"
+            context["review_required"] = str(
+                self._get_issue_config_value(self.issue_dir / "issue.yaml", "pr.auto_create")
+                is False
+            ).lower()
+
         return context
 
     @staticmethod
