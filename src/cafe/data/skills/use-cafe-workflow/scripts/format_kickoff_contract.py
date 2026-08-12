@@ -134,6 +134,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--issue-name", required=True)
     parser.add_argument("--effective-locale")
     parser.add_argument("--locale-source")
+    parser.add_argument("--repository-content-locale", required=True)
     parser.add_argument("--user-required", nargs="*", default=None)
     parser.add_argument("--driver-confirmable", nargs="*", default=None)
     parser.add_argument(
@@ -221,6 +222,7 @@ def render(args: argparse.Namespace) -> str:
             ["playbook_source", f"{loaded.source}: {loaded.path}"],
             ["configured_locale", configured_locale],
             ["effective_locale", f"{effective_locale} ({locale_source})"],
+            ["repository_content_locale", args.repository_content_locale],
             ["user_required", ", ".join(user_required) or "[]"],
             ["driver_confirmable", ", ".join(driver_confirmable) or "[]"],
             ["worktree", worktree],

@@ -84,6 +84,10 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "Alignment is a proactive driver decision" in normalized
     assert "alignment_policy:" not in reference
     assert "alignment_checkpoint: driver_resolvable_when_clear" in reference
+    assert "`repository_content_locale`" in reference
+    assert "explicitly ask the user to confirm `repository_content_locale`" in normalized
+    assert "do not treat inference or a playbook locale as confirmation" in normalized
+    assert "repository_language:" in reference
     assert ".cafe/issues/<issue-name>/issue.yaml" in reference
     assert "scripts/format_kickoff_contract.py" in reference
     assert "every phase, role, skill, scheduled gate" in normalized
@@ -128,6 +132,8 @@ mandate:
             "zh-TW",
             "--locale-source",
             "user thread override",
+            "--repository-content-locale",
+            "zh-TW",
             "--user-required",
             "--driver-confirmable",
             "spec",
@@ -151,6 +157,7 @@ mandate:
     assert "| review | reviewer | cafe-review | 否 | — | 否 |" in result.stdout
     assert "| pr | developer | cafe-pr | 否 | — | 否 |" in result.stdout
     assert "| effective_locale | zh-TW (user thread override) |" in result.stdout
+    assert "| repository_content_locale | zh-TW |" in result.stdout
     assert "| need_clarification | user_required | 否 |" in result.stdout
     assert "| product_scope | escalate | roadmap, positioning |" in result.stdout
 
@@ -181,6 +188,8 @@ def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
             "default",
             "--issue-name",
             "issue346",
+            "--repository-content-locale",
+            "en-US",
             "--user-required",
             "spec",
             "--worktree",
@@ -225,6 +234,8 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
             "default",
             "--issue-name",
             "issue346",
+            "--repository-content-locale",
+            "en-US",
             "--user-required",
             "spec",
             "plan",
@@ -364,6 +375,29 @@ def test_use_cafe_workflow_prefers_user_conversation_locale() -> None:
     assert "Never claim this skill lacks a locale rule" in normalized
     assert "Do not copy the locale into `issue.yaml`" in normalized
     assert "commands, paths, playbook and step names, intents, artifact keys" in normalized
+
+
+def test_use_cafe_workflow_requires_confirmed_repository_content_locale() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    reference = _read_skill_resource("references/kickoff.md")
+    normalized_skill = " ".join(skill.split())
+    normalized = " ".join(reference.split())
+
+    assert "repository content locale used by documentation and code comments" in normalized_skill
+    assert "## Repository content locale checklist" in reference
+    assert "Before `cafe init` or any other repository mutation" in normalized
+    assert "explicitly ask the user to confirm `repository_content_locale`" in normalized
+    assert (
+        "Use one repository content locale for both documentation and code comments"
+        in normalized
+    )
+    assert (
+        "scoped exception instead of making two languages a routine kickoff decision"
+        in normalized
+    )
+    assert "Acceptance of the complete kickoff contract explicitly confirms it" in normalized
+    assert "Persist the confirmed value in `.cafe/strategic_context.yaml`" in normalized
+    assert "not in issue-owned workflow state" in normalized
 
 
 def test_use_cafe_workflow_batches_driver_pr_review_findings() -> None:

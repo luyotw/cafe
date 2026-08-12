@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.15.0
+version: 1.16.0
 ---
 
 # Use CAFE Workflow
@@ -42,6 +42,9 @@ Do not preload unrelated references.
 - Resolve the effective conversation locale from a direct user override first,
   then a reliably inferred user preference from the current thread, and finally
   the active playbook. Use that locale for every driver-to-user message.
+- Obtain explicit kickoff confirmation for the repository content locale used
+  by documentation and code comments. Conversation-locale inference may supply
+  a recommended default, but it cannot confirm this convention for the user.
 - Use `.cafe/strategic_context.yaml` as the single source for strategic
   documents and authority. Do not invent strategy or silently create issue
   overrides.
@@ -68,8 +71,9 @@ Do not preload unrelated references.
 ### Start or resume
 
 - [ ] Read the kickoff and strategic-context references.
-- [ ] Resolve the active playbook, effective locale, confirmation gates,
-  reactive handoffs, mandate, and worktree behavior.
+- [ ] Resolve the active playbook, effective conversation locale, proposed
+  repository content locale, confirmation gates, reactive handoffs, mandate,
+  and worktree behavior.
 - [ ] Present the deterministic kickoff table and obtain explicit confirmation.
 - [ ] Check Git state, initialize CAFE if needed, prepare the issue, enter the
   recorded worktree, and persist the issue-owned contract.
