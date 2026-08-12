@@ -287,7 +287,7 @@ def test_blackboard_store_records_artifacts_events_and_decisions(tmp_path: Path)
 
     reloaded = store.load_or_create("spec")
     assert reloaded.current_step == "plan"
-    assert reloaded.schema_version == 2
+    assert reloaded.schema_version == 3
     assert reloaded.handoff_summary == "developer owns the next step"
     assert reloaded.artifacts["spec"].path == "spec/output.md"
     assert reloaded.artifacts["spec"].version == 1
