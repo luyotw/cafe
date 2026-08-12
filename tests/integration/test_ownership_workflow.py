@@ -239,6 +239,27 @@ def test_ownership_cli_dry_run_is_a_side_effect_free_simulation(
 playbook:
   id: ownership-preview
 steps:
+  draft:
+    skill: cafe-develop
+    role: developer
+    on: {await_agent: approval}
+  approval:
+    skill: cafe-develop
+    role: developer
+    assignee_type: human
+    human_tasks:
+      - trigger: initial
+        task_id: no-change-decision
+        outcomes: {agree: automatic}
+    on: {}
+  automatic:
+    skill: cafe-develop
+    role: developer
+    assignee_type: auto
+    automatic:
+      executor: declared_transition
+      inputs: {intent: await_agent}
+    on: {await_agent: mixed}
   mixed:
     skill: cafe-develop
     role: developer
@@ -272,6 +293,9 @@ steps:
 
     assert result.exit_code == 0, result.output
     assert "Ownership plan (read-only)" in result.stdout
+    assert "draft: owner=agent" in result.stdout
+    assert "approval: owner=human" in result.stdout
+    assert "automatic: owner=auto" in result.stdout
     assert "mixed: owner=hybrid" in result.stdout
     assert not (tmp_path / ".cafe" / "issues" / "ownership-preview" / "blackboard.json").exists()
 
