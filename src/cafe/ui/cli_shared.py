@@ -877,6 +877,41 @@ def _find_external_resume_step(
         except Exception:
             return None
 
+        try:
+            branch_name = git_ops.get_current_branch()
+        except Exception:
+            return None
+        if not branch_name:
+            return None
+
+        try:
+            existing_pr = _get_github_ops_cls()().get_pr_for_branch(branch_name)
+        except Exception:
+            return None
+        if not existing_pr:
+            return None
+
+        try:
+            pr_number = int(existing_pr["number"])
+            prefix = f"github-pr:{pr_number}:"
+            known_comment_ids = {
+                entry.source_identity[len(prefix) :]
+                for entry in ledger.load()
+                if entry.source_identity.startswith(prefix)
+            }
+            get_comments, filter_comments = _get_github_helpers()
+            comments = get_comments(pr_number, exclude_ids=known_comment_ids)
+            unresolved_comments = filter_comments(comments)
+        except Exception as exc:
+            console.print(
+                "[red]Error:[/red] could not evaluate unresolved PR discussion for external resume "
+                f"({exc}). Leaving workflow paused."
+            )
+            return None
+
+        if unresolved_comments:
+            return step_name
+
     return None
 
 

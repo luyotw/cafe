@@ -3035,7 +3035,7 @@ def test_find_external_resume_step_consumes_pending_ledger_feedback_for_its_targ
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-238"
     WorkflowFeedbackLedger(issue_dir).record(
-        source_identity="github_comment:238:comment-1",
+        source_identity="github-pr:238:comment-1",
         source_kind="github_pr",
         target_step="develop",
         content="Handle the unresolved comment.",
@@ -3071,7 +3071,7 @@ def test_find_external_resume_step_returns_none_for_consumed_ledger_feedback(
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-241"
     ledger = WorkflowFeedbackLedger(issue_dir)
-    identity = "github_comment:241:comment-1"
+    identity = "github-pr:241:comment-1"
     ledger.record(
         source_identity=identity,
         source_kind="github_pr",
@@ -3083,21 +3083,36 @@ def test_find_external_resume_step_returns_none_for_consumed_ledger_feedback(
         "steps": {
             "pr": {
                 "hooks": {
-                    "prepare_input": ["GitHubPRCreator", "GitHubPRFeedbackSource", "UserInputCollector"],
+                    "prepare_input": [
+                        "GitHubPRCreator",
+                        "GitHubPRFeedbackSource",
+                        "UserInputCollector",
+                    ],
                 },
             },
         },
     }
     git_ops = MagicMock()
+    git_ops.get_current_branch.return_value = "issue-241"
 
-    result = _find_external_resume_step(
-        issue_dir=issue_dir,
-        playbook_data=playbook_data,
-        git_ops=git_ops,
-    )
+    with (
+        patch("cafe.ui.cli.GitHubOps") as mock_github_ops,
+        patch("cafe.utils.github.get_all_pr_comments") as mock_fetch,
+        patch("cafe.utils.github.filter_unresolved_comments", return_value=[]),
+    ):
+        mock_github_ops.return_value.get_pr_for_branch.return_value = {
+            "number": 241,
+            "url": "https://github.com/test/repo/pull/241",
+        }
+        mock_fetch.return_value = []
+        result = _find_external_resume_step(
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            git_ops=git_ops,
+        )
 
     assert result is None
-    git_ops.get_current_branch.assert_not_called()
+    mock_fetch.assert_called_once_with(241, exclude_ids={"comment-1"})
 
 
 def test_find_external_resume_step_returns_none_without_pending_ledger_feedback(
@@ -3116,14 +3131,58 @@ def test_find_external_resume_step_returns_none_without_pending_ledger_feedback(
         },
     }
     git_ops = MagicMock()
-    result = _find_external_resume_step(
-        issue_dir=issue_dir,
-        playbook_data=playbook_data,
-        git_ops=git_ops,
-    )
+    git_ops.get_current_branch.return_value = "issue-240"
+
+    with (
+        patch("cafe.ui.cli.GitHubOps") as mock_github_ops,
+        patch("cafe.utils.github.get_all_pr_comments") as mock_fetch,
+    ):
+        mock_github_ops.return_value.get_pr_for_branch.return_value = None
+        result = _find_external_resume_step(
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            git_ops=git_ops,
+        )
 
     assert result is None
-    git_ops.get_current_branch.assert_not_called()
+    mock_fetch.assert_not_called()
+
+
+def test_find_external_resume_step_returns_pr_for_new_unresolved_github_feedback(
+    tmp_path: Path,
+) -> None:
+    """UT-003: unknown unresolved comments still start their declared source step."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-242"
+    playbook_data = {
+        "steps": {
+            "pr": {
+                "hooks": {
+                    "prepare_input": ["GitHubPRCreator", "GitHubPRFeedbackSource", "UserInputCollector"],
+                },
+            },
+        },
+    }
+    git_ops = MagicMock()
+    git_ops.get_current_branch.return_value = "issue-242"
+
+    with (
+        patch("cafe.ui.cli.GitHubOps") as mock_github_ops,
+        patch("cafe.utils.github.get_all_pr_comments") as mock_fetch,
+        patch("cafe.utils.github.filter_unresolved_comments", return_value=["comment-1"]),
+    ):
+        mock_github_ops.return_value.get_pr_for_branch.return_value = {
+            "number": 242,
+            "url": "https://github.com/test/repo/pull/242",
+        }
+        mock_fetch.return_value = ["comment-1"]
+        result = _find_external_resume_step(
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            git_ops=git_ops,
+        )
+
+    assert result == "pr"
+    mock_fetch.assert_called_once_with(242, exclude_ids=set())
 
 
 def test_workflow_command_resumes_pr_when_external_feedback_arrives_while_done(
