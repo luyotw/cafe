@@ -4291,7 +4291,7 @@ def test_completed_correction_selects_new_session_by_default(tmp_path: Path) -> 
     assert continuation.policy == SessionContinuationPolicy.NEW
 
 
-def test_correction_resume_override_uses_only_previous_exact_pair(tmp_path: Path) -> None:
+def test_completed_correction_ignores_resume_override(tmp_path: Path) -> None:
     executor = _minimal_spec_executor(
         tmp_path,
         agent_manager=FakeAgentManager("confirmed"),
@@ -4320,9 +4320,7 @@ def test_correction_resume_override_uses_only_previous_exact_pair(tmp_path: Path
         step_def=step_def,
     )
 
-    assert continuation.policy == SessionContinuationPolicy.RESUME_EXACT
-    assert continuation.cli == AgentCLI.CODEX
-    assert continuation.session_id == "old-session"
+    assert continuation.policy == SessionContinuationPolicy.NEW
 
 
 def test_incomplete_iteration_selects_exact_resume(tmp_path: Path) -> None:
