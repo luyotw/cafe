@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import copy
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
@@ -184,6 +185,12 @@ class GenericWorkflowStepExecutor(Phase):
         extra_prompt: Optional[str] = None,
         same_invocation_retry: bool = False,
     ) -> StepExecutionResult:
+        hybrid_portion = step_def.get("hybrid_portion")
+        is_hybrid_portion = isinstance(hybrid_portion, Mapping)
+        baton_path = self.issue_dir / "next_step.txt"
+        original_baton = baton_path.read_bytes() if baton_path.exists() else None
+        original_contract = copy.deepcopy(blackboard_state.handoff_contract)
+        original_current_step = blackboard_state.current_step
         self.phase_name = step_name
         self.phase_dir = self.issue_dir / step_name
         self.phase_dir.mkdir(parents=True, exist_ok=True)
@@ -448,7 +455,24 @@ class GenericWorkflowStepExecutor(Phase):
                     }
                 )
 
-        if status_code is not None:
+        captured_hybrid_baton: Optional[str] = None
+        if is_hybrid_portion:
+            current_baton = baton_path.read_bytes() if baton_path.exists() else None
+            if current_baton != original_baton:
+                try:
+                    captured_hybrid_baton = (current_baton or b"").decode("utf-8")
+                except UnicodeDecodeError:
+                    captured_hybrid_baton = "<non-utf8 baton>"
+                # A portion is intentionally unable to route the canonical
+                # workflow. Restore the pre-portion baton before returning
+                # its completion to the ownership runtime.
+                if original_contract is not None:
+                    blackboard_state.current_step = original_current_step
+                    store.write_handoff_contract(blackboard_state, original_contract)
+                elif original_baton is not None:
+                    baton_path.write_bytes(original_baton)
+
+        if status_code is not None and not is_hybrid_portion:
             # If the agent already wrote a valid baton (next_step.txt),
             # skip the status-code-driven baton write so we don't overwrite
             # the agent's explicit handoff.  This is the baton-first path.
@@ -467,6 +491,15 @@ class GenericWorkflowStepExecutor(Phase):
                 blackboard_state=blackboard_state,
                 step_name=step_name,
                 status_code=effective_status.value,
+            )
+
+        if captured_hybrid_baton is not None:
+            events.append(
+                {
+                    "type": "hybrid_portion_baton",
+                    "portion": dict(hybrid_portion),
+                    "payload": captured_hybrid_baton,
+                }
             )
 
         return StepExecutionResult(
@@ -529,9 +562,7 @@ class GenericWorkflowStepExecutor(Phase):
         try:
             workspace["head"] = self.git_ops.run_git("rev-parse", "HEAD")
             workspace["changed"] = [
-                line[3:]
-                for line in self.git_ops.get_status().splitlines()[:100]
-                if len(line) >= 4
+                line[3:] for line in self.git_ops.get_status().splitlines()[:100] if len(line) >= 4
             ]
         except Exception:
             workspace["state"] = "unknown"
@@ -777,16 +808,14 @@ class GenericWorkflowStepExecutor(Phase):
         previous_data = self._load_previous_iteration_data()
         current_data = self._load_current_iteration_data()
         step_def = self.playbook.get("steps", {}).get(step_name, {})
-        declared_artifacts = (
-            step_def.get("input_artifacts") if isinstance(step_def, dict) else None
-        )
+        declared_artifacts = step_def.get("input_artifacts") if isinstance(step_def, dict) else None
         if (
             blackboard_state is not None
             and isinstance(declared_artifacts, list)
             and is_interrupted_iteration(
-            iteration=self.iteration,
-            previous_iteration_data=previous_data,
-            current_iteration_data=current_data,
+                iteration=self.iteration,
+                previous_iteration_data=previous_data,
+                current_iteration_data=current_data,
             )
         ):
             artifact_lines = []
@@ -1575,9 +1604,7 @@ class GenericWorkflowStepExecutor(Phase):
                 payload,
                 current_step=step_name,
             )
-            allowed_handoff_intents = set(
-                effective_step_handoff_intents(step_def or {})
-            )
+            allowed_handoff_intents = set(effective_step_handoff_intents(step_def or {}))
             return (
                 contract.from_step == step_name
                 and contract.from_step != contract.to_step

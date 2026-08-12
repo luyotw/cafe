@@ -1,0 +1,381 @@
+"""Ownership-step contracts (UT-001–UT-007 and UT-011)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from cafe.core.automatic_steps import AutomaticExecutionResult, AutomaticExecutorRegistry
+from cafe.core.blackboard import BLACKBOARD_SCHEMA_VERSION, BlackboardState, BlackboardStore
+from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.core.human_tasks import HumanTaskBinding, HumanTaskDecision, HumanTaskPolicy
+from cafe.core.playbook import PlaybookDefinition, StepConfig
+from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+from cafe.playbooks.simulate import analyze_playbook, format_text_report
+from cafe.ui.human_tasks import apply_human_task_payload
+
+
+def _approval_policy() -> HumanTaskPolicy:
+    return HumanTaskPolicy(
+        id="approval",
+        pattern="no_changes_needed",
+        prompt="Approve this work",
+        input_schema="decision",
+        decisions=(HumanTaskDecision(id="accept", label="Accept"),),
+    )
+
+
+def _mixed_owner_model() -> PlaybookDefinition:
+    return PlaybookDefinition.model_validate(
+        {
+            "playbook": {"id": "mixed-owner"},
+            "steps": {
+                "agent": {"skill": "phase", "role": "operator", "on": {"await_agent": "human"}},
+                "human": {
+                    "skill": "phase",
+                    "role": "operator",
+                    "assignee_type": "human",
+                    "human_tasks": [
+                        {
+                            "trigger": "initial",
+                            "task_id": "approval",
+                            "outcomes": {"accept": "automatic"},
+                        }
+                    ],
+                    "on": {},
+                },
+                "automatic": {
+                    "skill": "phase",
+                    "role": "operator",
+                    "assignee_type": "auto",
+                    "automatic": {
+                        "executor": "declared_transition",
+                        "inputs": {"intent": "await_agent"},
+                    },
+                    "on": {"await_agent": "hybrid"},
+                },
+                "hybrid": {
+                    "skill": "phase",
+                    "role": "operator",
+                    "assignee_type": "hybrid",
+                    "human_tasks": [
+                        {
+                            "trigger": "approve",
+                            "task_id": "approval",
+                            "outcomes": {"accept": "hybrid"},
+                        }
+                    ],
+                    "hybrid": {
+                        "entry_portion": "draft",
+                        "portions": [
+                            {
+                                "id": "draft",
+                                "owner": "agent",
+                                "on": {"await_agent": {"portion": "approve"}},
+                            },
+                            {
+                                "id": "approve",
+                                "owner": "human",
+                                "on": {"accept": {"step": "_done"}},
+                            },
+                        ],
+                    },
+                    "on": {},
+                },
+            },
+        }
+    )
+
+
+def test_ownership_schema_normalizes_legacy_and_requires_complete_explicit_shapes() -> None:
+    """UT-001–UT-004: owner contracts are explicit and hybrid edges are typed."""
+    legacy = StepConfig.model_validate({"skill": "phase", "role": "operator", "on": {}})
+    assert legacy.assignee_type == "agent"
+    assert "assignee_type" not in legacy.model_fields_set
+
+    hybrid = StepConfig.model_validate(
+        {
+            "skill": "phase",
+            "role": "operator",
+            "assignee_type": "hybrid",
+            "human_tasks": [
+                {
+                    "trigger": "approve",
+                    "task_id": "approval",
+                    "outcomes": {"accept": "mixed"},
+                }
+            ],
+            "hybrid": {
+                "entry_portion": "draft",
+                "portions": [
+                    {
+                        "id": "draft",
+                        "owner": "agent",
+                        "on": {"await_agent": {"portion": "approve"}},
+                    },
+                    {
+                        "id": "approve",
+                        "owner": "human",
+                        "on": {"accept": {"step": "_done"}},
+                    },
+                ],
+            },
+            "on": {},
+        }
+    )
+    assert hybrid.hybrid is not None
+    assert hybrid.hybrid.entry_portion == "draft"
+
+    with pytest.raises(ValueError, match="automatic"):
+        StepConfig.model_validate(
+            {"skill": "phase", "role": "operator", "assignee_type": "auto", "on": {}}
+        )
+    with pytest.raises(ValueError, match="matching assignee_type"):
+        StepConfig.model_validate(
+            {
+                "skill": "phase",
+                "role": "operator",
+                "automatic": {"executor": "advance"},
+                "on": {},
+            }
+        )
+
+
+def test_automatic_registry_is_closed_and_returns_declared_intent() -> None:
+    """UT-003/UT-006: only a host-supplied registered executor can run."""
+    calls: list[dict[str, object]] = []
+    registry = AutomaticExecutorRegistry(
+        {
+            "advance": lambda inputs: calls.append(dict(inputs))
+            or AutomaticExecutionResult("await_agent")
+        }
+    )
+
+    assert registry.execute("advance", {"value": 1}).intent == "await_agent"
+    assert calls == [{"value": 1}]
+    with pytest.raises(ValueError, match="not registered"):
+        registry.execute("./untrusted-script", {})
+
+
+def test_human_owner_pauses_idempotently_without_invoking_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT-005: a human owner materializes one durable wait and never calls the agent."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "human-owner"
+    binding = HumanTaskBinding(trigger="initial", task_id="approval", outcomes={"accept": "after"})
+    monkeypatch.setattr(
+        "cafe.core.workflow_runtime.resolve_step_human_task",
+        lambda **_: (_approval_policy(), binding),
+    )
+    calls = 0
+
+    def executor(*_args: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("human-owned work must not invoke the agent executor")
+
+    playbook = {
+        "playbook": {"id": "owner-test"},
+        "steps": {
+            "approval": {
+                "skill": "phase",
+                "role": "operator",
+                "assignee_type": "human",
+                "human_tasks": [binding.model_dump()],
+                "on": {},
+            },
+            "after": {"skill": "phase", "role": "operator", "on": {}},
+        },
+    }
+    paused = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=playbook, executor=executor
+    ).run(start_step="approval")
+    recovered = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=playbook, executor=executor
+    ).run()
+
+    records = HumanTaskRecordStore(issue_dir)
+    assert paused.completed is False
+    assert recovered.completed is False
+    assert calls == 0
+    assert len(records.tasks()) == 1
+    assert records.active_wait_state(records.tasks()[0].workflow_id) is not None
+
+
+def test_automatic_owner_dispatches_registry_without_agent(tmp_path: Path) -> None:
+    """UT-006: automatic work transitions through its registered host executor only."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "automatic-owner"
+    agent_calls = 0
+    automatic_calls: list[dict[str, object]] = []
+
+    def executor(*_args: object, **_kwargs: object) -> object:
+        nonlocal agent_calls
+        agent_calls += 1
+        raise AssertionError("automatic work must not fall back to the agent")
+
+    registry = AutomaticExecutorRegistry(
+        {
+            "advance": lambda inputs: automatic_calls.append(dict(inputs))
+            or AutomaticExecutionResult("await_agent")
+        }
+    )
+    playbook = {
+        "playbook": {"id": "owner-test"},
+        "steps": {
+            "automatic": {
+                "skill": "phase",
+                "role": "operator",
+                "assignee_type": "auto",
+                "automatic": {"executor": "advance", "inputs": {"safe": True}},
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+        automatic_registry=registry,
+    ).run(start_step="automatic")
+
+    assert result.completed is True
+    assert agent_calls == 0
+    assert automatic_calls == [{"safe": True}]
+
+
+def test_hybrid_owner_resumes_only_its_declared_portion_after_matching_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT-007/UT-010: hybrid cursor contains agent completion and durable human resume."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "hybrid-owner"
+    binding = HumanTaskBinding(trigger="approve", task_id="approval", outcomes={"accept": "mixed"})
+    monkeypatch.setattr(
+        "cafe.core.workflow_runtime.resolve_step_human_task",
+        lambda **_: (_approval_policy(), binding),
+    )
+    monkeypatch.setattr(
+        "cafe.ui.human_tasks.resolve_step_human_task",
+        lambda **_: (_approval_policy(), binding),
+    )
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, _state: object, **_kwargs: object):
+        calls.append(step_def["hybrid_portion"]["id"])
+        return ("await_agent", {})
+
+    playbook = {
+        "playbook": {"id": "owner-test"},
+        "steps": {
+            "mixed": {
+                "skill": "phase",
+                "role": "operator",
+                "assignee_type": "hybrid",
+                "human_tasks": [binding.model_dump()],
+                "hybrid": {
+                    "entry_portion": "draft",
+                    "portions": [
+                        {
+                            "id": "draft",
+                            "owner": "agent",
+                            "on": {"await_agent": {"portion": "approve"}},
+                        },
+                        {
+                            "id": "approve",
+                            "owner": "human",
+                            "on": {"accept": {"portion": "finalize"}},
+                        },
+                        {
+                            "id": "finalize",
+                            "owner": "agent",
+                            "on": {"await_agent": {"step": "_done"}},
+                        },
+                    ],
+                },
+                "on": {},
+            }
+        },
+    }
+    paused = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=playbook, executor=executor
+    ).run(start_step="mixed")
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    state = BlackboardStore(issue_dir).load_or_create("mixed")
+    applied = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="mixed",
+        trigger="approve",
+        raw_payload={"task": "approval", "decision": "accept", "human_task_id": task.id},
+        source="test",
+    )
+    completed = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=playbook, executor=executor
+    ).run()
+
+    assert paused.final_status_code == "HYBRID_HUMAN_TASK_PENDING"
+    assert applied.target == "mixed"
+    assert completed.completed is True
+    assert calls == ["draft", "finalize"]
+
+
+def test_blackboard_v2_state_migrates_to_v3_without_losing_handoff(tmp_path: Path) -> None:
+    """UT-011: v2 data gains ownership defaults and persists as schema v3."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "migration"
+    store = BlackboardStore(issue_dir)
+    issue_dir.mkdir(parents=True)
+    store.file_path.write_text(
+        '{"schema_version": 2, "current_step": "approval", "playbook_id": "owner-test", '
+        '"workflow_id": "stable-id", "handoff_summary": "waiting"}',
+        encoding="utf-8",
+    )
+
+    state = store.load_or_create("approval", playbook_id="owner-test")
+    assert state.schema_version == BLACKBOARD_SCHEMA_VERSION == 3
+    assert state.ownership_cursor is None
+    assert state.step_visit_counts == {}
+    store.save(state)
+    assert '"schema_version": 3' in store.file_path.read_text(encoding="utf-8")
+    with pytest.raises(ValueError, match="future"):
+        BlackboardState.from_dict({"schema_version": 99}, initial_step="approval")
+
+
+def test_simulation_reports_all_owners_without_creating_runtime_state(tmp_path: Path) -> None:
+    """UT-008/IT-004: ownership preview is pure and exposes waits/authority."""
+    result = analyze_playbook(_mixed_owner_model())
+    text = format_text_report(result)
+
+    assert "agent: owner=agent" in text
+    assert "human: owner=human" in text
+    assert "automatic executor=declared_transition" in text
+    assert "portion=approve owner=human wait" in text
+    assert not (tmp_path / ".cafe").exists()
+
+
+def test_persisted_visit_limit_survives_a_separate_runtime_instance(tmp_path: Path) -> None:
+    """UT-009/IT-005: a restart cannot reset a top-level owner loop limit."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "persistent-loop"
+    playbook = {
+        "playbook": {"id": "owner-test"},
+        "steps": {
+            "loop": {
+                "skill": "phase",
+                "role": "operator",
+                "max_iterations": 1,
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "loop"},
+            }
+        },
+    }
+
+    def executor(*_args: object, **_kwargs: object):
+        return ("confirmed", {})
+
+    BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor).run(
+        start_step="loop", single_step=True
+    )
+    with pytest.raises(RuntimeError, match="max_iterations=1"):
+        BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor).run(
+            start_step="loop", single_step=True
+        )

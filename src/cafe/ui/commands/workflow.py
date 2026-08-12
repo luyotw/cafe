@@ -32,16 +32,20 @@ from cafe.ui.human_tasks import apply_human_task_payload
 from cafe.agents.executor import AgentExecutionError
 from cafe.utils.config import ConfigError, validate_directories_exist
 
+
 # Lazy access to GitOperations via cli for backward-compat test patching.
 def _get_GitOperations():
     from cafe.ui.cli import GitOperations
+
     return GitOperations
 
 
 # Lazy access to ConfigManager via cli for backward-compat test patching.
 def _get_ConfigManager():
     from cafe.ui.cli import ConfigManager
+
     return ConfigManager
+
 
 # Functions moved to cli_shared, accessed through cli module for
 # backward-compatible test patching (tests patch ``cafe.ui.cli._func``).
@@ -50,68 +54,79 @@ def _get_ConfigManager():
 
 def _build_workflow_pause_guidance(*a, **kw):
     from cafe.ui.cli import _build_workflow_pause_guidance as _fn
+
     return _fn(*a, **kw)
 
 
 def _build_workflow_step_executor(*a, **kw):
     from cafe.ui.cli import _build_workflow_step_executor as _fn
+
     return _fn(*a, **kw)
 
 
 def _check_agent_clis_available(*a, **kw):
     from cafe.ui.cli import _check_agent_clis_available as _fn
+
     return _fn(*a, **kw)
 
 
 def _consume_pending_chat_handoff(*a, **kw):
     from cafe.ui.cli import _consume_pending_chat_handoff as _fn
+
     return _fn(*a, **kw)
 
 
 def _find_external_resume_step(*a, **kw):
     from cafe.ui.cli import _find_external_resume_step as _fn
+
     return _fn(*a, **kw)
 
 
 def _find_incomplete_workflow_step(*a, **kw):
     from cafe.ui.cli import _find_incomplete_workflow_step as _fn
+
     return _fn(*a, **kw)
 
 
 def _handle_phase_exception(*a, **kw):
     from cafe.ui.cli import _handle_phase_exception as _fn
+
     return _fn(*a, **kw)
 
 
 def _handle_user_phase(*a, **kw):
     from cafe.ui.cli import _handle_user_phase as _fn
+
     return _fn(*a, **kw)
 
 
 def _load_issue_step_names(*a, **kw):
     from cafe.ui.cli import _load_issue_step_names as _fn
+
     return _fn(*a, **kw)
 
 
 def _print_workflow_pause_guidance(*a, **kw):
     from cafe.ui.cli import _print_workflow_pause_guidance as _fn
+
     return _fn(*a, **kw)
 
 
 def _resolve_selected_playbook(*a, **kw):
     from cafe.ui.cli import _resolve_selected_playbook as _fn
+
     return _fn(*a, **kw)
 
 
 def _resolve_issue_playbook_name(*a, **kw):
     from cafe.ui.cli import _resolve_issue_playbook_name as _fn
+
     return _fn(*a, **kw)
+
 
 console = Console()
 
-_USER_INPUT_HELP = (
-    "Initial workflow input, or answer to write when resuming from a user handoff"
-)
+_USER_INPUT_HELP = "Initial workflow input, or answer to write when resuming from a user handoff"
 
 
 def _normalize_cli_user_input(user_input: Any) -> Optional[str]:
@@ -283,18 +298,13 @@ def make(
 
 
 def show(
-    phase_name: str = typer.Argument(
-        ...,
-        help="Playbook step name"
-    ),
-    content_type: Optional[str] = typer.Argument(
-        None,
-        help="Content type (default: output)"
-    ),
+    phase_name: str = typer.Argument(..., help="Playbook step name"),
+    content_type: Optional[str] = typer.Argument(None, help="Content type (default: output)"),
     iteration: int = typer.Option(
         0,
-        "--iteration", "-i",
-        help="Iteration number (positive, 0=latest, negative=relative index)"
+        "--iteration",
+        "-i",
+        help="Iteration number (positive, 0=latest, negative=relative index)",
     ),
 ) -> None:
     """Display iteration file contents.
@@ -361,7 +371,9 @@ def show(
             if content_type == "status":
                 from cafe.services.summary_service import SummaryService
 
-                status = SummaryService(issues_root=cafe_dir / "issues").load_phase_status(issue_name, phase_name)
+                status = SummaryService(issues_root=cafe_dir / "issues").load_phase_status(
+                    issue_name, phase_name
+                )
                 if status:
                     console.print_json(data=status)
                     return
@@ -371,7 +383,9 @@ def show(
             else:
                 console.print(f"[red]Error: File not found: {file_path}[/red]")
                 if resolved_iteration is not None:
-                    console.print(f"[dim]File '{content_type}' does not exist in iteration {resolved_iteration}[/dim]")
+                    console.print(
+                        f"[dim]File '{content_type}' does not exist in iteration {resolved_iteration}[/dim]"
+                    )
             raise typer.Exit(1)
 
         # Read and display file content
@@ -382,6 +396,7 @@ def show(
             if file_path.suffix == ".json":
                 try:
                     import json
+
                     json_data = json.loads(content)
                     console.print_json(data=json_data)
                 except json.JSONDecodeError:
@@ -559,9 +574,13 @@ def _print_workflow_event_display(event: Any) -> None:
 def workflow(
     playbook: Optional[str] = typer.Option(None, "--playbook", help="Playbook name"),
     issue: Optional[str] = typer.Option(None, "--issue", help="Issue directory name"),
-    start_step: Optional[str] = typer.Option(None, "--start-step", help="Start execution from a specific step"),
+    start_step: Optional[str] = typer.Option(
+        None, "--start-step", help="Start execution from a specific step"
+    ),
     single_step: bool = typer.Option(False, "--single-step", help="Run only one playbook step"),
-    dry_run: bool = typer.Option(True, "--dry-run/--execute", help="Run with built-in dry executor"),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--execute", help="Run with built-in dry executor"
+    ),
     user_input: Optional[str] = typer.Option(
         None,
         "--user-input",
@@ -582,11 +601,13 @@ def workflow(
     """Run playbook workflow using the new generic runner."""
     user_input = _normalize_cli_user_input(user_input)
     try:
+
         def _predict_next_iteration(issue_root: Path, step_name: str) -> int:
             step_dir = issue_root / step_name
             iter_dirs = sorted(d for d in step_dir.glob("iteration_*") if d.is_dir())
             existing = [
-                d for d in iter_dirs
+                d
+                for d in iter_dirs
                 if (d / "iteration.json").exists() or (d / "context.json").exists()
             ]
             if not existing:
@@ -594,6 +615,7 @@ def workflow(
             count = len(existing)
             try:
                 import json as _json
+
                 last_dir = existing[-1]
                 last_file = (
                     last_dir / "iteration.json"
@@ -649,6 +671,20 @@ def workflow(
 
         playbook_loader = PlaybookLoader()
         playbook_data = playbook_loader.load(selected_playbook)
+        if dry_run:
+            # Dry-run is a planning surface, not a fake execution mode. It
+            # must not create workflow state, phase output, tasks, hooks, or
+            # agent/automatic executor sessions.
+            from cafe.core.playbook import PlaybookDefinition
+            from cafe.playbooks.simulate import analyze_playbook, format_text_report
+
+            model = PlaybookDefinition.model_validate(playbook_data)
+            preview_step = start_step or model.entry_point or next(iter(model.steps))
+            console.print(
+                f"[dim]Workflow context[/dim] playbook={model.playbook.id} step={preview_step}"
+            )
+            console.print(format_text_report(analyze_playbook(model)))
+            return
         interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
         generic_phase = GenericPhase(SkillLoader())
 
@@ -666,7 +702,10 @@ def workflow(
             if resolve_step_behavior(playbook_data, step_name).publish_confirmation:
                 store = BlackboardStore(issue_dir)
                 blackboard = store.load_or_create(
-                    str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
+                    str(
+                        playbook_data.get("entry_point")
+                        or next(iter(playbook_data["steps"].keys()))
+                    ),
                     playbook_id=str(playbook_data["playbook"]["id"]),
                 )
                 store.update_handoff_contract(
@@ -696,6 +735,7 @@ def workflow(
                 artifacts={str(output_key): str(output_path)},
                 status_code="confirmed",
             )
+
         entry_point = str(
             playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))
         )
@@ -712,15 +752,19 @@ def workflow(
 
         # Mutable holder so wrapped_executor can swap executors on fallback
         _executor_holder: Dict[str, Any] = {
-            "executor": None if dry_run else _build_workflow_step_executor(
-                config_manager=config_manager,
-                issue_dir=issue_dir,
-                issue_name=issue_name,
-                playbook_data=playbook_data,
-                generic_phase=generic_phase,
-                step_user_inputs=initial_step_user_inputs,
-                interactive=interactive,
-                extra_allowed_directories=add_dir_values,
+            "executor": (
+                None
+                if dry_run
+                else _build_workflow_step_executor(
+                    config_manager=config_manager,
+                    issue_dir=issue_dir,
+                    issue_name=issue_name,
+                    playbook_data=playbook_data,
+                    generic_phase=generic_phase,
+                    step_user_inputs=initial_step_user_inputs,
+                    interactive=interactive,
+                    extra_allowed_directories=add_dir_values,
+                )
             ),
             "fallback_applied": False,
         }
@@ -728,10 +772,13 @@ def workflow(
         def _apply_fallback_preset_and_rebuild() -> None:
             """Apply fallback preset and rebuild the step executor in-place."""
             from cafe.utils.preset import PresetManager, PresetNotFoundError
+
             assert fallback_preset is not None
             try:
                 PresetManager().apply(fallback_preset)
-                console.print(f"[yellow]⚡ Switched to fallback preset '{fallback_preset}' — remaining steps will use this crew.[/yellow]")
+                console.print(
+                    f"[yellow]⚡ Switched to fallback preset '{fallback_preset}' — remaining steps will use this crew.[/yellow]"
+                )
             except PresetNotFoundError as e:
                 console.print(f"[red]Fallback preset error: {e}[/red]")
                 raise
@@ -797,7 +844,8 @@ def workflow(
                 if (
                     fallback_preset
                     and not _executor_holder["fallback_applied"]
-                    and getattr(exc, "error_type", None) in ("rate_limit", "cli_not_found", "cli_unavailable", "model_not_found")
+                    and getattr(exc, "error_type", None)
+                    in ("rate_limit", "cli_not_found", "cli_unavailable", "model_not_found")
                 ):
                     _apply_fallback_preset_and_rebuild()
                     fallback_executor = _executor_holder["executor"]
@@ -835,7 +883,11 @@ def workflow(
                     playbook_data=playbook_data,
                     requested_start_step=pending_start_step,
                 )
-            if pending_start_step is not None and pending_start_step not in playbook_data["steps"] and pending_start_step not in {"user", "done"}:
+            if (
+                pending_start_step is not None
+                and pending_start_step not in playbook_data["steps"]
+                and pending_start_step not in {"user", "done"}
+            ):
                 raise ValueError(f"Unknown playbook step '{pending_start_step}'")
 
             blackboard = BlackboardStore(issue_dir).load_or_create(
@@ -936,9 +988,9 @@ def workflow(
                                     "[yellow]Workflow is waiting for an explicit alignment decision payload.[/yellow]"
                                 )
                                 console.print(
-                                    "[dim]Use JSON such as {\"decision\":\"approve\"}, "
-                                    "{\"decision\":\"narrow\",\"correction\":\"...\"}, "
-                                    "or {\"decision\":\"update_strategic_documents_first\"}.[/dim]"
+                                    '[dim]Use JSON such as {"decision":"approve"}, '
+                                    '{"decision":"narrow","correction":"..."}, '
+                                    'or {"decision":"update_strategic_documents_first"}.[/dim]'
                                 )
                                 return
                             selected_step = apply_alignment_decision_from_payload(
@@ -952,36 +1004,55 @@ def workflow(
                                 pending_start_step = selected_step
                                 continue
                             return
-                        if contract.intent in {
-                            HandoffIntent.CONFIRM_OUTPUT,
-                            HandoffIntent.NEED_CLARIFICATION,
-                            HandoffIntent.NO_CHANGES_NEEDED,
-                        }:
+                        owner_trigger = None
+                        source_step_def = playbook_data.get("steps", {}).get(from_step, {})
+                        if isinstance(source_step_def, dict):
+                            if source_step_def.get("assignee_type") == "human":
+                                owner_trigger = "initial"
+                            elif source_step_def.get("assignee_type") == "hybrid":
+                                cursor = getattr(blackboard, "ownership_cursor", None)
+                                if isinstance(cursor, dict) and cursor.get("step") == from_step:
+                                    portion = cursor.get("portion")
+                                    if isinstance(portion, str):
+                                        owner_trigger = portion
+                        if (
+                            contract.intent
+                            in {
+                                HandoffIntent.CONFIRM_OUTPUT,
+                                HandoffIntent.NEED_CLARIFICATION,
+                                HandoffIntent.NO_CHANGES_NEEDED,
+                            }
+                            or owner_trigger is not None
+                        ):
                             result = apply_human_task_payload(
                                 issue_dir=issue_dir,
                                 playbook_data=playbook_data,
                                 blackboard=blackboard,
                                 from_step=from_step,
-                                trigger=contract.intent.value,
+                                trigger=owner_trigger or contract.intent.value,
                                 raw_payload=user_input,
                                 source="command",
                             )
                             if result.rejection is not None:
                                 console.print(f"[yellow]{result.rejection.message}[/yellow]")
-                                console.print(
-                                    f"[dim]{result.rejection.correction_guidance}[/dim]"
-                                )
+                                console.print(f"[dim]{result.rejection.correction_guidance}[/dim]")
                                 return
                             user_input = None
                             pending_start_step = result.target
                             continue
                         store = BlackboardStore(issue_dir)
                         from_step_dir = issue_dir / from_step
-                        iteration_dirs = sorted(from_step_dir.glob("iteration_*")) if from_step_dir.exists() else []
+                        iteration_dirs = (
+                            sorted(from_step_dir.glob("iteration_*"))
+                            if from_step_dir.exists()
+                            else []
+                        )
                         next_iteration_num = len(iteration_dirs) + 1
                         next_iteration_dir = from_step_dir / f"iteration_{next_iteration_num:03d}"
                         next_iteration_dir.mkdir(parents=True, exist_ok=True)
-                        (next_iteration_dir / "user_input.md").write_text(user_input, encoding="utf-8")
+                        (next_iteration_dir / "user_input.md").write_text(
+                            user_input, encoding="utf-8"
+                        )
                         store.set_current_step(blackboard, from_step)
                         store.set_handoff_summary(
                             blackboard,
@@ -995,9 +1066,7 @@ def workflow(
                             intent=HandoffIntent.AWAIT_AGENT,
                             source="workflow.user_input_flag",
                         )
-                        console.print(
-                            f"[dim]Resuming[/dim] {from_step} with --user-input"
-                        )
+                        console.print(f"[dim]Resuming[/dim] {from_step} with --user-input")
                         # Consume user_input so it is not replayed on
                         # subsequent user handoffs for different steps.
                         user_input = None
@@ -1043,10 +1112,20 @@ def workflow(
             ):
                 pending_start_step = latest_blackboard.current_step
                 continue
-            if interactive and not dry_run and not single_step and latest_blackboard.current_step == "user":
+            if (
+                interactive
+                and not dry_run
+                and not single_step
+                and latest_blackboard.current_step == "user"
+            ):
                 pending_start_step = "user"
                 continue
-            if not interactive and not dry_run and not single_step and latest_blackboard.current_step == "user":
+            if (
+                not interactive
+                and not dry_run
+                and not single_step
+                and latest_blackboard.current_step == "user"
+            ):
                 if user_input and user_input.strip():
                     pending_start_step = "user"
                     continue
@@ -1057,7 +1136,11 @@ def workflow(
                     f"[green]Workflow completed[/green] step={result.final_step} status={result.final_status_code} next={latest_blackboard.current_step}"
                 )
             elif result.final_status_code.startswith("INTERRUPTED"):
-                reason = result.final_status_code.split(":", 1)[1] if ":" in result.final_status_code else "interrupted"
+                reason = (
+                    result.final_status_code.split(":", 1)[1]
+                    if ":" in result.final_status_code
+                    else "interrupted"
+                )
                 console.print(
                     f"[yellow]Workflow interrupted[/yellow] step={result.final_step} reason={reason}"
                 )
@@ -1072,9 +1155,7 @@ def workflow(
                         "[dim]PR publish failed after the agent completed. Fix the publish error, then run 'cafe make' again.[/dim]"
                     )
                 else:
-                    console.print(
-                        "[dim]Run 'cafe make' again to resume from this step.[/dim]"
-                    )
+                    console.print("[dim]Run 'cafe make' again to resume from this step.[/dim]")
                 return
             else:
                 console.print(
