@@ -708,9 +708,16 @@ steps:
 
 
 @pytest.mark.parametrize("playbook_name", ["default", "simple", "tdd"])
-def test_builtin_entry_steps_use_declared_initial_input_resolver(playbook_name: str) -> None:
+def test_builtin_entry_steps_use_declared_initial_input_resolver(
+    playbook_name: str, tmp_path: Path
+) -> None:
     """I3 — built-in development flows retain the provider contract."""
-    model = PlaybookLoader().load_model(playbook_name).model
+    builtin_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
+    model = PlaybookLoader(
+        project_root=tmp_path,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    ).load_model(playbook_name).model
     entry = model.steps[model.entry_point]
 
     assert entry.initial_input.providers == ["manual_text", "github_issue"]
