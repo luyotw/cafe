@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
 import json
 from pathlib import Path
+import threading
 from typing import Any, Mapping, Optional
 from uuid import uuid4
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows falls back to the local lock.
+    fcntl = None
 
 from cafe.core.packet_io import atomic_write_bytes, canonical_json
 
@@ -298,9 +305,14 @@ class _Envelope:
 class HumanTaskRecordStore:
     """Versioned local store for durable task, wait, result, and audit records."""
 
+    _thread_locks: dict[Path, threading.RLock] = {}
+    _thread_locks_guard = threading.Lock()
+
     def __init__(self, issue_dir: Path) -> None:
         self.issue_dir = issue_dir
         self.file_path = issue_dir / HUMAN_TASK_RECORD_FILENAME
+        self.lock_path = issue_dir / f".{HUMAN_TASK_RECORD_FILENAME}.lock"
+        self._transaction_depth = 0
 
     @property
     def exists(self) -> bool:
@@ -370,44 +382,45 @@ class HumanTaskRecordStore:
         assignee_type: str,
         assignee_id: Optional[str] = None,
     ) -> HumanTask:
-        envelope = self._load_for_workflow(workflow_id, create=True)
-        handoff_key = _handoff_key(workflow_id, step, iteration, trigger, policy_id)
-        existing = next(
-            (task for task in envelope.tasks.values() if task.handoff_key == handoff_key), None
-        )
-        if existing is not None:
-            return existing
-        now = _now_iso()
-        task = HumanTask(
-            id=str(uuid4()),
-            handoff_key=handoff_key,
-            workflow_id=workflow_id,
-            step=_text(step, "step"),
-            iteration=_positive(iteration, "iteration"),
-            trigger=_text(trigger, "trigger"),
-            policy_id=_text(policy_id, "policy_id"),
-            prompt=_text(prompt, "prompt"),
-            expected_result=dict(expected_result),
-            continuations=_string_mapping_value(continuations, "continuations"),
-            status=HumanTaskStatus.PENDING,
-            created_at=now,
-        )
-        envelope.tasks[task.id] = task
-        envelope.assignments[task.id] = Assignment(
-            task_id=task.id,
-            assignee_type=_text(assignee_type, "assignee_type"),
-            assignee_id=_optional_text(assignee_id),
-            created_at=now,
-        )
-        envelope.wait_states[task.id] = WaitState(
-            task_id=task.id,
-            workflow_id=workflow_id,
-            pause_reason=task.trigger,
-            created_at=now,
-        )
-        self._append_event(envelope, "created", task_id=task.id, context={"handoff_key": handoff_key})
-        self._save(envelope)
-        return task
+        with self.transaction():
+            envelope = self._load_for_workflow(workflow_id, create=True)
+            handoff_key = _handoff_key(workflow_id, step, iteration, trigger, policy_id)
+            existing = next(
+                (task for task in envelope.tasks.values() if task.handoff_key == handoff_key), None
+            )
+            if existing is not None:
+                return existing
+            now = _now_iso()
+            task = HumanTask(
+                id=str(uuid4()),
+                handoff_key=handoff_key,
+                workflow_id=workflow_id,
+                step=_text(step, "step"),
+                iteration=_positive(iteration, "iteration"),
+                trigger=_text(trigger, "trigger"),
+                policy_id=_text(policy_id, "policy_id"),
+                prompt=_text(prompt, "prompt"),
+                expected_result=dict(expected_result),
+                continuations=_string_mapping_value(continuations, "continuations"),
+                status=HumanTaskStatus.PENDING,
+                created_at=now,
+            )
+            envelope.tasks[task.id] = task
+            envelope.assignments[task.id] = Assignment(
+                task_id=task.id,
+                assignee_type=_text(assignee_type, "assignee_type"),
+                assignee_id=_optional_text(assignee_id),
+                created_at=now,
+            )
+            envelope.wait_states[task.id] = WaitState(
+                task_id=task.id,
+                workflow_id=workflow_id,
+                pause_reason=task.trigger,
+                created_at=now,
+            )
+            self._append_event(envelope, "created", task_id=task.id, context={"handoff_key": handoff_key})
+            self._save(envelope)
+            return task
 
     def complete(
         self,
@@ -417,54 +430,57 @@ class HumanTaskRecordStore:
         payload: Mapping[str, Any],
         source: str,
     ) -> TaskResult:
-        envelope = self._load_for_workflow(workflow_id, create=False)
-        task = self._task(envelope, task_id)
-        existing = envelope.results.get(task.id)
-        if existing is not None:
-            return existing
-        if task.status is not HumanTaskStatus.PENDING:
-            raise HumanTaskCorrelationError(f"task {task.id} is not pending")
-        wait_state = envelope.wait_states[task.id]
-        if wait_state.released_at is not None:
-            raise HumanTaskCorrelationError(f"task {task.id} has no active wait state")
-        now = _now_iso()
-        result = TaskResult(
-            id=str(uuid4()),
-            task_id=task.id,
-            workflow_id=workflow_id,
-            payload=dict(payload),
-            source=_text(source, "source"),
-            completed_at=now,
-        )
-        envelope.results[task.id] = result
-        envelope.tasks[task.id] = replace(task, status=HumanTaskStatus.COMPLETED, completed_at=now)
-        envelope.wait_states[task.id] = replace(wait_state, released_at=now)
-        self._append_event(envelope, "completed", task_id=task.id, context={"result_id": result.id})
-        self._save(envelope)
-        return result
+        with self.transaction():
+            envelope = self._load_for_workflow(workflow_id, create=False)
+            task = self._task(envelope, task_id)
+            existing = envelope.results.get(task.id)
+            if existing is not None:
+                return existing
+            if task.status is not HumanTaskStatus.PENDING:
+                raise HumanTaskCorrelationError(f"task {task.id} is not pending")
+            wait_state = envelope.wait_states[task.id]
+            if wait_state.released_at is not None:
+                raise HumanTaskCorrelationError(f"task {task.id} has no active wait state")
+            now = _now_iso()
+            result = TaskResult(
+                id=str(uuid4()),
+                task_id=task.id,
+                workflow_id=workflow_id,
+                payload=dict(payload),
+                source=_text(source, "source"),
+                completed_at=now,
+            )
+            envelope.results[task.id] = result
+            envelope.tasks[task.id] = replace(task, status=HumanTaskStatus.COMPLETED, completed_at=now)
+            envelope.wait_states[task.id] = replace(wait_state, released_at=now)
+            self._append_event(envelope, "completed", task_id=task.id, context={"result_id": result.id})
+            self._save(envelope)
+            return result
 
     def record_rejection(self, *, workflow_id: str, task_id: str, reason: str) -> None:
-        envelope = self._load_for_workflow(workflow_id, create=False)
-        self._task(envelope, task_id)
-        self._append_event(
-            envelope, "rejected", task_id=task_id, context={"reason": _text(reason, "reason")}
-        )
-        self._save(envelope)
+        with self.transaction():
+            envelope = self._load_for_workflow(workflow_id, create=False)
+            self._task(envelope, task_id)
+            self._append_event(
+                envelope, "rejected", task_id=task_id, context={"reason": _text(reason, "reason")}
+            )
+            self._save(envelope)
 
     def cancel(self, *, workflow_id: str, task_id: str, reason: str) -> HumanTask:
-        envelope = self._load_for_workflow(workflow_id, create=False)
-        task = self._task(envelope, task_id)
-        if task.status is not HumanTaskStatus.PENDING:
-            return task
-        now = _now_iso()
-        cancelled = replace(task, status=HumanTaskStatus.CANCELLED, cancelled_at=now)
-        envelope.tasks[task.id] = cancelled
-        envelope.wait_states[task.id] = replace(envelope.wait_states[task.id], released_at=now)
-        self._append_event(
-            envelope, "cancelled", task_id=task.id, context={"reason": _text(reason, "reason")}
-        )
-        self._save(envelope)
-        return cancelled
+        with self.transaction():
+            envelope = self._load_for_workflow(workflow_id, create=False)
+            task = self._task(envelope, task_id)
+            if task.status is not HumanTaskStatus.PENDING:
+                return task
+            now = _now_iso()
+            cancelled = replace(task, status=HumanTaskStatus.CANCELLED, cancelled_at=now)
+            envelope.tasks[task.id] = cancelled
+            envelope.wait_states[task.id] = replace(envelope.wait_states[task.id], released_at=now)
+            self._append_event(
+                envelope, "cancelled", task_id=task.id, context={"reason": _text(reason, "reason")}
+            )
+            self._save(envelope)
+            return cancelled
 
     def record_configuration_error(
         self,
@@ -475,19 +491,50 @@ class HumanTaskRecordStore:
         trigger: str,
         reason: str,
     ) -> None:
-        envelope = self._load_for_workflow(workflow_id, create=True)
-        self._append_event(
-            envelope,
-            "configuration_error",
-            task_id=None,
-            context={
-                "step": _text(step, "step"),
-                "iteration": _positive(iteration, "iteration"),
-                "trigger": _text(trigger, "trigger"),
-                "reason": _text(reason, "reason"),
-            },
-        )
-        self._save(envelope)
+        with self.transaction():
+            envelope = self._load_for_workflow(workflow_id, create=True)
+            self._append_event(
+                envelope,
+                "configuration_error",
+                task_id=None,
+                context={
+                    "step": _text(step, "step"),
+                    "iteration": _positive(iteration, "iteration"),
+                    "trigger": _text(trigger, "trigger"),
+                    "reason": _text(reason, "reason"),
+                },
+            )
+            self._save(envelope)
+
+    @contextmanager
+    def transaction(self):
+        """Serialize a durable record transition across threads and POSIX processes."""
+        if self._transaction_depth:
+            self._transaction_depth += 1
+            try:
+                yield
+            finally:
+                self._transaction_depth -= 1
+            return
+
+        with self._thread_lock_for(self.file_path):
+            self.issue_dir.mkdir(parents=True, exist_ok=True)
+            with self.lock_path.open("a+", encoding="utf-8") as lock_file:
+                if fcntl is not None:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                self._transaction_depth = 1
+                try:
+                    yield
+                finally:
+                    self._transaction_depth = 0
+                    if fcntl is not None:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    @classmethod
+    def _thread_lock_for(cls, file_path: Path) -> threading.RLock:
+        resolved = file_path.resolve()
+        with cls._thread_locks_guard:
+            return cls._thread_locks.setdefault(resolved, threading.RLock())
 
     def _load(self) -> _Envelope:
         if not self.file_path.exists():

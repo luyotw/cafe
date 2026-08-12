@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.playbooks.loader import PlaybookLoader
@@ -169,6 +171,88 @@ def test_matching_durable_completion_records_one_result_and_declared_continuatio
         assert records.get_wait_state(task.id).released_at is not None
         assert len(records.results()) == 1
         assert store.load_or_create("spec").handoff_contract.to_step == "plan"
+
+
+def test_completed_durable_result_recovers_the_declared_continuation_after_a_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IT-001/IT-003: a persisted result can finish its interrupted continuation."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "restart-after-result"
+    playbook = PlaybookLoader().load("default")
+    store, state = _paused_default_state(
+        issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
+    )
+    task = _materialize_default_task(
+        issue_dir, state, from_step="spec", trigger="confirm_output"
+    )
+    payload = {
+        "task": "output-review",
+        "decision": "confirm",
+        "human_task_id": task.id,
+    }
+
+    with monkeypatch.context() as crashing:
+        crashing.setattr(
+            BlackboardStore,
+            "set_current_step",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("interrupted")),
+        )
+        with pytest.raises(RuntimeError, match="interrupted"):
+            apply_human_task_payload(
+                issue_dir=issue_dir,
+                playbook_data=playbook,
+                blackboard=state,
+                from_step="spec",
+                trigger="confirm_output",
+                raw_payload=payload,
+                source="command",
+            )
+
+    restarted = store.load_or_create("spec", playbook_id="default")
+    records = HumanTaskRecordStore(issue_dir)
+    assert restarted.current_step == "user"
+    assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
+
+    recovered = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=restarted,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload=payload,
+        source="command",
+    )
+
+    assert recovered.target == "plan"
+    assert store.load_or_create("spec").handoff_contract.to_step == "plan"
+    assert len(HumanTaskRecordStore(issue_dir).results()) == 1
+
+
+def test_durable_command_requires_the_matching_task_identifier(tmp_path: Path) -> None:
+    """IT-004: a command cannot bind an unlabelled response to a later task."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "required-command-id"
+    playbook = PlaybookLoader().load("default")
+    store, state = _paused_default_state(
+        issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
+    )
+    task = _materialize_default_task(
+        issue_dir, state, from_step="spec", trigger="confirm_output"
+    )
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload={"task": "output-review", "decision": "confirm"},
+        source="command",
+    )
+
+    assert result.target is None
+    assert result.rejection is not None
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.PENDING
+    assert store.load_or_create("spec").current_step == "user"
 
 
 def test_durable_invalid_stale_and_cross_workflow_results_leave_the_pause_intact(
