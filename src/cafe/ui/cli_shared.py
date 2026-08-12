@@ -868,38 +868,14 @@ def _find_external_resume_step(
         try:
             from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
-            if WorkflowFeedbackLedger(issue_dir).pending():
-                return step_name
+            ledger = WorkflowFeedbackLedger(issue_dir)
+            for entry in ledger.pending():
+                if entry.target_step not in playbook_data["steps"]:
+                    continue
+                ledger.consume(entry.source_identity)
+                return entry.target_step
         except Exception:
             return None
-
-        try:
-            branch_name = git_ops.get_current_branch()
-        except Exception:
-            return None
-        if not branch_name:
-            return None
-
-        try:
-            existing_pr = _get_github_ops_cls()().get_pr_for_branch(branch_name)
-        except Exception:
-            return None
-        if not existing_pr:
-            return None
-
-        try:
-            _get_comments, _filter_comments = _get_github_helpers()
-            comments = _get_comments(int(existing_pr["number"]))
-            unresolved_comments = _filter_comments(comments)
-        except Exception as exc:
-            console.print(
-                "[red]Error:[/red] could not evaluate unresolved PR discussion for external resume "
-                f"({exc}). Leaving workflow paused."
-            )
-            return None
-
-        if unresolved_comments:
-            return step_name
 
     return None
 

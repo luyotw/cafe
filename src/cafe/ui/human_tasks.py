@@ -296,7 +296,7 @@ def apply_human_task_payload(
             target=None, policy=policy, rejection=qualification_rejection
         )
 
-    if binding.feedback_delivery is not None and completion.feedback:
+    if binding.feedback_delivery is not None and completion.feedback and is_correction:
         ledger = WorkflowFeedbackLedger(issue_dir)
         try:
             ledger.record(

@@ -321,6 +321,51 @@ steps:
     assert not feedback_iteration_dir.exists()
 
 
+def test_default_requested_changes_follow_declared_loop_without_publish_authority(
+    tmp_path: Path,
+) -> None:
+    """IT-003: a local correction follows default routes and cannot publish on its own."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "default-correction"
+    playbook = PlaybookLoader().load("default")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("pr", playbook_id="default")
+    store.set_current_step(state, "user")
+    store.update_handoff_contract(
+        state,
+        from_step="pr",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.CONFIRM_OUTPUT,
+        source="integration",
+    )
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="pr",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "local-review",
+            "decision": "request_changes",
+            "feedback": "Exercise the declared correction route.",
+        },
+        source="integration",
+    )
+
+    assert result.target == "develop"
+    assert [entry.target_step for entry in WorkflowFeedbackLedger(issue_dir).pending()] == [
+        "develop"
+    ]
+    assert playbook["steps"]["develop"]["on"]["await_agent"] == "review"
+    assert playbook["steps"]["review"]["on"]["await_agent"] == "pr"
+    assert playbook["steps"]["pr"]["capability_requests"] == ["cafe.pr.publish"]
+    assert state.capability_receipts == []
+
+
 def test_default_parity_and_metadata_absent_lifecycle_boundary(tmp_path: Path, monkeypatch) -> None:
     """IT-003: default completion, correction, review, and publish remain observable."""
     monkeypatch.chdir(tmp_path)

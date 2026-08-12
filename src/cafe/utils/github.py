@@ -1083,7 +1083,6 @@ def post_pr_todo_list(
     """Post the PR todo list as a PR comment when all items are checked."""
     if not post_todo_list:
         return
-
     pr_dir = issue_dir / "pr"
     if not pr_dir.exists():
         return
@@ -1129,4 +1128,3 @@ def post_pr_todo_list(
                 f"[yellow]⚠️  Warning: Failed to post PR todo list as PR comment: {e}[/yellow]"
             )
         return
-

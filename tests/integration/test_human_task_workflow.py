@@ -109,6 +109,36 @@ def test_invalid_default_human_task_response_keeps_the_user_pause(tmp_path: Path
     assert any(event.event_type == "human_task_rejected" for event in reloaded.events)
 
 
+def test_default_local_review_approval_does_not_create_durable_feedback(tmp_path: Path) -> None:
+    """IT-002: default local approval completes without a correction work item."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "local-review-approval"
+    playbook = PlaybookLoader().load("default")
+    store, state = _paused_default_state(
+        issue_dir, from_step="pr", intent=HandoffIntent.CONFIRM_OUTPUT
+    )
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="pr",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "local-review",
+            "decision": "approve",
+            "feedback": "Optional acknowledgement.",
+        },
+        source="integration",
+    )
+
+    assert result.target == "done"
+    assert WorkflowFeedbackLedger(issue_dir).pending() == []
+    assert "workflow_feedback" not in state.artifacts
+    assert store.load_or_create("pr").current_step == "done"
+
+
 def test_confirmation_rejects_invalid_declared_packet_contract_for_custom_steps(
     tmp_path: Path,
 ) -> None:

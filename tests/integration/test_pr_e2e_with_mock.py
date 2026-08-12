@@ -105,10 +105,64 @@ def test_pr_runtime_completes_with_capability_receipt(tmp_path: Path) -> None:
 
 
 @pytest.mark.e2e
-@pytest.mark.skip(reason="workflow_feedback replaces the last-seen artifact")
-def test_pr_runtime_loads_last_seen_comment_ids_from_artifact(tmp_path: Path) -> None:
-    from cafe.utils.github import load_pr_last_seen_comment_ids, persist_last_seen_comment_ids
+def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(tmp_path: Path) -> None:
+    """IT-001: mocked GitHub feedback becomes one durable declared work item."""
+    from unittest.mock import MagicMock, patch
 
-    pr_dir = tmp_path / "pr"
-    persist_last_seen_comment_ids(pr_dir, ["100", "200"])
-    assert load_pr_last_seen_comment_ids(pr_dir) == {"100", "200"}
+    from cafe.core.hooks.feedback import GitHubPRFeedbackSource
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+    from cafe.ui.cli_shared import _find_external_resume_step
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "pr-feedback"
+    playbook = _load_default_playbook()
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("pr", playbook_id="default")
+
+    class Phase:
+        def __init__(self) -> None:
+            self.issue_dir = issue_dir
+            self.git_ops = MagicMock()
+            self.git_ops.get_current_branch.return_value = "pr-feedback"
+            self.step_user_inputs: dict[str, str] = {}
+
+    phase = Phase()
+    source = GitHubPRFeedbackSource()
+    with (
+        patch("cafe.core.hooks.feedback.GitHubOps") as github_ops,
+        patch(
+            "cafe.core.hooks.feedback.get_all_pr_comments",
+            return_value=[{"id": "100", "body": "Handle the boundary.", "is_resolved": False}],
+        ),
+    ):
+        github_ops.return_value.get_pr_for_branch.return_value = {
+            "number": 101,
+            "url": "https://example.test/pr/101",
+        }
+        first = source.run(
+            stage="prepare_input",
+            phase=phase,
+            blackboard_state=state,
+            step_def=playbook["steps"]["pr"],
+            step_name="pr",
+        )
+        second = source.run(
+            stage="prepare_input",
+            phase=phase,
+            blackboard_state=state,
+            step_def=playbook["steps"]["pr"],
+            step_name="pr",
+        )
+
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    assert [entry.content for entry in ledger.pending()] == ["Handle the boundary."]
+    assert any(event["type"] == "workflow_feedback_recorded" for event in first.events)
+    assert second.events == []
+
+    phase.git_ops.reset_mock()
+    assert _find_external_resume_step(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        git_ops=phase.git_ops,
+    ) == "develop"
+    assert ledger.pending() == []
+    phase.git_ops.get_current_branch.assert_not_called()
