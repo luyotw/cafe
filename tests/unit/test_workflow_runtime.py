@@ -15,8 +15,10 @@ from cafe.core.blackboard import (
     OperationMonitoring,
     OperationRisk,
 )
+from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+from cafe.playbooks.loader import PlaybookLoader
 
 _OPERATION_DECISION = {
     "risk": "low",
@@ -1733,6 +1735,71 @@ def test_runtime_pauses_ready_for_review_with_confirm_output_intent(tmp_path: Pa
     assert blackboard.handoff_contract is not None
     assert blackboard.handoff_contract.to_owner == HandoffOwner.USER
     assert blackboard.handoff_contract.intent == HandoffIntent.CONFIRM_OUTPUT
+
+
+def test_runtime_materializes_one_declared_task_and_recovers_it_after_restart(tmp_path: Path) -> None:
+    """IT-001: pause/restart preserves the exact durable task and wait state."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "durable-restart"
+    playbook = PlaybookLoader().load("default")
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        )
+
+    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
+    paused = runtime.run(start_step="spec")
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    records = HumanTaskRecordStore(issue_dir)
+    task = records.tasks()[0]
+    wait = records.get_wait_state(task.id)
+
+    recovered = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=playbook, executor=executor
+    ).run(max_transitions=2)
+    restored = HumanTaskRecordStore(issue_dir)
+
+    assert paused.completed is False
+    assert recovered.completed is False
+    assert restored.tasks()[0].id == task.id
+    assert restored.get_wait_state(task.id) == wait
+    assert state.workflow_id == task.workflow_id
+
+
+def test_runtime_records_non_actionable_configuration_error_for_bad_task_binding(
+    tmp_path: Path,
+) -> None:
+    """IT-005: an unresolved declared task never creates an actionable wait."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "durable-config-error"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "cafe-spec",
+                "human_tasks": [],
+                "on": {"confirm_output": "spec"},
+            }
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        )
+
+    BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor).run(
+        start_step="spec"
+    )
+
+    records = HumanTaskRecordStore(issue_dir)
+    assert records.tasks() == ()
+    assert "configuration_error" in [event.event_type for event in records.lifecycle_events()]
 
 
 def test_runtime_pauses_brief_ready_for_review_with_confirm_output_intent(tmp_path: Path) -> None:

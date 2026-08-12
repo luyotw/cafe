@@ -26,6 +26,8 @@ from cafe.core.blackboard import (
     operation_receipt_path,
 )
 from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
+from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.core.human_tasks import resolve_step_human_task
 from cafe.core.playbook import resolve_step_behavior
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import (
@@ -902,6 +904,7 @@ class BlackboardWorkflowRuntime:
                 status_code=status_code,
                 source=contract_source,
             )
+        self._materialize_user_handoff_task(current_step=current_step)
         if record_event:
             self.blackboard_store.record_event(
                 self.blackboard,
@@ -919,6 +922,80 @@ class BlackboardWorkflowRuntime:
             final_status_code=status_code,
             completed=False,
         )
+
+    def _materialize_user_handoff_task(self, *, current_step: str) -> None:
+        """Create or recover a declared task before exposing the user pause."""
+        step_def = self.steps.get(current_step)
+        if not isinstance(step_def, dict):
+            return
+        raw_bindings = step_def.get("human_tasks")
+        if not isinstance(raw_bindings, (list, tuple)):
+            return
+        contract = self.blackboard.handoff_contract
+        if (
+            contract is None
+            or contract.to_owner is not HandoffOwner.USER
+            or contract.to_step != "user"
+            or contract.from_step != current_step
+        ):
+            return
+        trigger = contract.intent.value
+        iteration = self._human_task_iteration(current_step)
+        records = HumanTaskRecordStore(self.issue_dir)
+        try:
+            policy, binding = resolve_step_human_task(
+                playbook_data=self.playbook,
+                step_name=current_step,
+                trigger=trigger,
+                iteration=iteration,
+            )
+        except (LookupError, TypeError, ValueError) as exc:
+            records.record_configuration_error(
+                workflow_id=self.blackboard.workflow_id,
+                step=current_step,
+                iteration=iteration,
+                trigger=trigger,
+                reason=str(exc),
+            )
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "human_task_configuration_error",
+                {"step": current_step, "trigger": trigger, "reason": str(exc)},
+            )
+            return
+
+        existing_wait = records.active_wait_state(
+            self.blackboard.workflow_id,
+            step=current_step,
+            trigger=trigger,
+            policy_id=policy.id,
+        )
+        task = records.materialize(
+            workflow_id=self.blackboard.workflow_id,
+            step=current_step,
+            iteration=iteration,
+            trigger=trigger,
+            policy_id=policy.id,
+            prompt=policy.prompt,
+            expected_result=policy.model_dump(mode="json"),
+            continuations=binding.outcomes,
+            assignee_type="user",
+        )
+        if existing_wait is None:
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "human_task_materialized",
+                {"step": current_step, "trigger": trigger, "task_id": task.id},
+            )
+
+    def _human_task_iteration(self, current_step: str) -> int:
+        iteration_dir = self._latest_iteration_dir(current_step)
+        if iteration_dir is None:
+            return 1
+        try:
+            return int(iteration_dir.name.removeprefix("iteration_"))
+        except ValueError:
+            return 1
 
     def _emit_complete(
         self,

@@ -216,6 +216,23 @@ def test_blackboard_load_or_create_persists_current_step_and_playbook(tmp_path: 
     assert loaded.playbook_id == "default"
 
 
+def test_blackboard_migrates_a_legacy_state_to_a_stable_workflow_id(tmp_path: Path) -> None:
+    """UT-005: old taskless workflow state gains identity without a task record."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "legacy"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps({"schema_version": 1, "current_step": "user", "playbook_id": "default"}),
+        encoding="utf-8",
+    )
+
+    state = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    persisted = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
+
+    assert state.workflow_id
+    assert persisted["workflow_id"] == state.workflow_id
+    assert not (issue_dir / "human_tasks.json").exists()
+
+
 def test_alignment_checkpoint_baton_must_be_user_owned_user_target(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-align-baton"
     store = BlackboardStore(issue_dir)
@@ -270,7 +287,7 @@ def test_blackboard_store_records_artifacts_events_and_decisions(tmp_path: Path)
 
     reloaded = store.load_or_create("spec")
     assert reloaded.current_step == "plan"
-    assert reloaded.schema_version == 1
+    assert reloaded.schema_version == 2
     assert reloaded.handoff_summary == "developer owns the next step"
     assert reloaded.artifacts["spec"].path == "spec/output.md"
     assert reloaded.artifacts["spec"].version == 1

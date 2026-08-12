@@ -16,6 +16,7 @@ from cafe.core.blackboard import (
     HandoffOwner,
 )
 from cafe.core.human_tasks import HumanTaskPolicy
+from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.skills.loader import SkillLoader
 from cafe.ui.human_tasks import (
     _validate_packet_contracts_before_confirmation,
@@ -357,6 +358,68 @@ def test_command_completion_uses_the_same_policy_and_declared_destination(tmp_pa
     assert reloaded.current_step == "plan"
     assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
     assert reloaded.handoff_contract.to_step == "plan"
+
+
+def test_command_completion_binds_the_current_durable_task_before_routing(tmp_path: Path) -> None:
+    """IT-003: command input cannot bypass the active task/wait correlation."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "durable-command"
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("spec", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.CONFIRM_OUTPUT,
+        source="test",
+    )
+    playbook = {
+        "steps": {
+            "spec": {
+                "skill": "cafe-spec",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "output-review",
+                        "outcomes": {"confirm": "plan", "revise": "spec"},
+                    }
+                ],
+            },
+            "plan": {"skill": "cafe-plan"},
+        }
+    }
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook, step_name="spec", trigger="confirm_output"
+    )
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=blackboard.workflow_id,
+        step="spec",
+        iteration=1,
+        trigger="confirm_output",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+    )
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=blackboard,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "output-review",
+            "decision": "confirm",
+            "human_task_id": task.id,
+        },
+        source="command",
+    )
+
+    assert result.target == "plan"
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
 
 
 def test_cross_step_revision_feedback_is_written_for_the_selected_target(tmp_path: Path) -> None:
