@@ -45,8 +45,10 @@ records add a second guard after that validation:
 
 1. The active WaitState must match the current `workflow_id`, source step,
    trigger, and policy.
-2. When present, `human_task_id` in the interactive or JSON payload must match
-   that active task.
+2. A new interactive or JSON response for a durable task must include a
+   `human_task_id` that matches that active task. After an interruption that
+   occurs after result persistence, interactive recovery reuses the matching
+   stored result and task id without asking the participant to resubmit it.
 3. The selected continuation must be one captured by that task's handoff.
 4. CAFE persists the one TaskResult before it updates the baton.
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.playbooks.loader import PlaybookLoader
@@ -93,3 +95,77 @@ def test_interactive_handoff_forwards_the_active_durable_task_id(
 
     assert captured["human_task_id"] == task.id
     assert target == "plan"
+
+
+def test_interactive_handoff_recovers_a_persisted_completion_after_interruption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IT-001/IT-002: the public interactive path resumes a stored completion."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "interrupted-interactive"
+    playbook = PlaybookLoader().load("default")
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("spec", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.CONFIRM_OUTPUT,
+        source="test",
+    )
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook, step_name="spec", trigger="confirm_output"
+    )
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=blackboard.workflow_id,
+        step="spec",
+        iteration=1,
+        trigger="confirm_output",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+    )
+    payload = {"task": policy.id, "decision": "confirm", "human_task_id": task.id}
+    monkeypatch.setattr(
+        "cafe.ui.human_tasks.collect_human_task_payload", lambda *_args, **_kwargs: payload
+    )
+
+    with monkeypatch.context() as crashing:
+        crashing.setattr(
+            BlackboardStore,
+            "set_current_step",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("interrupted")),
+        )
+        with pytest.raises(RuntimeError, match="interrupted"):
+            cli_shared._handle_declared_human_task_handoff(
+                issue_name="interrupted-interactive",
+                issue_dir=issue_dir,
+                blackboard=blackboard,
+                from_step="spec",
+                summary="",
+                playbook_data=playbook,
+                trigger="confirm_output",
+            )
+
+    restarted = store.load_or_create("spec", playbook_id="default")
+    monkeypatch.setattr(
+        "cafe.ui.human_tasks.collect_human_task_payload",
+        lambda *_args, **_kwargs: pytest.fail("recovery must not re-prompt the participant"),
+    )
+    target = cli_shared._handle_declared_human_task_handoff(
+        issue_name="interrupted-interactive",
+        issue_dir=issue_dir,
+        blackboard=restarted,
+        from_step="spec",
+        summary="",
+        playbook_data=playbook,
+        trigger="confirm_output",
+    )
+
+    records = HumanTaskRecordStore(issue_dir)
+    assert target == "plan"
+    assert len(records.results()) == 1
+    assert store.load_or_create("spec").handoff_contract.to_step == "plan"
