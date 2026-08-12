@@ -541,12 +541,17 @@ def confirmation_gate_steps(model: PlaybookDefinition) -> tuple[str, ...]:
     """Return ordered steps that declare a planned user confirmation gate.
 
     ``on.confirm_output`` is the playbook-level declaration that a completed
-    step may hand its output to the user for approval. Other user-owned intents
-    such as clarification, permission, and alignment checkpoints are reactive
-    safety interruptions rather than kickoff confirmation choices.
+    step may hand its output to the user for approval. A binding that declares
+    feedback delivery is a runtime local-review loop, not a kickoff scheduling
+    choice. Other user-owned intents such as clarification, permission, and
+    alignment checkpoints are reactive safety interruptions rather than
+    kickoff confirmation choices.
     """
     return tuple(
-        step_name for step_name, step in model.steps.items() if "confirm_output" in step.on
+        step_name
+        for step_name, step in model.steps.items()
+        if "confirm_output" in step.on
+        and not any(binding.feedback_delivery is not None for binding in step.human_tasks)
     )
 
 
