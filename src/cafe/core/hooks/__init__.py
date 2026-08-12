@@ -54,12 +54,16 @@ class GitHubPRCreator(NoOpHook):
     name = "GitHubPRCreator"
 
 
+class GitHubPRFeedbackSource(NoOpHook):
+    name = "GitHubPRFeedbackSource"
+
+
 class PRCommentPoster(NoOpHook):
     name = "PRCommentPoster"
 
 
-class LocalPRReviewer(NoOpHook):
-    name = "LocalPRReviewer"
+class LocalReviewContextProvider(NoOpHook):
+    name = "LocalReviewContextProvider"
 
 
 class PRLinkOpener(NoOpHook):
@@ -70,13 +74,13 @@ from cafe.core.hooks.native import (
     GitHubIssueFetcher,
     GitHubPRCreator,
     InitialInputProviderResolver,
-    LocalPRReviewer,
     NoChangesNeededHandler,
     PRCommentPoster,
     PRLinkOpener,
     UserInputCollector,
 )
 from cafe.core.hooks.alignment import AlignmentCheckpointGate
+from cafe.core.hooks.feedback import GitHubPRFeedbackSource, LocalReviewContextProvider
 
 
 BUILTIN_HOOKS = {
@@ -90,7 +94,8 @@ BUILTIN_HOOKS = {
         PermissionRetryHandler,
         NewChangesGate,
         GitHubPRCreator,
-        LocalPRReviewer,
+        GitHubPRFeedbackSource,
+        LocalReviewContextProvider,
         PRCommentPoster,
         PRLinkOpener,
         AlignmentCheckpointGate,

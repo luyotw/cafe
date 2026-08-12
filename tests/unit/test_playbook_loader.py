@@ -4,10 +4,15 @@ from pathlib import Path
 
 import pytest
 
+from cafe.core.human_tasks import HumanTaskCompletion
 from cafe.core.playbook import PlaybookDefinition, resolve_playbook_skills
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
-from cafe.ui.human_tasks import resolve_step_human_task
+from cafe.ui.human_tasks import (
+    resolve_step_human_task,
+    resolve_step_human_task_continuation,
+    validate_step_human_task_completion,
+)
 
 
 def _write_skill(root: Path, name: str) -> None:
@@ -22,6 +27,351 @@ def _write_skill(root: Path, name: str) -> None:
 def _write_playbook(root: Path, name: str, content: str) -> None:
     root.mkdir(parents=True, exist_ok=True)
     (root / f"{name}.yaml").write_text(content, encoding="utf-8")
+
+
+def test_feedback_target_requires_skill_prompt_exposure(tmp_path: Path) -> None:
+    """UT-003: routed feedback reaches a target skill's declared prompt input."""
+    builtin_root = tmp_path / "builtin"
+    project_root = tmp_path / "project"
+    _write_skill(builtin_root / "skills", "source")
+    _write_skill(builtin_root / "skills", "receiver")
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "custom",
+        """
+playbook: {id: custom}
+steps:
+  source:
+    role: operator
+    skill: source
+    behavior: {feedback_target: receiver}
+    hooks: {prepare_input: [GitHubPRFeedbackSource]}
+    on: {await_agent: receiver}
+  receiver:
+    role: operator
+    skill: receiver
+    input_artifacts: [workflow_feedback]
+    on: {await_agent: _done}
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="feedback_target.*prompt input.*workflow_feedback"):
+        loader.load_model("custom")
+
+    (builtin_root / "skills" / "receiver" / "SKILL.md").write_text(
+        """---
+name: receiver
+description: receiver
+workflow:
+  prompt_inputs:
+    - artifacts: [workflow_feedback]
+      placeholder: workflow_feedback_file
+      required: false
+---
+
+# receiver
+""",
+        encoding="utf-8",
+    )
+
+    assert loader.load_model("custom").model.steps["receiver"].skill == "receiver"
+
+
+def test_github_feedback_source_requires_declared_feedback_target(tmp_path: Path) -> None:
+    """UT-003 — GitHub feedback source steps cannot rely on an implicit destination."""
+    builtin_root = tmp_path / "builtin"
+    project_root = tmp_path / "project"
+    _write_skill(builtin_root / "skills", "source")
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "custom",
+        """
+playbook: {id: custom}
+steps:
+  source:
+    role: operator
+    skill: source
+    hooks: {prepare_input: [GitHubPRFeedbackSource]}
+    on: {await_agent: _done}
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="GitHubPRFeedbackSource.*feedback_target"):
+        loader.load_model("custom")
+
+
+def test_github_feedback_source_rejects_explicit_null_target_override(tmp_path: Path) -> None:
+    """UT-003: an explicit null cannot erase direct feedback routing."""
+    builtin_root = tmp_path / "builtin"
+    project_root = tmp_path / "project"
+    _write_skill(builtin_root / "skills", "source")
+    _write_skill(builtin_root / "skills", "receiver")
+    (builtin_root / "skills" / "receiver" / "SKILL.md").write_text(
+        """---
+name: receiver
+description: receiver
+workflow:
+  prompt_inputs:
+    - artifacts: [workflow_feedback]
+      placeholder: workflow_feedback_file
+      required: false
+---
+
+# receiver
+""",
+        encoding="utf-8",
+    )
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "custom",
+        """
+playbook: {id: custom}
+behavior: {feedback_target: receiver}
+steps:
+  source:
+    role: operator
+    skill: source
+    behavior: {feedback_target: null}
+    hooks: {prepare_input: [GitHubPRFeedbackSource]}
+    on: {await_agent: receiver}
+  receiver:
+    role: operator
+    skill: receiver
+    input_artifacts: [workflow_feedback]
+    on: {await_agent: _done}
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="GitHubPRFeedbackSource.*feedback_target"):
+        loader.load_model("custom")
+
+
+@pytest.mark.parametrize("stage", ["before_execute", "after_execute", "publish_output"])
+def test_github_feedback_source_rejects_non_intake_stage(tmp_path: Path, stage: str) -> None:
+    """UT-003: feedback intake only runs through the prepare-input boundary."""
+    builtin_root = tmp_path / "builtin"
+    project_root = tmp_path / "project"
+    _write_skill(builtin_root / "skills", "source")
+    _write_skill(builtin_root / "skills", "receiver")
+    (builtin_root / "skills" / "receiver" / "SKILL.md").write_text(
+        """---
+name: receiver
+description: receiver
+workflow:
+  prompt_inputs:
+    - artifacts: [workflow_feedback]
+      placeholder: workflow_feedback_file
+      required: false
+---
+
+# receiver
+""",
+        encoding="utf-8",
+    )
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "custom",
+        f"""
+playbook: {{id: custom}}
+steps:
+  source:
+    role: operator
+    skill: source
+    behavior: {{feedback_target: receiver}}
+    hooks: {{{stage}: [GitHubPRFeedbackSource]}}
+    on: {{await_agent: receiver}}
+  receiver:
+    role: operator
+    skill: receiver
+    input_artifacts: [workflow_feedback]
+    on: {{await_agent: _done}}
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="GitHubPRFeedbackSource.*prepare_input"):
+        loader.load_model("custom")
+
+
+def test_human_feedback_delivery_requires_effective_skill_prompt_exposure(
+    tmp_path: Path,
+) -> None:
+    """UT-006: fixed and selected change routes receive workflow feedback."""
+    data_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
+    project_root = tmp_path / "project"
+    _write_skill(project_root / ".cafe" / "skills", "repair")
+    _write_skill(project_root / ".cafe" / "skills", "target-review")
+    (project_root / ".cafe" / "skills" / "target-review" / "SKILL.md").write_text(
+        """---
+name: target-review
+description: target review
+workflow:
+  human_tasks:
+    - id: choose-repair
+      pattern: confirm_output
+      prompt: Choose how to continue.
+      input_schema: decision
+      decisions:
+        - id: approve
+          label: Approve
+        - id: request_changes
+          label: Request changes
+          requires_feedback: true
+          requires_target: true
+---
+
+# target-review
+""",
+        encoding="utf-8",
+    )
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "custom",
+        """
+playbook: {id: custom}
+steps:
+  fixed-review:
+    role: developer
+    skill: cafe-pr
+    human_tasks:
+      - trigger: confirm_output
+        task_id: local-review
+        outcomes: {approve: _done, request_changes: repair}
+        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
+    on: {confirm_output: fixed-review, await_agent: _done}
+  target-review:
+    role: developer
+    skill: target-review
+    human_tasks:
+      - trigger: confirm_output
+        task_id: choose-repair
+        outcomes: {approve: _done}
+        allowed_targets: [repair]
+        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
+    on: {confirm_output: target-review, await_agent: _done}
+  repair:
+    role: developer
+    skill: repair
+    input_artifacts: [workflow_feedback]
+    on: {await_agent: _done}
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=data_root,
+    )
+
+    with pytest.raises(ValueError, match="feedback_delivery.*prompt input.*workflow_feedback"):
+        loader.load_model("custom")
+
+    (project_root / ".cafe" / "skills" / "repair" / "SKILL.md").write_text(
+        """---
+name: repair
+description: repair
+workflow:
+  prompt_inputs:
+    - artifacts: [review_feedback, workflow_feedback]
+      placeholder: workflow_feedback_file
+      required: false
+---
+
+# repair
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="feedback_delivery.*prompt input.*workflow_feedback"):
+        loader.load_model("custom")
+
+    (project_root / ".cafe" / "skills" / "repair" / "SKILL.md").write_text(
+        """---
+name: repair
+description: repair
+workflow:
+  prompt_inputs:
+    - artifacts: [workflow_feedback]
+      placeholder: workflow_feedback_file
+      required: false
+---
+
+# repair
+""",
+        encoding="utf-8",
+    )
+
+    loaded = loader.load_model("custom")
+    assert loaded.model.steps["repair"].skill == "repair"
+
+    playbook = loader.load("custom")
+    skill_loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=data_root,
+    )
+    fixed_policy, fixed_binding, fixed_completion = validate_step_human_task_completion(
+        playbook_data=playbook,
+        step_name="fixed-review",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "local-review",
+            "decision": "request_changes",
+            "feedback": "Repair the implementation.",
+        },
+        skill_loader=skill_loader,
+    )
+    assert isinstance(fixed_completion, HumanTaskCompletion)
+    assert (
+        resolve_step_human_task_continuation(
+            playbook_data=playbook,
+            policy=fixed_policy,
+            binding=fixed_binding,
+            completion=fixed_completion,
+        )
+        == "repair"
+    )
+
+    target_policy, target_binding, target_completion = validate_step_human_task_completion(
+        playbook_data=playbook,
+        step_name="target-review",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "choose-repair",
+            "decision": "request_changes",
+            "target": "repair",
+            "feedback": "Repair the implementation.",
+        },
+        skill_loader=skill_loader,
+    )
+    assert isinstance(target_completion, HumanTaskCompletion)
+    assert (
+        resolve_step_human_task_continuation(
+            playbook_data=playbook,
+            policy=target_policy,
+            binding=target_binding,
+            completion=target_completion,
+        )
+        == "repair"
+    )
 
 
 def test_declared_skill_environment_resolves_layers_with_stable_deduplication() -> None:
@@ -1420,12 +1770,17 @@ def test_builtin_hotfix_and_simple_playbooks_load() -> None:
     assert hotfix.entry_point == "develop"
     assert list(hotfix.steps.keys()) == ["develop", "review", "pr"]
     assert hotfix.steps["review"].max_iterations == 1
-    assert hotfix.steps["develop"].input_artifacts == ["review_feedback", "pr_result"]
+    assert hotfix.steps["develop"].input_artifacts == [
+        "review_feedback",
+        "pr_result",
+        "workflow_feedback",
+    ]
     assert tdd.steps["develop"].input_artifacts == [
         "spec",
         "plan",
         "review_feedback",
         "pr_result",
+        "workflow_feedback",
     ]
 
     assert simple.entry_point == "spec"

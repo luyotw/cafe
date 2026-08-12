@@ -901,7 +901,7 @@ def workflow(
                     store.set_current_step(blackboard, external_step)
                     store.set_handoff_summary(
                         blackboard,
-                        "Unresolved PR discussion detected while the workflow was paused; resuming the PR step.",
+                        "Durable workflow feedback detected while the workflow was paused; resuming its declared target.",
                     )
                     store.update_handoff_contract(
                         blackboard,

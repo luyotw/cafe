@@ -3,6 +3,18 @@ name: cafe-pr
 description: "整理提交內容並產出 pull request 標題與描述"
 version: 1.1.0
 workflow:
+  human_tasks:
+    - id: local-review
+      pattern: confirm_output
+      prompt: Review the prepared local changes and choose how to continue.
+      input_schema: decision
+      decisions:
+        - id: approve
+          label: Approve
+        - id: request_changes
+          label: Request changes
+          requires_feedback: true
+          correction: true
   prompt_inputs:
     - artifacts: [spec]
       placeholder: spec_file
@@ -33,6 +45,9 @@ workflow:
       required: false
     - artifacts: [review_feedback]
       placeholder: feedback_file
+      required: false
+    - artifacts: [workflow_feedback]
+      placeholder: workflow_feedback_file
       required: false
   prompt_references:
     spec_context: pr_spec_context.md

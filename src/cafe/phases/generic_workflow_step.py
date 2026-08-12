@@ -380,7 +380,7 @@ class GenericWorkflowStepExecutor(Phase):
             if status_code is None:
                 status_code = StatusCodeParser.extract(response, valid_intents)
 
-        agent_was_invoked = bool(last_prompt)
+        agent_was_invoked = execution.agent_invoked
         if (
             require_status_code
             and agent_was_invoked
@@ -474,6 +474,7 @@ class GenericWorkflowStepExecutor(Phase):
             artifacts=artifacts,
             status_code=effective_status.value if effective_status is not None else None,
             auto_continue=auto_continue,
+            agent_invoked=agent_was_invoked,
             events=events,
         )
 
@@ -1259,6 +1260,15 @@ class GenericWorkflowStepExecutor(Phase):
                 self.git_ops,
                 resolved_base,
             )
+
+        if "local_review" in behavior.context_providers:
+            base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
+            context["review_base"] = str(base_branch or self.git_ops.get_default_base_branch())
+            context["review_head"] = "HEAD"
+            context["review_required"] = str(
+                self._get_issue_config_value(self.issue_dir / "issue.yaml", "pr.auto_create")
+                is False
+            ).lower()
 
         return context
 

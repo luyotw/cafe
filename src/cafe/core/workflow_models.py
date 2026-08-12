@@ -15,6 +15,7 @@ class StepExecutionResult:
     status_code: str | None = None
     auto_continue: bool = False
     artifact_ready: bool = True
+    agent_invoked: bool = False
     events: list[dict[str, Any]] = field(default_factory=list)
 
 

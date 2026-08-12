@@ -174,6 +174,74 @@ def test_matching_durable_completion_records_one_result_and_declared_continuatio
         assert store.load_or_create("spec").handoff_contract.to_step == "plan"
 
 
+def test_default_local_review_approval_does_not_create_durable_feedback(tmp_path: Path) -> None:
+    """IT-002: default local approval completes without a correction work item."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "local-review-approval"
+    playbook = PlaybookLoader().load("default")
+    store, state = _paused_default_state(
+        issue_dir, from_step="pr", intent=HandoffIntent.CONFIRM_OUTPUT
+    )
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="pr",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "local-review",
+            "decision": "approve",
+            "feedback": "Optional acknowledgement.",
+        },
+        source="integration",
+    )
+
+    assert result.target == "done"
+    assert WorkflowFeedbackLedger(issue_dir).pending() == []
+    assert "workflow_feedback" not in state.artifacts
+    assert store.load_or_create("pr").current_step == "done"
+
+
+def test_durable_local_review_delivers_feedback_and_completes_one_task(tmp_path: Path) -> None:
+    """Durable task correlation and workflow-feedback delivery compose atomically."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "durable-local-review"
+    playbook = PlaybookLoader().load("default")
+    store, state = _paused_default_state(
+        issue_dir, from_step="pr", intent=HandoffIntent.CONFIRM_OUTPUT
+    )
+    task = _materialize_default_task(
+        issue_dir, state, from_step="pr", trigger="confirm_output"
+    )
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="pr",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "local-review",
+            "decision": "request_changes",
+            "feedback": "Preserve both durable contracts.",
+            "human_task_id": task.id,
+        },
+        source="command",
+    )
+
+    records = HumanTaskRecordStore(issue_dir)
+    assert result.target == "develop"
+    assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert len(records.results()) == 1
+    assert [entry.content for entry in WorkflowFeedbackLedger(issue_dir).pending()] == [
+        "Preserve both durable contracts."
+    ]
+    assert not (issue_dir / "develop" / "iteration_001" / "user_input.md").exists()
+
+
 def test_completed_durable_result_recovers_the_declared_continuation_after_a_restart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -28,7 +28,7 @@ from cafe.templates.manager import TemplateManager
 
 DONE_TARGET = "_done"
 SCRIPT_HOOK_STAGES = {"before_execute", "after_execute"}
-RUNTIME_CONTEXT_PROVIDERS = frozenset({"workflow_metadata", "git_history"})
+RUNTIME_CONTEXT_PROVIDERS = frozenset({"workflow_metadata", "git_history", "local_review"})
 RUNTIME_TOOL_GRANTS = frozenset({"web_research", "git_inspection"})
 
 RigorLevel = Literal["low", "medium", "high"]
@@ -541,12 +541,17 @@ def confirmation_gate_steps(model: PlaybookDefinition) -> tuple[str, ...]:
     """Return ordered steps that declare a planned user confirmation gate.
 
     ``on.confirm_output`` is the playbook-level declaration that a completed
-    step may hand its output to the user for approval. Other user-owned intents
-    such as clarification, permission, and alignment checkpoints are reactive
-    safety interruptions rather than kickoff confirmation choices.
+    step may hand its output to the user for approval. A binding that declares
+    feedback delivery is a runtime local-review loop, not a kickoff scheduling
+    choice. Other user-owned intents such as clarification, permission, and
+    alignment checkpoints are reactive safety interruptions rather than
+    kickoff confirmation choices.
     """
     return tuple(
-        step_name for step_name, step in model.steps.items() if "confirm_output" in step.on
+        step_name
+        for step_name, step in model.steps.items()
+        if "confirm_output" in step.on
+        and not any(binding.feedback_delivery is not None for binding in step.human_tasks)
     )
 
 
@@ -567,13 +572,73 @@ class PlaybookDefinition(BaseModel):
     def _default_entry_point(self) -> "PlaybookDefinition":
         if self.entry_point is None:
             self.entry_point = next(iter(self.steps.keys()))
+
+        def declares_workflow_feedback(step: StepConfig) -> bool:
+            return (
+                "input_artifacts" in step.model_fields_set
+                and "workflow_feedback" in (step.input_artifacts or [])
+            )
+
+        def github_pr_feedback_source_stages(step: StepConfig) -> list[str]:
+            return [
+                stage_name
+                for stage_name, hooks in (
+                    ("before_execute", step.hooks.before_execute),
+                    ("prepare_input", step.hooks.prepare_input),
+                    ("after_execute", step.hooks.after_execute),
+                    ("publish_output", step.hooks.publish_output),
+                )
+                if any(
+                    hook == "GitHubPRFeedbackSource"
+                    or (
+                        isinstance(hook, dict)
+                        and hook.get("name") == "GitHubPRFeedbackSource"
+                    )
+                    for hook in hooks
+                )
+            ]
+
         for step_name, step in self.steps.items():
             behavior = resolve_step_behavior(self, step_name)
             target = behavior.feedback_target
+            feedback_source_stages = github_pr_feedback_source_stages(step)
+            if feedback_source_stages:
+                if any(stage != "prepare_input" for stage in feedback_source_stages):
+                    raise ValueError(
+                        f"steps.{step_name}.hooks GitHubPRFeedbackSource only supports "
+                        "hooks.prepare_input"
+                    )
+                direct_target = step.behavior.feedback_target
+                if not isinstance(direct_target, str) or not direct_target.strip():
+                    raise ValueError(
+                        f"steps.{step_name}.hooks GitHubPRFeedbackSource requires "
+                        "behavior.feedback_target"
+                    )
             if target is not None and target not in self.steps:
                 raise ValueError(
                     f"steps.{step_name}.behavior.feedback_target {target!r} is not a defined step"
                 )
+            if target is not None and not declares_workflow_feedback(self.steps[target]):
+                raise ValueError(
+                    f"steps.{step_name}.behavior.feedback_target {target!r} must declare "
+                    "workflow_feedback in input_artifacts"
+                )
+            for binding in step.human_tasks:
+                if binding.feedback_delivery is None:
+                    continue
+                for delivery_target in [
+                    *binding.outcomes.values(),
+                    *binding.allowed_targets,
+                ]:
+                    if (
+                        delivery_target != DONE_TARGET
+                        and delivery_target in self.steps
+                        and not declares_workflow_feedback(self.steps[delivery_target])
+                    ):
+                        raise ValueError(
+                            f"steps.{step_name}.human_tasks feedback_delivery target "
+                            f"{delivery_target!r} must declare workflow_feedback in input_artifacts"
+                        )
             if (
                 behavior.publish_confirmation
                 and "cafe.pr.publish" not in step.capability_requests
@@ -778,6 +843,8 @@ def validate_playbook(
             warnings.append(
                 f"Step '{step_name}': assignee_type={step.assignee_type} (reserved for v0.3)"
             )
+
+    _validate_feedback_target_prompt_inputs(model, skill_loader=skill_loader)
 
     _validate_prepare_metadata(
         model,
@@ -1068,6 +1135,52 @@ def _validate_step_required_prompt_inputs(
                 )
 
 
+def _validate_feedback_target_prompt_inputs(
+    model: PlaybookDefinition,
+    *,
+    skill_loader: SkillLoader,
+) -> None:
+    """Ensure routed feedback is exposed to every possible target skill."""
+    def receives_workflow_feedback(skill_name: str) -> bool:
+        return any(
+            mapping.artifacts[0] == "workflow_feedback"
+            for mapping in skill_loader.get_workflow_contract(skill_name).prompt_inputs
+        )
+
+    for step_name, step in model.steps.items():
+        behavior = resolve_step_behavior(model, step_name)
+        targets: List[tuple[str, str]] = []
+        if behavior.feedback_target is not None:
+            targets.append(("behavior.feedback_target", behavior.feedback_target))
+        for binding in step.human_tasks:
+            if binding.feedback_delivery is None:
+                continue
+            targets.extend(
+                ("human_tasks feedback_delivery", target)
+                for target in [*binding.outcomes.values(), *binding.allowed_targets]
+                if target != DONE_TARGET
+            )
+
+        for source, target_name in targets:
+            target = model.steps[target_name]
+            selectors = (
+                [target.skill]
+                if isinstance(target.skill, str)
+                else list(target.skill.values())
+            )
+            missing = [
+                canonical_skill_name(skill_name)
+                for skill_name in selectors
+                if not receives_workflow_feedback(skill_name)
+            ]
+            if missing:
+                raise ValueError(
+                    f"Step {step_name!r} {source} target {target_name!r} must declare "
+                    "a prompt input for workflow_feedback; missing from "
+                    f"{missing}"
+                )
+
+
 def _tool_requirement_satisfied(required: str, allowed_tools: List[str]) -> bool:
     if required in allowed_tools:
         return True
@@ -1123,6 +1236,15 @@ def _validate_step_human_tasks(
                     f"unknown human task {binding.task_id!r}"
                 )
             policy = matching_policies[0]
+            if binding.feedback_delivery is not None and not (
+                policy.input_schema == "feedback"
+                or any(decision.requires_feedback for decision in policy.decisions)
+            ):
+                raise ValueError(
+                    f"Step '{step_name}', skill {canonical_skill_name(str(skill_name))!r}: "
+                    f"human task {binding.task_id!r} cannot deliver feedback because its policy "
+                    "does not collect feedback"
+                )
             if any(decision.requires_target for decision in policy.decisions) and not (
                 binding.allowed_targets
             ):

@@ -8,7 +8,13 @@ import json
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.blackboard import (
+    ArtifactEntry,
+    ArtifactKind,
+    BlackboardStore,
+    HandoffIntent,
+    HandoffOwner,
+)
 from cafe.core.downstream_contract import ContractValidationError, extract_downstream_contract
 from cafe.core.human_tasks import (
     HumanTaskBinding,
@@ -29,6 +35,7 @@ from cafe.core.human_task_records import (
     TaskResult,
 )
 from cafe.core.phase_state_mixin import next_runnable_iteration_number
+from cafe.core.workflow_feedback import WorkflowFeedbackError, WorkflowFeedbackLedger
 from cafe.skills.loader import SkillLoader
 
 
@@ -413,6 +420,75 @@ def _apply_human_task_payload(
             target=None, policy=policy, rejection=qualification_rejection
         )
 
+    feedback = (
+        durable_result.payload.get("feedback", "")
+        if durable_result is not None
+        else completion.feedback
+    )
+    decision = (
+        durable_result.payload.get("decision")
+        if durable_result is not None
+        else completion.decision
+    )
+    delivery_decision = next(
+        (item for item in policy.decisions if item.id == decision),
+        None,
+    )
+    if (
+        binding.feedback_delivery is not None
+        and isinstance(feedback, str)
+        and feedback.strip()
+        and (
+            policy.input_schema == "feedback"
+            or (delivery_decision is not None and delivery_decision.requires_feedback)
+        )
+    ):
+        ledger = WorkflowFeedbackLedger(issue_dir)
+        try:
+            ledger.record(
+                source_identity=(
+                    f"{binding.feedback_delivery.source_kind}:{from_step}:{policy.id}:{iteration}"
+                ),
+                source_kind=binding.feedback_delivery.source_kind,
+                target_step=continuation,
+                content=feedback,
+            )
+            previous = getattr(blackboard, "artifacts", {}).get(
+                binding.feedback_delivery.artifact
+            )
+            store.put_artifact(
+                blackboard,
+                ArtifactEntry(
+                    name=binding.feedback_delivery.artifact,
+                    kind=ArtifactKind.DOCUMENT,
+                    version=(previous.version + 1) if previous else 1,
+                    updated_by="human_task",
+                    path=str(ledger.path),
+                ),
+            )
+        except WorkflowFeedbackError as exc:
+            rejection = HumanTaskRejection(
+                message="Feedback could not be stored; the review remains paused.",
+                correction_guidance=policy.correction_guidance,
+            )
+            if durable_task is not None:
+                record_store.record_rejection(
+                    workflow_id=blackboard.workflow_id,
+                    task_id=durable_task.id,
+                    reason=rejection.message,
+                )
+            store.record_event(
+                blackboard,
+                "human_task_rejected",
+                {
+                    "step": from_step,
+                    "trigger": trigger,
+                    "task_id": policy.id,
+                    "reason": str(exc),
+                },
+            )
+            return HumanTaskApplication(target=None, policy=policy, rejection=rejection)
+
     if durable_task is not None:
         permitted_continuations = set(durable_task.continuations.values())
         if not permitted_continuations:
@@ -459,7 +535,13 @@ def _apply_human_task_payload(
                 )
                 return HumanTaskApplication(target=None, policy=policy, rejection=rejection)
 
-    agent_input = recovered_agent_input if durable_result is not None else completion.agent_input()
+    agent_input = (
+        ""
+        if binding.feedback_delivery is not None
+        else recovered_agent_input
+        if durable_result is not None
+        else completion.agent_input()
+    )
     if agent_input:
         has_feedback = (
             isinstance(durable_result.payload.get("feedback"), str)
