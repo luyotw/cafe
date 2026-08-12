@@ -152,6 +152,7 @@ def test_correction_ab_requires_ten_quality_preserving_pairs_for_claim(
     assert result.returncode == 0, result.stderr
     report = json.loads(result.stdout)
     assert report["pair_count"] == 10
+    assert report["aggregate_available"] is True
     assert report["aggregate"]["credit_reduction"]["median"] == 0.4
     assert report["arm_order_balanced"] is True
     assert report["protocol_ready"] is True
@@ -163,7 +164,10 @@ def test_correction_ab_does_not_claim_from_too_few_pairs(tmp_path: Path) -> None
     result = _run_ab_script(tmp_path, _manifest(9))
 
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["claim_ready"] is False
+    report = json.loads(result.stdout)
+    assert report["aggregate_available"] is False
+    assert "aggregate" not in report
+    assert report["claim_ready"] is False
 
 
 def test_correction_ab_does_not_claim_unbalanced_arm_order(tmp_path: Path) -> None:
@@ -175,8 +179,23 @@ def test_correction_ab_does_not_claim_unbalanced_arm_order(tmp_path: Path) -> No
 
     assert result.returncode == 0, result.stderr
     report = json.loads(result.stdout)
+    assert report["aggregate_available"] is False
+    assert "aggregate" not in report
     assert report["arm_order_balanced"] is False
     assert report["protocol_ready"] is False
+    assert report["claim_ready"] is False
+
+
+def test_correction_ab_hides_aggregate_for_quality_regression(tmp_path: Path) -> None:
+    manifest = _manifest(10)
+    manifest["pairs"][0]["fresh"] = _arm(policy="fresh", credits=60, quality=False)  # type: ignore[index]
+
+    result = _run_ab_script(tmp_path, manifest)
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["aggregate_available"] is False
+    assert "aggregate" not in report
     assert report["claim_ready"] is False
 
 

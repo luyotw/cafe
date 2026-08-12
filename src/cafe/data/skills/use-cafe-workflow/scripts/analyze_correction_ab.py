@@ -294,14 +294,14 @@ def analyze(manifest: dict[str, Any]) -> dict[str, Any]:
         and max(order_counts.values()) - min(order_counts.values()) <= 1
     )
     protocol_ready = all(protocol.values()) and order_balanced
-    claim_ready = (
+    aggregate_available = (
         len(rows) >= 10
         and protocol_ready
-        and aggregate["credit_reduction"]["median"] >= 0.30
         and not quality_regressions
         and not fresh_quality_failures
     )
-    return {
+    claim_ready = aggregate_available and aggregate["credit_reduction"]["median"] >= 0.30
+    report = {
         "schema_version": SCHEMA_VERSION,
         "pair_count": len(rows),
         "protocol": protocol,
@@ -309,7 +309,7 @@ def analyze(manifest: dict[str, Any]) -> dict[str, Any]:
         "arm_order_counts": order_counts,
         "arm_order_balanced": order_balanced,
         "pairs": rows,
-        "aggregate": aggregate,
+        "aggregate_available": aggregate_available,
         "quality_regressions": quality_regressions,
         "fresh_quality_failures": fresh_quality_failures,
         "claim_ready": claim_ready,
@@ -320,6 +320,9 @@ def analyze(manifest: dict[str, Any]) -> dict[str, Any]:
             "finding; no paired quality regression"
         ),
     }
+    if aggregate_available:
+        report["aggregate"] = aggregate
+    return report
 
 
 def _percent(value: float) -> str:
@@ -351,17 +354,27 @@ def format_markdown(report: dict[str, Any]) -> str:
                 quality="pass" if row["fresh_quality_pass"] else "fail",
             )
         )
-    lines.extend(
-        [
-            "",
-            "| Metric | Median | 95% bootstrap CI |",
-            "| --- | ---: | ---: |",
-        ]
-    )
-    for metric, values in report["aggregate"].items():
-        lines.append(
-            f"| {metric} | {_percent(values['median'])} | "
-            f"{_percent(values['ci95_low'])} to {_percent(values['ci95_high'])} |"
+    aggregate = report.get("aggregate")
+    if aggregate:
+        lines.extend(
+            [
+                "",
+                "| Metric | Median | 95% bootstrap CI |",
+                "| --- | ---: | ---: |",
+            ]
+        )
+        for metric, values in aggregate.items():
+            lines.append(
+                f"| {metric} | {_percent(values['median'])} | "
+                f"{_percent(values['ci95_low'])} to {_percent(values['ci95_high'])} |"
+            )
+    else:
+        lines.extend(
+            [
+                "",
+                "- Aggregate statistics are unavailable until the paired evidence is "
+                "complete, balanced, and quality-preserving.",
+            ]
         )
     lines.extend(
         [

@@ -862,13 +862,6 @@ class GenericWorkflowStepExecutor(Phase):
             )
             return exact or SessionContinuation.new()
 
-        if self.iteration > 1 and step_def.get("correction_session", "fresh") == "resume":
-            exact = exact_continuation_from_context(
-                previous_data,
-                configured_clis=configured_clis,
-            )
-            return exact or SessionContinuation.new()
-
         return SessionContinuation.new()
 
     def _git_snapshot(self) -> Dict[str, str]:
