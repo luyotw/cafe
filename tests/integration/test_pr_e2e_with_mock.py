@@ -106,7 +106,7 @@ def test_pr_runtime_completes_with_capability_receipt(tmp_path: Path) -> None:
 
 @pytest.mark.e2e
 def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(tmp_path: Path) -> None:
-    """IT-001: mocked GitHub feedback becomes one durable declared work item."""
+    """IT-001: GitHub feedback is batched, deduplicated, and delivered on step start."""
     from unittest.mock import MagicMock, patch
 
     from cafe.core.hooks.feedback import GitHubPRFeedbackSource
@@ -131,7 +131,10 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(tmp_
         patch("cafe.core.hooks.feedback.GitHubOps") as github_ops,
         patch(
             "cafe.core.hooks.feedback.get_all_pr_comments",
-            return_value=[{"id": "100", "body": "Handle the boundary.", "is_resolved": False}],
+            return_value=[
+                {"id": "100", "body": "Handle the first boundary.", "is_resolved": False},
+                {"id": "101", "body": "Handle the second boundary.", "is_resolved": False},
+            ],
         ),
     ):
         github_ops.return_value.get_pr_for_branch.return_value = {
@@ -154,7 +157,10 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(tmp_
         )
 
     ledger = WorkflowFeedbackLedger(issue_dir)
-    assert [entry.content for entry in ledger.pending()] == ["Handle the boundary."]
+    assert [entry.content for entry in ledger.pending()] == [
+        "Handle the first boundary.",
+        "Handle the second boundary.",
+    ]
     assert any(event["type"] == "workflow_feedback_recorded" for event in first.events)
     assert second.events == []
 
@@ -164,5 +170,21 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(tmp_
         playbook_data=playbook,
         git_ops=phase.git_ops,
     ) == "develop"
-    assert ledger.pending() == []
+    assert len(ledger.pending(target_step="develop")) == 2
     phase.git_ops.get_current_branch.assert_not_called()
+
+    started_steps: list[str] = []
+
+    def executor(step_name: str, _step_def: dict, _state: object) -> StepExecutionResult:
+        started_steps.append(step_name)
+        return StepExecutionResult(response="completed", artifacts={}, status_code="confirmed")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    runtime.run(start_step="develop", single_step=True)
+
+    assert started_steps == ["develop"]
+    assert ledger.pending(target_step="develop") == []

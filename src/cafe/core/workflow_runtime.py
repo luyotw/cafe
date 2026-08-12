@@ -36,6 +36,7 @@ from cafe.core.status_codes import (
     step_on_declares,
     transition_map_key,
 )
+from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 from cafe.core.workflow_models import (
     BatonRejected,
     PlaybookRunResult,
@@ -770,6 +771,20 @@ class BlackboardWorkflowRuntime:
                 "runtime": runtime,
             },
         )
+        delivered_feedback = WorkflowFeedbackLedger(
+            self.issue_dir
+        ).consume_pending_for_target(current_step)
+        if delivered_feedback:
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "workflow_feedback_delivered",
+                {
+                    "step": current_step,
+                    "source_identities": [
+                        entry.source_identity for entry in delivered_feedback
+                    ],
+                },
+            )
 
         try:
             try:

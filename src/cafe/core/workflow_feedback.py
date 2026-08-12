@@ -189,6 +189,34 @@ class WorkflowFeedbackLedger:
             self._store(updated)
         return changed
 
+    def consume_pending_for_target(self, target_step: str) -> list[WorkflowFeedbackEntry]:
+        """Atomically mark all pending feedback for a started target as delivered."""
+        target = _required(target_step, field="target_step")
+        entries = self.load()
+        delivered = [
+            entry
+            for entry in entries
+            if entry.actionable and entry.target_step == target
+        ]
+        if not delivered:
+            return []
+        delivered_identities = {entry.source_identity for entry in delivered}
+        updated = [
+            WorkflowFeedbackEntry(
+                **{
+                    **asdict(entry),
+                    "actionable": False,
+                    "consumed": True,
+                    "updated_at": _now(),
+                }
+            )
+            if entry.source_identity in delivered_identities
+            else entry
+            for entry in entries
+        ]
+        self._store(updated)
+        return delivered
+
     def pending(self, *, target_step: str | None = None) -> list[WorkflowFeedbackEntry]:
         """Return only items that are still actionable, optionally for one target."""
         return [

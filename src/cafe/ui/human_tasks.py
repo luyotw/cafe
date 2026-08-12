@@ -296,7 +296,14 @@ def apply_human_task_payload(
             target=None, policy=policy, rejection=qualification_rejection
         )
 
-    if binding.feedback_delivery is not None and completion.feedback and is_correction:
+    if (
+        binding.feedback_delivery is not None
+        and completion.feedback
+        and (
+            policy.input_schema == "feedback"
+            or (selected_decision is not None and selected_decision.requires_feedback)
+        )
+    ):
         ledger = WorkflowFeedbackLedger(issue_dir)
         try:
             ledger.record(

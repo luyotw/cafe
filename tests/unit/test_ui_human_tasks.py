@@ -456,6 +456,102 @@ def test_feedback_delivery_approval_does_not_record_optional_feedback(tmp_path: 
     assert "workflow_feedback" not in blackboard.artifacts
 
 
+def test_feedback_delivery_records_each_declared_feedback_mode(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """UT-006: delivery preserves free-form and required decision feedback."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    builtin_root = tmp_path / "builtin"
+    skill_dir = builtin_root / "skills" / "feedback-policy"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: feedback-policy
+description: feedback delivery test policy
+workflow:
+  human_tasks:
+    - id: free-form-feedback
+      pattern: revision_feedback
+      prompt: Provide revision feedback
+      input_schema: feedback
+    - id: decision-feedback
+      pattern: confirm_output
+      prompt: Review the result
+      input_schema: decision
+      decisions:
+        - id: approve
+          label: Approve
+        - id: revise
+          label: Revise
+          requires_feedback: true
+---
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+    monkeypatch.setattr("cafe.ui.human_tasks.SkillLoader", lambda: loader)
+
+    for task_id, trigger, payload in (
+        (
+            "free-form-feedback",
+            "need_clarification",
+            {"task": "free-form-feedback", "feedback": "Retain the boundary case."},
+        ),
+        (
+            "decision-feedback",
+            "confirm_output",
+            {
+                "task": "decision-feedback",
+                "decision": "revise",
+                "feedback": "Retain the error path.",
+            },
+        ),
+    ):
+        issue_dir = tmp_path / ".cafe" / "issues" / task_id
+        store = BlackboardStore(issue_dir)
+        blackboard = store.load_or_create("review", playbook_id="test")
+        store.set_current_step(blackboard, "user")
+        playbook = {
+            "steps": {
+                "review": {
+                    "skill": "feedback-policy",
+                    "human_tasks": [
+                        {
+                            "trigger": trigger,
+                            "task_id": task_id,
+                            "outcomes": {"submit": "develop", "revise": "develop"},
+                            "feedback_delivery": {
+                                "artifact": "workflow_feedback",
+                                "source_kind": "test_review",
+                            },
+                        }
+                    ],
+                },
+                "develop": {"skill": "feedback-policy"},
+            }
+        }
+
+        result = apply_human_task_payload(
+            issue_dir=issue_dir,
+            playbook_data=playbook,
+            blackboard=blackboard,
+            from_step="review",
+            trigger=trigger,
+            raw_payload=payload,
+            source="test",
+        )
+
+        assert result.target == "develop"
+        assert [entry.content for entry in WorkflowFeedbackLedger(issue_dir).pending()] == [
+            payload["feedback"]
+        ]
+
+
 def test_cross_step_revision_feedback_is_written_for_the_selected_target(tmp_path: Path) -> None:
     """Feedback follows a cross-step revision route instead of staying at the review step."""
     issue_dir = tmp_path / ".cafe" / "issues" / "cross-step-revision"

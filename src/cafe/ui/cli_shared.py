@@ -872,7 +872,6 @@ def _find_external_resume_step(
             for entry in ledger.pending():
                 if entry.target_step not in playbook_data["steps"]:
                     continue
-                ledger.consume(entry.source_identity)
                 return entry.target_step
         except Exception:
             return None
