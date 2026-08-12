@@ -387,6 +387,7 @@ def test_default_requested_changes_follow_declared_loop_without_publish_authorit
             response="confirmed",
             artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
             status_code="confirmed",
+            agent_invoked=True,
         )
 
     workflow_result = _run_until_settled(
