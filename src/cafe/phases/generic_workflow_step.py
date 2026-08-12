@@ -502,14 +502,15 @@ class GenericWorkflowStepExecutor(Phase):
             and self._should_validate_checklist(status_code)
         ):
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
-            validate_completion = lambda: self._validate_and_retry_checklist_completion(
-                agent_name=agent_name,
-                prompt=last_prompt[0] if last_prompt else "",
-                user_input=resolved_user_input,
-                valid_intents=valid_intents,
-                allowed_tools=allowed_tools,
-                max_retries=3,
-            )
+            def validate_completion():
+                return self._validate_and_retry_checklist_completion(
+                    agent_name=agent_name,
+                    prompt=last_prompt[0] if last_prompt else "",
+                    user_input=resolved_user_input,
+                    valid_intents=valid_intents,
+                    allowed_tools=allowed_tools,
+                    max_retries=3,
+                )
             response, validated_status, validation_passed = (
                 self._preserve_hybrid_control_files(
                     validate_completion,
