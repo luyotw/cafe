@@ -5,8 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.playbooks.loader import PlaybookLoader
-from cafe.ui.human_tasks import apply_human_task_payload
+from cafe.ui.human_tasks import apply_human_task_payload, resolve_step_human_task
 
 
 def _paused_default_state(issue_dir: Path, *, from_step: str, intent: HandoffIntent):
@@ -22,6 +23,30 @@ def _paused_default_state(issue_dir: Path, *, from_step: str, intent: HandoffInt
         source="test",
     )
     return store, state
+
+
+def _materialize_default_task(
+    issue_dir: Path,
+    state: object,
+    *,
+    from_step: str,
+    trigger: str,
+):
+    playbook = PlaybookLoader().load("default")
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook, step_name=from_step, trigger=trigger
+    )
+    return HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=state.workflow_id,
+        step=from_step,
+        iteration=1,
+        trigger=trigger,
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+    )
 
 
 def test_default_human_tasks_validate_and_route_all_user_handoff_patterns(tmp_path: Path) -> None:
@@ -107,6 +132,116 @@ def test_invalid_default_human_task_response_keeps_the_user_pause(tmp_path: Path
     assert reloaded.current_step == "user"
     assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
     assert any(event.event_type == "human_task_rejected" for event in reloaded.events)
+
+
+def test_matching_durable_completion_records_one_result_and_declared_continuation(
+    tmp_path: Path,
+) -> None:
+    """IT-002/IT-003: interactive and command responses share durable completion guards."""
+    playbook = PlaybookLoader().load("default")
+    for source in ("interactive", "command"):
+        issue_dir = tmp_path / ".cafe" / "issues" / source
+        store, state = _paused_default_state(
+            issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
+        )
+        task = _materialize_default_task(
+            issue_dir, state, from_step="spec", trigger="confirm_output"
+        )
+
+        result = apply_human_task_payload(
+            issue_dir=issue_dir,
+            playbook_data=playbook,
+            blackboard=state,
+            from_step="spec",
+            trigger="confirm_output",
+            raw_payload={
+                "task": "output-review",
+                "decision": "confirm",
+                "human_task_id": task.id,
+            },
+            source=source,
+        )
+
+        records = HumanTaskRecordStore(issue_dir)
+        assert result.target == "plan"
+        assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
+        assert records.get_wait_state(task.id).released_at is not None
+        assert len(records.results()) == 1
+        assert store.load_or_create("spec").handoff_contract.to_step == "plan"
+
+
+def test_durable_invalid_stale_and_cross_workflow_results_leave_the_pause_intact(
+    tmp_path: Path,
+) -> None:
+    """IT-004: only the matching active task can create progress exactly once."""
+    playbook = PlaybookLoader().load("default")
+    issue_dir = tmp_path / ".cafe" / "issues" / "guarded"
+    store, state = _paused_default_state(
+        issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
+    )
+    task = _materialize_default_task(
+        issue_dir, state, from_step="spec", trigger="confirm_output"
+    )
+
+    unrelated = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "output-review",
+            "decision": "confirm",
+            "human_task_id": "another-workflow-task",
+        },
+        source="command",
+    )
+    HumanTaskRecordStore(issue_dir).cancel(
+        workflow_id=state.workflow_id, task_id=task.id, reason="replaced handoff"
+    )
+    stale = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload={"task": "output-review", "decision": "confirm", "human_task_id": task.id},
+        source="interactive",
+    )
+
+    records = HumanTaskRecordStore(issue_dir)
+    assert unrelated.target is None and unrelated.rejection is not None
+    assert stale.target is None and stale.rejection is not None
+    assert store.load_or_create("spec").current_step == "user"
+    assert records.get_task(task.id).status is HumanTaskStatus.CANCELLED
+    assert records.results() == ()
+    assert "rejected" in [event.event_type for event in records.lifecycle_events()]
+
+
+def test_taskless_legacy_handoffs_continue_through_both_existing_transports(
+    tmp_path: Path,
+) -> None:
+    """IT-006: old #345 pauses have no fabricated record but remain completable."""
+    playbook = PlaybookLoader().load("default")
+    for source in ("interactive", "command"):
+        issue_dir = tmp_path / ".cafe" / "issues" / f"legacy-{source}"
+        store, state = _paused_default_state(
+            issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
+        )
+
+        result = apply_human_task_payload(
+            issue_dir=issue_dir,
+            playbook_data=playbook,
+            blackboard=state,
+            from_step="spec",
+            trigger="confirm_output",
+            raw_payload={"task": "output-review", "decision": "confirm"},
+            source=source,
+        )
+
+        assert result.target == "plan"
+        assert not (issue_dir / "human_tasks.json").exists()
+        assert store.load_or_create("spec").handoff_contract.to_step == "plan"
 
 
 def test_confirmation_rejects_invalid_declared_packet_contract_for_custom_steps(
