@@ -110,6 +110,108 @@ steps:
         loader.load_model("custom")
 
 
+def test_github_feedback_source_rejects_explicit_null_target_override(tmp_path: Path) -> None:
+    """UT-003: an explicit null cannot erase direct feedback routing."""
+    builtin_root = tmp_path / "builtin"
+    project_root = tmp_path / "project"
+    _write_skill(builtin_root / "skills", "source")
+    _write_skill(builtin_root / "skills", "receiver")
+    (builtin_root / "skills" / "receiver" / "SKILL.md").write_text(
+        """---
+name: receiver
+description: receiver
+workflow:
+  prompt_inputs:
+    - artifacts: [workflow_feedback]
+      placeholder: workflow_feedback_file
+      required: false
+---
+
+# receiver
+""",
+        encoding="utf-8",
+    )
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "custom",
+        """
+playbook: {id: custom}
+behavior: {feedback_target: receiver}
+steps:
+  source:
+    role: operator
+    skill: source
+    behavior: {feedback_target: null}
+    hooks: {prepare_input: [GitHubPRFeedbackSource]}
+    on: {await_agent: receiver}
+  receiver:
+    role: operator
+    skill: receiver
+    input_artifacts: [workflow_feedback]
+    on: {await_agent: _done}
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="GitHubPRFeedbackSource.*feedback_target"):
+        loader.load_model("custom")
+
+
+@pytest.mark.parametrize("stage", ["before_execute", "after_execute", "publish_output"])
+def test_github_feedback_source_rejects_non_intake_stage(tmp_path: Path, stage: str) -> None:
+    """UT-003: feedback intake only runs through the prepare-input boundary."""
+    builtin_root = tmp_path / "builtin"
+    project_root = tmp_path / "project"
+    _write_skill(builtin_root / "skills", "source")
+    _write_skill(builtin_root / "skills", "receiver")
+    (builtin_root / "skills" / "receiver" / "SKILL.md").write_text(
+        """---
+name: receiver
+description: receiver
+workflow:
+  prompt_inputs:
+    - artifacts: [workflow_feedback]
+      placeholder: workflow_feedback_file
+      required: false
+---
+
+# receiver
+""",
+        encoding="utf-8",
+    )
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "custom",
+        f"""
+playbook: {{id: custom}}
+steps:
+  source:
+    role: operator
+    skill: source
+    behavior: {{feedback_target: receiver}}
+    hooks: {{{stage}: [GitHubPRFeedbackSource]}}
+    on: {{await_agent: receiver}}
+  receiver:
+    role: operator
+    skill: receiver
+    input_artifacts: [workflow_feedback]
+    on: {{await_agent: _done}}
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="GitHubPRFeedbackSource.*prepare_input"):
+        loader.load_model("custom")
+
+
 def test_human_feedback_delivery_requires_effective_skill_prompt_exposure(
     tmp_path: Path,
 ) -> None:

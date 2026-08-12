@@ -579,36 +579,41 @@ class PlaybookDefinition(BaseModel):
                 and "workflow_feedback" in (step.input_artifacts or [])
             )
 
-        def declares_github_pr_feedback_source(step: StepConfig) -> bool:
-            return any(
-                hook == "GitHubPRFeedbackSource"
-                or (
-                    isinstance(hook, dict)
-                    and hook.get("name") == "GitHubPRFeedbackSource"
+        def github_pr_feedback_source_stages(step: StepConfig) -> list[str]:
+            return [
+                stage_name
+                for stage_name, hooks in (
+                    ("before_execute", step.hooks.before_execute),
+                    ("prepare_input", step.hooks.prepare_input),
+                    ("after_execute", step.hooks.after_execute),
+                    ("publish_output", step.hooks.publish_output),
                 )
-                for stage in (
-                    step.hooks.before_execute,
-                    step.hooks.prepare_input,
-                    step.hooks.after_execute,
-                    step.hooks.publish_output,
+                if any(
+                    hook == "GitHubPRFeedbackSource"
+                    or (
+                        isinstance(hook, dict)
+                        and hook.get("name") == "GitHubPRFeedbackSource"
+                    )
+                    for hook in hooks
                 )
-                for hook in stage
-            )
+            ]
 
         for step_name, step in self.steps.items():
             behavior = resolve_step_behavior(self, step_name)
             target = behavior.feedback_target
-            if (
-                declares_github_pr_feedback_source(step)
-                and (
-                    "feedback_target" not in step.behavior.model_fields_set
-                    or target is None
-                )
-            ):
-                raise ValueError(
-                    f"steps.{step_name}.hooks GitHubPRFeedbackSource requires "
-                    "behavior.feedback_target"
-                )
+            feedback_source_stages = github_pr_feedback_source_stages(step)
+            if feedback_source_stages:
+                if any(stage != "prepare_input" for stage in feedback_source_stages):
+                    raise ValueError(
+                        f"steps.{step_name}.hooks GitHubPRFeedbackSource only supports "
+                        "hooks.prepare_input"
+                    )
+                direct_target = step.behavior.feedback_target
+                if not isinstance(direct_target, str) or not direct_target.strip():
+                    raise ValueError(
+                        f"steps.{step_name}.hooks GitHubPRFeedbackSource requires "
+                        "behavior.feedback_target"
+                    )
             if target is not None and target not in self.steps:
                 raise ValueError(
                     f"steps.{step_name}.behavior.feedback_target {target!r} is not a defined step"
