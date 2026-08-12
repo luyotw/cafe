@@ -26,4 +26,4 @@ Analyze it with:
 python3 <skill-dir>/scripts/analyze_correction_ab.py <manifest.json>
 ```
 
-The script reports every pair, arm-order balance, protocol readiness, medians, deterministic 95% bootstrap confidence intervals, and `claim_ready`. Do not claim the 30% target until `claim_ready: yes`; directional unpaired workflow observations remain operational telemetry only.
+The script always reports every pair, arm-order balance, protocol readiness, and `claim_ready`. It reports aggregate medians and deterministic 95% bootstrap confidence intervals only when there are at least ten pairs with balanced arm order, complete protocol attestations, and quality-preserving fresh arms. Otherwise, both the default Markdown report and `--json` output mark aggregate statistics unavailable and leave the 30% target unclaimable. Do not claim the 30% target until `claim_ready: yes`; directional unpaired workflow observations remain operational telemetry only.

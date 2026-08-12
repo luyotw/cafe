@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -131,12 +132,17 @@ def _manifest(pair_count: int) -> dict[str, object]:
     }
 
 
-def _run_ab_script(tmp_path: Path, manifest: dict[str, object]) -> subprocess.CompletedProcess[str]:
+def _run_ab_script(
+    tmp_path: Path, manifest: dict[str, object], *, as_json: bool = True
+) -> subprocess.CompletedProcess[str]:
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     script = SKILLS / "use-cafe-workflow/scripts/analyze_correction_ab.py"
+    command = [sys.executable, str(script), str(manifest_path)]
+    if as_json:
+        command.append("--json")
     return subprocess.run(
-        [sys.executable, str(script), str(manifest_path), "--json"],
+        command,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -197,6 +203,29 @@ def test_correction_ab_hides_aggregate_for_quality_regression(tmp_path: Path) ->
     assert report["aggregate_available"] is False
     assert "aggregate" not in report
     assert report["claim_ready"] is False
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ("insufficient_pairs", "unbalanced_arm_order", "quality_regression"),
+)
+def test_correction_ab_default_report_hides_aggregate_until_evidence_is_valid(
+    tmp_path: Path, failure: str
+) -> None:
+    manifest = _manifest(9 if failure == "insufficient_pairs" else 10)
+    if failure == "unbalanced_arm_order":
+        for pair in manifest["pairs"]:  # type: ignore[union-attr]
+            pair["arm_order"] = "fresh_first"
+    elif failure == "quality_regression":
+        manifest["pairs"][0]["fresh"] = _arm(  # type: ignore[index]
+            policy="fresh", credits=60, quality=False
+        )
+
+    result = _run_ab_script(tmp_path, manifest, as_json=False)
+
+    assert result.returncode == 0, result.stderr
+    assert "Aggregate statistics are unavailable" in result.stdout
+    assert "| Metric | Median |" not in result.stdout
 
 
 def test_correction_ab_rejects_missing_billed_credits(tmp_path: Path) -> None:
