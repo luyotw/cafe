@@ -13,7 +13,6 @@ from cafe.utils.github import (
     get_all_pr_comments,
     filter_unresolved_comments,
     format_comments_for_prompt,
-    get_processed_comment_ids_from_history,
     PRComment,
     GitHubError,
 )
@@ -959,6 +958,7 @@ confirmed
         assert "Test comment" in result["skipped"][0]["reason"]
 
 
+@pytest.mark.skip(reason="workflow_feedback is the sole feedback lifecycle authority")
 class TestGetProcessedCommentIDs:
     """測試從歷史記錄中獲取已處理的 comment IDs"""
 
@@ -1107,6 +1107,7 @@ class TestGetProcessedCommentIDs:
             assert len(result) == 1
 
 
+@pytest.mark.skip(reason="workflow_feedback replaces the last-seen artifact")
 def test_load_pr_last_seen_comment_ids_reads_artifact(tmp_path: Path) -> None:
     from cafe.utils.github import load_pr_last_seen_comment_ids
 
@@ -1120,6 +1121,7 @@ def test_load_pr_last_seen_comment_ids_reads_artifact(tmp_path: Path) -> None:
     assert load_pr_last_seen_comment_ids(pr_dir) == {"a", "b"}
 
 
+@pytest.mark.skip(reason="workflow_feedback has no legacy context reader")
 def test_load_pr_last_seen_comment_ids_legacy_context(tmp_path: Path) -> None:
     from cafe.utils.github import load_pr_last_seen_comment_ids
 
@@ -1133,6 +1135,7 @@ def test_load_pr_last_seen_comment_ids_legacy_context(tmp_path: Path) -> None:
     assert load_pr_last_seen_comment_ids(pr_dir) == {"x"}
 
 
+@pytest.mark.skip(reason="workflow_feedback replaces the last-seen artifact")
 def test_persist_last_seen_comment_ids_round_trip(tmp_path: Path) -> None:
     from cafe.utils.github import (
         load_last_seen_comment_ids_from_artifact,
@@ -1146,6 +1149,7 @@ def test_persist_last_seen_comment_ids_round_trip(tmp_path: Path) -> None:
     assert load_pr_last_seen_comment_ids(pr_dir) == {"1", "2"}
 
 
+@pytest.mark.skip(reason="workflow_feedback replaces the last-seen artifact")
 def test_load_last_seen_comment_ids_from_artifact_missing_returns_none(tmp_path: Path) -> None:
     from cafe.utils.github import load_last_seen_comment_ids_from_artifact
 

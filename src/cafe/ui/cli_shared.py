@@ -862,8 +862,16 @@ def _find_external_resume_step(
     for step_name, step_def in playbook_data["steps"].items():
         hooks = step_def.get("hooks", {})
         prepare_hooks = hooks.get("prepare_input", [])
-        if "GitHubPRCreator" not in prepare_hooks:
+        if "GitHubPRFeedbackSource" not in prepare_hooks:
             continue
+
+        try:
+            from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+            if WorkflowFeedbackLedger(issue_dir).pending():
+                return step_name
+        except Exception:
+            return None
 
         try:
             branch_name = git_ops.get_current_branch()
@@ -880,11 +888,8 @@ def _find_external_resume_step(
             return None
 
         try:
-            from cafe.utils.github import load_pr_last_seen_comment_ids
-
             _get_comments, _filter_comments = _get_github_helpers()
-            exclude_ids = load_pr_last_seen_comment_ids(issue_dir / step_name)
-            comments = _get_comments(int(existing_pr["number"]), exclude_ids=exclude_ids)
+            comments = _get_comments(int(existing_pr["number"]))
             unresolved_comments = _filter_comments(comments)
         except Exception as exc:
             console.print(

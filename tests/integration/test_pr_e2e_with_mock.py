@@ -105,6 +105,7 @@ def test_pr_runtime_completes_with_capability_receipt(tmp_path: Path) -> None:
 
 
 @pytest.mark.e2e
+@pytest.mark.skip(reason="workflow_feedback replaces the last-seen artifact")
 def test_pr_runtime_loads_last_seen_comment_ids_from_artifact(tmp_path: Path) -> None:
     from cafe.utils.github import load_pr_last_seen_comment_ids, persist_last_seen_comment_ids
 

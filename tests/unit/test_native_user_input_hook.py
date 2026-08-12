@@ -10,7 +10,6 @@ from cafe.core.hooks.native import (
     GitHubIssueFetcher,
     GitHubPRCreator,
     InitialInputProviderResolver,
-    LocalPRReviewer,
     PRCommentPoster,
     PRLinkOpener,
     UserInputCollector,
@@ -983,6 +982,7 @@ def test_pr_link_opener_noops_when_browser_open_fails() -> None:
     assert result.events == []
 
 
+@pytest.mark.skip(reason="LocalReviewContextProvider replaces imperative local review")
 def test_local_pr_reviewer_displays_diff_and_confirms_local_mode(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     phase_dir = issue_dir / "pr"
@@ -1017,6 +1017,7 @@ def test_local_pr_reviewer_displays_diff_and_confirms_local_mode(tmp_path: Path)
     assert result.events == [{"type": "local_pr_review_confirmed"}]
 
 
+@pytest.mark.skip(reason="LocalReviewContextProvider replaces imperative local review")
 def test_local_pr_reviewer_writes_feedback_todo_and_requests_changes(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     phase_dir = issue_dir / "pr"
@@ -1053,6 +1054,7 @@ def test_local_pr_reviewer_writes_feedback_todo_and_requests_changes(tmp_path: P
     assert result.events[0]["type"] == "local_pr_review_changes_requested"
 
 
+@pytest.mark.skip(reason="GitHubPRFeedbackSource owns feedback intake")
 def test_github_pr_creator_prepare_input_loads_unresolved_comments(tmp_path: Path) -> None:
     phase_dir = tmp_path / "pr"
     phase_dir.mkdir(parents=True, exist_ok=True)
@@ -1087,6 +1089,7 @@ def test_github_pr_creator_prepare_input_loads_unresolved_comments(tmp_path: Pat
     assert result.events == [{"type": "pr_comments_loaded", "count": 1, "pr_number": "42"}]
 
 
+@pytest.mark.skip(reason="GitHubPRFeedbackSource owns ledger-backed feedback intake")
 def test_github_pr_creator_prepare_input_uses_and_updates_last_seen_comments(
     tmp_path: Path,
 ) -> None:

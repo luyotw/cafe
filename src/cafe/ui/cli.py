@@ -65,7 +65,6 @@ from cafe.utils.github import (  # noqa: F401 — backward-compat re-exports for
     GitHubOps,
     filter_unresolved_comments,
     get_all_pr_comments,
-    get_processed_comment_ids_from_history,
 )
 
 

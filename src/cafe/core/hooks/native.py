@@ -26,11 +26,6 @@ from cafe.ui.interactive_qa import interactive_qa_flow
 from cafe.utils.github import (
     GitHubError,
     GitHubOps,
-    filter_unresolved_comments,
-    format_comments_for_prompt,
-    get_all_pr_comments,
-    get_processed_comment_ids_from_history,
-    load_pr_last_seen_comment_ids,
 )
 
 
@@ -201,37 +196,6 @@ def _capability_execution_requested(
         contract.from_step == step_name
         and contract.to_step != step_name
         and contract.to_owner in {HandoffOwner.AGENT, HandoffOwner.DONE}
-    )
-
-
-def _extract_pr_comment_ids(comments: list[Any]) -> list[str]:
-    comment_ids: list[str] = []
-    for comment in comments:
-        raw_id = getattr(comment, "id", None)
-        if raw_id is None and isinstance(comment, dict):
-            raw_id = comment.get("id")
-        if raw_id is not None:
-            comment_ids.append(str(raw_id))
-    return comment_ids
-
-
-def _persist_pr_last_seen_comment_ids(pr_dir: Path, comment_ids: list[str]) -> None:
-    if not comment_ids:
-        return
-
-    seen_ids = load_pr_last_seen_comment_ids(pr_dir)
-    seen_ids.update(str(comment_id) for comment_id in comment_ids)
-
-    artifact_file = pr_dir / "artifacts" / "pr_last_seen_comments.json"
-    artifact_file.parent.mkdir(parents=True, exist_ok=True)
-    artifact_file.write_text(
-        json.dumps(
-            {"last_seen_comment_ids": sorted(seen_ids)},
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
     )
 
 
@@ -1164,39 +1128,7 @@ class GitHubPRCreator(NoOpHook):
         if has_unpushed_commits:
             return HookResult(context_updates=context_updates)
 
-        try:
-            exclude_ids = load_pr_last_seen_comment_ids(phase.phase_dir)
-            if not exclude_ids:
-                exclude_ids = get_processed_comment_ids_from_history(phase.phase_dir)
-            comments = get_all_pr_comments(int(existing_pr["number"]), exclude_ids=exclude_ids)
-            _persist_pr_last_seen_comment_ids(phase.phase_dir, _extract_pr_comment_ids(comments))
-            unresolved_comments = filter_unresolved_comments(comments)
-        except Exception:
-            return HookResult(context_updates=context_updates)
-
-        if not unresolved_comments:
-            return HookResult(context_updates=context_updates)
-
-        formatted_comments = format_comments_for_prompt(unresolved_comments).strip()
-        if not formatted_comments:
-            return HookResult(context_updates=context_updates)
-
-        step_name = kwargs.get("step_name")
-        if isinstance(step_name, str) and step_name:
-            phase.step_user_inputs[step_name] = formatted_comments
-        context_updates["user_input"] = formatted_comments
-        context_updates["pr_comment_count"] = str(len(unresolved_comments))
-        context_updates["pr_mode"] = "comments"
-        return HookResult(
-            context_updates=context_updates,
-            events=[
-                {
-                    "type": "pr_comments_loaded",
-                    "count": len(unresolved_comments),
-                    "pr_number": str(existing_pr["number"]),
-                }
-            ],
-        )
+        return HookResult(context_updates=context_updates)
 
     def _publish_output(self, **kwargs: Any) -> HookResult:
         from cafe.core.blackboard import BlackboardStore
@@ -1511,120 +1443,6 @@ class PRCommentPoster(NoOpHook):
                     "pr_number": str(existing_pr["number"]),
                 }
             ]
-        )
-
-
-class LocalPRReviewer(NoOpHook):
-    """Display local code diff and collect user confirmation for local PR mode."""
-
-    name = "LocalPRReviewer"
-
-    @staticmethod
-    def _is_local_pr_mode(phase: Any) -> bool:
-        issue_dir = getattr(phase, "issue_dir", None)
-        if not isinstance(issue_dir, Path):
-            return False
-        try:
-            value = phase._get_issue_config_value(issue_dir / "issue.yaml", "pr.auto_create")
-        except Exception:
-            return False
-        return value is False
-
-    @staticmethod
-    def _format_todo_feedback(feedback: str) -> str:
-        lines = [line.strip() for line in feedback.splitlines() if line.strip()]
-        todos = []
-        for line in lines:
-            normalized = line
-            for prefix in ("- [ ]", "- [x]", "-", "*"):
-                if normalized.startswith(prefix):
-                    normalized = normalized[len(prefix) :].strip()
-                    break
-            if normalized:
-                todos.append(f"- [ ] {normalized}")
-        if not todos:
-            todos.append("- [ ] Address local review feedback")
-        return "# Local review feedback\n\n## Todo List\n" + "\n".join(todos) + "\n"
-
-    def run(self, **kwargs: Any) -> HookResult:
-        if kwargs.get("stage") != "publish_output":
-            return HookResult()
-        phase = kwargs.get("phase")
-        step_name = str(kwargs.get("step_name") or "")
-        if not _publish_requested(
-            phase=phase,
-            step_name=step_name,
-            status_code=kwargs.get("status_code"),
-            context=kwargs.get("context"),
-            step_def=kwargs.get("step_def"),
-        ):
-            return HookResult()
-        output_file = kwargs.get("output_file")
-        if not isinstance(output_file, Path):
-            return HookResult()
-        if not self._is_local_pr_mode(phase):
-            return HookResult()
-        if not getattr(phase, "interactive", False):
-            return HookResult(
-                override_status_code=PhaseStatusCode.NEED_CLARIFICATION,
-                events=[{"type": "local_pr_review_required", "reason": "non_interactive"}],
-            )
-
-        try:
-            base_branch = phase._get_issue_config_value(
-                phase.issue_dir / "issue.yaml", "base_branch"
-            )
-            resolved_base = str(base_branch or phase.git_ops.get_default_base_branch())
-            diff_output = phase.git_ops.get_diff(resolved_base, "HEAD")
-        except Exception:
-            return HookResult()
-
-        from rich.console import Console
-        from rich.panel import Panel
-        from rich.syntax import Syntax
-
-        console = Console()
-
-        def _display_diff() -> None:
-            console.print()
-            console.print(Panel.fit("Local Review Mode - Code Changes", style="bold cyan"))
-            console.print()
-            if diff_output.strip():
-                console.print(Syntax(diff_output, "diff", theme="monokai", line_numbers=False))
-            else:
-                console.print("[yellow]No changes to review[/yellow]")
-            console.print()
-
-        _display_diff()
-        choice = phase._ask_user_for_review_decision(
-            "code changes",
-            agent_name=str(kwargs.get("agent_name") or ""),
-            role="developer",
-            output_file=output_file,
-            display_callback=_display_diff if diff_output.strip() else None,
-        )
-        result_or_input = phase._process_review_decision(
-            choice=choice,
-            prev_data={},
-            phase_name="Local review",
-            phase_specific_data={"local_review": True},
-        )
-
-        if choice == "confirm":
-            return HookResult(events=[{"type": "local_pr_review_confirmed"}])
-
-        feedback = str(result_or_input).strip()
-        output_file.write_text(self._format_todo_feedback(feedback), encoding="utf-8")
-        user_input_file = output_file.parent / "user_input.md"
-        user_input_file.write_text(feedback, encoding="utf-8")
-        return HookResult(
-            override_status_code=PhaseStatusCode.NEEDS_CHANGES,
-            events=[
-                {
-                    "type": "local_pr_review_changes_requested",
-                    "user_input_file": str(user_input_file),
-                }
-            ],
         )
 
 
