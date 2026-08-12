@@ -148,6 +148,7 @@ steps:
   repair:
     skill: cafe-develop
     role: developer
+    input_artifacts: [workflow_feedback]
     on: {await_agent: release}
   release:
     skill: cafe-develop

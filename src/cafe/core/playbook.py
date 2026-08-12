@@ -572,6 +572,13 @@ class PlaybookDefinition(BaseModel):
     def _default_entry_point(self) -> "PlaybookDefinition":
         if self.entry_point is None:
             self.entry_point = next(iter(self.steps.keys()))
+
+        def declares_workflow_feedback(step: StepConfig) -> bool:
+            return (
+                "input_artifacts" in step.model_fields_set
+                and "workflow_feedback" in (step.input_artifacts or [])
+            )
+
         for step_name, step in self.steps.items():
             behavior = resolve_step_behavior(self, step_name)
             target = behavior.feedback_target
@@ -579,6 +586,27 @@ class PlaybookDefinition(BaseModel):
                 raise ValueError(
                     f"steps.{step_name}.behavior.feedback_target {target!r} is not a defined step"
                 )
+            if target is not None and not declares_workflow_feedback(self.steps[target]):
+                raise ValueError(
+                    f"steps.{step_name}.behavior.feedback_target {target!r} must declare "
+                    "workflow_feedback in input_artifacts"
+                )
+            for binding in step.human_tasks:
+                if binding.feedback_delivery is None:
+                    continue
+                for delivery_target in [
+                    *binding.outcomes.values(),
+                    *binding.allowed_targets,
+                ]:
+                    if (
+                        delivery_target != DONE_TARGET
+                        and delivery_target in self.steps
+                        and not declares_workflow_feedback(self.steps[delivery_target])
+                    ):
+                        raise ValueError(
+                            f"steps.{step_name}.human_tasks feedback_delivery target "
+                            f"{delivery_target!r} must declare workflow_feedback in input_artifacts"
+                        )
             if (
                 behavior.publish_confirmation
                 and "cafe.pr.publish" not in step.capability_requests

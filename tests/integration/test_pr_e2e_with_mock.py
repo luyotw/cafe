@@ -106,7 +106,7 @@ def test_pr_runtime_completes_with_capability_receipt(tmp_path: Path) -> None:
 
 @pytest.mark.e2e
 def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(tmp_path: Path) -> None:
-    """IT-001: GitHub feedback is batched, deduplicated, and delivered on step start."""
+    """IT-001: GitHub feedback is batched, retried, and delivered exactly once."""
     from unittest.mock import MagicMock, patch
 
     from cafe.core.hooks.feedback import GitHubPRFeedbackSource
@@ -173,10 +173,32 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(tmp_
     assert len(ledger.pending(target_step="develop")) == 2
     phase.git_ops.get_current_branch.assert_not_called()
 
-    started_steps: list[str] = []
+    delivered_feedback: list[list[str]] = []
+
+    def interrupted_executor(
+        step_name: str, _step_def: dict, _state: object
+    ) -> StepExecutionResult:
+        delivered_feedback.append(
+            [entry.content for entry in ledger.pending(target_step=step_name)]
+        )
+        raise KeyboardInterrupt()
+
+    interrupted = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=interrupted_executor,
+    ).run(start_step="develop", single_step=True)
+
+    assert interrupted.final_status_code.startswith("INTERRUPTED")
+    assert [entry.content for entry in ledger.pending(target_step="develop")] == [
+        "Handle the first boundary.",
+        "Handle the second boundary.",
+    ]
 
     def executor(step_name: str, _step_def: dict, _state: object) -> StepExecutionResult:
-        started_steps.append(step_name)
+        delivered_feedback.append(
+            [entry.content for entry in ledger.pending(target_step=step_name)]
+        )
         return StepExecutionResult(response="completed", artifacts={}, status_code="confirmed")
 
     runtime = BlackboardWorkflowRuntime(
@@ -186,5 +208,8 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(tmp_
     )
     runtime.run(start_step="develop", single_step=True)
 
-    assert started_steps == ["develop"]
+    assert delivered_feedback == [
+        ["Handle the first boundary.", "Handle the second boundary."],
+        ["Handle the first boundary.", "Handle the second boundary."],
+    ]
     assert ledger.pending(target_step="develop") == []
