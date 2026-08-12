@@ -20,9 +20,6 @@ from cafe.core.blackboard import (
     HandoffContract,
     HandoffIntent,
     HandoffOwner,
-    LongRunningOperationArtifact,
-    operation_artifact_path,
-    operation_receipt_path,
 )
 from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
 from cafe.core.context_packet import (
@@ -242,61 +239,6 @@ class GenericWorkflowStepExecutor(Phase):
                 pass
             raise
 
-    def _preserve_runtime_operation_metadata(
-        self,
-        *,
-        snapshot: Optional[bytes],
-        observed: Optional[bytes],
-        step_name: str,
-        iteration_dir: Path,
-    ) -> Optional[bytes]:
-        """Merge verified operation metadata published while a hybrid call ran."""
-        if snapshot is None or observed is None:
-            return snapshot
-        try:
-            original_state = BlackboardState.from_dict(json.loads(snapshot), initial_step=step_name)
-            observed_state = BlackboardState.from_dict(json.loads(observed), initial_step=step_name)
-            operation_bytes = self._read_regular_file(
-                operation_artifact_path(iteration_dir), fail_closed=False
-            )
-            if operation_bytes is None:
-                return snapshot
-            operation = LongRunningOperationArtifact.from_dict(json.loads(operation_bytes))
-        except (OSError, ValueError, json.JSONDecodeError):
-            return snapshot
-
-        store = BlackboardStore(self.issue_dir)
-        if not operation_artifact_is_trusted(
-            blackboard_store=store,
-            blackboard=observed_state,
-            current_step=step_name,
-            iteration_dir=iteration_dir,
-            artifact=operation,
-        ):
-            return snapshot
-
-        operation_name = f"{step_name}_operation"
-        original_state.artifacts[operation_name] = observed_state.artifacts[operation_name]
-        try:
-            receipt_bytes = self._read_regular_file(
-                operation_receipt_path(iteration_dir), fail_closed=False
-            )
-            if receipt_bytes is not None:
-                receipt = LongRunningOperationArtifact.from_dict(json.loads(receipt_bytes))
-                if operation_receipt_is_trusted(
-                    blackboard_store=store,
-                    blackboard=observed_state,
-                    current_step=step_name,
-                    iteration_dir=iteration_dir,
-                    operation=operation,
-                    receipt=receipt,
-                ):
-                    receipt_name = f"{step_name}_operation_receipt"
-                    original_state.artifacts[receipt_name] = observed_state.artifacts[receipt_name]
-        except (OSError, ValueError, json.JSONDecodeError):
-            pass
-        return json.dumps(original_state.to_dict(), ensure_ascii=False, indent=2).encode("utf-8")
-
     def _preserve_hybrid_control_files(
         self,
         action: Callable[[], Any],
@@ -318,15 +260,7 @@ class GenericWorkflowStepExecutor(Phase):
         try:
             return action()
         finally:
-            blackboard_path = self.issue_dir / "blackboard.json"
-            restored = dict(snapshots)
-            restored[blackboard_path] = self._preserve_runtime_operation_metadata(
-                snapshot=snapshots[blackboard_path],
-                observed=self._read_regular_file(blackboard_path, fail_closed=False),
-                step_name=step_name,
-                iteration_dir=iteration_dir,
-            )
-            for path, content in restored.items():
+            for path, content in snapshots.items():
                 self._restore_control_file(path, content)
 
     def execute(self) -> Any:

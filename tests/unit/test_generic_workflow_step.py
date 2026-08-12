@@ -688,8 +688,10 @@ def test_hybrid_portion_replaces_control_file_symlink_without_following_it(
     assert store.load_or_create("mixed").current_step == "mixed"
 
 
-def test_hybrid_portion_preserves_runtime_operation_metadata(tmp_path: Path, monkeypatch) -> None:
-    """UT-010: hybrid rollback retains runtime-published operation trust evidence."""
+def test_hybrid_portion_discards_agent_authored_operation_metadata(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """UT-010: hybrid rollback does not trust operation metadata from an agent portion."""
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "hybrid-operation-metadata"
     playbook = {
@@ -755,13 +757,14 @@ def test_hybrid_portion_preserves_runtime_operation_metadata(tmp_path: Path, mon
     assert iteration_dir is not None
     assert operation is not None
     reloaded = store.load_or_create("mixed")
-    assert operation_artifact_is_trusted(
+    assert not operation_artifact_is_trusted(
         blackboard_store=store,
         blackboard=reloaded,
         current_step="mixed",
         iteration_dir=iteration_dir,
         artifact=operation,
     )
+    assert "mixed_operation" not in reloaded.artifacts
 
 
 def test_generic_workflow_step_writes_review_pause_contract(tmp_path: Path, monkeypatch) -> None:
