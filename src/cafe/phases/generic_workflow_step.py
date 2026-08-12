@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import errno
 import json
+import os
+import shutil
+import stat
+import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import (
@@ -173,6 +178,91 @@ class GenericWorkflowStepExecutor(Phase):
         )
         return merged
 
+    @staticmethod
+    def _read_regular_file(path: Path, *, fail_closed: bool) -> Optional[bytes]:
+        """Read a control file without following a replacement symlink."""
+        try:
+            mode = os.lstat(path).st_mode
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISREG(mode):
+            if fail_closed:
+                raise RuntimeError(f"canonical control file must be regular: {path}")
+            return None
+
+        try:
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except OSError as exc:
+            if not fail_closed and exc.errno in {errno.ENOENT, errno.ELOOP}:
+                return None
+            raise
+        with os.fdopen(fd, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                if fail_closed:
+                    raise RuntimeError(f"canonical control file must be regular: {path}")
+                return None
+            return handle.read()
+
+    @staticmethod
+    def _remove_control_path(path: Path) -> None:
+        """Remove a control-path entry without following a symlink."""
+        try:
+            mode = os.lstat(path).st_mode
+        except FileNotFoundError:
+            return
+        if stat.S_ISDIR(mode):
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+
+    @classmethod
+    def _restore_control_file(cls, path: Path, content: Optional[bytes]) -> None:
+        """Restore one control file by replacing its directory entry atomically."""
+        if content is None:
+            cls._remove_control_path(path)
+            return
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_path = tempfile.mkstemp(
+            dir=path.parent,
+            prefix=f".{path.name}.",
+        )
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(content)
+            cls._remove_control_path(path)
+            os.replace(temporary_path, path)
+        except BaseException:
+            try:
+                os.unlink(temporary_path)
+            except FileNotFoundError:
+                pass
+            raise
+
+    def _preserve_hybrid_control_files(
+        self,
+        action: Callable[[], Any],
+        *,
+        step_name: str,
+        iteration_dir: Path,
+    ) -> Any:
+        """Run an agent call without allowing it to persist canonical workflow control.
+
+        Hybrid portions may retain ordinary source-editing capabilities.  Those
+        capabilities cannot also become authority to route the outer workflow:
+        a portion writes only its private baton, while the runtime restores the
+        canonical baton and blackboard even when the agent call is interrupted.
+        """
+        control_files = (self.issue_dir / "blackboard.json", self.issue_dir / "next_step.txt")
+        snapshots = {
+            path: self._read_regular_file(path, fail_closed=True) for path in control_files
+        }
+        try:
+            return action()
+        finally:
+            for path, content in snapshots.items():
+                self._restore_control_file(path, content)
+
     def execute(self) -> Any:
         raise NotImplementedError("GenericWorkflowStepExecutor only supports execute_step()")
 
@@ -184,6 +274,9 @@ class GenericWorkflowStepExecutor(Phase):
         extra_prompt: Optional[str] = None,
         same_invocation_retry: bool = False,
     ) -> StepExecutionResult:
+        hybrid_portion = step_def.get("hybrid_portion")
+        is_hybrid_portion = isinstance(hybrid_portion, Mapping)
+        baton_path = self.issue_dir / "next_step.txt"
         self.phase_name = step_name
         self.phase_dir = self.issue_dir / step_name
         self.phase_dir.mkdir(parents=True, exist_ok=True)
@@ -193,6 +286,13 @@ class GenericWorkflowStepExecutor(Phase):
         self._delta_packet_metadata = None
         iteration_dir = self._get_iteration_dir(self.iteration)
         iteration_dir.mkdir(parents=True, exist_ok=True)
+        portion_baton_path = (
+            iteration_dir / "hybrid_portion_baton.json" if is_hybrid_portion else None
+        )
+        if portion_baton_path is not None:
+            # A hybrid portion receives a private completion sink.  The
+            # canonical baton remains untouched even if the agent is stopped.
+            portion_baton_path.write_text("", encoding="utf-8")
 
         output_file = self._get_versioned_file_path(step_name, self.iteration, self.phase_dir)
         checklist_file = iteration_dir / "checklist.md"
@@ -237,6 +337,7 @@ class GenericWorkflowStepExecutor(Phase):
             blackboard_state=blackboard_state,
             agent_name=agent_name,
             output_file=output_file,
+            baton_path=portion_baton_path or baton_path,
         )
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
         self._template_allowed_directories = self._template_allowed_directories_for(
@@ -285,6 +386,7 @@ class GenericWorkflowStepExecutor(Phase):
             output_file=output_file,
             checklist_file=checklist_file,
             questions_xml_file=questions_xml_file,
+            baton_path=portion_baton_path,
         )
         phase_specific_data = {
             "step_name": step_name,
@@ -304,25 +406,36 @@ class GenericWorkflowStepExecutor(Phase):
                 else allowed_tools
             )
             try:
-                response, _ = self._execute_agent_iteration(
-                    agent_name=agent_name,
-                    prompt=prompt,
-                    user_input=resolved_user_input,
-                    valid_intents=valid_intents,
-                    require_status_code=False,
-                    persist_status=False,
-                    allowed_tools=attempt_allowed_tools,
-                    phase_specific_data=phase_specific_data,
-                    backup_context_callback=lambda error: self._build_backup_takeover_context(
-                        error=error,
+
+                def execute_agent() -> tuple[str, Optional[PhaseStatusCode]]:
+                    return self._execute_agent_iteration(
+                        agent_name=agent_name,
+                        prompt=prompt,
+                        user_input=resolved_user_input,
+                        valid_intents=valid_intents,
+                        require_status_code=False,
+                        persist_status=False,
+                        allowed_tools=attempt_allowed_tools,
+                        phase_specific_data=phase_specific_data,
+                        backup_context_callback=lambda error: self._build_backup_takeover_context(
+                            error=error,
+                            step_name=step_name,
+                            step_def=step_def,
+                            blackboard_state=blackboard_state,
+                            output_file=output_file,
+                            checklist_file=checklist_file,
+                            iteration_dir=iteration_dir,
+                        ),
+                    )
+
+                if is_hybrid_portion:
+                    response, _ = self._preserve_hybrid_control_files(
+                        execute_agent,
                         step_name=step_name,
-                        step_def=step_def,
-                        blackboard_state=blackboard_state,
-                        output_file=output_file,
-                        checklist_file=checklist_file,
                         iteration_dir=iteration_dir,
-                    ),
-                )
+                    )
+                else:
+                    response, _ = execute_agent()
             finally:
                 # A phase agent can launch a controlled long-running operation,
                 # whose helper publishes runtime-owned metadata while this
@@ -389,8 +502,8 @@ class GenericWorkflowStepExecutor(Phase):
             and self._should_validate_checklist(status_code)
         ):
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
-            response, validated_status, validation_passed = (
-                self._validate_and_retry_checklist_completion(
+            def validate_completion():
+                return self._validate_and_retry_checklist_completion(
                     agent_name=agent_name,
                     prompt=last_prompt[0] if last_prompt else "",
                     user_input=resolved_user_input,
@@ -398,6 +511,14 @@ class GenericWorkflowStepExecutor(Phase):
                     allowed_tools=allowed_tools,
                     max_retries=3,
                 )
+            response, validated_status, validation_passed = (
+                self._preserve_hybrid_control_files(
+                    validate_completion,
+                    step_name=step_name,
+                    iteration_dir=iteration_dir,
+                )
+                if is_hybrid_portion
+                else validate_completion()
             )
             if validation_passed and validated_status is not None:
                 status_code = validated_status
@@ -448,7 +569,16 @@ class GenericWorkflowStepExecutor(Phase):
                     }
                 )
 
-        if status_code is not None:
+        captured_hybrid_baton: Optional[str] = None
+        if portion_baton_path is not None and portion_baton_path.exists():
+            try:
+                captured = portion_baton_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                captured = "<non-utf8 baton>"
+            if captured:
+                captured_hybrid_baton = captured
+
+        if status_code is not None and not is_hybrid_portion:
             # If the agent already wrote a valid baton (next_step.txt),
             # skip the status-code-driven baton write so we don't overwrite
             # the agent's explicit handoff.  This is the baton-first path.
@@ -467,6 +597,15 @@ class GenericWorkflowStepExecutor(Phase):
                 blackboard_state=blackboard_state,
                 step_name=step_name,
                 status_code=effective_status.value,
+            )
+
+        if captured_hybrid_baton is not None:
+            events.append(
+                {
+                    "type": "hybrid_portion_baton",
+                    "portion": dict(hybrid_portion),
+                    "payload": captured_hybrid_baton,
+                }
             )
 
         return StepExecutionResult(
@@ -530,9 +669,7 @@ class GenericWorkflowStepExecutor(Phase):
         try:
             workspace["head"] = self.git_ops.run_git("rev-parse", "HEAD")
             workspace["changed"] = [
-                line[3:]
-                for line in self.git_ops.get_status().splitlines()[:100]
-                if len(line) >= 4
+                line[3:] for line in self.git_ops.get_status().splitlines()[:100] if len(line) >= 4
             ]
         except Exception:
             workspace["state"] = "unknown"
@@ -778,16 +915,14 @@ class GenericWorkflowStepExecutor(Phase):
         previous_data = self._load_previous_iteration_data()
         current_data = self._load_current_iteration_data()
         step_def = self.playbook.get("steps", {}).get(step_name, {})
-        declared_artifacts = (
-            step_def.get("input_artifacts") if isinstance(step_def, dict) else None
-        )
+        declared_artifacts = step_def.get("input_artifacts") if isinstance(step_def, dict) else None
         if (
             blackboard_state is not None
             and isinstance(declared_artifacts, list)
             and is_interrupted_iteration(
-            iteration=self.iteration,
-            previous_iteration_data=previous_data,
-            current_iteration_data=current_data,
+                iteration=self.iteration,
+                previous_iteration_data=previous_data,
+                current_iteration_data=current_data,
             )
         ):
             artifact_lines = []
@@ -1082,6 +1217,7 @@ class GenericWorkflowStepExecutor(Phase):
         output_file: Path,
         checklist_file: Path,
         questions_xml_file: Path,
+        baton_path: Optional[Path] = None,
     ) -> List[str]:
         allowed_tools = self._normalize_allowed_tools(step_def.get("allowed_tools", []))
 
@@ -1098,12 +1234,15 @@ class GenericWorkflowStepExecutor(Phase):
 
         add("ls")
 
-        # Always allow writing blackboard and baton so agents can hand off
-        # without hitting permission denials (runtime also writes these, but
-        # belt-and-suspenders prevents the agent from wasting tokens asking
-        # for permission).
-        add_writable_file(self.issue_dir / "blackboard.json")
-        add_writable_file(self.issue_dir / "next_step.txt")
+        if baton_path is None:
+            # Always allow writing blackboard and baton so agents can hand off
+            # without hitting permission denials (runtime also writes these,
+            # but belt-and-suspenders prevents the agent from wasting tokens
+            # asking for permission).
+            add_writable_file(self.issue_dir / "blackboard.json")
+            add_writable_file(self.issue_dir / "next_step.txt")
+        else:
+            add_writable_file(baton_path)
 
         add_writable_file(output_file)
         add_writable_file(checklist_file)
@@ -1143,6 +1282,7 @@ class GenericWorkflowStepExecutor(Phase):
         blackboard_state: BlackboardState,
         agent_name: str,
         output_file: Path,
+        baton_path: Optional[Path] = None,
     ) -> Dict[str, str]:
         role = str(step_def.get("role", "developer"))
         role_dir = {
@@ -1174,7 +1314,7 @@ class GenericWorkflowStepExecutor(Phase):
             "iteration_dir": self._display_path(output_file.parent),
             "playbook_id": str(playbook.get("playbook", {}).get("id", "")),
             "blackboard_path": self._display_path(self.issue_dir / "blackboard.json"),
-            "next_step_path": self._display_path(self.issue_dir / "next_step.txt"),
+            "next_step_path": self._display_path(baton_path or self.issue_dir / "next_step.txt"),
             "output_file": self._display_path(output_file),
             "valid_to_steps": ", ".join(valid_to_steps),
             "valid_baton_intents": ", ".join(valid_baton_intents),
@@ -1585,9 +1725,7 @@ class GenericWorkflowStepExecutor(Phase):
                 payload,
                 current_step=step_name,
             )
-            allowed_handoff_intents = set(
-                effective_step_handoff_intents(step_def or {})
-            )
+            allowed_handoff_intents = set(effective_step_handoff_intents(step_def or {}))
             return (
                 contract.from_step == step_name
                 and contract.from_step != contract.to_step

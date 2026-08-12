@@ -13,6 +13,57 @@ from cafe.ui import cli_shared
 from cafe.ui.human_tasks import resolve_step_human_task
 
 
+def test_owner_declared_manual_handoff_uses_the_declared_durable_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Owner-declared waits must not fall through to the generic user menu."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "owner-wait"
+    playbook = {
+        "playbook": {"id": "owner-wait"},
+        "steps": {
+            "approval": {
+                "skill": "phase",
+                "role": "operator",
+                "assignee_type": "human",
+                "human_tasks": [{"trigger": "initial", "task_id": "approval", "outcomes": {}}],
+                "on": {},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("approval", playbook_id="owner-wait")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="approval",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.MANUAL_HANDOFF,
+        source="workflow.owner_human",
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        cli_shared,
+        "_handle_declared_human_task_handoff",
+        lambda **kwargs: captured.update(kwargs) or "after",
+    )
+    monkeypatch.setattr(
+        cli_shared,
+        "_handle_user_phase_generic",
+        lambda **_kwargs: pytest.fail("owner wait must use its durable task"),
+    )
+
+    target = cli_shared._handle_user_phase(
+        issue_name="owner-wait",
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=blackboard,
+    )
+
+    assert target == "after"
+    assert captured["trigger"] == "initial"
+
+
 def test_no_change_handoff_shows_implementation_output_before_decision(
     tmp_path: Path, monkeypatch
 ) -> None:

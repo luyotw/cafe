@@ -95,7 +95,7 @@ artifacts.
 | `type` | Usually `skill`; use `subflow` only when an actual subflow exists |
 | `skill` | Existing resolved skill name, or an iteration mapping with numbered keys/default |
 | `role` / `chat_role` | Must exist in top-level `roles` |
-| `assignee_type` | Use `agent`; other values are currently reserved and warn |
+| `assignee_type` | `agent` (or a v0.2-compatible omission), `human`, `auto`, or `hybrid` |
 | `input_artifacts` | Artifact keys already produced by earlier or conditional paths |
 | `output_artifact` | The key registered when `{output_file}` exists |
 | `initial_input` | Entry-step-only trusted input providers and explicit artifact/prompt bindings |
@@ -153,6 +153,71 @@ human_tasks:
   required by the selected policy. Plain text is accepted only for a feedback
   policy. Invalid payloads keep the workflow paused and display the policy's
   correction guidance.
+
+### Ownership declarations
+
+Omitting `assignee_type` is the compatibility form of `agent`: it retains the
+normal agent session and transition behavior. New ownership-specific fields
+must always be paired with their explicit owner; the loader rejects an
+ambiguous or incomplete declaration before any step runs.
+
+```yaml
+  approval:
+    skill: cafe-approval
+    role: operator
+    assignee_type: human
+    human_tasks:
+      - trigger: initial
+        task_id: approval
+        outcomes: {approve: publish}
+    "on": {}
+
+  publish:
+    skill: cafe-publish
+    role: operator
+    assignee_type: auto
+    automatic:
+      executor: declared_transition
+      inputs: {intent: await_agent}
+    "on": {await_agent: _done}
+```
+
+- A `human` owner has exactly one `initial` binding. It creates or recovers a
+  durable task and pauses without starting an agent.
+- An `auto` owner names a host-registered executor ID and its data-only inputs.
+  Paths, scripts, modules, and playbook-side registration are not authority;
+  unknown executors fail closed and never fall back to an agent.
+- A `hybrid` owner declares every agent/human portion and every typed edge. A
+  human portion's root binding uses its portion ID as `trigger`; its outcomes
+  return to the containing hybrid step so the persisted cursor, rather than
+  user input, applies its typed edge.
+
+```yaml
+  release:
+    skill: cafe-release
+    role: operator
+    assignee_type: hybrid
+    human_tasks:
+      - trigger: approve
+        task_id: release-approval
+        outcomes: {approve: release}
+    hybrid:
+      entry_portion: prepare
+      portions:
+        - id: prepare
+          owner: agent
+          on: {await_agent: {portion: approve}}
+        - id: approve
+          owner: human
+          on: {approve: {step: _done}}
+    "on": {}
+```
+
+Hybrid portion list order is presentation only. `entry_portion`, every
+continuation, and the human boundary must be explicit; no top-level exit may
+bypass the human portion. `cafe playbook simulate` and `workflow --dry-run`
+render this ownership plan read-only: they do not create state, tasks, output
+files, agent sessions, automatic work, or hooks.
 
 ## 4. Outcome To Transition Mapping
 

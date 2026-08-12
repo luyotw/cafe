@@ -8,13 +8,17 @@ from __future__ import annotations
 
 import json
 import re
-from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from cafe.core.active_issue import clear_marker_if_matches
+from cafe.core.automatic_steps import (
+    AutomaticExecutionResult,
+    AutomaticExecutorRegistry,
+    default_automatic_executor_registry,
+)
 from cafe.core.blackboard import (
     BlackboardStore,
     HandoffContract,
@@ -105,9 +109,7 @@ def operation_artifact_is_trusted(
     entry = blackboard_store.get_artifact(blackboard, f"{current_step}_operation")
     if entry is None:
         return False
-    expected_summary = (
-        f"long_running_operation:{artifact.operation_id}:{artifact.state.value}"
-    )
+    expected_summary = f"long_running_operation:{artifact.operation_id}:{artifact.state.value}"
     if entry.summary != expected_summary:
         return False
     return Path(entry.path) == operation_artifact_path(iteration_dir)
@@ -147,15 +149,18 @@ class BlackboardWorkflowRuntime:
         issue_dir: Path,
         playbook: Dict,
         executor: Any,
+        automatic_registry: Optional[AutomaticExecutorRegistry] = None,
     ) -> None:
         self.issue_dir = issue_dir
         self.playbook = playbook
         self.executor = executor
+        self.automatic_registry = automatic_registry or default_automatic_executor_registry()
 
         playbook_meta = playbook["playbook"]
         self.playbook_id = str(playbook_meta["id"])
         self.steps: Dict = playbook["steps"]
         self.start_step = str(playbook.get("entry_point") or next(iter(self.steps.keys())))
+        self._validate_automatic_executor_declarations()
 
         self.blackboard_store = BlackboardStore(issue_dir)
         self.blackboard = self.blackboard_store.load_or_create(
@@ -164,6 +169,26 @@ class BlackboardWorkflowRuntime:
             tolerate_invalid_baton=True,
         )
         self._operation_finalize_extra_prompt: Optional[str] = None
+
+    def _validate_automatic_executor_declarations(self) -> None:
+        """Reject unavailable automatic authority before recording a workflow visit."""
+        for step_name, step_def in self.steps.items():
+            if not isinstance(step_def, dict) or self._owner_for_step(step_def) != "auto":
+                continue
+            declaration = step_def.get("automatic")
+            executor_id = declaration.get("executor") if isinstance(declaration, dict) else None
+            inputs = declaration.get("inputs") if isinstance(declaration, dict) else None
+            if not isinstance(executor_id, str) or not self.automatic_registry.is_registered(
+                executor_id
+            ):
+                raise ValueError(
+                    f"Step '{step_name}' automatic executor {executor_id!r} is not registered"
+                )
+            if not isinstance(inputs, dict):
+                raise ValueError(
+                    f"Step '{step_name}' has an invalid automatic executor declaration"
+                )
+            self.automatic_registry.validate_inputs(executor_id, inputs)
 
     @staticmethod
     def _extract_goto_target(response: str) -> Optional[str]:
@@ -336,10 +361,7 @@ class BlackboardWorkflowRuntime:
             self.blackboard,
             allowed_steps=list(self.steps.keys()),
         )
-        status_code = (
-            contract.status_code
-            or f"BATON_{contract.intent.value.upper()}"
-        )
+        status_code = contract.status_code or f"BATON_{contract.intent.value.upper()}"
         if current_step == "done":
             cafe_dir = self.issue_dir.parent.parent
             clear_marker_if_matches(cafe_dir, self.issue_dir.name)
@@ -515,12 +537,10 @@ class BlackboardWorkflowRuntime:
         agent cannot forge any transition by editing ``operation.json`` or
         the blackboard directly.
         """
-        receipt, receipt_schema_invalid, receipt_untrusted = (
-            self._read_trusted_operation_receipt(
-                current_step=current_step,
-                iteration_dir=iteration_dir,
-                operation=operation,
-            )
+        receipt, receipt_schema_invalid, receipt_untrusted = self._read_trusted_operation_receipt(
+            current_step=current_step,
+            iteration_dir=iteration_dir,
+            operation=operation,
         )
         if receipt_schema_invalid or receipt_untrusted:
             return operation, receipt_schema_invalid, receipt_untrusted
@@ -639,13 +659,8 @@ class BlackboardWorkflowRuntime:
         contract = self._load_agent_written_handoff_contract(current_step=current_step)
         if contract.from_step != current_step:
             return None
-        if not (
-            contract.to_owner == HandoffOwner.AGENT
-            and contract.to_step == current_step
-        ):
-            valid_intents = effective_step_handoff_intents(
-                self.steps.get(current_step, {})
-            )
+        if not (contract.to_owner == HandoffOwner.AGENT and contract.to_step == current_step):
+            valid_intents = effective_step_handoff_intents(self.steps.get(current_step, {}))
             if contract.intent.value not in valid_intents:
                 raise BatonRejected(
                     field="intent",
@@ -750,6 +765,609 @@ class BlackboardWorkflowRuntime:
                 f"Step '{step_name}' has assignee_type={assignee_type}, which is not supported in v0.2. "
                 "Use v0.3+ or change to assignee_type=agent."
             )
+
+    @staticmethod
+    def _owner_for_step(step_def: Dict) -> str:
+        owner = str(step_def.get("assignee_type", "agent"))
+        if owner not in {"agent", "human", "auto", "hybrid"}:
+            raise RuntimeError(f"Step has unsupported assignee_type={owner!r}")
+        return owner
+
+    def _ensure_step_visit_within_limit(
+        self, *, current_step: str, step_def: Dict, runtime: str
+    ) -> int:
+        """Return the next visit number or fail before an owner performs work."""
+        visits = self.blackboard.step_visit_counts
+        visit_count = visits.get(current_step, 0) + 1
+        max_iterations = self._resolve_step_iteration_limit(step_def)
+        if max_iterations is not None and visit_count > max_iterations:
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "loop_detected",
+                {
+                    "step": current_step,
+                    "visits": visit_count,
+                    "max_iterations": max_iterations,
+                    "runtime": runtime,
+                },
+            )
+            raise RuntimeError(f"Step '{current_step}' exceeded max_iterations={max_iterations}")
+        return visit_count
+
+    def _record_step_visit(self, *, current_step: str, step_def: Dict, runtime: str) -> int:
+        """Persist the top-level visit before any owner-specific side effect."""
+        visit_count = self._ensure_step_visit_within_limit(
+            current_step=current_step,
+            step_def=step_def,
+            runtime=runtime,
+        )
+        visits = self.blackboard.step_visit_counts
+        visits[current_step] = visit_count
+        self.blackboard_store.save(self.blackboard)
+        return visit_count
+
+    def _materialize_owned_human_task(
+        self,
+        *,
+        current_step: str,
+        trigger: str,
+        status_code: str,
+        runtime: str,
+        cursor: Optional[Dict[str, Any]] = None,
+    ) -> PlaybookRunResult:
+        """Create/recover one owner-declared task without executing an agent."""
+        records = HumanTaskRecordStore(self.issue_dir)
+        iteration = self._human_task_iteration(current_step)
+        try:
+            policy, binding = resolve_step_human_task(
+                playbook_data=self.playbook,
+                step_name=current_step,
+                trigger=trigger,
+                iteration=iteration,
+            )
+        except (LookupError, TypeError, ValueError) as exc:
+            records.record_configuration_error(
+                workflow_id=self.blackboard.workflow_id,
+                step=current_step,
+                iteration=iteration,
+                trigger=trigger,
+                reason=str(exc),
+            )
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "human_task_configuration_error",
+                {"step": current_step, "trigger": trigger, "reason": str(exc)},
+            )
+            return PlaybookRunResult(
+                final_step=current_step,
+                final_status_code="HUMAN_TASK_CONFIGURATION_ERROR",
+                completed=False,
+            )
+
+        existing_wait = records.active_wait_state(
+            self.blackboard.workflow_id,
+            step=current_step,
+            trigger=trigger,
+            policy_id=policy.id,
+        )
+        task = records.materialize(
+            workflow_id=self.blackboard.workflow_id,
+            step=current_step,
+            iteration=iteration,
+            trigger=trigger,
+            policy_id=policy.id,
+            prompt=policy.prompt,
+            expected_result=policy.model_dump(mode="json"),
+            continuations=binding.outcomes,
+            assignee_type="human",
+        )
+        if cursor is not None:
+            cursor["task_id"] = task.id
+            self.blackboard.ownership_cursor = cursor
+            self.blackboard_store.save(self.blackboard)
+        self.blackboard_store.update_handoff_contract(
+            self.blackboard,
+            from_step=current_step,
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.MANUAL_HANDOFF,
+            status_code=status_code,
+            source="workflow.owner_human",
+        )
+        self.blackboard_store.set_current_step(self.blackboard, "user")
+        if existing_wait is None:
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "human_task_materialized",
+                {"step": current_step, "trigger": trigger, "task_id": task.id, "owner": "human"},
+            )
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "workflow_paused",
+            {
+                "step": current_step,
+                "status_code": status_code,
+                "reason": "human_owner",
+                "runtime": runtime,
+            },
+        )
+        return PlaybookRunResult(
+            final_step=current_step,
+            final_status_code=status_code,
+            completed=False,
+            detail=task.id,
+        )
+
+    def _run_human_owned_step(
+        self, *, current_step: str, step_def: Dict, visit_count: int, runtime: str
+    ) -> PlaybookRunResult:
+        return self._materialize_owned_human_task(
+            current_step=current_step,
+            trigger="initial",
+            status_code="HUMAN_TASK_PENDING",
+            runtime=runtime,
+        )
+
+    def _complete_owned_transition(
+        self, *, current_step: str, status_code: str, runtime: str, source: str
+    ) -> PlaybookRunResult:
+        next_step, transition_source = self._resolve_next_step(
+            current_step=current_step, response="", status_code=status_code
+        )
+        if next_step is None:
+            return PlaybookRunResult(
+                final_step=current_step, final_status_code="NO_STATUS_TRANSITION", completed=False
+            )
+        if next_step in {"done", "_done"}:
+            return self._emit_complete(
+                current_step=current_step,
+                status_code=status_code,
+                next_step=next_step,
+                runtime=runtime,
+                reason=source,
+                update_contract=True,
+                contract_source="workflow.owner_transition",
+            )
+        if next_step not in self.steps:
+            raise RuntimeError(f"Unknown owner transition target '{next_step}'")
+        self._emit_transition(
+            current_step=current_step,
+            next_step=next_step,
+            status_code=status_code,
+            source=transition_source,
+            runtime=runtime,
+            update_contract=True,
+            contract_source="workflow.owner_transition",
+        )
+        return PlaybookRunResult(
+            final_step=current_step, final_status_code=status_code, completed=False
+        )
+
+    def _prepare_auto_owned_step(
+        self, *, current_step: str, step_def: Dict
+    ) -> AutomaticExecutionResult | PlaybookRunResult:
+        """Execute and validate a trusted automatic result before workflow mutation."""
+        declaration = step_def.get("automatic")
+        if not isinstance(declaration, dict):
+            raise RuntimeError(f"Step '{current_step}' has no automatic executor declaration")
+        executor_id = declaration.get("executor")
+        inputs = declaration.get("inputs", {})
+        if not isinstance(executor_id, str) or not isinstance(inputs, dict):
+            raise RuntimeError(
+                f"Step '{current_step}' has an invalid automatic executor declaration"
+            )
+        try:
+            result: AutomaticExecutionResult = self.automatic_registry.execute(executor_id, inputs)
+        except Exception as exc:
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "automatic_step_rejected",
+                {"step": current_step, "executor": executor_id, "reason": str(exc)},
+            )
+            return PlaybookRunResult(
+                final_step=current_step,
+                final_status_code="AUTOMATIC_EXECUTOR_REJECTED",
+                completed=False,
+                detail=str(exc),
+            )
+
+        next_step, _transition_source = self._resolve_next_step(
+            current_step=current_step,
+            response="",
+            status_code=result.intent,
+        )
+        if next_step is None or (
+            next_step not in {"done", "_done"} and next_step not in self.steps
+        ):
+            reason = (
+                f"automatic executor {executor_id!r} returned undeclared intent {result.intent!r}"
+                if next_step is None
+                else f"automatic executor {executor_id!r} targeted unknown step {next_step!r}"
+            )
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "automatic_step_rejected",
+                {"step": current_step, "executor": executor_id, "reason": reason},
+            )
+            return PlaybookRunResult(
+                final_step=current_step,
+                final_status_code="AUTOMATIC_EXECUTOR_REJECTED",
+                completed=False,
+                detail=reason,
+            )
+        return result
+
+    def _run_auto_owned_step(
+        self,
+        *,
+        current_step: str,
+        step_def: Dict,
+        visit_count: int,
+        runtime: str,
+        result: AutomaticExecutionResult,
+    ) -> PlaybookRunResult:
+        """Persist a previously validated automatic completion."""
+        declaration = step_def["automatic"]
+        executor_id = declaration["executor"]
+        self._store_artifacts(result.artifacts)
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "automatic_step_completed",
+            {"step": current_step, "executor": executor_id, "intent": result.intent},
+        )
+        return self._complete_owned_transition(
+            current_step=current_step,
+            status_code=result.intent,
+            runtime=runtime,
+            source="automatic_executor",
+        )
+
+    @staticmethod
+    def _hybrid_target(portion: Dict[str, Any], completion_key: str) -> Optional[Dict[str, str]]:
+        raw_on = portion.get("on")
+        if not isinstance(raw_on, dict):
+            return None
+        raw_target = raw_on.get(completion_key)
+        return dict(raw_target) if isinstance(raw_target, dict) else None
+
+    @staticmethod
+    def _normalize_hybrid_completion_key(completion_key: str) -> str:
+        """Map a phase status to the declared hybrid transition key."""
+        try:
+            return transition_map_key(PhaseStatusCode(completion_key))
+        except ValueError:
+            return completion_key
+
+    def _captured_hybrid_completion_key(
+        self, *, captured: str, current_step: str, portion_id: str
+    ) -> Optional[str]:
+        """Accept only the portion-local baton shape the runtime requested."""
+        try:
+            raw_baton = json.loads(captured)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(raw_baton, dict):
+            return None
+        expected_source = f"hybrid_portion:{current_step}:{portion_id}"
+        if (
+            raw_baton.get("from_step") != current_step
+            or raw_baton.get("to_owner") != "agent"
+            or raw_baton.get("to_step") != current_step
+            or raw_baton.get("source") != expected_source
+        ):
+            return None
+        status_code = raw_baton.get("status_code")
+        intent = raw_baton.get("intent")
+        candidates = [
+            self._normalize_hybrid_completion_key(value)
+            for value in (status_code, intent)
+            if isinstance(value, str) and value
+        ]
+        if not candidates or len(set(candidates)) != 1:
+            return None
+        return candidates[0]
+
+    def _run_hybrid_owned_step(
+        self,
+        *,
+        current_step: str,
+        step_def: Dict,
+        visit_count: int,
+        runtime: str,
+        portions_remaining: int = 30,
+    ) -> PlaybookRunResult:
+        """Run only declared portion edges; human results re-enter through a cursor."""
+        if portions_remaining <= 0:
+            raise RuntimeError(
+                f"Hybrid step '{current_step}' exceeded its portion transition limit"
+            )
+        declaration = step_def.get("hybrid")
+        if not isinstance(declaration, dict) or not isinstance(declaration.get("portions"), list):
+            raise RuntimeError(f"Step '{current_step}' has no valid hybrid declaration")
+        portions = {
+            item.get("id"): item
+            for item in declaration["portions"]
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        }
+        cursor = self.blackboard.ownership_cursor
+        if not isinstance(cursor, dict) or cursor.get("step") != current_step:
+            cursor = {
+                "step": current_step,
+                "portion": declaration.get("entry_portion"),
+                "human_boundary_crossed": False,
+                "visit_count": visit_count,
+            }
+            self.blackboard.ownership_cursor = cursor
+            self.blackboard_store.save(self.blackboard)
+        elif not isinstance(cursor.get("visit_count"), int):
+            cursor["visit_count"] = visit_count
+            self.blackboard.ownership_cursor = cursor
+            self.blackboard_store.save(self.blackboard)
+        portion_id = cursor.get("portion")
+        portion = portions.get(portion_id)
+        if not isinstance(portion, dict):
+            raise RuntimeError(f"Hybrid step '{current_step}' cursor names an unknown portion")
+
+        if portion.get("owner") == "human":
+            task_id = cursor.get("task_id")
+            if isinstance(task_id, str):
+                records = HumanTaskRecordStore(self.issue_dir)
+                try:
+                    task = records.get_task(task_id)
+                    result = records.get_result(task_id)
+                except Exception:
+                    task = None
+                    result = None
+                if task is not None and result is not None:
+                    key = result.payload.get("decision") or result.payload.get("target")
+                    target = (
+                        self._hybrid_target(portion, str(key)) if isinstance(key, str) else None
+                    )
+                    if target is None:
+                        self.blackboard_store.record_event(
+                            self.blackboard,
+                            "hybrid_portion_rejected",
+                            {
+                                "step": current_step,
+                                "portion": portion_id,
+                                "reason": "undeclared human result",
+                            },
+                        )
+                        return PlaybookRunResult(
+                            final_step=current_step,
+                            final_status_code="HYBRID_RESULT_REJECTED",
+                            completed=False,
+                        )
+                    cursor.pop("task_id", None)
+                    cursor["human_boundary_crossed"] = True
+                    if "portion" in target:
+                        cursor["portion"] = target["portion"]
+                        self.blackboard.ownership_cursor = cursor
+                        self.blackboard_store.save(self.blackboard)
+                        return self._run_hybrid_owned_step(
+                            current_step=current_step,
+                            step_def=step_def,
+                            visit_count=visit_count,
+                            runtime=runtime,
+                            portions_remaining=portions_remaining - 1,
+                        )
+                    self.blackboard.ownership_cursor = None
+                    self.blackboard_store.save(self.blackboard)
+                    return self._complete_hybrid_step_target(
+                        current_step=current_step,
+                        target=target["step"],
+                        runtime=runtime,
+                        source="hybrid_human_result",
+                    )
+            return self._materialize_owned_human_task(
+                current_step=current_step,
+                trigger=str(portion_id),
+                status_code="HYBRID_HUMAN_TASK_PENDING",
+                runtime=runtime,
+                cursor=cursor,
+            )
+
+        if portion.get("owner") != "agent":
+            raise RuntimeError(
+                f"Hybrid step '{current_step}' portion {portion_id!r} has invalid owner"
+            )
+        framed_step = dict(step_def)
+        framed_step["hybrid_portion"] = {
+            "id": portion_id,
+            "instruction": portion.get("instruction", ""),
+        }
+        frame = self._execute_one_iteration(
+            current_step=current_step,
+            step_def=framed_step,
+            runtime="hybrid_portion",
+            hop_count=1,
+            visit_count=visit_count,
+            extra_prompt=(
+                f"[HYBRID PORTION] Execute only declared portion {portion_id!r}. "
+                "Return only a declared completion status; do not route the top-level workflow. "
+                "If a baton is required, write it only to the supplied portion-local path with "
+                f"from_step={current_step!r}, to_owner='agent', to_step={current_step!r}, "
+                f"and source='hybrid_portion:{current_step}:{portion_id}'."
+            ),
+        )
+        self._store_artifacts(frame.artifacts)
+        completion_key = (
+            self._normalize_hybrid_completion_key(frame.explicit_status_code)
+            if frame.explicit_status_code is not None
+            else None
+        )
+        captured_key: Optional[str] = None
+        captured_invalid = False
+        events = getattr(frame.execution_result, "events", [])
+        if isinstance(events, list):
+            captured = next(
+                (
+                    event.get("payload")
+                    for event in events
+                    if isinstance(event, dict) and event.get("type") == "hybrid_portion_baton"
+                ),
+                None,
+            )
+            if isinstance(captured, str):
+                captured_key = self._captured_hybrid_completion_key(
+                    captured=captured,
+                    current_step=current_step,
+                    portion_id=str(portion_id),
+                )
+                captured_invalid = captured_key is None
+        if captured_invalid:
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "hybrid_portion_rejected",
+                {
+                    "step": current_step,
+                    "portion": portion_id,
+                    "reason": "invalid captured baton",
+                },
+            )
+            return PlaybookRunResult(
+                final_step=current_step,
+                final_status_code="HYBRID_RESULT_REJECTED",
+                completed=False,
+            )
+        if completion_key is not None and captured_key is not None:
+            if completion_key != captured_key:
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "hybrid_portion_rejected",
+                    {
+                        "step": current_step,
+                        "portion": portion_id,
+                        "reason": "conflicting baton and status",
+                    },
+                )
+                return PlaybookRunResult(
+                    final_step=current_step,
+                    final_status_code="HYBRID_RESULT_REJECTED",
+                    completed=False,
+                )
+        if completion_key is None:
+            completion_key = captured_key
+        if completion_key is None:
+            parsed, _goto, _valid = self._parse_legacy_status(
+                step_def=step_def, response=frame.response, explicit_status_code=None
+            )
+            completion_key = (
+                self._normalize_hybrid_completion_key(parsed.value) if parsed is not None else None
+            )
+        target = self._hybrid_target(portion, completion_key or "")
+        if target is None:
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "hybrid_portion_rejected",
+                {"step": current_step, "portion": portion_id, "reason": "undeclared agent result"},
+            )
+            return PlaybookRunResult(
+                final_step=current_step, final_status_code="HYBRID_RESULT_REJECTED", completed=False
+            )
+        if "portion" in target:
+            cursor["portion"] = target["portion"]
+            self.blackboard.ownership_cursor = cursor
+            self.blackboard_store.save(self.blackboard)
+            return self._run_hybrid_owned_step(
+                current_step=current_step,
+                step_def=step_def,
+                visit_count=visit_count,
+                runtime=runtime,
+                portions_remaining=portions_remaining - 1,
+            )
+        if not cursor.get("human_boundary_crossed"):
+            raise RuntimeError(
+                f"Hybrid step '{current_step}' attempted a top-level exit before its human boundary"
+            )
+        self.blackboard.ownership_cursor = None
+        self.blackboard_store.save(self.blackboard)
+        return self._complete_hybrid_step_target(
+            current_step=current_step,
+            target=target["step"],
+            runtime=runtime,
+            source="hybrid_agent_result",
+        )
+
+    def _complete_hybrid_step_target(
+        self, *, current_step: str, target: str, runtime: str, source: str
+    ) -> PlaybookRunResult:
+        if target in {"done", "_done"}:
+            return self._emit_complete(
+                current_step=current_step,
+                status_code="HYBRID_COMPLETED",
+                next_step=target,
+                runtime=runtime,
+                reason=source,
+                update_contract=True,
+                contract_source="workflow.hybrid_transition",
+            )
+        if target not in self.steps:
+            raise RuntimeError(f"Hybrid target {target!r} is not a declared step")
+        self._emit_transition(
+            current_step=current_step,
+            next_step=target,
+            status_code="HYBRID_COMPLETED",
+            source=source,
+            runtime=runtime,
+            update_contract=True,
+            contract_source="workflow.hybrid_transition",
+        )
+        return PlaybookRunResult(
+            final_step=current_step, final_status_code="HYBRID_COMPLETED", completed=False
+        )
+
+    def _run_non_agent_owner(
+        self, *, current_step: str, step_def: Dict, runtime: str
+    ) -> Optional[PlaybookRunResult]:
+        owner = self._owner_for_step(step_def)
+        if owner == "agent":
+            return None
+        automatic_result: AutomaticExecutionResult | None = None
+        if owner == "auto":
+            self._ensure_step_visit_within_limit(
+                current_step=current_step,
+                step_def=step_def,
+                runtime=runtime,
+            )
+            prepared = self._prepare_auto_owned_step(
+                current_step=current_step,
+                step_def=step_def,
+            )
+            if isinstance(prepared, PlaybookRunResult):
+                return prepared
+            automatic_result = prepared
+        cursor = self.blackboard.ownership_cursor
+        if (
+            owner == "hybrid"
+            and isinstance(cursor, dict)
+            and cursor.get("step") == current_step
+            and isinstance(cursor.get("visit_count"), int)
+        ):
+            visit_count = cursor["visit_count"]
+        else:
+            visit_count = self._record_step_visit(
+                current_step=current_step, step_def=step_def, runtime=runtime
+            )
+        if owner == "human":
+            return self._run_human_owned_step(
+                current_step=current_step,
+                step_def=step_def,
+                visit_count=visit_count,
+                runtime=runtime,
+            )
+        if owner == "auto":
+            assert automatic_result is not None
+            return self._run_auto_owned_step(
+                current_step=current_step,
+                step_def=step_def,
+                visit_count=visit_count,
+                runtime=runtime,
+                result=automatic_result,
+            )
+        return self._run_hybrid_owned_step(
+            current_step=current_step, step_def=step_def, visit_count=visit_count, runtime=runtime
+        )
 
     def _execute_one_iteration(
         self,
@@ -1109,7 +1727,9 @@ class BlackboardWorkflowRuntime:
         if post_contract.to_owner == HandoffOwner.AGENT and post_contract.to_step == current_step:
             return None
 
-        resolved_status_code = post_contract.status_code or f"BATON_{post_contract.intent.value.upper()}"
+        resolved_status_code = (
+            post_contract.status_code or f"BATON_{post_contract.intent.value.upper()}"
+        )
         if post_contract.to_owner == HandoffOwner.USER:
             result = self._emit_pause(
                 current_step=current_step,
@@ -1394,8 +2014,7 @@ class BlackboardWorkflowRuntime:
                     )
                 )
                 trusted_succeeded_receipt = (
-                    receipt is not None
-                    and receipt.state == LongRunningOperationState.SUCCEEDED
+                    receipt is not None and receipt.state == LongRunningOperationState.SUCCEEDED
                 )
                 if receipt_schema_invalid:
                     operation_schema_invalid = True
@@ -1562,7 +2181,9 @@ class BlackboardWorkflowRuntime:
                 "runtime": runtime,
             },
         )
-        self._restore_interrupted_step_handoff(current_step=current_step, reason="operation_running")
+        self._restore_interrupted_step_handoff(
+            current_step=current_step, reason="operation_running"
+        )
         return PlaybookRunResult(
             final_step=current_step,
             final_status_code="OPERATION_RUNNING",
@@ -1757,7 +2378,9 @@ class BlackboardWorkflowRuntime:
 
         result = self._validate_reconciled_handoff(current_step=current_step)
 
-        gated = self._handle_operation_gate(current_step=current_step, runtime=runtime, result=result)
+        gated = self._handle_operation_gate(
+            current_step=current_step, runtime=runtime, result=result
+        )
         if gated is not None:
             return gated
 
@@ -1784,7 +2407,9 @@ class BlackboardWorkflowRuntime:
         """Re-check operations created by a production helper during this invocation."""
         self.blackboard = self.blackboard_store.load_or_create(current_step)
         result = self._validate_reconciled_handoff(current_step=current_step)
-        return self._handle_operation_gate(current_step=current_step, runtime=runtime, result=result)
+        return self._handle_operation_gate(
+            current_step=current_step, runtime=runtime, result=result
+        )
 
     def _latest_unreconciled_interrupted_step(self) -> Optional[tuple[str, str]]:
         for event in reversed(self.blackboard.events):
@@ -1838,11 +2463,15 @@ class BlackboardWorkflowRuntime:
         single_step_mode: bool = False,
     ) -> PlaybookRunResult:
         last_status_code = ""
-        step_visits: Counter[str] = Counter()
         effective_transition_runtime = transition_runtime_label or runtime_label
 
         for hop_count in range(1, max_transitions + 1):
             step_def = self.steps[current_step]
+            owned_result = self._run_non_agent_owner(
+                current_step=current_step, step_def=step_def, runtime=runtime_label
+            )
+            if owned_result is not None:
+                return owned_result
             _baton_retry_extra_prompt: Optional[str] = None
             try:
                 self._validate_agent_baton(current_step=current_step)
@@ -1861,8 +2490,9 @@ class BlackboardWorkflowRuntime:
                     },
                 )
                 _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
-            step_visits[current_step] += 1
-            visit_count = step_visits[current_step]
+            visit_count = self._record_step_visit(
+                current_step=current_step, step_def=step_def, runtime=runtime_label
+            )
             for _baton_attempt in range(3):
                 try:
                     frame = self._execute_one_iteration(
@@ -1915,8 +2545,7 @@ class BlackboardWorkflowRuntime:
                         status_code = str(explicit_status_code)
                     else:
                         status_code = (
-                            contract.status_code
-                            or f"BATON_{contract.intent.value.upper()}"
+                            contract.status_code or f"BATON_{contract.intent.value.upper()}"
                         )
                     break
                 except BatonRejected as br:
@@ -2075,15 +2704,18 @@ class BlackboardWorkflowRuntime:
         pause_record_event: bool = True,
     ) -> PlaybookRunResult:
         last_status_code = ""
-        step_visits: Counter[str] = Counter()
-
         for hop_count in range(1, max_transitions + 1):
+            step_def = self.steps[current_step]
+            owned_result = self._run_non_agent_owner(
+                current_step=current_step, step_def=step_def, runtime=runtime_label
+            )
+            if owned_result is not None:
+                return owned_result
             if self._is_baton_driven_step(current_step):
                 return self._run_baton_driven_pr(
                     current_step=current_step, max_transitions=max_transitions - hop_count + 1
                 )
 
-            step_def = self.steps[current_step]
             _baton_retry_extra_prompt: Optional[str] = None
             try:
                 self._validate_agent_baton(current_step=current_step)
@@ -2102,23 +2734,9 @@ class BlackboardWorkflowRuntime:
                     },
                 )
                 _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
-            step_visits[current_step] += 1
-            visit_count = step_visits[current_step]
-            max_iterations = self._resolve_step_iteration_limit(step_def)
-            if max_iterations is not None and visit_count > max_iterations:
-                self.blackboard_store.record_event(
-                    self.blackboard,
-                    "loop_detected",
-                    {
-                        "step": current_step,
-                        "visits": visit_count,
-                        "max_iterations": max_iterations,
-                        "runtime": runtime_label,
-                    },
-                )
-                raise RuntimeError(
-                    f"Step '{current_step}' exceeded max_iterations={max_iterations}"
-                )
+            visit_count = self._record_step_visit(
+                current_step=current_step, step_def=step_def, runtime=runtime_label
+            )
 
             for _baton_attempt in range(3):
                 try:
@@ -2232,8 +2850,7 @@ class BlackboardWorkflowRuntime:
                 if operation_result is not None:
                     return operation_result
                 status_code = (
-                    post_contract.status_code
-                    or f"BATON_{post_contract.intent.value.upper()}"
+                    post_contract.status_code or f"BATON_{post_contract.intent.value.upper()}"
                 )
                 last_status_code = status_code
                 self._record_step_completion(
@@ -2515,9 +3132,7 @@ class BlackboardWorkflowRuntime:
         )
         raise RuntimeError(f"Playbook run reached max transition limit ({max_transitions})")
 
-    def _try_reconcile_current_step(
-        self, *, current_step: str
-    ) -> Optional[PlaybookRunResult]:
+    def _try_reconcile_current_step(self, *, current_step: str) -> Optional[PlaybookRunResult]:
         """Re-check an existing operation for ``current_step`` before (re-)executing it.
 
         Called from every ``run()`` path -- single-step, multi-transition,
@@ -2599,9 +3214,7 @@ class BlackboardWorkflowRuntime:
         else:
             return None
 
-        entry = self.blackboard_store.get_artifact(
-            self.blackboard, f"{current_step}_operation"
-        )
+        entry = self.blackboard_store.get_artifact(self.blackboard, f"{current_step}_operation")
         if entry is None:
             return None
         path = Path(entry.path)
@@ -2618,6 +3231,13 @@ class BlackboardWorkflowRuntime:
         return path.parent
 
     def _run_single_step(self, *, current_step: str) -> PlaybookRunResult:
+        owned_result = self._run_non_agent_owner(
+            current_step=current_step,
+            step_def=self.steps[current_step],
+            runtime="single_step",
+        )
+        if owned_result is not None:
+            return owned_result
         if self._is_baton_driven_step(current_step):
             return self._run_baton_driven_pr(
                 current_step=current_step,
@@ -2733,6 +3353,14 @@ class BlackboardWorkflowRuntime:
                 intent=HandoffIntent.AWAIT_AGENT,
                 source="workflow.start_step_override",
             )
+
+        owned_result = self._run_non_agent_owner(
+            current_step=current_step,
+            step_def=self.steps[current_step],
+            runtime="owner_dispatch",
+        )
+        if owned_result is not None:
+            return owned_result
 
         if not self._is_baton_driven_step(current_step):
             return self._run_legacy_until_boundary(

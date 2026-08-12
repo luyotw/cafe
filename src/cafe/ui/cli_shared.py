@@ -33,8 +33,8 @@ from cafe.services.delta_display import DeltaDisplay
 from cafe.skills.loader import SkillLoader
 from cafe.utils.config import ConfigError, ConfigManager
 from cafe.utils.crew import CrewManager, normalize_role_config
+from cafe.utils.git_utils import get_git_toplevel, get_repo_root
 from cafe.utils.phase_config import load_phase_step_model
-from cafe.utils.git_utils import get_repo_root, get_git_toplevel
 
 VALID_CONTENT_TYPES = [
     "context",
@@ -980,6 +980,33 @@ def _handle_user_phase(
             from_step=from_step,
             summary=summary,
         )
+
+    if (
+        handoff_intent == HandoffIntent.MANUAL_HANDOFF
+        and getattr(contract, "source", "") == "workflow.owner_human"
+        and from_step in playbook_data.get("steps", {})
+    ):
+        step_def = playbook_data["steps"][from_step]
+        owner = step_def.get("assignee_type") if isinstance(step_def, dict) else None
+        trigger = "initial" if owner == "human" else None
+        cursor = getattr(blackboard, "ownership_cursor", None)
+        if (
+            owner == "hybrid"
+            and isinstance(cursor, dict)
+            and cursor.get("step") == from_step
+            and isinstance(cursor.get("portion"), str)
+        ):
+            trigger = cursor["portion"]
+        if trigger is not None:
+            return _handle_declared_human_task_handoff(
+                issue_name=issue_name,
+                issue_dir=issue_dir,
+                blackboard=blackboard,
+                from_step=from_step,
+                summary=summary,
+                playbook_data=playbook_data,
+                trigger=trigger,
+            )
 
     if handoff_intent in {
         HandoffIntent.CONFIRM_OUTPUT,

@@ -36,6 +36,7 @@ def LongRunningOperationArtifact(**kwargs):
         recovery="inspect the same operation id",
         **kwargs,
     )
+
 from cafe.core.hooks import HookResult
 from cafe.core.resume_user_input import CONTINUE_USER_INPUT
 from cafe.core.session_continuation import (
@@ -44,6 +45,7 @@ from cafe.core.session_continuation import (
 )
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import AgentCLI, AgentConfig, TokenUsage
+from cafe.core.workflow_runtime import operation_artifact_is_trusted
 from cafe.phases.generic_phase import GenericPhase, GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.skills.loader import SkillLoader
@@ -550,6 +552,220 @@ def test_generic_workflow_step_status_transition_writes_strict_baton_payload(
         "to_step": "plan",
         "intent": "await_agent",
     }
+
+
+def test_hybrid_portion_restores_canonical_control_files_after_agent_mutation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """UT-010: only the portion-local baton can survive a hybrid agent run."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "hybrid-control-files"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "mixed": {
+                "skill": "develop",
+                "role": "developer",
+                "output_artifact": "code",
+                "allowed_tools": ["Read", "Edit", "Write", "Bash"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+                "hybrid_portion": {"id": "draft"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("mixed")
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "to_owner": "agent",
+                "to_step": "mixed",
+                "intent": "await_agent",
+            }
+        ),
+        encoding="utf-8",
+    )
+    original_baton = (issue_dir / "next_step.txt").read_text(encoding="utf-8")
+
+    def on_execute(*, streaming_output_file: str | None, **_kwargs: object) -> None:
+        assert streaming_output_file is not None
+        (issue_dir / "next_step.txt").write_text("agent-controlled", encoding="utf-8")
+        (issue_dir / "blackboard.json").write_text('{"current_step": "escaped"}', encoding="utf-8")
+        portion_baton = Path(streaming_output_file).parent / "hybrid_portion_baton.json"
+        portion_baton.write_text(
+            json.dumps(
+                {
+                    "from_step": "mixed",
+                    "to_owner": "agent",
+                    "to_step": "mixed",
+                    "intent": "await_agent",
+                    "source": "hybrid_portion:mixed:draft",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="hybrid-control-files",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed", on_execute=on_execute),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    result = executor.execute_step("mixed", playbook["steps"]["mixed"], state)
+
+    reloaded = BlackboardStore(issue_dir).load_or_create("mixed")
+    assert (issue_dir / "next_step.txt").read_text(encoding="utf-8") == original_baton
+    assert reloaded.current_step == "mixed"
+    assert "escaped" not in (issue_dir / "blackboard.json").read_text(encoding="utf-8")
+    assert result.events[-1]["type"] == "hybrid_portion_baton"
+
+
+def test_hybrid_portion_replaces_control_file_symlink_without_following_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """UT-010: hybrid rollback restores a replaced control path, not its target."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "hybrid-control-symlink"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "mixed": {
+                "skill": "develop",
+                "role": "developer",
+                "output_artifact": "code",
+                "allowed_tools": ["Read", "Edit", "Write", "Bash"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+                "hybrid_portion": {"id": "draft"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("mixed")
+    protected_target = tmp_path / "protected-control-file"
+    protected_target.write_text("must remain unchanged", encoding="utf-8")
+
+    def on_execute(*, streaming_output_file: str | None, **_kwargs: object) -> None:
+        assert streaming_output_file is not None
+        control_path = issue_dir / "blackboard.json"
+        control_path.unlink()
+        control_path.symlink_to(protected_target)
+        portion_baton = Path(streaming_output_file).parent / "hybrid_portion_baton.json"
+        portion_baton.write_text(
+            json.dumps(
+                {
+                    "from_step": "mixed",
+                    "to_owner": "agent",
+                    "to_step": "mixed",
+                    "intent": "await_agent",
+                    "source": "hybrid_portion:mixed:draft",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="hybrid-control-symlink",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed", on_execute=on_execute),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("mixed", playbook["steps"]["mixed"], state)
+
+    assert protected_target.read_text(encoding="utf-8") == "must remain unchanged"
+    assert not (issue_dir / "blackboard.json").is_symlink()
+    assert store.load_or_create("mixed").current_step == "mixed"
+
+
+def test_hybrid_portion_discards_agent_authored_operation_metadata(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """UT-010: hybrid rollback does not trust operation metadata from an agent portion."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "hybrid-operation-metadata"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "mixed": {
+                "skill": "develop",
+                "role": "developer",
+                "output_artifact": "code",
+                "allowed_tools": ["Read", "Edit", "Write", "Bash"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+                "hybrid_portion": {"id": "draft"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("mixed")
+    operation: _LongRunningOperationArtifact | None = None
+    iteration_dir: Path | None = None
+
+    def on_execute(*, streaming_output_file: str | None, **_kwargs: object) -> None:
+        nonlocal iteration_dir, operation
+        assert streaming_output_file is not None
+        iteration_dir = Path(streaming_output_file).parent
+        operation = store.write_operation_artifact(
+            store.load_or_create("mixed"),
+            step="mixed",
+            iteration_dir=iteration_dir,
+            artifact=LongRunningOperationArtifact(
+                state=LongRunningOperationState.RUNNING,
+                reason="hybrid agent started a controlled operation",
+                operation_id="hybrid-operation",
+            ),
+        )
+        portion_baton = iteration_dir / "hybrid_portion_baton.json"
+        portion_baton.write_text(
+            json.dumps(
+                {
+                    "from_step": "mixed",
+                    "to_owner": "agent",
+                    "to_step": "mixed",
+                    "intent": "await_agent",
+                    "source": "hybrid_portion:mixed:draft",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="hybrid-operation-metadata",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed", on_execute=on_execute),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("mixed", playbook["steps"]["mixed"], state)
+
+    assert iteration_dir is not None
+    assert operation is not None
+    reloaded = store.load_or_create("mixed")
+    assert not operation_artifact_is_trusted(
+        blackboard_store=store,
+        blackboard=reloaded,
+        current_step="mixed",
+        iteration_dir=iteration_dir,
+        artifact=operation,
+    )
+    assert "mixed_operation" not in reloaded.artifacts
 
 
 def test_generic_workflow_step_writes_review_pause_contract(tmp_path: Path, monkeypatch) -> None:
@@ -5160,3 +5376,90 @@ def test_persisted_packet_decision_fails_closed_on_tampered_runtime_fields(
         GenericWorkflowStepExecutor._load_persisted_effective_inputs(
             iteration_dir, require_persisted_packet_decision=True
         )
+
+
+def test_hybrid_portion_uses_a_private_baton_sink(tmp_path: Path, monkeypatch) -> None:
+    """A hybrid portion cannot write the canonical routing baton."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "hybrid-sink"
+    playbook = {
+        "playbook": {"id": "hybrid-sink"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "skills": {"workflow": {"shared": []}, "chat": {"shared": []}},
+        "steps": {
+            "mixed": {
+                "skill": "develop",
+                "role": "developer",
+                "output_artifact": "code",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {},
+            }
+        },
+    }
+    canonical_baton = issue_dir / "next_step.txt"
+    canonical_payload = {
+        "version": 1,
+        "from_step": "mixed",
+        "to_owner": "agent",
+        "to_step": "mixed",
+        "intent": "await_agent",
+        "status_code": "",
+        "created_at": "2026-01-01T00:00:00+08:00",
+        "source": "test",
+    }
+    canonical_baton.parent.mkdir(parents=True)
+    canonical_baton.write_text(json.dumps(canonical_payload), encoding="utf-8")
+    state = BlackboardStore(issue_dir).load_or_create("mixed", playbook_id="hybrid-sink")
+    sink_paths: list[Path] = []
+
+    def write_portion_completion(*, prompt: str, **_kwargs) -> None:
+        sink_path = Path(
+            next(
+                line.split("=", 1)[1]
+                for line in prompt.splitlines()
+                if line.startswith("next_step_file=")
+            )
+        )
+        sink_paths.append(sink_path)
+        sink_path.write_text(
+            json.dumps(
+                {
+                    "from_step": "mixed",
+                    "to_owner": "agent",
+                    "to_step": "mixed",
+                    "intent": "await_agent",
+                    "source": "hybrid_portion:mixed:draft",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    agent_manager = FakeAgentManager("confirmed", on_execute=write_portion_completion)
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="hybrid-sink",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    hybrid_step = {
+        **playbook["steps"]["mixed"],
+        "hybrid_portion": {"id": "draft", "instruction": "Draft the proposal."},
+    }
+
+    result = executor.execute_step("mixed", hybrid_step, state)
+
+    assert [path.resolve() for path in sink_paths] == [
+        issue_dir / "mixed" / "iteration_001" / "hybrid_portion_baton.json"
+    ]
+    assert json.loads(canonical_baton.read_text(encoding="utf-8")) == canonical_payload
+    allowed_tools = agent_manager.allowed_tools_calls[0] or []
+    assert (
+        "write(./.cafe/issues/hybrid-sink/mixed/iteration_001/hybrid_portion_baton.json)"
+        in allowed_tools
+    )
+    assert "write(./.cafe/issues/hybrid-sink/next_step.txt)" not in allowed_tools
+    assert any(event["type"] == "hybrid_portion_baton" for event in result.events)

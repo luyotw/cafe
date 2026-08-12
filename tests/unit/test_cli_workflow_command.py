@@ -10,12 +10,12 @@ from typer.testing import CliRunner
 from cafe.agents.executor import AgentExecutionError
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.git import BranchHealth
-from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult
 from cafe.ui.cli import (
-    app,
     _execute_single_step_alias,
     _find_external_resume_step,
     _handle_user_phase,
+    app,
 )
 from cafe.ui.cli_shared import (
     _alignment_checkpoint_menu_choices,
@@ -222,9 +222,9 @@ def test_workflow_command_runs_dry_mode(tmp_path: Path, monkeypatch) -> None:
         assert result.exit_code == 0
         assert "Workflow context" in result.stdout
         assert "playbook=default step=spec" in result.stdout
-        assert "Workflow completed" in result.stdout
+        assert "Ownership plan (read-only)" in result.stdout
         blackboard_file = tmp_path / ".cafe" / "issues" / "issue-100" / "blackboard.json"
-        assert blackboard_file.exists()
+        assert not blackboard_file.exists()
 
 
 def test_workflow_dry_mode_completes_declared_custom_publish_step(
@@ -260,17 +260,8 @@ steps:
         result = runner.invoke(app, ["workflow", "--playbook", "custom", "--dry-run"])
 
     assert result.exit_code == 0
-    assert "Workflow completed" in result.stdout
-    blackboard = json.loads(
-        (
-            tmp_path
-            / ".cafe"
-            / "issues"
-            / "issue-custom-publish"
-            / "blackboard.json"
-        ).read_text(encoding="utf-8")
-    )
-    assert blackboard["current_step"] == "done"
+    assert "Ownership plan (read-only)" in result.stdout
+    assert not (tmp_path / ".cafe" / "issues" / "issue-custom-publish" / "blackboard.json").exists()
 
 
 def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None:
@@ -546,9 +537,9 @@ def test_workflow_command_resume_user_input_targets_handoff_from_step(
                 "--playbook",
                 "default",
                 "--execute",
-                    "--single-step",
-                    "--user-input",
-                    '{"task":"clarification-answers","answers":{"scope":"include CSV export in scope"}}',
+                "--single-step",
+                "--user-input",
+                '{"task":"clarification-answers","answers":{"scope":"include CSV export in scope"}}',
             ],
         )
 
@@ -557,9 +548,10 @@ def test_workflow_command_resume_user_input_targets_handoff_from_step(
     resume_input = issue_dir / "plan" / "iteration_002" / "user_input.md"
     assert resume_input.read_text(encoding="utf-8") == "scope: include CSV export in scope"
     reloaded = store.load_or_create("spec", playbook_id="default")
-    assert "completed human task clarification-answers for plan" in (
-        reloaded.handoff_summary or ""
-    ).lower()
+    assert (
+        "completed human task clarification-answers for plan"
+        in (reloaded.handoff_summary or "").lower()
+    )
     assert reloaded.current_step == "develop"
 
 
@@ -1372,9 +1364,9 @@ def test_workflow_command_resume_confirm_output_keeps_await_agent_intent(
                 "workflow",
                 "--playbook",
                 "default",
-                    "--execute",
-                    "--user-input",
-                    '{"task":"output-review","decision":"confirm"}',
+                "--execute",
+                "--user-input",
+                '{"task":"output-review","decision":"confirm"}',
             ],
         )
 
@@ -1899,6 +1891,38 @@ def test_workflow_command_prints_paused_when_human_input_is_needed(
         assert "Workflow is waiting for user input" in result.stdout
 
 
+def test_workflow_command_prints_owner_task_id_for_noninteractive_wait(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The non-interactive owner handoff exposes the durable task identifier."""
+    monkeypatch.chdir(tmp_path)
+
+    class WaitingRuntime:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def run(self, **_kwargs) -> PlaybookRunResult:
+            return PlaybookRunResult(
+                final_step="approval",
+                final_status_code="HUMAN_TASK_PENDING",
+                completed=False,
+                detail="task-owner-123",
+            )
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.BlackboardWorkflowRuntime", WaitingRuntime),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-201"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+
+    assert result.exit_code == 0
+    assert "task-owner-123" in result.stdout
+
+
 def test_workflow_command_prints_recovery_guidance_for_pr_baton_pause(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -2140,19 +2164,19 @@ def test_confirm_output_chat_uses_playbook_chat_role(tmp_path: Path, monkeypatch
             "writer": {"default_agent": "David"},
         },
         "steps": {
-                "brief": {
-                    "role": "editor",
-                    "chat_role": "writer",
-                    "skill": "cafe-brief_first",
-                    "human_tasks": [
-                        {
-                            "trigger": "confirm_output",
-                            "task_id": "editorial-output-review",
-                            "outcomes": {"approve": "draft", "revise": "brief"},
-                        }
-                    ],
-                    "on": {"await_agent": "draft", "confirm_output": "brief"},
-                },
+            "brief": {
+                "role": "editor",
+                "chat_role": "writer",
+                "skill": "cafe-brief_first",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "editorial-output-review",
+                        "outcomes": {"approve": "draft", "revise": "brief"},
+                    }
+                ],
+                "on": {"await_agent": "draft", "confirm_output": "brief"},
+            },
             "draft": {"role": "writer", "on": {"await_agent": "_done"}},
         },
     }
@@ -2196,18 +2220,18 @@ def test_brief_confirm_output_routes_to_review_confirmation(tmp_path: Path, monk
         "entry_point": "brief",
         "roles": {"editor": {"default_agent": "Roger"}},
         "steps": {
-                "brief": {
-                    "role": "editor",
-                    "skill": "cafe-brief_first",
-                    "human_tasks": [
-                        {
-                            "trigger": "confirm_output",
-                            "task_id": "editorial-output-review",
-                            "outcomes": {"approve": "draft", "revise": "brief"},
-                        }
-                    ],
-                    "on": {"confirm_output": "brief", "await_agent": "draft"},
-                },
+            "brief": {
+                "role": "editor",
+                "skill": "cafe-brief_first",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "editorial-output-review",
+                        "outcomes": {"approve": "draft", "revise": "brief"},
+                    }
+                ],
+                "on": {"confirm_output": "brief", "await_agent": "draft"},
+            },
             "draft": {"role": "writer", "on": {"await_agent": "_done"}},
         },
     }
@@ -2240,17 +2264,17 @@ def test_user_phase_no_changes_needed_resumes_develop_without_generic_menu(
         "playbook": {"id": "default"},
         "roles": {"developer": {"default_agent": "David"}},
         "steps": {
-                "develop": {
-                    "role": "developer",
-                    "skill": "cafe-develop",
-                    "human_tasks": [
-                        {
-                            "trigger": "no_changes_needed",
-                            "task_id": "no-change-decision",
-                            "outcomes": {"agree": "review", "disagree": "develop"},
-                        }
-                    ],
-                    "on": {
+            "develop": {
+                "role": "developer",
+                "skill": "cafe-develop",
+                "human_tasks": [
+                    {
+                        "trigger": "no_changes_needed",
+                        "task_id": "no-change-decision",
+                        "outcomes": {"agree": "review", "disagree": "develop"},
+                    }
+                ],
+                "on": {
                     "await_agent": "review",
                     "manual_handoff": "pr",
                     "no_changes_needed": "develop",
@@ -3475,7 +3499,9 @@ steps:
         executor = MagicMock()
         executor.execute_step.side_effect = lambda step_name, step_def, state, **kwargs: (
             executed_steps.append(step_name)
-            or _result(status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={})
+            or _result(
+                status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
+            )
         )
         mock_builder.return_value = executor
 

@@ -1,17 +1,15 @@
 """Tests for non-software playbook loading and lightweight command coverage."""
 
-import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from cafe.playbooks.simulate import analyze_playbook
 from cafe.core.workflow_models import PlaybookRunResult
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.playbooks.simulate import analyze_playbook
 from cafe.skills.loader import SkillLoader
 from cafe.ui.cli import app
-
 
 runner = CliRunner()
 
@@ -92,11 +90,8 @@ def test_builtin_non_software_workflow_dry_run_accepts_editorial(monkeypatch) ->
         )
 
     assert result.exit_code == 0
-    blackboard_data = json.loads(
-        (_repo_root() / ".cafe" / "issues" / "issue253" / "blackboard.json").read_text(encoding="utf-8")
-    )
-    assert blackboard_data["playbook_id"] == "editorial"
-    assert "Workflow completed" in result.stdout
+    assert "Ownership plan (read-only)" in result.stdout
+    assert not (_repo_root() / ".cafe" / "issues" / "issue253" / "blackboard.json").exists()
 
 
 def test_builtin_non_software_playbook_load_strict(monkeypatch) -> None:

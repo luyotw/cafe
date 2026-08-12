@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,13 @@ RUNTIME_TOOL_GRANTS = frozenset({"web_research", "git_inspection"})
 RigorLevel = Literal["low", "medium", "high"]
 InputMethodDefault = Literal["manual", "github"]
 CONVERSATION_LOCALE_PATTERN = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
+
+
+def _non_empty(value: str, *, field_name: str) -> str:
+    token = value.strip()
+    if not token:
+        raise ValueError(f"{field_name} must not be empty")
+    return token
 
 
 class PlaybookMeta(BaseModel):
@@ -199,14 +207,11 @@ class InitialInputDeclaration(BaseModel):
         if len(providers) != len(set(providers)):
             raise ValueError("initial_input.providers must not contain duplicates")
         unsupported = [
-            provider
-            for provider in providers
-            if provider not in SUPPORTED_INITIAL_INPUT_PROVIDERS
+            provider for provider in providers if provider not in SUPPORTED_INITIAL_INPUT_PROVIDERS
         ]
         if unsupported:
             raise ValueError(
-                "initial_input.providers contains unsupported provider "
-                f"{unsupported[0]!r}"
+                "initial_input.providers contains unsupported provider " f"{unsupported[0]!r}"
             )
         return providers
 
@@ -263,6 +268,117 @@ class EffectiveStepBehavior(BaseModel):
     runtime_tool_grants: List[str] = Field(default_factory=list)
 
 
+class AutomaticStepConfig(BaseModel):
+    """A declarative selector for a runtime-owned automatic executor."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    executor: str
+    inputs: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("executor")
+    @classmethod
+    def _validate_executor(cls, value: str) -> str:
+        token = _non_empty(value, field_name="automatic.executor")
+        if "/" in token or "\\" in token or token.startswith("."):
+            raise ValueError("automatic.executor must name a registered executor id, not a path")
+        return token
+
+    @field_validator("inputs")
+    @classmethod
+    def _validate_json_inputs(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        """Keep declarative automatic input data portable and untrusted."""
+
+        def is_json_value(candidate: Any) -> bool:
+            if candidate is None or isinstance(candidate, (str, bool, int)):
+                return True
+            if isinstance(candidate, float):
+                return math.isfinite(candidate)
+            if isinstance(candidate, list):
+                return all(is_json_value(item) for item in candidate)
+            if isinstance(candidate, dict):
+                return all(
+                    isinstance(key, str) and is_json_value(item) for key, item in candidate.items()
+                )
+            return False
+
+        if not is_json_value(value):
+            raise ValueError("automatic.inputs must contain JSON values only")
+        return value
+
+
+class HybridTarget(BaseModel):
+    """One typed continuation from a hybrid portion."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step: Optional[str] = None
+    portion: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_single_target(self) -> "HybridTarget":
+        values = [value for value in (self.step, self.portion) if value is not None]
+        if len(values) != 1:
+            raise ValueError("hybrid target requires exactly one of step or portion")
+        if not values[0].strip():
+            raise ValueError("hybrid target must not be empty")
+        return self
+
+
+class HybridPortion(BaseModel):
+    """An explicit agent or human portion of one hybrid step."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    owner: Literal["agent", "human"]
+    instruction: Optional[str] = None
+    on: Dict[str, HybridTarget]
+
+    @field_validator("id")
+    @classmethod
+    def _validate_id(cls, value: str) -> str:
+        return _non_empty(value, field_name="hybrid portion id")
+
+    @field_validator("on")
+    @classmethod
+    def _validate_on(cls, value: Dict[str, HybridTarget]) -> Dict[str, HybridTarget]:
+        if not value:
+            raise ValueError("hybrid portion requires at least one declared continuation")
+        for key in value:
+            _non_empty(key, field_name="hybrid continuation key")
+        return value
+
+
+class HybridStepConfig(BaseModel):
+    """Validated portion graph for a mixed agent/human step."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    entry_portion: str
+    portions: tuple[HybridPortion, ...]
+
+    @model_validator(mode="after")
+    def _validate_portions(self) -> "HybridStepConfig":
+        ids = [portion.id for portion in self.portions]
+        if not ids:
+            raise ValueError("hybrid.portions must not be empty")
+        if len(set(ids)) != len(ids):
+            raise ValueError("hybrid portion ids must be unique")
+        if self.entry_portion not in ids:
+            raise ValueError("hybrid.entry_portion must name a declared portion")
+        owners = {portion.owner for portion in self.portions}
+        if owners != {"agent", "human"}:
+            raise ValueError("hybrid.portions must declare both agent and human work")
+        for portion in self.portions:
+            for target in portion.on.values():
+                if target.portion is not None and target.portion not in ids:
+                    raise ValueError(
+                        f"hybrid portion {portion.id!r} targets unknown portion {target.portion!r}"
+                    )
+        return self
+
+
 def _behavior_value(
     defaults: StepBehaviorDeclaration,
     override: StepBehaviorDeclaration,
@@ -284,7 +400,9 @@ class StepConfig(BaseModel):
     type: Literal["skill", "subflow"] = "skill"
     skill: SkillSelector
     role: str
-    assignee_type: Literal["agent", "human", "auto"] = "agent"
+    assignee_type: Literal["agent", "human", "auto", "hybrid"] = "agent"
+    automatic: Optional[AutomaticStepConfig] = None
+    hybrid: Optional[HybridStepConfig] = None
     # ``None`` means the legacy playbook omitted this field and therefore
     # intentionally receives every recorded artifact. An explicit empty list
     # remains the opt-in isolated scope.
@@ -311,6 +429,23 @@ class StepConfig(BaseModel):
     def _validate_input_artifact_scope(self) -> "StepConfig":
         if "input_artifacts" in self.model_fields_set and self.input_artifacts is None:
             raise ValueError("input_artifacts must be a list when specified")
+        if self.automatic is not None and self.assignee_type != "auto":
+            raise ValueError("automatic requires matching assignee_type=auto")
+        if self.hybrid is not None and self.assignee_type != "hybrid":
+            raise ValueError("hybrid requires matching assignee_type=hybrid")
+        if self.assignee_type == "auto" and self.automatic is None:
+            raise ValueError("assignee_type=auto requires automatic executor declaration")
+        if self.assignee_type == "human":
+            initial = [binding for binding in self.human_tasks if binding.trigger == "initial"]
+            if len(initial) != 1 or not initial[0].outcomes:
+                raise ValueError(
+                    "assignee_type=human requires exactly one initial human task with "
+                    "declared outcomes"
+                )
+        if self.assignee_type == "hybrid" and self.hybrid is None:
+            raise ValueError("assignee_type=hybrid requires hybrid portion declaration")
+        if self.assignee_type == "auto" and self.human_tasks:
+            raise ValueError("assignee_type=auto cannot declare human_tasks")
         return self
 
     @field_validator("human_tasks")
@@ -647,6 +782,7 @@ class PlaybookDefinition(BaseModel):
                     f"steps.{step_name}.behavior.publish_confirmation requires "
                     "the cafe.pr.publish capability request"
                 )
+            _validate_ownership_contract(step_name, step, self.steps)
         return self
 
 
@@ -775,6 +911,13 @@ def normalize_playbook_yaml(data: Dict) -> Dict:
         skill = step.get("skill")
         if isinstance(skill, dict):
             step["skill"] = {str(key): value for key, value in skill.items()}
+        hybrid = step.get("hybrid")
+        if isinstance(hybrid, dict) and isinstance(hybrid.get("portions"), list):
+            for portion in hybrid["portions"]:
+                if isinstance(portion, dict) and "on" not in portion and True in portion:
+                    value = portion.pop(True)
+                    if isinstance(value, dict):
+                        portion["on"] = value
     return data
 
 
@@ -835,17 +978,12 @@ def validate_playbook(
         _validate_step_required_prompt_inputs(step_name, step, skill_loader)
         _validate_step_required_tools(step_name, step, skill_loader)
         _validate_step_human_tasks(step_name, step, steps, skill_loader)
+        _validate_ownership_contract(step_name, step, steps)
         _validate_script_hook_stages(step_name, step.hooks)
         _validate_targets(step_name, step.allowed_goto, steps, "allowed_goto")
         _validate_transition_targets(step_name, step.on, steps)
         warnings.extend(_collect_tool_warnings(step_name, step.allowed_tools))
-        if step.assignee_type != "agent":
-            warnings.append(
-                f"Step '{step_name}': assignee_type={step.assignee_type} (reserved for v0.3)"
-            )
-
     _validate_feedback_target_prompt_inputs(model, skill_loader=skill_loader)
-
     _validate_prepare_metadata(
         model,
         skill_loader=skill_loader,
@@ -899,9 +1037,7 @@ def _validate_skill_environments(
             ) from exc
 
 
-def _validate_initial_input_declarations(
-    model: PlaybookDefinition, *, source: str
-) -> None:
+def _validate_initial_input_declarations(model: PlaybookDefinition, *, source: str) -> None:
     """Fail closed on invalid initial-input declarations before execution."""
     registered = registered_initial_input_providers()
     for step_name, step in model.steps.items():
@@ -910,9 +1046,7 @@ def _validate_initial_input_declarations(
             continue
         field_path = f"steps.{step_name}.initial_input"
         if step_name != model.entry_point:
-            raise ValueError(
-                f"{field_path} is only allowed on entry_point {model.entry_point!r}"
-            )
+            raise ValueError(f"{field_path} is only allowed on entry_point {model.entry_point!r}")
         if declaration.legacy_presentation and (
             source != "builtin" or model.playbook.id not in {"default", "simple", "tdd"}
         ):
@@ -1218,10 +1352,19 @@ def _validate_step_human_tasks(
     """Ensure every policy binding names a skill task and declared destinations."""
     if not step.human_tasks:
         return
+    hybrid_human_triggers = {
+        portion.id
+        for portion in (step.hybrid.portions if step.hybrid is not None else ())
+        if portion.owner == "human"
+    }
     selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
     contracts = [skill_loader.get_workflow_contract(skill) for skill in selectors]
     for binding in step.human_tasks:
-        if binding.trigger != "initial" and binding.trigger not in step.on:
+        if (
+            binding.trigger != "initial"
+            and binding.trigger not in step.on
+            and binding.trigger not in hybrid_human_triggers
+        ):
             raise ValueError(
                 f"Step '{step_name}' human task trigger {binding.trigger!r} "
                 "is not declared in its transitions"
@@ -1257,6 +1400,90 @@ def _validate_step_human_tasks(
                 raise ValueError(
                     f"Step '{step_name}' has invalid human task outcome target {target!r}"
                 )
+
+
+def _validate_ownership_contract(
+    step_name: str,
+    step: StepConfig,
+    steps: Dict[str, StepConfig],
+) -> None:
+    """Validate explicit owner declarations before runtime dispatch can begin."""
+    if step.assignee_type == "auto":
+        if step.automatic is None or not step.on:
+            raise ValueError(
+                f"Step '{step_name}' automatic owner requires an executor and declared transitions"
+            )
+        return
+    if step.assignee_type == "human":
+        initial = [binding for binding in step.human_tasks if binding.trigger == "initial"]
+        if len(step.human_tasks) != 1 or len(initial) != 1:
+            raise ValueError(
+                f"Step '{step_name}' human owner requires exactly one initial human task binding"
+            )
+        return
+    if step.assignee_type != "hybrid":
+        return
+
+    hybrid = step.hybrid
+    assert hybrid is not None
+    portions = {portion.id: portion for portion in hybrid.portions}
+    human_portions = {
+        portion.id: portion for portion in hybrid.portions if portion.owner == "human"
+    }
+    bindings = {binding.trigger: binding for binding in step.human_tasks}
+    if set(bindings) != set(human_portions):
+        raise ValueError(
+            f"Step '{step_name}' hybrid human portions require exactly one matching "
+            "human task binding"
+        )
+
+    for portion in hybrid.portions:
+        if portion.owner == "agent":
+            invalid = set(portion.on) - PLAYBOOK_INTENT_KEYS
+            if invalid:
+                raise ValueError(
+                    f"Step '{step_name}' hybrid agent portion {portion.id!r} has invalid "
+                    f"completion key {sorted(invalid)[0]!r}"
+                )
+        for target in portion.on.values():
+            if target.step is not None and target.step != DONE_TARGET and target.step not in steps:
+                raise ValueError(
+                    f"Step '{step_name}' hybrid portion {portion.id!r} targets unknown "
+                    f"step {target.step!r}"
+                )
+
+    for portion_id, portion in human_portions.items():
+        binding = bindings[portion_id]
+        if set(binding.outcomes) != set(portion.on):
+            raise ValueError(
+                f"Step '{step_name}' hybrid human portion {portion_id!r} outcomes must "
+                "match its declared continuations"
+            )
+        if any(target != step_name for target in binding.outcomes.values()):
+            raise ValueError(
+                f"Step '{step_name}' hybrid human task outcomes must return to the containing step"
+            )
+
+    seen: set[tuple[str, bool]] = set()
+
+    def walk(portion_id: str, human_crossed: bool) -> None:
+        state = (portion_id, human_crossed)
+        if state in seen:
+            return
+        seen.add(state)
+        portion = portions[portion_id]
+        crossed = human_crossed or portion.owner == "human"
+        for target in portion.on.values():
+            if target.step is not None:
+                if not crossed:
+                    raise ValueError(
+                        f"Step '{step_name}' hybrid exit from portion {portion_id!r} "
+                        "bypasses its required human boundary"
+                    )
+            elif target.portion is not None:
+                walk(target.portion, crossed)
+
+    walk(hybrid.entry_portion, False)
 
 
 def _validate_script_hook_stages(step_name: str, hooks: StepHooks) -> None:

@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 from cafe.core.workflow_models import BatonRejected
 
 BLACKBOARD_FILENAME = "blackboard.json"
-BLACKBOARD_SCHEMA_VERSION = 2
+BLACKBOARD_SCHEMA_VERSION = 3
 NEXT_STEP_FILENAME = "next_step.txt"
 HANDOFF_CONTRACT_VERSION = 1
 OPERATION_ARTIFACT_FILENAME = "operation.json"
@@ -340,7 +340,9 @@ class DecisionEntry:
             timestamp=str(data.get("timestamp", _now_iso())),
             step=str(data.get("from", "system")),
             decision="transition",
-            rationale=json.dumps({k: v for k, v in data.items() if k != "timestamp"}, ensure_ascii=False),
+            rationale=json.dumps(
+                {k: v for k, v in data.items() if k != "timestamp"}, ensure_ascii=False
+            ),
             made_by=str(data.get("from", "system")),
         )
 
@@ -455,16 +457,25 @@ class HandoffContract:
 
         if self.to_owner == HandoffOwner.AGENT and self.to_step in {"user", "done"}:
             raise ValueError("Baton owner mismatch: agent owner cannot target user/done")
-        if self.to_owner in {HandoffOwner.USER, HandoffOwner.DONE} and self.to_step not in {"user", "done"}:
+        if self.to_owner in {HandoffOwner.USER, HandoffOwner.DONE} and self.to_step not in {
+            "user",
+            "done",
+        }:
             raise ValueError("Baton owner mismatch: user/done owner must target user or done")
 
         if self.intent == HandoffIntent.CONFIRM_OUTPUT and self.from_step not in allowed_steps:
-            raise ValueError("intent=confirm_output is only valid when from_step is a playbook step")
+            raise ValueError(
+                "intent=confirm_output is only valid when from_step is a playbook step"
+            )
         if self.intent == HandoffIntent.ALIGNMENT_CHECKPOINT:
             if self.to_owner != HandoffOwner.USER or self.to_step != "user":
-                raise ValueError("intent=alignment_checkpoint must be user-owned and target to_step=user")
+                raise ValueError(
+                    "intent=alignment_checkpoint must be user-owned and target to_step=user"
+                )
             if self.from_step not in allowed_steps:
-                raise ValueError("intent=alignment_checkpoint is only valid when from_step is a playbook step")
+                raise ValueError(
+                    "intent=alignment_checkpoint is only valid when from_step is a playbook step"
+                )
 
 
 @dataclass
@@ -481,6 +492,8 @@ class BlackboardState:
     capability_receipts: List[Dict[str, Any]] = field(default_factory=list)
     handoff_summary: str = ""
     handoff_contract: Optional[HandoffContract] = None
+    ownership_cursor: Optional[Dict[str, Any]] = None
+    step_visit_counts: Dict[str, int] = field(default_factory=dict)
     updated_at: str = field(default_factory=_now_iso)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -497,11 +510,20 @@ class BlackboardState:
             "handoff_contract": (
                 self.handoff_contract.to_dict() if self.handoff_contract is not None else None
             ),
+            "ownership_cursor": dict(self.ownership_cursor) if self.ownership_cursor else None,
+            "step_visit_counts": dict(self.step_visit_counts),
             "updated_at": self.updated_at,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any], *, initial_step: str) -> "BlackboardState":
+        raw_version = data.get("schema_version", 1)
+        if not isinstance(raw_version, int):
+            raise ValueError("blackboard schema_version must be an integer")
+        if raw_version > BLACKBOARD_SCHEMA_VERSION:
+            raise ValueError(
+                f"blackboard schema version {raw_version} is from an unsupported future runtime"
+            )
         raw_artifacts = data.get("artifacts", {})
         artifacts: Dict[str, ArtifactEntry] = {}
         if isinstance(raw_artifacts, dict):
@@ -525,6 +547,20 @@ class BlackboardState:
                 if isinstance(item, dict):
                     receipts.append(dict(item))
 
+        raw_cursor = data.get("ownership_cursor")
+        if raw_cursor is not None and not isinstance(raw_cursor, dict):
+            raise ValueError("blackboard ownership_cursor must be an object or null")
+        raw_visits = data.get("step_visit_counts", {})
+        if not isinstance(raw_visits, dict):
+            raise ValueError("blackboard step_visit_counts must be an object")
+        visits: Dict[str, int] = {}
+        for step, count in raw_visits.items():
+            if not isinstance(count, int) or count < 0:
+                raise ValueError(
+                    "blackboard step_visit_counts values must be non-negative integers"
+                )
+            visits[str(step)] = count
+
         return cls(
             current_step=str(data.get("current_step", initial_step)),
             playbook_id=str(data.get("playbook_id", "default")),
@@ -537,11 +573,14 @@ class BlackboardState:
             handoff_summary=str(data.get("handoff_summary", "")),
             handoff_contract=(
                 HandoffContract.from_dict_with_current_step(
-                    dict(data["handoff_contract"]), current_step=str(data.get("current_step", initial_step))
+                    dict(data["handoff_contract"]),
+                    current_step=str(data.get("current_step", initial_step)),
                 )
                 if isinstance(data.get("handoff_contract"), dict)
                 else None
             ),
+            ownership_cursor=dict(raw_cursor) if raw_cursor is not None else None,
+            step_visit_counts=visits,
             updated_at=str(data.get("updated_at", _now_iso())),
         )
 
@@ -620,12 +659,20 @@ class BlackboardStore:
         contract = HandoffContract(
             version=HANDOFF_CONTRACT_VERSION,
             from_step=state.current_step,
-            to_owner=HandoffOwner.AGENT if state.current_step not in {"user", "done"} else HandoffOwner(state.current_step),
+            to_owner=(
+                HandoffOwner.AGENT
+                if state.current_step not in {"user", "done"}
+                else HandoffOwner(state.current_step)
+            ),
             to_step=state.current_step,
             intent=(
                 HandoffIntent.AWAIT_AGENT
                 if state.current_step not in {"user", "done"}
-                else (HandoffIntent.MANUAL_HANDOFF if state.current_step == "user" else HandoffIntent.WORKFLOW_COMPLETE)
+                else (
+                    HandoffIntent.MANUAL_HANDOFF
+                    if state.current_step == "user"
+                    else HandoffIntent.WORKFLOW_COMPLETE
+                )
             ),
             status_code="",
             created_at=_now_iso(),
@@ -818,9 +865,7 @@ class BlackboardStore:
                 version=version,
                 updated_by=step,
                 path=str(path),
-                summary=(
-                    f"long_running_operation:{artifact.operation_id}:{artifact.state.value}"
-                ),
+                summary=(f"long_running_operation:{artifact.operation_id}:{artifact.state.value}"),
             ),
         )
         self.record_event(
@@ -837,9 +882,7 @@ class BlackboardStore:
         )
         return artifact
 
-    def read_operation_receipt(
-        self, iteration_dir: Path
-    ) -> Optional[LongRunningOperationArtifact]:
+    def read_operation_receipt(self, iteration_dir: Path) -> Optional[LongRunningOperationArtifact]:
         path = operation_receipt_path(iteration_dir)
         if not path.exists():
             return None
@@ -950,7 +993,9 @@ class BlackboardStore:
         )
         self.save(state)
 
-    def record_event(self, state: BlackboardState, event_type: str, payload: Dict[str, Any]) -> None:
+    def record_event(
+        self, state: BlackboardState, event_type: str, payload: Dict[str, Any]
+    ) -> None:
         step = str(payload.get("step", state.current_step))
         self.log_event(state, step, event_type, json.dumps(payload, ensure_ascii=False), payload)
 
@@ -986,9 +1031,19 @@ class BlackboardStore:
         since: Optional[str] = None,
         max_events: int = 20,
     ) -> str:
-        lines = ["## Blackboard", "", "### Artifacts", "| Name | Kind | Ver | Updated By | When |", "|------|------|-----|-----------|------|"]
+        lines = [
+            "## Blackboard",
+            "",
+            "### Artifacts",
+            "| Name | Kind | Ver | Updated By | When |",
+            "|------|------|-----|-----------|------|",
+        ]
         for name, entry in sorted(state.artifacts.items()):
-            when = entry.updated_at.split("T", 1)[1][:5] if "T" in entry.updated_at else entry.updated_at
+            when = (
+                entry.updated_at.split("T", 1)[1][:5]
+                if "T" in entry.updated_at
+                else entry.updated_at
+            )
             lines.append(
                 f"| {name} | {entry.kind.value} | v{entry.version} | {entry.updated_by} | {when} |"
             )
@@ -996,7 +1051,9 @@ class BlackboardStore:
         lines.extend(["", f"### Recent Events (since your last run, max {max_events})"])
         events = state.events if since is None else self.get_events_since(state, since)
         for entry in events[-max_events:]:
-            when = entry.timestamp.split("T", 1)[1][:5] if "T" in entry.timestamp else entry.timestamp
+            when = (
+                entry.timestamp.split("T", 1)[1][:5] if "T" in entry.timestamp else entry.timestamp
+            )
             lines.append(f"- [{when}] {entry.step}: {entry.message}")
 
         lines.extend(["", "### Input Files"])
