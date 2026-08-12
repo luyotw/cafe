@@ -177,8 +177,8 @@ ambiguous or incomplete declaration before any step runs.
     role: operator
     assignee_type: auto
     automatic:
-      executor: publish_preview
-      inputs: {channel: staging}
+      executor: declared_transition
+      inputs: {intent: await_agent}
     "on": {await_agent: _done}
 ```
 

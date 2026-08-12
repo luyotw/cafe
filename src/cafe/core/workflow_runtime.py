@@ -14,6 +14,11 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from cafe.core.active_issue import clear_marker_if_matches
+from cafe.core.automatic_steps import (
+    AutomaticExecutionResult,
+    AutomaticExecutorRegistry,
+    default_automatic_executor_registry,
+)
 from cafe.core.blackboard import (
     BlackboardStore,
     HandoffContract,
@@ -25,11 +30,6 @@ from cafe.core.blackboard import (
     operation_receipt_path,
 )
 from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
-from cafe.core.automatic_steps import (
-    AutomaticExecutionResult,
-    AutomaticExecutorRegistry,
-    default_automatic_executor_registry,
-)
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.human_tasks import resolve_step_human_task
 from cafe.core.playbook import resolve_step_behavior
@@ -159,6 +159,7 @@ class BlackboardWorkflowRuntime:
         self.playbook_id = str(playbook_meta["id"])
         self.steps: Dict = playbook["steps"]
         self.start_step = str(playbook.get("entry_point") or next(iter(self.steps.keys())))
+        self._validate_automatic_executor_declarations()
 
         self.blackboard_store = BlackboardStore(issue_dir)
         self.blackboard = self.blackboard_store.load_or_create(
@@ -167,6 +168,20 @@ class BlackboardWorkflowRuntime:
             tolerate_invalid_baton=True,
         )
         self._operation_finalize_extra_prompt: Optional[str] = None
+
+    def _validate_automatic_executor_declarations(self) -> None:
+        """Reject unavailable automatic authority before recording a workflow visit."""
+        for step_name, step_def in self.steps.items():
+            if not isinstance(step_def, dict) or self._owner_for_step(step_def) != "auto":
+                continue
+            declaration = step_def.get("automatic")
+            executor_id = declaration.get("executor") if isinstance(declaration, dict) else None
+            if not isinstance(executor_id, str) or not self.automatic_registry.is_registered(
+                executor_id
+            ):
+                raise ValueError(
+                    f"Step '{step_name}' automatic executor {executor_id!r} is not registered"
+                )
 
     @staticmethod
     def _extract_goto_target(response: str) -> Optional[str]:
@@ -956,6 +971,43 @@ class BlackboardWorkflowRuntime:
         raw_target = raw_on.get(completion_key)
         return dict(raw_target) if isinstance(raw_target, dict) else None
 
+    @staticmethod
+    def _normalize_hybrid_completion_key(completion_key: str) -> str:
+        """Map a phase status to the declared hybrid transition key."""
+        try:
+            return transition_map_key(PhaseStatusCode(completion_key))
+        except ValueError:
+            return completion_key
+
+    def _captured_hybrid_completion_key(
+        self, *, captured: str, current_step: str, portion_id: str
+    ) -> Optional[str]:
+        """Accept only the portion-local baton shape the runtime requested."""
+        try:
+            raw_baton = json.loads(captured)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(raw_baton, dict):
+            return None
+        expected_source = f"hybrid_portion:{current_step}:{portion_id}"
+        if (
+            raw_baton.get("from_step") != current_step
+            or raw_baton.get("to_owner") != "agent"
+            or raw_baton.get("to_step") != current_step
+            or raw_baton.get("source") != expected_source
+        ):
+            return None
+        status_code = raw_baton.get("status_code")
+        intent = raw_baton.get("intent")
+        candidates = [
+            self._normalize_hybrid_completion_key(value)
+            for value in (status_code, intent)
+            if isinstance(value, str) and value
+        ]
+        if not candidates or len(set(candidates)) != 1:
+            return None
+        return candidates[0]
+
     def _run_hybrid_owned_step(
         self,
         *,
@@ -984,7 +1036,12 @@ class BlackboardWorkflowRuntime:
                 "step": current_step,
                 "portion": declaration.get("entry_portion"),
                 "human_boundary_crossed": False,
+                "visit_count": visit_count,
             }
+            self.blackboard.ownership_cursor = cursor
+            self.blackboard_store.save(self.blackboard)
+        elif not isinstance(cursor.get("visit_count"), int):
+            cursor["visit_count"] = visit_count
             self.blackboard.ownership_cursor = cursor
             self.blackboard_store.save(self.blackboard)
         portion_id = cursor.get("portion")
@@ -1068,12 +1125,20 @@ class BlackboardWorkflowRuntime:
             visit_count=visit_count,
             extra_prompt=(
                 f"[HYBRID PORTION] Execute only declared portion {portion_id!r}. "
-                "Return only a declared completion status; do not route the top-level workflow."
+                "Return only a declared completion status; do not route the top-level workflow. "
+                "If a baton is required, write it only to the supplied portion-local path with "
+                f"from_step={current_step!r}, to_owner='agent', to_step={current_step!r}, "
+                f"and source='hybrid_portion:{current_step}:{portion_id}'."
             ),
         )
         self._store_artifacts(frame.artifacts)
-        completion_key = frame.explicit_status_code
+        completion_key = (
+            self._normalize_hybrid_completion_key(frame.explicit_status_code)
+            if frame.explicit_status_code is not None
+            else None
+        )
         captured_key: Optional[str] = None
+        captured_invalid = False
         events = getattr(frame.execution_result, "events", [])
         if isinstance(events, list):
             captured = next(
@@ -1085,26 +1150,29 @@ class BlackboardWorkflowRuntime:
                 None,
             )
             if isinstance(captured, str):
-                try:
-                    raw_baton = json.loads(captured)
-                except json.JSONDecodeError:
-                    raw_baton = None
-                if isinstance(raw_baton, dict):
-                    raw_status = raw_baton.get("status_code")
-                    raw_intent = raw_baton.get("intent")
-                    if isinstance(raw_status, str) and raw_status:
-                        captured_key = raw_status
-                    elif isinstance(raw_intent, str) and raw_intent:
-                        captured_key = raw_intent
+                captured_key = self._captured_hybrid_completion_key(
+                    captured=captured,
+                    current_step=current_step,
+                    portion_id=str(portion_id),
+                )
+                captured_invalid = captured_key is None
+        if captured_invalid:
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "hybrid_portion_rejected",
+                {
+                    "step": current_step,
+                    "portion": portion_id,
+                    "reason": "invalid captured baton",
+                },
+            )
+            return PlaybookRunResult(
+                final_step=current_step,
+                final_status_code="HYBRID_RESULT_REJECTED",
+                completed=False,
+            )
         if completion_key is not None and captured_key is not None:
-
-            def normalized(key: str) -> str:
-                try:
-                    return transition_map_key(PhaseStatusCode(key))
-                except ValueError:
-                    return key
-
-            if normalized(completion_key) != normalized(captured_key):
+            if completion_key != captured_key:
                 self.blackboard_store.record_event(
                     self.blackboard,
                     "hybrid_portion_rejected",
@@ -1125,7 +1193,9 @@ class BlackboardWorkflowRuntime:
             parsed, _goto, _valid = self._parse_legacy_status(
                 step_def=step_def, response=frame.response, explicit_status_code=None
             )
-            completion_key = parsed.value if parsed is not None else None
+            completion_key = (
+                self._normalize_hybrid_completion_key(parsed.value) if parsed is not None else None
+            )
         target = self._hybrid_target(portion, completion_key or "")
         if target is None:
             self.blackboard_store.record_event(
@@ -1194,9 +1264,18 @@ class BlackboardWorkflowRuntime:
         owner = self._owner_for_step(step_def)
         if owner == "agent":
             return None
-        visit_count = self._record_step_visit(
-            current_step=current_step, step_def=step_def, runtime=runtime
-        )
+        cursor = self.blackboard.ownership_cursor
+        if (
+            owner == "hybrid"
+            and isinstance(cursor, dict)
+            and cursor.get("step") == current_step
+            and isinstance(cursor.get("visit_count"), int)
+        ):
+            visit_count = cursor["visit_count"]
+        else:
+            visit_count = self._record_step_visit(
+                current_step=current_step, step_def=step_def, runtime=runtime
+            )
         if owner == "human":
             return self._run_human_owned_step(
                 current_step=current_step,

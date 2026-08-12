@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import copy
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
@@ -188,9 +187,6 @@ class GenericWorkflowStepExecutor(Phase):
         hybrid_portion = step_def.get("hybrid_portion")
         is_hybrid_portion = isinstance(hybrid_portion, Mapping)
         baton_path = self.issue_dir / "next_step.txt"
-        original_baton = baton_path.read_bytes() if baton_path.exists() else None
-        original_contract = copy.deepcopy(blackboard_state.handoff_contract)
-        original_current_step = blackboard_state.current_step
         self.phase_name = step_name
         self.phase_dir = self.issue_dir / step_name
         self.phase_dir.mkdir(parents=True, exist_ok=True)
@@ -200,6 +196,13 @@ class GenericWorkflowStepExecutor(Phase):
         self._delta_packet_metadata = None
         iteration_dir = self._get_iteration_dir(self.iteration)
         iteration_dir.mkdir(parents=True, exist_ok=True)
+        portion_baton_path = (
+            iteration_dir / "hybrid_portion_baton.json" if is_hybrid_portion else None
+        )
+        if portion_baton_path is not None:
+            # A hybrid portion receives a private completion sink.  The
+            # canonical baton remains untouched even if the agent is stopped.
+            portion_baton_path.write_text("", encoding="utf-8")
 
         output_file = self._get_versioned_file_path(step_name, self.iteration, self.phase_dir)
         checklist_file = iteration_dir / "checklist.md"
@@ -244,6 +247,7 @@ class GenericWorkflowStepExecutor(Phase):
             blackboard_state=blackboard_state,
             agent_name=agent_name,
             output_file=output_file,
+            baton_path=portion_baton_path or baton_path,
         )
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
         self._template_allowed_directories = self._template_allowed_directories_for(
@@ -292,6 +296,7 @@ class GenericWorkflowStepExecutor(Phase):
             output_file=output_file,
             checklist_file=checklist_file,
             questions_xml_file=questions_xml_file,
+            baton_path=portion_baton_path,
         )
         phase_specific_data = {
             "step_name": step_name,
@@ -456,21 +461,13 @@ class GenericWorkflowStepExecutor(Phase):
                 )
 
         captured_hybrid_baton: Optional[str] = None
-        if is_hybrid_portion:
-            current_baton = baton_path.read_bytes() if baton_path.exists() else None
-            if current_baton != original_baton:
-                try:
-                    captured_hybrid_baton = (current_baton or b"").decode("utf-8")
-                except UnicodeDecodeError:
-                    captured_hybrid_baton = "<non-utf8 baton>"
-                # A portion is intentionally unable to route the canonical
-                # workflow. Restore the pre-portion baton before returning
-                # its completion to the ownership runtime.
-                if original_contract is not None:
-                    blackboard_state.current_step = original_current_step
-                    store.write_handoff_contract(blackboard_state, original_contract)
-                elif original_baton is not None:
-                    baton_path.write_bytes(original_baton)
+        if portion_baton_path is not None and portion_baton_path.exists():
+            try:
+                captured = portion_baton_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                captured = "<non-utf8 baton>"
+            if captured:
+                captured_hybrid_baton = captured
 
         if status_code is not None and not is_hybrid_portion:
             # If the agent already wrote a valid baton (next_step.txt),
@@ -1110,6 +1107,7 @@ class GenericWorkflowStepExecutor(Phase):
         output_file: Path,
         checklist_file: Path,
         questions_xml_file: Path,
+        baton_path: Optional[Path] = None,
     ) -> List[str]:
         allowed_tools = self._normalize_allowed_tools(step_def.get("allowed_tools", []))
 
@@ -1126,12 +1124,15 @@ class GenericWorkflowStepExecutor(Phase):
 
         add("ls")
 
-        # Always allow writing blackboard and baton so agents can hand off
-        # without hitting permission denials (runtime also writes these, but
-        # belt-and-suspenders prevents the agent from wasting tokens asking
-        # for permission).
-        add_writable_file(self.issue_dir / "blackboard.json")
-        add_writable_file(self.issue_dir / "next_step.txt")
+        if baton_path is None:
+            # Always allow writing blackboard and baton so agents can hand off
+            # without hitting permission denials (runtime also writes these,
+            # but belt-and-suspenders prevents the agent from wasting tokens
+            # asking for permission).
+            add_writable_file(self.issue_dir / "blackboard.json")
+            add_writable_file(self.issue_dir / "next_step.txt")
+        else:
+            add_writable_file(baton_path)
 
         add_writable_file(output_file)
         add_writable_file(checklist_file)
@@ -1171,6 +1172,7 @@ class GenericWorkflowStepExecutor(Phase):
         blackboard_state: BlackboardState,
         agent_name: str,
         output_file: Path,
+        baton_path: Optional[Path] = None,
     ) -> Dict[str, str]:
         role = str(step_def.get("role", "developer"))
         role_dir = {
@@ -1202,7 +1204,7 @@ class GenericWorkflowStepExecutor(Phase):
             "iteration_dir": self._display_path(output_file.parent),
             "playbook_id": str(playbook.get("playbook", {}).get("id", "")),
             "blackboard_path": self._display_path(self.issue_dir / "blackboard.json"),
-            "next_step_path": self._display_path(self.issue_dir / "next_step.txt"),
+            "next_step_path": self._display_path(baton_path or self.issue_dir / "next_step.txt"),
             "output_file": self._display_path(output_file),
             "valid_to_steps": ", ".join(valid_to_steps),
             "valid_baton_intents": ", ".join(valid_baton_intents),

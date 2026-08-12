@@ -249,15 +249,20 @@ def format_dot(result: PlaybookSimulationResult) -> str:
     for f, _i, t in result.edges:
         nodes.add(f)
         nodes.add(t)
+    ownership_by_step: Dict[str, List[str]] = {}
+    current_step: str | None = None
+    for line in result.ownership:
+        if not line.startswith("  ") and ": owner=" in line:
+            current_step, detail = line.split(": ", 1)
+            ownership_by_step[current_step] = [detail]
+            nodes.add(current_step)
+        elif current_step is not None:
+            ownership_by_step[current_step].append(line.strip())
     for n in sorted(nodes):
-        lines.append(f'  "{_dot_escape(n)}";')
+        details = ownership_by_step.get(n, [])
+        label = "\\n".join([n, *details])
+        lines.append(f'  "{_dot_escape(n)}" [label="{_dot_escape(label)}"];')
     for f, intent, t in result.edges:
         lines.append(f'  "{_dot_escape(f)}" -> "{_dot_escape(t)}" [label="{_dot_escape(intent)}"];')
-    for line in result.ownership:
-        if not line.startswith("  portion="):
-            continue
-        # The textual report remains the detailed source; DOT mirrors the
-        # ownership boundary as a comment without fabricating executable edges.
-        lines.append(f"  // {_dot_escape(line.strip())}")
     lines.append("}")
     return "\n".join(lines)

@@ -12,11 +12,12 @@ from typing import Any, Dict, List, Optional
 import typer
 from rich.console import Console
 
+from cafe.agents.executor import AgentExecutionError
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.issue_resolution import ActiveIssueResolutionError, resolve_active_issue
 from cafe.core.playbook import resolve_step_behavior
 from cafe.core.types import CriticalPhaseError
-from cafe.core.workflow_models import StepExecutionResult, StepInterrupted
+from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.phases.generic_phase import GenericPhase
 from cafe.playbooks.loader import PlaybookLoader
@@ -24,12 +25,15 @@ from cafe.skills.loader import SkillLoader
 from cafe.ui.cli_shared import (
     VALID_CONTENT_TYPES,
     apply_alignment_decision_from_payload,
-    get_show_file_path as _get_show_file_path,
     parse_alignment_decision_payload,
+)
+from cafe.ui.cli_shared import (
+    get_show_file_path as _get_show_file_path,
+)
+from cafe.ui.cli_shared import (
     resolve_iteration_number as _resolve_iteration_number,
 )
 from cafe.ui.human_tasks import apply_human_task_payload
-from cafe.agents.executor import AgentExecutionError
 from cafe.utils.config import ConfigError, validate_directories_exist
 
 
@@ -411,7 +415,7 @@ def show(
                 console.print(content)
 
         except UnicodeDecodeError:
-            console.print(f"[red]Error: Failed to read file (not UTF-8 encoded)[/red]")
+            console.print("[red]Error: Failed to read file (not UTF-8 encoded)[/red]")
             raise typer.Exit(1)
 
     except ValueError as e:
@@ -436,9 +440,9 @@ def status() -> None:
     Examples:
         cafe status
     """
+    from cafe.services.summary_display import SummaryDisplay
     from cafe.services.summary_service import SummaryService
     from cafe.services.timeline_builder import TimelineBuilder
-    from cafe.services.summary_display import SummaryDisplay
 
     try:
         # Get current issue from git context
@@ -688,54 +692,6 @@ def workflow(
         interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
         generic_phase = GenericPhase(SkillLoader())
 
-        def dry_executor(
-            step_name: str,
-            step_def: Dict,
-            blackboard_state: object,
-            extra_prompt: Optional[str] = None,
-            same_invocation_retry: bool = False,
-        ) -> StepExecutionResult:
-            output_key = step_def.get("output_artifact", step_name)
-            output_path = issue_dir / step_name / "output.md"
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(f"# {step_name}\n\nDry-run output\n", encoding="utf-8")
-            if resolve_step_behavior(playbook_data, step_name).publish_confirmation:
-                store = BlackboardStore(issue_dir)
-                blackboard = store.load_or_create(
-                    str(
-                        playbook_data.get("entry_point")
-                        or next(iter(playbook_data["steps"].keys()))
-                    ),
-                    playbook_id=str(playbook_data["playbook"]["id"]),
-                )
-                store.update_handoff_contract(
-                    blackboard,
-                    from_step=step_name,
-                    to_owner=HandoffOwner.DONE,
-                    to_step="done",
-                    intent=HandoffIntent.WORKFLOW_COMPLETE,
-                    source="workflow.dry_run",
-                )
-                return StepExecutionResult(
-                    response="dry run",
-                    artifacts={str(output_key): str(output_path)},
-                    events=[
-                        {
-                            "type": "pr_synced",
-                            "url": "https://example.com/dry-run-pr",
-                            "display": {
-                                "style": "green",
-                                "lines": ["PR synced", "  URL: https://example.com/dry-run-pr"],
-                            },
-                        }
-                    ],
-                )
-            return StepExecutionResult(
-                response="dry-run",
-                artifacts={str(output_key): str(output_path)},
-                status_code="confirmed",
-            )
-
         entry_point = str(
             playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))
         )
@@ -752,19 +708,15 @@ def workflow(
 
         # Mutable holder so wrapped_executor can swap executors on fallback
         _executor_holder: Dict[str, Any] = {
-            "executor": (
-                None
-                if dry_run
-                else _build_workflow_step_executor(
-                    config_manager=config_manager,
-                    issue_dir=issue_dir,
-                    issue_name=issue_name,
-                    playbook_data=playbook_data,
-                    generic_phase=generic_phase,
-                    step_user_inputs=initial_step_user_inputs,
-                    interactive=interactive,
-                    extra_allowed_directories=add_dir_values,
-                )
+            "executor": _build_workflow_step_executor(
+                config_manager=config_manager,
+                issue_dir=issue_dir,
+                issue_name=issue_name,
+                playbook_data=playbook_data,
+                generic_phase=generic_phase,
+                step_user_inputs=initial_step_user_inputs,
+                interactive=interactive,
+                extra_allowed_directories=add_dir_values,
             ),
             "fallback_applied": False,
         }
@@ -803,14 +755,6 @@ def workflow(
         ) -> Any:
             iteration = _predict_next_iteration(issue_dir, step_name)
             console.print(f"[dim]Executing[/dim] step={step_name} iteration={iteration:03d}")
-            if dry_run:
-                return dry_executor(
-                    step_name,
-                    step_def,
-                    blackboard_state,
-                    extra_prompt=extra_prompt,
-                    same_invocation_retry=same_invocation_retry,
-                )
             step_role = step_def.get("role") if isinstance(step_def, dict) else None
             missing_clis = _check_agent_clis_available(
                 config_manager,
@@ -873,16 +817,11 @@ def workflow(
         explicit_start_step_pending = start_step is not None
         while True:
             has_explicit_start_step = explicit_start_step_pending
-            if dry_run:
-                pending_start_step = pending_start_step or str(
-                    playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))
-                )
-            else:
-                pending_start_step = _consume_pending_chat_handoff(
-                    issue_dir=issue_dir,
-                    playbook_data=playbook_data,
-                    requested_start_step=pending_start_step,
-                )
+            pending_start_step = _consume_pending_chat_handoff(
+                issue_dir=issue_dir,
+                playbook_data=playbook_data,
+                requested_start_step=pending_start_step,
+            )
             if (
                 pending_start_step is not None
                 and pending_start_step not in playbook_data["steps"]
@@ -896,7 +835,7 @@ def workflow(
             )
 
             active_step = pending_start_step or blackboard.current_step
-            if not dry_run and has_explicit_start_step:
+            if has_explicit_start_step:
                 if active_step not in {"user", "done"}:
                     _reset_baton_for_explicit_start_step(
                         issue_dir=issue_dir,
@@ -904,7 +843,7 @@ def workflow(
                         active_step=active_step,
                     )
                 explicit_start_step_pending = False
-            if not dry_run and active_step in {"user", "done"}:
+            if active_step in {"user", "done"}:
                 handoff_contract = getattr(blackboard, "handoff_contract", None)
                 # A phase-authored user baton is authoritative. A bootstrap
                 # baton only mirrors a legacy current_step and may still need
@@ -967,7 +906,7 @@ def workflow(
                         f"[yellow]Detected external workflow feedback[/yellow] step={external_step}"
                     )
                     continue
-            if not dry_run and active_step in {"user", "done"}:
+            if active_step in {"user", "done"}:
                 if active_step == "done" and not interactive:
                     console.print("[green]Workflow already completed[/green] step=done")
                     console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
@@ -1112,20 +1051,10 @@ def workflow(
             ):
                 pending_start_step = latest_blackboard.current_step
                 continue
-            if (
-                interactive
-                and not dry_run
-                and not single_step
-                and latest_blackboard.current_step == "user"
-            ):
+            if interactive and not single_step and latest_blackboard.current_step == "user":
                 pending_start_step = "user"
                 continue
-            if (
-                not interactive
-                and not dry_run
-                and not single_step
-                and latest_blackboard.current_step == "user"
-            ):
+            if not interactive and not single_step and latest_blackboard.current_step == "user":
                 if user_input and user_input.strip():
                     pending_start_step = "user"
                     continue
@@ -1161,6 +1090,11 @@ def workflow(
                 console.print(
                     f"[yellow]Workflow paused[/yellow] step={result.final_step} status={result.final_status_code} next={latest_blackboard.current_step}"
                 )
+                if result.detail and result.final_status_code in {
+                    "HUMAN_TASK_PENDING",
+                    "HYBRID_HUMAN_TASK_PENDING",
+                }:
+                    console.print(f"[dim]Human task ID: {result.detail}[/dim]")
                 console.print(
                     f"[dim]{_build_workflow_pause_guidance(blackboard=latest_blackboard, final_status_code=result.final_status_code)}[/dim]"
                 )
@@ -1170,7 +1104,6 @@ def workflow(
                 )
                 if (
                     interactive
-                    and not dry_run
                     and not single_step
                     and result.final_status_code in {"NO_BATON_TRANSITION", "NO_STATUS_TRANSITION"}
                 ):

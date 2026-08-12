@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,9 +12,9 @@ from cafe.core.automatic_steps import AutomaticExecutionResult, AutomaticExecuto
 from cafe.core.blackboard import BLACKBOARD_SCHEMA_VERSION, BlackboardState, BlackboardStore
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.human_tasks import HumanTaskBinding, HumanTaskDecision, HumanTaskPolicy
-from cafe.core.playbook import PlaybookDefinition, StepConfig
-from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
-from cafe.playbooks.simulate import analyze_playbook, format_text_report
+from cafe.core.playbook import PlaybookDefinition, StepConfig, validate_playbook
+from cafe.core.workflow_runtime import BlackboardWorkflowRuntime, StepIterationFrame
+from cafe.playbooks.simulate import analyze_playbook, format_dot, format_text_report
 from cafe.ui.human_tasks import apply_human_task_payload
 
 
@@ -140,6 +142,45 @@ def test_ownership_schema_normalizes_legacy_and_requires_complete_explicit_shape
                 "on": {},
             }
         )
+    with pytest.raises(ValueError, match="JSON"):
+        StepConfig.model_validate(
+            {
+                "skill": "phase",
+                "role": "operator",
+                "assignee_type": "auto",
+                "automatic": {"executor": "declared_transition", "inputs": {"bad": object()}},
+                "on": {"await_agent": "_done"},
+            }
+        )
+
+
+def test_strict_validation_accepts_declared_non_agent_owners(tmp_path: Path) -> None:
+    """UT-001–UT-004: strict loading no longer treats supported owners as reserved."""
+    data = _mixed_owner_model().model_dump(mode="json", exclude_none=True, exclude_unset=True)
+    data["roles"] = {"operator": {}}
+    data["skills"] = {"workflow": {"shared": []}, "chat": {"shared": []}}
+    model = PlaybookDefinition.model_validate(data)
+    contract = SimpleNamespace(
+        prompt_inputs=(),
+        required_tools=(),
+        human_tasks=(_approval_policy(),),
+        output_templates=None,
+    )
+
+    class SkillLoaderStub:
+        def get_skill_dir(self, _skill_name: str) -> Path:
+            return tmp_path
+
+        def get_workflow_contract(self, _skill_name: str) -> SimpleNamespace:
+            return contract
+
+    assert validate_playbook(
+        model,
+        skill_loader=SkillLoaderStub(),
+        source="test",
+        path=tmp_path / "mixed-owner.yml",
+        strict=True,
+    ) == []
 
 
 def test_automatic_registry_is_closed_and_returns_declared_intent() -> None:
@@ -244,6 +285,33 @@ def test_automatic_owner_dispatches_registry_without_agent(tmp_path: Path) -> No
     assert automatic_calls == [{"safe": True}]
 
 
+def test_unknown_automatic_executor_is_rejected_before_a_visit_is_persisted(tmp_path: Path) -> None:
+    """UT-003/IT-002: an undeclared executor cannot mutate workflow progress."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "automatic-owner"
+    playbook = {
+        "playbook": {"id": "owner-test"},
+        "steps": {
+            "automatic": {
+                "skill": "phase",
+                "role": "operator",
+                "assignee_type": "auto",
+                "automatic": {"executor": "not-registered", "inputs": {}},
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="not registered"):
+        BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            executor=lambda *_args, **_kwargs: pytest.fail("agent must not run"),
+        )
+
+    state = BlackboardStore(issue_dir).load_or_create("automatic", playbook_id="owner-test")
+    assert state.step_visit_counts == {}
+
+
 def test_hybrid_owner_resumes_only_its_declared_portion_after_matching_task(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -262,7 +330,7 @@ def test_hybrid_owner_resumes_only_its_declared_portion_after_matching_task(
 
     def executor(step_name: str, step_def: dict, _state: object, **_kwargs: object):
         calls.append(step_def["hybrid_portion"]["id"])
-        return ("await_agent", {})
+        return ("confirmed", {})
 
     playbook = {
         "playbook": {"id": "owner-test"},
@@ -271,6 +339,7 @@ def test_hybrid_owner_resumes_only_its_declared_portion_after_matching_task(
                 "skill": "phase",
                 "role": "operator",
                 "assignee_type": "hybrid",
+                "max_iterations": 1,
                 "human_tasks": [binding.model_dump()],
                 "hybrid": {
                     "entry_portion": "draft",
@@ -318,6 +387,71 @@ def test_hybrid_owner_resumes_only_its_declared_portion_after_matching_task(
     assert applied.target == "mixed"
     assert completed.completed is True
     assert calls == ["draft", "finalize"]
+    assert BlackboardStore(issue_dir).load_or_create("mixed").step_visit_counts == {"mixed": 1}
+
+
+def test_hybrid_rejects_a_captured_baton_from_another_portion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT-010: a portion-local completion cannot impersonate another boundary."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "hybrid-baton"
+    binding = HumanTaskBinding(trigger="approve", task_id="approval", outcomes={"accept": "mixed"})
+    playbook = {
+        "playbook": {"id": "owner-test"},
+        "steps": {
+            "mixed": {
+                "skill": "phase",
+                "role": "operator",
+                "assignee_type": "hybrid",
+                "human_tasks": [binding.model_dump()],
+                "hybrid": {
+                    "entry_portion": "draft",
+                    "portions": [
+                        {
+                            "id": "draft",
+                            "owner": "agent",
+                            "on": {"await_agent": {"portion": "approve"}},
+                        },
+                        {
+                            "id": "approve",
+                            "owner": "human",
+                            "on": {"accept": {"step": "_done"}},
+                        },
+                    ],
+                },
+                "on": {},
+            }
+        },
+    }
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args, **_kwargs: pytest.fail("captured result bypasses the agent"),
+    )
+    captured = json.dumps(
+        {
+            "from_step": "mixed",
+            "to_owner": "agent",
+            "to_step": "mixed",
+            "intent": "await_agent",
+            "source": "hybrid_portion:mixed:other",
+        }
+    )
+    frame = StepIterationFrame(
+        execution_result=SimpleNamespace(
+            events=[{"type": "hybrid_portion_baton", "payload": captured}]
+        ),
+        response="",
+        artifacts={},
+        explicit_status_code=None,
+        auto_continue=False,
+    )
+    monkeypatch.setattr(runtime, "_execute_one_iteration", lambda **_kwargs: frame)
+
+    result = runtime.run(start_step="mixed")
+
+    assert result.final_status_code == "HYBRID_RESULT_REJECTED"
+    assert runtime.blackboard.current_step == "mixed"
 
 
 def test_blackboard_v2_state_migrates_to_v3_without_losing_handoff(tmp_path: Path) -> None:
@@ -351,6 +485,10 @@ def test_simulation_reports_all_owners_without_creating_runtime_state(tmp_path: 
     assert "automatic executor=declared_transition" in text
     assert "portion=approve owner=human wait" in text
     assert not (tmp_path / ".cafe").exists()
+    dot = format_dot(result)
+    assert "owner=human" in dot
+    assert "executor=declared_transition" in dot
+    assert "portion=approve" in dot
 
 
 def test_persisted_visit_limit_survives_a_separate_runtime_instance(tmp_path: Path) -> None:

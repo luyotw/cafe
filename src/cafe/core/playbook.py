@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -283,6 +284,28 @@ class AutomaticStepConfig(BaseModel):
             raise ValueError("automatic.executor must name a registered executor id, not a path")
         return token
 
+    @field_validator("inputs")
+    @classmethod
+    def _validate_json_inputs(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        """Keep declarative automatic input data portable and untrusted."""
+
+        def is_json_value(candidate: Any) -> bool:
+            if candidate is None or isinstance(candidate, (str, bool, int)):
+                return True
+            if isinstance(candidate, float):
+                return math.isfinite(candidate)
+            if isinstance(candidate, list):
+                return all(is_json_value(item) for item in candidate)
+            if isinstance(candidate, dict):
+                return all(
+                    isinstance(key, str) and is_json_value(item) for key, item in candidate.items()
+                )
+            return False
+
+        if not is_json_value(value):
+            raise ValueError("automatic.inputs must contain JSON values only")
+        return value
+
 
 class HybridTarget(BaseModel):
     """One typed continuation from a hybrid portion."""
@@ -416,7 +439,8 @@ class StepConfig(BaseModel):
             initial = [binding for binding in self.human_tasks if binding.trigger == "initial"]
             if len(initial) != 1 or not initial[0].outcomes:
                 raise ValueError(
-                    "assignee_type=human requires exactly one initial human task with declared outcomes"
+                    "assignee_type=human requires exactly one initial human task with "
+                    "declared outcomes"
                 )
         if self.assignee_type == "hybrid" and self.hybrid is None:
             raise ValueError("assignee_type=hybrid requires hybrid portion declaration")
@@ -891,11 +915,6 @@ def validate_playbook(
         _validate_targets(step_name, step.allowed_goto, steps, "allowed_goto")
         _validate_transition_targets(step_name, step.on, steps)
         warnings.extend(_collect_tool_warnings(step_name, step.allowed_tools))
-        if step.assignee_type != "agent":
-            warnings.append(
-                f"Step '{step_name}': assignee_type={step.assignee_type} (reserved for v0.3)"
-            )
-
     _validate_prepare_metadata(
         model,
         skill_loader=skill_loader,
@@ -1290,7 +1309,8 @@ def _validate_ownership_contract(
     bindings = {binding.trigger: binding for binding in step.human_tasks}
     if set(bindings) != set(human_portions):
         raise ValueError(
-            f"Step '{step_name}' hybrid human portions require exactly one matching human task binding"
+            f"Step '{step_name}' hybrid human portions require exactly one matching "
+            "human task binding"
         )
 
     for portion in hybrid.portions:
@@ -1298,19 +1318,22 @@ def _validate_ownership_contract(
             invalid = set(portion.on) - PLAYBOOK_INTENT_KEYS
             if invalid:
                 raise ValueError(
-                    f"Step '{step_name}' hybrid agent portion {portion.id!r} has invalid completion key {sorted(invalid)[0]!r}"
+                    f"Step '{step_name}' hybrid agent portion {portion.id!r} has invalid "
+                    f"completion key {sorted(invalid)[0]!r}"
                 )
         for target in portion.on.values():
             if target.step is not None and target.step != DONE_TARGET and target.step not in steps:
                 raise ValueError(
-                    f"Step '{step_name}' hybrid portion {portion.id!r} targets unknown step {target.step!r}"
+                    f"Step '{step_name}' hybrid portion {portion.id!r} targets unknown "
+                    f"step {target.step!r}"
                 )
 
     for portion_id, portion in human_portions.items():
         binding = bindings[portion_id]
         if set(binding.outcomes) != set(portion.on):
             raise ValueError(
-                f"Step '{step_name}' hybrid human portion {portion_id!r} outcomes must match its declared continuations"
+                f"Step '{step_name}' hybrid human portion {portion_id!r} outcomes must "
+                "match its declared continuations"
             )
         if any(target != step_name for target in binding.outcomes.values()):
             raise ValueError(
@@ -1330,7 +1353,8 @@ def _validate_ownership_contract(
             if target.step is not None:
                 if not crossed:
                     raise ValueError(
-                        f"Step '{step_name}' hybrid exit from portion {portion_id!r} bypasses its required human boundary"
+                        f"Step '{step_name}' hybrid exit from portion {portion_id!r} "
+                        "bypasses its required human boundary"
                     )
             elif target.portion is not None:
                 walk(target.portion, crossed)

@@ -31,6 +31,10 @@ class AutomaticExecutorRegistry:
     ) -> None:
         self._executors = dict(executors or {})
 
+    def is_registered(self, executor_id: str) -> bool:
+        """Return whether a runtime-owned executor is available to this run."""
+        return executor_id in self._executors
+
     def execute(self, executor_id: str, inputs: Mapping[str, Any]) -> AutomaticExecutionResult:
         executor = self._executors.get(executor_id)
         if executor is None:

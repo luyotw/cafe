@@ -10,12 +10,12 @@ from typer.testing import CliRunner
 from cafe.agents.executor import AgentExecutionError
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.git import BranchHealth
-from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult
 from cafe.ui.cli import (
-    app,
     _execute_single_step_alias,
     _find_external_resume_step,
     _handle_user_phase,
+    app,
 )
 from cafe.ui.cli_shared import (
     _alignment_checkpoint_menu_choices,
@@ -1889,6 +1889,38 @@ def test_workflow_command_prints_paused_when_human_input_is_needed(
         result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
         assert result.exit_code == 0
         assert "Workflow is waiting for user input" in result.stdout
+
+
+def test_workflow_command_prints_owner_task_id_for_noninteractive_wait(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The non-interactive owner handoff exposes the durable task identifier."""
+    monkeypatch.chdir(tmp_path)
+
+    class WaitingRuntime:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def run(self, **_kwargs) -> PlaybookRunResult:
+            return PlaybookRunResult(
+                final_step="approval",
+                final_status_code="HUMAN_TASK_PENDING",
+                completed=False,
+                detail="task-owner-123",
+            )
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.BlackboardWorkflowRuntime", WaitingRuntime),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-201"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+
+    assert result.exit_code == 0
+    assert "task-owner-123" in result.stdout
 
 
 def test_workflow_command_prints_recovery_guidance_for_pr_baton_pause(

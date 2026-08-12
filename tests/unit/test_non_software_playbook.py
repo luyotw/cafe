@@ -1,17 +1,15 @@
 """Tests for non-software playbook loading and lightweight command coverage."""
 
-import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from cafe.playbooks.simulate import analyze_playbook
 from cafe.core.workflow_models import PlaybookRunResult
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.playbooks.simulate import analyze_playbook
 from cafe.skills.loader import SkillLoader
 from cafe.ui.cli import app
-
 
 runner = CliRunner()
 
