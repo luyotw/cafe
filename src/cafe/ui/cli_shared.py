@@ -22,6 +22,7 @@ from rich.console import Console
 
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.types import AgentCLI, AgentConfig
 from cafe.core.workflow_models import BatonRejected
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -1043,6 +1044,15 @@ def _handle_declared_human_task_handoff(
         questions_file = iteration_dirs[-1] / "questions.xml" if iteration_dirs else None
         if questions_file is not None and questions_file.exists() and validate_questions_xml(questions_file):
             questions = parse_questions_xml(questions_file)
+    durable_task_id = None
+    durable_wait = HumanTaskRecordStore(issue_dir).active_wait_state(
+        blackboard.workflow_id,
+        step=from_step,
+        trigger=trigger,
+        policy_id=policy.id,
+    )
+    if durable_wait is not None:
+        durable_task_id = durable_wait.task_id
     payload = collect_human_task_payload(
         policy,
         questions=questions,
@@ -1051,6 +1061,7 @@ def _handle_declared_human_task_handoff(
         agent_name=_resolve_role_agent_name(
             playbook_data, _resolve_step_chat_role(playbook_data, from_step)
         ),
+        human_task_id=durable_task_id,
     )
     if isinstance(payload, dict) and payload.get("decision") == "chat":
         from cafe.ui.cli import _consume_pending_chat_handoff, launch_chat_session

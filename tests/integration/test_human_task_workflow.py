@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
@@ -183,17 +184,29 @@ def test_durable_invalid_stale_and_cross_workflow_results_leave_the_pause_intact
         issue_dir, state, from_step="spec", trigger="confirm_output"
     )
 
+    invalid = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload={"task": "output-review", "decision": "unknown", "human_task_id": task.id},
+        source="command",
+    )
+
     unrelated = apply_human_task_payload(
         issue_dir=issue_dir,
         playbook_data=playbook,
         blackboard=state,
         from_step="spec",
         trigger="confirm_output",
-        raw_payload={
-            "task": "output-review",
-            "decision": "confirm",
-            "human_task_id": "another-workflow-task",
-        },
+        raw_payload=json.dumps(
+            {
+                "task": "output-review",
+                "decision": "confirm",
+                "human_task_id": "another-workflow-task",
+            }
+        ),
         source="command",
     )
     HumanTaskRecordStore(issue_dir).cancel(
@@ -210,12 +223,44 @@ def test_durable_invalid_stale_and_cross_workflow_results_leave_the_pause_intact
     )
 
     records = HumanTaskRecordStore(issue_dir)
+    assert invalid.target is None and invalid.rejection is not None
     assert unrelated.target is None and unrelated.rejection is not None
     assert stale.target is None and stale.rejection is not None
     assert store.load_or_create("spec").current_step == "user"
     assert records.get_task(task.id).status is HumanTaskStatus.CANCELLED
     assert records.results() == ()
     assert "rejected" in [event.event_type for event in records.lifecycle_events()]
+
+    duplicate_dir = tmp_path / ".cafe" / "issues" / "duplicate"
+    duplicate_store, duplicate_state = _paused_default_state(
+        duplicate_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
+    )
+    duplicate_task = _materialize_default_task(
+        duplicate_dir, duplicate_state, from_step="spec", trigger="confirm_output"
+    )
+    completed = apply_human_task_payload(
+        issue_dir=duplicate_dir,
+        playbook_data=playbook,
+        blackboard=duplicate_state,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload={"task": "output-review", "decision": "confirm", "human_task_id": duplicate_task.id},
+        source="command",
+    )
+    duplicate = apply_human_task_payload(
+        issue_dir=duplicate_dir,
+        playbook_data=playbook,
+        blackboard=duplicate_state,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload={"task": "output-review", "decision": "confirm", "human_task_id": duplicate_task.id},
+        source="command",
+    )
+
+    assert completed.target == "plan"
+    assert duplicate.target is None and duplicate.rejection is not None
+    assert len(HumanTaskRecordStore(duplicate_dir).results()) == 1
+    assert duplicate_store.load_or_create("spec").current_step == "plan"
 
 
 def test_taskless_legacy_handoffs_continue_through_both_existing_transports(
