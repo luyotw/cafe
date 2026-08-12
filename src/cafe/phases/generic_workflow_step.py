@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import errno
 import json
+import os
 import shutil
+import stat
+import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
@@ -16,6 +20,9 @@ from cafe.core.blackboard import (
     HandoffContract,
     HandoffIntent,
     HandoffOwner,
+    LongRunningOperationArtifact,
+    operation_artifact_path,
+    operation_receipt_path,
 )
 from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
 from cafe.core.context_packet import (
@@ -174,7 +181,129 @@ class GenericWorkflowStepExecutor(Phase):
         )
         return merged
 
-    def _preserve_hybrid_control_files(self, action: Callable[[], Any]) -> Any:
+    @staticmethod
+    def _read_regular_file(path: Path, *, fail_closed: bool) -> Optional[bytes]:
+        """Read a control file without following a replacement symlink."""
+        try:
+            mode = os.lstat(path).st_mode
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISREG(mode):
+            if fail_closed:
+                raise RuntimeError(f"canonical control file must be regular: {path}")
+            return None
+
+        try:
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except OSError as exc:
+            if not fail_closed and exc.errno in {errno.ENOENT, errno.ELOOP}:
+                return None
+            raise
+        with os.fdopen(fd, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                if fail_closed:
+                    raise RuntimeError(f"canonical control file must be regular: {path}")
+                return None
+            return handle.read()
+
+    @staticmethod
+    def _remove_control_path(path: Path) -> None:
+        """Remove a control-path entry without following a symlink."""
+        try:
+            mode = os.lstat(path).st_mode
+        except FileNotFoundError:
+            return
+        if stat.S_ISDIR(mode):
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+
+    @classmethod
+    def _restore_control_file(cls, path: Path, content: Optional[bytes]) -> None:
+        """Restore one control file by replacing its directory entry atomically."""
+        if content is None:
+            cls._remove_control_path(path)
+            return
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_path = tempfile.mkstemp(
+            dir=path.parent,
+            prefix=f".{path.name}.",
+        )
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(content)
+            cls._remove_control_path(path)
+            os.replace(temporary_path, path)
+        except BaseException:
+            try:
+                os.unlink(temporary_path)
+            except FileNotFoundError:
+                pass
+            raise
+
+    def _preserve_runtime_operation_metadata(
+        self,
+        *,
+        snapshot: Optional[bytes],
+        observed: Optional[bytes],
+        step_name: str,
+        iteration_dir: Path,
+    ) -> Optional[bytes]:
+        """Merge verified operation metadata published while a hybrid call ran."""
+        if snapshot is None or observed is None:
+            return snapshot
+        try:
+            original_state = BlackboardState.from_dict(json.loads(snapshot), initial_step=step_name)
+            observed_state = BlackboardState.from_dict(json.loads(observed), initial_step=step_name)
+            operation_bytes = self._read_regular_file(
+                operation_artifact_path(iteration_dir), fail_closed=False
+            )
+            if operation_bytes is None:
+                return snapshot
+            operation = LongRunningOperationArtifact.from_dict(json.loads(operation_bytes))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return snapshot
+
+        store = BlackboardStore(self.issue_dir)
+        if not operation_artifact_is_trusted(
+            blackboard_store=store,
+            blackboard=observed_state,
+            current_step=step_name,
+            iteration_dir=iteration_dir,
+            artifact=operation,
+        ):
+            return snapshot
+
+        operation_name = f"{step_name}_operation"
+        original_state.artifacts[operation_name] = observed_state.artifacts[operation_name]
+        try:
+            receipt_bytes = self._read_regular_file(
+                operation_receipt_path(iteration_dir), fail_closed=False
+            )
+            if receipt_bytes is not None:
+                receipt = LongRunningOperationArtifact.from_dict(json.loads(receipt_bytes))
+                if operation_receipt_is_trusted(
+                    blackboard_store=store,
+                    blackboard=observed_state,
+                    current_step=step_name,
+                    iteration_dir=iteration_dir,
+                    operation=operation,
+                    receipt=receipt,
+                ):
+                    receipt_name = f"{step_name}_operation_receipt"
+                    original_state.artifacts[receipt_name] = observed_state.artifacts[receipt_name]
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+        return json.dumps(original_state.to_dict(), ensure_ascii=False, indent=2).encode("utf-8")
+
+    def _preserve_hybrid_control_files(
+        self,
+        action: Callable[[], Any],
+        *,
+        step_name: str,
+        iteration_dir: Path,
+    ) -> Any:
         """Run an agent call without allowing it to persist canonical workflow control.
 
         Hybrid portions may retain ordinary source-editing capabilities.  Those
@@ -183,21 +312,22 @@ class GenericWorkflowStepExecutor(Phase):
         canonical baton and blackboard even when the agent call is interrupted.
         """
         control_files = (self.issue_dir / "blackboard.json", self.issue_dir / "next_step.txt")
-        snapshots = {path: path.read_bytes() if path.is_file() else None for path in control_files}
+        snapshots = {
+            path: self._read_regular_file(path, fail_closed=True) for path in control_files
+        }
         try:
             return action()
         finally:
-            for path, content in snapshots.items():
-                if content is None:
-                    if path.is_dir():
-                        shutil.rmtree(path)
-                    elif path.exists() or path.is_symlink():
-                        path.unlink()
-                    continue
-                if path.is_dir():
-                    shutil.rmtree(path)
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(content)
+            blackboard_path = self.issue_dir / "blackboard.json"
+            restored = dict(snapshots)
+            restored[blackboard_path] = self._preserve_runtime_operation_metadata(
+                snapshot=snapshots[blackboard_path],
+                observed=self._read_regular_file(blackboard_path, fail_closed=False),
+                step_name=step_name,
+                iteration_dir=iteration_dir,
+            )
+            for path, content in restored.items():
+                self._restore_control_file(path, content)
 
     def execute(self) -> Any:
         raise NotImplementedError("GenericWorkflowStepExecutor only supports execute_step()")
@@ -365,7 +495,11 @@ class GenericWorkflowStepExecutor(Phase):
                     )
 
                 if is_hybrid_portion:
-                    response, _ = self._preserve_hybrid_control_files(execute_agent)
+                    response, _ = self._preserve_hybrid_control_files(
+                        execute_agent,
+                        step_name=step_name,
+                        iteration_dir=iteration_dir,
+                    )
                 else:
                     response, _ = execute_agent()
             finally:
@@ -443,7 +577,11 @@ class GenericWorkflowStepExecutor(Phase):
                 max_retries=3,
             )
             response, validated_status, validation_passed = (
-                self._preserve_hybrid_control_files(validate_completion)
+                self._preserve_hybrid_control_files(
+                    validate_completion,
+                    step_name=step_name,
+                    iteration_dir=iteration_dir,
+                )
                 if is_hybrid_portion
                 else validate_completion()
             )
