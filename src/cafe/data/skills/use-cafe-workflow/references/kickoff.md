@@ -6,23 +6,35 @@ workflow conversation language. Also read `strategic_context.md`.
 
 ## Conversation locale checklist
 
-- [ ] Treat the active playbook's `playbook.conversation_locale` as the source
-  of truth unless the user directly overrides it for this thread.
+- [ ] Resolve the effective locale in this priority order:
+  1. a locale the user directly requested for this thread;
+  2. a locale reliably inferred from the user's own natural-language messages
+     in the current thread;
+  3. the active playbook's `playbook.conversation_locale`.
+- [ ] Infer a preference when the user's current request clearly uses one
+  language, or when multiple user messages consistently use it. Do not infer
+  from quoted text, pasted artifacts, code, commands, proper nouns, or an
+  isolated token. If the evidence is mixed or ambiguous, use the playbook
+  locale.
 - [ ] Resolve the active playbook from the user's request or `.cafe/config.yaml`.
 - [ ] Run `cafe playbook confirmation-gates <playbook-id>` and read both the
   `Conversation locale:` line and confirmation-gate candidates.
-- [ ] Use an explicit BCP 47 value as-is. For `auto`, use the language of the
-  user's current request.
+- [ ] Treat a configured explicit BCP 47 value as the fallback, not an override
+  of a direct or reliably inferred user preference. For `auto`, infer from the
+  user's messages using the same rules above.
 - [ ] Include the effective value and source in the kickoff, for example:
-  `conversation_locale: en-US (from playbook: default)`. Locale is a required
-  kickoff field, not a confirmation gate.
+  `conversation_locale: zh-TW (inferred user preference from current thread)`
+  or `conversation_locale: en-US (from playbook: default)`. Locale is a
+  required kickoff field, not a confirmation gate.
 - [ ] Apply it to kickoff, clarification, permission, alignment, progress,
   error, and completion messages. Preserve commands, paths, playbook and step
   names, intents, artifact keys, payload fields, and quoted source text.
-- [ ] Honor a direct thread language override. Merely writing in another
-  language or asking why a language was used is not an override.
+- [ ] Honor a direct thread language override over every other source. Merely
+  writing in another language is an inference signal, not a direct override;
+  asking why a language was used is not an override.
 - [ ] If asked about the language choice, report the configured value,
-  effective value, and source. Never claim this skill lacks a locale rule.
+  effective value, inference evidence when applicable, and source. Never claim
+  this skill lacks a locale rule.
 
 Do not copy the locale into `issue.yaml`. Re-resolve it when starting or
 resuming and whenever the playbook changes.

@@ -341,7 +341,7 @@ def test_use_cafe_workflow_bounds_diagnosis_and_repairs_only_declarative_layers(
     assert "unconfirmed or transient failures" in normalized
 
 
-def test_use_cafe_workflow_uses_playbook_conversation_locale() -> None:
+def test_use_cafe_workflow_prefers_user_conversation_locale() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/kickoff.md")
     normalized = " ".join(reference.split())
@@ -351,7 +351,13 @@ def test_use_cafe_workflow_uses_playbook_conversation_locale() -> None:
     assert "playbook.conversation_locale" in reference
     assert "cafe playbook confirmation-gates <playbook-id>" in reference
     assert "`Conversation locale:` line" in normalized
-    assert "For `auto`, use the language of the user's current request" in normalized
+    assert "a locale the user directly requested for this thread" in normalized
+    assert "a locale reliably inferred from the user's own natural-language messages" in normalized
+    assert "Do not infer from quoted text, pasted artifacts, code, commands" in normalized
+    assert "If the evidence is mixed or ambiguous, use the playbook locale" in normalized
+    assert "For `auto`, infer from the user's messages using the same rules above" in normalized
+    assert "explicit BCP 47 value as the fallback" in normalized
+    assert "conversation_locale: zh-TW (inferred user preference from current thread)" in normalized
     assert "conversation_locale: en-US (from playbook: default)" in normalized
     assert "required kickoff field, not a confirmation gate" in normalized
     assert "asking why a language was used is not an override" in normalized
