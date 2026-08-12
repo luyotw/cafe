@@ -3027,10 +3027,10 @@ def test_workflow_alignment_decision_precedes_incomplete_iteration_resume(
     mock_find_incomplete.assert_not_called()
 
 
-def test_find_external_resume_step_consumes_pending_ledger_feedback_for_its_target(
+def test_find_external_resume_step_preserves_pending_ledger_feedback_for_its_target(
     tmp_path: Path,
 ) -> None:
-    """UT-003: durable, actionable feedback alone resumes its declared step."""
+    """UT-003: durable feedback selects its declared target without early delivery."""
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-238"
@@ -3059,7 +3059,7 @@ def test_find_external_resume_step_consumes_pending_ledger_feedback_for_its_targ
     )
 
     assert result == "develop"
-    assert WorkflowFeedbackLedger(issue_dir).pending() == []
+    assert len(WorkflowFeedbackLedger(issue_dir).pending(target_step="develop")) == 1
     git_ops.get_current_branch.assert_not_called()
 
 
