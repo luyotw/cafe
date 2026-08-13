@@ -258,6 +258,11 @@ def prepare(
         "--check/--no-check",
         help="Check for uncommitted changes before switching branch (default: True)",
     ),
+    init_git: bool = typer.Option(
+        False,
+        "--init-git",
+        help="Initialize local Git version history when this folder is not yet a repository.",
+    ),
     worktree: Optional[str] = typer.Option(
         "",
         "--worktree",
@@ -415,15 +420,94 @@ def prepare(
                 raise typer.Exit(1)
 
         # 4. Initialize Git operations
+        initialized_git_now = False
         try:
+            repository_exists = GitOperations.is_repository()
             git_ops = GitOperations()
+            bootstrap_needs_baseline = repository_exists and not git_ops.has_commits()
+            resume_approved_bootstrap = (
+                bootstrap_needs_baseline and git_ops.is_bootstrap_pending()
+            )
+
+            if not repository_exists or bootstrap_needs_baseline:
+                should_initialize = init_git or resume_approved_bootstrap
+                if not should_initialize and interactive:
+                    console.print(
+                        "[yellow]CAFE needs local version history before it can safely "
+                        "make changes.[/yellow]"
+                    )
+                    console.print(
+                        "[dim]This lets you return to an earlier version if something goes wrong. "
+                        "It stays on this computer and does not create or upload anything to "
+                        "GitHub.[/dim]"
+                    )
+                    should_initialize = bool(
+                        prompt_confirm("Turn on local version history now?", default=True)
+                    )
+
+                if not should_initialize:
+                    if not interactive:
+                        console.print(
+                            "[yellow]CAFE needs local version history before it can safely "
+                            "make changes.[/yellow]"
+                        )
+                        console.print(
+                            "[dim]It stays on this computer and does not create or upload "
+                            "anything to GitHub.[/dim]"
+                        )
+                    console.print(
+                        "[yellow]Git was not initialized, so preparation has stopped.[/yellow]"
+                    )
+                    if not interactive:
+                        console.print(
+                            "[dim]After approval, rerun this command with --init-git.[/dim]"
+                        )
+                    raise typer.Exit(1)
+
+                if not repository_exists:
+                    git_ops = GitOperations.initialize_repository(initial_branch="main")
+                else:
+                    if not git_ops.is_bootstrap_pending():
+                        git_ops.run_git(
+                            "config", "--local", "cafe.bootstrap-pending", "true"
+                        )
+                    git_ops.complete_repository_initialization()
+                initialized_git_now = True
+                initialized_branch = git_ops.get_current_branch()
+                console.print(
+                    "[green]✓ Local version history is ready on branch "
+                    f"'{initialized_branch}'.[/green]"
+                )
+                console.print(
+                    "[dim]Existing files were not added automatically; CAFE will review "
+                    "them before committing.[/dim]"
+                )
+                if git_ops.uses_placeholder_identity():
+                    console.print(
+                        "[yellow]This folder is using CAFE and/or cafe@local.invalid for "
+                        "a missing Git author setting. This local-only setting remains "
+                        "until you change it; update it before publishing if you want "
+                        "commits to show your own identity.[/yellow]"
+                    )
         except Exception as e:
-            console.print(f"[red]Error: Not a git repository. {e}[/red]")
-            console.print("[yellow]Hint: Run 'git init' to initialize a git repository.[/yellow]")
+            if isinstance(e, typer.Exit):
+                raise
+            console.print(f"[red]Error: Could not initialize local version history. {e}[/red]")
             raise typer.Exit(1)
 
+        bootstrap_requires_current_checkout = (
+            initialized_git_now or git_ops.requires_bootstrap_checkout() is True
+        )
+
         # 6. Check for uncommitted changes (warning only)
-        if check_uncommitted and git_ops.has_uncommitted_changes():
+        has_changes_to_confirm = False
+        if check_uncommitted:
+            if bootstrap_requires_current_checkout:
+                has_changes_to_confirm = git_ops.has_tracked_or_staged_changes()
+            else:
+                has_changes_to_confirm = git_ops.has_uncommitted_changes()
+
+        if has_changes_to_confirm:
             console.print("[yellow]⚠️  Warning: You have uncommitted changes.[/yellow]")
             console.print(
                 "[yellow]    It's recommended to commit or stash them before switching branches.[/yellow]"
@@ -464,12 +548,33 @@ def prepare(
 
         # If --worktree parameter is provided (non-interactive)
         if worktree and worktree.strip():
+            if bootstrap_requires_current_checkout:
+                console.print(
+                    "[red]A separate worktree cannot be created until the initial project "
+                    "files have been committed.[/red]"
+                )
+                console.print(
+                    "[yellow]Rerun without --worktree. Worktrees become available after "
+                    "all starting files are committed or ignored.[/yellow]"
+                )
+                raise typer.Exit(1)
             use_worktree = True
             worktree_path = worktree.strip()
         # If in config prompt mode and no --worktree parameter
         elif should_prompt_for_config and not worktree:
-            # Ask user if they want to use worktree mode
-            use_worktree = prompt_confirm("Use Git worktree mode for this issue?", default=False)
+            # A repository created moments ago only has its empty safety
+            # baseline. Keep the first task in the current folder so existing
+            # files remain visible for review and are not silently omitted.
+            if bootstrap_requires_current_checkout:
+                console.print(
+                    "[dim]The first task will use this folder. Separate workspaces become "
+                    "available after all starting files are committed or ignored.[/dim]"
+                )
+            else:
+                # Ask user if they want to use worktree mode
+                use_worktree = prompt_confirm(
+                    "Use Git worktree mode for this issue?", default=False
+                )
 
             if use_worktree:
                 # Suggest default path

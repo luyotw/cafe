@@ -83,6 +83,16 @@ explicit user confirmation of:
 - mandate preset, axes, levels, and out-of-mandate list;
 - worktree choice and path when using a worktree.
 
+Before proposing the worktree choice, detect whether the target folder is
+already a Git repository. When it is not:
+
+- explain local version history in plain language: it enables recovery and does
+  not create GitHub resources or upload files;
+- recommend enabling it, but require the kickoff confirmation before mutation;
+- use the current checkout for the first task because a worktree would omit the
+  uncommitted starting files;
+- keep GitHub repository creation, remotes, and push as separate permissions.
+
 Do not reuse another issue's contract or a repository proposal silently. For an
 existing issue, honor its confirmed contract and reconfirm only when it is
 missing, invalid, or stale.
@@ -139,6 +149,12 @@ python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --worktree .cafe/worktrees/<issue-name>
 ```
 
+When the target folder is not yet a Git repository and initialization is part
+of this kickoff, replace the final `--worktree ...` argument with
+`--current-checkout`. The rendered contract must show the current checkout for
+that first task; do not ask the user to approve a worktree that cannot safely
+contain the starting files.
+
 Pass an option with no step values for an explicit empty list. The formatter
 validates the partition and includes every phase, role, skill, scheduled gate,
 owner, stop behavior, reactive policy, mandate boundary, conversation locale
@@ -154,18 +170,34 @@ for confirmation rather than asking again.
 - [ ] Inventory strategic documents and authority using
   `strategic_context.md`; co-create any required missing document before
   `cafe make`.
-- [ ] Check `git status --short --branch`.
+- [ ] Detect whether the folder is a Git repository. If it is, check
+  `git status --short --branch`.
+- [ ] If the folder is not a Git repository, record that read-only finding,
+  include local version-history initialization in the kickoff, and after
+  confirmation pass `--init-git` to `cafe prepare`. Do not request a worktree
+  for that first task.
 - [ ] Verify `repository_content_locale` was explicitly confirmed and persist
   it in `.cafe/strategic_context.yaml`.
 - [ ] If needed, initialize with `cafe init --preset <preset>`.
-- [ ] Recommend a worktree at `.cafe/worktrees/<issue-name>` by default. If the
-  user accepts the recommended kickoff unchanged, worktree creation is approved.
+- [ ] For an existing initialized repository, recommend a worktree at
+  `.cafe/worktrees/<issue-name>` by default. If the user accepts the recommended
+  kickoff unchanged, worktree creation is approved. For an approved first Git
+  initialization, instead record and render the `current checkout` choice.
 - [ ] Prepare non-interactively:
 
   ```bash
   cafe prepare <issue-name> --no-interactive --input-method=manual \
     --rigor=medium --spec-template=auto --plan-template=default \
     --worktree .cafe/worktrees/<issue-name>
+  ```
+
+  For the first task in a folder whose Git initialization was approved, omit
+  `--worktree` and use:
+
+  ```bash
+  cafe prepare <issue-name> --no-interactive --init-git \
+    --input-method=manual --rigor=medium --spec-template=auto \
+    --plan-template=default
   ```
 
   For a GitHub issue:

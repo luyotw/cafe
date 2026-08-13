@@ -193,17 +193,147 @@ class TestPrepareCommand:
         # has_uncommitted_changes should not be called
         mock_git_ops.has_uncommitted_changes.assert_not_called()
 
-    def test_prepare_not_git_repo(self, temp_repo_dir):
-        """測試在非 git repo 時失敗"""
-        # Mock GitOperations to raise exception
-        with patch('cafe.ui.cli.GitOperations') as MockGitOperations:
-            MockGitOperations.side_effect = Exception("Not a git repository")
+    def test_prepare_non_interactive_requires_explicit_git_initialization(self, temp_repo_dir):
+        """非互動模式不得無聲建立 Git，需提供明確旗標。"""
+        with patch("cafe.ui.cli.GitOperations") as mock_git_operations:
+            mock_git_operations.is_repository.return_value = False
+
+            result = runner.invoke(
+                app,
+                [
+                    "prepare",
+                    "test-issue",
+                    "--no-interactive",
+                    "--input-method=manual",
+                    "--rigor=medium",
+                    "--spec-template=auto",
+                    "--plan-template=default",
+                ],
+            )
+
+            assert result.exit_code == 1
+            assert "local version history" in result.stdout
+            assert "--init-git" in result.stdout
+            mock_git_operations.initialize_repository.assert_not_called()
+
+    def test_prepare_interactive_can_initialize_git_after_plain_language_confirmation(
+        self, temp_repo_dir
+    ):
+        """互動模式說明用途並取得同意後建立本機 Git。"""
+        initialized = MagicMock()
+        initialized.has_uncommitted_changes.return_value = False
+        initialized.has_tracked_or_staged_changes.return_value = False
+        initialized.get_current_branch.return_value = "main"
+        initialized.branch_exists.return_value = False
+        initialized.worktree_exists.return_value = False
+
+        with (
+            patch("cafe.ui.cli.GitOperations") as mock_git_operations,
+            patch("cafe.ui.cli.prompt_confirm", return_value=True),
+        ):
+            mock_git_operations.is_repository.return_value = False
+            mock_git_operations.initialize_repository.return_value = initialized
 
             result = runner.invoke(app, ["prepare", "test-issue"])
 
-            assert result.exit_code == 1
-            assert "Not a git repository" in result.stdout
-            assert "git init" in result.stdout
+        assert result.exit_code == 0
+        assert "does not create or upload anything to GitHub" in result.stdout
+        assert "Local version history is ready" in result.stdout
+        mock_git_operations.initialize_repository.assert_called_once_with(initial_branch="main")
+        initialized.has_uncommitted_changes.assert_not_called()
+        initialized.create_branch.assert_called_once_with("test-issue")
+
+    def test_prepare_interactive_decline_does_not_initialize_git(self, temp_repo_dir):
+        """互動模式拒絕後停止，且不得建立 Git。"""
+        with (
+            patch("cafe.ui.cli.GitOperations") as mock_git_operations,
+            patch("cafe.ui.cli.prompt_confirm", return_value=False),
+        ):
+            mock_git_operations.is_repository.return_value = False
+
+            result = runner.invoke(app, ["prepare", "test-issue"])
+
+        assert result.exit_code == 1
+        assert "Git was not initialized" in result.stdout
+        mock_git_operations.initialize_repository.assert_not_called()
+
+    def test_prepare_non_interactive_can_initialize_git_with_explicit_flag(
+        self, temp_repo_dir
+    ):
+        """非互動模式收到明確旗標後可建立 Git 並繼續。"""
+        initialized = MagicMock()
+        initialized.has_uncommitted_changes.return_value = False
+        initialized.has_tracked_or_staged_changes.return_value = False
+        initialized.get_current_branch.return_value = "main"
+        initialized.branch_exists.return_value = False
+        initialized.worktree_exists.return_value = False
+
+        with patch("cafe.ui.cli.GitOperations") as mock_git_operations:
+            mock_git_operations.is_repository.return_value = False
+            mock_git_operations.initialize_repository.return_value = initialized
+
+            result = runner.invoke(
+                app,
+                [
+                    "prepare",
+                    "test-issue",
+                    "--no-interactive",
+                    "--init-git",
+                    "--input-method=manual",
+                    "--rigor=medium",
+                    "--spec-template=auto",
+                    "--plan-template=default",
+                ],
+            )
+
+        assert result.exit_code == 0
+        mock_git_operations.initialize_repository.assert_called_once_with(initial_branch="main")
+        initialized.has_uncommitted_changes.assert_not_called()
+        initialized.create_branch.assert_called_once_with("test-issue")
+
+    def test_prepare_first_initialized_task_rejects_worktree(self, temp_repo_dir):
+        """新 repo 的第一個任務留在目前資料夾，避免遺漏初始未提交檔案。"""
+        initialized = MagicMock()
+        initialized.has_uncommitted_changes.return_value = False
+        initialized.has_tracked_or_staged_changes.return_value = False
+        initialized.get_current_branch.return_value = "main"
+
+        with patch("cafe.ui.cli.GitOperations") as mock_git_operations:
+            mock_git_operations.is_repository.return_value = False
+            mock_git_operations.initialize_repository.return_value = initialized
+
+            result = runner.invoke(
+                app,
+                ["prepare", "test-issue", "--init-git", "--worktree", "worktrees/test-issue"],
+            )
+
+        assert result.exit_code == 1
+        assert "initial project files" in result.stdout
+        initialized.create_worktree.assert_not_called()
+
+    def test_prepare_pending_bootstrap_still_checks_tracked_changes(
+        self, temp_repo_dir
+    ):
+        """初始 untracked 檔可保留，但 tracked 變更仍須確認。"""
+        git = MagicMock()
+        git.has_commits.return_value = True
+        git.requires_bootstrap_checkout.return_value = True
+        git.has_tracked_or_staged_changes.return_value = True
+
+        with (
+            patch("cafe.ui.cli.GitOperations") as mock_git_operations,
+            patch("cafe.ui.cli.prompt_confirm", return_value=False),
+        ):
+            mock_git_operations.is_repository.return_value = True
+            mock_git_operations.return_value = git
+
+            result = runner.invoke(app, ["prepare", "second-task"])
+
+        assert result.exit_code == 0
+        assert "Warning: You have uncommitted changes" in result.stdout
+        assert "Cancelled" in result.stdout
+        git.has_tracked_or_staged_changes.assert_called_once_with()
+        git.create_branch.assert_not_called()
 
     def test_prepare_creates_proper_directory_structure(self, temp_repo_dir, mock_git_ops):
         """測試創建正確目錄結構"""

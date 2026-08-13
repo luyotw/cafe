@@ -1,9 +1,10 @@
 """Tests for Git operations."""
 
-import pytest
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from cafe.core.git import GitError, GitOperations
 
@@ -20,6 +21,209 @@ class TestGitOperations:
         """測試使用自訂路徑初始化 GitOperations"""
         git = GitOperations("/tmp/repo")
         assert git.repo_path == Path("/tmp/repo")
+
+    def test_initialize_repository_creates_main_baseline_without_staging_files(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """引導式初始化建立 main 基準，但不自動加入既有檔案。"""
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        for variable in (
+            "GIT_AUTHOR_NAME",
+            "GIT_AUTHOR_EMAIL",
+            "GIT_COMMITTER_NAME",
+            "GIT_COMMITTER_EMAIL",
+        ):
+            monkeypatch.delenv(variable, raising=False)
+
+        existing_file = tmp_path / "notes.txt"
+        existing_file.write_text("private draft", encoding="utf-8")
+
+        git = GitOperations.initialize_repository(str(tmp_path))
+
+        assert GitOperations.is_repository(str(tmp_path)) is True
+        assert git.get_current_branch() == "main"
+        assert git.run_git("log", "-1", "--pretty=%s") == "Initialize repository"
+        assert git.run_git("config", "--local", "--get", "user.name") == "CAFE"
+        assert git.run_git("config", "--local", "--get", "user.email") == "cafe@local.invalid"
+        assert git.requires_bootstrap_checkout() is True
+        assert "?? notes.txt" in git.get_status()
+
+        git.run_git("add", "notes.txt")
+        assert git.requires_bootstrap_checkout() is True
+        git.run_git("reset", "notes.txt")
+
+        git.run_git("add", "--intent-to-add", "notes.txt")
+        assert git.requires_bootstrap_checkout() is True
+        git.run_git("reset", "notes.txt")
+
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        (cafe_dir / "issue.md").write_text("tracked artifact", encoding="utf-8")
+        git.run_git("add", ".cafe/issue.md")
+        git.run_git("commit", "--no-gpg-sign", "-m", "Add CAFE artifact")
+
+        assert git.requires_bootstrap_checkout() is True
+
+        git.run_git("add", "notes.txt")
+        git.run_git("commit", "--no-gpg-sign", "-m", "Add initial project files")
+
+        assert git.requires_bootstrap_checkout() is False
+        with pytest.raises(GitError):
+            git.run_git("config", "--local", "--get", "cafe.bootstrap-pending")
+
+    def test_bootstrap_checkout_allows_initial_files_covered_by_gitignore(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """初始檔案被明確忽略後，不再阻擋 worktree。"""
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        (tmp_path / ".env").write_text("SECRET=private", encoding="utf-8")
+
+        git = GitOperations.initialize_repository(str(tmp_path))
+        (tmp_path / ".gitignore").write_text(".env\n", encoding="utf-8")
+        git.run_git("add", ".gitignore")
+        git.run_git("commit", "--no-gpg-sign", "-m", "Define ignored files")
+
+        assert git.requires_bootstrap_checkout() is False
+
+    @pytest.mark.parametrize(
+        ("global_config", "expected_local_key", "expected_local_value"),
+        [
+            ("[user]\n\tname = Family Admin\n", "user.email", "cafe@local.invalid"),
+            ("[user]\n\temail = family@example.com\n", "user.name", "CAFE"),
+        ],
+    )
+    def test_initialize_repository_discloses_partial_placeholder_identity(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        global_config: str,
+        expected_local_key: str,
+        expected_local_value: str,
+    ) -> None:
+        """全域 Git 身分缺一項時，只補缺值且仍標記需揭露。"""
+        config_path = tmp_path / "global.gitconfig"
+        config_path.write_text(global_config, encoding="utf-8")
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config_path))
+        monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        repo_path = tmp_path / "project"
+        repo_path.mkdir()
+
+        git = GitOperations.initialize_repository(str(repo_path))
+
+        assert git.run_git("config", "--local", "--get", expected_local_key) == (
+            expected_local_value
+        )
+        assert git.uses_placeholder_identity() is True
+
+    def test_initialize_repository_preserves_complete_existing_identity(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """完整的既有 Git 身分不會被本機預設值覆寫。"""
+        for variable in (
+            "GIT_AUTHOR_NAME",
+            "GIT_AUTHOR_EMAIL",
+            "GIT_COMMITTER_NAME",
+            "GIT_COMMITTER_EMAIL",
+        ):
+            monkeypatch.delenv(variable, raising=False)
+        config_path = tmp_path / "global.gitconfig"
+        config_path.write_text(
+            "[user]\n\tname = Family Admin\n\temail = family@example.com\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config_path))
+        monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        repo_path = tmp_path / "project"
+        repo_path.mkdir()
+
+        git = GitOperations.initialize_repository(str(repo_path))
+
+        assert git.run_git("log", "-1", "--pretty=%an <%ae>") == (
+            "Family Admin <family@example.com>"
+        )
+        assert git.uses_placeholder_identity() is False
+        with pytest.raises(GitError):
+            git.run_git("config", "--local", "--get", "user.name")
+        with pytest.raises(GitError):
+            git.run_git("config", "--local", "--get", "user.email")
+
+    def test_initialize_repository_replaces_empty_identity_values(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """空白 Git 身分視同缺值，以免基準 commit 無法建立。"""
+        config_path = tmp_path / "global.gitconfig"
+        config_path.write_text(
+            "[user]\n\tname = \n\temail = \n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config_path))
+        monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        repo_path = tmp_path / "project"
+        repo_path.mkdir()
+
+        git = GitOperations.initialize_repository(str(repo_path))
+
+        assert git.run_git("config", "--local", "--get", "user.name") == "CAFE"
+        assert git.run_git("config", "--local", "--get", "user.email") == (
+            "cafe@local.invalid"
+        )
+        assert git.has_commits() is True
+
+    def test_complete_initialization_keeps_existing_index_out_of_baseline(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """續跑初始化時，已 staged 的敏感檔不可混入空白基準。"""
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        subprocess.run(
+            ["git", "init", "-b", "main"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        secret_file = tmp_path / ".env"
+        secret_file.write_text("API_TOKEN=private", encoding="utf-8")
+        git = GitOperations(str(tmp_path))
+        git.run_git("add", ".env")
+        git.run_git("config", "--local", "cafe.bootstrap-pending", "true")
+
+        git.complete_repository_initialization()
+
+        assert git.run_git("ls-tree", "--name-only", "HEAD") == ""
+        assert "A  .env" in git.get_status()
+        assert git.has_tracked_or_staged_changes() is True
+
+    def test_complete_initialization_does_not_run_post_commit_hook(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """空白基準不得觸發可能造成外部副作用的 Git hooks。"""
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        subprocess.run(
+            ["git", "init", "-b", "main"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        git = GitOperations(str(tmp_path))
+        hooks_dir = tmp_path / ".git" / "hooks"
+        sentinel = tmp_path / "post-commit-ran"
+        post_commit = hooks_dir / "post-commit"
+        post_commit.write_text(
+            f"#!/bin/sh\ntouch '{sentinel}'\n",
+            encoding="utf-8",
+        )
+        post_commit.chmod(0o755)
+        git.run_git("config", "--local", "cafe.bootstrap-pending", "true")
+
+        git.complete_repository_initialization()
+
+        assert git.has_commits() is True
+        assert not sentinel.exists()
 
     def test_run_git_success(self) -> None:
         """測試成功執行 git 指令並回傳輸出"""
@@ -212,6 +416,18 @@ class TestGitOperations:
             has_changes = git.has_uncommitted_changes()
 
             assert has_changes is False
+
+    def test_has_tracked_or_staged_changes_ignores_untracked_files(self) -> None:
+        """bootstrap dirty check 只檢查 tracked 與 staged 變更。"""
+        git = GitOperations()
+
+        with patch.object(git, "run_git", return_value=" M tracked.txt") as mock_run:
+            has_changes = git.has_tracked_or_staged_changes()
+
+        assert has_changes is True
+        mock_run.assert_called_once_with(
+            "status", "--porcelain", "--untracked-files=no"
+        )
 
     def test_get_current_branch_detached_head(self) -> None:
         """測試在 detached HEAD 狀態時回傳空字串"""
