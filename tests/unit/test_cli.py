@@ -6,9 +6,8 @@ from pathlib import Path
 from typer.testing import CliRunner
 from unittest.mock import MagicMock, Mock, patch
 
-from cafe.ui.cli import app, _setup_agents
+from cafe.ui.cli import app
 from cafe.core.git import GitOperations
-from cafe.core.types import AgentCLI
 from cafe.utils.config import ConfigManager
 
 
@@ -23,98 +22,10 @@ def mock_git_ops() -> MagicMock:
     return git_ops
 
 
-@pytest.fixture
-def config_dir_with_file(tmp_path):
-    """Create a config directory with a valid config.yaml file."""
-    config_dir = tmp_path / ".cafe"
-    config_dir.mkdir(parents=True)
-    (config_dir / "config.yaml").write_text("""
-agents:
-  pm:
-    name: Roger
-    cli: copilot
-  developer:
-    name: David
-    cli: copilot
-  reviewer:
-    name: Richard
-    cli: copilot
-
-auto:
-  max_review_iterations: 5
-""")
-    return config_dir
-
-
 def _create_minimal_config(tmp_path: Path):
     """Helper to create minimal config.yaml in tmp_path/.cafe/"""
     from tests.conftest import create_minimal_config
     create_minimal_config(tmp_path)
-
-
-class TestSetupAgents:
-    """Test agent setup functionality."""
-
-    def test_setup_agents_with_default_config(self, config_dir_with_file) -> None:
-        """測試使用預設設定建立 agents"""
-        config_manager = ConfigManager(str(config_dir_with_file))
-
-        agent_manager = _setup_agents(config_manager)
-
-        # 驗證三個 agents 都已註冊
-        assert "Roger" in agent_manager.agents
-        assert "David" in agent_manager.agents
-        assert "Richard" in agent_manager.agents
-
-        # 驗證有預設值
-        assert agent_manager.agents["Roger"].config.cli != None
-        assert agent_manager.agents["David"].config.cli != None
-        assert agent_manager.agents["Richard"].config.cli != None
-
-    def test_setup_agents_with_custom_config(self, tmp_path: Path) -> None:
-        """測試使用自訂設定建立 agents"""
-        config_file = tmp_path / "config.yaml"
-        config_manager = ConfigManager(str(config_file))
-
-        # 設定自訂 agent 設定（使用 dict 結構而非預設 list）
-        custom_config = {
-            "agents": {
-                "pm": {"name": "CustomPM", "cli": "gemini"},
-                "developer": {"name": "CustomDev", "cli": "claude"},
-                "reviewer": {"name": "Richard", "cli": "cursor-agent"},
-            }
-        }
-        config_manager.save_config(custom_config)
-
-        agent_manager = _setup_agents(config_manager)
-
-        # 驗證自訂設定
-        assert "CustomPM" in agent_manager.agents
-        assert "CustomDev" in agent_manager.agents
-        assert agent_manager.agents["CustomPM"].config.cli == AgentCLI.GEMINI
-        assert agent_manager.agents["Richard"].config.cli == AgentCLI.CURSOR
-
-    def test_setup_agents_preserves_model_from_config(self, tmp_path: Path) -> None:
-        """Test that agent model from config is preserved when setting up agents."""
-        config_file = tmp_path / "config.yaml"
-        config_manager = ConfigManager(str(config_file))
-
-        # Create config with model settings
-        custom_config = {
-            "agents": {
-                "pm": {"name": "Roger", "cli": "claude", "model": "haiku"},
-                "developer": {"name": "David", "cli": "claude", "model": "opus"},
-                "reviewer": {"name": "Richard", "cli": "gemini", "model": "gemini-2.5-flash"},
-            }
-        }
-        config_manager.save_config(custom_config)
-
-        agent_manager = _setup_agents(config_manager)
-
-        # Verify models are preserved
-        assert agent_manager.agents["Roger"].config.model == "haiku"
-        assert agent_manager.agents["David"].config.model == "opus"
-        assert agent_manager.agents["Richard"].config.model == "gemini-2.5-flash"
 
 
 class TestVersionCommand:

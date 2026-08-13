@@ -36,6 +36,30 @@ from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.ui.cli import _consume_pending_chat_handoff, app
 from cafe.ui.cli_shared import _load_issue_step_names
+from cafe.utils.phase_config import PhaseStepModelResolution
+
+
+@pytest.fixture(autouse=True)
+def _configured_test_phase_chain(monkeypatch):
+    """Keep workflow journeys focused on orchestration, with a valid test chain."""
+    from cafe.phases import generic_workflow_step
+
+    real_loader = generic_workflow_step.load_phase_step_model
+
+    def load_test_phase(*, step_name, local_path, repo_path=None):
+        if any(path is not None and path.exists() for path in (local_path, repo_path)):
+            return real_loader(step_name=step_name, local_path=local_path, repo_path=repo_path)
+        return PhaseStepModelResolution(
+            name=None,
+            role=None,
+            clis=(("codex", "gpt-5-test"),),
+            model="gpt-5-test",
+            source="test",
+            chain=("test",),
+            clis_source="test",
+        )
+
+    monkeypatch.setattr(generic_workflow_step, "load_phase_step_model", load_test_phase)
 
 
 def _write_pr_done_baton(issue_dir: Path) -> None:
@@ -131,6 +155,12 @@ def _build_integration_generic_phase(tmp_path: Path) -> GenericPhase:
 def test_custom_publish_feedback_and_lifecycle_contracts(tmp_path: Path, monkeypatch) -> None:
     """IT-001/IT-002: custom publish feedback resumes its declared repair step."""
     monkeypatch.chdir(tmp_path)
+    (tmp_path / ".cafe").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".cafe" / "phases.yaml").write_text(
+        "repair:\n  name: David\n  clis:\n    - cli: codex\n      model: test-model\n"
+        "release:\n  name: David\n  clis:\n    - cli: codex\n      model: test-model\n",
+        encoding="utf-8",
+    )
     issue_dir = tmp_path / ".cafe" / "issues" / "release-journey"
     issue_dir.mkdir(parents=True)
     (issue_dir / "issue.yaml").write_text(
@@ -270,7 +300,10 @@ steps:
 
     with (
         patch("cafe.ui.cli.GitOperations", return_value=git_factory()),
-        patch("cafe.ui.cli._build_workflow_step_executor", return_value=_ResumeExecutor()),
+        patch(
+            "cafe.ui.commands.workflow._build_workflow_step_executor",
+            return_value=_ResumeExecutor(),
+        ),
     ):
         resume_result = runner.invoke(
             app,
@@ -994,6 +1027,14 @@ class TestUserHandoff:
     ) -> None:
         """CLI 在同一次 --execute 呼叫中，user handoff 後自動繼續到完成。"""
         monkeypatch.chdir(tmp_path)
+        (tmp_path / ".cafe").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".cafe" / "phases.yaml").write_text(
+            "".join(
+                f"{step}:\n  name: David\n  clis:\n    - cli: codex\n      model: test-model\n"
+                for step in ("spec", "plan", "develop", "review", "pr")
+            ),
+            encoding="utf-8",
+        )
 
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-cli-resume"
         issue_dir.mkdir(parents=True, exist_ok=True)
@@ -1034,7 +1075,10 @@ class TestUserHandoff:
         handle_user_side_effects = ["spec", None]
         with (
             patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-            patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+            patch(
+                "cafe.ui.commands.workflow._build_workflow_step_executor",
+                return_value=FakeExecutor(),
+            ),
             patch(
                 "cafe.ui.cli._handle_user_phase",
                 side_effect=handle_user_side_effects,
@@ -1104,7 +1148,10 @@ class TestNextStepLifecycle:
         cli_runner = CliRunner()
         with (
             patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-            patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+            patch(
+                "cafe.ui.commands.workflow._build_workflow_step_executor",
+                return_value=FakeExecutor(),
+            ),
         ):
             git = MagicMock()
             git.get_current_branch.return_value = "issue-nextstep-missing"

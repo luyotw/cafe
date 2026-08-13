@@ -174,38 +174,38 @@ class TestMakeCommand:
         ]
         assert workflow_calls == []
 
-    def test_make_command_fails_when_clis_missing(self) -> None:
-        """測試 cafe make 指令在環境檢查失敗時正確中止."""
+    def test_make_command_ignores_legacy_agent_cli_settings(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """config.yaml agents 不再參與 make 的 execution preflight."""
         from typer.testing import CliRunner
 
         from cafe.ui.cli import app
 
+        monkeypatch.chdir(tmp_path)
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        (cafe_dir / "config.yaml").write_text(
+            "agents:\n  developer:\n    name: David\n    cli: nonexistent\n",
+            encoding="utf-8",
+        )
         runner = CliRunner()
 
-        # Mock ConfigManager and shutil.which
         with (
-            patch("cafe.ui.cli.ConfigManager") as mock_config_class,
             patch("shutil.which") as mock_which,
+            patch("subprocess.run") as mock_run,
         ):
-            mock_config = MagicMock()
-            mock_config.get.side_effect = lambda key, default: {
-                "agents.pm": {"name": "Roger", "cli": "copilot"},
-                "agents.developer": {"name": "David", "cli": "claude"},
-                "agents.reviewer": {"name": "Richard", "cli": "gemini"},
-            }.get(key, default)
-            mock_config_class.return_value = mock_config
-
-            # Mock missing 'claude'
-            mock_which.side_effect = lambda cli: (
-                "/usr/local/bin/" + cli if cli != "claude" else None
-            )
-
-            # Execute
+            mock_run.return_value = MagicMock(returncode=0)
             result = runner.invoke(app, ["make"])
 
-            # Verify
-            assert result.exit_code == 1
-            assert "claude" in result.stdout.lower()
+        assert result.exit_code == 0, result.output
+        mock_which.assert_not_called()
+        workflow_calls = [
+            call
+            for call in mock_run.call_args_list
+            if "cafe.ui.cli" in " ".join(str(part) for part in call.args[0])
+        ]
+        assert len(workflow_calls) == 1
 
     def test_make_command_executes_workflow_when_clis_available(self) -> None:
         """測試 cafe make 指令在環境檢查通過後執行 cafe workflow --execute."""
@@ -278,38 +278,28 @@ class TestMakeCommand:
         assert "--user-input" in call_args
         assert "As a user, I want to export CSV reports." in call_args
 
-    def test_make_command_displays_correct_error_message(self) -> None:
-        """測試 cafe make 指令顯示正確錯誤提示訊息."""
+    def test_make_command_propagates_workflow_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """workflow 的非零結果應成為 make 的穩定失敗 outcome."""
         from typer.testing import CliRunner
 
         from cafe.ui.cli import app
 
+        monkeypatch.chdir(tmp_path)
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        (cafe_dir / "config.yaml").write_text("settings: {}\n", encoding="utf-8")
         runner = CliRunner()
 
-        # Mock ConfigManager and shutil.which
-        with (
-            patch("cafe.ui.cli.ConfigManager") as mock_config_class,
-            patch("shutil.which") as mock_which,
-        ):
-            mock_config = MagicMock()
-            mock_config.get.side_effect = lambda key, default: {
-                "agents.pm": {"name": "Roger", "cli": "copilot"},
-                "agents.developer": {"name": "David", "cli": "claude"},
-                "agents.reviewer": {"name": "Richard", "cli": "nonexistent"},
-            }.get(key, default)
-            mock_config_class.return_value = mock_config
-
-            # Mock missing tools
-            mock_which.side_effect = lambda cli: (
-                None if cli in ["claude", "nonexistent"] else "/usr/local/bin/" + cli
-            )
-
-            # Execute
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=7)
             result = runner.invoke(app, ["make"])
 
-            # Verify error message content
-            assert result.exit_code == 1
-            assert "Error" in result.stdout or "error" in result.stdout.lower()
-            # Should list missing tools
-            assert "claude" in result.stdout
-            assert "nonexistent" in result.stdout
+        assert result.exit_code == 7
+        workflow_calls = [
+            call
+            for call in mock_run.call_args_list
+            if "cafe.ui.cli" in " ".join(str(part) for part in call.args[0])
+        ]
+        assert len(workflow_calls) == 1
