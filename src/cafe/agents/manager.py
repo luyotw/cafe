@@ -156,7 +156,7 @@ class AgentManager:
         return cli, (model if isinstance(model, str) else None), configured_primary, chain
 
     def _configured_chain_for_agent(self, config: AgentConfig) -> list[CliEntry]:
-        """Return configured CLI chain entries for this agent, with legacy fallback support."""
+        """Return configured CLI chain entries for this agent."""
         if config.clis:
             return [
                 CliEntry(
@@ -193,7 +193,7 @@ class AgentManager:
         return output
 
     def configured_primary_cli(self, config: AgentConfig) -> Optional[AgentCLI]:
-        """Return the crew-configured primary CLI (before any sticky reorder)."""
+        """Return the configured primary CLI before any sticky reorder."""
         chain = self._normalize_chain(self._configured_chain_for_agent(config))
         return chain[0].cli if chain else None
 
@@ -219,7 +219,7 @@ class AgentManager:
 
         # Sticky reorder is a within-config fallback preference: keep using the
         # CLI that last succeeded so we don't thrash mid-issue. But an explicit
-        # crew.yaml edit that changes the configured primary must win. If the
+        # execution config change that changes the configured primary must win. If the
         # configured primary differs from what it was when this CLI was recorded
         # (or the record predates this field), treat the sticky record as stale.
         if chain and recorded_primary is not None and recorded_primary != chain[0].cli:
@@ -282,7 +282,7 @@ class AgentManager:
         return active_cli, self._session_id_for_cli(agent_name, active_cli, phase_name)
 
     def configured_execution_chain(self, agent_name: str) -> list[CliEntry]:
-        """Return the canonical crew chain, including legacy backup config."""
+        """Return the canonical configured execution chain."""
         config = self.get_agent(agent_name).config
         return self._normalize_chain(self._configured_chain_for_agent(config))
 

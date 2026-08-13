@@ -57,7 +57,7 @@ class PermissionAction(str, Enum):
 
 
 class CliEntry(BaseModel):
-    """A single CLI entry in a role's fallback chain.
+    """A single CLI entry in an execution fallback chain.
 
     Each entry carries the CLI identifier, an optional default model, and optional
     phase-level model overrides stored in phase_models (e.g. {"plan": "sonnet"}).
@@ -81,41 +81,7 @@ class CliEntry(BaseModel):
 
 
 class AgentConfig(BaseModel):
-    """Configuration for an AI agent.
-
-    Supports a clis list where each entry carries its own CLI, model, and
-    phase-level overrides.  The legacy backup_clis / models_config fields are
-    retained for internal backwards compatibility but new code should populate
-    clis instead (normalize_role_config produces this).
-
-    Example crew.yaml (new format)::
-
-        developer:
-          name: David
-          clis:
-            - cli: claude
-              model: opus
-              plan: sonnet
-            - cli: gemini
-              model: gemini-2.5-pro-preview
-            - cli: copilot
-
-    Example crew.yaml (old format — auto-normalized)::
-
-        developer:
-          name: David
-          cli: claude
-          model: opus
-          backup:
-            - gemini
-            - copilot
-          models:
-            claude:
-              plan: opus
-              develop: sonnet
-            gemini:
-              plan: gemini-2.5-pro-preview
-    """
+    """Resolved configuration for one AI agent execution chain."""
 
     name: str
     cli: AgentCLI

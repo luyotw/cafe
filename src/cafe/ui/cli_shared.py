@@ -23,16 +23,14 @@ from rich.console import Console
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
-from cafe.core.types import AgentCLI, AgentConfig
+from cafe.core.types import AgentCLI, AgentConfig, CliEntry
 from cafe.core.workflow_models import BatonRejected
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
-from cafe.playbooks.loader import PlaybookLoader
 from cafe.services.delta_display import DeltaDisplay
 from cafe.skills.loader import SkillLoader
 from cafe.utils.config import ConfigError, ConfigManager
-from cafe.utils.crew import CrewManager, normalize_role_config
 from cafe.utils.git_utils import get_git_toplevel, get_repo_root
 from cafe.utils.phase_config import load_phase_step_model
 
@@ -115,29 +113,7 @@ def check_agent_clis_available(
     phase_config_local_path: Optional[Path] = None,
     phase_config_repo_path: Optional[Path] = None,
 ) -> List[str]:
-    """Check if all configured agent CLIs are installed."""
-    try:
-        config_dir = getattr(config_manager, "config_dir", None)
-        crew_data = (
-            CrewManager(cafe_dir=Path(config_dir)).load()
-            if isinstance(config_dir, (str, Path))
-            else {}
-        )
-    except (AttributeError, TypeError):
-        crew_data = {}
-
-    def _role_config(role: str, default_cli: str) -> dict:
-        if crew_data and role in crew_data and isinstance(crew_data[role], dict):
-            return crew_data[role]
-        val = config_manager.get(f"agents.{role}", {})
-        return val if isinstance(val, dict) else {"cli": default_cli}
-
-    def _configured_chain(config: dict) -> list[str]:
-        chain = [entry.cli.value for entry in normalize_role_config(config)]
-        if chain:
-            return chain
-        cli = config.get("cli")
-        return [cli] if isinstance(cli, str) and cli else ["copilot"]
+    """Check the active phase-configured CLI chain."""
 
     def _check_chain(chain: list[str], *, context: Optional[str] = None) -> List[str]:
         available = [cli for cli in chain if shutil.which(cli) is not None]
@@ -164,6 +140,7 @@ def check_agent_clis_available(
             worktree_root = get_git_toplevel()
             return worktree_root / ".cafe" / "phases.yaml", repo_root / ".cafe" / "phases.yaml"
         except Exception:
+            config_dir = getattr(config_manager, "config_dir", None)
             if isinstance(config_dir, (str, Path)):
                 return Path(config_dir) / "phases.yaml", None
         return None, None
@@ -175,43 +152,22 @@ def check_agent_clis_available(
             local_path=local_path,
             repo_path=repo_path,
         )
-        if phase_resolution.clis:
-            source_paths = {
-                "worktree": local_path.as_posix() if local_path is not None else None,
-                "repo": repo_path.as_posix() if repo_path is not None else None,
-            }
-            phase_config_file = (
-                source_paths.get(phase_resolution.clis_source or "")
-                or phase_resolution.clis_source
-                or phase_resolution.source
-                or "phase-config"
-            )
-            return _check_chain(
-                [cli for cli, _model in phase_resolution.clis],
-                context=f"file={phase_config_file} step={active_step} field=clis",
-            )
+        source_paths = {
+            "worktree": local_path.as_posix() if local_path is not None else None,
+            "repo": repo_path.as_posix() if repo_path is not None else None,
+        }
+        phase_config_file = (
+            source_paths.get(phase_resolution.clis_source or "")
+            or phase_resolution.clis_source
+            or phase_resolution.source
+            or "phase-config"
+        )
+        return _check_chain(
+            [cli for cli, _model in phase_resolution.clis],
+            context=f"file={phase_config_file} step={active_step} field=clis",
+        )
 
-        target_role = active_role or phase_resolution.role
-        if target_role:
-            return _check_chain(
-                _configured_chain(_role_config(target_role, "copilot")),
-                context=f"step={active_step} field=clis",
-            )
-
-    role_configs = [
-        _role_config("pm", "copilot"),
-        _role_config("developer", "copilot"),
-        _role_config("reviewer", "copilot"),
-    ]
-
-    missing_clis = []
-    for role_config in role_configs:
-        chain = _configured_chain(role_config)
-        for cli in _check_chain(chain):
-            if cli not in missing_clis:
-                missing_clis.append(cli)
-
-    return missing_clis
+    return []
 
 
 def setup_agents(
@@ -220,38 +176,15 @@ def setup_agents(
     phase_name: Optional[str] = None,
     cafe_dir: Optional[Path] = None,
 ) -> AgentManager:
-    """Setup agent manager with configured role agents.
-
-    Reads from crew.yaml first; falls back to config.yaml agents: section for backward compat.
-    """
-    agent_manager = AgentManager(issue_name=issue_name)
-
-    # Prefer crew.yaml; fall back to config.yaml agents: section
-    try:
-        _cafe_dir = Path(cafe_dir) if cafe_dir else Path(config_manager.config_dir)
-        crew_data = CrewManager(cafe_dir=_cafe_dir).load()
-    except (AttributeError, TypeError):
-        crew_data = {}
-
-    if not crew_data:
-        # No crew.yaml in this .cafe, the repo root (worktree fallback), or
-        # config.yaml agents. Roles will silently use the default CLI, which is
-        # rarely intended — guide the user to configure the role→CLI mapping.
-        console.print(
-            "[yellow]⚠️  No crew.yaml found[/yellow] (checked this .cafe, the repo "
-            "root, and config.yaml agents). Roles will fall back to the default "
-            "CLI, which may not be what you want. Create [bold].cafe/crew.yaml[/bold] "
-            "at the repo root to map roles → CLI (e.g. via `cafe crew`)."
-        )
-
-    def _role_config(role: str, default_name: str) -> dict:
-        if crew_data and role in crew_data and isinstance(crew_data[role], dict):
-            return crew_data[role]
-        return config_manager.get(f"agents.{role}", {"name": default_name, "cli": "copilot"})
+    """Build the active workflow agent from its complete phase chain."""
+    if not issue_name or not phase_name:
+        raise ValueError("phase configuration requires issue_name and phase_name")
 
     def _resolve_phase_config_paths() -> tuple[Optional[Path], Optional[Path]]:
         local_path = None
         repo_path = None
+        if cafe_dir is not None:
+            return Path(cafe_dir) / "phases.yaml", None
         try:
             repo_root = get_repo_root()
             worktree_root = get_git_toplevel()
@@ -262,136 +195,24 @@ def setup_agents(
             local_path = fallback_cafe_dir / "phases.yaml"
         return local_path, repo_path
 
-    def _resolve_phase_overrides() -> tuple[Optional[str], Optional[list[dict[str, str]]], Optional[str]]:
-        if not issue_name or not phase_name:
-            return None, None, None
-        try:
-            local_path, repo_path = _resolve_phase_config_paths()
-            resolved = load_phase_step_model(
-                step_name=phase_name,
-                local_path=local_path,
-                repo_path=repo_path,
-            )
-        except ValueError as exc:
-            raise ValueError(
-                f"invalid phase config for step '{phase_name}': {exc}"
-            ) from exc
-        if not resolved.clis:
-            return resolved.name, None, resolved.role
-
-        clis_payload = []
-        for cli_name, model in resolved.clis:
-            entry = {"cli": cli_name}
-            if model is not None:
-                entry["model"] = model
-            clis_payload.append(entry)
-        return resolved.name, clis_payload, resolved.role
-
-    phase_name_override, phase_clis, phase_role = _resolve_phase_overrides()
-
-    def _resolve_phase_target_role() -> Optional[str]:
-        if phase_role is not None:
-            return phase_role
-        if not phase_name:
-            return None
-        try:
-            playbook_name = config_manager.get("settings.playbook", None)
-            if not playbook_name:
-                playbook_name = config_manager.get("playbook", "default")
-            playbook = PlaybookLoader(project_root=get_git_toplevel()).load(str(playbook_name))
-            step_def = playbook.get("steps", {}).get(phase_name, {})
-            if isinstance(step_def, dict):
-                role = step_def.get("role")
-                if isinstance(role, str) and role.strip():
-                    return role.strip()
-        except Exception:
-            pass
-        return None
-
-    phase_target_role = _resolve_phase_target_role()
-
-    def _resolve_phase_model() -> Optional[str]:
-        if not phase_name or not issue_name:
-            return None
-
-        try:
-            local_path, repo_path = _resolve_phase_config_paths()
-            resolution = load_phase_step_model(
-                step_name=phase_name,
-                local_path=local_path,
-                repo_path=repo_path,
-            )
-        except ValueError as exc:
-            raise ValueError(
-                f"invalid phase config for step '{phase_name}': {exc}"
-            ) from exc
-        return resolution.model
-
-    pm_config = _role_config("pm", "Roger")
-    dev_config = _role_config("developer", "David")
-    reviewer_config = _role_config("reviewer", "Richard")
-
-    def _build_models_config(config: dict) -> Dict[str, Dict[str, str]]:
-        raw_models = config.get("models", {}) or {}
-        models_config: Dict[str, Dict[str, str]] = {}
-        if isinstance(raw_models, dict):
-            for cli_name, phase_map in raw_models.items():
-                if isinstance(phase_map, dict):
-                    models_config[cli_name] = {k: str(v) for k, v in phase_map.items()}
-        return models_config
-
-    def _build_agent_config(role_config: dict, role: str, default_name: str) -> AgentConfig:
-        active_chain = normalize_role_config(role_config)
-        agent_name = role_config.get("name", default_name)
-        phase_model = _resolve_phase_model() if phase_name else None
-
-        phase_applies_to_role = phase_target_role == role
-
-        if phase_target_role is not None and not phase_applies_to_role:
-            active_chain = normalize_role_config(role_config)
-            agent_name = str(role_config.get("name", default_name))
-        elif phase_applies_to_role and (phase_clis is not None or phase_name_override is not None):
-            merged_config = dict(role_config)
-            if phase_clis is not None:
-                merged_config["clis"] = phase_clis
-            if phase_name_override is not None:
-                merged_config["name"] = phase_name_override
-            agent_name = str(merged_config.get("name", default_name))
-            active_chain = normalize_role_config(merged_config)
-
-        models_config = _build_models_config(role_config)
-
-        if active_chain:
-            primary = active_chain[0]
-            cli = primary.cli
-            if phase_clis is not None and phase_model is not None and phase_applies_to_role:
-                model = phase_model
-            else:
-                model = primary.resolve_model(phase_name)
-            backup_clis = [e.cli for e in active_chain[1:]]
-            for entry in active_chain:
-                if entry.phase_models:
-                    models_config[entry.cli.value] = dict(entry.phase_models)
-            if model is None and phase_model is not None and phase_applies_to_role:
-                model = phase_model
-        else:
-            # No valid CLI in role config; fall back to copilot with no model
-            cli = AgentCLI.COPILOT
-            model = None
-            backup_clis = []
-
-        return AgentConfig(
-            name=agent_name,
-            cli=cli,
-            model=model,
-            clis=active_chain,
-            backup_clis=backup_clis,
-            models_config=models_config,
+    local_path, repo_path = _resolve_phase_config_paths()
+    resolved = load_phase_step_model(
+        step_name=phase_name,
+        local_path=local_path,
+        repo_path=repo_path,
+    )
+    chain = [CliEntry(cli=AgentCLI(cli), model=model) for cli, model in resolved.clis]
+    primary = chain[0]
+    agent_manager = AgentManager(issue_name=issue_name)
+    agent_manager.register_agent(
+        AgentConfig(
+            name=resolved.name or phase_name,
+            cli=primary.cli,
+            model=primary.model,
+            clis=chain,
+            backup_clis=[entry.cli for entry in chain[1:]],
         )
-
-    agent_manager.register_agent(_build_agent_config(pm_config, "pm", "Roger"))
-    agent_manager.register_agent(_build_agent_config(dev_config, "developer", "David"))
-    agent_manager.register_agent(_build_agent_config(reviewer_config, "reviewer", "Richard"))
+    )
 
     return agent_manager
 
@@ -654,21 +475,11 @@ def _resolve_selected_playbook(playbook_name: Optional[str]) -> str:
 def _build_workflow_role_agent_map(
     config_manager: ConfigManager, playbook_data: Dict[str, Any]
 ) -> Dict[str, str]:
-    """Resolve playbook roles to configured agent names."""
-    try:
-        crew_data = CrewManager(cafe_dir=Path(config_manager.config_dir)).load()
-    except (AttributeError, TypeError):
-        crew_data = {}
-
-    def _agent_name(role: str, default: str) -> str:
-        if crew_data and role in crew_data and isinstance(crew_data[role], dict):
-            return str(crew_data[role].get("name", default))
-        return str(config_manager.get(f"agents.{role}.name", default))
-
+    """Resolve playbook roles to validation/default agent names."""
     mapping: Dict[str, str] = {
-        "pm": _agent_name("pm", "Roger"),
-        "developer": _agent_name("developer", "David"),
-        "reviewer": _agent_name("reviewer", "Richard"),
+        "pm": "Roger",
+        "developer": "David",
+        "reviewer": "Richard",
     }
     for role_name, role_def in playbook_data.get("roles", {}).items():
         if role_name in mapping:
@@ -695,21 +506,6 @@ def _build_workflow_step_executor(
     role_agent_map = _build_workflow_role_agent_map(config_manager, playbook_data)
     if role_agent_map_override:
         role_agent_map.update(role_agent_map_override)
-    try:
-        crew_data = CrewManager(cafe_dir=Path(config_manager.config_dir)).load()
-    except (AttributeError, TypeError):
-        crew_data = {}
-
-    def _role_cfg(role: str) -> dict:
-        if crew_data and role in crew_data and isinstance(crew_data[role], dict):
-            return crew_data[role]
-        return config_manager.get(f"agents.{role}", {})
-
-    role_configs = {
-        "pm": _role_cfg("pm"),
-        "developer": _role_cfg("developer"),
-        "reviewer": _role_cfg("reviewer"),
-    }
     return GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name=issue_name,
@@ -718,7 +514,7 @@ def _build_workflow_step_executor(
         agent_manager=setup_agents(config_manager, issue_name=issue_name, phase_name=phase_name),
         git_ops=_get_git_operations_cls()(),
         role_agent_map=role_agent_map,
-        role_configs=role_configs,
+        role_configs={},
         step_user_inputs=step_user_inputs,
         interactive=interactive,
         config_allowed_directories=config_manager.get_allowed_directories(),
