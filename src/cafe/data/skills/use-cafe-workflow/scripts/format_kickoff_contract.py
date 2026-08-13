@@ -209,6 +209,25 @@ def _parse_phase_chains(
     return parsed
 
 
+def _parse_phase_rationales(
+    values: list[str],
+    *,
+    step_names: set[str],
+) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for value in values:
+        step_name, separator, rationale = value.partition("=")
+        step_name, rationale = step_name.strip(), rationale.strip()
+        if not separator or not step_name or not rationale:
+            raise ValueError("invalid --phase-rationale; expected STEP=RATIONALE")
+        if step_name not in step_names:
+            raise ValueError(f"unknown phase-rationale step: {step_name}")
+        if step_name in parsed:
+            raise ValueError(f"duplicate phase-rationale step: {step_name}")
+        parsed[step_name] = rationale
+    return parsed
+
+
 def _resolve_configured_chain(
     *,
     step_name: str,
@@ -264,6 +283,13 @@ def _parser() -> argparse.ArgumentParser:
         metavar="STEP=CLI:MODEL,CLI:MODEL",
         help="Exact ordered chain for a phase; otherwise resolve phase and crew config.",
     )
+    parser.add_argument(
+        "--phase-rationale",
+        action="append",
+        default=[],
+        metavar="STEP=RATIONALE",
+        help="Driver-assessed capability band and evidence for an agent-executed phase.",
+    )
     parser.add_argument("--phase-config", type=Path, default=Path(".cafe/phases.yaml"))
     parser.add_argument("--crew-config", type=Path, default=Path(".cafe/crew.yaml"))
     parser.add_argument("--effective-locale")
@@ -312,6 +338,10 @@ def render(args: argparse.Namespace) -> str:
     mandate, mandate_source = _load_strategic_context(strategic_context, args.issue_name)
     phase_chain_overrides = _parse_phase_chains(
         args.phase_chain,
+        step_names=set(model.steps),
+    )
+    phase_rationales = _parse_phase_rationales(
+        args.phase_rationale,
         step_names=set(model.steps),
     )
     crew_config = _load_yaml_mapping(crew_config_path, label="crew config")
@@ -396,7 +426,7 @@ def render(args: argparse.Namespace) -> str:
             ]
         )
         if step.assignee_type not in {"agent", "hybrid"}:
-            model_rows.append([step_name, "not agent-executed", "—", "playbook"])
+            model_rows.append([step_name, "not agent-executed", "—", "playbook", "—"])
             continue
         if step_name in phase_chain_overrides:
             chain, chain_source = phase_chain_overrides[step_name], "--phase-chain"
@@ -409,7 +439,20 @@ def render(args: argparse.Namespace) -> str:
             )
         primary = f"{chain[0][0]}:{chain[0][1]}"
         fallbacks = " → ".join(f"{cli}:{model_name}" for cli, model_name in chain[1:])
-        model_rows.append([step_name, primary, fallbacks, chain_source])
+        rationale = phase_rationales.get(step_name)
+        if rationale is None:
+            raise ValueError(f"missing phase rationale for agent-executed step: {step_name}")
+        model_rows.append([step_name, primary, fallbacks, chain_source, rationale])
+
+    unused_rationales = set(phase_rationales) - {
+        name
+        for name, step in model.steps.items()
+        if step.assignee_type in {"agent", "hybrid"}
+    }
+    if unused_rationales:
+        raise ValueError(
+            "phase rationale targets non-agent step: " + ", ".join(sorted(unused_rationales))
+        )
 
     reactive = _table(
         reactive_headers,
@@ -463,7 +506,10 @@ def render(args: argparse.Namespace) -> str:
                 profile_rows,
             ),
             "### Phase model chains — driver-assessed",
-            _table(["Phase", "Primary", "Fallbacks", "Source"], model_rows),
+            _table(
+                ["Phase", "Primary", "Fallbacks", "Source", "Selection rationale"],
+                model_rows,
+            ),
             reactive_title,
             reactive,
             "### Mandate",

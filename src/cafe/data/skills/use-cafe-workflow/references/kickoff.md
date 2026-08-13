@@ -154,6 +154,7 @@ python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --model-adjustment-authority <driver_autonomous|user_approval_required> \
   --risk-factor "<risk factor; repeat as needed>" \
   --assessment-rationale "<repository evidence for nature and scale>" \
+  --phase-rationale "<step>=<capability band, profile/risk evidence, and fallback justification>" \
   --effective-locale <locale> \
   --locale-source "<playbook or direct-user-override source>" \
   --repository-content-locale <locale> \
@@ -173,11 +174,14 @@ Pass `--phase-chain
 agent-executed phase that is not already fully resolved by `--phase-config` and
 `--crew-config`. The formatter has no built-in provider or model defaults. It
 rejects a missing fallback, an unresolved model, and an unsupported CLI. It
-validates chain structure only; it does not validate model suitability. Use the
-phase profile, issue assessment, provider documentation, and preflight evidence
-to justify that each selected model satisfies the displayed requirements. This
-judgment remains driver-owned rather than a runtime model registry, and the
-formatter labels the model-chain table `driver-assessed`.
+validates chain structure only; it does not validate model suitability. Pass one
+`--phase-rationale <step>=<text>` for every agent-executed phase. The formatter
+rejects missing, unknown, or duplicate rationales and displays them beside the
+chain. Use the capability band, phase profile, issue assessment, current
+provider documentation, and preflight evidence to justify that each selected
+model satisfies the displayed requirements. This judgment remains driver-owned
+rather than a runtime model registry, and the formatter labels the model-chain
+table `driver-assessed`.
 
 Pass an option with no step values for an explicit empty list. The formatter
 validates the partition and includes every phase, role, skill, scheduled gate,

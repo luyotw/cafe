@@ -47,6 +47,53 @@ iteration. This applies equally to bundled and custom playbooks. A legacy custom
 skill without a declaration receives the neutral default and the formatter marks
 it `defaulted`; do not silently invent stronger or weaker requirements.
 
+## Keep model ownership outside phase agents
+
+The phase skill owns only its provider-neutral minimum execution profile. The
+driver owns the capability-band classification, current provider/model mapping,
+preflight, and every write to the active worktree's `.cafe/phases.yaml`.
+
+- Do not put provider names, model IDs, or cost tiers into phase skills.
+- Do not let a phase agent select its own model or approve its fallback.
+- Treat an existing repository chain as a candidate, not as selection evidence.
+  Re-justify it against the current issue and phase before proposing it.
+- Keep exact model choices issue-owned. A reusable phase skill must remain valid
+  when providers rename, replace, or reposition models.
+
+## Classify the required capability band
+
+Classify the remaining work for each phase before mapping it to current models.
+The bands describe task requirements, not permanent provider or model names.
+
+| Band | Use when | Do not use when |
+| --- | --- | --- |
+| `efficiency` | The work is routine and bounded, output shape is explicit, automated or host-side validation is strong, failure is reversible, and the agent owns no ambiguous or high-consequence decision. | Correctness depends on discovering unstated scope, coordinating several subsystems, or detecting a subtle failure that validation will not expose. |
+| `balanced` | Scope and contracts are clear, the work still needs ordinary engineering judgment across connected components, tests or review provide a bounded correction loop, and failure is recoverable. | The task changes a durable contract or migration boundary, has substantial unknowns, or a locally plausible result can leave a system-wide defect. |
+| `frontier` | Requirements or architecture contain material unknowns; work crosses subsystem, migration, compatibility, durable-state, concurrency, security, or trusted-capability boundaries; verification is broad; or failure is hard to detect or undo. | The remaining work has become mechanical and independently verifiable. |
+
+Use the phase profile as the minimum starting point:
+
+- `reasoning: routine` is eligible for `efficiency` only when the task evidence
+  also satisfies the boundedness, verification, and reversibility conditions.
+- `reasoning: standard` normally starts at `balanced`.
+- `reasoning: high` normally starts at `frontier`. Select a `balanced` model only
+  with concrete current evidence that it satisfies the declared high-reasoning
+  requirement for this workload; cost or an existing preset is not evidence.
+
+Then apply issue-level escalation. A medium public contract or several connected
+components requires at least `balanced`. Large scope, broad unknowns, a breaking
+migration, multiple sources of truth, security/trust boundaries, durable state,
+concurrency, weak observability, or difficult rollback raises affected phases to
+`frontier`. Issue risk may raise a phase above its default; it never lowers the
+phase skill's declared minimum.
+
+Classify the work the agent actually owns. A publication phase may remain
+`efficiency` when the agent only prepares a deterministic local artifact and an
+independent trusted host hook validates and performs the external mutation. If
+the agent itself must resolve ambiguous review feedback, redesign behavior, or
+authorize the side effect, route that work to the responsible earlier phase or
+raise the band.
+
 ## Select exact chains
 
 Combine the issue nature, scale, risk factors, each resolved execution profile, configured
@@ -54,11 +101,20 @@ providers, available exact models, and preflight evidence. The proposal must
 name an ordered chain of at least two distinct CLIs with an exact model for each
 entry. No provider or model is built into this skill.
 
+Map the selected band to current provider models using current primary provider
+documentation and task-relevant local evidence. Do not permanently equate a
+band with a provider family, infer capability from a model name alone, or use a
+repository preset as the rationale. If current positioning is unavailable or
+cross-provider equivalence is uncertain, retain a previously confirmed capable
+chain or choose the stronger candidate rather than guessing.
+
 Apply these rules:
 
-1. Choose a primary that satisfies the phase reasoning and workload.
+1. Choose a primary that satisfies the phase capability band, reasoning, and workload.
 2. Choose a fallback that satisfies `fallback_strength`. For
-   `equivalent_or_stronger`, do not knowingly select a weaker fallback.
+   `equivalent`, use the same assessed band. For `equivalent_or_stronger`, use
+   the same or a stronger assessed band; if equivalence is uncertain, choose
+   the stronger fallback.
 3. Use a distinct fallback CLI so it can execute independently from the
    primary.
 4. Raise the required capability when issue-level risk is stronger than the
@@ -66,9 +122,13 @@ Apply these rules:
    overall issue is small.
 5. Keep publication or other routine phases economical only when their own risk
    domains and current issue evidence permit it.
+6. Prefer a canonical exact model identifier reported by the provider or CLI.
+   Do not persist a floating alias as "exact" when the preflight exposes the
+   canonical model it resolved to.
 
 The driver may recommend any configured combination that meets these rules, but
-must explain the choice using the issue assessment and execution profile.
+must record one phase-specific rationale naming the selected band, profile
+evidence, issue-risk overlay, and why the fallback meets its strength contract.
 
 ## Model and fallback preflight
 
@@ -83,8 +143,8 @@ Before the first phase execution:
    making the primary fail with the classified `model_not_found` condition and
    proving the configured fallback entry executes. Do not create a fake failure
    inside a live issue or consume one of its iterations.
-4. Run `cafe crew list` and inspect the applicable `.cafe/phases.yaml` to verify
-   ordering and exact model names. Treat an unavailable model, missing
+4. Inspect the applicable `.cafe/phases.yaml` and resolved execution preview to
+   verify ordering and exact model names. Treat an unavailable model, missing
    authentication, or failed fallback smoke test as a blocking preflight
    failure.
 
@@ -143,8 +203,16 @@ evidence, including:
 - remaining work becoming mechanical enough for a lower capability that still
   satisfies the resolved phase profile.
 
+De-escalate only future work. Reduced uncertainty after spec or plan may move a
+future `standard` implementation from `frontier` to `balanced` when its
+contracts, deletion/wiring map, tests, and rollback are now explicit. It does
+not justify lowering a `high` phase or an unresolved migration merely because a
+stronger phase produced a good artifact. An implementation correction may move
+to `efficiency` only when it is deterministic, narrowly verified, reversible,
+and still satisfies the phase profile.
+
 Update only the future phase's chain in `.cafe/phases.yaml`. With
 `user_approval_required`, stop and obtain approval for the exact replacement
-first. State the keep/change rationale in the driver progress update; do not add
-a separate runtime decision store. A terminal `_done` baton has no future chain
-to adjust.
+first. State the new band and keep/change rationale in the driver progress
+update; do not add a separate runtime decision store. A terminal `_done` baton
+has no future chain to adjust.
