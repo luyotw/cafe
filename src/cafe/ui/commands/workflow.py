@@ -706,22 +706,34 @@ def workflow(
             resume_blackboard.current_step,
         )
 
-        # Mutable holder so wrapped_executor can swap executors on fallback
-        _executor_holder: Dict[str, Any] = {
-            "executor": _build_workflow_step_executor(
+        initial_phase_name = start_step or resume_blackboard.current_step
+        if initial_phase_name not in playbook_data["steps"]:
+            initial_phase_name = None
+
+        def _build_executor_for_phase(phase_name: Optional[str]):
+            return _build_workflow_step_executor(
                 config_manager=config_manager,
                 issue_dir=issue_dir,
                 issue_name=issue_name,
                 playbook_data=playbook_data,
                 generic_phase=generic_phase,
+                phase_name=phase_name,
                 step_user_inputs=initial_step_user_inputs,
                 interactive=interactive,
                 extra_allowed_directories=add_dir_values,
-            ),
+            )
+
+        # Mutable holder so wrapped_executor can swap executors when the active
+        # phase changes or a fallback preset is applied. Agent setup resolves
+        # the CLI/model chain for one phase, so reusing it for another phase can
+        # silently retain the previous role's default chain.
+        _executor_holder: Dict[str, Any] = {
+            "executor": _build_executor_for_phase(initial_phase_name),
+            "phase_name": initial_phase_name,
             "fallback_applied": False,
         }
 
-        def _apply_fallback_preset_and_rebuild() -> None:
+        def _apply_fallback_preset_and_rebuild(phase_name: str) -> None:
             """Apply fallback preset and rebuild the step executor in-place."""
             from cafe.utils.preset import PresetManager, PresetNotFoundError
 
@@ -734,16 +746,8 @@ def workflow(
             except PresetNotFoundError as e:
                 console.print(f"[red]Fallback preset error: {e}[/red]")
                 raise
-            _executor_holder["executor"] = _build_workflow_step_executor(
-                config_manager=config_manager,
-                issue_dir=issue_dir,
-                issue_name=issue_name,
-                playbook_data=playbook_data,
-                generic_phase=generic_phase,
-                step_user_inputs=initial_step_user_inputs,
-                interactive=interactive,
-                extra_allowed_directories=add_dir_values,
-            )
+            _executor_holder["executor"] = _build_executor_for_phase(phase_name)
+            _executor_holder["phase_name"] = phase_name
             _executor_holder["fallback_applied"] = True
 
         def wrapped_executor(
@@ -755,6 +759,9 @@ def workflow(
         ) -> Any:
             iteration = _predict_next_iteration(issue_dir, step_name)
             console.print(f"[dim]Executing[/dim] step={step_name} iteration={iteration:03d}")
+            if _executor_holder["phase_name"] != step_name:
+                _executor_holder["executor"] = _build_executor_for_phase(step_name)
+                _executor_holder["phase_name"] = step_name
             step_role = step_def.get("role") if isinstance(step_def, dict) else None
             missing_clis = _check_agent_clis_available(
                 config_manager,
@@ -791,7 +798,7 @@ def workflow(
                     and getattr(exc, "error_type", None)
                     in ("rate_limit", "cli_not_found", "cli_unavailable", "model_not_found")
                 ):
-                    _apply_fallback_preset_and_rebuild()
+                    _apply_fallback_preset_and_rebuild(step_name)
                     fallback_executor = _executor_holder["executor"]
                     fallback_kwargs = {"extra_prompt": extra_prompt}
                     fallback_signature = inspect.signature(fallback_executor.execute_step)

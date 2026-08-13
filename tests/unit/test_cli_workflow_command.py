@@ -441,7 +441,7 @@ def test_workflow_fallback_rebuild_passes_entry_point_user_input(
     )
 
     user_text = "Hotfix the login timeout regression."
-    builder_calls: list[dict[str, str] | None] = []
+    builder_calls: list[tuple[str | None, dict[str, str] | None]] = []
     execute_calls = {"count": 0}
 
     class FakeExecutor:
@@ -454,7 +454,7 @@ def test_workflow_fallback_rebuild_passes_entry_point_user_input(
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
     def fake_builder(**kwargs):
-        builder_calls.append(kwargs.get("step_user_inputs"))
+        builder_calls.append((kwargs.get("phase_name"), kwargs.get("step_user_inputs")))
         return FakeExecutor()
 
     with (
@@ -481,7 +481,13 @@ def test_workflow_fallback_rebuild_passes_entry_point_user_input(
         )
 
     assert result.exit_code == 0
-    assert builder_calls == [{"develop": user_text}, {"develop": user_text}]
+    expected_input = {"develop": user_text}
+    assert builder_calls == [
+        ("develop", expected_input),
+        ("develop", expected_input),
+        ("review", expected_input),
+        ("pr", expected_input),
+    ]
 
 
 def test_workflow_command_resume_user_input_targets_handoff_from_step(
@@ -3384,6 +3390,73 @@ steps:
         )
         assert result.exit_code == 0
         assert executed_steps == ["plan"]
+        assert mock_builder.call_args.kwargs["phase_name"] == "plan"
+
+
+def test_workflow_command_rebuilds_executor_for_each_active_phase(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    built_phases: list[str | None] = []
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-phase-chain"
+    playbook_dir = tmp_path / ".cafe" / "playbooks"
+    playbook_dir.mkdir(parents=True)
+    (playbook_dir / "phase-chain.yaml").write_text(
+        """
+playbook:
+  id: phase-chain
+steps:
+  spec:
+    skill: cafe-spec
+    role: pm
+    on: {await_agent: plan}
+  plan:
+    skill: cafe-plan
+    role: developer
+    on: {await_agent: develop}
+  develop:
+    skill: cafe-develop
+    role: developer
+    on: {await_agent: _done}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    class FakeExecutor:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
+            next_step = {"spec": "plan", "plan": "develop", "develop": "done"}[step_name]
+            _handoff_to_step(
+                issue_dir=issue_dir,
+                state=blackboard_state,
+                from_step=step_name,
+                to_step=next_step,
+                status_code="confirmed",
+            )
+            return _result(
+                status_code="confirmed",
+                step_name=step_name,
+                step_def=step_def,
+                artifacts={},
+            )
+
+    def fake_builder(**kwargs):
+        built_phases.append(kwargs.get("phase_name"))
+        return FakeExecutor()
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", side_effect=fake_builder),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-phase-chain"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "phase-chain", "--execute"])
+
+    assert result.exit_code == 0, result.output
+    assert built_phases[:3] == ["spec", "plan", "develop"]
 
 
 def test_workflow_command_runs_hotfix_playbook(tmp_path: Path, monkeypatch) -> None:
