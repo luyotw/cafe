@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional
 import typer
 from rich.console import Console
 
-from cafe.agents.executor import AgentExecutionError
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.issue_resolution import ActiveIssueResolutionError, resolve_active_issue
 from cafe.core.playbook import resolve_step_behavior
@@ -208,11 +207,6 @@ def make(
         "-t",
         help="Overall workflow timeout in seconds (0 = no timeout)",
     ),
-    fallback_preset: Optional[str] = typer.Option(
-        None,
-        "--fallback-preset",
-        help="Crew preset to switch to when primary CLI is rate-limited, missing, unavailable, or has a bad model",
-    ),
     add_dir: List[str] = typer.Option(
         [],
         "--add-dir",
@@ -278,8 +272,6 @@ def make(
     cmd = [sys.executable, "-m", "cafe.ui.cli", "workflow", "--execute"]
     if user_input:
         cmd.extend(["--user-input", user_input])
-    if fallback_preset:
-        cmd.extend(["--fallback-preset", fallback_preset])
     for directory in add_dir_values:
         cmd.extend(["--add-dir", directory])
 
@@ -591,11 +583,6 @@ def workflow(
         "-u",
         help=_USER_INPUT_HELP,
     ),
-    fallback_preset: Optional[str] = typer.Option(
-        None,
-        "--fallback-preset",
-        help="Crew preset to switch to when primary CLI is rate-limited, missing, unavailable, or has a bad model",
-    ),
     add_dir: List[str] = typer.Option(
         [],
         "--add-dir",
@@ -724,31 +711,13 @@ def workflow(
             )
 
         # Mutable holder so wrapped_executor can swap executors when the active
-        # phase changes or a fallback preset is applied. Agent setup resolves
+        # phase changes. Agent setup resolves
         # the CLI/model chain for one phase, so reusing it for another phase can
         # silently retain the previous role's default chain.
         _executor_holder: Dict[str, Any] = {
-            "executor": _build_executor_for_phase(initial_phase_name),
-            "phase_name": initial_phase_name,
-            "fallback_applied": False,
+            "executor": None,
+            "phase_name": None,
         }
-
-        def _apply_fallback_preset_and_rebuild(phase_name: str) -> None:
-            """Apply fallback preset and rebuild the step executor in-place."""
-            from cafe.utils.preset import PresetManager, PresetNotFoundError
-
-            assert fallback_preset is not None
-            try:
-                PresetManager().apply(fallback_preset)
-                console.print(
-                    f"[yellow]⚡ Switched to fallback preset '{fallback_preset}' — remaining steps will use this crew.[/yellow]"
-                )
-            except PresetNotFoundError as e:
-                console.print(f"[red]Fallback preset error: {e}[/red]")
-                raise
-            _executor_holder["executor"] = _build_executor_for_phase(phase_name)
-            _executor_holder["phase_name"] = phase_name
-            _executor_holder["fallback_applied"] = True
 
         def wrapped_executor(
             step_name: str,
@@ -784,37 +753,12 @@ def workflow(
                 for parameter in execute_signature.parameters.values()
             ):
                 execute_kwargs["same_invocation_retry"] = same_invocation_retry
-            try:
-                result = step_executor.execute_step(
-                    step_name,
-                    step_def,
-                    blackboard_state,
-                    **execute_kwargs,
-                )
-            except AgentExecutionError as exc:
-                if (
-                    fallback_preset
-                    and not _executor_holder["fallback_applied"]
-                    and getattr(exc, "error_type", None)
-                    in ("rate_limit", "cli_not_found", "cli_unavailable", "model_not_found")
-                ):
-                    _apply_fallback_preset_and_rebuild(step_name)
-                    fallback_executor = _executor_holder["executor"]
-                    fallback_kwargs = {"extra_prompt": extra_prompt}
-                    fallback_signature = inspect.signature(fallback_executor.execute_step)
-                    if "same_invocation_retry" in fallback_signature.parameters or any(
-                        parameter.kind == inspect.Parameter.VAR_KEYWORD
-                        for parameter in fallback_signature.parameters.values()
-                    ):
-                        fallback_kwargs["same_invocation_retry"] = same_invocation_retry
-                    result = fallback_executor.execute_step(
-                        step_name,
-                        step_def,
-                        blackboard_state,
-                        **fallback_kwargs,
-                    )
-                else:
-                    raise
+            result = step_executor.execute_step(
+                step_name,
+                step_def,
+                blackboard_state,
+                **execute_kwargs,
+            )
             if isinstance(result, StepExecutionResult):
                 for event in result.events:
                     _print_workflow_event_display(event)
@@ -1084,7 +1028,7 @@ def workflow(
                     console.print(f"[red]{result.detail.rstrip()}[/red]")
                 if reason.startswith("agent_"):
                     console.print(
-                        "[dim]Agent execution failed. Switch to a different CLI in your config, then run 'cafe make' again.[/dim]"
+                        "[dim]Agent execution failed. Update the active step chain in .cafe/phases.yaml, then retry.[/dim]"
                     )
                 elif reason == "publish_error":
                     console.print(

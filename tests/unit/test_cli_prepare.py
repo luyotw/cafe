@@ -586,6 +586,10 @@ class TestPrepareCommandWorktree:
         repo_cafe_dir.mkdir(parents=True, exist_ok=True)
         repo_config = repo_cafe_dir / "config.yaml"
         repo_config.write_text("test_config: value\n")
+        (repo_cafe_dir / "phases.yaml").write_text(
+            "develop:\n  clis:\n    - {cli: codex, model: repo-owned}\n",
+            encoding="utf-8",
+        )
 
         # 創建 worktree 目錄（模擬 git worktree add 行為）
         worktree_path = temp_repo_dir / "worktrees" / "test-issue"
@@ -608,6 +612,7 @@ class TestPrepareCommandWorktree:
         worktree_config = worktree_cafe_dir / "config.yaml"
         assert worktree_config.exists(), "config.yaml should be copied to worktree"
         assert worktree_config.read_text() == "test_config: value\n"
+        assert not (worktree_cafe_dir / "phases.yaml").exists()
 
         # 驗證 issue 目錄結構被創建
         worktree_issue_dir = worktree_cafe_dir / "issues" / "test-issue"

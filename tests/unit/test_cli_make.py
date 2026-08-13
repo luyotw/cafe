@@ -12,82 +12,6 @@ from cafe.utils.config import ConfigManager
 class TestCheckAgentCLIsAvailable:
     """測試 _check_agent_clis_available 函數."""
 
-    def test_all_clis_available(self) -> None:
-        """測試當所有 CLI 工具都存在時, 檢查通過."""
-        # Setup
-        config_manager = MagicMock(spec=ConfigManager)
-        config_manager.get.side_effect = lambda key, default: {
-            "agents.pm": {"name": "Roger", "cli": "copilot"},
-            "agents.developer": {"name": "David", "cli": "claude"},
-            "agents.reviewer": {"name": "Richard", "cli": "gemini"},
-        }.get(key, default)
-
-        # Import the function
-        from cafe.ui.cli import _check_agent_clis_available
-
-        # Mock shutil.which to return paths for all CLIs
-        with patch("shutil.which") as mock_which:
-            mock_which.return_value = "/usr/local/bin/cli"
-
-            # Execute
-            missing_clis = _check_agent_clis_available(config_manager)
-
-            # Verify
-            assert missing_clis == []
-            assert mock_which.call_count == 3
-
-    def test_missing_cli_tools(self) -> None:
-        """測試當缺少某個 CLI 工具時, 檢查失敗並回傳正確錯誤訊息."""
-        # Setup
-        config_manager = MagicMock(spec=ConfigManager)
-        config_manager.get.side_effect = lambda key, default: {
-            "agents.pm": {"name": "Roger", "cli": "copilot"},
-            "agents.developer": {"name": "David", "cli": "claude"},
-            "agents.reviewer": {"name": "Richard", "cli": "gemini"},
-        }.get(key, default)
-
-        # Import the function
-        from cafe.ui.cli import _check_agent_clis_available
-
-        # Mock shutil.which to return None for 'claude' and 'gemini'
-        with patch("shutil.which") as mock_which:
-
-            def which_side_effect(cli: str) -> str | None:
-                return "/usr/local/bin/copilot" if cli == "copilot" else None
-
-            mock_which.side_effect = which_side_effect
-
-            # Execute
-            missing_clis = _check_agent_clis_available(config_manager)
-
-            # Verify
-            assert len(missing_clis) == 2
-            assert "claude" in missing_clis
-            assert "gemini" in missing_clis
-
-    def test_available_fallback_chain_does_not_fail_preflight(self) -> None:
-        """測試 fallback chain 有可用 CLI 時不阻擋 workflow."""
-        config_manager = MagicMock(spec=ConfigManager)
-        config_manager.get.side_effect = lambda key, default: {
-            "agents.pm": {"name": "Roger", "cli": "copilot"},
-            "agents.developer": {
-                "name": "David",
-                "clis": [{"cli": "claude"}, {"cli": "codex"}],
-            },
-            "agents.reviewer": {"name": "Richard", "cli": "copilot"},
-        }.get(key, default)
-
-        from cafe.ui.cli import _check_agent_clis_available
-
-        with patch("shutil.which") as mock_which:
-            mock_which.side_effect = lambda cli: (
-                f"/usr/local/bin/{cli}" if cli in {"copilot", "codex"} else None
-            )
-
-            missing_clis = _check_agent_clis_available(config_manager)
-
-            assert missing_clis == []
-
     def test_active_step_phase_chain_drives_transition_preflight(self, tmp_path: Path) -> None:
         """active step 有 explicit phase chain 時，只用該 chain 做 transition preflight."""
         phase_config = tmp_path / ".cafe" / "phases.yaml"
@@ -97,7 +21,9 @@ class TestCheckAgentCLIsAvailable:
 develop:
   clis:
     - cli: claude
+      model: sonnet
     - cli: codex
+      model: gpt-5.6-sol
 """,
             encoding="utf-8",
         )
@@ -135,31 +61,14 @@ develop:
         assert "step=develop" in warning_text
         assert "field=clis" in warning_text
 
-    def test_reads_correct_config_keys(self) -> None:
-        """測試從 `.cafe/config.yaml` 正確讀取所有 agent  CLI 配置."""
-        # Setup
-        config_manager = MagicMock(spec=ConfigManager)
-        config_manager.get.side_effect = lambda key, default: {
-            "agents.pm": {"name": "Roger", "cli": "copilot"},
-            "agents.developer": {"name": "David", "cli": "cursor-agent"},
-            "agents.reviewer": {"name": "Richard", "cli": "gemini"},
-        }.get(key, default)
-
-        # Import the function
+    def test_without_active_step_does_not_infer_role_configuration(self) -> None:
         from cafe.ui.cli import _check_agent_clis_available
 
-        # Mock shutil.which
+        config_manager = MagicMock(spec=ConfigManager)
         with patch("shutil.which") as mock_which:
-            mock_which.return_value = "/usr/local/bin/cli"
-
-            # Execute
-            _check_agent_clis_available(config_manager)
-
-            # Verify config_manager.get was called with correct keys
-            calls = [call[0][0] for call in config_manager.get.call_args_list]
-            assert "agents.pm" in calls
-            assert "agents.developer" in calls
-            assert "agents.reviewer" in calls
+            assert _check_agent_clis_available(config_manager) == []
+        mock_which.assert_not_called()
+        config_manager.get.assert_not_called()
 
 
 class TestMakeCommand:

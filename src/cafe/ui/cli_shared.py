@@ -28,6 +28,7 @@ from cafe.core.workflow_models import BatonRejected
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
+from cafe.playbooks.loader import PlaybookLoader
 from cafe.services.delta_display import DeltaDisplay
 from cafe.skills.loader import SkillLoader
 from cafe.utils.config import ConfigError, ConfigManager
@@ -2109,9 +2110,7 @@ def _handle_phase_exception(e: Exception, phase_name: str) -> None:
             console.print()
             console.print("[bold]Next steps (choose one):[/bold]")
             console.print("  • Wait for quota reset or switch to a different account, OR")
-            console.print(
-                "  • Use [cyan]cafe config edit[/cyan] to add backup agents or switch CLI tool"
-            )
+            console.print("  • Update the active step chain in [cyan].cafe/phases.yaml[/cyan]")
             console.print()
             console.print("Then run [cyan]cafe make[/cyan] again to resume from where it stopped")
             console.print()

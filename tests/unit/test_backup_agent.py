@@ -58,117 +58,6 @@ class TestAgentConfigBackupFields:
         assert config.model == "opus"
 
 
-class TestSetupAgentsBackupConfig:
-    """Tests for _setup_agents reading backup configuration."""
-
-    def test_setup_agents_loads_backup_clis(self, tmp_path: Path) -> None:
-        """Test that _setup_agents reads the backup list from config file."""
-        from cafe.ui.cli import _setup_agents
-        from cafe.utils.config import ConfigManager
-
-        config_file = tmp_path / "config.yaml"
-        config_manager = ConfigManager(str(config_file))
-
-        custom_config = {
-            "agents": {
-                "pm": {"name": "Roger", "cli": "copilot"},
-                "developer": {
-                    "name": "David",
-                    "cli": "claude",
-                    "backup": ["gemini", "copilot"],
-                },
-                "reviewer": {"name": "Richard", "cli": "copilot"},
-            }
-        }
-        config_manager.save_config(custom_config)
-
-        agent_manager = _setup_agents(config_manager, phase_name="develop")
-        david_config = agent_manager.agents["David"].config
-        assert david_config.backup_clis == [AgentCLI.GEMINI, AgentCLI.COPILOT]
-
-    def test_setup_agents_excludes_primary_cli_from_backup(self, tmp_path: Path) -> None:
-        """Test that entries in the backup list matching the primary CLI are filtered out."""
-        from cafe.ui.cli import _setup_agents
-        from cafe.utils.config import ConfigManager
-
-        config_file = tmp_path / "config.yaml"
-        config_manager = ConfigManager(str(config_file))
-
-        custom_config = {
-            "agents": {
-                "pm": {"name": "Roger", "cli": "copilot"},
-                "developer": {
-                    "name": "David",
-                    "cli": "claude",
-                    "backup": [
-                        "claude",
-                        "gemini",
-                    ],  # "claude" matches primary CLI, should be filtered
-                },
-                "reviewer": {"name": "Richard", "cli": "copilot"},
-            }
-        }
-        config_manager.save_config(custom_config)
-
-        agent_manager = _setup_agents(config_manager, phase_name="develop")
-        david_config = agent_manager.agents["David"].config
-        assert AgentCLI.CLAUDE not in david_config.backup_clis
-        assert AgentCLI.GEMINI in david_config.backup_clis
-
-    def test_setup_agents_loads_models_config(self, tmp_path: Path) -> None:
-        """Test that _setup_agents reads the models dict from config file."""
-        from cafe.ui.cli import _setup_agents
-        from cafe.utils.config import ConfigManager
-
-        config_file = tmp_path / "config.yaml"
-        config_manager = ConfigManager(str(config_file))
-
-        custom_config = {
-            "agents": {
-                "pm": {"name": "Roger", "cli": "copilot"},
-                "developer": {
-                    "name": "David",
-                    "cli": "claude",
-                    "models": {
-                        "claude": {"plan": "opus", "develop": "sonnet", "pr": "haiku"},
-                        "gemini": {
-                            "plan": "gemini-3-flash-preview",
-                            "develop": "gemini-3-flash-preview",
-                        },
-                    },
-                },
-                "reviewer": {"name": "Richard", "cli": "copilot"},
-            }
-        }
-        config_manager.save_config(custom_config)
-
-        agent_manager = _setup_agents(config_manager, phase_name="develop")
-        david_config = agent_manager.agents["David"].config
-        assert david_config.models_config["claude"]["plan"] == "opus"
-        assert david_config.models_config["gemini"]["develop"] == "gemini-3-flash-preview"
-
-    def test_setup_agents_empty_backup_when_not_configured(self, tmp_path: Path) -> None:
-        """Test that backup_clis is empty when not configured."""
-        from cafe.ui.cli import _setup_agents
-        from cafe.utils.config import ConfigManager
-
-        config_file = tmp_path / "config.yaml"
-        config_manager = ConfigManager(str(config_file))
-
-        custom_config = {
-            "agents": {
-                "pm": {"name": "Roger", "cli": "copilot"},
-                "developer": {"name": "David", "cli": "claude"},
-                "reviewer": {"name": "Richard", "cli": "copilot"},
-            }
-        }
-        config_manager.save_config(custom_config)
-
-        agent_manager = _setup_agents(config_manager)
-        assert agent_manager.agents["David"].config.backup_clis == []
-        assert agent_manager.agents["David"].config.models_config == {}
-
-
 class TestAgentManagerBackupRetry:
     """Tests for AgentManager backup agent retry logic."""
 
@@ -531,7 +420,7 @@ class TestRateLimitErrorDisplay:
             _handle_phase_exception(error, "develop")
 
         captured = capsys.readouterr()
-        assert "backup" in captured.out.lower() or "cafe config edit" in captured.out
+        assert ".cafe/phases.yaml" in captured.out
 
     def test_rate_limit_shows_tried_agents_when_all_exhausted(self, capsys) -> None:
         """Test that the error message shows the list of tried agents when all are exhausted."""

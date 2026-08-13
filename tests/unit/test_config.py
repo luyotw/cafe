@@ -2,12 +2,9 @@
 
 import pytest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 import yaml
 
 from cafe.utils.config import ConfigManager, ConfigError
-from cafe.utils.crew import CrewManager
-from cafe.core.types import AgentCLI
 
 
 @pytest.fixture
@@ -83,28 +80,6 @@ class TestLoadConfig:
         with pytest.raises(ConfigError, match="Failed to load config"):
             manager.load_config()
 
-    def test_load_config_migrates_legacy_agents_to_crew_yaml(self, tmp_path: Path) -> None:
-        """載入含 legacy agents 的 config 時會遷移至 crew.yaml 並清除 config agents。"""
-        config_dir = tmp_path / ".cafe"
-        config_dir.mkdir()
-        config_file = config_dir / "config.yaml"
-        config_file.write_text(
-            "python_bin: python3\n"
-            "agents:\n"
-            "  pm:\n    name: Roger\n    cli: copilot\n"
-        )
-
-        manager = ConfigManager(config_dir=str(config_dir))
-        loaded = manager.load_config()
-
-        assert "agents" not in loaded
-        assert loaded["python_bin"] == "python3"
-        crew_data = yaml.safe_load((config_dir / "crew.yaml").read_text())
-        assert crew_data["pm"]["name"] == "Roger"
-        config_on_disk = yaml.safe_load(config_file.read_text())
-        assert "agents" not in config_on_disk
-
-
 class TestDefaultConfig:
     """Test default configuration."""
 
@@ -113,28 +88,15 @@ class TestDefaultConfig:
         manager = ConfigManager()
         config = manager.get_default_config()
 
-        assert "agents" in config
-        assert isinstance(config["agents"], dict)
+        assert config["python_bin"] == "python3"
+        assert "agents" not in config
 
     def test_default_config_structure(self) -> None:
         """測試預設設定結構"""
         manager = ConfigManager()
         config = manager.get_default_config()
 
-        # Check agents structure
-        assert "pm" in config["agents"]
-        assert "developer" in config["agents"]
-        assert "reviewer" in config["agents"]
-
-        # Check each agent has name and cli
-        assert config["agents"]["pm"]["name"] == "Roger"
-        assert "cli" in config["agents"]["pm"]
-
-        assert config["agents"]["developer"]["name"] == "David"
-        assert "cli" in config["agents"]["developer"]
-
-        assert config["agents"]["reviewer"]["name"] == "Richard"
-        assert "cli" in config["agents"]["reviewer"]
+        assert config["auto"]["max_review_iterations"] == 5
 
 
 class TestSaveConfig:
@@ -195,27 +157,10 @@ class TestValidateConfig:
 
         assert result is True
 
-    def test_validate_invalid_agent_tool(self) -> None:
-        """測試驗證無效 agent cli"""
+    def test_validate_rejects_non_mapping(self) -> None:
         manager = ConfigManager()
-        config = {
-            "agents": [
-                {"name": "Roger", "cli": "invalid_cli"},
-            ],
-        }
-
-        with pytest.raises(ConfigError, match="Invalid agent"):
-            manager.validate_config(config)
-
-    def test_validate_missing_required_field(self) -> None:
-        """測試驗證缺少必要欄位"""
-        manager = ConfigManager()
-        config = {
-            # Missing agents
-        }
-
-        with pytest.raises(ConfigError, match="Missing required field"):
-            manager.validate_config(config)
+        with pytest.raises(ConfigError, match="mapping"):
+            manager.validate_config([])
 
 
 class TestGetConfigValue:
@@ -292,73 +237,24 @@ class TestResetConfig:
     def test_reset_to_defaults(self, config_with_file) -> None:
         """測試重置為預設值"""
         # Set some custom values
-        config_with_file.set("agents.pm.cli", "claude")
-        assert config_with_file.get("agents.pm.cli") == "claude"
+        config_with_file.set("python_bin", "custom-python")
+        assert config_with_file.get("python_bin") == "custom-python"
 
         # Reset
         config_with_file.reset()
 
         # Should be back to default (from get_default_config)
-        config = config_with_file.get("agents")
-        assert config["pm"]["cli"] == "gemini"  # Default from get_default_config()
+        assert config_with_file.get("python_bin") == "python3"
 
     def test_reset_persists_to_file(self, config_with_file) -> None:
         """測試重置會持久化到檔案"""
-        config_with_file.set("agents.pm.cli", "claude")
-        crew_file = config_with_file.config_dir / "crew.yaml"
-        if crew_file.exists():
-            crew_file.unlink()
+        config_with_file.set("python_bin", "custom-python")
         config_with_file.reset()
 
         # Load with new manager
         manager2 = ConfigManager(config_dir=str(config_with_file.config_dir))
         manager2.load_config()
-        crew = CrewManager(cafe_dir=config_with_file.config_dir).load()
-
-        assert crew["pm"]["cli"] == "gemini"  # Default from get_default_config()
-
-
-class TestAliasResolution:
-    """Test alias resolution for convenience shortcuts."""
-
-    def test_resolve_agent_shortcut(self) -> None:
-        """測試解析 agent CLI 快捷方式"""
-        manager = ConfigManager()
-
-        assert manager._resolve_alias("pm") == "agents.pm.cli"
-        assert manager._resolve_alias("dev") == "agents.developer.cli"  # dev is alias for developer
-        assert manager._resolve_alias("reviewer") == "agents.reviewer.cli"
-
-    def test_resolve_agent_with_property(self) -> None:
-        """測試解析帶屬性 agent key"""
-        manager = ConfigManager()
-
-        assert manager._resolve_alias("pm.cli") == "agents.pm.cli"
-        assert manager._resolve_alias("pm.name") == "agents.pm.name"
-        assert manager._resolve_alias("dev.cli") == "agents.developer.cli"  # dev is alias for developer
-
-    def test_resolve_non_agent_key(self) -> None:
-        """測試非 agent key 不做轉換"""
-        manager = ConfigManager()
-
-        assert manager._resolve_alias("defaults.workflow_mode") == "defaults.workflow_mode"
-        assert manager._resolve_alias("other.key") == "other.key"
-
-    def test_set_with_alias(self, config_with_file) -> None:
-        """測試使用 alias 設定值"""
-        # Use alias
-        config_with_file.set("pm", "gemini")
-
-        # Should be stored in agents.pm.cli
-        assert config_with_file.get("agents.pm.cli") == "gemini"
-
-    def test_set_with_agent_property_alias(self, config_with_file) -> None:
-        """測試使用 agent.property alias 設定值"""
-        # Use shorthand
-        config_with_file.set("pm.name", "NewPM")
-
-        # Should be stored in agents.pm.name
-        assert config_with_file.get("agents.pm.name") == "NewPM"
+        assert manager2.get("python_bin") == "python3"
 
 
 class TestMergeConfig:
@@ -409,25 +305,13 @@ class TestConfigUnicodeHandling:
         config_dir = tmp_path / ".cafe"
         config_manager = ConfigManager(config_dir=str(config_dir))
 
-        # Create config with Unicode characters (Chinese names)
-        unicode_config = {
-            "agents": {
-                "developer": {"cli": "claude", "name": "黃建"},
-                "pm": {"cli": "gemini", "name": "方竹"},
-                "reviewer": {"cli": "claude", "name": "安那"},
-            },
-            "python_bin": "python3",
-        }
+        unicode_config = {"project_label": "黃建", "python_bin": "python3"}
 
         # Save config
         config_manager.save_config(unicode_config)
 
-        config_manager.load_config()
-        crew = CrewManager(cafe_dir=config_dir).load()
-
-        assert crew["developer"]["name"] == "黃建"
-        assert crew["pm"]["name"] == "方竹"
-        assert crew["reviewer"]["name"] == "安那"
+        loaded = config_manager.load_config()
+        assert loaded["project_label"] == "黃建"
 
     def test_config_file_contains_readable_unicode(self, tmp_path: Path) -> None:
         """Test that saved config file contains readable Unicode (not escape sequences)."""
@@ -435,11 +319,7 @@ class TestConfigUnicodeHandling:
         config_manager = ConfigManager(config_dir=str(config_dir))
 
         # Create config with Unicode
-        unicode_config = {
-            "agents": {
-                "developer": {"cli": "claude", "name": "黃建"},
-            },
-        }
+        unicode_config = {"project_label": "黃建"}
 
         config_manager.save_config(unicode_config)
 
@@ -457,27 +337,17 @@ class TestConfigUnicodeHandling:
         config_dir = tmp_path / ".cafe"
         config_manager = ConfigManager(config_dir=str(config_dir))
 
-        original_config = {
-            "agents": {
-                "developer": {"cli": "claude", "name": "黃建"},
-                "pm": {"cli": "gemini", "name": "方竹"},
-                "reviewer": {"cli": "cursor", "name": "安那"},
-            },
-            "python_bin": "python3",
-        }
+        original_config = {"project_label": "黃建", "python_bin": "python3"}
 
         config_manager.save_config(original_config)
         config_manager.load_config()
-        crew_once = CrewManager(cafe_dir=config_dir).load()
+        loaded_once = config_manager.load_config()
 
         config_manager.save_config({"python_bin": "python3"})
         config_manager.load_config()
-        crew_twice = CrewManager(cafe_dir=config_dir).load()
-
-        for agent_type in ["developer", "pm", "reviewer"]:
-            expected = original_config["agents"][agent_type]["name"]
-            assert crew_once[agent_type]["name"] == expected
-            assert crew_twice[agent_type]["name"] == expected
+        loaded_twice = config_manager.load_config()
+        assert loaded_once["project_label"] == "黃建"
+        assert "project_label" not in loaded_twice
 
 
 class TestGetAllowedDirectories:

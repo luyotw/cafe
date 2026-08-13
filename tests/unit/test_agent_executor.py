@@ -243,7 +243,7 @@ class TestAgentExecutorErrorHandling:
         ],
     )
     def test_codex_usage_limit_signals_are_rate_limit(self, message: str) -> None:
-        """Codex's confirmed usage-limit signals should allow crew fallback."""
+        """Codex's confirmed usage-limit signals should allow chain fallback."""
         config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
         executor = AgentExecutor(config)
 

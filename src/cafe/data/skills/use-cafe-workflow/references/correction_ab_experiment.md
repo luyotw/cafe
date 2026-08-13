@@ -6,7 +6,7 @@ Use this protocol only when evaluating `correction_session: fresh|resume` or an 
 
 1. Freeze one base repository SHA, correction input, model, reasoning effort, CLI version, resolved playbook, dependencies, and test environment for each pair. Record SHA-256 fingerprints for the exact correction input, resolved playbook, and normalized environment manifest.
 2. Create two isolated clean worktrees from that SHA. Run one `resume` control and one `fresh` treatment; randomize arm order across pairs so provider timing is not consistently assigned to one policy.
-3. Keep playbook, crew, CLI version, dependencies, and test environment equal. Do not run the second arm on files mutated by the first.
+3. Keep playbook, phase chains, CLI version, dependencies, and test environment equal. Do not run the second arm on files mutated by the first.
 4. Record actual billed Codex credits for each arm. Do not substitute a rate-card estimate. Copy raw token and wall-time telemetry from the iteration metadata, not from `streaming.jsonl`.
 5. Record `success`, artifact/checklist/baton correctness, and high-severity review findings for both arms. A pair with missing telemetry or uncertain quality is incomplete, not a pass.
 

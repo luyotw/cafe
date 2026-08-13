@@ -9,12 +9,13 @@ from typing import Optional
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.playbook import resolve_playbook_skills
-from cafe.core.types import AgentCLI, AgentConfig
+from cafe.core.types import AgentCLI, AgentConfig, CliEntry
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.config import ConfigManager
-from cafe.utils.crew import CrewManager, normalize_role_config
+from cafe.utils.git_utils import get_git_toplevel, get_repo_root
+from cafe.utils.phase_config import load_phase_step_model
 
 CURSOR_NATIVE_MODULE_HINT = "@anysphere/file-service-"
 
@@ -57,50 +58,44 @@ def get_chat_next_step_path(issue_dir: Path) -> Path:
 def _load_chat_role_config(
     config_manager: ConfigManager, role: str, issue_dir: Optional[Path] = None
 ) -> Optional[dict]:
-    """Load role config from crew.yaml first, then config.yaml."""
+    """Load the active step's sole execution chain from phases.yaml."""
+    if issue_dir is None:
+        return None
     try:
-        config_dir = getattr(config_manager, "config_dir", None)
-        if isinstance(config_dir, (str, Path)):
-            crew_data = CrewManager(cafe_dir=Path(config_dir)).load()
-            role_config = crew_data.get(role)
-            if isinstance(role_config, dict):
-                return role_config
-    except Exception:
-        pass
-
-    role_config = config_manager.get(f"agents.{role}", None)
-    if isinstance(role_config, dict):
-        return role_config
-
-    if issue_dir is not None:
-        playbook_role_config = _load_playbook_role_config(issue_dir, role)
-        if playbook_role_config is not None:
-            return playbook_role_config
-    return None
-
-
-def _load_playbook_role_config(issue_dir: Path, role: str) -> Optional[dict]:
-    try:
-        _, _, playbook_id = _load_chat_workflow_context(issue_dir)
-        playbook = PlaybookLoader(project_root=Path.cwd()).load(playbook_id)
+        current_step, _steps, _playbook = _load_chat_workflow_context(issue_dir)
+        resolution = load_phase_step_model(
+            step_name=current_step,
+            local_path=get_git_toplevel() / ".cafe" / "phases.yaml",
+            repo_path=get_repo_root() / ".cafe" / "phases.yaml",
+        )
     except Exception:
         return None
+    if resolution.role and resolution.role != role:
+        return None
+    return {
+        "name": resolution.name or current_step,
+        "role": resolution.role or role,
+        "clis": [{"cli": cli, "model": model} for cli, model in resolution.clis],
+    }
 
-    role_def = playbook.get("roles", {}).get(role, {})
-    if not isinstance(role_def, dict):
-        return None
 
-    agent_name = role_def.get("default_agent")
-    cli = role_def.get("default_cli")
-    if not isinstance(agent_name, str) or not agent_name.strip():
-        return None
-    if not isinstance(cli, str) or not cli.strip():
-        return None
-    return {"name": agent_name.strip(), "cli": cli.strip()}
+def _phase_entries(role_config: dict) -> list[CliEntry]:
+    raw_entries = role_config.get("clis")
+    if not isinstance(raw_entries, list):
+        return []
+    entries: list[CliEntry] = []
+    for item in raw_entries:
+        if not isinstance(item, dict):
+            continue
+        try:
+            entries.append(CliEntry(cli=AgentCLI(item.get("cli")), model=item.get("model")))
+        except (TypeError, ValueError):
+            continue
+    return entries
 
 
 def _configured_cli_values(role_config: dict) -> set[str]:
-    chain = normalize_role_config(role_config)
+    chain = _phase_entries(role_config)
     values = {entry.cli.value for entry in chain}
     cli = role_config.get("cli")
     if isinstance(cli, str):
@@ -113,7 +108,7 @@ def _configured_model_for_cli(
     cli: str,
     phase_name: Optional[str],
 ) -> Optional[str]:
-    for entry in normalize_role_config(role_config):
+    for entry in _phase_entries(role_config):
         if entry.cli.value == cli:
             return entry.resolve_model(phase_name)
 
@@ -124,7 +119,7 @@ def _configured_model_for_cli(
 
 
 def _resolve_primary_chat_cli(role_config: dict) -> tuple[Optional[str], Optional[str]]:
-    chain = normalize_role_config(role_config)
+    chain = _phase_entries(role_config)
     if chain:
         primary = chain[0]
         return primary.cli.value, primary.resolve_model(None)
@@ -162,10 +157,10 @@ def _load_active_chat_cli(
     if configured and cli not in configured:
         return None
 
-    # An explicit crew.yaml primary change invalidates the sticky record:
+    # An explicit phase-chain primary change invalidates the sticky record:
     # ignore it unless the recorded configured_primary still matches (or the
     # sticky CLI already is the current primary). Mirrors AgentManager.
-    chain = normalize_role_config(role_config)
+    chain = _phase_entries(role_config)
     current_primary = chain[0].cli.value if chain else None
     recorded_primary = record.get("configured_primary")
     if current_primary is not None and cli != current_primary:
@@ -183,14 +178,13 @@ def _load_active_chat_cli(
 
     recorded_chain = record.get("chain")
     if isinstance(recorded_chain, list):
-        # Accept legacy stored chains as list of dicts or list of strings
         def _extract_cli_value(item):
             if isinstance(item, dict):
                 return item.get("cli")
             return item
 
         recorded_chain_values = [_extract_cli_value(i) for i in recorded_chain]
-        current_chain = [entry.cli.value for entry in normalize_role_config(role_config)]
+        current_chain = [entry.cli.value for entry in _phase_entries(role_config)]
         if recorded_chain_values != current_chain:
             return None
 
@@ -472,6 +466,7 @@ def launch_chat_session(
             name=agent_name,
             cli=agent_cli,
             model=agent_model,
+            clis=_phase_entries(agent_config),
         )
     )
 

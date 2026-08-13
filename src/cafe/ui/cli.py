@@ -397,7 +397,7 @@ def _setup_agents(
     phase_name: Optional[str] = None,
     cafe_dir: Optional[Path] = None,
 ) -> AgentManager:
-    """Setup agent manager with default agents."""
+    """Set up the active phase-configured agent manager."""
     return _shared_setup_agents(
         config_manager=config_manager,
         issue_name=issue_name,
@@ -514,6 +514,7 @@ def init() -> None:
 
     try:
         existing_config = config_manager.load_config()
+        existing_config.pop("agents", None)
         settings = existing_config.setdefault("settings", {})
 
         new_auto_update = prompt_confirm(
@@ -581,6 +582,7 @@ def setup(
             raise typer.Exit(1)
 
         existing_config = config_manager.load_config()
+        existing_config.pop("agents", None)
         settings = existing_config.setdefault("settings", {})
 
         if playbook is not None:
@@ -596,6 +598,7 @@ def setup(
 
     try:
         existing_config = config_manager.load_config()
+        existing_config.pop("agents", None)
         settings = existing_config.setdefault("settings", {})
 
         new_auto_update = prompt_confirm(
