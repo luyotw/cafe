@@ -47,7 +47,6 @@ try:
     from cafe.playbooks.loader import PlaybookLoader
     from cafe.skills.execution_profile import resolve_execution_profile
     from cafe.skills.loader import SkillLoader
-    from cafe.utils.crew import normalize_role_config
     from cafe.utils.phase_config import load_phase_step_model
 except ModuleNotFoundError:
     _reexec_with_cafe_python()
@@ -233,7 +232,6 @@ def _resolve_configured_chain(
     step_name: str,
     role: str,
     phase_config: Path,
-    crew_config: Mapping[str, Any],
 ) -> tuple[ModelChain, str]:
     phase = load_phase_step_model(
         step_name=step_name,
@@ -243,17 +241,7 @@ def _resolve_configured_chain(
         raise ValueError(
             f"phase config role mismatch for '{step_name}': expected '{role}', got '{phase.role}'"
         )
-    if phase.clis:
-        return _validate_chain(list(phase.clis), step_name=step_name), str(phase_config)
-
-    role_config = crew_config.get(role)
-    chain = normalize_role_config(role_config) if isinstance(role_config, dict) else []
-    resolved = [(entry.cli.value, entry.resolve_model(step_name) or "") for entry in chain]
-    if not resolved:
-        raise ValueError(
-            f"no model chain for phase '{step_name}'; pass --phase-chain or configure role '{role}'"
-        )
-    return _validate_chain(resolved, step_name=step_name), "crew config"
+    return _validate_chain(list(phase.clis), step_name=step_name), str(phase_config)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -281,7 +269,7 @@ def _parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="STEP=CLI:MODEL,CLI:MODEL",
-        help="Exact ordered chain for a phase; otherwise resolve phase and crew config.",
+        help="Exact ordered chain for a phase; otherwise resolve phases.yaml.",
     )
     parser.add_argument(
         "--phase-rationale",
@@ -291,7 +279,6 @@ def _parser() -> argparse.ArgumentParser:
         help="Driver-assessed capability band and evidence for an agent-executed phase.",
     )
     parser.add_argument("--phase-config", type=Path, default=Path(".cafe/phases.yaml"))
-    parser.add_argument("--crew-config", type=Path, default=Path(".cafe/crew.yaml"))
     parser.add_argument("--effective-locale")
     parser.add_argument("--locale-source")
     parser.add_argument("--repository-content-locale", required=True)
@@ -334,7 +321,6 @@ def render(args: argparse.Namespace) -> str:
     locale_source = args.locale_source or f"playbook:{args.playbook_id}"
     strategic_context = _project_path(args.strategic_context, project_root)
     phase_config = _project_path(args.phase_config, project_root)
-    crew_config_path = _project_path(args.crew_config, project_root)
     mandate, mandate_source = _load_strategic_context(strategic_context, args.issue_name)
     phase_chain_overrides = _parse_phase_chains(
         args.phase_chain,
@@ -344,7 +330,6 @@ def render(args: argparse.Namespace) -> str:
         args.phase_rationale,
         step_names=set(model.steps),
     )
-    crew_config = _load_yaml_mapping(crew_config_path, label="crew config")
     zh = effective_locale.lower().startswith("zh")
     worktree = args.worktree if args.worktree else "current checkout"
 
@@ -435,7 +420,6 @@ def render(args: argparse.Namespace) -> str:
                 step_name=step_name,
                 role=step.role,
                 phase_config=phase_config,
-                crew_config=crew_config,
             )
         primary = f"{chain[0][0]}:{chain[0][1]}"
         fallbacks = " → ".join(f"{cli}:{model_name}" for cli, model_name in chain[1:])

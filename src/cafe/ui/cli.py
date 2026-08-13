@@ -20,8 +20,6 @@ from cafe.ui.commands import catalog as catalog_commands
 from cafe.ui.commands import operation as operation_commands
 from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.commands import audit as audit_commands
-from cafe.ui.commands import preset as preset_commands
-from cafe.ui.commands import crew as crew_commands
 from cafe.ui.commands import verification as verification_commands
 from cafe.ui.cli_shared import (
     CONTENT_TYPE_FILE_MAP as _SHARED_CONTENT_TYPE_FILE_MAP,
@@ -479,26 +477,15 @@ def _get_valid_playbook_values() -> List[str]:
 
 
 @app.command()
-def init(
-    preset: Optional[str] = typer.Option(
-        None,
-        "--preset",
-        help="Preset name to apply directly (non-interactive).",
-    ),
-) -> None:
+def init() -> None:
     """Initialize CAFE configuration for the project.
 
-    Creates .cafe/config.yaml and runs crew set-primary + setup flows.
-    Use --preset for non-interactive initialization.
+    Creates project-owned configuration and bundled default content.
     """
-    from cafe.ui.commands.crew import run_set_primary_interactive
-    from cafe.utils.preset import PresetManager, PresetNotFoundError
-
     config_manager = ConfigManager()
     cafe_dir = Path(".cafe")
 
-    # Check if config already exists (only prompt when not using --preset on fresh init)
-    if not preset and config_manager.config_file.exists():
+    if config_manager.config_file.exists():
         console.print("[yellow]⚠️  Configuration already exists.[/yellow]")
         console.print(f"[dim]Current config: {config_manager.config_file}[/dim]")
         console.print()
@@ -517,25 +504,6 @@ def init(
 
     cafe_dir.mkdir(parents=True, exist_ok=True)
     _ensure_default_content(cafe_dir)
-
-    if preset:
-        manager = PresetManager()
-        try:
-            manager.apply(preset, cafe_dir=cafe_dir)
-        except PresetNotFoundError as e:
-            console.print(f"[red]Error: {e}[/red]")
-            raise typer.Exit(1)
-
-        config_manager.save_config({"settings": {"auto_update": True}})
-        console.print(f"[green]✓ Initialized with preset '[cyan]{preset}[/cyan]'.[/green]")
-        console.print("[cyan]You can now use `cafe prepare` to start a new development task.[/cyan]")
-        return
-
-    try:
-        run_set_primary_interactive(cafe_dir=cafe_dir)
-    except KeyboardInterrupt:
-        console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
-        raise typer.Exit(1)
 
     # Minimal config.yaml with defaults; setup can refine later
     if not config_manager.config_file.exists():
@@ -793,12 +761,6 @@ app.add_typer(agent_app, name="agent")
 # Playbook and skill management commands
 app.add_typer(catalog_commands.playbook_app, name="playbook")
 app.add_typer(catalog_commands.skill_app, name="skill")
-
-# Preset management commands
-app.add_typer(preset_commands.app, name="preset")
-
-# Crew management commands
-app.add_typer(crew_commands.crew_app, name="crew")
 
 # Workflow verification receipts
 app.add_typer(verification_commands.verification_app, name="verification")

@@ -121,6 +121,8 @@ Do not preload unrelated references.
 - `references/running_workflow.md` — commands, inspection, retries, operating rules.
 - `references/model_selection.md` — issue sizing, provider-neutral phase
   profiles, configured fallback preflight, reassessment, and adjustment authority.
+- `references/phases_yaml.md` — confirmed-chain writer contract and
+  non-authoritative field guidance.
 - `references/handoffs_and_alignment.md` — user pauses and driver decisions.
 - `references/diagnosis_and_repair.md` — bounded classification and disposition.
 - `references/convergent_pr_review.md` — batched final review, merge, close, teardown.

@@ -34,9 +34,8 @@ first execution and after every completed phase.
   use it merely to resume a user-owned handoff.
 
 - Keep the confirmed primary and fallback chains in the active worktree's
-  `.cafe/phases.yaml`. Use `--fallback-preset <preset>` only as a bounded
-  recovery when that confirmed config cannot be used; it replaces the remaining
-  crew and therefore follows model-adjustment authority.
+  `.cafe/phases.yaml`. Install or change them with `write_phase_config.py`, then
+  verify the affected step through the core parser before execution.
 - Use repeated `--add-dir <path>` for existing extra directories. Prefer stable
   configuration in `.cafe/config.yaml` as `allowed_directories`.
 

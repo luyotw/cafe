@@ -155,8 +155,9 @@ which CLI/model actually ran.
 ## Persist the confirmed plan
 
 After kickoff confirmation and preparation, store issue-owned execution chains
-in the active worktree's `.cafe/phases.yaml`; do not rewrite repository-wide
-crew defaults for one issue:
+in the active worktree's `.cafe/phases.yaml` with
+`scripts/write_phase_config.py`. Pass only the exact confirmed dynamic chains,
+then resolve every required step through the core parser before execution:
 
 ```yaml
 quality_gate:

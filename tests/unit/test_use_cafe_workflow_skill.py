@@ -1,6 +1,8 @@
 """Tests for bundled use-cafe-workflow skill guidance."""
 
 import subprocess
+import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -259,6 +261,107 @@ def test_kickoff_formatter_documents_structural_validation_boundary() -> None:
     assert "driver-assessed" in script
 
 
+def test_phase_writer_installs_exact_confirmed_chains_atomically(tmp_path: Path) -> None:
+    chains = tmp_path / "chains.json"
+    target = tmp_path / ".cafe" / "phases.yaml"
+    chains.write_text(
+        json.dumps(
+            {
+                "develop": {
+                    "name": "David",
+                    "role": "developer",
+                    "clis": [
+                        {"cli": "codex", "model": "gpt-5.6-sol"},
+                        {"cli": "claude", "model": "claude-opus-5"},
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    script = SKILL_ROOT / "scripts" / "write_phase_config.py"
+
+    result = subprocess.run(
+        [sys.executable, str(script), "--chains-json", str(chains), "--target", str(target)],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    from cafe.utils.phase_config import load_phase_step_model
+
+    resolution = load_phase_step_model(step_name="develop", local_path=target)
+    assert resolution.clis == (
+        ("codex", "gpt-5.6-sol"),
+        ("claude", "claude-opus-5"),
+    )
+
+
+def test_phase_writer_preserves_existing_file_when_candidate_is_invalid(tmp_path: Path) -> None:
+    chains = tmp_path / "chains.json"
+    target = tmp_path / ".cafe" / "phases.yaml"
+    target.parent.mkdir()
+    original = "develop:\n  clis:\n    - {cli: codex, model: old}\n    - {cli: claude, model: old}\n"
+    target.write_text(original, encoding="utf-8")
+    chains.write_text(
+        json.dumps({"develop": {"clis": [{"cli": "codex", "model": "only-primary"}]}}),
+        encoding="utf-8",
+    )
+    script = SKILL_ROOT / "scripts" / "write_phase_config.py"
+
+    result = subprocess.run(
+        [sys.executable, str(script), "--chains-json", str(chains), "--target", str(target)],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_phase_writer_preserves_existing_file_when_atomic_replace_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    chains = tmp_path / "chains.json"
+    target = tmp_path / ".cafe" / "phases.yaml"
+    target.parent.mkdir()
+    original = "develop:\n  clis:\n    - {cli: codex, model: old}\n"
+    target.write_text(original, encoding="utf-8")
+    chains.write_text(
+        json.dumps(
+            {
+                "develop": {
+                    "clis": [
+                        {"cli": "codex", "model": "gpt-5.6-sol"},
+                        {"cli": "claude", "model": "claude-opus-5"},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    script = SKILL_ROOT / "scripts" / "write_phase_config.py"
+    spec = importlib.util.spec_from_file_location("test_write_phase_config", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError("blocked")))
+
+    try:
+        module.write_phase_config(chains_file=chains, target=target)
+    except OSError:
+        pass
+    else:
+        raise AssertionError("atomic replacement failure must be surfaced")
+
+    assert target.read_text(encoding="utf-8") == original
+    assert not list(target.parent.glob(".phases.yaml.*.tmp"))
+
+
 def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
     tmp_path: Path,
 ) -> None:
@@ -513,7 +616,8 @@ def test_kickoff_formatter_rejects_unresolved_phase_models(tmp_path: Path) -> No
     )
 
     assert result.returncode == 2
-    assert "no model chain for phase 'spec'" in result.stderr
+    assert "step='spec'" in result.stderr
+    assert "field='spec'" in result.stderr
 
 
 def test_kickoff_formatter_rejects_missing_phase_rationale(tmp_path: Path) -> None:
