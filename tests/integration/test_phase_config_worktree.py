@@ -68,3 +68,20 @@ def test_load_phase_step_model_field_by_field_fallback(tmp_path: Path) -> None:
     assert result.name == "RepoName"
     assert result.role == "developer"
     assert result.model == "local-codex"
+
+
+def test_missing_chain_fails_closed_instead_of_using_legacy_config(tmp_path: Path) -> None:
+    legacy = tmp_path / "worktree" / ".cafe" / "crew.yaml"
+    _write_yaml(legacy, {"build": {"clis": [{"cli": "codex", "model": "legacy"}]}})
+
+    with pytest.raises(ValueError) as exc_info:
+        load_phase_step_model(
+            step_name="build",
+            local_path=tmp_path / "worktree" / ".cafe" / "phases.yaml",
+            repo_path=tmp_path / ".cafe" / "phases.yaml",
+        )
+
+    message = str(exc_info.value)
+    assert "step='build'" in message
+    assert "field='build'" in message
+    assert legacy.as_posix() not in message

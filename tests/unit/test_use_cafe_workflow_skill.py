@@ -1,6 +1,8 @@
 """Tests for bundled use-cafe-workflow skill guidance."""
 
 import subprocess
+import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -24,11 +26,26 @@ DEFAULT_PHASE_CHAINS = {
     "pr": "cursor-agent:publication-main,gemini:publication-fallback",
 }
 
+DEFAULT_PHASE_RATIONALES = {
+    "spec": "frontier: high requirements reasoning and public-contract risk; equivalent fallback",
+    "plan": "frontier: high architecture reasoning and integration risk; equivalent fallback",
+    "develop": "balanced: bounded implementation with integration tests; equivalent fallback",
+    "review": "frontier: high correctness and security reasoning; stronger fallback",
+    "pr": "efficiency: routine publication artifact with independent host validation; equivalent fallback",
+}
+
 
 def _phase_chain_args(chains: dict[str, str] | None = None) -> list[str]:
     result: list[str] = []
     for step, chain in (chains or DEFAULT_PHASE_CHAINS).items():
         result.extend(["--phase-chain", f"{step}={chain}"])
+    return result
+
+
+def _phase_rationale_args(rationales: dict[str, str] | None = None) -> list[str]:
+    result: list[str] = []
+    for step, rationale in (rationales or DEFAULT_PHASE_RATIONALES).items():
+        result.extend(["--phase-rationale", f"{step}={rationale}"])
     return result
 
 
@@ -179,6 +196,7 @@ mandate:
             "--assessment-rationale",
             "Changes a public workflow contract across runtime and CLI.",
             *_phase_chain_args(),
+            *_phase_rationale_args(),
             "--effective-locale",
             "zh-TW",
             "--locale-source",
@@ -215,13 +233,13 @@ mandate:
     assert "### Phase model chains — driver-assessed" in result.stdout
     assert (
         "| develop | copilot:implementation-main | "
-        "cursor-agent:implementation-fallback | --phase-chain |" in result.stdout
+        "cursor-agent:implementation-fallback | --phase-chain | balanced:" in result.stdout
     )
     assert (
-        "| review | gemini:review-main | copilot:review-fallback | --phase-chain |" in result.stdout
+        "| review | gemini:review-main | copilot:review-fallback | --phase-chain | frontier:" in result.stdout
     )
     assert (
-        "| pr | cursor-agent:publication-main | gemini:publication-fallback | --phase-chain |"
+        "| pr | cursor-agent:publication-main | gemini:publication-fallback | --phase-chain | efficiency:"
         in result.stdout
     )
     assert (
@@ -241,6 +259,107 @@ def test_kickoff_formatter_documents_structural_validation_boundary() -> None:
     assert "structurally validated" in script
     assert "validates chain structure only; it does not validate model suitability" in kickoff
     assert "driver-assessed" in script
+
+
+def test_phase_writer_installs_exact_confirmed_chains_atomically(tmp_path: Path) -> None:
+    chains = tmp_path / "chains.json"
+    target = tmp_path / ".cafe" / "phases.yaml"
+    chains.write_text(
+        json.dumps(
+            {
+                "develop": {
+                    "name": "David",
+                    "role": "developer",
+                    "clis": [
+                        {"cli": "codex", "model": "gpt-5.6-sol"},
+                        {"cli": "claude", "model": "claude-opus-5"},
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    script = SKILL_ROOT / "scripts" / "write_phase_config.py"
+
+    result = subprocess.run(
+        [sys.executable, str(script), "--chains-json", str(chains), "--target", str(target)],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    from cafe.utils.phase_config import load_phase_step_model
+
+    resolution = load_phase_step_model(step_name="develop", local_path=target)
+    assert resolution.clis == (
+        ("codex", "gpt-5.6-sol"),
+        ("claude", "claude-opus-5"),
+    )
+
+
+def test_phase_writer_preserves_existing_file_when_candidate_is_invalid(tmp_path: Path) -> None:
+    chains = tmp_path / "chains.json"
+    target = tmp_path / ".cafe" / "phases.yaml"
+    target.parent.mkdir()
+    original = "develop:\n  clis:\n    - {cli: codex, model: old}\n    - {cli: claude, model: old}\n"
+    target.write_text(original, encoding="utf-8")
+    chains.write_text(
+        json.dumps({"develop": {"clis": [{"cli": "codex", "model": "only-primary"}]}}),
+        encoding="utf-8",
+    )
+    script = SKILL_ROOT / "scripts" / "write_phase_config.py"
+
+    result = subprocess.run(
+        [sys.executable, str(script), "--chains-json", str(chains), "--target", str(target)],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_phase_writer_preserves_existing_file_when_atomic_replace_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    chains = tmp_path / "chains.json"
+    target = tmp_path / ".cafe" / "phases.yaml"
+    target.parent.mkdir()
+    original = "develop:\n  clis:\n    - {cli: codex, model: old}\n"
+    target.write_text(original, encoding="utf-8")
+    chains.write_text(
+        json.dumps(
+            {
+                "develop": {
+                    "clis": [
+                        {"cli": "codex", "model": "gpt-5.6-sol"},
+                        {"cli": "claude", "model": "claude-opus-5"},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    script = SKILL_ROOT / "scripts" / "write_phase_config.py"
+    spec = importlib.util.spec_from_file_location("test_write_phase_config", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError("blocked")))
+
+    try:
+        module.write_phase_config(chains_file=chains, target=target)
+    except OSError:
+        pass
+    else:
+        raise AssertionError("atomic replacement failure must be surfaced")
+
+    assert target.read_text(encoding="utf-8") == original
+    assert not list(target.parent.glob(".phases.yaml.*.tmp"))
 
 
 def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
@@ -345,6 +464,7 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
             "--strategic-context",
             str(strategic_context),
             *_phase_chain_args(),
+            *_phase_rationale_args(),
         ],
         cwd=PROJECT_ROOT,
         text=True,
@@ -434,6 +554,8 @@ entry_point: audit
             "The custom phase evaluates a security-sensitive contract.",
             "--phase-chain",
             "audit=gemini:audit-main,copilot:audit-fallback",
+            "--phase-rationale",
+            "audit=frontier: high security review with an equivalent independent fallback",
             "--repository-content-locale",
             "en-US",
             "--current-checkout",
@@ -494,7 +616,53 @@ def test_kickoff_formatter_rejects_unresolved_phase_models(tmp_path: Path) -> No
     )
 
     assert result.returncode == 2
-    assert "no model chain for phase 'spec'" in result.stderr
+    assert "step='spec'" in result.stderr
+    assert "field='spec'" in result.stderr
+
+
+def test_kickoff_formatter_rejects_missing_phase_rationale(tmp_path: Path) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SKILL_ROOT / "scripts" / "format_kickoff_contract.py"),
+            "simple",
+            "--project-root",
+            str(PROJECT_ROOT),
+            "--issue-name",
+            "issue-no-rationale",
+            "--issue-nature",
+            "localized defect",
+            "--issue-scale",
+            "small",
+            "--model-adjustment-authority",
+            "user_approval_required",
+            "--risk-factor",
+            "none",
+            "--assessment-rationale",
+            "Focused behavior.",
+            "--phase-chain",
+            "spec=gemini:requirements-main,copilot:requirements-fallback",
+            "--repository-content-locale",
+            "en-US",
+            "--user-required",
+            "spec",
+            "--current-checkout",
+            "--strategic-context",
+            str(strategic_context),
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "missing phase rationale for agent-executed step: spec" in result.stderr
 
 
 def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() -> None:
@@ -651,6 +819,14 @@ def test_use_cafe_workflow_requires_one_step_execution_and_model_authority() -> 
     assert "`driver_autonomous`" in kickoff
     assert "`user_approval_required`" in kickoff
     assert "No provider or model is built into this skill" in normalized_models
+    assert "The phase skill owns only its provider-neutral minimum execution profile" in normalized_models
+    assert "The driver owns the capability-band classification" in normalized_models
+    assert "`efficiency`" in models
+    assert "`balanced`" in models
+    assert "`frontier`" in models
+    assert "Treat an existing repository chain as a candidate, not as selection evidence" in normalized_models
+    assert "A publication phase may remain `efficiency`" in normalized_models
+    assert "Reduced uncertainty after spec or plan may move" in normalized_models
     assert "Resolve the skill bound by the active playbook" in normalized_models
     assert "actual next iteration" in normalized_models
     assert "making the primary fail with the classified `model_not_found`" in normalized_models

@@ -52,11 +52,8 @@ def config(
     \b
     Examples:
         cafe config
-        cafe config set pm gemini
-        cafe config set pm.cli gemini
-        cafe config set agents.pm.cli gemini
-        cafe config get pm
-        cafe config get agents.pm.cli
+        cafe config set settings.playbook default
+        cafe config get settings.playbook
         cafe config edit
         cafe config reset
     """

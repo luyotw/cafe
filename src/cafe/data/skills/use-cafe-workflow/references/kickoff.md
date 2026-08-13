@@ -154,6 +154,7 @@ python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --model-adjustment-authority <driver_autonomous|user_approval_required> \
   --risk-factor "<risk factor; repeat as needed>" \
   --assessment-rationale "<repository evidence for nature and scale>" \
+  --phase-rationale "<step>=<capability band, profile/risk evidence, and fallback justification>" \
   --effective-locale <locale> \
   --locale-source "<playbook or direct-user-override source>" \
   --repository-content-locale <locale> \
@@ -170,14 +171,17 @@ contain the starting files.
 
 Pass `--phase-chain
 <step>=<primary-cli>:<exact-model>,<fallback-cli>:<exact-model>` once for every
-agent-executed phase that is not already fully resolved by `--phase-config` and
-`--crew-config`. The formatter has no built-in provider or model defaults. It
+agent-executed phase that is not already fully resolved by `--phase-config`.
+The formatter has no built-in provider or model defaults. It
 rejects a missing fallback, an unresolved model, and an unsupported CLI. It
-validates chain structure only; it does not validate model suitability. Use the
-phase profile, issue assessment, provider documentation, and preflight evidence
-to justify that each selected model satisfies the displayed requirements. This
-judgment remains driver-owned rather than a runtime model registry, and the
-formatter labels the model-chain table `driver-assessed`.
+validates chain structure only; it does not validate model suitability. Pass one
+`--phase-rationale <step>=<text>` for every agent-executed phase. The formatter
+rejects missing, unknown, or duplicate rationales and displays them beside the
+chain. Use the capability band, phase profile, issue assessment, current
+provider documentation, and preflight evidence to justify that each selected
+model satisfies the displayed requirements. This judgment remains driver-owned
+rather than a runtime model registry, and the formatter labels the model-chain
+table `driver-assessed`.
 
 Pass an option with no step values for an explicit empty list. The formatter
 validates the partition and includes every phase, role, skill, scheduled gate,
@@ -206,7 +210,7 @@ for confirmation rather than asking again.
   it in `.cafe/strategic_context.yaml`.
 - [ ] Complete the issue assessment and model preflight from
   `model_selection.md`; do not propose a model that already failed preflight.
-- [ ] If needed, initialize with `cafe init --preset <preset>`.
+- [ ] If needed, initialize project-owned files with `cafe init`.
 - [ ] For an existing initialized repository, recommend a worktree at
   `.cafe/worktrees/<issue-name>` by default. If the user accepts the recommended
   kickoff unchanged, worktree creation is approved. For an approved first Git
@@ -265,9 +269,9 @@ for confirmation rather than asking again.
     confirmed_at: 2026-08-13
   ```
 
-- [ ] Write the confirmed ordered phase chains to the active worktree's
-  `.cafe/phases.yaml` and verify the effective config as described in
-  `model_selection.md`.
+- [ ] Install the confirmed ordered phase chains in the active worktree with
+  `scripts/write_phase_config.py`, then verify the effective config as described
+  in `model_selection.md`.
 - [ ] Re-run `cafe playbook confirmation-gates <playbook-id>` and verify the
   locale and exact candidate partition before the first workflow execution.
 - [ ] If preparation accidentally omitted an approved worktree, repair or

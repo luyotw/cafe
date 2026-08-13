@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from cafe.agents.executor import AgentExecutionError
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.git import BranchHealth
 from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult
@@ -28,6 +27,12 @@ from cafe.ui.commands.workflow import _reset_baton_for_explicit_start_step
 from cafe.utils.config import ConfigManager
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _configured_cli_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Workflow command tests isolate routing from phase-config preflight."""
+    monkeypatch.setattr("cafe.ui.cli._check_agent_clis_available", lambda *args, **kwargs: [])
 
 
 def test_issue_step_resolution_uses_issue_yaml_before_blackboard_exists(
@@ -259,7 +264,7 @@ steps:
 
         result = runner.invoke(app, ["workflow", "--playbook", "custom", "--dry-run"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, (result.stdout, result.exception)
     assert "Ownership plan (read-only)" in result.stdout
     assert not (tmp_path / ".cafe" / "issues" / "issue-custom-publish" / "blackboard.json").exists()
 
@@ -424,70 +429,6 @@ def test_workflow_command_passes_initial_user_input_to_brief_step(
     assert mock_builder.call_args.kwargs["step_user_inputs"] == {
         "brief": "Write a blog post about playbook-driven workflows."
     }
-
-
-def test_workflow_fallback_rebuild_passes_entry_point_user_input(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Fallback executor rebuild should keep entry-point keyed step_user_inputs."""
-    monkeypatch.chdir(tmp_path)
-    cafe_dir = tmp_path / ".cafe"
-    cafe_dir.mkdir()
-    presets_dir = cafe_dir / "presets"
-    presets_dir.mkdir()
-    (presets_dir / "fallback-crew.yaml").write_text(
-        "pm:\n  name: Roger\n  cli: gemini\n",
-        encoding="utf-8",
-    )
-
-    user_text = "Hotfix the login timeout regression."
-    builder_calls: list[tuple[str | None, dict[str, str] | None]] = []
-    execute_calls = {"count": 0}
-
-    class FakeExecutor:
-        def execute_step(
-            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
-        ) -> StepExecutionResult:
-            execute_calls["count"] += 1
-            if execute_calls["count"] == 1:
-                raise AgentExecutionError("rate limit", error_type="rate_limit")
-            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
-
-    def fake_builder(**kwargs):
-        builder_calls.append((kwargs.get("phase_name"), kwargs.get("step_user_inputs")))
-        return FakeExecutor()
-
-    with (
-        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.cli._build_workflow_step_executor", side_effect=fake_builder),
-        patch("cafe.utils.preset.PresetManager.apply"),
-    ):
-        git = MagicMock()
-        git.get_current_branch.return_value = "issue-hotfix-fallback"
-        mock_git_cls.return_value = git
-
-        result = runner.invoke(
-            app,
-            [
-                "workflow",
-                "--playbook",
-                "hotfix",
-                "--execute",
-                "--user-input",
-                user_text,
-                "--fallback-preset",
-                "fallback-crew",
-            ],
-        )
-
-    assert result.exit_code == 0
-    expected_input = {"develop": user_text}
-    assert builder_calls == [
-        ("develop", expected_input),
-        ("develop", expected_input),
-        ("review", expected_input),
-        ("pr", expected_input),
-    ]
 
 
 def test_workflow_command_resume_user_input_targets_handoff_from_step(
@@ -1324,7 +1265,7 @@ def test_workflow_command_does_not_treat_generic_user_input_as_alignment_approva
             ],
         )
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, (result.stdout, result.exception)
     assert "alignment decision payload" in result.stdout
     assert not (issue_dir / "develop" / "iteration_001" / "user_input.md").exists()
     reloaded = store.load_or_create("spec", playbook_id="default")

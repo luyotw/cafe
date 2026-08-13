@@ -48,18 +48,38 @@ from cafe.core.types import AgentCLI, AgentConfig, TokenUsage
 from cafe.core.workflow_runtime import operation_artifact_is_trusted
 from cafe.phases.generic_phase import GenericPhase, GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
+from cafe.utils.phase_config import PhaseStepModelResolution
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 
 
 @pytest.fixture(autouse=True)
-def _default_strategic_context(tmp_path: Path):
+def _default_runtime_context(tmp_path: Path, monkeypatch):
     """Give tests a configured strategic context so steps that opt into the
     alignment gate stay quiet unless a test sets up a real trigger. Tests that
     exercise the missing-context behavior delete this file explicitly."""
     config = tmp_path / ".cafe" / "strategic_context.yaml"
     config.parent.mkdir(parents=True, exist_ok=True)
     config.write_text("version: 1\n", encoding="utf-8")
+
+    from cafe.phases import generic_workflow_step
+
+    real_loader = generic_workflow_step.load_phase_step_model
+
+    def load_test_phase_config(*, step_name, local_path, repo_path=None):
+        if any(path is not None and path.exists() for path in (local_path, repo_path)):
+            return real_loader(step_name=step_name, local_path=local_path, repo_path=repo_path)
+        return PhaseStepModelResolution(
+            name=None,
+            role=None,
+            clis=(("codex", "gpt-5-test"),),
+            model="gpt-5-test",
+            source="test",
+            chain=("test",),
+            clis_source="test",
+        )
+
+    monkeypatch.setattr(generic_workflow_step, "load_phase_step_model", load_test_phase_config)
 
 
 class FakeAgentManager:
@@ -421,6 +441,9 @@ def test_resolve_agent_name_uses_phase_config_name(tmp_path: Path, monkeypatch) 
 develop:
   name: PhaseDavid
   role: developer
+  clis:
+    - cli: codex
+      model: gpt-5-test
 """,
         encoding="utf-8",
     )
@@ -2584,6 +2607,13 @@ def test_generic_workflow_step_applies_phase_specific_model_per_step(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    (tmp_path / ".cafe" / "phases.yaml").write_text(
+        "spec:\n  clis:\n    - cli: codex\n      model: gpt-5.4\n"
+        "plan:\n  clis:\n    - cli: codex\n      model: claude-opus-4.6\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("cafe.phases.generic_workflow_step.get_repo_root", lambda: tmp_path)
+    monkeypatch.setattr("cafe.phases.generic_workflow_step.get_git_toplevel", lambda: tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-models"
     playbook = {
         "playbook": {"id": "default"},
@@ -2628,10 +2658,6 @@ def test_generic_workflow_step_applies_phase_specific_model_per_step(
         agent_manager=agent_manager,
         git_ops=FakeGitOperations(),
         role_agent_map={"pm": "Roger", "developer": "David"},
-        role_configs={
-            "pm": {"spec": {"model": "gpt-5.4"}},
-            "developer": {"plan": {"model": "claude-opus-4.6"}},
-        },
     )
 
     executor.execute_step("spec", playbook["steps"]["spec"], state)
@@ -2646,14 +2672,17 @@ def test_generic_workflow_step_applies_phase_specific_model_per_step(
     assert "claude-opus-4.6" in (agent_manager.preview_calls[1] or [])
 
 
-def test_generic_workflow_step_applies_phase_specific_model_from_clis_format(
+def test_generic_workflow_step_applies_primary_model_from_phase_chain(
     tmp_path: Path, monkeypatch
 ) -> None:
-    # Regression: per-phase models declared in the new `clis:` list format must
-    # reach the CLI command. Previously _resolve_step_model only understood the
-    # old `role.<phase>.model` shape, so the clis list was silently ignored and
-    # the CLI fell back to its default model.
     monkeypatch.chdir(tmp_path)
+    (tmp_path / ".cafe" / "phases.yaml").write_text(
+        "spec:\n  clis:\n    - cli: claude\n      model: opus\n"
+        "plan:\n  clis:\n    - cli: claude\n      model: opus\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("cafe.phases.generic_workflow_step.get_repo_root", lambda: tmp_path)
+    monkeypatch.setattr("cafe.phases.generic_workflow_step.get_git_toplevel", lambda: tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-clis-models"
     playbook = {
         "playbook": {"id": "default"},
@@ -2698,10 +2727,6 @@ def test_generic_workflow_step_applies_phase_specific_model_from_clis_format(
         agent_manager=agent_manager,
         git_ops=FakeGitOperations(),
         role_agent_map={"pm": "Roger", "developer": "David"},
-        role_configs={
-            "pm": {"clis": [{"cli": "claude", "spec": "opus"}]},
-            "developer": {"clis": [{"cli": "claude", "plan": "opus", "develop": "sonnet"}]},
-        },
     )
 
     executor.execute_step("spec", playbook["steps"]["spec"], state)

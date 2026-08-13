@@ -432,7 +432,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         agent_name: str,
         fallback: Optional[Iterable[Any]],
     ) -> Optional[Iterable[Any]]:
-        """Return the registered crew chain without invocation-local reordering."""
+        """Return the registered execution chain without invocation-local reordering."""
         getter = getattr(self.agent_manager, "configured_execution_chain", None)
         if callable(getter):
             try:
@@ -530,7 +530,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             data[agent_name] = {
                 "cli": agent_cli,
                 "model": model,
-                # Crew primary at record time, so a later crew.yaml primary change
+                # Configured primary at record time, so a later chain change
                 # invalidates this sticky record instead of being overridden by it.
                 "configured_primary": configured_primary,
                 "chain": execution_chain_snapshot,

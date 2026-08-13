@@ -47,7 +47,6 @@ try:
     from cafe.playbooks.loader import PlaybookLoader
     from cafe.skills.execution_profile import resolve_execution_profile
     from cafe.skills.loader import SkillLoader
-    from cafe.utils.crew import normalize_role_config
     from cafe.utils.phase_config import load_phase_step_model
 except ModuleNotFoundError:
     _reexec_with_cafe_python()
@@ -209,12 +208,30 @@ def _parse_phase_chains(
     return parsed
 
 
+def _parse_phase_rationales(
+    values: list[str],
+    *,
+    step_names: set[str],
+) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for value in values:
+        step_name, separator, rationale = value.partition("=")
+        step_name, rationale = step_name.strip(), rationale.strip()
+        if not separator or not step_name or not rationale:
+            raise ValueError("invalid --phase-rationale; expected STEP=RATIONALE")
+        if step_name not in step_names:
+            raise ValueError(f"unknown phase-rationale step: {step_name}")
+        if step_name in parsed:
+            raise ValueError(f"duplicate phase-rationale step: {step_name}")
+        parsed[step_name] = rationale
+    return parsed
+
+
 def _resolve_configured_chain(
     *,
     step_name: str,
     role: str,
     phase_config: Path,
-    crew_config: Mapping[str, Any],
 ) -> tuple[ModelChain, str]:
     phase = load_phase_step_model(
         step_name=step_name,
@@ -224,17 +241,7 @@ def _resolve_configured_chain(
         raise ValueError(
             f"phase config role mismatch for '{step_name}': expected '{role}', got '{phase.role}'"
         )
-    if phase.clis:
-        return _validate_chain(list(phase.clis), step_name=step_name), str(phase_config)
-
-    role_config = crew_config.get(role)
-    chain = normalize_role_config(role_config) if isinstance(role_config, dict) else []
-    resolved = [(entry.cli.value, entry.resolve_model(step_name) or "") for entry in chain]
-    if not resolved:
-        raise ValueError(
-            f"no model chain for phase '{step_name}'; pass --phase-chain or configure role '{role}'"
-        )
-    return _validate_chain(resolved, step_name=step_name), "crew config"
+    return _validate_chain(list(phase.clis), step_name=step_name), str(phase_config)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -262,10 +269,16 @@ def _parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="STEP=CLI:MODEL,CLI:MODEL",
-        help="Exact ordered chain for a phase; otherwise resolve phase and crew config.",
+        help="Exact ordered chain for a phase; otherwise resolve phases.yaml.",
+    )
+    parser.add_argument(
+        "--phase-rationale",
+        action="append",
+        default=[],
+        metavar="STEP=RATIONALE",
+        help="Driver-assessed capability band and evidence for an agent-executed phase.",
     )
     parser.add_argument("--phase-config", type=Path, default=Path(".cafe/phases.yaml"))
-    parser.add_argument("--crew-config", type=Path, default=Path(".cafe/crew.yaml"))
     parser.add_argument("--effective-locale")
     parser.add_argument("--locale-source")
     parser.add_argument("--repository-content-locale", required=True)
@@ -308,13 +321,15 @@ def render(args: argparse.Namespace) -> str:
     locale_source = args.locale_source or f"playbook:{args.playbook_id}"
     strategic_context = _project_path(args.strategic_context, project_root)
     phase_config = _project_path(args.phase_config, project_root)
-    crew_config_path = _project_path(args.crew_config, project_root)
     mandate, mandate_source = _load_strategic_context(strategic_context, args.issue_name)
     phase_chain_overrides = _parse_phase_chains(
         args.phase_chain,
         step_names=set(model.steps),
     )
-    crew_config = _load_yaml_mapping(crew_config_path, label="crew config")
+    phase_rationales = _parse_phase_rationales(
+        args.phase_rationale,
+        step_names=set(model.steps),
+    )
     zh = effective_locale.lower().startswith("zh")
     worktree = args.worktree if args.worktree else "current checkout"
 
@@ -396,7 +411,7 @@ def render(args: argparse.Namespace) -> str:
             ]
         )
         if step.assignee_type not in {"agent", "hybrid"}:
-            model_rows.append([step_name, "not agent-executed", "—", "playbook"])
+            model_rows.append([step_name, "not agent-executed", "—", "playbook", "—"])
             continue
         if step_name in phase_chain_overrides:
             chain, chain_source = phase_chain_overrides[step_name], "--phase-chain"
@@ -405,11 +420,23 @@ def render(args: argparse.Namespace) -> str:
                 step_name=step_name,
                 role=step.role,
                 phase_config=phase_config,
-                crew_config=crew_config,
             )
         primary = f"{chain[0][0]}:{chain[0][1]}"
         fallbacks = " → ".join(f"{cli}:{model_name}" for cli, model_name in chain[1:])
-        model_rows.append([step_name, primary, fallbacks, chain_source])
+        rationale = phase_rationales.get(step_name)
+        if rationale is None:
+            raise ValueError(f"missing phase rationale for agent-executed step: {step_name}")
+        model_rows.append([step_name, primary, fallbacks, chain_source, rationale])
+
+    unused_rationales = set(phase_rationales) - {
+        name
+        for name, step in model.steps.items()
+        if step.assignee_type in {"agent", "hybrid"}
+    }
+    if unused_rationales:
+        raise ValueError(
+            "phase rationale targets non-agent step: " + ", ".join(sorted(unused_rationales))
+        )
 
     reactive = _table(
         reactive_headers,
@@ -463,7 +490,10 @@ def render(args: argparse.Namespace) -> str:
                 profile_rows,
             ),
             "### Phase model chains — driver-assessed",
-            _table(["Phase", "Primary", "Fallbacks", "Source"], model_rows),
+            _table(
+                ["Phase", "Primary", "Fallbacks", "Source", "Selection rationale"],
+                model_rows,
+            ),
             reactive_title,
             reactive,
             "### Mandate",

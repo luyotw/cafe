@@ -28,6 +28,23 @@ def mock_chat_environment():
         yield mock_prepare
 
 
+@pytest.fixture(autouse=True)
+def mock_phase_config_boundary_for_legacy_chat_fixtures(monkeypatch):
+    """Keep launcher tests focused on chat behavior, not phase-file I/O."""
+    from cafe.ui import chat
+
+    real_loader = chat._load_chat_role_config
+
+    def load_config(config_manager, role, issue_dir=None):
+        configured = config_manager.get(f"agents.{role}", None)
+        if configured is not None:
+            return configured
+        return real_loader(config_manager, role, issue_dir=issue_dir)
+
+    monkeypatch.setattr(chat, "_load_chat_role_config", load_config)
+    yield monkeypatch
+
+
 class TestLaunchChatSession:
     """Tests for launch_chat_session()."""
 
@@ -455,7 +472,7 @@ def test_launch_chat_session_stops_before_cli_when_playbook_validation_fails(
     assert "not-installed" in printed
 
 
-def test_latest_role_iteration_cli_infers_codex_for_legacy_fallback_metadata(
+def test_latest_role_iteration_cli_infers_codex_for_phase_chain_metadata(
     tmp_path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -483,8 +500,8 @@ def test_latest_role_iteration_cli_infers_codex_for_legacy_fallback_metadata(
         role_config={
             "name": "David",
             "clis": [
-                {"cli": "claude"},
-                {"cli": "codex", "develop": "gpt-5.3-codex"},
+                    {"cli": "claude", "model": "sonnet"},
+                    {"cli": "codex", "model": "gpt-5.3-codex"},
             ],
         },
     )
@@ -521,7 +538,7 @@ def test_launch_chat_session_prepares_chat_handoff_directory(
     assert get_chat_next_step_path(tmp_path / ".cafe" / "issues" / "issue123").parent.exists()
 
 
-def test_launch_chat_session_uses_playbook_role_defaults(
+def test_launch_chat_session_uses_active_phase_chain(
     tmp_path,
     monkeypatch,
     mock_chat_environment,
@@ -533,12 +550,23 @@ def test_launch_chat_session_uses_playbook_role_defaults(
         '{"schema_version":1,"playbook_id":"research","current_step":"question","artifacts":{},"events":[],"decisions":[]}',
         encoding="utf-8",
     )
+    (tmp_path / ".cafe" / "phases.yaml").write_text(
+        "question:\n"
+        "  name: Morgan\n"
+        "  role: researcher\n"
+        "  clis:\n"
+        "    - cli: claude\n"
+        "      model: sonnet\n",
+        encoding="utf-8",
+    )
 
     with (
         patch("cafe.ui.chat.subprocess.run", return_value=MagicMock(returncode=0)) as mock_run,
         patch("cafe.ui.chat.ConfigManager") as mock_config_manager_cls,
         patch("cafe.ui.chat.AgentManager") as mock_agent_manager_cls,
         patch("cafe.ui.chat.PlaybookLoader") as mock_loader_cls,
+        patch("cafe.ui.chat.get_git_toplevel", return_value=tmp_path),
+        patch("cafe.ui.chat.get_repo_root", return_value=tmp_path),
     ):
         mock_config = MagicMock()
         mock_config.config_dir = str(tmp_path / ".cafe")
@@ -546,13 +574,13 @@ def test_launch_chat_session_uses_playbook_role_defaults(
         mock_config_manager_cls.return_value = mock_config
         mock_loader_cls.return_value.load.return_value = {
             "playbook": {"id": "research"},
-            "roles": {"researcher": {"default_agent": "Morgan", "default_cli": "claude"}},
+            "roles": {"researcher": {"default_agent": "Morgan"}},
             "steps": {"question": {"role": "researcher"}},
         }
 
         agent_manager = MagicMock()
         executor = MagicMock()
-        executor.config = AgentConfig(name="Morgan", cli=AgentCLI.CLAUDE)
+        executor.config = AgentConfig(name="Morgan", cli=AgentCLI.CLAUDE, model="sonnet")
         executor._get_cli_strategy.return_value = ClaudeCLI(executor.config)
         agent_manager.get_agent.return_value = executor
         agent_manager.session_manager = MagicMock()
@@ -561,10 +589,70 @@ def test_launch_chat_session_uses_playbook_role_defaults(
         result = launch_chat_session("researcher", "research-1")
 
     assert result == 0
-    assert mock_run.call_args.args[0] == ["claude"]
+    assert mock_run.call_args.args[0] == ["claude", "--model", "sonnet"]
     registered_config = agent_manager.register_agent.call_args.args[0]
     assert registered_config.name == "Morgan"
     assert registered_config.cli == AgentCLI.CLAUDE
+
+
+@pytest.mark.parametrize(
+    "phase_config",
+    [
+        None,
+        "develop:\n  name: David\n  role: developer\n  clis: invalid\n",
+    ],
+    ids=["missing", "invalid"],
+)
+def test_paused_human_task_chat_fails_closed_through_phase_loader(
+    tmp_path,
+    monkeypatch,
+    mock_chat_environment,
+    mock_phase_config_boundary_for_legacy_chat_fixtures,
+    phase_config,
+) -> None:
+    """Paused chat resolves the originating agent step through production config."""
+    mock_phase_config_boundary_for_legacy_chat_fixtures.undo()
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue407"
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="develop",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.NEED_CLARIFICATION,
+        source="workflow.pause",
+    )
+    if phase_config is not None:
+        (tmp_path / ".cafe" / "phases.yaml").write_text(
+            phase_config,
+            encoding="utf-8",
+        )
+
+    with (
+        patch("builtins.print") as mock_print,
+        patch("cafe.ui.chat.subprocess.run") as mock_run,
+        patch("cafe.ui.chat.PlaybookLoader") as mock_loader_cls,
+        patch("cafe.ui.chat.get_git_toplevel", return_value=tmp_path),
+        patch("cafe.ui.chat.get_repo_root", return_value=tmp_path),
+    ):
+        mock_loader_cls.return_value.load.return_value = {
+            "playbook": {"id": "default"},
+            "roles": {"developer": {"default_agent": "David"}},
+            "steps": {"develop": {"role": "developer"}},
+        }
+
+        result = launch_chat_session("developer", "issue407")
+
+    assert result == 1
+    mock_run.assert_not_called()
+    printed = " ".join(str(call) for call in mock_print.call_args_list)
+    assert "Skipping chat" not in printed
+    assert "invalid phase config" in printed
+    assert "develop" in printed
+    assert "field='develop" in printed
 
 
 def test_prepare_chat_handoff_state_creates_blackboard_and_clears_stale_baton(

@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.17.0
+version: 1.18.0
 ---
 
 # Use CAFE Workflow
@@ -42,7 +42,9 @@ Do not preload unrelated references.
 - Assess the issue nature, scale, and risk before kickoff. Include one exact
   primary/fallback model chain per phase and model-adjustment authority in the
   contract. Resolve provider-neutral phase execution profiles from the active
-  playbook skills; no provider or model is built into this driver skill.
+  playbook skills, classify the remaining work into a capability band, and
+  record a phase-specific selection rationale; no provider or model is built
+  into this driver skill.
 - Resolve the effective conversation locale from a direct user override first,
   then a reliably inferred user preference from the current thread, and finally
   the active playbook. Use that locale for every driver-to-user message.
@@ -82,9 +84,10 @@ Do not preload unrelated references.
   repository content locale, confirmation gates, reactive handoffs, mandate,
   and worktree behavior.
 - [ ] Assess issue nature, scale, and risk factors; resolve
-  every phase skill's execution profile, resolve exact primary and fallback
-  models, test candidate availability and the configured fallback path, and
-  propose model-adjustment authority.
+  every phase skill's execution profile, classify each phase's capability band,
+  resolve exact primary and fallback models with a phase-specific rationale,
+  test candidate availability and the configured fallback path, and propose
+  model-adjustment authority.
 - [ ] Present the deterministic kickoff table and obtain explicit confirmation.
 - [ ] Check Git state, initialize CAFE if needed, prepare the issue, enter the
   recorded worktree, and persist the issue-owned contract.
@@ -118,6 +121,8 @@ Do not preload unrelated references.
 - `references/running_workflow.md` — commands, inspection, retries, operating rules.
 - `references/model_selection.md` — issue sizing, provider-neutral phase
   profiles, configured fallback preflight, reassessment, and adjustment authority.
+- `references/phases_yaml.md` — confirmed-chain writer contract and
+  non-authoritative field guidance.
 - `references/handoffs_and_alignment.md` — user pauses and driver decisions.
 - `references/diagnosis_and_repair.md` — bounded classification and disposition.
 - `references/convergent_pr_review.md` — batched final review, merge, close, teardown.

@@ -318,11 +318,6 @@ def prepare(
         "--post-pr-todo-list/--no-post-pr-todo-list",
         help="Post organized PR comments as todo list to PR (default: True when auto-create PR is enabled)",
     ),
-    preset: Optional[str] = typer.Option(
-        None,
-        "--preset",
-        help="Apply a named crew preset as .cafe/crew.yaml (e.g. --preset gemini-team)",
-    ),
 ) -> None:
     """Prepare issue environment (directory, config, git branch) before running spec phase.
 
@@ -368,19 +363,6 @@ def prepare(
             console.print(
                 f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed + template_failed} file(s)"
             )
-
-        # 1.2. Apply preset if specified
-        if preset:
-            from cafe.utils.preset import PresetManager, PresetNotFoundError
-
-            try:
-                PresetManager().apply(preset, cafe_dir=cafe_dir)
-                console.print(
-                    f"  [green]✓[/green] Applied preset '[cyan]{preset}[/cyan]' as crew.yaml"
-                )
-            except PresetNotFoundError as e:
-                console.print(f"[red]Error: {e}[/red]")
-                raise typer.Exit(1)
 
         from cafe.core.prepare_profile import PrepareProfile, PrepareRigorError
         from cafe.playbooks.loader import PlaybookLoader
@@ -810,11 +792,9 @@ def prepare(
             # Create .cafe directory structure in worktree
             worktree_cafe_dir.mkdir(parents=True, exist_ok=True)
 
-            # Copy root .cafe config into the worktree so it inherits the repo's
-            # setup regardless of where the worktree lives. Without crew.yaml the
-            # worktree silently falls back to the default CLI; strategic_context
-            # and docs back workflow Q&A / review.
-            for config_name in ("config.yaml", "crew.yaml", "strategic_context.yaml"):
+            # Copy only project-owned configuration. Issue-owned phases.yaml is
+            # installed by the workflow driver after kickoff confirmation.
+            for config_name in ("config.yaml", "strategic_context.yaml"):
                 repo_file = repo_cafe_dir / config_name
                 if repo_file.exists():
                     shutil.copy2(repo_file, worktree_cafe_dir / config_name)

@@ -16,6 +16,30 @@ from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
+from cafe.utils.phase_config import PhaseStepModelResolution
+
+
+@pytest.fixture(autouse=True)
+def _configured_test_phase_chain(monkeypatch):
+    """Keep skill journeys focused on metadata with a valid execution chain."""
+    from cafe.phases import generic_workflow_step
+
+    real_loader = generic_workflow_step.load_phase_step_model
+
+    def load_test_phase(*, step_name, local_path, repo_path=None):
+        if any(path is not None and path.exists() for path in (local_path, repo_path)):
+            return real_loader(step_name=step_name, local_path=local_path, repo_path=repo_path)
+        return PhaseStepModelResolution(
+            name=None,
+            role=None,
+            clis=(("codex", "gpt-5-test"),),
+            model="gpt-5-test",
+            source="test",
+            chain=("test",),
+            clis_source="test",
+        )
+
+    monkeypatch.setattr(generic_workflow_step, "load_phase_step_model", load_test_phase)
 
 
 class _AgentManager:
@@ -46,6 +70,21 @@ def _write_skill(root: Path, name: str, body: str = "") -> None:
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "SKILL.md").write_text(
         f"---\nname: {name}\ndescription: {name}\n---\n\n{body}", encoding="utf-8"
+    )
+
+
+@pytest.fixture(autouse=True)
+def _configured_phase_chains(tmp_path: Path) -> None:
+    """Custom workflow journeys declare every executable test step explicitly."""
+    cafe_dir = tmp_path / ".cafe"
+    cafe_dir.mkdir(parents=True, exist_ok=True)
+    steps = ("synthesis", "assemble", "spec", "plan", "develop", "review", "pr", "run")
+    (cafe_dir / "phases.yaml").write_text(
+        "".join(
+            f"{step}:\n  name: David\n  clis:\n    - cli: codex\n      model: test-model\n"
+            for step in steps
+        ),
+        encoding="utf-8",
     )
 
 

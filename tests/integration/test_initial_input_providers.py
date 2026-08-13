@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
@@ -17,8 +18,42 @@ from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.ui.cli import app
+from cafe.utils.phase_config import PhaseStepModelResolution
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _configured_test_phase_chain(monkeypatch):
+    """Keep input-provider journeys focused on their public boundary."""
+    from cafe.phases import generic_workflow_step
+
+    real_loader = generic_workflow_step.load_phase_step_model
+
+    def load_test_phase(*, step_name, local_path, repo_path=None):
+        if any(path is not None and path.exists() for path in (local_path, repo_path)):
+            return real_loader(step_name=step_name, local_path=local_path, repo_path=repo_path)
+        return PhaseStepModelResolution(
+            name=None,
+            role=None,
+            clis=(("codex", "gpt-5-test"),),
+            model="gpt-5-test",
+            source="test",
+            chain=("test",),
+            clis_source="test",
+        )
+
+    monkeypatch.setattr(generic_workflow_step, "load_phase_step_model", load_test_phase)
+
+
+def _write_phase_chains(tmp_path: Path) -> None:
+    cafe_dir = tmp_path / ".cafe"
+    cafe_dir.mkdir(parents=True, exist_ok=True)
+    (cafe_dir / "phases.yaml").write_text(
+        "intake:\n  name: David\n  clis:\n    - cli: codex\n      model: test-model\n"
+        "spec:\n  name: David\n  clis:\n    - cli: codex\n      model: test-model\n",
+        encoding="utf-8",
+    )
 
 
 class _AgentManager:
@@ -112,6 +147,7 @@ def _prepare_intake_issue(
     from tests.conftest import create_minimal_config
 
     create_minimal_config(tmp_path)
+    _write_phase_chains(tmp_path)
     _write_skill(tmp_path / ".cafe" / "skills", "intake")
     _write_intake_playbook(tmp_path)
     config_path = tmp_path / ".cafe" / "config.yaml"
@@ -187,6 +223,7 @@ def _prepare_builtin_issue(
     from tests.conftest import create_minimal_config
 
     create_minimal_config(tmp_path)
+    _write_phase_chains(tmp_path)
     config_path = tmp_path / ".cafe" / "config.yaml"
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     config["playbook"] = playbook_id

@@ -61,47 +61,25 @@ CAFE supports `git worktree`, enabling parallel development across multiple issu
 CAFE integrates with multiple CLI-based AI agents (e.g., Claude Code, Cursor CLI).
 Different agents and models can be assigned per role, allowing you to balance cost, performance, and reasoning depth.
 
-### Automatic Fallback Agent Switching on Rate Limits
+### Phase-Specific Agent Chains
 
-When a primary agent hits an API rate limit (or is not installed), CAFE automatically switches to the next CLI in the configured fallback chain—without stopping the workflow. Each entry in the chain can specify its own model and per-phase model overrides.
-
-Configure per-role fallback chains in `.cafe/crew.yaml` using the `clis` list:
+CAFE executes each workflow step from the exact ordered chain in the active
+worktree's `.cafe/phases.yaml`. When a primary agent hits a supported fallback
+condition, CAFE tries the next configured entry without changing configuration.
 
 ```yaml
-developer:
+develop:
   name: David
+  role: developer
   clis:
-    - cli: claude                  # Primary CLI
-      model: opus                  # Default model for this entry
-      plan: sonnet                 # Override model for the plan phase
-      develop: sonnet
-    - cli: gemini                  # First fallback
-      model: gemini-2.5-pro-preview
-    - cli: copilot                 # Second fallback (uses CLI default model)
+    - cli: codex
+      model: gpt-5.6-sol
+    - cli: claude
+      model: claude-opus-5
 ```
 
-The old format is still fully supported and auto-normalized at runtime:
-
-```yaml
-# Backward-compatible format (auto-normalized to clis list)
-developer:
-  name: David
-  cli: claude
-  model: opus
-  backup:                          # Fallback CLIs (tried in order)
-    - gemini
-    - copilot
-  models:                          # Per-CLI, per-phase model configuration
-    claude:
-      plan: opus
-      develop: sonnet
-    gemini:
-      plan: gemini-2.5-pro-preview
-      develop: gemini-2-flash-preview
-    copilot: {}                    # Use CLI default model
-```
-
-If all entries in the chain are exhausted, the workflow stops with a clear error message listing every CLI that was tried. You can edit your crew with `cafe config edit`.
+Every entry requires an exact model. Missing, empty, or malformed step chains
+stop before agent invocation with source, step, and field context.
 
 ---
 
@@ -164,10 +142,8 @@ cafe --help
     ```bash
     cafe init
     ```
-    This guides you through crew setup (selecting a preset or customizing CLI/model per role) and project settings. For non-interactive init:
-    ```bash
-    cafe init --preset default
-    ```
+    This initializes project settings and bundled default content. Issue-owned
+    phase chains are established by the workflow driver after kickoff confirmation.
 
 2.  **Start the development workflow**:
     ```bash
@@ -183,63 +159,10 @@ cafe --help
     cafe close
     ```
 
-### Crew Configuration
-
-Crew configuration lives in `.cafe/crew.yaml` and defines which CLI agent each role uses, with per-role fallback chains and model settings.
-
-**View current crew:**
-```bash
-cafe crew list
-```
-
-**Set primary CLI for all roles (non-interactive):**
-```bash
-# Via preset
-cafe crew set-primary --preset claude-opus
-
-# Or specify CLI + model + phase overrides directly
-cafe crew set-primary --cli codex --model gpt-5.5 \
-  --phase-model developer.plan=gpt-5.5 \
-  --phase-model developer.develop=gpt-5.3-codex
-```
-
-**Set primary CLI (interactive):**
-```bash
-cafe crew set-primary
-```
-Detects installed CLIs, offers matching presets, previews the resolved config, and applies your choice.
-
-**Configure fallback chains:**
-```bash
-# Interactive: per-role chain editor (add/remove/reorder entries)
-cafe crew set-fallback
-
-# Non-interactive: add a fallback entry
-cafe crew set-fallback --role developer --add codex,gpt-5.5
-
-# Non-interactive: remove a fallback entry
-cafe crew set-fallback --role developer --remove codex
-```
-
-When the primary CLI hits a rate limit or is not found, CAFE automatically tries the next CLI in the role's fallback chain.
-
-**crew.yaml schema:**
-```yaml
-developer:
-  name: David
-  clis:
-    - cli: claude            # Primary
-      model: opus            # Default model for this entry
-      plan: sonnet           # Phase override (plan phase uses sonnet)
-      develop: sonnet
-    - cli: codex             # First fallback
-      model: o4-mini
-    - cli: cursor-agent      # Second fallback
-```
-
 ### Phase Configuration
 
-Project-level phase overrides live in `.cafe/phases.yaml` with the step name as the top-level key.
+`.cafe/phases.yaml` is the sole runtime execution configuration, with the step
+name as the top-level key.
 
 ```yaml
 build:
@@ -247,8 +170,9 @@ build:
   role: developer
   clis:
     - cli: claude
-      model: gpt-5
+      model: claude-opus-5
     - cli: gemini
+      model: gemini-2.5-pro
 ```
 
 The highest precedence source is worktree-local `.cafe/phases.yaml` in the active
@@ -257,7 +181,7 @@ field-level validation errors.
 
 ### Project Settings
 
-Project settings (playbook, rigor, auto-update) live in `.cafe/config.yaml` and are managed separately from crew config:
+Project settings (playbook, rigor, auto-update) live in `.cafe/config.yaml` and are managed separately from phase execution configuration:
 
 ```bash
 # Interactive
@@ -327,14 +251,6 @@ cafe skill sync-global --cli codex --cli cursor
 
 Pass bundled skill names as positional arguments to override the default set.
 
-### Presets
-
-Built-in presets provide ready-made crew configurations:
-```bash
-cafe preset list            # List available presets
-cafe preset save my-team    # Save current crew as a reusable preset
-```
-
 ### Multiple Worktrees
 
 In worktree mode, each worktree maintains independent configuration:
@@ -377,14 +293,9 @@ You can create and manage custom templates with the `cafe template` command set.
 CAFE provides additional commands for managing issues and viewing execution details:
 
 #### Project Setup
-- `cafe init` - Initialize CAFE (crew + settings + default agents/templates). Use `--preset` for non-interactive init
+- `cafe init` - Initialize project settings and bundled default content
 - `cafe setup` - Configure project settings (playbook, rigor, auto-update) in config.yaml
 - `cafe skill sync-global` - Explicitly install, recover, or selectively update bundled workflow helper skills; configured Git hooks keep normal source updates synchronized automatically
-- `cafe crew list` - Display resolved crew configuration (role → CLI chain → models)
-- `cafe crew set-primary` - Set primary CLI for all roles (interactive or `--preset`/`--cli`/`--phase-model` flags)
-- `cafe crew set-fallback` - Edit per-role fallback chains (interactive or `--role --add/--remove` flags)
-- `cafe preset list` - List available crew presets
-- `cafe preset save <name>` - Save current crew as a reusable preset
 
 #### Workflow Execution
 - `cafe prepare` - Prepare issue environment (creates worktree, initializes config and git branch)

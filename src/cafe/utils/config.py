@@ -7,8 +7,6 @@ import yaml
 import json
 import time
 
-from cafe.core.types import AgentCLI
-from cafe.utils.crew import CrewManager
 
 
 class ConfigError(Exception):
@@ -188,7 +186,6 @@ class ConfigManager:
             )
 
         try:
-            CrewManager(cafe_dir=self.config_dir).migrate_legacy_agents_from_config()
             with open(self.config_file, "r") as f:
                 self._config = yaml.safe_load(f)
             if issue_config:
@@ -204,20 +201,6 @@ class ConfigManager:
             Default configuration dictionary
         """
         return {
-            "agents": {
-                "pm": {
-                    "name": "Roger",
-                    "cli": "gemini",
-                },
-                "developer": {
-                    "name": "David",
-                    "cli": "claude",
-                },
-                "reviewer": {
-                    "name": "Richard",
-                    "cli": "gemini",
-                },
-            },
             "auto": {
                 "max_review_iterations": 5,
             },
@@ -246,24 +229,8 @@ class ConfigManager:
         Raises:
             ConfigError: If configuration is invalid
         """
-        # Check required fields
-        required_fields = ["agents"]
-        for field in required_fields:
-            if field not in config:
-                raise ConfigError(f"Missing required field: {field}")
-
-        # Validate agents
-        if isinstance(config["agents"], list):
-            for agent in config["agents"]:
-                if "cli" in agent:
-                    try:
-                        AgentCLI(agent["cli"])
-                    except ValueError:
-                        raise ConfigError(
-                            f"Invalid agent CLI: {agent['cli']}. "
-                            f"Must be one of: {[t.value for t in AgentCLI]}"
-                        )
-
+        if not isinstance(config, dict):
+            raise ConfigError("Configuration must be a mapping")
         return True
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -355,17 +322,9 @@ class ConfigManager:
             key: Configuration key (supports dot notation for nested keys)
             value: Value to set
 
-        Note:
-            Supports aliases for agent CLI shortcuts:
-            - 'pm' → 'agents.pm.cli'
-            - 'dev' or 'developer' → 'agents.developer.cli'
-            - 'reviewer' → 'agents.reviewer.cli'
         """
         if self._config is None:
             self.load_config()
-
-        # Apply alias logic for agent CLI shortcuts
-        key = self._resolve_alias(key)
 
         # Handle nested keys with dot notation
         keys = key.split(".")
@@ -382,42 +341,6 @@ class ConfigManager:
 
         # Save to file
         self.save_config(self._config)
-
-    def _resolve_alias(self, key: str) -> str:
-        """Resolve key aliases for convenience.
-
-        Args:
-            key: Original key
-
-        Returns:
-            Resolved key
-
-        Examples:
-            'pm' → 'agents.pm.cli'
-            'dev' → 'agents.developer.cli'
-            'developer' → 'agents.developer.cli'
-            'pm.name' → 'agents.pm.name' (no change needed, already has agent prefix)
-        """
-        # Agent CLI shortcuts: pm, dev/developer, reviewer (without dots)
-        if key == 'pm':
-            return 'agents.pm.cli'
-        if key in ['dev', 'developer']:
-            return 'agents.developer.cli'
-        if key == 'reviewer':
-            return 'agents.reviewer.cli'
-
-        # If it starts with agent name but not agents., add agents prefix
-        # e.g., 'pm.cli' → 'agents.pm.cli', 'pm.name' → 'agents.pm.name'
-        if key.startswith('pm.'):
-            return f'agents.{key}'
-        if key.startswith('dev.') or key.startswith('developer.'):
-            # Map both 'dev.' and 'developer.' to 'agents.developer.'
-            suffix = key.split('.', 1)[1]
-            return f'agents.developer.{suffix}'
-        if key.startswith('reviewer.'):
-            return f'agents.{key}'
-
-        return key
 
     def reset(self) -> None:
         """Reset configuration to default values."""
