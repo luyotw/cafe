@@ -16,6 +16,10 @@ input`:
 
 - [ ] Identify `from_step`, `to_owner`, and `intent` from blackboard handoff,
   `next_step.txt`, or terminal output.
+- [ ] For a HumanTask-backed handoff, resolve the active task ID, declared
+  `task`, input schema, and current question IDs from the terminal output,
+  `cafe show <from_step> questions`, and the matching pending record in
+  `.cafe/issues/<issue>/human_tasks.json`. Do not guess or reuse an old task ID.
 - [ ] Re-resolve the conversation locale.
 - [ ] Read `playbook_id`, `confirmation_contract`, and
   `reactive_user_handoffs` from the active `issue.yaml`.
@@ -41,17 +45,21 @@ Then route by intent:
 - any other user-owned pause: stop. Unknown handoffs are not driver-confirmable.
 
 Driver-confirmable means the driver verifies and resumes; it does not let a
-phase agent approve itself. Resume after verification with, for example:
+phase agent approve itself. Resume the structured user handoff without forcing
+a start step. If the declared outcome continues to an agent phase, first
+reassess and configure that phase's model chain, because this invocation may
+execute the continuation. Then submit the response, for example:
 
 ```bash
-cafe make --user-input "confirmed"
+cafe workflow --execute --single-step \
+  --user-input '{"task":"output-review","decision":"confirm","human_task_id":"<active-human-task-id>"}'
 ```
 
-Use a bounded correction instead of `confirmed` when the output is close and
-the correction follows directly from confirmed context. Stop for the user when
+Use the active task's declared decision ID. For a bounded revision, include its
+required `feedback` instead of sending plain text. Stop for the user when
 approval would change requirements beyond authority, public positioning,
-business/legal/pricing decisions, production access, destructive operations, or
-an ambiguous strategic tradeoff.
+business/legal/pricing decisions, production access, destructive operations,
+or an ambiguous strategic tradeoff.
 
 ## Driver-owned alignment
 
@@ -114,8 +122,24 @@ Keep adjacent concerns separate:
 ### Asking and resuming
 
 Ask one focused question naming the governing axis, proposal delta, recommended
-option, and tradeoff. Pass the answer to the responsible spec or plan step with
-`cafe make --user-input "<answer>"` so the accepted artifact records it.
+option, and tradeoff. Pass the answer to the responsible spec or plan step in
+one-step mode so the accepted artifact records it:
+
+```bash
+cafe workflow --execute --single-step \
+  --user-input '{"task":"clarification-answers","answers":{"<question-id>":"<answer>"},"human_task_id":"<active-human-task-id>"}'
+```
+
+Use every current question ID required by the active task. If its declared
+input schema is `feedback` rather than `answers`, use:
+
+```bash
+cafe workflow --execute --single-step \
+  --user-input '{"task":"clarification-feedback","feedback":"<answer>","human_task_id":"<active-human-task-id>"}'
+```
+
+Never convert an `answers`, `decision`, or `target` task into a plain-text
+payload; runtime accepts plain text only for a declared `feedback` schema.
 
 Update a strategic document only when the user explicitly confirms the new
 strategic content. A driver-authored draft remains `draft` or `missing` unless
@@ -132,7 +156,8 @@ For an explicit `alignment_checkpoint`:
    approve the checkpoint:
 
    ```bash
-   cafe make --user-input '{"decision":"approve","reason":"Within confirmed roadmap and mandate."}'
+   cafe workflow --execute --single-step \
+     --user-input '{"decision":"approve","reason":"Within confirmed roadmap and mandate."}'
    ```
 
 4. For `within` + `propose`, use the playbook's grounded recommendation flow.

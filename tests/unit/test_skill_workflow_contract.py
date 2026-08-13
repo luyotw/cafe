@@ -61,6 +61,36 @@ def test_workflow_contract_parses_declared_inputs_checklists_and_templates() -> 
     assert contract.output_templates.catalog == "research-report"
 
 
+def test_workflow_contract_parses_provider_neutral_execution_profile() -> None:
+    contract = SkillWorkflowContract.model_validate(
+        {
+            "execution_profile": {
+                "workload": "review",
+                "reasoning": "high",
+                "risk_domains": ["correctness", "security"],
+                "fallback_strength": "equivalent_or_stronger",
+            }
+        }
+    )
+
+    assert contract.execution_profile is not None
+    assert contract.execution_profile.workload == "review"
+    assert contract.execution_profile.risk_domains == ("correctness", "security")
+
+
+def test_workflow_contract_rejects_invalid_execution_profile() -> None:
+    with pytest.raises(ValidationError, match="risk_domains must not contain duplicates"):
+        SkillWorkflowContract.model_validate(
+            {
+                "execution_profile": {
+                    "workload": "review",
+                    "risk_domains": ["security", "security"],
+                    "provider": "vendor-specific",
+                }
+            }
+        )
+
+
 def test_workflow_contract_rejects_duplicate_required_tools() -> None:
     """Required tools are normalized once and cannot contain duplicate grants."""
     data = _contract_data()
@@ -156,9 +186,7 @@ def test_workflow_contract_rejects_prompt_reference_that_overlaps_prompt_input()
             0, {"reference": "../outside.md"}
         ),
         lambda data: data["checklist"].__setitem__("unexpected", True),
-        lambda data: data["checklist"]["variants"].__setitem__(
-            0, {"when": {"iteration": 1}}
-        ),
+        lambda data: data["checklist"]["variants"].__setitem__(0, {"when": {"iteration": 1}}),
     ],
 )
 def test_workflow_contract_rejects_ambiguous_or_unsafe_declarations(mutate) -> None:

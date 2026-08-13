@@ -23,7 +23,7 @@ def test_packaged_develop_skill_has_risk_driven_operation_guidance() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-develop")
 
-    assert "version: 1.5.1" in text
+    assert "version: 1.6.0" in text
     assert "low 使用 `final-only`／`summary-only`" in text
     assert "max_read_only_commands" not in text
     assert "20 次" not in text
@@ -38,10 +38,10 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
 
     expected_versions = {
-        "cafe-spec": "1.2.0",
-        "cafe-plan": "1.3.0",
+        "cafe-spec": "1.3.0",
+        "cafe-plan": "1.4.0",
         "cafe-workflow-common": "1.5.0",
-        "use-cafe-workflow": "1.16.0",
+        "use-cafe-workflow": "1.17.0",
     }
     for name, version in expected_versions.items():
         assert f"version: {version}" in _skill_text(builtin_root, name)

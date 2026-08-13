@@ -1,8 +1,13 @@
 ---
 name: cafe-incident_mitigate
 description: 緩解與復原（維運應變流程）
-version: 1.0.1
+version: 1.1.0
 workflow:
+  execution_profile:
+    workload: operations
+    reasoning: high
+    risk_domains: [service-impact, state-change, rollback]
+    fallback_strength: equivalent_or_stronger
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback

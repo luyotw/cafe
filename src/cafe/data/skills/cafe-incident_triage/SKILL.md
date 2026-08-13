@@ -1,8 +1,13 @@
 ---
 name: cafe-incident_triage
 description: 分類與處置決策（維運應變流程）
-version: 1.0.1
+version: 1.1.0
 workflow:
+  execution_profile:
+    workload: operations
+    reasoning: high
+    risk_domains: [service-impact, prioritization]
+    fallback_strength: equivalent_or_stronger
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback

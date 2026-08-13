@@ -1,8 +1,13 @@
 ---
 name: cafe-incident_postmortem
 description: 事後檢討與行動項目（維運應變流程）
-version: 1.0.1
+version: 1.1.0
 workflow:
+  execution_profile:
+    workload: operations
+    reasoning: standard
+    risk_domains: [root-cause, prevention]
+    fallback_strength: equivalent_or_stronger
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback

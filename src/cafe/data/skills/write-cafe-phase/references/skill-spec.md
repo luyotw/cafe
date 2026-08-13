@@ -57,6 +57,11 @@ how the skill consumes them:
 
 ```yaml
 workflow:
+  execution_profile:
+    workload: research
+    reasoning: high
+    risk_domains: [source-quality, conflicting-evidence]
+    fallback_strength: equivalent_or_stronger
   required_tools:
     - "Bash(cafe verification check:*)"
   prompt_inputs:
@@ -78,6 +83,26 @@ workflow:
   output_templates:
     catalog: research-report
 ```
+
+Every phase skill must declare `workflow.execution_profile`. This is durable,
+provider-neutral execution-requirement metadata; it is not an execution
+configuration:
+
+- `workload`: one of `general`, `requirements`, `planning`, `implementation`,
+  `review`, `publication`, `operations`, `research`, or `content`;
+- `reasoning`: `routine`, `standard`, or `high`;
+- `risk_domains`: unique stable tokens describing the failure surface;
+- `fallback_strength`: `equivalent` or `equivalent_or_stronger`.
+
+Do not name a CLI provider, model, pricing tier, or current availability in this
+profile. The outer workflow driver combines it with issue scale, runtime
+configuration, and preflight evidence to choose exact CLI/model chains. When a
+playbook uses an iteration selector such as `{1: cafe-brief_first, default:
+cafe-brief_revise}`, kickoff must conservatively aggregate every declared
+variant, while execution-time reassessment resolves the skill for the actual
+iteration. A legacy custom phase without this field receives the neutral
+`general`/`standard`/`equivalent` default and must be reported as
+defaulted rather than silently inferred from its step name.
 
 - `required_tools` lists tool contracts the skill cannot execute correctly
   without. Every playbook step selecting the skill must grant each declaration

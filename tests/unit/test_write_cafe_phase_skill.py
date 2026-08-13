@@ -24,3 +24,7 @@ def test_write_cafe_phase_repairs_only_its_declarative_layer() -> None:
     assert "沒有 user 明確授權不得 自動 create、comment 或 close issue" in normalized_spec
     assert "playbook `skills.workflow`" in spec
     assert "playbook `skills.chat`" in spec
+    assert "workflow.execution_profile" in skill
+    assert "provider-neutral execution-requirement metadata" in normalized_spec
+    assert "Do not name a CLI provider, model, pricing tier" in normalized_spec
+    assert "conservatively aggregate every declared variant" in normalized_spec

@@ -1,36 +1,42 @@
 # Running And Inspecting A Workflow
 
 Read this reference after kickoff and whenever starting, resuming, inspecting,
-or retrying ordinary workflow work.
+or retrying ordinary workflow work. Also read `model_selection.md` before the
+first execution and after every completed phase.
 
 ## Command checklist
 
-- Start with the user's requirement:
+- Resolve the current phase from `cafe status` and the structured baton, then
+  start it with the user's requirement:
 
   ```bash
-  cafe make --user-input "<requirement or answer>. Strategic context: .cafe/strategic_context.yaml (issue: <issue-name>)"
+  cafe workflow --execute --start-step <step> --single-step \
+    --user-input "<requirement or answer>. Strategic context: .cafe/strategic_context.yaml (issue: <issue-name>)"
   ```
 
-- Resume normally:
+- Resume the phase declared by the persisted baton without new input:
 
   ```bash
-  cafe make
+  cafe workflow --execute --single-step
   ```
 
-- Retry a specific step only when a bounded retry is justified:
+- Answer an authorized user handoff without overriding its structured baton.
+  First read `handoffs_and_alignment.md`, resolve the active HumanTask and its
+  input schema, then use the documented JSON payload with the current
+  `human_task_id`. If its declared outcome continues to an agent phase,
+  reassess and configure that phase's model chain before submitting the payload,
+  because the same one-step invocation may execute the continuation. Plain text
+  is valid only for a task that explicitly declares the `feedback` schema;
+  never use it for `decision`, `answers`, or `target`.
 
-  ```bash
-  cafe workflow --execute --start-step <step>
-  ```
+- Add `--start-step <step>` only for the initial entry point or when a bounded
+  retry/diagnosis must deliberately replace the current baton position. Never
+  use it merely to resume a user-owned handoff.
 
-- Add `--single-step` for one-step diagnosis:
-
-  ```bash
-  cafe workflow --execute --start-step <step> --single-step
-  ```
-
-- Use `--fallback-preset <preset>` when the primary CLI is unavailable,
-  rate-limited, missing, or configured with a bad model.
+- Keep the confirmed primary and fallback chains in the active worktree's
+  `.cafe/phases.yaml`. Use `--fallback-preset <preset>` only as a bounded
+  recovery when that confirmed config cannot be used; it replaces the remaining
+  crew and therefore follows model-adjustment authority.
 - Use repeated `--add-dir <path>` for existing extra directories. Prefer stable
   configuration in `.cafe/config.yaml` as `allowed_directories`.
 
@@ -48,9 +54,20 @@ answering or resuming. Non-interactive resumption is allowed only when the exact
 answer or permission already exists in the current thread, or the confirmed
 contract delegates that specific decision to the driver.
 
+After every invocation that completes a phase, inspect the phase result and
+actual CLI/model, duration, verification, and structured baton. Resolve the
+actual skill for the next agent iteration, decide whether to keep or change its
+chain under `model_selection.md`, and update `.cafe/phases.yaml` before that
+phase executes. If a user handoff sits between phases, make this decision before
+submitting the structured response that selects the continuation. A terminal
+`_done` baton has no future chain to adjust.
+
 ## Operating rules
 
-- Prefer `cafe make`; legacy per-step commands were removed in issue #315.
+- Do not use `cafe make` for driver execution. It can cross multiple phase
+  boundaries before the driver can reassess models. Use the generic
+  `cafe workflow` command with `--single-step` and normally follow persisted
+  workflow state.
 - Do not edit workflow artifacts, blackboard, or `next_step.txt` by hand unless
   repairing confirmed broken state.
 - Do not bypass CAFE by directly asking an agent to implement the issue.
@@ -60,10 +77,10 @@ contract delegates that specific decision to the driver.
   agent can rewrite the baton:
 
   ```bash
-  cafe workflow --execute --start-step <step>
+    cafe workflow --execute --start-step <step> --single-step
   ```
 
 - If PR sync fails because the branch has uncommitted changes, commit or stash
-  them, then rerun `cafe make`.
+  them, then rerun the PR phase in one-step mode.
 - If behavior appears incorrect rather than merely incomplete, stop retries and
   read `diagnosis_and_repair.md`.

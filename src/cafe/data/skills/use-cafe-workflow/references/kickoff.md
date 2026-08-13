@@ -1,8 +1,9 @@
 # Kickoff And Preparation
 
 Read this reference before presenting a kickoff, preparing an issue, resuming an
-issue whose first `cafe make` has not run, or answering a question about the
-workflow conversation language. Also read `strategic_context.md`.
+issue whose first workflow execution has not run, or answering a question about
+the workflow conversation language. Also read `model_selection.md` and
+`strategic_context.md`.
 
 ## Conversation locale checklist
 
@@ -71,8 +72,8 @@ resuming and whenever the playbook changes.
 
 ## Kickoff contract: first blocking gate
 
-Before `cafe prepare`, any repository mutation, or the first `cafe make`, obtain
-explicit user confirmation of:
+Before `cafe prepare`, any repository mutation, or the first workflow execution,
+obtain explicit user confirmation of:
 
 - `playbook_id`;
 - `conversation_locale` with source;
@@ -81,6 +82,12 @@ explicit user confirmation of:
   `driver_confirmable`;
 - `reactive_user_handoffs`;
 - mandate preset, axes, levels, and out-of-mandate list;
+- issue nature, scale, and risk factors;
+- every resolved phase-skill execution profile, including all possible
+  iteration variants at kickoff;
+- the exact ordered primary and fallback CLI/model chain for every phase;
+- `model_adjustment_authority`: either `driver_autonomous` or
+  `user_approval_required`;
 - worktree choice and path when using a worktree.
 
 Before proposing the worktree choice, detect whether the target folder is
@@ -117,7 +124,9 @@ missing, invalid, or stale.
    confirmation stops.
 
 If the playbook, effective conversation locale, repository content locale, or
-the candidate set changes, reconfirm the contract before the next `cafe make`.
+the candidate set changes, reconfirm the contract before the next workflow
+execution. A post-phase model change follows the separately confirmed
+model-adjustment authority in `model_selection.md`.
 
 `need_clarification` and `need_permission` are reactive interruptions, not
 scheduled candidates. `manual_handoff` is routing, not a planned confirmation
@@ -141,6 +150,10 @@ Use the bundled formatter instead of a prose-only summary:
 ```bash
 python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --issue-name <issue-name> \
+  --issue-nature <nature> --issue-scale <small|medium|large> \
+  --model-adjustment-authority <driver_autonomous|user_approval_required> \
+  --risk-factor "<risk factor; repeat as needed>" \
+  --assessment-rationale "<repository evidence for nature and scale>" \
   --effective-locale <locale> \
   --locale-source "<playbook or direct-user-override source>" \
   --repository-content-locale <locale> \
@@ -155,12 +168,25 @@ of this kickoff, replace the final `--worktree ...` argument with
 that first task; do not ask the user to approve a worktree that cannot safely
 contain the starting files.
 
+Pass `--phase-chain
+<step>=<primary-cli>:<exact-model>,<fallback-cli>:<exact-model>` once for every
+agent-executed phase that is not already fully resolved by `--phase-config` and
+`--crew-config`. The formatter has no built-in provider or model defaults. It
+rejects a missing fallback, an unresolved model, and an unsupported CLI. It
+validates chain structure only; it does not validate model suitability. Use the
+phase profile, issue assessment, provider documentation, and preflight evidence
+to justify that each selected model satisfies the displayed requirements. This
+judgment remains driver-owned rather than a runtime model registry, and the
+formatter labels the model-chain table `driver-assessed`.
+
 Pass an option with no step values for an explicit empty list. The formatter
 validates the partition and includes every phase, role, skill, scheduled gate,
-owner, stop behavior, reactive policy, mandate boundary, conversation locale
-source, repository content locale, and worktree choice. It re-executes with
-the Python interpreter that owns `cafe` when the shell interpreter lacks CAFE
-dependencies.
+owner, stop behavior, resolved skill execution profile, exact
+primary/fallback model chain and its config source, autonomous adjustment
+authority, reactive policy, mandate boundary, conversation locale source,
+repository content locale, and worktree choice. It
+re-executes with the Python interpreter that owns `cafe` when the shell
+interpreter lacks CAFE dependencies.
 
 If the user already chose values in the current request, render and restate them
 for confirmation rather than asking again.
@@ -169,7 +195,7 @@ for confirmation rather than asking again.
 
 - [ ] Inventory strategic documents and authority using
   `strategic_context.md`; co-create any required missing document before
-  `cafe make`.
+  workflow execution.
 - [ ] Detect whether the folder is a Git repository. If it is, check
   `git status --short --branch`.
 - [ ] If the folder is not a Git repository, record that read-only finding,
@@ -178,6 +204,8 @@ for confirmation rather than asking again.
   for that first task.
 - [ ] Verify `repository_content_locale` was explicitly confirmed and persist
   it in `.cafe/strategic_context.yaml`.
+- [ ] Complete the issue assessment and model preflight from
+  `model_selection.md`; do not propose a model that already failed preflight.
 - [ ] If needed, initialize with `cafe init --preset <preset>`.
 - [ ] For an existing initialized repository, recommend a worktree at
   `.cafe/worktrees/<issue-name>` by default. If the user accepts the recommended
@@ -212,8 +240,9 @@ for confirmation rather than asking again.
   back to the main checkout after worktree creation fails.
 - [ ] Enter the reported worktree before running workflow commands.
 - [ ] Persist the active `playbook_id`, confirmation contract, and reactive
-  handoff policy in `.cafe/issues/<issue-name>/issue.yaml` in the active
-  checkout before the first `cafe make`:
+  handoff policy, issue assessment, and model-adjustment authority in
+  `.cafe/issues/<issue-name>/issue.yaml` in the active checkout before the
+  first workflow execution:
 
   ```yaml
   playbook_id: default
@@ -226,13 +255,24 @@ for confirmation rather than asking again.
     need_clarification: user_required
     need_permission: user_required
     alignment_checkpoint: driver_resolvable_when_clear
+  issue_assessment:
+    nature: feature/integration
+    scale: medium
+    risk_factors: [public contract, integration coverage]
+  model_adjustment:
+    authority: driver_autonomous
+    confirmed_by: user
+    confirmed_at: 2026-08-13
   ```
 
+- [ ] Write the confirmed ordered phase chains to the active worktree's
+  `.cafe/phases.yaml` and verify the effective config as described in
+  `model_selection.md`.
 - [ ] Re-run `cafe playbook confirmation-gates <playbook-id>` and verify the
-  locale and exact candidate partition before the first `cafe make`.
+  locale and exact candidate partition before the first workflow execution.
 - [ ] If preparation accidentally omitted an approved worktree, repair or
-  recreate preparation before the first `cafe make`; do not discard the issue
-  configuration or silently continue in the main checkout.
+  recreate preparation before the first workflow execution; do not discard the
+  issue configuration or silently continue in the main checkout.
 
 A legacy `mandate.confirmation_contract.agent_confirmable` value in strategic
 context is only a kickoff proposal. Rename it to `driver_confirmable`, compare it

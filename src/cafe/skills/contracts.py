@@ -271,6 +271,40 @@ class OutputTemplatesContract(BaseModel):
         return value
 
 
+ExecutionWorkload = Literal[
+    "general",
+    "requirements",
+    "planning",
+    "implementation",
+    "review",
+    "publication",
+    "operations",
+    "research",
+    "content",
+]
+ExecutionReasoning = Literal["routine", "standard", "high"]
+FallbackStrength = Literal["equivalent", "equivalent_or_stronger"]
+
+
+class ExecutionProfile(BaseModel):
+    """Provider-neutral requirements for executing one skill."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    workload: ExecutionWorkload = "general"
+    reasoning: ExecutionReasoning = "standard"
+    risk_domains: Tuple[str, ...] = ()
+    fallback_strength: FallbackStrength = "equivalent"
+
+    @field_validator("risk_domains")
+    @classmethod
+    def _validate_risk_domains(cls, value: Tuple[str, ...]) -> Tuple[str, ...]:
+        cleaned = tuple(_safe_token(item, field_name="risk domain") for item in value)
+        if len(set(cleaned)) != len(cleaned):
+            raise ValueError("risk_domains must not contain duplicates")
+        return cleaned
+
+
 class SkillWorkflowContract(BaseModel):
     """All optional workflow metadata carried in a skill frontmatter block."""
 
@@ -282,6 +316,7 @@ class SkillWorkflowContract(BaseModel):
     checklist: Optional[ChecklistContract] = None
     output_templates: Optional[OutputTemplatesContract] = None
     human_tasks: Tuple[HumanTaskPolicy, ...] = ()
+    execution_profile: Optional[ExecutionProfile] = None
 
     @field_validator("required_tools")
     @classmethod

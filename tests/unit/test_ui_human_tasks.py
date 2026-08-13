@@ -202,6 +202,59 @@ workflow:
     assert [decision.id for decision in policy.decisions] == ["approve"]
 
 
+def test_human_task_selector_uses_runtime_legacy_fallback_order(tmp_path: Path) -> None:
+    """Custom selectors must resolve identically in runtime and HumanTask paths."""
+    builtin_root = tmp_path / "builtin"
+    for skill_name, decision_id in (("second-brief", "second"), ("tenth-brief", "tenth")):
+        skill_dir = builtin_root / "skills" / skill_name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"""---
+name: {skill_name}
+description: test skill
+workflow:
+  human_tasks:
+    - id: review-brief
+      pattern: confirm_output
+      prompt: Review the brief
+      input_schema: decision
+      decisions:
+        - id: {decision_id}
+          label: {decision_id.title()}
+---
+""",
+            encoding="utf-8",
+        )
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    policy, _binding = resolve_step_human_task(
+        playbook_data={
+            "steps": {
+                "brief": {
+                    "skill": {"2": "second-brief", "10": "tenth-brief"},
+                    "human_tasks": [
+                        {
+                            "trigger": "confirm_output",
+                            "task_id": "review-brief",
+                            "outcomes": {"tenth": "draft"},
+                        }
+                    ],
+                }
+            }
+        },
+        step_name="brief",
+        trigger="confirm_output",
+        skill_loader=loader,
+        iteration=1,
+    )
+
+    assert [decision.id for decision in policy.decisions] == ["tenth"]
+
+
 def test_inline_multiple_choice_uses_checkbox_answers(monkeypatch) -> None:
     """Interactive inline multi-select responses retain every selected option."""
     calls: list[tuple[str, list[str]]] = []

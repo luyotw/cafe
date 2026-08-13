@@ -1,8 +1,13 @@
 ---
 name: cafe-research_collect
 description: 搜尋、整理與記錄來源（非軟體研究流程）
-version: 1.0.1
+version: 1.1.0
 workflow:
+  execution_profile:
+    workload: research
+    reasoning: standard
+    risk_domains: [source-quality, traceability]
+    fallback_strength: equivalent
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback

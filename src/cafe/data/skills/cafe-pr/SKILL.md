@@ -1,8 +1,13 @@
 ---
 name: cafe-pr
 description: "整理提交內容並產出 pull request 標題與描述"
-version: 1.1.0
+version: 1.2.0
 workflow:
+  execution_profile:
+    workload: publication
+    reasoning: routine
+    risk_domains: [external-side-effects]
+    fallback_strength: equivalent
   human_tasks:
     - id: local-review
       pattern: confirm_output

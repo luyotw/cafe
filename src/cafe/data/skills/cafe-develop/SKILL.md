@@ -1,8 +1,13 @@
 ---
 name: cafe-develop
 description: "依計畫進行程式開發與測試"
-version: 1.5.1
+version: 1.6.0
 workflow:
+  execution_profile:
+    workload: implementation
+    reasoning: standard
+    risk_domains: [integration, state-change]
+    fallback_strength: equivalent_or_stronger
   human_tasks:
     - id: no-change-decision
       pattern: no_changes_needed

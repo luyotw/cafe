@@ -1,7 +1,7 @@
 ---
 name: write-cafe-phase
 description: Use this skill when creating, updating, or repairing a CAFE workflow phase or its supporting shared/chat skill under src/cafe/data/skills or .cafe/skills. Covers phase scope, SKILL.md structure, placeholders, plan handoffs, and runtime conventions, including declarative defects identified by use-cafe-workflow. Not for generic skill files, playbook YAML, driver skills, or CAFE core/runtime defects.
-version: 2.5.0
+version: 2.6.0
 ---
 
 # Write CAFE Phase Skill
@@ -12,7 +12,7 @@ version: 2.5.0
 - Own and repair the phase/shared/chat declarative layer without crossing into driver or CAFE runtime implementation.
 
 ## Not This Skill
-- Generic (non-CAFE) skill authoring for Claude Code or other CLIs — use your own skill-writing skill.
+- Generic (non-CAFE) skill authoring for agent CLIs — use your own skill-writing skill.
 - Driver / meta skills that humans invoke from the terminal (e.g. `use-cafe-workflow`) — those follow §1/§3 of `references/skill-spec.md` but are not workflow skills.
 - Creating or restructuring a CAFE playbook YAML — use `write-cafe-playbook` after the phase contracts are ready.
 
@@ -80,12 +80,14 @@ version: 2.5.0
 - If the skill is part of workflow execution, assume runtime will provide file paths such as blackboard, artifacts, output file, checklist, and baton path.
 - For a plan → execute pair, wire the playbook artifact contract before using `{plan_file}`; a skill body alone does not make the handoff work.
 - For planned output approval, wire `on.confirm_output` in the playbook before claiming the phase participates in the kickoff stop contract; routing text in the skill alone is insufficient.
+- Every phase skill declares a provider-neutral `workflow.execution_profile` with workload, reasoning, risk domains, and fallback strength. Never put a CLI provider, model name, pricing tier, or current availability claim in that profile.
+- If one playbook step selects different skills by iteration, describe each skill honestly. The workflow driver resolves the actual iteration skill and conservatively aggregates all variants at kickoff.
 - Declare every mandatory tool dependency once in `workflow.required_tools`; every playbook step that selects the skill must grant it in `allowed_tools`.
 - Do not duplicate global workflow handoff rules across many phase skills. Put those rules in a shared skill.
 - Do not create extra docs like `README.md`, `CHANGELOG.md`, or design notes inside the skill folder.
 
 ## Writing Process
-1. Write the frontmatter first.
+1. Write the frontmatter first, including `workflow.execution_profile` for every phase skill.
 2. Write a short title and purpose section.
 3. For a plan → execute pair or forward plan chain, define every `output_artifact: plan` → `input_artifacts: [plan]` binding and each implementation plan shape before writing the skills.
 4. For every planned user approval, add the phase routing decision and verify the bound playbook step declares `on.confirm_output`.
@@ -99,6 +101,7 @@ version: 2.5.0
 ## SKILL.md Checklist
 - `name` matches the folder name.
 - `description` starts from user intent and clearly says when to use the skill.
+- A phase skill has a provider-neutral `workflow.execution_profile`; it contains no CLI or model names.
 - The body stays focused on the core workflow.
 - Steps are ordered and actionable.
 - Defaults are explicit.

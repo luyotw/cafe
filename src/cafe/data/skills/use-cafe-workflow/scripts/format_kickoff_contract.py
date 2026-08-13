@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a validated CAFE kickoff contract as Markdown tables."""
+"""Render a structurally validated, provider-neutral CAFE kickoff contract."""
 
 from __future__ import annotations
 
@@ -9,7 +9,12 @@ import shlex
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
+
+_MODEL_ADJUSTMENT_AUTHORITIES = {
+    "driver_autonomous",
+    "user_approval_required",
+}
 
 
 def _reexec_with_cafe_python() -> None:
@@ -35,13 +40,25 @@ def _reexec_with_cafe_python() -> None:
 
 
 try:
-    import yaml
+    import yaml  # type: ignore[import-untyped]
 
     from cafe.core.playbook import confirmation_gate_steps
+    from cafe.core.types import AgentCLI
     from cafe.playbooks.loader import PlaybookLoader
+    from cafe.skills.execution_profile import resolve_execution_profile
+    from cafe.skills.loader import SkillLoader
+    from cafe.utils.crew import normalize_role_config
+    from cafe.utils.phase_config import load_phase_step_model
 except ModuleNotFoundError:
     _reexec_with_cafe_python()
     raise
+
+
+ModelChain = list[tuple[str, str]]
+
+
+def _project_path(path: Path, project_root: Path) -> Path:
+    return path if path.is_absolute() else project_root / path
 
 
 def _items(values: Iterable[str] | None) -> list[str]:
@@ -66,6 +83,15 @@ def _table(headers: list[str], rows: list[list[Any]]) -> str:
     ]
     lines.extend("| " + " | ".join(_cell(item) for item in row) + " |" for row in rows)
     return "\n".join(lines)
+
+
+def _load_yaml_mapping(path: Path, *, label: str) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{label} must contain a top-level mapping: {path}")
+    return raw
 
 
 def _load_strategic_context(path: Path, issue_name: str) -> tuple[dict[str, Any], str]:
@@ -120,18 +146,126 @@ def _resolve_partition(
     return user_required, driver_confirmable
 
 
-def _skill_name(value: str | dict[str, str]) -> str:
-    if isinstance(value, str):
-        return value
-    return ", ".join(f"{key}: {skill}" for key, skill in value.items())
+def _parse_chain(raw_chain: str, *, step_name: str) -> ModelChain:
+    chain: ModelChain = []
+    seen_clis: set[str] = set()
+    for raw_entry in raw_chain.split(","):
+        cli, separator, model = raw_entry.strip().partition(":")
+        cli, model = cli.strip(), model.strip()
+        if not separator or not cli or not model:
+            raise ValueError("invalid phase-chain entry; expected CLI:MODEL")
+        try:
+            cli = AgentCLI(cli).value
+        except ValueError as exc:
+            raise ValueError(f"unsupported CLI '{cli}' in phase chain for {step_name}") from exc
+        if cli in seen_clis:
+            raise ValueError(f"duplicate CLI '{cli}' in phase chain for {step_name}")
+        seen_clis.add(cli)
+        chain.append((cli, model))
+    return _validate_chain(chain, step_name=step_name)
+
+
+def _validate_chain(
+    chain: Iterable[tuple[str, str | None]],
+    *,
+    step_name: str,
+) -> ModelChain:
+    chain = list(chain)
+    if len(chain) < 2:
+        raise ValueError(f"phase chain for {step_name} must include a primary and fallback")
+    seen: set[str] = set()
+    result: ModelChain = []
+    for raw_cli, raw_model in chain:
+        try:
+            cli = AgentCLI(raw_cli).value
+        except ValueError as exc:
+            raise ValueError(f"unsupported CLI '{raw_cli}' in phase chain for {step_name}") from exc
+        model = str(raw_model or "").strip()
+        if not model:
+            raise ValueError(f"phase chain for {step_name} has an unresolved model for CLI '{cli}'")
+        if cli in seen:
+            raise ValueError(f"duplicate CLI '{cli}' in phase chain for {step_name}")
+        seen.add(cli)
+        result.append((cli, model))
+    return result
+
+
+def _parse_phase_chains(
+    values: list[str],
+    *,
+    step_names: set[str],
+) -> dict[str, ModelChain]:
+    parsed: dict[str, ModelChain] = {}
+    for value in values:
+        step_name, separator, raw_chain = value.partition("=")
+        step_name = step_name.strip()
+        if not separator or not step_name or not raw_chain.strip():
+            raise ValueError("invalid --phase-chain; expected STEP=CLI:MODEL,CLI:MODEL")
+        if step_name not in step_names:
+            raise ValueError(f"unknown phase-chain step: {step_name}")
+        if step_name in parsed:
+            raise ValueError(f"duplicate phase-chain step: {step_name}")
+        parsed[step_name] = _parse_chain(raw_chain, step_name=step_name)
+    return parsed
+
+
+def _resolve_configured_chain(
+    *,
+    step_name: str,
+    role: str,
+    phase_config: Path,
+    crew_config: Mapping[str, Any],
+) -> tuple[ModelChain, str]:
+    phase = load_phase_step_model(
+        step_name=step_name,
+        local_path=phase_config if phase_config.is_file() else None,
+    )
+    if phase.role is not None and phase.role != role:
+        raise ValueError(
+            f"phase config role mismatch for '{step_name}': expected '{role}', got '{phase.role}'"
+        )
+    if phase.clis:
+        return _validate_chain(list(phase.clis), step_name=step_name), str(phase_config)
+
+    role_config = crew_config.get(role)
+    chain = normalize_role_config(role_config) if isinstance(role_config, dict) else []
+    resolved = [(entry.cli.value, entry.resolve_model(step_name) or "") for entry in chain]
+    if not resolved:
+        raise ValueError(
+            f"no model chain for phase '{step_name}'; pass --phase-chain or configure role '{role}'"
+        )
+    return _validate_chain(resolved, step_name=step_name), "crew config"
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Format a validated CAFE kickoff contract as Markdown tables."
+        description="Format a structurally validated CAFE kickoff contract as Markdown tables."
     )
     parser.add_argument("playbook_id")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--issue-name", required=True)
+    parser.add_argument("--issue-nature", required=True)
+    parser.add_argument(
+        "--issue-scale",
+        choices=("small", "medium", "large"),
+        required=True,
+    )
+    parser.add_argument(
+        "--model-adjustment-authority",
+        choices=tuple(sorted(_MODEL_ADJUSTMENT_AUTHORITIES)),
+        required=True,
+    )
+    parser.add_argument("--risk-factor", action="append", required=True)
+    parser.add_argument("--assessment-rationale", required=True)
+    parser.add_argument(
+        "--phase-chain",
+        action="append",
+        default=[],
+        metavar="STEP=CLI:MODEL,CLI:MODEL",
+        help="Exact ordered chain for a phase; otherwise resolve phase and crew config.",
+    )
+    parser.add_argument("--phase-config", type=Path, default=Path(".cafe/phases.yaml"))
+    parser.add_argument("--crew-config", type=Path, default=Path(".cafe/crew.yaml"))
     parser.add_argument("--effective-locale")
     parser.add_argument("--locale-source")
     parser.add_argument("--repository-content-locale", required=True)
@@ -155,8 +289,11 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def render(args: argparse.Namespace) -> str:
-    loaded = PlaybookLoader().load_model(args.playbook_id)
+    project_root = args.project_root.resolve()
+    playbook_loader = PlaybookLoader(project_root=project_root)
+    loaded = playbook_loader.load_model(args.playbook_id)
     model = loaded.model
+    skill_loader = SkillLoader(project_root=project_root)
     candidates = confirmation_gate_steps(model)
     user_required, driver_confirmable = _resolve_partition(
         candidates=candidates,
@@ -169,10 +306,15 @@ def render(args: argparse.Namespace) -> str:
     if effective_locale.lower() == "auto":
         raise ValueError("--effective-locale is required when the playbook locale is auto")
     locale_source = args.locale_source or f"playbook:{args.playbook_id}"
-    mandate, mandate_source = _load_strategic_context(
-        args.strategic_context,
-        args.issue_name,
+    strategic_context = _project_path(args.strategic_context, project_root)
+    phase_config = _project_path(args.phase_config, project_root)
+    crew_config_path = _project_path(args.crew_config, project_root)
+    mandate, mandate_source = _load_strategic_context(strategic_context, args.issue_name)
+    phase_chain_overrides = _parse_phase_chains(
+        args.phase_chain,
+        step_names=set(model.steps),
     )
+    crew_config = _load_yaml_mapping(crew_config_path, label="crew config")
     zh = effective_locale.lower().startswith("zh")
     worktree = args.worktree if args.worktree else "current checkout"
 
@@ -188,13 +330,10 @@ def render(args: argparse.Namespace) -> str:
             "會停下來給 user 確認",
         ]
         yes, no = "是", "否"
-        no_gate = "—"
-        user_owner = "user"
+        no_gate, user_owner = "—", "user"
         driver_owner = "driver（驗證後繼續）"
         reactive_title = "### Reactive user handoffs"
         reactive_headers = ["Intent", "Policy", "是否為排程 gate"]
-        mandate_title = "### Mandate"
-        mandate_headers = ["Axis", "Level", "Grounds"]
     else:
         title = f"## Kickoff Contract — {args.issue_name}"
         summary_headers = ["Field", "Value"]
@@ -207,13 +346,10 @@ def render(args: argparse.Namespace) -> str:
             "Stops for user confirmation",
         ]
         yes, no = "yes", "no"
-        no_gate = "—"
-        user_owner = "user"
+        no_gate, user_owner = "—", "user"
         driver_owner = "driver (verify, then continue)"
         reactive_title = "### Reactive user handoffs"
         reactive_headers = ["Intent", "Policy", "Scheduled gate"]
-        mandate_title = "### Mandate"
-        mandate_headers = ["Axis", "Level", "Grounds"]
 
     summary = _table(
         summary_headers,
@@ -223,6 +359,11 @@ def render(args: argparse.Namespace) -> str:
             ["configured_locale", configured_locale],
             ["effective_locale", f"{effective_locale} ({locale_source})"],
             ["repository_content_locale", args.repository_content_locale],
+            ["issue_nature", args.issue_nature],
+            ["issue_scale", args.issue_scale],
+            ["risk_factors", ", ".join(args.risk_factor)],
+            ["assessment_rationale", args.assessment_rationale],
+            ["model_adjustment_authority", args.model_adjustment_authority],
             ["user_required", ", ".join(user_required) or "[]"],
             ["driver_confirmable", ", ".join(driver_confirmable) or "[]"],
             ["worktree", worktree],
@@ -230,7 +371,9 @@ def render(args: argparse.Namespace) -> str:
         ],
     )
 
-    phase_rows = []
+    phase_rows: list[list[Any]] = []
+    model_rows: list[list[Any]] = []
+    profile_rows: list[list[Any]] = []
     for step_name, step in model.steps.items():
         if step_name in user_required:
             gate, owner, stop = yes, user_owner, yes
@@ -238,7 +381,35 @@ def render(args: argparse.Namespace) -> str:
             gate, owner, stop = yes, driver_owner, no
         else:
             gate, owner, stop = no, no_gate, no
-        phase_rows.append([step_name, step.role, _skill_name(step.skill), gate, owner, stop])
+        profile = resolve_execution_profile(skill_loader, step.skill)
+        skill_label = ", ".join(profile.skill_names)
+        phase_rows.append([step_name, step.role, skill_label, gate, owner, stop])
+        profile_rows.append(
+            [
+                step_name,
+                skill_label,
+                ", ".join(profile.workloads),
+                profile.reasoning,
+                ", ".join(profile.risk_domains) or "—",
+                profile.fallback_strength,
+                "defaulted" if profile.uses_default else "declared",
+            ]
+        )
+        if step.assignee_type not in {"agent", "hybrid"}:
+            model_rows.append([step_name, "not agent-executed", "—", "playbook"])
+            continue
+        if step_name in phase_chain_overrides:
+            chain, chain_source = phase_chain_overrides[step_name], "--phase-chain"
+        else:
+            chain, chain_source = _resolve_configured_chain(
+                step_name=step_name,
+                role=step.role,
+                phase_config=phase_config,
+                crew_config=crew_config,
+            )
+        primary = f"{chain[0][0]}:{chain[0][1]}"
+        fallbacks = " → ".join(f"{cli}:{model_name}" for cli, model_name in chain[1:])
+        model_rows.append([step_name, primary, fallbacks, chain_source])
 
     reactive = _table(
         reactive_headers,
@@ -278,11 +449,26 @@ def render(args: argparse.Namespace) -> str:
             summary,
             "### Phases",
             _table(phase_headers, phase_rows),
+            "### Phase execution requirements",
+            _table(
+                [
+                    "Phase",
+                    "Resolved skill variants",
+                    "Workload",
+                    "Reasoning",
+                    "Risk domains",
+                    "Fallback strength",
+                    "Profile source",
+                ],
+                profile_rows,
+            ),
+            "### Phase model chains — driver-assessed",
+            _table(["Phase", "Primary", "Fallbacks", "Source"], model_rows),
             reactive_title,
             reactive,
-            mandate_title,
+            "### Mandate",
             mandate_summary,
-            _table(mandate_headers, mandate_rows),
+            _table(["Axis", "Level", "Grounds"], mandate_rows),
         ]
     )
 
@@ -290,7 +476,7 @@ def render(args: argparse.Namespace) -> str:
 def main() -> int:
     try:
         print(render(_parser().parse_args()))
-    except (FileNotFoundError, ValueError) as exc:
+    except (FileNotFoundError, LookupError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 0

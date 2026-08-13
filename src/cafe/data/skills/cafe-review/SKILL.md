@@ -1,8 +1,13 @@
 ---
 name: cafe-review
 description: "審查程式碼品質與風險"
-version: 1.3.0
+version: 1.4.0
 workflow:
+  execution_profile:
+    workload: review
+    reasoning: high
+    risk_domains: [correctness, security]
+    fallback_strength: equivalent_or_stronger
   required_tools:
     - "Bash(cafe verification check:*)"
   human_tasks:

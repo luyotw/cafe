@@ -1,8 +1,13 @@
 ---
 name: cafe-draft
 description: 依核定大綱撰寫初稿
-version: 1.0.1
+version: 1.1.0
 workflow:
+  execution_profile:
+    workload: content
+    reasoning: standard
+    risk_domains: [source-fidelity]
+    fallback_strength: equivalent
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback

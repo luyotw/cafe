@@ -1071,20 +1071,12 @@ class GenericWorkflowStepExecutor(Phase):
         return []
 
     def _resolve_skill_name(self, step_def: Dict[str, Any], iteration: int) -> str:
+        from cafe.skills.selectors import resolve_skill_selector
+
         skill = step_def.get("skill")
-        if isinstance(skill, str):
-            return skill
-        if isinstance(skill, dict):
-            exact = skill.get(str(iteration))
-            if exact:
-                return str(exact)
-            default = skill.get("default")
-            if default:
-                return str(default)
-            numbered = sorted(skill.items(), key=lambda item: str(item[0]))
-            if numbered:
-                return str(numbered[0][1])
-        raise ValueError("Step is missing skill configuration")
+        if not isinstance(skill, (str, dict)):
+            raise ValueError("Step is missing skill configuration")
+        return resolve_skill_selector(skill, iteration)
 
     def _resolve_phase_config_paths(self) -> tuple[Optional[Path], Optional[Path]]:
         local_path = None

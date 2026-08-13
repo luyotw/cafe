@@ -1,8 +1,13 @@
 ---
 name: cafe-plan
 description: "產出可執行的開發計畫"
-version: 1.3.0
+version: 1.4.0
 workflow:
+  execution_profile:
+    workload: planning
+    reasoning: high
+    risk_domains: [architecture, integration]
+    fallback_strength: equivalent_or_stronger
   human_tasks:
     - id: development-guide
       pattern: revision_feedback

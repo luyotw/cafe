@@ -1,8 +1,13 @@
 ---
 name: cafe-incident_detect
 description: 偵測與通報事件徵兆（維運應變流程）
-version: 1.0.1
+version: 1.1.0
 workflow:
+  execution_profile:
+    workload: operations
+    reasoning: high
+    risk_domains: [service-impact, incomplete-evidence]
+    fallback_strength: equivalent_or_stronger
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback

@@ -1,7 +1,13 @@
 ---
 name: cafe-publish
 description: 定稿與發佈前整理
-version: 1.0.0
+version: 1.1.0
+workflow:
+  execution_profile:
+    workload: publication
+    reasoning: routine
+    risk_domains: [external-side-effects]
+    fallback_strength: equivalent
 ---
 
 # Publish Piece

@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.16.0
+version: 1.17.0
 ---
 
 # Use CAFE Workflow
@@ -23,7 +23,7 @@ situation. Resolve every path relative to this `SKILL.md`.
 
 | Situation | Read before acting |
 | --- | --- |
-| Start or resume before the first `cafe make`; answer a locale or kickoff question | `references/kickoff.md` and `references/strategic_context.md` |
+| Start or resume before the first workflow execution; answer a locale or kickoff question | `references/kickoff.md`, `references/model_selection.md`, and `references/strategic_context.md` |
 | Run, resume, inspect, retry, or recover ordinary workflow work | `references/running_workflow.md` |
 | Handle `to_owner=user`, confirmation, clarification, permission, or alignment | `references/handoffs_and_alignment.md`; also read `references/strategic_context.md` |
 | Start or resume linked work; confirm a spec or plan with an issue-decomposition assessment | `references/issue_decomposition.md`; also read `references/strategic_context.md` and `references/handoffs_and_alignment.md` |
@@ -37,8 +37,12 @@ Do not preload unrelated references.
 ## Core invariants
 
 - The complete kickoff contract is the first blocking gate. Do not run
-  `cafe prepare`, mutate the repository, or run the first `cafe make` before the
-  user confirms it.
+  `cafe prepare`, mutate the repository, or execute the first workflow phase
+  before the user confirms it.
+- Assess the issue nature, scale, and risk before kickoff. Include one exact
+  primary/fallback model chain per phase and model-adjustment authority in the
+  contract. Resolve provider-neutral phase execution profiles from the active
+  playbook skills; no provider or model is built into this driver skill.
 - Resolve the effective conversation locale from a direct user override first,
   then a reliably inferred user preference from the current thread, and finally
   the active playbook. Use that locale for every driver-to-user message.
@@ -54,8 +58,11 @@ Do not preload unrelated references.
 - Validate issue-decomposition assessments before confirming spec or plan;
   coordinate any authorized split through existing authority boundaries and
   reconstruct linked-work position from durable records.
-- Prefer `cafe make`. Use a focused `cafe workflow --execute --start-step
-  <step>` only for a bounded retry or diagnosis.
+- Drive every agent phase with `cafe workflow --execute --single-step`; add
+  `--start-step <step>` only for the initial entry or a justified bounded retry.
+  Do not use `cafe make` to execute an unattended multi-phase chain.
+- After each completed phase, reassess the remaining phase model chains. Change
+  them only within the confirmed model-adjustment authority.
 - Do not manually edit workflow artifacts, blackboard state, or
   `next_step.txt` except when repairing confirmed broken workflow state.
 - Do not bypass CAFE by directly asking an agent to implement an issue that the
@@ -74,6 +81,10 @@ Do not preload unrelated references.
 - [ ] Resolve the active playbook, effective conversation locale, proposed
   repository content locale, confirmation gates, reactive handoffs, mandate,
   and worktree behavior.
+- [ ] Assess issue nature, scale, and risk factors; resolve
+  every phase skill's execution profile, resolve exact primary and fallback
+  models, test candidate availability and the configured fallback path, and
+  propose model-adjustment authority.
 - [ ] Present the deterministic kickoff table and obtain explicit confirmation.
 - [ ] Check Git state, initialize CAFE if needed, prepare the issue, enter the
   recorded worktree, and persist the issue-owned contract.
@@ -81,7 +92,11 @@ Do not preload unrelated references.
 ### Run
 
 - [ ] Read the running-workflow reference.
-- [ ] Start with the user's requirement or resume with `cafe make`.
+- [ ] Execute only the current phase with `--single-step`, including the initial
+  requirement or authorized resume input as needed; otherwise follow the
+  persisted baton without forcing `--start-step`.
+- [ ] After the phase, inspect its output and execution evidence, then keep or
+  revise the next model chain under the confirmed authority.
 - [ ] Inspect progress through `cafe status` and `cafe show`; consult the
   blackboard only when command output is insufficient.
 - [ ] When CAFE pauses, classify the handoff before supplying any input.
@@ -101,6 +116,8 @@ Do not preload unrelated references.
 - `references/kickoff.md` — locale, confirmation contract, formatter, prepare.
 - `references/strategic_context.md` — documents, mandate, protected overrides.
 - `references/running_workflow.md` — commands, inspection, retries, operating rules.
+- `references/model_selection.md` — issue sizing, provider-neutral phase
+  profiles, configured fallback preflight, reassessment, and adjustment authority.
 - `references/handoffs_and_alignment.md` — user pauses and driver decisions.
 - `references/diagnosis_and_repair.md` — bounded classification and disposition.
 - `references/convergent_pr_review.md` — batched final review, merge, close, teardown.

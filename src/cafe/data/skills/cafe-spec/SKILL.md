@@ -1,8 +1,13 @@
 ---
 name: cafe-spec
 description: "收集、整理或修訂需求規格（依 iteration 切換行為）"
-version: 1.2.0
+version: 1.3.0
 workflow:
+  execution_profile:
+    workload: requirements
+    reasoning: high
+    risk_domains: [product-scope, compatibility]
+    fallback_strength: equivalent_or_stronger
   human_tasks:
     - id: output-review
       pattern: confirm_output

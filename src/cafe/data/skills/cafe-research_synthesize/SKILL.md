@@ -1,8 +1,13 @@
 ---
 name: cafe-research_synthesize
 description: 綜合發現與交叉驗證（非軟體研究流程）
-version: 1.0.1
+version: 1.1.0
 workflow:
+  execution_profile:
+    workload: research
+    reasoning: high
+    risk_domains: [conflicting-evidence, inference]
+    fallback_strength: equivalent_or_stronger
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback

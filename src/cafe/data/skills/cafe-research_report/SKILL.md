@@ -1,8 +1,13 @@
 ---
 name: cafe-research_report
 description: 產出研究報告（非軟體研究流程）
-version: 1.0.1
+version: 1.1.0
 workflow:
+  execution_profile:
+    workload: content
+    reasoning: standard
+    risk_domains: [source-fidelity, limitations]
+    fallback_strength: equivalent
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback

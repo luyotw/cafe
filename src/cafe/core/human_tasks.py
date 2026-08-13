@@ -411,16 +411,11 @@ def _reject(policy: HumanTaskPolicy, message: str) -> HumanTaskRejection:
 def _select_step_skill_name(step_def: Mapping[str, Any], iteration: int) -> str:
     """Select the existing iteration-aware skill declaration for a task binding."""
     raw_skill = step_def.get("skill")
-    if isinstance(raw_skill, str) and raw_skill.strip():
-        return raw_skill
-    if isinstance(raw_skill, Mapping):
-        exact = raw_skill.get(str(iteration))
-        if isinstance(exact, str) and exact.strip():
-            return exact
-        default = raw_skill.get("default")
-        if isinstance(default, str) and default.strip():
-            return default
-        for value in raw_skill.values():
-            if isinstance(value, str) and value.strip():
-                return value
-    raise HumanTaskPolicyError("Human-task step must select a skill")
+    if not isinstance(raw_skill, (str, Mapping)):
+        raise HumanTaskPolicyError("Human-task step must select a skill")
+    from cafe.skills.selectors import resolve_skill_selector
+
+    try:
+        return resolve_skill_selector(raw_skill, iteration)
+    except ValueError as exc:
+        raise HumanTaskPolicyError("Human-task step must select a skill") from exc

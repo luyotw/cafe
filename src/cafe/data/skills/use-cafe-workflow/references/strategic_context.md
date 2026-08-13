@@ -16,9 +16,9 @@ Do not split this information into `mandate.yaml` or another parallel config.
 | Department norms | How the team operates | `CONTRIBUTING.md`, `docs/guidelines/*.md` |
 | Playbook policy | Rules for this workflow type | `docs/policies/<name>.md` |
 
-If a needed category is `missing`, do not start `cafe make`. Interview the user,
-draft the document, obtain confirmation, save it at the agreed path, then mark
-it `exists` or user-approved `draft`.
+If a needed category is `missing`, do not start workflow execution. Interview
+the user, draft the document, obtain confirmation, save it at the agreed path,
+then mark it `exists` or user-approved `draft`.
 
 ## Authority model
 

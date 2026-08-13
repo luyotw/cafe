@@ -1,7 +1,13 @@
 ---
 name: cafe-editorial_review
 description: 審閱稿件品質與對齊大綱
-version: 1.0.0
+version: 1.1.0
+workflow:
+  execution_profile:
+    workload: review
+    reasoning: standard
+    risk_domains: [source-fidelity, audience-alignment]
+    fallback_strength: equivalent_or_stronger
 ---
 
 # Editorial Review

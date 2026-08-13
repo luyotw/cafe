@@ -1,8 +1,13 @@
 ---
 name: cafe-brief_revise
 description: 依回饋修訂內容大綱（編輯流程）
-version: 1.0.1
+version: 1.1.0
 workflow:
+  execution_profile:
+    workload: content
+    reasoning: standard
+    risk_domains: [audience-alignment]
+    fallback_strength: equivalent
   human_tasks:
     - id: editorial-output-review
       pattern: confirm_output
