@@ -61,22 +61,41 @@ def _load_chat_role_config(
     """Load the active step's sole execution chain from phases.yaml."""
     if issue_dir is None:
         return None
-    try:
-        current_step, _steps, _playbook = _load_chat_workflow_context(issue_dir)
-        resolution = load_phase_step_model(
-            step_name=current_step,
-            local_path=get_git_toplevel() / ".cafe" / "phases.yaml",
-            repo_path=get_repo_root() / ".cafe" / "phases.yaml",
-        )
-    except Exception:
-        return None
+    execution_step = _load_chat_execution_step(issue_dir)
+    resolution = load_phase_step_model(
+        step_name=execution_step,
+        local_path=get_git_toplevel() / ".cafe" / "phases.yaml",
+        repo_path=get_repo_root() / ".cafe" / "phases.yaml",
+    )
     if resolution.role and resolution.role != role:
         return None
     return {
-        "name": resolution.name or current_step,
+        "name": resolution.name or execution_step,
         "role": resolution.role or role,
         "clis": [{"cli": cli, "model": model} for cli, model in resolution.clis],
     }
+
+
+def _load_chat_execution_step(issue_dir: Path) -> str:
+    """Resolve the agent step whose execution chain should launch paused chat."""
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    current_step = blackboard.current_step
+    if current_step != "user":
+        return current_step
+
+    contract = blackboard.handoff_contract
+    if (
+        contract is None
+        or contract.to_owner != HandoffOwner.USER
+        or contract.to_step != "user"
+        or not contract.from_step
+        or contract.from_step == "user"
+    ):
+        raise ValueError(
+            "invalid paused chat handoff: current_step='user': "
+            "field='handoff_contract.from_step': expected originating agent step"
+        )
+    return contract.from_step
 
 
 def _phase_entries(role_config: dict) -> list[CliEntry]:
@@ -435,7 +454,14 @@ def launch_chat_session(
 
     # Load configuration
     config_manager = ConfigManager()
-    agent_config = _load_chat_role_config(config_manager, role, issue_dir=issue_dir)
+    try:
+        agent_config = _load_chat_role_config(config_manager, role, issue_dir=issue_dir)
+    except Exception as exc:
+        print(
+            f"\n⚠️  Chat cannot start because phase configuration failed for "
+            f"role '{role}': {exc}. Fix .cafe/phases.yaml and retry.\n"
+        )
+        return 1
 
     if agent_config is None:
         print(f"\n⚠️  No agent configured for role '{role}'. Skipping chat.\n")

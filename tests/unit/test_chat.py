@@ -42,6 +42,7 @@ def mock_phase_config_boundary_for_legacy_chat_fixtures(monkeypatch):
         return real_loader(config_manager, role, issue_dir=issue_dir)
 
     monkeypatch.setattr(chat, "_load_chat_role_config", load_config)
+    yield monkeypatch
 
 
 class TestLaunchChatSession:
@@ -592,6 +593,66 @@ def test_launch_chat_session_uses_active_phase_chain(
     registered_config = agent_manager.register_agent.call_args.args[0]
     assert registered_config.name == "Morgan"
     assert registered_config.cli == AgentCLI.CLAUDE
+
+
+@pytest.mark.parametrize(
+    "phase_config",
+    [
+        None,
+        "develop:\n  name: David\n  role: developer\n  clis: invalid\n",
+    ],
+    ids=["missing", "invalid"],
+)
+def test_paused_human_task_chat_fails_closed_through_phase_loader(
+    tmp_path,
+    monkeypatch,
+    mock_chat_environment,
+    mock_phase_config_boundary_for_legacy_chat_fixtures,
+    phase_config,
+) -> None:
+    """Paused chat resolves the originating agent step through production config."""
+    mock_phase_config_boundary_for_legacy_chat_fixtures.undo()
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue407"
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="default")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="develop",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.NEED_CLARIFICATION,
+        source="workflow.pause",
+    )
+    if phase_config is not None:
+        (tmp_path / ".cafe" / "phases.yaml").write_text(
+            phase_config,
+            encoding="utf-8",
+        )
+
+    with (
+        patch("builtins.print") as mock_print,
+        patch("cafe.ui.chat.subprocess.run") as mock_run,
+        patch("cafe.ui.chat.PlaybookLoader") as mock_loader_cls,
+        patch("cafe.ui.chat.get_git_toplevel", return_value=tmp_path),
+        patch("cafe.ui.chat.get_repo_root", return_value=tmp_path),
+    ):
+        mock_loader_cls.return_value.load.return_value = {
+            "playbook": {"id": "default"},
+            "roles": {"developer": {"default_agent": "David"}},
+            "steps": {"develop": {"role": "developer"}},
+        }
+
+        result = launch_chat_session("developer", "issue407")
+
+    assert result == 1
+    mock_run.assert_not_called()
+    printed = " ".join(str(call) for call in mock_print.call_args_list)
+    assert "Skipping chat" not in printed
+    assert "invalid phase config" in printed
+    assert "develop" in printed
+    assert "field='develop" in printed
 
 
 def test_prepare_chat_handoff_state_creates_blackboard_and_clears_stale_baton(
