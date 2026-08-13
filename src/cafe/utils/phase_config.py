@@ -168,6 +168,13 @@ def _validate_phase_doc(payload: Mapping, source: str) -> None:
                     step=step_name,
                     source=source,
                 )
+                if entry.get("model") is None:
+                    raise _validation_error(
+                        source,
+                        step=step_name,
+                        field=f"{step_name}.clis[{index}].model",
+                        detail="expected non-empty string",
+                    )
 
 
 def _resolved_step_payload(
@@ -238,7 +245,6 @@ def load_phase_step_model(
     step_name: str,
     local_path: Optional[Path],
     repo_path: Optional[Path] = None,
-    worktree_path: Optional[Path] = None,
 ) -> PhaseStepModelResolution:
     """Resolve model + metadata across phase config source chain.
 
@@ -251,7 +257,7 @@ def load_phase_step_model(
 
     active_step = step_name.strip()
     chain: list[str] = []
-    payloads: dict[str, Mapping] = {}
+    payloads: dict[str, tuple[Mapping, Path]] = {}
 
     for source_label, path in (
         (SOURCE_WORKTREE, local_path),
@@ -263,15 +269,7 @@ def load_phase_step_model(
         payload = _load_yaml_file(path)
         _validate_phase_doc(payload, source=path.as_posix())
         chain.append(source_label)
-        payloads[source_label] = payload
-
-    # Backward-compatible legacy local fallback is intentionally not in the active
-    # precedence chain; old behavior is not authoritative in the new contract.
-    if not chain and worktree_path is not None and worktree_path.exists():
-        payload = _load_yaml_file(worktree_path)
-        _validate_phase_doc(payload, source=worktree_path.as_posix())
-        chain.append("legacy")
-        payloads["legacy"] = payload
+        payloads[source_label] = (payload, path)
 
     resolved_name: Optional[str] = None
     resolved_role: Optional[str] = None
@@ -283,11 +281,11 @@ def load_phase_step_model(
     resolved_clis_source: Optional[str] = None
 
     for source_label in chain:
-        payload = payloads[source_label]
+        payload, source_path = payloads[source_label]
         name, role, clis, model = _resolved_step_payload(
             payload=payload,
             step_name=active_step,
-            source=source_label,
+            source=source_path.as_posix(),
         )
         if resolved_name is None and name is not None:
             resolved_name = name
@@ -304,6 +302,25 @@ def load_phase_step_model(
             resolved_clis_source = source_label
             if resolved_source is None:
                 resolved_source = source_label
+
+    error_path = next(
+        (path for path in (local_path, repo_path) if path is not None and path.exists()),
+        local_path or repo_path or Path(".cafe/phases.yaml"),
+    )
+    if not chain or not any(active_step in payload for payload, _path in payloads.values()):
+        raise _validation_error(
+            error_path.as_posix(),
+            step=active_step,
+            field=active_step,
+            detail="required step configuration is missing",
+        )
+    if resolved_clis is None:
+        raise _validation_error(
+            error_path.as_posix(),
+            step=active_step,
+            field=f"{active_step}.clis",
+            detail="required execution chain is missing",
+        )
 
     return PhaseStepModelResolution(
         name=resolved_name,
