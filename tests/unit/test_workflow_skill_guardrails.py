@@ -42,7 +42,7 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
 
     expected_versions = {
         "cafe-spec": "1.4.0",
-        "cafe-plan": "1.5.0",
+        "cafe-plan": "1.6.0",
         "cafe-workflow-common": "1.6.0",
         "use-cafe-workflow": "1.18.0",
     }
@@ -60,6 +60,9 @@ def test_spec_and_plan_skills_pin_downstream_contract_schema() -> None:
     assert "`Contract-Version: 1`" in plan
     assert "Every Test List `Covers` value" in plan
     assert "must\nname an `INV-*`" in plan
+    assert "do not copy source stable ID tokens" in plan
+    assert "(`GOAL-*`, `NONGOAL-*`, `AC-*`, or `TRUST-*`)" in plan
+    assert "Translate each requirement into the matching plan-owned" in plan
 
 
 def test_packaged_develop_skill_checks_complete_production_wiring() -> None:

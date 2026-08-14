@@ -1,7 +1,7 @@
 ---
 name: cafe-plan
 description: "產出可執行的開發計畫"
-version: 1.5.0
+version: 1.6.0
 workflow:
   execution_profile:
     workload: planning
@@ -128,6 +128,11 @@ Keep exactly one versioned `## Downstream Contract` in every produced plan. Sync
 
 The declaration is fixed at `Contract-Version: 1` and `Artifact-Kind: plan`.
 Use only the schema sections and ID families shown by the selected template.
+The spec is a source of requirement wording, not plan-owned identifiers. Preserve
+the meaning of spec requirements, but do not copy source stable ID tokens
+(`GOAL-*`, `NONGOAL-*`, `AC-*`, or `TRUST-*`) anywhere in the plan body or
+contract. Translate each requirement into the matching plan-owned `ARCH-*`,
+`INV-*`, `UT-*`, `IT-*`, `ADR-*`, or `TASK-*` entry instead.
 Every Test List `Covers` value and Dependency ADR requirement reference must
 name an `INV-*` defined in this contract; task dependencies may reference only
 defined `TASK-*` IDs or `—`. Never use `TRUST-*`, `AC-*`, or `ADR-*` in those

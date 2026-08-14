@@ -13,6 +13,7 @@
 [ ] Read `src/cafe/data/skills/cafe-plan/references/test_invariants_policy.md` when writing Test List items and assertion guidance
 [ ] Confirm: Integration test entries describe **user journeys** and **invariant outcomes**, not UI components
 [ ] Confirm: Test List items avoid brittle bindings (UI copy, CSS classes, DOM structure, internal state shape) unless the spec explicitly requires them
+[ ] Preserve source requirement wording without copying spec stable ID tokens (`GOAL-*`, `NONGOAL-*`, `AC-*`, `TRUST-*`); map each requirement to plan-owned `ARCH-*`, `INV-*`, `UT-*`, `IT-*`, `ADR-*`, or `TASK-*` IDs
 [ ] Append plan after "## Development Guide" section
 [ ] Keep "## Development Guide" section unchanged
 [ ] Confirm: Only wrote plans and steps, NO actual code

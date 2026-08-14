@@ -82,7 +82,7 @@ _(If N or M is 0, one sentence explains why.)_
 - [ ] Commit changes
 
 ### Phase 6: Definition of Done (DoD)
-Copy the DoD items from the spec's Acceptance Criteria section (lines marked with `✅ **DoD:**`) and verify each one:
+Copy the wording of the DoD items from the spec's Acceptance Criteria section (lines marked with `✅ **DoD:**`) and verify each one. Do not copy the spec's stable ID labels; map the requirements to the plan-owned IDs below:
 - [ ] The reported bug no longer reproduces
 - [ ] No regressions in existing functionality
 
