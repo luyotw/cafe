@@ -168,6 +168,37 @@ def test_rejects_contract_ids_that_are_not_declared_by_the_body(tmp_path: Path) 
         extract_downstream_contract(source, kind="spec")
 
 
+def test_ignores_non_contract_tokens_that_resemble_stable_ids(tmp_path: Path) -> None:
+    source = tmp_path / "plan.md"
+    source.write_text(
+        _valid_plan_contract()
+        .replace("- [ ] **TASK-001**", "- [x] **TASK-001**")
+        .replace(
+            "ARCH-001 INV-001 UT-001 ADR-001",
+            "SHA-256 HTTP-404 ARCH-001 INV-001 UT-001 ADR-001",
+        ),
+        encoding="utf-8",
+    )
+
+    assert extract_downstream_contract(source, kind="plan").kind == "plan"
+
+
+def test_rejects_known_source_ids_that_plan_contract_does_not_own(tmp_path: Path) -> None:
+    source = tmp_path / "plan.md"
+    source.write_text(
+        _valid_plan_contract()
+        .replace("- [ ] **TASK-001**", "- [x] **TASK-001**")
+        .replace(
+            "ARCH-001 INV-001 UT-001 ADR-001",
+            "AC-002 ARCH-001 INV-001 UT-001 ADR-001",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ContractValidationError, match="cover"):
+        extract_downstream_contract(source, kind="plan")
+
+
 @pytest.mark.parametrize(
     "replacement",
     [

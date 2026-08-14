@@ -39,6 +39,14 @@ _SCHEMAS = {
     ),
 }
 _ID = re.compile(r"[A-Z][A-Z0-9_]*-[0-9]{3,}")
+_STABLE_ID_PREFIXES = tuple(
+    dict.fromkeys(
+        prefix
+        for schema in _SCHEMAS.values()
+        for _heading, _columns, prefixes in schema
+        for prefix in ((prefixes,) if isinstance(prefixes, str) else prefixes)
+    )
+)
 _TABLE_SEPARATOR = re.compile(r":?-{3,}:?")
 _FENCE_MARKER = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 
@@ -97,6 +105,15 @@ def _update_fence(fence: str | None, line: str) -> str | None:
 
 def _required_references(text: str) -> Iterable[str]:
     return _ID.findall(text)
+
+
+def _stable_ids(text: str) -> set[str]:
+    """Return only identifiers owned by a declared CAFE contract schema."""
+    return {
+        identifier
+        for identifier in _ID.findall(text)
+        if identifier.startswith(_STABLE_ID_PREFIXES)
+    }
 
 
 def _markdown_heading_positions(text: str, pattern: re.Pattern[str]) -> list[int]:
@@ -200,7 +217,7 @@ def extract_downstream_contract(path: str | Path, *, kind: str) -> DownstreamCon
             )
         if body_task_states != task_states:
             raise ContractValidationError("Plan task state disagrees with complete plan")
-    body_ids = set(_ID.findall(body))
+    body_ids = _stable_ids(body)
     if not body_ids:
         raise ContractValidationError("Source must declare stable IDs in its authoritative body")
     if body_ids != ids:
