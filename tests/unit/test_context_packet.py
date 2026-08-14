@@ -106,6 +106,26 @@ def test_id_free_plan_derives_checkbox_records_from_document_order(tmp_path: Pat
     ]
 
 
+def test_plan_checkbox_records_ignore_fenced_examples(tmp_path: Path) -> None:
+    """UT-006: example checkboxes do not affect executable plan task state."""
+    source = tmp_path / "plan.md"
+    source.write_text(
+        "# Plan\n\n- [ ] First task\n\n```markdown\n- [x] Example task\n```\n\n"
+        "- [x] Second task\n",
+        encoding="utf-8",
+    )
+
+    result = resolve_context_packet(
+        source_path=source, contract_kind="plan", target_step="develop", iteration=1,
+        placeholders=("plan_file",), packet_path=tmp_path / "plan-packet.json",
+    )
+
+    assert result["packet"]["manifest"]["checkboxes"] == [
+        {"ordinal": 1, "checked": False, "text": "First task"},
+        {"ordinal": 2, "checked": True, "text": "Second task"},
+    ]
+
+
 def test_singleton_packet_placeholder_is_required_by_active_policy(tmp_path: Path) -> None:
     """UT-004: an empty persisted decision cannot omit a singleton packet input."""
     source = tmp_path / "spec.md"

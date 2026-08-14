@@ -581,8 +581,16 @@ def validate_context_packet(packet: Any) -> None:
 
 def _checkbox_records(text: str) -> list[dict[str, Any]]:
     import re
-    return [{"ordinal": index, "checked": marker.lower() == "x", "text": label.strip()}
-            for index, (marker, label) in enumerate(re.findall(r"(?m)^\s*-\s+\[([ xX])\]\s+(.+)$", text), 1)]
+    records: list[dict[str, Any]] = []
+    fence: str | None = None
+    for line in text.splitlines():
+        visible = fence is None
+        fence = _update_fence(fence, line)
+        match = re.match(r"^\s*-\s+\[([ xX])\]\s+(.+)$", line)
+        if visible and fence is None and match:
+            marker, label = match.groups()
+            records.append({"ordinal": len(records) + 1, "checked": marker.lower() == "x", "text": label.strip()})
+    return records
 
 
 def _packet_contract_kind(packet: Mapping[str, Any]) -> str:
