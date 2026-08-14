@@ -6,7 +6,7 @@ import pytest
 
 from cafe.core.human_tasks import HumanTaskCompletion
 from cafe.core.playbook import PlaybookDefinition, resolve_playbook_skills
-from cafe.playbooks.loader import PlaybookLoader
+from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 from cafe.skills.loader import SkillLoader
 from cafe.ui.human_tasks import (
     resolve_step_human_task,
@@ -27,6 +27,68 @@ def _write_skill(root: Path, name: str) -> None:
 def _write_playbook(root: Path, name: str, content: str) -> None:
     root.mkdir(parents=True, exist_ok=True)
     (root / f"{name}.yaml").write_text(content, encoding="utf-8")
+
+
+def test_issue_can_override_only_one_step_iteration_limit(tmp_path: Path) -> None:
+    issue_yaml = tmp_path / "issue.yaml"
+    issue_yaml.write_text(
+        "playbook_overrides:\n  steps:\n    review:\n      max_iterations: 7\n",
+        encoding="utf-8",
+    )
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {"max_iterations": 3},
+            "review": {"max_iterations": 5},
+        },
+    }
+
+    resolved = apply_issue_playbook_overrides(playbook, issue_yaml)
+
+    assert resolved["steps"]["review"]["max_iterations"] == 7
+    assert resolved["steps"]["develop"]["max_iterations"] == 3
+    assert playbook["steps"]["review"]["max_iterations"] == 5
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ("steps:\n  missing:\n    max_iterations: 2", "unknown playbook step"),
+        ("steps:\n  review:\n    max_iterations: many", "positive integer"),
+        ("steps:\n  review:\n    skill: other", "supports only max_iterations"),
+        ("entry_point: review", "supports only 'steps'"),
+    ],
+)
+def test_issue_playbook_override_rejects_unsupported_contract(
+    tmp_path: Path, override: str, message: str
+) -> None:
+    issue_yaml = tmp_path / "issue.yaml"
+    indented_override = "\n".join(f"  {line}" for line in override.splitlines())
+    issue_yaml.write_text(
+        f"playbook_overrides:\n{indented_override}\n",
+        encoding="utf-8",
+    )
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {"review": {"max_iterations": 5}},
+    }
+
+    with pytest.raises(ValueError, match=message):
+        apply_issue_playbook_overrides(playbook, issue_yaml)
+
+
+@pytest.mark.parametrize("contents", ["false\n", "[]\n", "0\n", "''\n"])
+def test_issue_playbook_override_rejects_falsy_non_mapping_yaml(
+    tmp_path: Path, contents: str
+) -> None:
+    issue_yaml = tmp_path / "issue.yaml"
+    issue_yaml.write_text(contents, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="issue.yaml must contain a mapping"):
+        apply_issue_playbook_overrides(
+            {"playbook": {"id": "default"}, "steps": {"review": {}}},
+            issue_yaml,
+        )
 
 
 def test_feedback_target_requires_skill_prompt_exposure(tmp_path: Path) -> None:

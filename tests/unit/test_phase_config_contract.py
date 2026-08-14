@@ -84,7 +84,21 @@ def test_load_phase_step_model_rejects_empty_phase_entry(tmp_path):
     message = str(exc_info.value)
     assert config.as_posix() in message
     assert "step='build'" in message
-    assert "field='build.clis'" in message
+    assert "field='build.name'" in message
+
+
+def test_load_phase_step_model_rejects_missing_agent_name(tmp_path):
+    config = tmp_path / "phases.yaml"
+    config.write_text(
+        "build:\n  role: developer\n  clis:\n    - cli: codex\n      model: gpt-5\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        load_phase_step_model(step_name="build", local_path=config)
+
+    assert "field='build.name'" in str(exc_info.value)
+    assert "required agent name is missing" in str(exc_info.value)
 
 
 def test_load_phase_step_model_rejects_missing_step_with_source_context(tmp_path):

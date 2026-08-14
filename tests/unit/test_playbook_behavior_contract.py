@@ -194,9 +194,14 @@ def test_custom_named_publish_step_uses_declared_baton_and_receipt_contract(tmp_
         build_behavior={"completion": "baton", "publish_confirmation": True}
     )
     playbook["steps"]["build"]["capability_requests"] = ["cafe.pr.publish"]
+    issue_dir = tmp_path / ".cafe" / "issues" / "custom"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "pr:\n  auto_create: true\n", encoding="utf-8"
+    )
 
     runtime = BlackboardWorkflowRuntime(
-        issue_dir=tmp_path / ".cafe" / "issues" / "custom",
+        issue_dir=issue_dir,
         playbook=playbook,
         executor=lambda *_args, **_kwargs: None,
     )

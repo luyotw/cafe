@@ -1,7 +1,7 @@
 ---
 name: cafe-plan
 description: "產出可執行的開發計畫"
-version: 1.4.0
+version: 1.5.0
 workflow:
   execution_profile:
     workload: planning
@@ -125,6 +125,13 @@ Write plan to: {output_file}
 ## Downstream Contract
 
 Keep exactly one versioned `## Downstream Contract` in every produced plan. Synchronize stable IDs and each top-level task's pending/completed state with the complete plan before user confirmation; legacy artifacts without this section deliberately remain full-source inputs.
+
+The declaration is fixed at `Contract-Version: 1` and `Artifact-Kind: plan`.
+Use only the schema sections and ID families shown by the selected template.
+Every Test List `Covers` value and Dependency ADR requirement reference must
+name an `INV-*` defined in this contract; task dependencies may reference only
+defined `TASK-*` IDs or `—`. Never use `TRUST-*`, `AC-*`, or `ADR-*` in those
+reference columns.
 
 ## Handoff
 - 依照本輪結果更新 blackboard 與 next-step baton。

@@ -445,8 +445,10 @@ class HandoffContract:
     def validate(self, *, allowed_steps: List[str]) -> None:
         allowed_targets = set(allowed_steps) | {"user", "done"}
         if self.version != HANDOFF_CONTRACT_VERSION:
-            raise ValueError(
-                f"Unsupported baton contract version {self.version}; expected {HANDOFF_CONTRACT_VERSION}"
+            raise BatonRejected(
+                field="version",
+                invalid_value=str(self.version),
+                valid_values=[str(HANDOFF_CONTRACT_VERSION)],
             )
         if self.to_step not in allowed_targets:
             raise BatonRejected(
@@ -456,26 +458,72 @@ class HandoffContract:
             )
 
         if self.to_owner == HandoffOwner.AGENT and self.to_step in {"user", "done"}:
-            raise ValueError("Baton owner mismatch: agent owner cannot target user/done")
-        if self.to_owner in {HandoffOwner.USER, HandoffOwner.DONE} and self.to_step not in {
-            "user",
-            "done",
-        }:
-            raise ValueError("Baton owner mismatch: user/done owner must target user or done")
+            raise BatonRejected(
+                field="to_step",
+                invalid_value=self.to_step,
+                valid_values=sorted(allowed_steps),
+            )
+        if self.to_owner == HandoffOwner.USER and self.to_step != "user":
+            raise BatonRejected(
+                field="to_step",
+                invalid_value=self.to_step,
+                valid_values=["user"],
+            )
+        if self.to_owner == HandoffOwner.DONE and self.to_step != "done":
+            raise BatonRejected(
+                field="to_step",
+                invalid_value=self.to_step,
+                valid_values=["done"],
+            )
 
         if self.intent == HandoffIntent.CONFIRM_OUTPUT and self.from_step not in allowed_steps:
-            raise ValueError(
-                "intent=confirm_output is only valid when from_step is a playbook step"
+            raise BatonRejected(
+                field="from_step",
+                invalid_value=self.from_step,
+                valid_values=sorted(allowed_steps),
             )
         if self.intent == HandoffIntent.ALIGNMENT_CHECKPOINT:
-            if self.to_owner != HandoffOwner.USER or self.to_step != "user":
-                raise ValueError(
-                    "intent=alignment_checkpoint must be user-owned and target to_step=user"
+            if self.to_owner != HandoffOwner.USER:
+                raise BatonRejected(
+                    field="to_owner",
+                    invalid_value=self.to_owner.value,
+                    valid_values=[HandoffOwner.USER.value],
+                )
+            if self.to_step != "user":
+                raise BatonRejected(
+                    field="to_step",
+                    invalid_value=self.to_step,
+                    valid_values=["user"],
                 )
             if self.from_step not in allowed_steps:
-                raise ValueError(
-                    "intent=alignment_checkpoint is only valid when from_step is a playbook step"
+                raise BatonRejected(
+                    field="from_step",
+                    invalid_value=self.from_step,
+                    valid_values=sorted(allowed_steps),
                 )
+
+        intents_by_owner = {
+            HandoffOwner.AGENT: {
+                HandoffIntent.AWAIT_AGENT,
+                HandoffIntent.MANUAL_HANDOFF,
+            },
+            HandoffOwner.USER: {
+                HandoffIntent.CONFIRM_OUTPUT,
+                HandoffIntent.ALIGNMENT_CHECKPOINT,
+                HandoffIntent.NEED_CLARIFICATION,
+                HandoffIntent.NEED_PERMISSION,
+                HandoffIntent.NO_CHANGES_NEEDED,
+                HandoffIntent.MANUAL_HANDOFF,
+            },
+            HandoffOwner.DONE: {HandoffIntent.WORKFLOW_COMPLETE},
+        }
+        valid_intents = intents_by_owner[self.to_owner]
+        if self.intent not in valid_intents:
+            raise BatonRejected(
+                field="intent",
+                invalid_value=self.intent.value,
+                valid_values=sorted(intent.value for intent in valid_intents),
+            )
 
 
 @dataclass

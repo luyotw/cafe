@@ -63,6 +63,34 @@ def test_setup_agents_registers_only_the_phase_configured_chain(
     ]
 
 
+def test_setup_agents_rejects_missing_agent_name_before_registration(
+    tmp_path: Path, monkeypatch
+) -> None:
+    cafe_dir = tmp_path / ".cafe"
+    cafe_dir.mkdir()
+    (cafe_dir / "phases.yaml").write_text(
+        "develop:\n"
+        "  role: developer\n"
+        "  clis:\n"
+        "    - cli: codex\n"
+        "      model: gpt-5.6-sol\n",
+        encoding="utf-8",
+    )
+    manager_factory = MagicMock()
+    monkeypatch.setattr(cli_shared, "AgentManager", manager_factory)
+    monkeypatch.setattr(cli_shared, "get_git_toplevel", lambda: tmp_path)
+    monkeypatch.setattr(cli_shared, "get_repo_root", lambda: tmp_path)
+
+    with pytest.raises(ValueError, match="develop.name"):
+        cli_shared.setup_agents(
+            _config_manager(tmp_path),
+            issue_name="issue-407",
+            phase_name="develop",
+        )
+
+    manager_factory.assert_not_called()
+
+
 def test_cli_preflight_does_not_consult_role_or_default_configuration(
     tmp_path: Path, monkeypatch
 ) -> None:

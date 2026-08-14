@@ -1,5 +1,6 @@
 """Tests for prepare CLI command."""
 
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -7,6 +8,7 @@ import yaml
 from typer.testing import CliRunner
 
 from cafe.ui.cli import app
+from cafe.ui.commands.lifecycle import _ensure_worktree_cafe_excluded
 
 runner = CliRunner()
 
@@ -79,7 +81,7 @@ class TestPrepareCommand:
             config_data = yaml.safe_load(f)
             assert config_data["base_branch"] == "main"
             assert config_data["feature_branch"] == "test-issue"
-            assert config_data["auto"]["max_review_iterations"] == 5
+            assert "auto" not in config_data
 
         # Verify git operations called
         mock_git_ops.branch_exists.assert_called_once_with("test-issue")
@@ -367,9 +369,8 @@ class TestPrepareCommand:
             # Parse YAML
             config_data = yaml.safe_load(content)
             assert isinstance(config_data, dict)
-            assert len(config_data) == 3  # base_branch, feature_branch, auto
-            assert "auto" in config_data
-            assert config_data["auto"]["max_review_iterations"] == 5
+            assert len(config_data) == 2  # base_branch, feature_branch
+            assert "auto" not in config_data
 
     def test_prepare_idempotent(self, temp_repo_dir, mock_git_ops):
         """測試重複執行 prepare 是否安全（冪等性）"""
@@ -619,6 +620,83 @@ class TestPrepareCommandWorktree:
         assert worktree_issue_dir.exists(), "Issue directory should be created in worktree"
         assert (worktree_issue_dir / "spec").exists(), "spec directory should exist"
         assert (worktree_issue_dir / "sessions").exists(), "sessions directory should exist"
+
+    def test_worktree_cafe_state_is_added_to_local_git_exclude(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+        (repo / ".cafe" / "issues" / "demo").mkdir(parents=True)
+        (repo / ".cafe" / "issues" / "demo" / "blackboard.json").write_text("{}\n")
+
+        _ensure_worktree_cafe_excluded(repo)
+        _ensure_worktree_cafe_excluded(repo)
+
+        exclude_path = subprocess.run(
+            ["git", "rev-parse", "--git-path", "info/exclude"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        exclude_file = repo / exclude_path
+        assert exclude_file.read_text(encoding="utf-8").splitlines().count(".cafe/") == 1
+        status = subprocess.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert ".cafe/" not in status
+
+    def test_linked_worktree_cafe_state_is_excluded_without_hiding_tracked_changes(
+        self, tmp_path
+    ):
+        repo = tmp_path / "repo"
+        linked = tmp_path / "linked"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"], cwd=repo, check=True
+        )
+        (repo / "tracked.txt").write_text("clean\n", encoding="utf-8")
+        subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "worktree", "add", "-b", "feature", str(linked)],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+        (linked / ".cafe" / "issues" / "demo").mkdir(parents=True)
+        (linked / ".cafe" / "issues" / "demo" / "blackboard.json").write_text(
+            "{}\n", encoding="utf-8"
+        )
+
+        _ensure_worktree_cafe_excluded(linked)
+        status = subprocess.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=linked,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert ".cafe/" not in status
+
+        (linked / "tracked.txt").write_text("dirty\n", encoding="utf-8")
+        dirty_status = subprocess.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=linked,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert " M tracked.txt" in dirty_status
 
     # Tests removed: Agents and templates are no longer copied to worktree .cafe directory
     # They are now managed globally at ~/.cafe/
@@ -1171,6 +1249,49 @@ class TestPrepareCommandPostPrTodoList:
         with open(config_file) as f:
             config_data = yaml.safe_load(f)
             assert config_data["pr"]["post_todo_list"] is True
+
+    def test_non_interactive_no_auto_create_pr_persists_false(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "prepare",
+                "noninteractive-local-pr",
+                "--no-interactive",
+                "--input-method",
+                "manual",
+                "--rigor",
+                "medium",
+                "--no-auto-create-pr",
+            ],
+        )
+
+        assert result.exit_code == 0
+        config_file = (
+            temp_repo_dir
+            / ".cafe"
+            / "issues"
+            / "noninteractive-local-pr"
+            / "issue.yaml"
+        )
+        config_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        assert config_data["pr"]["auto_create"] is False
+
+    def test_issue_argument_no_auto_create_pr_persists_false(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        result = runner.invoke(
+            app,
+            ["prepare", "argument-local-pr", "--no-auto-create-pr"],
+        )
+
+        assert result.exit_code == 0
+        config_file = (
+            temp_repo_dir / ".cafe" / "issues" / "argument-local-pr" / "issue.yaml"
+        )
+        config_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        assert config_data["pr"]["auto_create"] is False
 
     def test_non_interactive_no_post_pr_todo_list_flag_saves_false_to_config(self, temp_repo_dir, mock_git_ops):
         """Test 3.4b: --no-interactive モードで --no-post-pr-todo-list フラグが issue.yaml に保存される。"""

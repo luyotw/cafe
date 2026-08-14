@@ -19,6 +19,7 @@ from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
+from cafe.utils.phase_config import PhaseStepModelResolution
 
 
 def _load_default_playbook() -> dict:
@@ -113,7 +114,9 @@ def test_pr_runtime_completes_with_capability_receipt(tmp_path: Path) -> None:
 
 
 @pytest.mark.e2e
-def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(tmp_path: Path) -> None:
+def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """IT-001: feedback survives a pre-agent pause and reaches the target prompt once."""
     from unittest.mock import MagicMock, patch
 
@@ -121,7 +124,23 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(tmp_
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
     from cafe.ui.cli_shared import _find_external_resume_step
 
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "cafe.phases.generic_workflow_step.load_phase_step_model",
+        lambda **_kwargs: PhaseStepModelResolution(
+            name="David",
+            role="developer",
+            clis=(("codex", "test-model"),),
+            model="test-model",
+            source="test",
+            chain=("test",),
+            name_source="test",
+            role_source="test",
+            clis_source="test",
+        ),
+    )
     issue_dir = tmp_path / ".cafe" / "issues" / "pr-feedback"
+    issue_dir.mkdir(parents=True)
     playbook = _load_default_playbook()
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("pr", playbook_id="default")

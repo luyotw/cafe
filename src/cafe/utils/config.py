@@ -201,9 +201,6 @@ class ConfigManager:
             Default configuration dictionary
         """
         return {
-            "auto": {
-                "max_review_iterations": 5,
-            },
             "python_bin": "python3",
         }
 

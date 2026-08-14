@@ -26,6 +26,11 @@ PUBLISH_STEP = {
 }
 
 
+def _enable_remote_pr(issue_dir: Path) -> None:
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "issue.yaml").write_text("pr:\n  auto_create: true\n", encoding="utf-8")
+
+
 class _FakePhase:
     def __init__(self, phase_dir: Path, iteration: int, issue_name: str = "demo") -> None:
         self.phase_dir = phase_dir
@@ -885,6 +890,7 @@ def test_execute_step_skips_checklist_validation_when_confirmed_without_agent_ru
     )
     executor._resolve_skill_name = MagicMock(return_value="spec_revise")
     executor._resolve_agent_name = MagicMock(return_value="Roger")
+    executor._apply_step_agent_model = MagicMock()
     executor._build_context = MagicMock(return_value={})
     executor._generate_checklist = MagicMock()
     executor._persist_final_status = MagicMock()
@@ -984,6 +990,7 @@ def test_pr_link_opener_noops_when_browser_open_fails() -> None:
 
 def test_github_pr_creator_publish_output_runs_sync_pr_script(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    _enable_remote_pr(issue_dir)
     phase_dir = issue_dir / "pr"
     output_file = phase_dir / "iteration_001" / "output.md"
     publish_request_file = phase_dir / "iteration_001" / "publish_request.json"
@@ -1158,6 +1165,7 @@ def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_with
     tmp_path: Path,
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    _enable_remote_pr(issue_dir)
     phase_dir = issue_dir / "pr"
     output_file = phase_dir / "iteration_001" / "output.md"
     publish_request_file = phase_dir / "iteration_001" / "publish_request.json"
@@ -1228,6 +1236,7 @@ def test_github_pr_creator_publish_output_runs_from_pr_done_await_agent_baton(
     tmp_path: Path,
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    _enable_remote_pr(issue_dir)
     phase_dir = issue_dir / "pr"
     output_file = phase_dir / "iteration_001" / "output.md"
     publish_request_file = phase_dir / "iteration_001" / "publish_request.json"
@@ -1298,6 +1307,7 @@ def test_github_pr_creator_publish_output_runs_from_legacy_done_baton(
     tmp_path: Path,
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    _enable_remote_pr(issue_dir)
     phase_dir = issue_dir / "pr"
     output_file = phase_dir / "iteration_001" / "output.md"
     publish_request_file = phase_dir / "iteration_001" / "publish_request.json"
@@ -1379,11 +1389,47 @@ def test_github_pr_creator_publish_output_skips_local_pr_mode(tmp_path: Path) ->
     assert result.events == []
 
 
+@pytest.mark.parametrize(
+    "issue_config",
+    [None, "{}\n", "pr:\n  auto_create: maybe\n", "[invalid yaml\n"],
+)
+def test_github_pr_creator_publish_output_fails_safe_without_explicit_true(
+    tmp_path: Path, issue_config: str | None
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "pr"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    publish_request_file = phase_dir / "iteration_001" / "publish_request.json"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Test PR\n\nBody\n", encoding="utf-8")
+    publish_request_file.write_text("{}", encoding="utf-8")
+    if issue_config is not None:
+        (issue_dir / "issue.yaml").write_text(issue_config, encoding="utf-8")
+
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+
+    with patch("cafe.core.capabilities.subprocess.run") as mock_run:
+        result = GitHubPRCreator().run(
+            stage="publish_output",
+            phase=phase,
+            step_name="pr",
+            step_def=PUBLISH_STEP,
+            output_file=output_file,
+            publish_request_file=publish_request_file,
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+
+    mock_run.assert_not_called()
+    assert result.events == []
+
+
 def test_github_pr_creator_publish_ignores_untrusted_script_field_in_request(
     tmp_path: Path,
 ) -> None:
     """Registry-resolved script is used; agent-supplied script path must not change dispatch."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    _enable_remote_pr(issue_dir)
     phase_dir = issue_dir / "pr"
     output_file = phase_dir / "iteration_001" / "output.md"
     publish_request_file = phase_dir / "iteration_001" / "publish_request.json"

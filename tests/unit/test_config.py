@@ -96,7 +96,7 @@ class TestDefaultConfig:
         manager = ConfigManager()
         config = manager.get_default_config()
 
-        assert config["auto"]["max_review_iterations"] == 5
+        assert "auto" not in config
 
 
 class TestSaveConfig:

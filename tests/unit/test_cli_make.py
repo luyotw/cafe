@@ -19,6 +19,7 @@ class TestCheckAgentCLIsAvailable:
         phase_config.write_text(
             """
 develop:
+  name: David
   clis:
     - cli: claude
       model: sonnet

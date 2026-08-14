@@ -323,6 +323,44 @@ def test_phase_writer_preserves_existing_file_when_candidate_is_invalid(tmp_path
     assert target.read_text(encoding="utf-8") == original
 
 
+def test_phase_writer_rejects_missing_agent_name(tmp_path: Path) -> None:
+    chains = tmp_path / "chains.json"
+    target = tmp_path / ".cafe" / "phases.yaml"
+    chains.write_text(
+        json.dumps(
+            {
+                "develop": {
+                    "role": "developer",
+                    "clis": [
+                        {"cli": "codex", "model": "gpt-5.6-sol"},
+                        {"cli": "claude", "model": "claude-opus-5"},
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SKILL_ROOT / "scripts" / "write_phase_config.py"),
+            "--chains-json",
+            str(chains),
+            "--target",
+            str(target),
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "non-empty agent name" in result.stderr
+    assert not target.exists()
+
+
 def test_phase_writer_preserves_existing_file_when_atomic_replace_fails(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -335,6 +373,7 @@ def test_phase_writer_preserves_existing_file_when_atomic_replace_fails(
         json.dumps(
             {
                 "develop": {
+                    "name": "David",
                     "clis": [
                         {"cli": "codex", "model": "gpt-5.6-sol"},
                         {"cli": "claude", "model": "claude-opus-5"},

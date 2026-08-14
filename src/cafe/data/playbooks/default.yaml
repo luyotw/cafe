@@ -156,7 +156,7 @@ steps:
         task_id: clarification-feedback
         outcomes: {submit: review}
     allowed_tools: [Read, Grep, Glob, "Bash(git:*)", "Bash(cafe verification check:*)", "Bash(cafe verification focus:*)"]
-    max_iterations: 3
+    max_iterations: 5
     allowed_goto: [spec, develop, plan]
     hooks:
       prepare_input: [UserInputCollector]

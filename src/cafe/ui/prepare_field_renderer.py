@@ -58,7 +58,7 @@ class NonInteractiveCliAnswers:
     plan_template: Optional[str] = None
     sync_spec_github: Optional[bool] = None
     sync_plan_github: Optional[bool] = None
-    auto_create_pr: bool = False
+    auto_create_pr: Optional[bool] = None
     post_pr_todo_list: Optional[bool] = None
 
 
@@ -258,7 +258,7 @@ def _cli_value_for_field(
         "pr.post_todo_list": answers.post_pr_todo_list,
     }
     if field.write == "pr.auto_create":
-        return answers.auto_create_pr, answers.auto_create_pr
+        return answers.auto_create_pr is not None, answers.auto_create_pr
     value = values.get(field.write)
     return value is not None, value
 
@@ -320,7 +320,7 @@ def resolve_non_interactive_issue_config(
         if not profile.prepare.prompt_for_spec_plan_config and profile.prepare.model_fields_set == {
             "prompt_for_spec_plan_config"
         }:
-            if answers.auto_create_pr or answers.post_pr_todo_list is not None:
+            if answers.auto_create_pr is not None or answers.post_pr_todo_list is not None:
                 raise PrepareNonInteractiveError(
                     "--auto-create-pr and --post-pr-todo-list require a playbook with a "
                     "pr step or explicit pr.* prepare fields"
@@ -358,14 +358,18 @@ def resolve_non_interactive_issue_config(
         if answers.sync_plan_github is not None:
             set_write_value(config, "plan.sync_github", answers.sync_plan_github)
         if not profile.supports_pr_config() and (
-            answers.auto_create_pr or answers.post_pr_todo_list is not None
+            answers.auto_create_pr is not None or answers.post_pr_todo_list is not None
         ):
             raise PrepareNonInteractiveError(
                 "--auto-create-pr and --post-pr-todo-list require a playbook with a "
                 "pr step or explicit pr.* prepare fields"
             )
-        if profile.supports_pr_config() and profile.is_github_repo and answers.auto_create_pr:
-            set_write_value(config, "pr.auto_create", True)
+        if (
+            profile.supports_pr_config()
+            and profile.is_github_repo
+            and answers.auto_create_pr is not None
+        ):
+            set_write_value(config, "pr.auto_create", answers.auto_create_pr)
         if profile.supports_pr_config() and answers.post_pr_todo_list is not None:
             set_write_value(config, "pr.post_todo_list", answers.post_pr_todo_list)
         return config
@@ -411,7 +415,7 @@ def resolve_non_interactive_issue_config(
                 config.initial_input["issue_id"] = answers.issue_id
 
     if not profile.supports_pr_config(parsed_fields) and (
-        answers.auto_create_pr or answers.post_pr_todo_list is not None
+        answers.auto_create_pr is not None or answers.post_pr_todo_list is not None
     ):
         raise PrepareNonInteractiveError(
             "--auto-create-pr and --post-pr-todo-list require a playbook with a "

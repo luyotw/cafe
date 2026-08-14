@@ -1160,7 +1160,11 @@ class GitHubPRCreator(NoOpHook):
         output_file = kwargs.get("output_file")
         if phase is None or not isinstance(output_file, Path) or not output_file.exists():
             return HookResult()
-        if self._is_local_pr_mode(phase):
+        if (
+            CAPABILITY_PR_PUBLISH_ID
+            in _effective_capability_ids(step_name=step_name, step_def=step_def)
+            and self._is_local_pr_mode(phase)
+        ):
             return HookResult()
 
         repo_root = self._resolve_repo_root(phase)
@@ -1270,8 +1274,8 @@ class GitHubPRCreator(NoOpHook):
                 "pr.auto_create",
             )
         except Exception:
-            return False
-        return value is False
+            return True
+        return value is not True
 
     @staticmethod
     def _resolve_repo_root(phase: Any) -> Path:

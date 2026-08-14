@@ -174,6 +174,8 @@ def test_runtime_rejects_undeclared_alignment_legacy_status(
 
 def test_runtime_blocks_pr_done_without_publish_receipt(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-pr"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("pr:\n  auto_create: true\n", encoding="utf-8")
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -199,6 +201,40 @@ def test_runtime_blocks_pr_done_without_publish_receipt(tmp_path: Path) -> None:
     assert result.final_status_code == "MISSING_CAPABILITY_RECEIPT"
     blackboard = BlackboardStore(issue_dir).load_or_create("pr")
     assert blackboard.current_step == "pr"
+
+
+def test_runtime_missing_pr_config_does_not_require_publish_receipt(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-local-pr"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "pr": {
+                "skill": "spec_first",
+                "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        _write_baton(
+            issue_dir,
+            from_step="pr",
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
+        return StepExecutionResult(response="done", artifacts={"pr_result": "local"})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="pr")
+
+    assert result.completed is True
 
 
 def test_runtime_completes_pr_when_publish_receipt_exists(tmp_path: Path) -> None:
@@ -713,7 +749,7 @@ def test_runtime_done_baton_status_overrides_phase_parser_status(tmp_path: Path)
                     "version": 1,
                     "to_owner": "done",
                     "to_step": "done",
-                    "intent": "await_agent",
+                    "intent": "workflow_complete",
                 }
             ),
             encoding="utf-8",
@@ -732,7 +768,7 @@ def test_runtime_done_baton_status_overrides_phase_parser_status(tmp_path: Path)
     result = runtime.run(start_step="pr", single_step=True)
 
     assert result.completed is True
-    assert result.final_status_code == "BATON_AWAIT_AGENT"
+    assert result.final_status_code == "BATON_WORKFLOW_COMPLETE"
 
 
 def test_runtime_single_step_legacy_transition_uses_single_step_labels(tmp_path: Path) -> None:
@@ -2228,6 +2264,7 @@ def test_runtime_handles_keyboard_interrupt(tmp_path: Path) -> None:
         else interrupted_events[0].message
     )
     assert msg["step"] == "spec"
+    assert bb.step_visit_counts == {}
 
 
 def test_runtime_handles_agent_execution_error(tmp_path: Path) -> None:
@@ -2270,6 +2307,7 @@ def test_runtime_handles_agent_execution_error(tmp_path: Path) -> None:
     )
     assert msg["step"] == "spec"
     assert msg["reason"] == "agent_rate_limit"
+    assert bb.step_visit_counts == {}
 
 
 def test_runtime_reconciles_agent_error_after_valid_handoff(tmp_path: Path) -> None:
@@ -2558,6 +2596,44 @@ def _simple_playbook(step_name: str = "spec") -> dict:
     }
 
 
+def test_bundled_review_iteration_limits_are_defined_by_playbooks() -> None:
+    loader = PlaybookLoader()
+
+    assert loader.load("default")["steps"]["review"]["max_iterations"] == 5
+    assert loader.load("tdd")["steps"]["review"]["max_iterations"] == 5
+
+
+def test_pre_execution_failure_does_not_consume_agent_visit(tmp_path: Path) -> None:
+    from cafe.agents.executor import AgentExecutionError
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "pre-execution-failure"
+    playbook = _simple_playbook()
+    playbook["steps"]["spec"]["max_iterations"] = 1
+    calls = 0
+
+    def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise AgentExecutionError("contract preflight failed", error_type="contract")
+        _make_valid_baton_text(issue_dir)
+        return StepExecutionResult(response="done", artifacts={})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+
+    interrupted = runtime.run(start_step="spec", max_transitions=5)
+    assert interrupted.final_status_code == "INTERRUPTED:agent_contract"
+    assert BlackboardStore(issue_dir).load_or_create("spec").step_visit_counts == {}
+
+    completed = runtime.run(start_step="spec", max_transitions=5)
+    assert completed.completed is True
+    assert BlackboardStore(issue_dir).load_or_create("spec").step_visit_counts == {"spec": 1}
+
+
 def test_execute_one_iteration_forwards_extra_prompt_to_executor(tmp_path: Path) -> None:
     """executor 被呼叫時應收到 extra_prompt kwarg（傳入值）。"""
     issue_dir = tmp_path / ".cafe" / "issues" / "extra-prompt-1"
@@ -2707,6 +2783,75 @@ def test_runtime_retries_once_on_baton_rejected_then_succeeds(tmp_path: Path) ->
     bb = BlackboardStore(issue_dir).load_or_create("spec")
     rejected_events = [e for e in bb.events if e.event_type == "baton_rejected"]
     assert len(rejected_events) == 1
+
+
+def test_runtime_retries_user_owner_with_step_target_then_succeeds(tmp_path: Path) -> None:
+    """Semantic owner/target mismatches use the declared baton retry loop."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "retry-owner-target"
+    issue_dir.mkdir(parents=True)
+    prompts: list[str | None] = []
+
+    def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
+        prompts.append(kwargs.get("extra_prompt"))
+        if len(prompts) == 1:
+            _write_baton(
+                issue_dir,
+                from_step="spec",
+                to_owner="user",
+                to_step="spec",
+                intent="need_clarification",
+            )
+        else:
+            _make_valid_baton_text(
+                issue_dir,
+                from_step="spec",
+                to_step="done",
+                intent="workflow_complete",
+            )
+        return StepExecutionResult(response="done", artifacts={}, status_code="")
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_simple_playbook(),
+        executor=executor,
+    ).run(start_step="spec", max_transitions=5)
+
+    assert result.completed is True
+    assert len(prompts) == 2
+    assert "field 'to_step'" in str(prompts[1])
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    assert blackboard.step_visit_counts == {"spec": 1}
+
+
+def test_runtime_retries_owner_intent_mismatch_then_succeeds(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "retry-owner-intent"
+    issue_dir.mkdir(parents=True)
+    prompts: list[str | None] = []
+
+    def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
+        prompts.append(kwargs.get("extra_prompt"))
+        if len(prompts) == 1:
+            _write_baton(
+                issue_dir,
+                from_step="spec",
+                to_owner="done",
+                to_step="done",
+                intent="need_clarification",
+            )
+        else:
+            _make_valid_baton_text(issue_dir)
+        return StepExecutionResult(response="done", artifacts={}, status_code="")
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_simple_playbook(),
+        executor=executor,
+    ).run(start_step="spec", max_transitions=5)
+
+    assert result.completed is True
+    assert "field 'intent'" in str(prompts[1])
+    assert "workflow_complete" in str(prompts[1])
+    assert BlackboardStore(issue_dir).load_or_create("spec").step_visit_counts == {"spec": 1}
 
 
 def test_runtime_retries_twice_on_baton_rejected_then_succeeds(tmp_path: Path) -> None:

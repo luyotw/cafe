@@ -5,7 +5,7 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 from types import MethodType, SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -38,6 +38,7 @@ def LongRunningOperationArtifact(**kwargs):
     )
 
 from cafe.core.hooks import HookResult
+from cafe.core.downstream_contract import ContractValidationError
 from cafe.core.resume_user_input import CONTINUE_USER_INPUT
 from cafe.core.session_continuation import (
     SessionContinuation,
@@ -304,6 +305,7 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
         git_ops=FakeGitOperations(),
         role_agent_map={"pm": "Roger"},
     )
+    executor._validate_produced_packet_contracts = MagicMock()
 
     result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
@@ -323,6 +325,7 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert reloaded.handoff_contract.intent == HandoffIntent.WORKFLOW_COMPLETE
     assert reloaded.handoff_contract.status_code == "confirmed"
     assert reloaded.handoff_contract.source == "workflow.status_transition_adapter"
+    executor._validate_produced_packet_contracts.assert_called_once()
 
 
 def test_generic_step_passes_declared_read_only_guard_to_agent_manager(
@@ -902,6 +905,7 @@ def test_generic_workflow_step_question_need_clarification_writes_clarification_
         role_agent_map={"researcher": "Morgan"},
         interactive=True,
     )
+    executor._validate_produced_packet_contracts = MagicMock()
 
     result = executor.execute_step("question", playbook["steps"]["question"], state)
 
@@ -910,6 +914,7 @@ def test_generic_workflow_step_question_need_clarification_writes_clarification_
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.NEED_CLARIFICATION
     assert reloaded.handoff_contract.to_step == "user"
+    executor._validate_produced_packet_contracts.assert_not_called()
 
 
 def test_generic_workflow_step_question_step_allows_questions_xml_edit(
@@ -2608,8 +2613,8 @@ def test_generic_workflow_step_applies_phase_specific_model_per_step(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".cafe" / "phases.yaml").write_text(
-        "spec:\n  clis:\n    - cli: codex\n      model: gpt-5.4\n"
-        "plan:\n  clis:\n    - cli: codex\n      model: claude-opus-4.6\n",
+        "spec:\n  name: Roger\n  clis:\n    - cli: codex\n      model: gpt-5.4\n"
+        "plan:\n  name: David\n  clis:\n    - cli: codex\n      model: claude-opus-4.6\n",
         encoding="utf-8",
     )
     monkeypatch.setattr("cafe.phases.generic_workflow_step.get_repo_root", lambda: tmp_path)
@@ -2677,8 +2682,8 @@ def test_generic_workflow_step_applies_primary_model_from_phase_chain(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".cafe" / "phases.yaml").write_text(
-        "spec:\n  clis:\n    - cli: claude\n      model: opus\n"
-        "plan:\n  clis:\n    - cli: claude\n      model: opus\n",
+        "spec:\n  name: Roger\n  clis:\n    - cli: claude\n      model: opus\n"
+        "plan:\n  name: David\n  clis:\n    - cli: claude\n      model: opus\n",
         encoding="utf-8",
     )
     monkeypatch.setattr("cafe.phases.generic_workflow_step.get_repo_root", lambda: tmp_path)
@@ -2814,6 +2819,58 @@ def _make_minimal_executor(tmp_path, **kwargs):
         git_ops=FakeGitOperations(),
         role_agent_map={},
         **kwargs,
+    )
+
+
+def test_producer_completion_rejects_invalid_declared_packet_contract(tmp_path: Path) -> None:
+    executor = _make_minimal_executor(tmp_path)
+    executor.generic_phase.skill_loader = SkillLoader()
+    executor.playbook = {
+        "playbook": {"id": "packet-validation"},
+        "steps": {
+            "spec": {"skill": "cafe-spec", "output_artifact": "spec"},
+            "develop": {
+                "skill": "cafe-develop",
+                "input_artifacts": ["spec"],
+            },
+        },
+    }
+    output = tmp_path / "spec.md"
+    output.write_text(
+        "# Spec\n\nGOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001\n\n"
+        "## Downstream Contract\n\n"
+        "- Contract-Version: `2`\n"
+        "- Artifact-Kind: `spec`\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ContractValidationError, match="cannot satisfy packet input"):
+        executor._validate_produced_packet_contracts(
+            producer_step="spec",
+            artifact_name="spec",
+            output_file=output,
+        )
+
+
+def test_producer_completion_ignores_consumer_without_packet_policy(tmp_path: Path) -> None:
+    executor = _make_minimal_executor(tmp_path)
+    executor.playbook = {
+        "playbook": {"id": "full-input"},
+        "steps": {
+            "spec": {"skill": "cafe-spec", "output_artifact": "spec"},
+            "develop": {
+                "skill": "cafe-develop",
+                "input_artifacts": ["spec"],
+            },
+        },
+    }
+    output = tmp_path / "partial-spec.md"
+    output.write_text("# Legacy full-input spec\n", encoding="utf-8")
+
+    executor._validate_produced_packet_contracts(
+        producer_step="spec",
+        artifact_name="spec",
+        output_file=output,
     )
 
 

@@ -1,7 +1,7 @@
 ---
 name: cafe-spec
 description: "收集、整理或修訂需求規格（依 iteration 切換行為）"
-version: 1.3.0
+version: 1.4.0
 workflow:
   execution_profile:
     workload: requirements
@@ -104,6 +104,11 @@ Write spec to: {output_file}
 ## Downstream Contract
 
 Keep exactly one versioned `## Downstream Contract` in every produced spec. Its stable IDs must cover the downstream requirements in the complete body; it is confirmed with the complete artifact and is copied byte-for-byte only by the runtime. Legacy artifacts without this section deliberately remain full-source inputs.
+
+The declaration is fixed at `Contract-Version: 1` and `Artifact-Kind: spec`.
+Use only the schema sections and ID families shown by the selected template:
+`GOAL-*`, `NONGOAL-*`, `AC-*`, `INV-*`, and `TRUST-*`. Do not invent a new
+contract version or additional ID family.
 
 ## Handoff
 - 依照本輪結果更新 blackboard 與 next-step baton。

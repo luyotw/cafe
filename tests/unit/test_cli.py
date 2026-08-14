@@ -169,6 +169,8 @@ class TestCloseCommand:
         config_file.write_text("""
 base_branch: main
 feature_branch: test-issue
+pr:
+  auto_create: true
 """)
 
         # Mock Git operations
@@ -220,6 +222,8 @@ feature_branch: test-issue
 base_branch: main
 feature_branch: test-issue
 worktree_path: {worktree_path}
+pr:
+  auto_create: true
 """)
 
         # Create .git directory to simulate main repo
@@ -272,7 +276,9 @@ worktree_path: {worktree_path}
         branch_name = "test-issue"
         config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
         config_file.parent.mkdir(parents=True, exist_ok=True)
-        config_file.write_text("base_branch: main\nfeature_branch: test-issue\n")
+        config_file.write_text(
+            "base_branch: main\nfeature_branch: test-issue\npr:\n  auto_create: true\n"
+        )
 
         # Mock Git operations - checkout fails
         mock_git_instance = MagicMock()
@@ -319,7 +325,9 @@ worktree_path: {worktree_path}
         branch_name = "test-issue"
         config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
         config_file.parent.mkdir(parents=True, exist_ok=True)
-        config_file.write_text("base_branch: main\nfeature_branch: test-issue\n")
+        config_file.write_text(
+            "base_branch: main\nfeature_branch: test-issue\npr:\n  auto_create: true\n"
+        )
 
         # Mock Git operations - pull fails
         mock_git_instance = MagicMock()

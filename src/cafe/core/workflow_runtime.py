@@ -631,15 +631,15 @@ class BlackboardWorkflowRuntime:
             return False
         issue_yaml = self.issue_dir / "issue.yaml"
         if not issue_yaml.exists():
-            return True
+            return False
         try:
             import yaml  # type: ignore[import-untyped]
 
             data = yaml.safe_load(issue_yaml.read_text(encoding="utf-8")) or {}
         except Exception:
-            return True
+            return False
         pr_cfg = data.get("pr") or {}
-        return pr_cfg.get("auto_create", True) is not False
+        return pr_cfg.get("auto_create", False) is True
 
     def _status_from_contract(self, current_step: str, execution_result: Any) -> str:
         contract = self._load_agent_written_handoff_contract(current_step=current_step)
@@ -805,6 +805,17 @@ class BlackboardWorkflowRuntime:
         visits[current_step] = visit_count
         self.blackboard_store.save(self.blackboard)
         return visit_count
+
+    def _rollback_step_visit(self, *, current_step: str, visit_count: int) -> None:
+        """Undo a provisional agent visit when execution never yields a result."""
+        visits = self.blackboard.step_visit_counts
+        if visits.get(current_step) != visit_count:
+            return
+        if visit_count > 1:
+            visits[current_step] = visit_count - 1
+        else:
+            visits.pop(current_step, None)
+        self.blackboard_store.save(self.blackboard)
 
     def _materialize_owned_human_task(
         self,
@@ -2515,6 +2526,10 @@ class BlackboardWorkflowRuntime:
                     )
                     if reconciled is not None:
                         return reconciled
+                    self._rollback_step_visit(
+                        current_step=current_step,
+                        visit_count=visit_count,
+                    )
                     self._restore_interrupted_step_handoff(
                         current_step=current_step,
                         reason=si.reason,
@@ -2761,6 +2776,10 @@ class BlackboardWorkflowRuntime:
                     )
                     if reconciled is not None:
                         return reconciled
+                    self._rollback_step_visit(
+                        current_step=current_step,
+                        visit_count=visit_count,
+                    )
                     self._restore_interrupted_step_handoff(
                         current_step=current_step,
                         reason=si.reason,

@@ -32,6 +32,9 @@ def _candidate_document(chains: dict[str, Any]) -> dict[str, Any]:
         unknown = set(raw_config) - allowed
         if unknown:
             raise ValueError(f"unsupported fields for step '{step}': {', '.join(sorted(unknown))}")
+        name = raw_config.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"step '{step}' must include a non-empty agent name")
         clis = raw_config.get("clis")
         if not isinstance(clis, list) or len(clis) < 2:
             raise ValueError(f"step '{step}' must include a primary and fallback CLI")

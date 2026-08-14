@@ -13,8 +13,8 @@ python3 <skill-dir>/scripts/write_phase_config.py \
   --target <active-worktree>/.cafe/phases.yaml
 ```
 
-The writer accepts optional `name` and `role` plus a required `clis` list for
-each discovered step. It writes a same-directory candidate, validates every
+The writer requires a non-empty `name` and `clis` list for each discovered
+step; `role` remains optional metadata. It writes a same-directory candidate, validates every
 step through the core parser, and atomically replaces the target only after
 validation succeeds.
 

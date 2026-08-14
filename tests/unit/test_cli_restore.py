@@ -180,11 +180,15 @@ class TestRestoreCommand:
         # Mock run_git to handle worktree creation
         mock_git_ops.run_git.return_value = None
 
-        result = runner.invoke(app, ["restore", "test-worktree-issue"], input="y\n")
+        with patch(
+            "cafe.ui.commands.lifecycle._ensure_worktree_cafe_excluded"
+        ) as mock_exclude:
+            result = runner.invoke(app, ["restore", "test-worktree-issue"], input="y\n")
 
         assert result.exit_code == 0
         # Should attempt to create worktree
         assert "Creating worktree" in result.stdout or "worktree" in result.stdout.lower()
+        mock_exclude.assert_called_once()
 
     def test_restore_user_cancels_confirmation(self, temp_repo_dir, mock_git_ops, archived_issue):
         """測試使用者取消確認後退出"""

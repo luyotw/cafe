@@ -314,6 +314,13 @@ def load_phase_step_model(
             field=active_step,
             detail="required step configuration is missing",
         )
+    if resolved_name is None:
+        raise _validation_error(
+            error_path.as_posix(),
+            step=active_step,
+            field=f"{active_step}.name",
+            detail="required agent name is missing",
+        )
     if resolved_clis is None:
         raise _validation_error(
             error_path.as_posix(),

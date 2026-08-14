@@ -275,7 +275,7 @@ steps:
     input_artifacts: [spec, plan, code]
     output_artifact: review_feedback
     allowed_tools: [Read, Grep, Glob, "Bash(git:*)"]
-    max_iterations: "$auto.max_review_iterations"
+    max_iterations: 5
     allowed_goto: [spec, develop, plan]
     hooks:
       before_execute: [NewChangesGate]

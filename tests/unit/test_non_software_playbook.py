@@ -72,6 +72,10 @@ def test_builtin_non_software_playbooks_simulate_reports_no_findings(monkeypatch
 
 def test_builtin_non_software_workflow_dry_run_accepts_editorial(monkeypatch) -> None:
     monkeypatch.chdir(_repo_root())
+    blackboard_path = _repo_root() / ".cafe" / "issues" / "issue253" / "blackboard.json"
+    original_blackboard = (
+        blackboard_path.read_bytes() if blackboard_path.exists() else None
+    )
     with (
         patch("cafe.ui.commands.workflow._get_GitOperations") as mock_git_factory,
         patch("cafe.ui.commands.workflow.BlackboardWorkflowRuntime") as mock_runtime_cls,
@@ -91,7 +95,9 @@ def test_builtin_non_software_workflow_dry_run_accepts_editorial(monkeypatch) ->
 
     assert result.exit_code == 0
     assert "Ownership plan (read-only)" in result.stdout
-    assert not (_repo_root() / ".cafe" / "issues" / "issue253" / "blackboard.json").exists()
+    assert (
+        blackboard_path.read_bytes() if blackboard_path.exists() else None
+    ) == original_blackboard
 
 
 def test_builtin_non_software_playbook_load_strict(monkeypatch) -> None:

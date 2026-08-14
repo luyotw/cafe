@@ -68,7 +68,28 @@ class _AgentManager:
 
     def execute(self, _name: str, prompt: str, **_kwargs):
         self.prompts.append(prompt)
-        return "confirmed", TokenUsage(), [], [], [], None
+        return (
+            "# Result\n\nGOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001\n\n"
+            "## Downstream Contract\n\n"
+            "- Contract-Version: `1`\n"
+            "- Artifact-Kind: `spec`\n\n"
+            "### Goals\n"
+            "| ID | Statement |\n| --- | --- |\n| GOAL-001 | Goal |\n\n"
+            "### Non-Goals\n"
+            "| ID | Statement |\n| --- | --- |\n| NONGOAL-001 | None |\n\n"
+            "### Acceptance Criteria\n"
+            "| ID | Priority | Statement |\n| --- | --- | --- |\n"
+            "| AC-001 | must | Accepted |\n\n"
+            "### Invariants\n"
+            "| ID | Statement |\n| --- | --- |\n| INV-001 | Safe |\n\n"
+            "### Trust Boundaries\n"
+            "| ID | Statement |\n| --- | --- |\n| TRUST-001 | Local |\n",
+            TokenUsage(),
+            [],
+            [],
+            [],
+            None,
+        )
 
 
 class _GitOps:

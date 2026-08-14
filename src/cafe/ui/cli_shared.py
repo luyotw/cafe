@@ -207,7 +207,7 @@ def setup_agents(
     agent_manager = AgentManager(issue_name=issue_name)
     agent_manager.register_agent(
         AgentConfig(
-            name=resolved.name or phase_name,
+            name=resolved.name,
             cli=primary.cli,
             model=primary.model,
             clis=chain,

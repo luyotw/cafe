@@ -119,10 +119,18 @@ def _handoff_to_step(
     from_step: str,
     to_step: str,
     status_code: str,
-    intent: HandoffIntent = HandoffIntent.AWAIT_AGENT,
+    intent: HandoffIntent | None = None,
 ) -> None:
     store = BlackboardStore(issue_dir)
     to_owner = HandoffOwner.AGENT if to_step not in {"user", "done"} else HandoffOwner(to_step)
+    if intent is None:
+        intent = (
+            HandoffIntent.WORKFLOW_COMPLETE
+            if to_owner == HandoffOwner.DONE
+            else HandoffIntent.MANUAL_HANDOFF
+            if to_owner == HandoffOwner.USER
+            else HandoffIntent.AWAIT_AGENT
+        )
     store.update_handoff_contract(
         state,
         from_step=from_step,
@@ -230,6 +238,34 @@ def test_workflow_command_runs_dry_mode(tmp_path: Path, monkeypatch) -> None:
         assert "Ownership plan (read-only)" in result.stdout
         blackboard_file = tmp_path / ".cafe" / "issues" / "issue-100" / "blackboard.json"
         assert not blackboard_file.exists()
+
+
+def test_workflow_rejects_invalid_issue_playbook_override_before_execution(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-override"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "playbook: default\n"
+        "playbook_overrides:\n"
+        "  steps:\n"
+        "    review:\n"
+        "      skill: cafe-develop\n",
+        encoding="utf-8",
+    )
+
+    with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-override"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "default", "--dry-run"])
+
+    assert result.exit_code == 1
+    assert "playbook_overrides.steps.review supports only" in result.stdout
+    assert "max_iterations; unsupported field(s): skill" in result.stdout
+    assert not (issue_dir / "blackboard.json").exists()
 
 
 def test_workflow_dry_mode_completes_declared_custom_publish_step(
@@ -2739,6 +2775,7 @@ def test_workflow_command_resumes_incomplete_iteration_when_user_handoff_is_lega
                 "iteration": 2,
                 "step_name": "spec",
                 "skill_name": "spec_revise",
+                "status_code": "ready_for_review",
                 "user_input": "confirmed clarification answers",
                 "timestamp": "2026-04-14T10:00:00+08:00",
             }
@@ -2792,6 +2829,7 @@ def test_workflow_user_handoff_precedes_incomplete_iteration_resume(
 ) -> None:
     """A valid user-owned baton cannot be overwritten by stale unfinished work."""
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CAFE_FORCE_INTERACTIVE", "1")
     executed_steps: list[str] = []
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-user-incomplete"
@@ -2835,6 +2873,10 @@ def test_workflow_user_handoff_precedes_incomplete_iteration_resume(
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
         patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
         patch("cafe.ui.cli._find_incomplete_workflow_step") as mock_find_incomplete,
+        patch(
+            "cafe.ui.cli._handle_user_phase",
+            return_value=None,
+        ) as mock_handle_user_phase,
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-user-incomplete"
@@ -2847,7 +2889,6 @@ def test_workflow_user_handoff_precedes_incomplete_iteration_resume(
                 "--playbook",
                 "default",
                 "--execute",
-                "--single-step",
                 "--user-input",
                 '{"task":"output-review","decision":"confirm"}',
             ],
@@ -2858,6 +2899,7 @@ def test_workflow_user_handoff_precedes_incomplete_iteration_resume(
     assert "Executing step=plan iteration=001" in result.stdout
     assert executed_steps == ["plan"]
     mock_find_incomplete.assert_not_called()
+    mock_handle_user_phase.assert_called_once()
 
 
 @pytest.mark.parametrize("source", ["chat.bootstrap", "unknown"])
@@ -3634,4 +3676,4 @@ def test_resolve_initial_step_user_inputs_cold_start_maps_entry_point() -> None:
         playbook_data, "initial requirement", None, "build"
     )
     assert inputs == {"build": "initial requirement"}
-    assert remaining == "initial requirement"
+    assert remaining is None

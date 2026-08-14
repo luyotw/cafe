@@ -261,8 +261,59 @@ def test_alignment_checkpoint_baton_must_be_user_owned_user_target(tmp_path: Pat
             status_code="alignment_checkpoint",
         ),
     )
-    with pytest.raises(ValueError, match="alignment_checkpoint"):
+    with pytest.raises(BatonRejected) as exc_info:
         store.load_handoff_contract(state, allowed_steps=["develop", "review"])
+    assert exc_info.value.field == "to_owner"
+    assert exc_info.value.valid_values == ["user"]
+
+
+@pytest.mark.parametrize(
+    ("to_owner", "to_step", "intent", "valid_intents"),
+    [
+        ("done", "done", "need_clarification", ["workflow_complete"]),
+        (
+            "user",
+            "user",
+            "workflow_complete",
+            [
+                "alignment_checkpoint",
+                "confirm_output",
+                "manual_handoff",
+                "need_clarification",
+                "need_permission",
+                "no_changes_needed",
+            ],
+        ),
+        ("user", "user", "await_agent", None),
+        ("agent", "review", "workflow_complete", ["await_agent", "manual_handoff"]),
+    ],
+)
+def test_handoff_contract_rejects_owner_intent_mismatch(
+    tmp_path: Path,
+    to_owner: str,
+    to_step: str,
+    intent: str,
+    valid_intents: list[str] | None,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "owner-intent"
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+    _write_baton(
+        issue_dir,
+        _base_payload(
+            from_step="spec",
+            to_owner=to_owner,
+            to_step=to_step,
+            intent=intent,
+        ),
+    )
+
+    with pytest.raises(BatonRejected) as exc_info:
+        store.load_handoff_contract(state, allowed_steps=["spec", "review"])
+
+    assert exc_info.value.field == "intent"
+    if valid_intents is not None:
+        assert exc_info.value.valid_values == valid_intents
 
 
 def test_blackboard_store_records_artifacts_events_and_decisions(tmp_path: Path) -> None:

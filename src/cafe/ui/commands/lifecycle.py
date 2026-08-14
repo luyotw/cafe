@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -30,6 +31,30 @@ prompt_for_rigor: Any = None
 select_template: Any = None
 _ensure_default_content: Any = None
 _resolve_iteration_index: Any = None
+
+
+def _ensure_worktree_cafe_excluded(worktree_root: Path) -> None:
+    """Keep CAFE-managed worktree state out of Git without editing .gitignore."""
+    result = subprocess.run(
+        ["git", "-C", str(worktree_root), "rev-parse", "--git-path", "info/exclude"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        detail = result.stderr.strip() or result.stdout.strip() or "empty Git path"
+        raise RuntimeError(f"cannot resolve local Git exclude file: {detail}")
+    exclude_file = Path(result.stdout.strip())
+    if not exclude_file.is_absolute():
+        exclude_file = worktree_root / exclude_file
+    entry = ".cafe/"
+    existing = exclude_file.read_text(encoding="utf-8") if exclude_file.exists() else ""
+    if entry in {line.strip() for line in existing.splitlines()}:
+        return
+    exclude_file.parent.mkdir(parents=True, exist_ok=True)
+    separator = "" if not existing or existing.endswith("\n") else "\n"
+    with exclude_file.open("a", encoding="utf-8") as stream:
+        stream.write(f"{separator}# CAFE worktree runtime state (auto-excluded)\n{entry}\n")
 
 
 def set_runtime(
@@ -298,8 +323,8 @@ def prepare(
         "--spec-template",
         help="Spec template name (default: auto)",
     ),
-    auto_create_pr: bool = typer.Option(
-        False,
+    auto_create_pr: Optional[bool] = typer.Option(
+        None,
         "--auto-create-pr/--no-auto-create-pr",
         help="Automatically create PR after development (default: False, GitHub repos only)",
     ),
@@ -585,6 +610,7 @@ def prepare(
         pr_config = {}
         step_configs: dict[str, dict[str, Any]] = {}
         initial_input_config: dict[str, Any] = {}
+        parsed_fields = None
 
         if profile.should_prompt_spec_plan_config(should_prompt_for_config):
             console.print()
@@ -719,22 +745,38 @@ def prepare(
         # else: issue_name was provided as argument but not --no-interactive
         #       Don't save any config (old behavior for backward compatibility)
 
+        # Explicit PR flags are authoritative in every invocation shape, including
+        # ``cafe prepare ISSUE --no-auto-create-pr`` where an issue argument
+        # suppresses the interactive configuration prompts.
+        if auto_create_pr is not None:
+            if not profile.supports_pr_config(parsed_fields):
+                console.print(
+                    "[red]Error: --auto-create-pr/--no-auto-create-pr requires a "
+                    "playbook with PR configuration.[/red]"
+                )
+                raise typer.Exit(1)
+            if auto_create_pr and not profile.is_github_repo:
+                console.print("[red]Error: --auto-create-pr requires a GitHub repository.[/red]")
+                raise typer.Exit(1)
+            pr_config["auto_create"] = auto_create_pr
+            if not auto_create_pr:
+                pr_config.pop("post_todo_list", None)
+        if post_pr_todo_list is not None:
+            if not profile.supports_pr_config(parsed_fields):
+                console.print(
+                    "[red]Error: --post-pr-todo-list/--no-post-pr-todo-list requires a "
+                    "playbook with PR configuration.[/red]"
+                )
+                raise typer.Exit(1)
+            if auto_create_pr is not False:
+                pr_config["post_todo_list"] = post_pr_todo_list
+
         # 11. Prepare config data (but don't write yet)
         feature_branch = issue_name
-
-        # Load global config to get default auto settings
-        from cafe.utils.config import ConfigManager
-
-        config_manager = ConfigManager(".cafe")
-        global_config = config_manager.load_config()
-        max_review_iterations = global_config.get("auto", {}).get("max_review_iterations", 5)
 
         config_data = {
             "base_branch": base_branch,
             "feature_branch": feature_branch,
-            "auto": {
-                "max_review_iterations": max_review_iterations,
-            },
         }
 
         # Add spec config if present
@@ -811,6 +853,13 @@ def prepare(
 
             # Initialize default templates and agents in worktree .cafe
             _ensure_default_content(worktree_cafe_dir)
+            try:
+                _ensure_worktree_cafe_excluded(worktree_abs)
+            except (OSError, RuntimeError) as exc:
+                console.print(
+                    "[yellow]Warning: Could not exclude CAFE worktree state from Git: "
+                    f"{exc}[/yellow]"
+                )
 
             # Set issue_dir to worktree location for config writing
             issue_dir = worktree_issues_dir
@@ -1160,7 +1209,7 @@ def close(
                 raise typer.Exit(1)
 
             # Step 3: Merge or pull changes based on pr.auto_create config
-            pr_auto_create = config_data.get("pr", {}).get("auto_create", True)
+            pr_auto_create = config_data.get("pr", {}).get("auto_create", False)
             worktree_abs = Path(worktree_path).resolve()
             worktree_issue_dir = worktree_abs / ".cafe" / "issues" / feature_branch
             try:
@@ -1296,7 +1345,7 @@ def close(
                 raise typer.Exit(1)
 
             # Step 2: Merge or pull changes based on pr.auto_create config
-            pr_auto_create = config_data.get("pr", {}).get("auto_create", True)
+            pr_auto_create = config_data.get("pr", {}).get("auto_create", False)
             try:
                 if squash:
                     # Explicit --squash always squash-merges locally into the base
@@ -1542,6 +1591,13 @@ def restore(issue_name: str = typer.Argument(..., help="Issue name to restore"))
         # Resolve worktree_path to absolute before any chdir
         if worktree_path:
             worktree_path = str(Path(worktree_path).resolve())
+            try:
+                _ensure_worktree_cafe_excluded(Path(worktree_path))
+            except (OSError, RuntimeError) as exc:
+                console.print(
+                    "[yellow]Warning: Could not exclude restored CAFE worktree state "
+                    f"from Git: {exc}[/yellow]"
+                )
 
         # Navigate to worktree directory if it was created
         if worktree_path:

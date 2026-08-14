@@ -161,6 +161,7 @@ then resolve every required step through the core parser before execution:
 
 ```yaml
 quality_gate:
+  name: Reviewer
   role: reviewer
   clis:
     - cli: <primary-cli>

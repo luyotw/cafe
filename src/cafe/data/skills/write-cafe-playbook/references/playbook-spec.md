@@ -329,6 +329,23 @@ Prefer an explicit forward skip:
   skill to declare `workflow.output_templates`; other workflow-owned settings need
   no development-stage or PR metadata.
 
+### Per-issue iteration override
+
+An issue may adjust one step's visit cap without copying the full playbook. The
+override surface is intentionally limited to `steps.<name>.max_iterations`:
+
+```yaml
+playbook_overrides:
+  steps:
+    review:
+      max_iterations: 7
+```
+
+The step must exist in the selected playbook and the value must be a positive
+integer. Unknown steps, fields, or non-integer values fail before workflow
+execution. Other graph, skill, hook, and presentation changes still require a
+project playbook under `.cafe/playbooks/`.
+
 ### Initial input for a custom entry step
 
 Use this contract when an entry step needs operator text or a GitHub issue before

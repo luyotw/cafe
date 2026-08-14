@@ -677,6 +677,17 @@ commands:
         )
         assert with_pr.pr == {"auto_create": True, "post_todo_list": False}
 
+        without_auto_create = resolve_non_interactive_issue_config(
+            profile,
+            NonInteractiveCliAnswers(
+                input_method="manual",
+                auto_create_pr=False,
+            ),
+            parsed_fields=_default_fields(),
+            deps=_resolver_deps(),
+        )
+        assert without_auto_create.pr == {"auto_create": False}
+
     def test_pr_flags_rejected_when_playbook_has_no_pr_config(self) -> None:
         profile = _no_pr_profile()
 

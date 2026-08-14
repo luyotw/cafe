@@ -124,7 +124,7 @@ class TestSetupNonInteractiveFlags:
         cafe_dir.mkdir()
         original = {
             "settings": {"auto_update": True},
-            "auto": {"max_review_iterations": 7},
+            "integration": {"custom_timeout": 7},
             "python_bin": "python3.11",
         }
         _write_config(cafe_dir, original)
@@ -134,7 +134,7 @@ class TestSetupNonInteractiveFlags:
 
         assert result.exit_code == 0
         cfg = _read_config(cafe_dir)
-        assert cfg["auto"]["max_review_iterations"] == 7
+        assert cfg["integration"]["custom_timeout"] == 7
         assert cfg["python_bin"] == "python3.11"
 
     def test_invalid_rigor_exits_with_error(

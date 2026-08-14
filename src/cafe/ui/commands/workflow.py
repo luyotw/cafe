@@ -14,12 +14,13 @@ from rich.console import Console
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.issue_resolution import ActiveIssueResolutionError, resolve_active_issue
+from cafe.core.phase_state_mixin import next_runnable_iteration_number
 from cafe.core.playbook import resolve_step_behavior
 from cafe.core.types import CriticalPhaseError
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.phases.generic_phase import GenericPhase
-from cafe.playbooks.loader import PlaybookLoader
+from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 from cafe.skills.loader import SkillLoader
 from cafe.ui.cli_shared import (
     VALID_CONTENT_TYPES,
@@ -168,7 +169,7 @@ def _resolve_initial_step_user_inputs(
         return {str(start_step): user_input}, None
     if user_input and resume_current_step in {"user", "done"}:
         return None, user_input
-    return _build_initial_step_user_inputs(playbook_data, user_input), user_input
+    return _build_initial_step_user_inputs(playbook_data, user_input), None
 
 
 def _validate_allowed_directories(config_manager: Any, add_dir: List[str]) -> None:
@@ -593,33 +594,6 @@ def workflow(
     user_input = _normalize_cli_user_input(user_input)
     try:
 
-        def _predict_next_iteration(issue_root: Path, step_name: str) -> int:
-            step_dir = issue_root / step_name
-            iter_dirs = sorted(d for d in step_dir.glob("iteration_*") if d.is_dir())
-            existing = [
-                d
-                for d in iter_dirs
-                if (d / "iteration.json").exists() or (d / "context.json").exists()
-            ]
-            if not existing:
-                return 1
-            count = len(existing)
-            try:
-                import json as _json
-
-                last_dir = existing[-1]
-                last_file = (
-                    last_dir / "iteration.json"
-                    if (last_dir / "iteration.json").exists()
-                    else last_dir / "context.json"
-                )
-                last_data = _json.loads(last_file.read_text(encoding="utf-8"))
-                if not last_data.get("status_code"):
-                    return last_data.get("iteration", count)
-            except Exception:
-                return count
-            return count + 1
-
         git = _get_GitOperations()()
         cafe_dir = Path(".cafe")
         try:
@@ -662,6 +636,10 @@ def workflow(
 
         playbook_loader = PlaybookLoader()
         playbook_data = playbook_loader.load(selected_playbook)
+        playbook_data = apply_issue_playbook_overrides(
+            playbook_data,
+            issue_dir / "issue.yaml",
+        )
         if dry_run:
             # Dry-run is a planning surface, not a fake execution mode. It
             # must not create workflow state, phase output, tasks, hooks, or
@@ -676,7 +654,7 @@ def workflow(
             )
             console.print(format_text_report(analyze_playbook(model)))
             return
-        interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
+        tty_interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
         generic_phase = GenericPhase(SkillLoader())
 
         entry_point = str(
@@ -693,6 +671,11 @@ def workflow(
             resume_blackboard.current_step,
         )
 
+        def _interactive_mode() -> bool:
+            # An explicit payload is authoritative for the current user gate,
+            # then normal TTY interaction resumes after that payload is consumed.
+            return tty_interactive and user_input is None
+
         initial_phase_name = start_step or resume_blackboard.current_step
         if initial_phase_name not in playbook_data["steps"]:
             initial_phase_name = None
@@ -706,7 +689,7 @@ def workflow(
                 generic_phase=generic_phase,
                 phase_name=phase_name,
                 step_user_inputs=initial_step_user_inputs,
-                interactive=interactive,
+                interactive=_interactive_mode(),
                 extra_allowed_directories=add_dir_values,
             )
 
@@ -726,7 +709,7 @@ def workflow(
             extra_prompt: Optional[str] = None,
             same_invocation_retry: bool = False,
         ) -> Any:
-            iteration = _predict_next_iteration(issue_dir, step_name)
+            iteration = next_runnable_iteration_number(issue_dir / step_name)
             console.print(f"[dim]Executing[/dim] step={step_name} iteration={iteration:03d}")
             if _executor_holder["phase_name"] != step_name:
                 _executor_holder["executor"] = _build_executor_for_phase(step_name)
@@ -767,6 +750,7 @@ def workflow(
         pending_start_step = start_step
         explicit_start_step_pending = start_step is not None
         while True:
+            interactive = _interactive_mode()
             has_explicit_start_step = explicit_start_step_pending
             pending_start_step = _consume_pending_chat_handoff(
                 issue_dir=issue_dir,

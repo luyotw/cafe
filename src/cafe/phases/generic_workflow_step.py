@@ -26,6 +26,7 @@ from cafe.core.context_packet import (
     build_context_packet_diagnostics,
     format_context_packet_diagnostic,
 )
+from cafe.core.downstream_contract import ContractValidationError, extract_downstream_contract
 from cafe.core.delta_packet import (
     build_delta_packet,
     inline_delta_packet,
@@ -56,7 +57,7 @@ from cafe.core.status_codes import (
 )
 from cafe.core.takeover import build_takeover_snapshot
 from cafe.core.types import AgentCLI
-from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.workflow_models import BatonRejected, StepExecutionResult
 from cafe.core.workflow_runtime import (
     operation_artifact_is_trusted,
     operation_receipt_is_trusted,
@@ -526,6 +527,15 @@ class GenericWorkflowStepExecutor(Phase):
         output_key = str(step_def.get("output_artifact", step_name))
         artifacts: Dict[str, str] = {}
         if execution.artifact_ready and output_file.exists():
+            if self._output_requires_contract_validation(
+                step_name=step_name,
+                status_code=status_code,
+            ):
+                self._validate_produced_packet_contracts(
+                    producer_step=step_name,
+                    artifact_name=output_key,
+                    output_file=output_file,
+                )
             output_path = str(output_file)
             artifacts[output_key] = output_path
             self._write_artifact_record(
@@ -1376,7 +1386,7 @@ class GenericWorkflowStepExecutor(Phase):
             context["review_head"] = "HEAD"
             context["review_required"] = str(
                 self._get_issue_config_value(self.issue_dir / "issue.yaml", "pr.auto_create")
-                is False
+                is not True
             ).lower()
 
         return context
@@ -1615,6 +1625,64 @@ class GenericWorkflowStepExecutor(Phase):
             PhaseStatusCode.READY_FOR_REVIEW,
             PhaseStatusCode.CONFIRM_OUTPUT,
         }
+
+    def _output_requires_contract_validation(
+        self, *, step_name: str, status_code: Optional[PhaseStatusCode]
+    ) -> bool:
+        if status_code is not None:
+            return self._should_validate_checklist(status_code)
+        try:
+            contract = BlackboardStore(self.issue_dir).load_handoff_contract(
+                BlackboardStore(self.issue_dir).load_or_create(step_name),
+                allowed_steps=list(self.playbook.get("steps", {})),
+            )
+        except (OSError, ValueError, BatonRejected):
+            return False
+        return (
+            contract.from_step == step_name
+            and contract.to_step != step_name
+            and contract.intent
+            in {
+                HandoffIntent.AWAIT_AGENT,
+                HandoffIntent.CONFIRM_OUTPUT,
+                HandoffIntent.WORKFLOW_COMPLETE,
+            }
+        )
+
+    def _validate_produced_packet_contracts(
+        self, *, producer_step: str, artifact_name: str, output_file: Path
+    ) -> None:
+        """Validate a producer as soon as it completes for a packet consumer."""
+        steps = self.playbook.get("steps", {})
+        if not isinstance(steps, Mapping):
+            return
+        for consumer_step, consumer in steps.items():
+            if not isinstance(consumer_step, str) or not isinstance(consumer, Mapping):
+                continue
+            inputs = consumer.get("input_artifacts")
+            if not isinstance(inputs, list) or artifact_name not in inputs:
+                continue
+            consumer_iteration = self._get_next_iteration_number(
+                consumer_step,
+                self.issue_dir / consumer_step,
+            )
+            skill_name = self._resolve_skill_name(dict(consumer), consumer_iteration)
+            workflow_contract = self._get_skill_loader().get_workflow_contract(skill_name)
+            packet_kinds = {
+                policy.contract_kind
+                for prompt_input in workflow_contract.prompt_inputs
+                if artifact_name in prompt_input.artifacts
+                for policy in prompt_input.load_policy
+                if policy.mode == "packet" and policy.contract_kind in {"spec", "plan"}
+            }
+            for kind in sorted(packet_kinds):
+                try:
+                    extract_downstream_contract(output_file, kind=kind)
+                except ContractValidationError as exc:
+                    raise ContractValidationError(
+                        f"Step {producer_step!r} output {artifact_name!r} cannot satisfy "
+                        f"packet input for step {consumer_step!r}: {exc}"
+                    ) from exc
 
     @staticmethod
     def _event_allows_auto_continue(event: Dict[str, Any]) -> bool:
