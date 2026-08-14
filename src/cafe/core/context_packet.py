@@ -1,4 +1,4 @@
-"""Immutable packet envelopes for validated source-owned contracts."""
+"""Immutable, runtime-derived views of authoritative Markdown artifacts."""
 
 from __future__ import annotations
 
@@ -14,7 +14,9 @@ from cafe.core.packet_io import (
     sha256_bytes,
 )
 
-CONTEXT_PACKET_SCHEMA_VERSION = 1
+CONTEXT_PACKET_SCHEMA_VERSION = 2
+_LEGACY_CONTEXT_PACKET_SCHEMA_VERSION = 1
+_STRUCTURAL_MANIFEST_VERSION = 1
 _FALLBACK_DETAILS = {
     "packet_build_failed": "context packet could not be built",
     "packet_invalid": "context packet validation failed",
@@ -22,6 +24,68 @@ _FALLBACK_DETAILS = {
 }
 _FALLBACK_REASONS = frozenset(_FALLBACK_DETAILS)
 _MAX_DIAGNOSTIC_DETAIL = 160
+
+
+def _visible_heading_fragments(text: str) -> list[dict[str, Any]]:
+    """Extract deterministic, source-owned Markdown fragments.
+
+    A duplicate heading path is deliberately not a packet candidate: selecting
+    one occurrence would make a compact view ambiguous, so the caller falls
+    back to the complete authority instead.
+    """
+    lines = text.splitlines(keepends=True)
+    headings: list[tuple[int, int, str, tuple[str, ...]]] = []
+    stack: list[tuple[int, str]] = []
+    fence: str | None = None
+    offset = 0
+    for line_number, line in enumerate(lines):
+        visible = fence is None
+        fence = _update_fence(fence, line)
+        if visible and fence is None:
+            match = __import__("re").match(r"^(#{1,6})[ \t]+(.+?)[ \t]*#?[ \t]*$", line.rstrip("\r\n"))
+            if match:
+                level, title = len(match.group(1)), match.group(2)
+                while stack and stack[-1][0] >= level:
+                    stack.pop()
+                stack.append((level, title))
+                headings.append((line_number, level, title, tuple(item[1] for item in stack)))
+        offset += len(line)
+    paths = [heading[3] for heading in headings]
+    if len(paths) != len(set(paths)):
+        raise ValueError("Ambiguous Markdown heading path")
+    fragments: list[dict[str, Any]] = []
+    starts = [item[0] for item in headings]
+    if starts and starts[0] > 0:
+        content = "".join(lines[: starts[0]])
+        fragments.append(_fragment(("document",), 1, content))
+    elif not starts:
+        fragments.append(_fragment(("document",), 1, text))
+        return fragments
+    for index, (start, _level, _title, path) in enumerate(headings):
+        end = starts[index + 1] if index + 1 < len(starts) else len(lines)
+        fragments.append(_fragment(path, 1, "".join(lines[start:end])))
+    return fragments
+
+
+def _fragment(path: tuple[str, ...], ordinal: int, content: str) -> dict[str, Any]:
+    encoded = content.encode("utf-8")
+    return {
+        "heading_path": list(path),
+        "ordinal": ordinal,
+        "bytes": content,
+        "sha256": sha256_bytes(encoded),
+    }
+
+
+def _update_fence(fence: str | None, line: str) -> str | None:
+    import re
+    marker = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$", line.rstrip("\r\n"))
+    if marker is None:
+        return fence
+    token, trailing = marker.groups()
+    if fence is None:
+        return token
+    return None if token[0] == fence[0] and len(token) >= len(fence) and not trailing.strip() else fence
 
 
 def format_context_packet_diagnostic(binding: Mapping[str, Any]) -> str:
@@ -321,7 +385,7 @@ def _validate_binding_authority(
             validate_context_packet(packet)
             expected_packet = build_context_packet(
                 source_path=authority,
-                contract_kind=packet["contract"]["kind"],
+                contract_kind=_packet_contract_kind(packet),
                 target_step=target_step if target_step is not None else packet["target"]["step"],
                 iteration=iteration if iteration is not None else packet["target"]["iteration"],
                 placeholders=declared_placeholders,
@@ -414,42 +478,60 @@ def build_context_packet(
     source_artifact_version: int | None = None,
 ) -> dict[str, Any]:
     source = Path(source_path)
-    contract = extract_downstream_contract(source, kind=contract_kind)
     source_metadata = file_metadata(source)
+    if source_metadata.get("state") != "file":
+        raise OSError("Unreadable context source")
     source_metadata.update(
         {
             "artifact_name": source_artifact_name or source.stem,
             "artifact_version": source_artifact_version or 1,
         }
     )
+    # A valid v1 contract remains readable during migration.  New and malformed
+    # documents never need contract metadata: they use the structural manifest.
+    try:
+        contract = extract_downstream_contract(source, kind=contract_kind)
+    except ContractValidationError:
+        contract = None
+    if contract is not None:
+        return {
+            "schema_version": _LEGACY_CONTEXT_PACKET_SCHEMA_VERSION,
+            "packet_kind": "downstream_contract",
+            "target": {"step": target_step, "iteration": iteration, "placeholders": list(placeholders)},
+            "source": source_metadata,
+            "contract": {"kind": contract.kind, "version": contract.version,
+                         "sha256": contract.sha256, "bytes": contract.bytes.decode("utf-8")},
+        }
+    try:
+        text = source.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise OSError("Unreadable context source") from exc
     return {
         "schema_version": CONTEXT_PACKET_SCHEMA_VERSION,
-        "packet_kind": "downstream_contract",
+        "packet_kind": "structural_manifest",
         "target": {"step": target_step, "iteration": iteration, "placeholders": list(placeholders)},
         "source": source_metadata,
-        "contract": {
-            "kind": contract.kind,
-            "version": contract.version,
-            "sha256": contract.sha256,
-            "bytes": contract.bytes.decode("utf-8"),
+        "manifest": {
+            "kind": contract_kind,
+            "version": _STRUCTURAL_MANIFEST_VERSION,
+            "extraction_profile": "markdown-headings-v1",
+            "source_sha256": source_metadata["sha256"],
+            "fragments": _visible_heading_fragments(text),
+            "checkboxes": _checkbox_records(text) if contract_kind == "plan" else [],
         },
     }
 
 
 def validate_context_packet(packet: Any) -> None:
-    if not isinstance(packet, dict) or set(packet) != {
-        "schema_version",
-        "packet_kind",
-        "target",
-        "source",
-        "contract",
-    }:
+    if not isinstance(packet, dict) or not {"schema_version", "packet_kind", "target", "source"}.issubset(packet):
         raise ValueError("Invalid context packet envelope")
-    if (
-        packet.get("schema_version") != CONTEXT_PACKET_SCHEMA_VERSION
-        or packet.get("packet_kind") != "downstream_contract"
-    ):
+    legacy = packet.get("schema_version") == _LEGACY_CONTEXT_PACKET_SCHEMA_VERSION and packet.get("packet_kind") == "downstream_contract"
+    structural = packet.get("schema_version") == CONTEXT_PACKET_SCHEMA_VERSION and packet.get("packet_kind") == "structural_manifest"
+    if not (legacy or structural):
         raise ValueError("Invalid context packet schema")
+    expected_keys = {"schema_version", "packet_kind", "target", "source", "contract"} if legacy else {"schema_version", "packet_kind", "target", "source", "manifest"}
+    if set(packet) != expected_keys:
+        raise ValueError("Invalid context packet envelope")
     target = packet.get("target")
     source = packet.get("source")
     if (
@@ -482,19 +564,31 @@ def validate_context_packet(packet: Any) -> None:
         or not _valid_sha256(source.get("sha256"))
     ):
         raise ValueError("Invalid context packet source")
-    if not isinstance(packet.get("contract"), dict):
-        raise ValueError("Invalid context packet envelope")
-    contract = packet["contract"]
-    if (
-        set(contract) != {"kind", "version", "sha256", "bytes"}
-        or contract.get("kind") not in {"spec", "plan"}
-        or contract.get("version") != 1
-        or not isinstance(contract.get("bytes"), str)
-        or not _valid_sha256(contract.get("sha256"))
-    ):
-        raise ValueError("Invalid context packet contract")
-    if sha256_bytes(contract["bytes"].encode("utf-8")) != contract.get("sha256"):
-        raise ValueError("Invalid context packet contract hash")
+    if legacy:
+        contract = packet.get("contract")
+        if set(packet) != {"schema_version", "packet_kind", "target", "source", "contract"} or not isinstance(contract, dict) or set(contract) != {"kind", "version", "sha256", "bytes"} or contract.get("kind") not in {"spec", "plan"} or contract.get("version") != 1 or not isinstance(contract.get("bytes"), str) or not _valid_sha256(contract.get("sha256")) or sha256_bytes(contract["bytes"].encode("utf-8")) != contract.get("sha256"):
+            raise ValueError("Invalid context packet contract")
+        return
+    manifest = packet.get("manifest")
+    if set(packet) != {"schema_version", "packet_kind", "target", "source", "manifest"} or not isinstance(manifest, dict) or set(manifest) != {"kind", "version", "extraction_profile", "source_sha256", "fragments", "checkboxes"} or manifest.get("kind") not in {"spec", "plan"} or manifest.get("version") != _STRUCTURAL_MANIFEST_VERSION or manifest.get("extraction_profile") != "markdown-headings-v1" or manifest.get("source_sha256") != source["sha256"] or not isinstance(manifest["fragments"], list) or not manifest["fragments"]:
+        raise ValueError("Invalid structural context packet")
+    for fragment in manifest["fragments"]:
+        if not isinstance(fragment, dict) or set(fragment) != {"heading_path", "ordinal", "bytes", "sha256"} or not isinstance(fragment["heading_path"], list) or not fragment["heading_path"] or any(not isinstance(item, str) or not item for item in fragment["heading_path"]) or not isinstance(fragment["ordinal"], int) or fragment["ordinal"] < 1 or not isinstance(fragment["bytes"], str) or not _valid_sha256(fragment["sha256"]) or sha256_bytes(fragment["bytes"].encode("utf-8")) != fragment["sha256"]:
+            raise ValueError("Invalid structural context packet")
+    if not isinstance(manifest["checkboxes"], list):
+        raise ValueError("Invalid structural context packet")
+
+
+def _checkbox_records(text: str) -> list[dict[str, Any]]:
+    import re
+    return [{"ordinal": index, "checked": marker.lower() == "x", "text": label.strip()}
+            for index, (marker, label) in enumerate(re.findall(r"(?m)^\s*-\s+\[([ xX])\]\s+(.+)$", text), 1)]
+
+
+def _packet_contract_kind(packet: Mapping[str, Any]) -> str:
+    if packet.get("packet_kind") == "downstream_contract":
+        return str(packet["contract"]["kind"])
+    return str(packet["manifest"]["kind"])
 
 
 def _valid_sha256(value: Any) -> bool:
@@ -515,7 +609,9 @@ def persist_context_packet(
         expected_sha256=expected_sha256,
         matches_identity=lambda old, new: old.get("target") == new.get("target")
         and old.get("source") == new.get("source")
-        and old.get("contract") == new.get("contract"),
+        and old.get("packet_kind") == new.get("packet_kind")
+        and old.get("contract") == new.get("contract")
+        and old.get("manifest") == new.get("manifest"),
     )
 
 
@@ -541,12 +637,7 @@ def resolve_context_packet(
             source_artifact_name=source_artifact_name,
             source_artifact_version=source_artifact_version,
         )
-    except ContractValidationError:
-        # Invalid source contracts are confirmation failures, not safe packet
-        # fallbacks.  The producer must receive the contract validator's
-        # relation-specific feedback before a consumer can start.
-        raise
-    except OSError:
+    except (ContractValidationError, OSError, ValueError):
         return _context_packet_fallback(
             source_path, source_artifact_name, source_artifact_version, "packet_build_failed"
         )

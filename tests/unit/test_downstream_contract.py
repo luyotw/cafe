@@ -303,10 +303,11 @@ ARCH-001 INV-001 UT-001 ADR-001
         ("src/cafe/data/skills/cafe-plan/assets/templates/simple.md", "plan"),
     ],
 )
-def test_builtin_source_templates_have_valid_contracts(relative_path: str, kind: str) -> None:
+def test_builtin_source_templates_do_not_require_packet_contracts(relative_path: str, kind: str) -> None:
     root = Path(__file__).resolve().parents[2]
 
-    contract = extract_downstream_contract(root / relative_path, kind=kind)
+    text = (root / relative_path).read_text(encoding="utf-8")
 
-    assert contract.kind == kind
-    assert contract.bytes.startswith(b"## Downstream Contract\n")
+    assert "## Downstream Contract" not in text
+    assert "Authoritative Requirement IDs" not in text
+    assert "Authoritative Delivery IDs" not in text

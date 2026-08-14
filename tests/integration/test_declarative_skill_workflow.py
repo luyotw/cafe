@@ -380,8 +380,8 @@ BODY-ONLY-SENTINEL GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
         git_ops=_GitOps(),
         role_agent_map={"researcher": "David"},
     )
-    with pytest.raises(ContractValidationError):
-        second.execute_step("assemble", step, state)
+    second.execute_step("assemble", step, state)
+    assert "compact_brief=packet" in second_manager.prompts[0]
 
     packet_source.write_text(
         """# Brief
@@ -425,8 +425,8 @@ GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
         git_ops=_GitOps(),
         role_agent_map={"researcher": "David"},
     )
-    with pytest.raises(ContractValidationError):
-        empty_table_executor.execute_step("assemble", step, state)
+    empty_table_executor.execute_step("assemble", step, state)
+    assert "compact_brief=packet" in empty_table_manager.prompts[0]
 
 
 def test_packaged_workflow_uses_full_then_packet_then_legacy_fallback(
@@ -512,22 +512,21 @@ def test_packaged_workflow_uses_full_then_packet_then_legacy_fallback(
     spec_packets = list(issue_dir.glob("**/context_spec_file.json"))
     plan_packets = list(issue_dir.glob("**/context_plan_file.json"))
     assert spec_packets and plan_packets
-    spec_packet = json.loads(spec_packets[-1].read_text(encoding="utf-8"))["contract"]["bytes"]
-    plan_packet = json.loads(plan_packets[-1].read_text(encoding="utf-8"))["contract"]["bytes"]
-    assert "BODY-ONLY-PACKAGED-SENTINEL" not in spec_packet
-    for identifier in ("GOAL-001", "NONGOAL-001", "AC-001", "INV-001", "TRUST-001"):
-        assert identifier in spec_packet
-    assert "### Test List" in plan_packet
-    assert "### Dependency ADR References" in plan_packet
-    assert "ADR-001" in plan_packet
-    assert "| TASK-001 | pending |" in plan_packet
+    spec_packet = json.loads(spec_packets[-1].read_text(encoding="utf-8"))
+    plan_packet = json.loads(plan_packets[-1].read_text(encoding="utf-8"))
+    assert spec_packet["packet_kind"] == "structural_manifest"
+    assert plan_packet["packet_kind"] == "structural_manifest"
+    spec_fragments = "".join(item["bytes"] for item in spec_packet["manifest"]["fragments"])
+    plan_fragments = "".join(item["bytes"] for item in plan_packet["manifest"]["fragments"])
+    assert "BODY-ONLY-PACKAGED-SENTINEL" in spec_fragments
+    assert "## Test List" in plan_fragments
+    assert plan_packet["manifest"]["checkboxes"]
     final_host_inputs = phase.host_contexts[-1]["authoritative_inputs"]
     assert Path(final_host_inputs["spec_file"]).resolve() == spec
     assert Path(final_host_inputs["plan_file"]).resolve() == plan
 
-    spec.write_text("# Legacy confirmed artifact\n", encoding="utf-8")
-    with pytest.raises(ContractValidationError):
-        run("develop")
+    spec.write_text("# Ordinary confirmed artifact\n", encoding="utf-8")
+    run("develop")
 
 
 def test_workflow_replace_removes_stale_native_skills(tmp_path: Path, monkeypatch) -> None:
