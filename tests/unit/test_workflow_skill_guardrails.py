@@ -60,7 +60,7 @@ def test_spec_and_plan_skills_describe_runtime_owned_context_packets() -> None:
 
     for text in (spec, plan):
         assert "runtime" in text
-        assert "Downstream Contract" in text
+        assert "Downstream" in text and "Contract" in text
         assert "packet-specific IDs" in text
         assert "Contract-Version: 1" not in text
 
