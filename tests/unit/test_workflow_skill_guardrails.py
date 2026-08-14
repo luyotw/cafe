@@ -26,7 +26,7 @@ def test_packaged_develop_skill_has_risk_driven_operation_guidance() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-develop")
 
-    assert "version: 1.6.0" in text
+    assert "version: 1.7.0" in text
     assert "low 使用 `final-only`／`summary-only`" in text
     assert "max_read_only_commands" not in text
     assert "20 次" not in text
@@ -34,6 +34,9 @@ def test_packaged_develop_skill_has_risk_driven_operation_guidance() -> None:
     assert "不得繼續探索" not in text
     assert "任兩次實質修改之間" not in text
     assert "3 次唯讀呼叫內" not in text
+    assert "`Task Status` 僅使用 schema 允許的 `completed`" in text
+    assert "不得寫 `done`" in text
+    assert "verification receipt 是獨立證據，不能取代 summary" in text
 
 
 def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:

@@ -4,6 +4,7 @@
 [ ] Carefully read .cafe/issues/test/spec/iteration_001/output.md and .cafe/issues/test/plan/iteration_001/output.md
 [ ] Execute development tasks in strict order according to the plan
 [ ] Mark each completed task as checked in .cafe/issues/test/plan/iteration_001/output.md (change - [ ] to - [x])
+[ ] Keep the plan contract valid when marking completion: set matching `Task Status` rows to `completed` (never `done`)
 [ ] Follow existing commit message style, commit multiple times if needed
 [ ] Do NOT modify commits from other branches
 [ ] Confirm: Maximized code reuse by looking for existing patterns and utilities
@@ -18,6 +19,7 @@
 [ ] Confirm: `cafe verification run` reported a valid receipt; do not change HEAD or tracked files afterward
 [ ] Confirm: All tests pass and are not fragile
 [ ] Confirm: No pending work remains
+[ ] Write a non-empty development summary to .cafe/issues/test/develop/iteration_001/output.md; the verification receipt does not replace this summary
 [ ] Write the next-step baton to hand off to the next workflow target; the runtime updates blackboard
 
 

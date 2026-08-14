@@ -13,5 +13,6 @@
 [ ] Confirm: `cafe verification run` reported a valid receipt; do not change HEAD or tracked files afterward
 [ ] Confirm: All tests pass and are not fragile
 [ ] Confirm: No pending work remains
+[ ] Write a non-empty development summary to {output_file}; the verification receipt does not replace this summary
 [ ] Write the next-step baton to hand off to the next workflow target; the runtime updates blackboard
 {xml_questions_instruction}

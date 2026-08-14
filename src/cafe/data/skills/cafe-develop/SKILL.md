@@ -1,7 +1,7 @@
 ---
 name: cafe-develop
 description: "依計畫進行程式開發與測試"
-version: 1.6.0
+version: 1.7.0
 workflow:
   execution_profile:
     workload: implementation
@@ -97,6 +97,8 @@ Read your agent file: {agent_file}
 - 若 workflow 提供 plan，新增或修改的測試必須對應其 **Test List** 項目（範圍變更時先更新計畫）
 - 斷言以 invariant 為主：避免綁定 UI copy、CSS class、DOM 結構、內部 state shape；允許 a11y role/label、`data-testid`、以及規格明訂的文案（見 `cafe-plan/references/test_invariants_policy.md`）
 - 每輪完成後更新 checklist
+- 更新 plan 的完成狀態時，authoritative body checkbox 使用 `[x]`，`## Downstream Contract` 的 `Task Status` 僅使用 schema 允許的 `completed`；不得寫 `done`
+- 在 handoff 前寫入非空的 development summary 到 `{output_file}`；verification receipt 是獨立證據，不能取代 summary
 - 維持既有 commit 風格與程式碼註解語言
 - 優先重用現有模式與工具
 - Repo 搜尋與輸出上限：請依 shared skill「cafe-workflow-common」的 **Bounded repository inspection**；本 skill 不重複敘述。
