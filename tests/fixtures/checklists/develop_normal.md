@@ -18,7 +18,7 @@
 [ ] Confirm: `cafe verification run` reported a valid receipt; do not change HEAD or tracked files afterward
 [ ] Confirm: All tests pass and are not fragile
 [ ] Confirm: No pending work remains
-[ ] Update blackboard and next-step baton to hand off to the next workflow target
+[ ] Write the next-step baton to hand off to the next workflow target; the runtime updates blackboard
 
 
 ## Basic Principles

@@ -97,6 +97,12 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
     assert "next_step_file=.cafe/issues/demo/next_step.txt" in prompt
     assert "Runtime context:" in prompt
     assert "Baton contract (single source of truth):" in prompt
+    compact_baton = (
+        '{"version":1,"to_owner":"<agent|user|done>",'
+        '"to_step":"<target>","intent":"<intent>"}'
+    )
+    assert compact_baton in prompt
+    assert "never write blackboard_file" in prompt
     assert "valid intent values: [await_agent, confirm_output, alignment_checkpoint, need_clarification, need_permission, no_changes_needed, manual_handoff, workflow_complete]" in prompt
     assert "do not invoke external workflow-driving skills (e.g. use-cafe-workflow)" in prompt
     assert "Do NOT finish this step until ALL checklist items are marked as [x]." in prompt

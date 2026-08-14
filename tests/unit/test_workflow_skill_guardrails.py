@@ -13,9 +13,12 @@ def test_packaged_workflow_common_uses_bounded_digest() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-workflow-common")
 
-    assert "version: 1.5.0" in text
+    assert "version: 1.6.0" in text
     assert "Bounded blackboard digest" in text
     assert "Do **not** read or print the whole file" in text
+    assert '"from_step": "<current step name>"' not in text
+    assert '"created_at": "<ISO 8601 timestamp>"' not in text
+    assert "The runtime derives and persists those fields" in text
     assert "Do not skip the blackboard read" not in text
 
 
@@ -40,7 +43,7 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
     expected_versions = {
         "cafe-spec": "1.4.0",
         "cafe-plan": "1.5.0",
-        "cafe-workflow-common": "1.5.0",
+        "cafe-workflow-common": "1.6.0",
         "use-cafe-workflow": "1.18.0",
     }
     for name, version in expected_versions.items():

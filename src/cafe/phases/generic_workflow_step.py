@@ -1214,11 +1214,8 @@ class GenericWorkflowStepExecutor(Phase):
         add("ls")
 
         if baton_path is None:
-            # Always allow writing blackboard and baton so agents can hand off
-            # without hitting permission denials (runtime also writes these,
-            # but belt-and-suspenders prevents the agent from wasting tokens
-            # asking for permission).
-            add_writable_file(self.issue_dir / "blackboard.json")
+            # Agents write only the routing baton. Blackboard state and audit
+            # metadata are runtime-owned and must not be mutated by a phase.
             add_writable_file(self.issue_dir / "next_step.txt")
         else:
             add_writable_file(baton_path)
@@ -1247,10 +1244,9 @@ class GenericWorkflowStepExecutor(Phase):
 
     def _build_baton_retry_allowed_tools(self) -> List[str]:
         allowed_tools = ["read", "grep", "glob", "ls"]
-        for path in (self.issue_dir / "blackboard.json", self.issue_dir / "next_step.txt"):
-            display_path = self._display_path(path)
-            allowed_tools.append(f"edit({display_path})")
-            allowed_tools.append(f"write({display_path})")
+        display_path = self._display_path(self.issue_dir / "next_step.txt")
+        allowed_tools.append(f"edit({display_path})")
+        allowed_tools.append(f"write({display_path})")
         return allowed_tools
 
     def _build_context(

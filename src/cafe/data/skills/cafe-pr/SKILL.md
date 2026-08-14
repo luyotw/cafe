@@ -117,7 +117,7 @@ alongside this skill.
    - Body 維持 `Summary`、`Changes`、`Test Plan` 結構
 3. 不要直接呼叫 GitHub connector、GitHub API、`gh pr create`，也不要自行執行 `scripts/sync_pr.sh`
 4. 不要查詢或等待遠端 branch/PR；遠端 publish 是 agent 回傳後才由 host-side hook 執行
-5. 完成本地 PR artifact 與 checklist 後，依照本輪結果更新 blackboard 與 next-step baton
+5. 完成本地 PR artifact 與 checklist 後，依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新
 6. CAFE host-side hook 會執行 `scripts/sync_pr.sh --output {output_file}`，依 `issue.yaml` 的 `base_branch` 自動加上 `--base`
 7. Hook 會把 PR URL 作為 `pr_synced` event 回傳，CLI 會印出 PR URL
 8. 完成本地 artifact 後，把 next-step baton 寫成 `done`；不要用 response text status code 代表 workflow completion
@@ -133,4 +133,4 @@ alongside this skill.
 Write PR content to: {output_file}
 
 ## Handoff
-- 依照本輪結果更新 blackboard 與 next-step baton。
+- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。

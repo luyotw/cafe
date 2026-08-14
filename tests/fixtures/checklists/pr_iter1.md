@@ -9,7 +9,7 @@
 [ ] Include reference to original requirements
 [ ] List all major changes and commits in the Changes section
 [ ] Do not query or wait for a remote GitHub branch/PR; host-side publish runs after this phase returns
-[ ] Update blackboard and next-step baton to hand off to the next workflow target
+[ ] Write the next-step baton to hand off to the next workflow target; the runtime updates blackboard
 [ ] Mark this checklist complete before returning confirmed
 
 

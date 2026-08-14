@@ -134,4 +134,4 @@ defined `TASK-*` IDs or `—`. Never use `TRUST-*`, `AC-*`, or `ADR-*` in those
 reference columns.
 
 ## Handoff
-- 依照本輪結果更新 blackboard 與 next-step baton。
+- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。

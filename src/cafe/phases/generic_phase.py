@@ -172,6 +172,15 @@ class GenericPhase:
             else ""
         ) or ", ".join(intent.value for intent in HandoffIntent)
         runtime_context.append("Baton contract (single source of truth):")
+        runtime_context.append(
+            '- write next_step_file as JSON with exactly these required fields: '
+            '{"version":1,"to_owner":"<agent|user|done>",'
+            '"to_step":"<target>","intent":"<intent>"}'
+        )
+        runtime_context.append(
+            "- never write blackboard_file; the runtime derives audit metadata "
+            "and updates the blackboard"
+        )
         runtime_context.append(f"- valid intent values: [{baton_intents}]")
         # 列出本 playbook 實際合法的 to_step，避免 agent 沿用共用 skill 範例裡的 step
         # （如 pr）而寫出此 playbook 不存在的目標導致 baton 被拒。

@@ -94,7 +94,7 @@ bash scripts/sync_github.sh --help
   若為 `split`，保留有用的目前成果與不重疊的後續項目；僅提出建議，絕不建立
   issue、更新路線圖或變更優先順序。
 - User 確認暫停、交給 `plan` 前是否執行 GitHub sync、以及 baton 順序：請依 shared skill「cafe-workflow-common」的 **Confirming spec and plan with the user**、**Where policies live**，並搭配 `cafe-github_sync` skill；本 skill 不重複敘述。
-- 第一次草稿需 user 確認時：把 blackboard `current_step` 改成 `user`，並把 next-step baton 寫入 `user`，不要直接交給 `plan`（其餘細節以 cafe-workflow-common 為準）。
+- 第一次草稿需 user 確認時：把 next-step baton 寫入 `user`，不要直接交給 `plan`；blackboard 由 runtime 更新（其餘細節以 cafe-workflow-common 為準）。
 - 後續輪若仍需 user 再看一輪：同樣把 next-step baton 寫入 `user`。
 - 若資訊不足，輸出 `questions.xml` 並依 cafe-workflow-common 暫停給 `user`。
 
@@ -111,4 +111,4 @@ Use only the schema sections and ID families shown by the selected template:
 contract version or additional ID family.
 
 ## Handoff
-- 依照本輪結果更新 blackboard 與 next-step baton。
+- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。

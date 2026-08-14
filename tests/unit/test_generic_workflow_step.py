@@ -1323,9 +1323,9 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
     assert (
         "write(./.cafe/issues/issue-review-skill/review/iteration_001/checklist.md)" in allowed_tools
     )
-    assert "edit(./.cafe/issues/issue-review-skill/blackboard.json)" in allowed_tools
+    assert "edit(./.cafe/issues/issue-review-skill/blackboard.json)" not in allowed_tools
     assert "edit(./.cafe/issues/issue-review-skill/next_step.txt)" in allowed_tools
-    assert "write(./.cafe/issues/issue-review-skill/blackboard.json)" in allowed_tools
+    assert "write(./.cafe/issues/issue-review-skill/blackboard.json)" not in allowed_tools
     assert "write(./.cafe/issues/issue-review-skill/next_step.txt)" in allowed_tools
 
     prompt = agent_manager.prompts[-1]
@@ -2138,9 +2138,9 @@ def test_generic_workflow_step_uses_baton_only_tools_on_baton_error(
     assert "grep" in allowed_tools
     assert "glob" in allowed_tools
     assert "ls" in allowed_tools
-    assert "edit(./.cafe/issues/issue-spec-baton-retry/blackboard.json)" in allowed_tools
+    assert "edit(./.cafe/issues/issue-spec-baton-retry/blackboard.json)" not in allowed_tools
     assert "edit(./.cafe/issues/issue-spec-baton-retry/next_step.txt)" in allowed_tools
-    assert "write(./.cafe/issues/issue-spec-baton-retry/blackboard.json)" in allowed_tools
+    assert "write(./.cafe/issues/issue-spec-baton-retry/blackboard.json)" not in allowed_tools
     assert "write(./.cafe/issues/issue-spec-baton-retry/next_step.txt)" in allowed_tools
     assert (
         "edit(./.cafe/issues/issue-spec-baton-retry/spec/iteration_001/output.md)"

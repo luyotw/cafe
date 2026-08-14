@@ -1,7 +1,7 @@
 ---
 name: cafe-workflow-common
 description: Use this skill at the start of any CAFE workflow phase to load the bounded workflow digest, identify the current baton state, and ground the phase in shared context before reading phase-specific artifacts.
-version: 1.5.0
+version: 1.6.0
 ---
 
 # Workflow Common
@@ -29,20 +29,19 @@ If you do NOT write a baton, the runtime falls back to your response's status co
 
 ## Baton Schema
 
-Write a JSON object to `next_step.txt` with these fields:
+Write a JSON object to `next_step.txt` with exactly these required routing fields:
 
 ```json
 {
   "version": 1,
-  "from_step": "<current step name>",
   "to_owner": "<agent|user|done>",
   "to_step": "<target step name or user or done>",
-  "intent": "<intent value>",
-  "status_code": "",
-  "created_at": "<ISO 8601 timestamp>",
-  "source": "<from_step>"
+  "intent": "<intent value>"
 }
 ```
+
+Do not add audit metadata such as `from_step`, `status_code`, `created_at`, or
+`source`. The runtime derives and persists those fields in the blackboard.
 
 ### Valid `to_owner` values
 
@@ -81,13 +80,9 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 ```json
 {
   "version": 1,
-  "from_step": "spec",
   "to_owner": "agent",
   "to_step": "plan",
-  "intent": "await_agent",
-  "status_code": "",
-  "created_at": "2026-05-14T10:00:00+08:00",
-  "source": "spec"
+  "intent": "await_agent"
 }
 ```
 
@@ -95,13 +90,9 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 ```json
 {
   "version": 1,
-  "from_step": "plan",
   "to_owner": "user",
   "to_step": "user",
-  "intent": "confirm_output",
-  "status_code": "",
-  "created_at": "2026-05-14T10:00:00+08:00",
-  "source": "plan"
+  "intent": "confirm_output"
 }
 ```
 
@@ -109,13 +100,9 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 ```json
 {
   "version": 1,
-  "from_step": "pr",
   "to_owner": "done",
   "to_step": "done",
-  "intent": "workflow_complete",
-  "status_code": "confirmed",
-  "created_at": "2026-05-14T10:00:00+08:00",
-  "source": "pr"
+  "intent": "workflow_complete"
 }
 ```
 

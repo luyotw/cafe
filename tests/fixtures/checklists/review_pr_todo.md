@@ -68,7 +68,7 @@
 [ ] Each issue should be a checkbox item with file path and line number
 [ ] If no issues found, all items should be marked [x]
 [ ] Do NOT provide code solutions, only identify issues
-[ ] Update blackboard and next-step baton to hand off to the next workflow target
+[ ] Write the next-step baton to hand off to the next workflow target; the runtime updates blackboard
 [ ] Keep the response brief; workflow transitions are controlled by the baton
 
 

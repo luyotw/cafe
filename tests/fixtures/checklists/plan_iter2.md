@@ -11,7 +11,7 @@
 [ ] Keep "## Development Guide" section unchanged
 [ ] Confirm: Only wrote plans and steps, NO actual code
 [ ] Confirm: No code was modified
-[ ] Update blackboard and next-step baton to hand off to the next workflow target
+[ ] Write the next-step baton to hand off to the next workflow target; the runtime updates blackboard
 
 
 
