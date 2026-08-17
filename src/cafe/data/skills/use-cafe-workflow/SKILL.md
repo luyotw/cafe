@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.18.0
+version: 1.19.0
 ---
 
 # Use CAFE Workflow
@@ -86,8 +86,8 @@ Do not preload unrelated references.
 - [ ] Assess issue nature, scale, and risk factors; resolve
   every phase skill's execution profile, classify each phase's capability band,
   resolve exact primary and fallback models with a phase-specific rationale,
-  test candidate availability and the configured fallback path, and propose
-  model-adjustment authority.
+  reuse valid cached preflight evidence or test candidate availability and the
+  configured fallback path, and propose model-adjustment authority.
 - [ ] Present the deterministic kickoff table and obtain explicit confirmation.
 - [ ] Check Git state, initialize CAFE if needed, prepare the issue, enter the
   recorded worktree, and persist the issue-owned contract.

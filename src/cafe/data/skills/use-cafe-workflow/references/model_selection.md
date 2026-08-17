@@ -136,13 +136,17 @@ Before the first phase execution:
 
 1. Render the exact ordered chain for every agent-executed phase: primary first,
    followed by every fallback.
-2. Confirm each selected CLI is installed and authenticated. A version command
-   proves installation only; use a minimal non-mutating prompt with every
-   distinct selected CLI/model to prove that the exact model can execute.
-3. Exercise the configured CAFE fallback path in a disposable test fixture by
-   making the primary fail with the classified `model_not_found` condition and
-   proving the configured fallback entry executes. Do not create a fake failure
-   inside a live issue or consume one of its iterations.
+2. For every distinct selected CLI/model, consult the machine-local preflight
+   cache described below. On a cache miss, confirm the CLI is installed and
+   authenticated with an actual minimal non-mutating model prompt. A version
+   command proves installation only; it is used for cache invalidation, not as
+   model-availability evidence.
+3. For every distinct ordered chain, run the cached CAFE fallback smoke helper.
+   A fresh smoke exercises the configured path by making the primary fail with
+   the classified `model_not_found` condition and proves each configured
+   fallback entry can execute in order. Do not create a fake failure inside a
+   live issue or consume one of its iterations; use the disposable in-process
+   fixture provided by the helper.
 4. Inspect the applicable `.cafe/phases.yaml` and resolved execution preview to
    verify ordering and exact model names. Treat an unavailable model, missing
    authentication, or failed fallback smoke test as a blocking preflight
@@ -151,6 +155,60 @@ Before the first phase execution:
 Automatic activation of a confirmed fallback is already authorized by kickoff;
 it is not a driver-authored adjustment. Preserve the execution record showing
 which CLI/model actually ran.
+
+### Reuse successful preflight evidence
+
+Use `scripts/preflight_cache.py` to run or reuse the model probe. The cache is
+machine- and user-local at the XDG cache location (normally
+`~/.cache/cafe/use-cafe-workflow/preflight-v1.json`); never put it in the
+repository or an issue worktree. It stores timestamps, exact model names, CLI
+version fingerprints, ordered chains, and CAFE runtime fingerprints. It does
+not store prompts, model output, credentials, tokens, or repository content.
+
+For each distinct selected candidate, run:
+
+```bash
+python3 <skill-dir>/scripts/preflight_cache.py candidate-probe \
+  --cli <cli> --model <exact-model>
+```
+
+- Exit `0` with `status=hit` reuses a successful actual execution from the last
+  24 hours for the same exact model and unchanged CLI executable/version.
+- Exit `0` with `status=fresh` means the helper ran one actual minimal
+  non-mutating prompt through the selected CAFE CLI/model and cached the success.
+  If the provider reports a canonical resolved model, use that exact identifier
+  in the confirmed chain and probe it before execution.
+- Any non-zero exit is a blocking probe, cache, or CLI inspection error. The
+  helper never records a failed, interrupted, rate-limited, unauthenticated, or
+  ambiguous probe.
+
+Then smoke each distinct ordered chain; the helper automatically reuses a
+successful result for 30 days only when the exact chain and CAFE runtime source
+fingerprint are unchanged:
+
+```bash
+python3 <skill-dir>/scripts/preflight_cache.py fallback-smoke \
+  --entry <primary-cli>:<exact-model> \
+  --entry <fallback-cli>:<exact-model>
+```
+
+Pass every configured fallback with another `--entry` in execution order. A
+`status=fresh` result performed the disposable smoke; `status=hit` reused it.
+The helper never calls a provider model: actual provider execution is covered by
+the candidate probes, while this smoke proves CAFE's classified takeover path.
+
+A live workflow failure always overrides cached evidence. On
+`model_not_found`, authentication failure, or CLI unavailability, invalidate the
+matching candidate before reconsidering it:
+
+```bash
+python3 <skill-dir>/scripts/preflight_cache.py candidate-invalidate \
+  --cli <cli> --model <exact-model>
+```
+
+For a suspected fallback-runtime defect, rerun `fallback-smoke` with `--force`.
+Do not cache failures or treat a cache hit as permission to ignore current rate
+limits, provider incidents, or a different resolved model.
 
 ## Persist the confirmed plan
 

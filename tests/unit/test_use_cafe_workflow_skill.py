@@ -1,8 +1,8 @@
 """Tests for bundled use-cafe-workflow skill guidance."""
 
-import subprocess
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -51,6 +51,33 @@ def _phase_rationale_args(rationales: dict[str, str] | None = None) -> list[str]
 
 def _read_skill_resource(path: str) -> str:
     return (SKILL_ROOT / path).read_text(encoding="utf-8")
+
+
+def _load_script_module(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _run_preflight_cache(
+    cache_file: Path, *args: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(SKILL_ROOT / "scripts" / "preflight_cache.py"),
+            "--cache-file",
+            str(cache_file),
+            *args,
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
 
 
 def test_use_cafe_workflow_uses_progressive_disclosure() -> None:
@@ -399,6 +426,134 @@ def test_phase_writer_preserves_existing_file_when_atomic_replace_fails(
 
     assert target.read_text(encoding="utf-8") == original
     assert not list(target.parent.glob(".phases.yaml.*.tmp"))
+
+
+def test_preflight_cache_reuses_only_success_for_same_cli_fingerprint(
+    tmp_path: Path, monkeypatch
+) -> None:
+    executable_dir = tmp_path / "bin"
+    executable_dir.mkdir()
+    executable = executable_dir / "codex"
+    executable.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"--version\" ]; then printf '%s\\n' 'codex 1.0'; exit 0; fi\n"
+        "printf '%s\\n' "
+        "'{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\","
+        "\"text\":\"CAFE_PREFLIGHT_OK\"}}' "
+        "'{\"type\":\"turn.completed\",\"usage\":{}}'\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", str(executable_dir))
+    cache_file = tmp_path / "cache" / "preflight.json"
+
+    miss = _run_preflight_cache(
+        cache_file, "candidate-check", "--cli", "codex", "--model", "exact-model-v1"
+    )
+    assert miss.returncode == 3
+    assert json.loads(miss.stdout)["status"] == "miss"
+
+    recorded = _run_preflight_cache(
+        cache_file,
+        "candidate-probe",
+        "--cli",
+        "codex",
+        "--model",
+        "exact-model-v1",
+    )
+    assert recorded.returncode == 0, recorded.stderr
+    assert json.loads(recorded.stdout)["status"] == "fresh"
+    assert cache_file.stat().st_mode & 0o777 == 0o600
+
+    hit = _run_preflight_cache(
+        cache_file,
+        "candidate-probe",
+        "--cli",
+        "codex",
+        "--model",
+        "exact-model-v1",
+    )
+    assert hit.returncode == 0, hit.stderr
+    assert json.loads(hit.stdout)["status"] == "hit"
+
+    executable.write_text(
+        "#!/bin/sh\nprintf '%s\\n' 'codex version 2.0'\n", encoding="utf-8"
+    )
+    executable.chmod(0o755)
+    changed = _run_preflight_cache(
+        cache_file,
+        "candidate-check",
+        "--cli",
+        "codex",
+        "--model",
+        "exact-model-v1",
+    )
+    assert changed.returncode == 3
+    assert json.loads(changed.stdout)["reason"] == "not_cached"
+
+
+def test_preflight_cache_can_invalidate_candidate_evidence(
+    tmp_path: Path, monkeypatch
+) -> None:
+    executable_dir = tmp_path / "bin"
+    executable_dir.mkdir()
+    executable = executable_dir / "probe-cli"
+    executable.write_text("#!/bin/sh\nprintf '%s\\n' 'probe-cli 1.0'\n", encoding="utf-8")
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", str(executable_dir))
+    cache_file = tmp_path / "preflight.json"
+
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "preflight_cache.py", "preflight_cache_invalidation"
+    )
+    recorded = module.candidate_record(
+        cache_file=cache_file,
+        cli="probe-cli",
+        model="exact-model",
+        resolved_model=None,
+        now=1.0,
+    )
+    assert recorded["status"] == "recorded"
+    invalidated = _run_preflight_cache(
+        cache_file,
+        "candidate-invalidate",
+        "--cli",
+        "probe-cli",
+        "--model",
+        "exact-model",
+    )
+    assert invalidated.returncode == 0, invalidated.stderr
+    assert json.loads(invalidated.stdout)["removed"] == 1
+    miss = _run_preflight_cache(
+        cache_file,
+        "candidate-check",
+        "--cli",
+        "probe-cli",
+        "--model",
+        "exact-model",
+    )
+    assert miss.returncode == 3
+
+
+def test_preflight_cache_runs_and_reuses_cafe_fallback_smoke(tmp_path: Path) -> None:
+    cache_file = tmp_path / "preflight.json"
+    args = (
+        "fallback-smoke",
+        "--entry",
+        "codex:primary-model",
+        "--entry",
+        "claude:fallback-model",
+    )
+
+    fresh = _run_preflight_cache(cache_file, *args)
+    assert fresh.returncode == 0, fresh.stderr
+    assert json.loads(fresh.stdout)["status"] == "fresh"
+    hit = _run_preflight_cache(cache_file, *args)
+    assert hit.returncode == 0, hit.stderr
+    assert json.loads(hit.stdout)["status"] == "hit"
+    forced = _run_preflight_cache(cache_file, *args, "--force")
+    assert forced.returncode == 0, forced.stderr
+    assert json.loads(forced.stdout)["status"] == "fresh"
 
 
 def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
@@ -870,6 +1025,12 @@ def test_use_cafe_workflow_requires_one_step_execution_and_model_authority() -> 
     assert "actual next iteration" in normalized_models
     assert "making the primary fail with the classified `model_not_found`" in normalized_models
     assert "Do not create a fake failure inside a live issue" in normalized_models
+    assert "scripts/preflight_cache.py" in models
+    assert "last 24 hours" in normalized_models
+    assert "successful result for 30 days" in normalized_models
+    assert "never records a failed" in normalized_models
+    assert "A live workflow failure always overrides cached evidence" in normalized_models
+    assert (SKILL_ROOT / "scripts" / "preflight_cache.py").is_file()
     assert "After each one-step invocation" in normalized_models
     assert "active worktree's `.cafe/phases.yaml`" in normalized_models
 
