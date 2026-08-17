@@ -115,6 +115,12 @@ Apply these rules:
    `equivalent`, use the same assessed band. For `equivalent_or_stronger`, use
    the same or a stronger assessed band; if equivalence is uncertain, choose
    the stronger fallback.
+   Model release order is not capability-band order: a fallback may use an
+   older model version than the primary when current provider evidence,
+   task-relevant local evidence, and preflight show that it still satisfies the
+   required band, workload, reasoning, and risk domains. Never reject a
+   fallback solely because its version number is lower, and never assume two
+   versions are equivalent solely because they share a model family.
 3. Use a distinct fallback CLI so it can execute independently from the
    primary.
 4. Raise the required capability when issue-level risk is stronger than the

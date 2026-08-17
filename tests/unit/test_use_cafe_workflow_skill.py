@@ -1020,6 +1020,9 @@ def test_use_cafe_workflow_requires_one_step_execution_and_model_authority() -> 
     assert "`frontier`" in models
     assert "Treat an existing repository chain as a candidate, not as selection evidence" in normalized_models
     assert "A publication phase may remain `efficiency`" in normalized_models
+    assert "Model release order is not capability-band order" in normalized_models
+    assert "Never reject a fallback solely because its version number is lower" in normalized_models
+    assert "never assume two versions are equivalent solely because they share a model family" in normalized_models
     assert "Reduced uncertainty after spec or plan may move" in normalized_models
     assert "Resolve the skill bound by the active playbook" in normalized_models
     assert "actual next iteration" in normalized_models
