@@ -18,6 +18,7 @@ from cafe.skills.global_installer import (
     GlobalSkillSyncError,
     GlobalSkillSyncSummary,
     auto_sync_global_skills,
+    detect_global_skill_clis,
     sync_global_skills,
 )
 
@@ -28,6 +29,20 @@ EXPECTED_CLI_ROOTS = {
     "cursor": Path(".cursor/skills"),
     "gemini": Path(".gemini/skills"),
 }
+
+
+@pytest.fixture(autouse=True)
+def _detect_supported_clis_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    executable_names = {
+        executable
+        for names in global_installer.GLOBAL_CLI_EXECUTABLES.values()
+        for executable in names
+    }
+    monkeypatch.setattr(
+        global_installer.shutil,
+        "which",
+        lambda executable: f"/test-bin/{executable}" if executable in executable_names else None,
+    )
 
 
 def _write_skill(source_root: Path, name: str, body: str) -> None:
@@ -45,6 +60,71 @@ def _write_skill(source_root: Path, name: str, body: str) -> None:
 def _write_default_sources(source_root: Path) -> None:
     for name in DEFAULT_GLOBAL_SKILLS:
         _write_skill(source_root, name, f"{name} v1")
+
+
+def test_detect_global_skill_clis_uses_path_or_existing_non_cafe_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home_dir = tmp_path / "home"
+    managed_only = home_dir / ".claude/skills/use-cafe-workflow"
+    managed_only.mkdir(parents=True)
+    (managed_only / "SKILL.md").write_text("managed", encoding="utf-8")
+    gemini_config = home_dir / ".gemini/settings.json"
+    gemini_config.parent.mkdir(parents=True)
+    gemini_config.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        global_installer.shutil,
+        "which",
+        lambda executable: "/test-bin/codex" if executable == "codex" else None,
+    )
+
+    detected = detect_global_skill_clis(home_dir=home_dir)
+
+    assert detected == ["codex", "gemini"]
+
+
+def test_default_sync_skips_undetected_clis_but_explicit_target_creates_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+    monkeypatch.setattr(
+        global_installer.shutil,
+        "which",
+        lambda executable: "/test-bin/codex" if executable == "codex" else None,
+    )
+
+    detected = sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    assert detected.installed_count == 3
+    assert (home_dir / ".codex/skills/use-cafe-workflow/SKILL.md").is_file()
+    assert not (home_dir / ".claude").exists()
+
+    explicit = sync_global_skills(
+        source_root=source_root,
+        home_dir=home_dir,
+        cli_names=["cursor"],
+    )
+
+    assert explicit.installed_count == 3
+    assert (home_dir / ".cursor/skills/use-cafe-workflow/SKILL.md").is_file()
+
+
+def test_default_sync_is_a_noop_when_no_supported_cli_is_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+    monkeypatch.setattr(global_installer.shutil, "which", lambda _: None)
+
+    explicit = sync_global_skills(source_root=source_root, home_dir=home_dir)
+    automatic = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    assert explicit.results == []
+    assert automatic is None
+    assert not home_dir.exists()
 
 
 def test_sync_global_skills_installs_updates_and_detects_unchanged(tmp_path: Path) -> None:
@@ -83,6 +163,27 @@ def test_sync_global_skills_installs_updates_and_detects_unchanged(tmp_path: Pat
     )
 
     unchanged = sync_global_skills(source_root=source_root, home_dir=home_dir)
+    assert unchanged.unchanged_count == 15
+    assert unchanged.changed_count == 0
+
+
+def test_sync_global_skills_ignores_generated_python_bytecode(tmp_path: Path) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+    generated = source_root / "use-cafe-workflow" / "scripts" / "__pycache__"
+    generated.mkdir(parents=True)
+    bytecode = generated / "helper.cpython-312.pyc"
+    bytecode.write_bytes(b"first generated version")
+
+    installed = sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    assert installed.installed_count == 15
+    assert not (home_dir / ".codex/skills/use-cafe-workflow/scripts/__pycache__").exists()
+
+    bytecode.write_bytes(b"second generated version")
+    unchanged = sync_global_skills(source_root=source_root, home_dir=home_dir)
+
     assert unchanged.unchanged_count == 15
     assert unchanged.changed_count == 0
 
@@ -411,6 +512,9 @@ def test_auto_sync_lock_contention_is_safe_across_processes(tmp_path: Path) -> N
     source_root = tmp_path / "bundled-skills"
     home_dir = tmp_path / "home"
     _write_default_sources(source_root)
+    codex_config = home_dir / ".codex/config.toml"
+    codex_config.parent.mkdir(parents=True)
+    codex_config.write_text("model = 'test'\n", encoding="utf-8")
     code = (
         "from pathlib import Path; import sys; "
         "from cafe.skills.global_installer import auto_sync_global_skills; "

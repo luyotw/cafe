@@ -475,52 +475,33 @@ def test_taskless_payload_rejects_another_workflows_durable_records(tmp_path: Pa
     assert HumanTaskRecordStore(issue_dir).results() == ()
 
 
-def test_confirmation_rejects_invalid_declared_packet_contract_for_custom_steps(
+def test_plan_confirmation_accepts_structural_packet_source_without_legacy_contract(
     tmp_path: Path,
 ) -> None:
-    """A packet consumer blocks confirmation before any fallback can be recorded."""
+    """Plan confirmation leaves structural packet construction to the consumer runtime."""
     issue_dir = tmp_path / ".cafe" / "issues" / "packet-confirmation"
     store, state = _paused_default_state(
-        issue_dir, from_step="producer", intent=HandoffIntent.CONFIRM_OUTPUT
+        issue_dir, from_step="plan", intent=HandoffIntent.CONFIRM_OUTPUT
     )
-    output = issue_dir / "producer" / "iteration_001" / "output.md"
+    output = issue_dir / "plan" / "iteration_001" / "plan.md"
     output.parent.mkdir(parents=True)
-    output.write_text("# incomplete source\n", encoding="utf-8")
-    store.set_artifact(state, "spec", str(output))
-    playbook = {
-        "steps": {
-            "producer": {
-                "skill": "cafe-spec",
-                "output_artifact": "spec",
-                "human_tasks": [
-                    {
-                        "trigger": "confirm_output",
-                        "task_id": "output-review",
-                        "outcomes": {"confirm": "consumer", "revise": "producer"},
-                    }
-                ],
-            },
-            "consumer": {"skill": "cafe-develop", "input_artifacts": ["spec"]},
-        }
-    }
+    output.write_text("# Implementation Plan\n\n- [ ] Implement the fix.\n", encoding="utf-8")
+    store.set_artifact(state, "plan", str(output))
+    playbook = PlaybookLoader().load("default")
 
     result = apply_human_task_payload(
         issue_dir=issue_dir,
         playbook_data=playbook,
         blackboard=state,
-        from_step="producer",
+        from_step="plan",
         trigger="confirm_output",
         raw_payload={"task": "output-review", "decision": "confirm"},
         source="integration",
     )
 
-    assert result.target is None
-    assert result.rejection is not None
-    assert "producer -> consumer" in result.rejection.message
-    assert "Downstream Contract" in result.rejection.message
-    reloaded = store.load_or_create("producer")
-    assert reloaded.current_step == "user"
-    assert not any("fallback" in event.event_type for event in reloaded.events)
+    assert result.target == "develop"
+    assert result.rejection is None
+    assert store.load_or_create("plan").current_step == "develop"
 
 
 def test_tdd_no_change_agreement_skips_review_to_pr(tmp_path: Path) -> None:

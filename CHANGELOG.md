@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-08-18
+
+### Added
+
+- Added an agent-neutral repository bootstrap that installs CAFE into an
+  isolated user environment and synchronizes bundled workflow skills without a
+  vendor-specific plugin.
+- Added an AI-readable installation contract and surfaced it at the beginning
+  of the README.
+
+### Changed
+
+- Global helper skill synchronization now targets only detected agent CLIs by
+  default. Explicit `--cli` selections still create the requested destination.
+- Generated Python bytecode is excluded from skill fingerprints and installed
+  copies to prevent unnecessary synchronization.
+
+### Fixed
+
+- Removed the stale HumanTask confirmation gate that still required legacy
+  model-authored downstream contracts after structural context packets became
+  authoritative.
+- Added rollback protection so a failed bootstrap cannot replace a working
+  CAFE launcher with an incomplete installation.
+
+See [the v0.3.1 release notes](docs/releases/v0.3.1.md) for installation and
+upgrade details.
+
 ## [0.3.0] - 2026-08-18
 
 This release opens the v0.3 development cycle. Roadmap capabilities assigned
