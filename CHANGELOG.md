@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.3.0] - 2026-08-11
+## [0.3.0] - 2026-08-18
 
 This release opens the v0.3 development cycle. Roadmap capabilities assigned
 to v0.3 are delivered throughout `0.3.x`; the v0.3 completion criteria are the
@@ -16,6 +16,9 @@ exit criteria for `0.4.0`.
   `key=value` batons, and legacy baton aliases are rejected.
 - Namespaced bundled workflow skills with the `cafe-` prefix and moved workflow
   behavior to declarative skill and playbook contracts.
+- Removed runtime crew and preset configuration. Every agent-executed step now
+  requires an exact ordered CLI/model chain in the issue worktree's
+  `.cafe/phases.yaml`.
 
 See [the v0.3.0 migration guide](docs/releases/v0.3.0.md) before upgrading an
 installation with unfinished v0.2.x workflows or custom playbooks.
@@ -24,6 +27,10 @@ installation with unfinished v0.2.x workflows or custom playbooks.
 
 - Declarative prepare fields, human tasks, phase configuration, alignment
   checkpoints, and non-software playbooks.
+- Durable HumanTask records with assignment, wait-state, result, lifecycle,
+  correlation, and interruption-recovery semantics.
+- Declarative step ownership for user, agent, host, script, and hybrid workflow
+  portions, plus durable feedback delivery across development and PR loops.
 - Fresh correction sessions with deterministic delta and context packets.
 - Persistent long-running operation state, risk-driven monitoring, and
   `cafe operation status`.
@@ -33,12 +40,17 @@ installation with unfinished v0.2.x workflows or custom playbooks.
   telemetry.
 - A release gate that verifies coverage, contracts, package contents, and a
   clean wheel installation.
+- Issue-decomposition assessments and driver-owned adaptive model selection,
+  fallback preflight caching, and one-step phase reassessment.
 
 ### Changed
 
 - Renamed the workflow summary command to `cafe status`.
 - Made CLI fallback, correction routing, and targeted human-task revisions
   explicit and declarative.
+- Made context packets runtime-derived structural manifests. New spec and plan
+  artifacts no longer require author-maintained ID taxonomies or duplicate
+  downstream contracts; valid legacy v1 contracts remain readable.
 - Reduced repeated document loading and correction-review work while preserving
   root-cause and sibling-path review coverage.
 
@@ -46,6 +58,9 @@ installation with unfinished v0.2.x workflows or custom playbooks.
 
 - Corrected worktree configuration, agent permission, fallback classification,
   session continuation, PR publish, and user-handoff edge cases.
+- Preserved strict workflow recovery across paused human tasks, feedback
+  delivery, compact baton handoffs, phase-chain setup, and context-packet
+  fallback or tamper detection.
 - Declared `click` as a direct runtime dependency so a clean wheel installation
   can start the CLI.
 

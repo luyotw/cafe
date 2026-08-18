@@ -1642,37 +1642,6 @@ class GenericWorkflowStepExecutor(Phase):
         self, *, producer_step: str, artifact_name: str, output_file: Path
     ) -> None:
         """Deprecated compatibility hook; packet metadata never gates output."""
-        return
-        steps = self.playbook.get("steps", {})
-        if not isinstance(steps, Mapping):
-            return
-        for consumer_step, consumer in steps.items():
-            if not isinstance(consumer_step, str) or not isinstance(consumer, Mapping):
-                continue
-            inputs = consumer.get("input_artifacts")
-            if not isinstance(inputs, list) or artifact_name not in inputs:
-                continue
-            consumer_iteration = self._get_next_iteration_number(
-                consumer_step,
-                self.issue_dir / consumer_step,
-            )
-            skill_name = self._resolve_skill_name(dict(consumer), consumer_iteration)
-            workflow_contract = self._get_skill_loader().get_workflow_contract(skill_name)
-            packet_kinds = {
-                policy.contract_kind
-                for prompt_input in workflow_contract.prompt_inputs
-                if artifact_name in prompt_input.artifacts
-                for policy in prompt_input.load_policy
-                if policy.mode == "packet" and policy.contract_kind in {"spec", "plan"}
-            }
-            for kind in sorted(packet_kinds):
-                try:
-                    extract_downstream_contract(output_file, kind=kind)
-                except ContractValidationError as exc:
-                    raise ContractValidationError(
-                        f"Step {producer_step!r} output {artifact_name!r} cannot satisfy "
-                        f"packet input for step {consumer_step!r}: {exc}"
-                    ) from exc
 
     @staticmethod
     def _event_allows_auto_continue(event: Dict[str, Any]) -> bool:
