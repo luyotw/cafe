@@ -324,7 +324,7 @@ ships.
 
 - [Roadmap](docs/roadmap.md)
 - [Changelog](CHANGELOG.md)
-- [Latest release notes](docs/releases/v0.3.1.md)
+- [Latest release notes](docs/releases/v0.3.2.md)
 - [Strategic positioning](docs/positioning.md)
 
 ## Contributing
