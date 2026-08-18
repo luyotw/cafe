@@ -1,118 +1,99 @@
 # The CAFE Engine
-## AI-Driven Development Workflow Automation
 
-**Maximize your vibe coding—without losing control of your codebase.**
+CAFE is a workflow engine that helps AI agents complete complex, long-running
+work reliably.
 
-CAFE (CLI Agent Flow Engine) is an AI-driven development workflow automation system powered by headless CLI agents. Our goal is to help individual developers leverage AI agents more effectively while maintaining code quality and long-term maintainability. It automates the entire development lifecycle—from requirements analysis to PR generation—by orchestrating specialized roles such as PM, Developer, and Reviewer, while keeping the codebase structured, inspectable, and maintainable.
+Describe the outcome you want, and CAFE guides agents through clarification,
+planning, execution, review, and delivery. It pauses when your judgment is
+needed and can resume interrupted work from where it stopped.
 
-CAFE is actively evolving—we're continuously iterating based on real-world usage and feedback to improve stability, usability, and integration with various AI agents.
+To install CAFE, see [INSTALL.md](INSTALL.md), or ask your CLI agent to follow
+that file for you.
 
-To install CAFE, see [INSTALL.md](INSTALL.md), or ask your CLI agent to follow it.
+![CAFE default software workflow](images/cafe-flow.png)
 
-![image](https://github.com/luyotw/cafe/blob/main/images/cafe-flow.png)
+## 1. What CAFE Is
 
----
+### Core idea
 
-## Who is CAFE designed for?
+**Turn AI agent work from a one-off conversation into a manageable, resumable,
+and continuously improvable workflow.**
 
-CAFE is designed for **individual developers** who want to leverage CLI-based AI agents to accelerate development without sacrificing code quality or long-term maintainability.
+CAFE does not replace agents or make every decision for you. It connects people,
+agents, workflow steps, and outputs so agents can move forward within clear
+boundaries and return control when human judgment is genuinely needed.
 
-CAFE is a good fit if you want to:
+### Three highlights
 
-- **Use CLI agent tools more effectively**  
-  Automate repetitive development tasks—such as requirement breakdown, implementation, code review, and PR generation—so you can focus on higher-level thinking and creative work.
+#### 1. Move complex work all the way to completion
 
-- **Maintain control over AI-generated code**  
-  CAFE enforces a multi-stage workflow that decomposes complex tasks into single-objective steps, guiding AI behavior and improving output stability and predictability.
+CAFE connects clarification, planning, execution, review, and delivery into one
+workflow. You do not need to tell an agent what to do next in every conversation
+or remember where the work stopped.
 
-- **Improve long-term code maintainability**  
-  By introducing explicit planning and review stages, CAFE ensures that AI-generated code is not only functional, but also readable, structured, and easier to evolve over time.
+It is especially useful for software development, research, editorial work,
+incident response, and other work that takes multiple steps to complete.
 
-> There is no magic bullet for high-quality code. Human review remains essential.  
-> CAFE is designed to **minimize the time and cognitive load required for review**, not to eliminate it.
+#### 2. Let agents work autonomously while people control key decisions
 
----
+You decide in advance what agents may handle on their own and what still needs
+your approval.
 
-## Key Features
+CAFE keeps work moving within those boundaries and pauses only for decisions
+such as requirement tradeoffs or expanded permissions. You do not need to
+supervise every step, and agents do not silently take control beyond the agreed
+scope.
 
-### High-Quality Code via Role-Oriented Workflow
+#### 3. Resume, hand off, and reuse work
 
-If you frequently spend time correcting code produced by CLI agent tools, CAFE addresses this by introducing explicit role separation.  
-A PM clarifies intent, a Developer implements changes, and a Reviewer evaluates the result—ensuring each stage is handled with a clear responsibility and objective.
+Workflow state, outputs, decisions, and review results stay with the project
+instead of depending on one chat session or one agent's memory.
 
----
+For example, if Claude reaches its usage limit, Codex can read the current
+workflow state and take over from the stopping point without requiring you to
+explain the requirements again or restart the work.
 
-### Standardized, Repeatable Development Flow
+Work can continue across sessions, agents, and interruptions with explicit
+progress intact. Mature workflows can also become reusable playbooks for future
+tasks or be adapted to fit a team's needs.
 
-Clarify requirements → Confirm implementation plan → Grab a coffee → Review the PR → Done.
+### Good use cases
 
----
+CAFE is a good fit for:
 
-### Git Worktree Support for Parallel Development
+- technical founders, operators, and small agent-native teams;
+- software changes that benefit from explicit specification, planning, and
+  independent review;
+- long-running work that may pause, change owner, or span several sessions;
+- repeated operating procedures that should be reviewed and evolved in Git;
+- custom workflows such as research, editorial production, incidents, and
+  other artifact-driven processes.
 
-CAFE supports `git worktree`, enabling parallel development across multiple issues without context switching. Each worktree operates in an isolated environment with its own configuration, allowing you to:
+CAFE is probably unnecessary for a disposable one-prompt task. It is also not
+an arbitrary host-privilege executor, a replacement for human review, or a
+complete project-management platform. Its value starts when the workflow and
+its history matter beyond the current chat.
 
-- Work on multiple features simultaneously without stashing changes
-- Let agents work in the background while you focus on other tasks
-- Maintain separate agent configurations per task (e.g., different models for different complexity levels)
+### Supported CLI agents
 
----
+CAFE currently integrates with:
 
-### Flexible Integration with CLI Agent Tools
-
-CAFE integrates with multiple CLI-based AI agents (e.g., Claude Code, Cursor CLI).
-Different agents and models can be assigned per role, allowing you to balance cost, performance, and reasoning depth.
-
-### Phase-Specific Agent Chains
-
-CAFE executes each workflow step from the exact ordered chain in the active
-worktree's `.cafe/phases.yaml`. When a primary agent hits a supported fallback
-condition, CAFE tries the next configured entry without changing configuration.
-
-```yaml
-develop:
-  name: David
-  role: developer
-  clis:
-    - cli: codex
-      model: gpt-5.6-sol
-    - cli: claude
-      model: claude-opus-5
-```
-
-Every entry requires an exact model. Missing, empty, or malformed step chains
-stop before agent invocation with source, step, and field context.
-
----
-
-### GitHub-Native Workflow
-
-CAFE can fetch requirements directly from GitHub Issues and automatically generate pull requests, keeping your AI-driven workflow aligned with standard GitHub development practices.
-
-## System Requirements
-
-### Prerequisites
-- **Python 3.10+**
-- [git](https://git-scm.com/) - for version control
-- [gh](https://cli.github.com/) - GitHub CLI (for PR creation and issue management)
-
-### Agent CLI Tools (at least one is required)
-- [Claude CLI](https://claude.com/product/claude-code)
+- [Claude Code](https://claude.com/product/claude-code)
 - [OpenAI Codex CLI](https://developers.openai.com/codex/cli)
 - [GitHub Copilot CLI](https://github.com/features/copilot/cli)
-- [Cursor CLI](https://cursor.com/zh-Hant/cli)
+- [Cursor CLI](https://cursor.com/cli)
 - [Gemini CLI](https://geminicli.com/)
 
-Support for more CLI agent tools is planned for the future. Stay tuned!
+At least one supported CLI agent is required. CAFE itself requires Python 3.10+
+and Git. GitHub workflows also require the
+[GitHub CLI](https://cli.github.com/).
 
-> **Note**: CAFE leverages the **headless mode** of these CLI tools, which means CAFE operates without requiring interactive sessions or IDE integrations. The CLI tools execute commands and return results to CAFE for processing, enabling seamless automation of the entire development workflow.
+## 2. Use CAFE
 
-## Installation
+### Install without using a terminal yourself
 
-### Ask Your CLI Agent (Recommended)
-
-CAFE does not require a vendor-specific plugin. Ask any CLI agent that can
-inspect repository files and run local commands to install it for you:
+Send this request to any CLI agent that can inspect files and run local
+commands:
 
 ```text
 Install the latest stable CAFE release from https://github.com/luyotw/cafe.
@@ -120,232 +101,237 @@ Follow INSTALL.md. I authorize the user-scoped changes described there.
 Do not use sudo, do not modify system Python, and do not change my shell profile.
 ```
 
-The repository bootstrap installs CAFE in an isolated user environment and
-synchronizes the bundled workflow skills for detected Claude, Codex, Copilot,
-Cursor, and Gemini installations. See [INSTALL.md](INSTALL.md) for the exact
-safety boundaries and agent instructions.
+The repository bootstrap installs CAFE in an isolated user environment. It
+then installs the `use-cafe-workflow`, `write-cafe-phase`, and
+`write-cafe-playbook` skills for detected supported agents. It does not require
+a vendor-specific plugin.
 
-### Manual Installation
+For the exact mutation boundaries, prerequisites, manual alternatives, and
+upgrade behavior, read [INSTALL.md](INSTALL.md).
 
-From PyPI:
+### Start work with `use-cafe-workflow`
 
-```bash
-pip install cafe-engine
+Start your CLI agent in the project you want CAFE to manage. Then describe the
+outcome instead of manually operating each CAFE command. For a GitHub issue:
+
+```text
+Use CAFE to work on GitHub issue #123 in this repository.
+Keep our conversation in zh-TW and repository content in en-US.
 ```
 
-From source:
+For work that does not start from GitHub:
 
-```bash
-# Clone repository
-git clone https://github.com/luyotw/cafe.git
-cd cafe
-
-# Install CAFE
-pip install -e .
-
-# Or install the development version (including testing tools)
-pip install -e ".[dev]"
+```text
+Use CAFE to add CSV export to this project. Preserve the existing public API.
 ```
 
-After installation, you can use the `cafe` command:
-```bash
-cafe --help
+The `use-cafe-workflow` driver will inspect the repository and propose a
+kickoff contract before it mutates the project or starts the first phase. The
+proposal includes:
+
+- the playbook and scope;
+- conversation and repository-content locales;
+- planned human confirmation points and reactive handoffs;
+- issue size, risk, and the mandate boundary;
+- the primary and fallback CLI/model chain for each agent phase;
+- whether the driver may adjust later model choices autonomously; and
+- whether the issue should use a worktree.
+
+Confirm or revise that contract once. The driver then prepares the issue and
+executes one phase at a time. After every completed phase it inspects the
+result, reassesses later model choices within the granted authority, and follows
+the persisted handoff. It stops when a decision still belongs to you.
+
+Common follow-up requests are similarly direct:
+
+```text
+Resume the current CAFE workflow.
 ```
 
-## Usage
-
-### Quick Start
-
-> Please ensure you have installed the prerequisites from the [System Requirements](#system-requirements) section and at least one Agent CLI tool.
-
-1.  **Initialize CAFE**:
-    ```bash
-    cafe init
-    ```
-    This initializes project settings and bundled default content. Issue-owned
-    phase chains are established by the workflow driver after kickoff confirmation.
-
-2.  **Start the development workflow**:
-    ```bash
-    cafe prepare
-    ```
-    Switch to the worktree path if set, then:
-    ```bash
-    cafe make
-    ```
-
-3.  **Finalize and sync back**:
-    ```bash
-    cafe close
-    ```
-
-### Phase Configuration
-
-`.cafe/phases.yaml` is the sole runtime execution configuration, with the step
-name as the top-level key.
-
-```yaml
-build:
-  name: Build step
-  role: developer
-  clis:
-    - cli: claude
-      model: claude-opus-5
-    - cli: gemini
-      model: gemini-2.5-pro
+```text
+Show me the current CAFE status and explain what is waiting for me.
 ```
 
-The highest precedence source is worktree-local `.cafe/phases.yaml` in the active
-worktree, then repository `.cafe/phases.yaml`. Missing or malformed entries are rejected with
-field-level validation errors.
-
-### Project Settings
-
-Project settings (playbook, rigor, auto-update) live in `.cafe/config.yaml` and are managed separately from phase execution configuration:
-
-```bash
-# Interactive
-cafe setup
-
-# Non-interactive
-cafe setup --playbook default --rigor high --auto-update
+```text
+Continue, but require my approval before changing any phase model.
 ```
 
-You can also grant every workflow agent access to additional project directories:
+### Built-in playbooks
 
-```yaml
-# .cafe/config.yaml
-allowed_directories:
-  - src
-  - tests
+CAFE includes software-development, hotfix, TDD, research, editorial, incident,
+and simple workflows. To inspect what is available, ask your agent:
+
+```text
+Show me the CAFE playbooks available in this project and explain when to use
+each one.
 ```
 
-For a one-off run, append directories with `cafe make --add-dir scripts --add-dir docs`.
-Configured and CLI-provided directories must exist before the workflow starts.
+The default software playbook separates specification, planning, development,
+review, and PR publication. Other playbooks can use different roles, artifacts,
+steps, and human gates without changing the workflow engine.
 
-### Global Workflow Helper Skills
+### Create a custom workflow with skills
 
-Every `cafe` CLI startup detects supported agent installations, performs a fast
-per-machine fingerprint check, and installs or updates bundled workflow helper
-skills when their sources changed or an installed copy is missing. Detection
-uses an agent executable on `PATH` or existing vendor state other than copies
-managed only by CAFE. This covers fresh machines, new checkouts, and package
-upgrades without creating directories for agents that are not installed.
+Custom workflows have two authoring layers:
 
-The fingerprint and installed copies are local to each machine. Multiple
-machines can develop CAFE concurrently: each one syncs from its current local
-checkout, and receives another machine's committed skill changes after the
-normal Git push/pull exchange. CAFE does not auto-pull or modify a checkout.
-Concurrent CAFE processes on one machine serialize complete sync batches so
-their destination updates cannot interleave. A batch stages every changed copy
-before publishing and rolls the published copies back if any update fails.
+| Need | Use | Project source of truth |
+| --- | --- | --- |
+| Define how one phase behaves | `write-cafe-phase` | `.cafe/skills/<name>/` |
+| Connect phases and gates | `write-cafe-playbook` | `.cafe/playbooks/<id>.yaml` |
+| Execute or resume the workflow | `use-cafe-workflow` | Runtime state under `.cafe/issues/` |
 
-CAFE's Git hooks also verify and synchronize all managed copies immediately
-after every commit or merge, including amended commits. Enable the hooks once
-per checkout:
+Define or update the phase skills first, then connect them with a playbook. For
+example:
 
-```bash
-./setup-hooks.sh
+```text
+Use write-cafe-phase to create a project skill that turns an approved research
+brief into a cited report. The report must stop for user approval.
 ```
 
-Use the explicit command for recovery after an automatic sync warning, repairing
-manually edited destination content, or limiting the target CLIs:
+Then:
 
-```bash
-cafe skill sync-global
+```text
+Use write-cafe-playbook to create a research-publication playbook from the
+existing brief, report, review, and publish skills.
 ```
 
-The default sync copies `use-cafe-workflow`, `write-cafe-playbook`, and
-`write-cafe-phase`, including their references and scripts, to the detected
-subset of:
+These authoring skills encode CAFE's artifact, plan handoff, ownership,
+confirmation, tool, and validation rules. They should edit project sources of
+truth, not generated issue artifacts or globally installed skill copies.
 
-- `~/.claude/skills/`
-- `~/.codex/skills/`
-- `~/.copilot/skills/`
-- `~/.cursor/skills/`
-- `~/.gemini/skills/`
+Before using a custom workflow, ask the authoring agent to validate its skill
+bindings, confirmation gates, and graph:
 
-The command is safe to rerun: it reports each destination as installed,
-updated, or unchanged. Explicit `--cli` targets bypass detection and may create
-the selected vendor directory:
-
-```bash
-cafe skill sync-global --cli codex --cli cursor
+```text
+Validate the research-publication skills and playbook strictly. Show me its
+planned confirmation gates, simulate every route, and fix any unexplained
+warning before we use it.
 ```
 
-Pass bundled skill names as positional arguments to override the default set.
+You can then ask the driver to use that playbook by name:
 
-### Multiple Worktrees
-
-In worktree mode, each worktree maintains independent configuration:
-```bash
-cafe prepare --worktree .cafe/worktrees/issue42
-cd .cafe/worktrees/issue42
-cafe make
+```text
+Use CAFE with the research-publication playbook for this brief.
 ```
 
-## Core Architecture
+The skills are the recommended interface because they preserve kickoff,
+one-step execution, model reassessment, and human-handoff rules. The agent
+operates the Engine commands on your behalf and should explain outcomes and
+decisions rather than exposing command mechanics as the normal user interface.
 
-### 5-in-1 Workflow:
+## 3. When You Need More Control
 
-- The development process consists of five main phases:
-  - **Phase 1: Requirements Analysis** - The PM agent clarifies requirements and writes specification documents.
-  - **Phase 2: Implementation Analysis** - The Developer agent creates an implementation plan and breaks down tasks.
-  - **Phase 3: Development** - The Developer agent implements the features and commits the code.
-  - **Phase 4: Code Review** - The Reviewer agent reviews the code. If modifications are needed, the process returns to Phase 3.
-  - **Phase 5: Create PR** - The Developer agent automatically creates a GitHub PR or allows the user to review locally. If there are suggestions for changes, the process returns to Phase 3.
-- You can run the entire flow with a single command, `cafe make`, or resume an interrupted flow.
-- To run a single playbook step explicitly, use `cafe workflow --start-step <step> --execute` (for example `cafe workflow --start-step spec --execute --user-input "..."`).
+You do not need the following details for your first workflow, but they are the
+main concepts to know when customizing, diagnosing, or requesting advanced
+operations from CAFE.
 
-### Agent System
-- **PM**: Clarifies requirements, avoiding technical details.
-- **Developer**: Analyzes implementation and writes code.
-- **Reviewer**: Reviews code for quality assurance.
+### Mental model
 
-You can create and manage custom agents using the `cafe agent` command set. Custom agents are stored globally in `~/.cafe/agents/` and can be reused across all your CAFE projects. See `cafe agent --help` for more details.
+| Concept | Responsibility |
+| --- | --- |
+| Playbook | Step graph, roles, ownership, artifacts, tools, hooks, and transitions |
+| Phase skill | Instructions and execution contract for one workflow behavior |
+| Blackboard | Durable workflow state, artifacts, events, and current handoff |
+| HumanTask | A persisted question, decision, approval, or external action owned by a person |
+| Phase chain | Ordered primary and fallback CLI/model entries for one agent step |
+| Worktree | An isolated Git checkout for one issue's code and workflow state |
 
-### Template System
-- **Spec Template**: Defines the format for requirements clarification and specification documents.
-- **Plan Template**: Defines the format for the implementation plan.
-- **Review Report Template** (To be implemented): Defines the format for code review reports.
-- **PR Description Template** (To be implemented): Defines the format for PR descriptions.
+The repository is the definition layer; chat history is not the source of
+truth. Runtime state currently lives under `.cafe/issues/`, while project
+playbooks, skills, strategy, and settings remain versionable alongside the
+project.
 
-You can create and manage custom templates with the `cafe template` command set. Custom templates are stored globally in `~/.cafe/templates/` and can be reused across all your CAFE projects. When a custom template has the same name as a system template, the custom template takes precedence. See `cafe template --help` for details.
+### Important project files
 
-### Other Features
+- `.cafe/config.yaml`: project playbook and general settings.
+- `.cafe/strategic_context.yaml`: confirmed strategic documents, authority, and
+  repository-wide conventions.
+- `.cafe/phases.yaml`: exact CLI/model chains used by agent-executed steps.
+- `.cafe/playbooks/`: project-defined workflow graphs.
+- `.cafe/skills/`: project-defined phase, shared, and chat skills.
+- `.cafe/issues/<issue>/`: issue configuration, blackboard, HumanTasks,
+  iterations, artifacts, and handoffs.
 
-CAFE provides additional commands for managing issues and viewing execution details:
+Issue worktrees can carry their own `.cafe/phases.yaml`, allowing model choices
+to differ between issues without changing repository-wide defaults.
 
-#### Project Setup
-- `cafe init` - Initialize project settings and bundled default content
-- `cafe setup` - Configure project settings (playbook, rigor, auto-update) in config.yaml
-- `cafe skill sync-global` - Explicitly install, recover, or selectively update bundled workflow helper skills; configured Git hooks keep normal source updates synchronized automatically
+### Inspect and recover
 
-#### Workflow Execution
-- `cafe prepare` - Prepare issue environment (creates worktree, initializes config and git branch)
-- `cafe make` - Execute the complete automated workflow from current phase to PR creation
-- `cafe close` - Close current feature and return to base branch (syncs changes, removes worktree)
+Ask the driver for the information or recovery outcome you need:
 
-#### Monitoring & Control
-- `cafe status` - Display a comprehensive timeline of all workflow phases, iterations, and execution statistics
-- `cafe show` - Display iteration file contents (spec, plan, output, checklist, questions, error logs, etc.)
-- `cafe chat <pm|developer|reviewer>` - Open interactive chat with a specific role agent (extremely useful for confirming details or making changes outside the spec)
-- `cafe reset` - Rollback the previous iteration (CAFE's basic execution unit), useful for redoing work or reverting a mistaken confirm (note: does not revert git changes)
+```text
+Show the current workflow timeline, owner, latest phase output, and anything
+that is waiting for me.
+```
 
-#### Issue Management
-- `cafe ls` - List all CAFE issues with their worktree paths and current status
-- `cafe restore` - Restore archived issues from backup (recover closed issues and chat with historical agents)
-- `cafe rm` - Remove one or more issues and all their data without backing up (use with caution)
+```text
+List the prepared CAFE issues and their worktree locations.
+```
 
-#### Customization
-- `cafe config` - View and manage CAFE configuration settings
-- `cafe agent create` - Create custom agents with specific behaviors and prompts tailored to your needs
-- `cafe template create` - Create custom spec and plan templates for specialized workflows or domain-specific requirements
+```text
+Explain what would be removed if we reset the latest development iteration.
+Do not make the change until I confirm.
+```
 
-Use `cafe <command> --help` to see detailed usage for each command.
+```text
+Audit this project's CAFE playbooks and skills, then explain any inconsistency
+in user-facing terms.
+```
+
+Resetting workflow iterations does not revert Git changes. Restoring archived
+issues and deleting workflow state are also explicit operations; the driver
+should show the exact scope before acting.
+
+Do not manually edit the blackboard or handoff files during ordinary recovery.
+If behavior is wrong rather than merely incomplete, let `use-cafe-workflow`
+classify whether the defect belongs to a project playbook, a phase skill, or the
+CAFE runtime before changing sources.
+
+### Global helper skills
+
+CAFE synchronizes its three helper skills only for detected CLI agents. An
+agent is detected through its executable on `PATH` or existing vendor state;
+directories containing only old CAFE-managed copies do not count as an
+installation.
+
+Ask your agent to repair a managed copy or preinstall for a specific agent:
+
+```text
+Repair CAFE's managed helper skills for every detected CLI agent.
+```
+
+```text
+Install CAFE's helper skills for Codex and Cursor even if they are not currently
+detected. Tell me which user directories will be created before proceeding.
+```
+
+Explicit agent targets bypass detection and may create the selected vendor
+skill directories. Synchronization is transactional and safe to repeat.
+
+### Security and authority
+
+CAFE separates agent-authored intent from trusted host execution. A workflow
+may describe a desired operation, but credentials, external mutations, and
+host-side capabilities remain subject to tool availability, policy, and human
+authorization. Installing CAFE does not configure provider credentials or give
+an agent additional system privileges.
+
+### Project status and compatibility
+
+CAFE is actively evolving. Roadmap version labels describe development cycles;
+the changelog and release notes describe what a particular release actually
+ships.
+
+- [Roadmap](docs/roadmap.md)
+- [Changelog](CHANGELOG.md)
+- [Latest release notes](docs/releases/v0.3.1.md)
+- [Strategic positioning](docs/positioning.md)
 
 ## Contributing
-Contributions of any kind are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for more details.
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development
+setup, testing, and release verification.
 
 ## License
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+CAFE is available under the [MIT License](LICENSE).
