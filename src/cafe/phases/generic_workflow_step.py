@@ -26,7 +26,6 @@ from cafe.core.context_packet import (
     build_context_packet_diagnostics,
     format_context_packet_diagnostic,
 )
-from cafe.core.downstream_contract import ContractValidationError, extract_downstream_contract
 from cafe.core.delta_packet import (
     build_delta_packet,
     inline_delta_packet,
@@ -527,15 +526,9 @@ class GenericWorkflowStepExecutor(Phase):
         output_key = str(step_def.get("output_artifact", step_name))
         artifacts: Dict[str, str] = {}
         if execution.artifact_ready and output_file.exists():
-            if self._output_requires_contract_validation(
-                step_name=step_name,
-                status_code=status_code,
-            ):
-                self._validate_produced_packet_contracts(
-                    producer_step=step_name,
-                    artifact_name=output_key,
-                    output_file=output_file,
-                )
+            # Context packets are an optional runtime view.  Their structural
+            # eligibility is resolved at the consuming edge, where any failure
+            # safely selects the complete authoritative artifact.
             output_path = str(output_file)
             artifacts[output_key] = output_path
             self._write_artifact_record(
@@ -1648,7 +1641,8 @@ class GenericWorkflowStepExecutor(Phase):
     def _validate_produced_packet_contracts(
         self, *, producer_step: str, artifact_name: str, output_file: Path
     ) -> None:
-        """Validate a producer as soon as it completes for a packet consumer."""
+        """Deprecated compatibility hook; packet metadata never gates output."""
+        return
         steps = self.playbook.get("steps", {})
         if not isinstance(steps, Mapping):
             return

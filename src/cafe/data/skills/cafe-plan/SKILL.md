@@ -122,21 +122,13 @@ When the Dependency ADR proposes a **new major** of a package, note whether that
 ## Output
 Write plan to: {output_file}
 
-## Downstream Contract
+## Context packets
 
-Keep exactly one versioned `## Downstream Contract` in every produced plan. Synchronize stable IDs and each top-level task's pending/completed state with the complete plan before user confirmation; legacy artifacts without this section deliberately remain full-source inputs.
-
-The declaration is fixed at `Contract-Version: 1` and `Artifact-Kind: plan`.
-Use only the schema sections and ID families shown by the selected template.
-The spec is a source of requirement wording, not plan-owned identifiers. Preserve
-the meaning of spec requirements, but do not copy source stable ID tokens
-(`GOAL-*`, `NONGOAL-*`, `AC-*`, or `TRUST-*`) anywhere in the plan body or
-contract. Translate each requirement into the matching plan-owned `ARCH-*`,
-`INV-*`, `UT-*`, `IT-*`, `ADR-*`, or `TASK-*` entry instead.
-Every Test List `Covers` value and Dependency ADR requirement reference must
-name an `INV-*` defined in this contract; task dependencies may reference only
-defined `TASK-*` IDs or `—`. Never use `TRUST-*`, `AC-*`, or `ADR-*` in those
-reference columns.
+The complete plan Markdown is the only semantic authority. Keep ordinary
+headings, the Test List, and executable checkboxes, but do not add
+packet-specific IDs, an authoritative delivery-ID list, or a `Downstream
+Contract`. Runtime-generated structural packets derive checkbox identity from
+document order and safely fall back to the complete source when unavailable.
 
 ## Handoff
 - 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。

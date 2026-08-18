@@ -101,14 +101,12 @@ bash scripts/sync_github.sh --help
 ## Output
 Write spec to: {output_file}
 
-## Downstream Contract
+## Context packets
 
-Keep exactly one versioned `## Downstream Contract` in every produced spec. Its stable IDs must cover the downstream requirements in the complete body; it is confirmed with the complete artifact and is copied byte-for-byte only by the runtime. Legacy artifacts without this section deliberately remain full-source inputs.
-
-The declaration is fixed at `Contract-Version: 1` and `Artifact-Kind: spec`.
-Use only the schema sections and ID families shown by the selected template:
-`GOAL-*`, `NONGOAL-*`, `AC-*`, `INV-*`, and `TRUST-*`. Do not invent a new
-contract version or additional ID family.
+The complete spec Markdown is the only semantic authority. Do not add
+packet-specific IDs, an authoritative ID list, or a `Downstream Contract`.
+The runtime may derive a verified structural packet from ordinary headings;
+if it cannot, downstream work receives the complete source instead.
 
 ## Handoff
 - 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。

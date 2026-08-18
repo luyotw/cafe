@@ -305,8 +305,6 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
         git_ops=FakeGitOperations(),
         role_agent_map={"pm": "Roger"},
     )
-    executor._validate_produced_packet_contracts = MagicMock()
-
     result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
     assert result.response == "confirmed"
@@ -325,7 +323,6 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert reloaded.handoff_contract.intent == HandoffIntent.WORKFLOW_COMPLETE
     assert reloaded.handoff_contract.status_code == "confirmed"
     assert reloaded.handoff_contract.source == "workflow.status_transition_adapter"
-    executor._validate_produced_packet_contracts.assert_called_once()
 
 
 def test_generic_step_passes_declared_read_only_guard_to_agent_manager(
@@ -2822,7 +2819,7 @@ def _make_minimal_executor(tmp_path, **kwargs):
     )
 
 
-def test_producer_completion_rejects_invalid_declared_packet_contract(tmp_path: Path) -> None:
+def test_producer_completion_does_not_gate_on_packet_metadata(tmp_path: Path) -> None:
     executor = _make_minimal_executor(tmp_path)
     executor.generic_phase.skill_loader = SkillLoader()
     executor.playbook = {
@@ -2844,12 +2841,9 @@ def test_producer_completion_rejects_invalid_declared_packet_contract(tmp_path: 
         encoding="utf-8",
     )
 
-    with pytest.raises(ContractValidationError, match="cannot satisfy packet input"):
-        executor._validate_produced_packet_contracts(
-            producer_step="spec",
-            artifact_name="spec",
-            output_file=output,
-        )
+    executor._validate_produced_packet_contracts(
+        producer_step="spec", artifact_name="spec", output_file=output
+    )
 
 
 def test_producer_completion_ignores_consumer_without_packet_policy(tmp_path: Path) -> None:

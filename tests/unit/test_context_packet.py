@@ -76,9 +76,8 @@ def test_packet_relationship_falls_back_without_affecting_other_inputs(tmp_path:
     assert resolved["packet_spec"]["source"]["artifact_name"] == "spec"
     assert resolved["packet_spec"]["source"]["artifact_version"] == 1
     assert resolved["full_notes"] == {"mode": "full", "path": str(tmp_path / "notes.md")}
-    source.write_text("# legacy", encoding="utf-8")
-    with pytest.raises(ContractValidationError):
-        resolve_context_packet(
+    source.write_text("# Ordinary spec\n\n## Goal\n\nNo taxonomy required.\n", encoding="utf-8")
+    rebuilt = resolve_context_packet(
             source_path=source,
             contract_kind="spec",
             target_step="custom",
@@ -86,6 +85,45 @@ def test_packet_relationship_falls_back_without_affecting_other_inputs(tmp_path:
             placeholders=("packet_spec",),
             packet_path=tmp_path / "new.json",
         )
+    assert rebuilt["mode"] == "packet"
+    assert rebuilt["packet"]["packet_kind"] == "structural_manifest"
+
+
+def test_id_free_plan_derives_checkbox_records_from_document_order(tmp_path: Path) -> None:
+    """UT-006/UT-008: ordinary plan Markdown is independently consumable."""
+    source = tmp_path / "plan.md"
+    source.write_text("# Plan\n\n## Tasks\n\n- [ ] First task\n- [x] Second task\n", encoding="utf-8")
+
+    result = resolve_context_packet(
+        source_path=source, contract_kind="plan", target_step="develop", iteration=1,
+        placeholders=("plan_file",), packet_path=tmp_path / "plan-packet.json",
+    )
+
+    assert result["mode"] == "packet"
+    assert result["packet"]["manifest"]["checkboxes"] == [
+        {"ordinal": 1, "checked": False, "text": "First task"},
+        {"ordinal": 2, "checked": True, "text": "Second task"},
+    ]
+
+
+def test_plan_checkbox_records_ignore_fenced_examples(tmp_path: Path) -> None:
+    """UT-006: example checkboxes do not affect executable plan task state."""
+    source = tmp_path / "plan.md"
+    source.write_text(
+        "# Plan\n\n- [ ] First task\n\n```markdown\n- [x] Example task\n```\n\n"
+        "- [x] Second task\n",
+        encoding="utf-8",
+    )
+
+    result = resolve_context_packet(
+        source_path=source, contract_kind="plan", target_step="develop", iteration=1,
+        placeholders=("plan_file",), packet_path=tmp_path / "plan-packet.json",
+    )
+
+    assert result["packet"]["manifest"]["checkboxes"] == [
+        {"ordinal": 1, "checked": False, "text": "First task"},
+        {"ordinal": 2, "checked": True, "text": "Second task"},
+    ]
 
 
 def test_singleton_packet_placeholder_is_required_by_active_policy(tmp_path: Path) -> None:

@@ -53,19 +53,16 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
         assert f"version: {version}" in _skill_text(builtin_root, name)
 
 
-def test_spec_and_plan_skills_pin_downstream_contract_schema() -> None:
+def test_spec_and_plan_skills_describe_runtime_owned_context_packets() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     spec = _skill_text(builtin_root, "cafe-spec")
     plan = _skill_text(builtin_root, "cafe-plan")
 
-    assert "`Contract-Version: 1`" in spec
-    assert "`GOAL-*`, `NONGOAL-*`, `AC-*`, `INV-*`, and `TRUST-*`" in spec
-    assert "`Contract-Version: 1`" in plan
-    assert "Every Test List `Covers` value" in plan
-    assert "must\nname an `INV-*`" in plan
-    assert "do not copy source stable ID tokens" in plan
-    assert "(`GOAL-*`, `NONGOAL-*`, `AC-*`, or `TRUST-*`)" in plan
-    assert "Translate each requirement into the matching plan-owned" in plan
+    for text in (spec, plan):
+        assert "runtime" in text
+        assert "Downstream" in text and "Contract" in text
+        assert "packet-specific IDs" in text
+        assert "Contract-Version: 1" not in text
 
 
 def test_packaged_develop_skill_checks_complete_production_wiring() -> None:
