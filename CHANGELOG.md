@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2] - 2026-08-18
+
+### Changed
+
+- Reworked the README around CAFE's core purpose and three primary benefits:
+  completing multi-step work, preserving human control, and supporting durable
+  handoffs between agents.
+- Replaced the user-facing command walkthrough with agent-guided installation,
+  workflow execution, recovery, and customization requests.
+- Clarified when CAFE is useful, how custom phase skills and playbooks fit
+  together, and which implementation details users can defer until needed.
+
+This is a documentation-only patch release. It does not change runtime behavior,
+workflow schemas, or persisted state.
+
+See [the v0.3.2 release notes](docs/releases/v0.3.2.md) for details.
+
 ## [0.3.1] - 2026-08-18
 
 ### Added
