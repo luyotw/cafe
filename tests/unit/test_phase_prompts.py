@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch, MagicMock
 from cafe.ui.phase_prompts import prompt_for_input_method, prompt_for_rigor, fetch_github_issue
 from cafe.ui.display import Display
 from cafe.utils.github import GitHubOps, GitHubError
+from cafe.core.prepare_fields import PrepareField
 
 
 class TestPromptForInputMethod:
@@ -55,6 +56,33 @@ class TestPromptForInputMethod:
         github_ops.extract_issue_number.assert_called_once_with(
             "https://github.com/user/repo/issues/456"
         )
+
+    @patch("cafe.ui.phase_prompts.prompt_text")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    def test_GitHub_Issue欄位使用宣告的標籤(self, mock_prompt_list, mock_prompt_text):
+        """U5 — the declared issue field controls the GitHub prompt wording."""
+        mock_prompt_list.return_value = "2. GitHub"
+        mock_prompt_text.return_value = "350"
+        github_ops = Mock(spec=GitHubOps)
+        github_ops.extract_issue_number.return_value = "350"
+        issue_field = PrepareField.model_validate(
+            {
+                "id": "issue_reference",
+                "type": "text",
+                "label": "Tracked issue reference",
+                "write": "spec.issue_id",
+                "normalize": "github_issue",
+            }
+        )
+
+        method, issue_id = prompt_for_input_method(
+            Display(),
+            github_ops,
+            issue_field=issue_field,
+        )
+
+        assert (method, issue_id) == ("github", 350)
+        assert mock_prompt_text.call_args.kwargs["message"] == "Tracked issue reference"
 
     @patch("cafe.ui.phase_prompts.prompt_text")
     @patch("cafe.ui.phase_prompts.prompt_list")

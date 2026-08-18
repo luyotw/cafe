@@ -113,10 +113,10 @@ class TestCloseCommandPRMode:
         # Verify git pull was not called
         assert not mock_git_ops.pull.called
 
-    def test_close_without_pr_config_defaults_to_git_pull(
+    def test_close_without_pr_config_defaults_to_local_merge(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr
     ):
-        """測試沒有 pr config 時預設使用 git pull（向下相容）"""
+        """Missing PR config must fail safe and keep the close flow local."""
         # Setup issue config without pr config
         issue_dir = temp_repo_dir / ".cafe" / "issues" / "test-issue"
         issue_dir.mkdir(parents=True)
@@ -130,8 +130,8 @@ class TestCloseCommandPRMode:
         result = runner.invoke(app, ["close"])
 
         assert result.exit_code == 0
-        # Verify git pull was called (default behavior)
-        mock_git_ops.pull.assert_called_once()
+        mock_git_ops.merge.assert_called_once_with("test-issue")
+        assert not mock_git_ops.pull.called
 
     def test_close_worktree_mode_with_pr_auto_create_false_uses_git_merge(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr

@@ -34,6 +34,12 @@ You can contribute to this project in several ways:
     ```bash
     ./setup-hooks.sh
     ```
+    The configured post-commit and post-merge hooks verify and synchronize
+    bundled workflow helper skills to supported agent CLIs. CAFE CLI
+    startup also uses a per-machine fingerprint as a cross-check for fresh
+    checkouts and package upgrades. Concurrent development machines keep
+    independent sync state and pick up each other's committed changes through
+    the normal Git push/pull flow; CAFE never auto-pulls or modifies a checkout.
 
 ## Pull Request Process
 
@@ -48,9 +54,12 @@ You can contribute to this project in several ways:
     ```bash
     pytest
     ```
-    Fast local commits use the pre-commit hook's quick suite. A full test run,
-    including slower orchestration-heavy tests, runs on `git push` via the
-    `pre-push` hook.
+    Fast local commits run a bounded contract smoke suite plus tests related to
+    staged files. A complete no-coverage test run executes on `git push` via the
+    `pre-push` hook. Run the coverage gate separately when changing behavior:
+    ```bash
+    ./scripts/test-coverage.sh
+    ```
 
 4.  Commit your changes. Please write a clear commit message.
 
@@ -63,17 +72,20 @@ You can contribute to this project in several ways:
 
 ## Testing policy (workflow)
 
-Plan, develop, and review skills enforce a **test invariants** policy: tests should protect business rules and user-journey outcomes, not fragile UI structure. See `src/cafe/data/skills/plan/references/test_invariants_policy.md` for what to test, what to avoid, and examples.
+Plan, develop, and review skills enforce a **test invariants** policy: tests should protect business rules and user-journey outcomes, not fragile UI structure. See `src/cafe/data/skills/cafe-plan/references/test_invariants_policy.md` for what to test, what to avoid, and examples.
 
 ## Pre-release Verification
 
 Before cutting a release or merging large changes to builtin skills, playbooks, or agents, run the builtin tooling audit:
 
 ```bash
-cafe audit
+./scripts/release-check.sh
 ```
 
-This command checks that all builtin skills and playbooks are internally consistent (agent files exist, placeholder conventions are met, hooks are registered and executable, and baton intents are valid). It exits non-zero if any check fails. Run it again after fixing any reported gaps to confirm they are resolved.
+This release gate runs the complete coverage suite, critical lint checks, the
+builtin tooling audit, strict skill validation, package builds, and a clean
+wheel-install smoke test. It exits non-zero if any check fails. Run it again
+after fixing any reported gaps to confirm they are resolved.
 
 ## Workflow behavior
 

@@ -1,10 +1,11 @@
 """測試 AbstractCLI 抽象基底類別."""
 
-import pytest
 from abc import ABC
 
+import pytest
+
 from cafe.agents.cli.abstract import AbstractCLI
-from cafe.core.types import AgentConfig, AgentCLI, TokenUsage
+from cafe.core.types import AgentCLI, AgentConfig, TokenUsage
 
 
 def test_abstract_cli_cannot_be_instantiated():
@@ -69,3 +70,58 @@ def test_concrete_cli_can_be_instantiated():
     assert cli.config == config
     assert cli.config.name == "test"
     assert cli.config.cli == AgentCLI.CLAUDE
+
+
+@pytest.mark.parametrize(
+    ("agent_cli", "session_id", "model", "initial_prompt", "expected"),
+    [
+        (AgentCLI.CLAUDE, None, None, None, ["claude"]),
+        (
+            AgentCLI.CLAUDE,
+            "claude-session",
+            "sonnet",
+            "Review this",
+            ["claude", "--resume", "claude-session", "--model", "sonnet", "Review this"],
+        ),
+        (
+            AgentCLI.COPILOT,
+            "copilot-session",
+            None,
+            "ignored",
+            ["copilot", "--resume", "copilot-session"],
+        ),
+        (
+            AgentCLI.GEMINI,
+            "gemini-session",
+            "gemini-pro",
+            None,
+            ["gemini", "--resume", "gemini-session", "--model", "gemini-pro"],
+        ),
+        (
+            AgentCLI.CURSOR,
+            "cursor-session",
+            None,
+            None,
+            ["cursor-agent", "--resume", "cursor-session"],
+        ),
+        (
+            AgentCLI.CODEX,
+            "codex-session",
+            "gpt-test",
+            "Review this",
+            ["codex", "--model", "gpt-test", "resume", "codex-session", "Review this"],
+        ),
+    ],
+)
+def test_build_interactive_command(
+    agent_cli: AgentCLI,
+    session_id: str | None,
+    model: str | None,
+    initial_prompt: str | None,
+    expected: list[str],
+) -> None:
+    cli = ConcreteCLI(
+        AgentConfig(name="test", cli=agent_cli, session_id=session_id, model=model)
+    )
+
+    assert cli.build_interactive_command(initial_prompt=initial_prompt) == expected

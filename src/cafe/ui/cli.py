@@ -17,10 +17,10 @@ from cafe.ui.commands import lifecycle as lifecycle_commands
 from cafe.ui.commands import issues as issues_commands
 from cafe.ui.commands import templates as template_commands
 from cafe.ui.commands import catalog as catalog_commands
+from cafe.ui.commands import operation as operation_commands
 from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.commands import audit as audit_commands
-from cafe.ui.commands import preset as preset_commands
-from cafe.ui.commands import crew as crew_commands
+from cafe.ui.commands import verification as verification_commands
 from cafe.ui.cli_shared import (
     CONTENT_TYPE_FILE_MAP as _SHARED_CONTENT_TYPE_FILE_MAP,
     VALID_CONTENT_TYPES as _SHARED_VALID_CONTENT_TYPES,
@@ -63,7 +63,6 @@ from cafe.utils.github import (  # noqa: F401 — backward-compat re-exports for
     GitHubOps,
     filter_unresolved_comments,
     get_all_pr_comments,
-    get_processed_comment_ids_from_history,
 )
 
 
@@ -201,6 +200,36 @@ def _check_repo_entrypoint_alignment() -> bool:
         "Use the command above manually.[/yellow]"
     )
     return False
+
+
+def _auto_sync_global_helper_skills() -> None:
+    """Keep global helper skills current on each real CAFE CLI startup."""
+    if os.getenv("CAFE_SKIP_GLOBAL_SKILL_SYNC"):
+        return
+    if sys.argv[1:3] == ["skill", "sync-global"]:
+        return
+
+    from cafe.skills.global_installer import auto_sync_global_skills
+
+    try:
+        summary = auto_sync_global_skills()
+    except Exception as exc:
+        console.print(f"[yellow]⚠ Global helper skill auto-sync failed: {exc}[/yellow]")
+        return
+
+    if summary is None:
+        return
+    if summary.failed_count:
+        console.print(
+            f"[yellow]⚠ Global helper skill auto-sync failed for "
+            f"{summary.failed_count} installation(s). "
+            f"Run `cafe skill sync-global` for details.[/yellow]"
+        )
+    elif summary.changed_count:
+        console.print(
+            f"[dim]✓ Synchronized {summary.changed_count} global helper "
+            f"skill installation(s)[/dim]"
+        )
 
 
 def _build_dynamic_step_click_command(step_name: str) -> Optional[click.Command]:
@@ -366,12 +395,14 @@ def _setup_agents(
     config_manager: ConfigManager,
     issue_name: Optional[str] = None,
     phase_name: Optional[str] = None,
+    cafe_dir: Optional[Path] = None,
 ) -> AgentManager:
-    """Setup agent manager with default agents."""
+    """Set up the active phase-configured agent manager."""
     return _shared_setup_agents(
         config_manager=config_manager,
         issue_name=issue_name,
         phase_name=phase_name,
+        cafe_dir=cafe_dir,
     )
 
 
@@ -446,26 +477,15 @@ def _get_valid_playbook_values() -> List[str]:
 
 
 @app.command()
-def init(
-    preset: Optional[str] = typer.Option(
-        None,
-        "--preset",
-        help="Preset name to apply directly (non-interactive).",
-    ),
-) -> None:
+def init() -> None:
     """Initialize CAFE configuration for the project.
 
-    Creates .cafe/config.yaml and runs crew set-primary + setup flows.
-    Use --preset for non-interactive initialization.
+    Creates project-owned configuration and bundled default content.
     """
-    from cafe.ui.commands.crew import run_set_primary_interactive
-    from cafe.utils.preset import PresetManager, PresetNotFoundError
-
     config_manager = ConfigManager()
     cafe_dir = Path(".cafe")
 
-    # Check if config already exists (only prompt when not using --preset on fresh init)
-    if not preset and config_manager.config_file.exists():
+    if config_manager.config_file.exists():
         console.print("[yellow]⚠️  Configuration already exists.[/yellow]")
         console.print(f"[dim]Current config: {config_manager.config_file}[/dim]")
         console.print()
@@ -485,25 +505,6 @@ def init(
     cafe_dir.mkdir(parents=True, exist_ok=True)
     _ensure_default_content(cafe_dir)
 
-    if preset:
-        manager = PresetManager()
-        try:
-            manager.apply(preset, cafe_dir=cafe_dir)
-        except PresetNotFoundError as e:
-            console.print(f"[red]Error: {e}[/red]")
-            raise typer.Exit(1)
-
-        config_manager.save_config({"settings": {"auto_update": True}})
-        console.print(f"[green]✓ Initialized with preset '[cyan]{preset}[/cyan]'.[/green]")
-        console.print("[cyan]You can now use `cafe prepare` to start a new development task.[/cyan]")
-        return
-
-    try:
-        run_set_primary_interactive(cafe_dir=cafe_dir)
-    except KeyboardInterrupt:
-        console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
-        raise typer.Exit(1)
-
     # Minimal config.yaml with defaults; setup can refine later
     if not config_manager.config_file.exists():
         config_manager.save_config({"settings": {"auto_update": True}})
@@ -513,6 +514,7 @@ def init(
 
     try:
         existing_config = config_manager.load_config()
+        existing_config.pop("agents", None)
         settings = existing_config.setdefault("settings", {})
 
         new_auto_update = prompt_confirm(
@@ -580,6 +582,7 @@ def setup(
             raise typer.Exit(1)
 
         existing_config = config_manager.load_config()
+        existing_config.pop("agents", None)
         settings = existing_config.setdefault("settings", {})
 
         if playbook is not None:
@@ -595,6 +598,7 @@ def setup(
 
     try:
         existing_config = config_manager.load_config()
+        existing_config.pop("agents", None)
         settings = existing_config.setdefault("settings", {})
 
         new_auto_update = prompt_confirm(
@@ -721,7 +725,7 @@ app.command(name="rm")(issues_commands.remove_issue)
 
 app.command()(workflow_commands.make)
 app.command()(workflow_commands.show)
-app.command()(workflow_commands.summary)
+app.command()(workflow_commands.status)
 app.command()(workflow_commands.workflow)
 
 app.command(name="audit")(audit_commands.audit)
@@ -739,12 +743,14 @@ remove_issue = issues_commands.remove_issue
 
 make = workflow_commands.make
 show = workflow_commands.show
+status = workflow_commands.status
 summary = workflow_commands.summary
 workflow = workflow_commands.workflow
 
 
 # Template management commands
 app.add_typer(template_commands.template_app, name="template")
+app.add_typer(operation_commands.operation_app, name="operation")
 
 # Backward-compatible alias for TEMPLATE_TYPES (now defined in templates module)
 TEMPLATE_TYPES = template_commands.TEMPLATE_TYPES
@@ -759,11 +765,8 @@ app.add_typer(agent_app, name="agent")
 app.add_typer(catalog_commands.playbook_app, name="playbook")
 app.add_typer(catalog_commands.skill_app, name="skill")
 
-# Preset management commands
-app.add_typer(preset_commands.app, name="preset")
-
-# Crew management commands
-app.add_typer(crew_commands.crew_app, name="crew")
+# Workflow verification receipts
+app.add_typer(verification_commands.verification_app, name="verification")
 
 
 def _print_agents(custom_only: bool = False) -> None:
@@ -1215,6 +1218,7 @@ def main() -> Optional[int]:
     _check_dependencies()
     if not _check_repo_entrypoint_alignment():
         return 1
+    _auto_sync_global_helper_skills()
     # Check for updates and auto-upgrade if available
     _check_for_updates()
     app()

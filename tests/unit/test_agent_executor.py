@@ -87,6 +87,33 @@ class TestAgentExecutorWithSession:
 class TestAgentExecutorErrorHandling:
     """Test AgentExecutor error handling."""
 
+    def test_stream_json_early_output_then_idle_timeout_raises_timeout(self) -> None:
+        """Early stream output is not success unless a terminal result message arrived."""
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.return_value = (
+            '{"type": "message", "message": {"content": [{"type": "text", "text": "working"}]}}\n'
+        )
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = -15
+
+        def mock_select(rlist, wlist, xlist, timeout=None):
+            if mock_process.stdout.readline.call_count == 0:
+                return (rlist, [], [])
+            return ([], [], [])
+
+        with (
+            patch("subprocess.Popen", return_value=mock_process),
+            patch("select.select", side_effect=mock_select),
+            patch("time.time", side_effect=[0, 0, 301]),
+        ):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor.execute("Test prompt")
+
+        assert exc_info.value.error_type == "timeout"
+
     def test_execute_raises_execution_error_on_failure(self) -> None:
         """測試 agent 執行失敗時拋出 AgentExecutionError"""
         config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE, session_id="test-session")
@@ -209,6 +236,63 @@ class TestAgentExecutorErrorHandling:
         assert "API rate limit reached" in (exc_info.value.display_message or "")
 
     @pytest.mark.parametrize(
+        "message",
+        [
+            "You've hit your usage limit. Try again later.",
+            "See https://chatgpt.com/codex/settings/usage for usage details.",
+        ],
+    )
+    def test_codex_usage_limit_signals_are_rate_limit(self, message: str) -> None:
+        """Codex's confirmed usage-limit signals should allow chain fallback."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+
+        error_type, display_message = executor._classify_execution_error("Codex", message)
+
+        assert error_type == "rate_limit"
+        assert "API rate limit reached" in (display_message or "")
+
+    @pytest.mark.parametrize(
+        "event",
+        [
+            '{"type":"error","message":"You\'ve hit your usage limit. Try again later."}\n',
+            '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit. Try again later."}}\n',
+        ],
+    )
+    def test_codex_usage_limit_stream_events_are_rate_limit(self, event: str) -> None:
+        """Codex stream error events should preserve their fallbackable category."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"thread.started","thread_id":"abc"}\n',
+            event,
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 1
+        mock_process.terminate.return_value = None
+
+        with patch("subprocess.Popen", return_value=mock_process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor.execute("Test prompt")
+
+        assert exc_info.value.error_type == "rate_limit"
+
+    def test_unrelated_codex_failure_is_not_rate_limit(self) -> None:
+        """Unrelated Codex failures should retain normal non-fallback behavior."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+
+        error_type, display_message = executor._classify_execution_error(
+            "Codex", "Workspace access was denied by the sandbox."
+        )
+
+        assert error_type is None
+        assert display_message is None
+
+    @pytest.mark.parametrize(
         ("cli", "message"),
         [
             (AgentCLI.CLAUDE, "Error: invalid model cafe-nonexistent-model-xyz"),
@@ -253,6 +337,50 @@ class TestAgentExecutorErrorHandling:
         assert exc_info.value.error_type == "model_not_found"
         assert "not available or not supported" in (exc_info.value.display_message or "")
 
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "rate_limit",
+            "api_error_status:429",
+            "You've hit your session limit; resets 11am (Asia/Taipei)",
+        ],
+    )
+    def test_claude_session_limit_errors_are_rate_limit(self, message: str) -> None:
+        """Claude's structured/session limit errors should trigger fallback."""
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE, model="sonnet")
+        executor = AgentExecutor(config)
+
+        error_type, display_message = executor._classify_execution_error("Claude", message)
+
+        assert error_type == "rate_limit"
+        assert "API rate limit reached" in (display_message or "")
+
+    def test_claude_stream_json_session_limit_result_is_rate_limit(self) -> None:
+        """Claude stream-json result events can report session quota with is_error=true."""
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE, model="sonnet")
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"system","session_id":"abc"}\n',
+            (
+                '{"type":"result","subtype":"success","is_error":true,'
+                '"api_error_status":429,'
+                '"result":"You\\u0027ve hit your session limit; resets 11am (Asia/Taipei)"}\n'
+            ),
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 1
+        mock_process.terminate.return_value = None
+
+        with patch("subprocess.Popen", return_value=mock_process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor.execute("Test prompt")
+
+        assert exc_info.value.error_type == "rate_limit"
+        assert "API rate limit reached" in (exc_info.value.display_message or "")
+
     def test_non_stream_invalid_model_stderr_is_model_not_found(self) -> None:
         """Copilot-style stderr model errors should be classified after non-zero exit."""
         config = AgentConfig(name="Roger", cli=AgentCLI.COPILOT, model="cafe-nonexistent-model-xyz")
@@ -294,10 +422,12 @@ class TestCodexPermissionExtraction:
         assert denials[0].tool_name == "Bash"
         assert denials[0].tool_input["command"].startswith("git add src/cafe/ui/cli.py")
 
-    def test_codex_exec_does_not_override_codex_home(self) -> None:
-        """Codex executions should inherit the default environment."""
+    def test_codex_exec_preserves_codex_home(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Codex executions should preserve the provider configuration environment."""
         config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
         executor = AgentExecutor(config)
+        codex_home = "/tmp/custom-codex-home"
+        monkeypatch.setenv("CODEX_HOME", codex_home)
 
         mock_process = MagicMock()
         mock_process.stdout.readline.side_effect = [
@@ -310,7 +440,7 @@ class TestCodexPermissionExtraction:
         with patch("subprocess.Popen", return_value=mock_process) as mock_popen, patch("sys.platform", "win32"):
             executor.execute("Test prompt")
 
-        assert "CODEX_HOME" not in mock_popen.call_args.kwargs["env"]
+        assert mock_popen.call_args.kwargs["env"]["CODEX_HOME"] == codex_home
 
 
 class TestTokenUsageTracking:
@@ -453,7 +583,8 @@ class TestClaudeAllowedToolsFormatting:
         assert "LS" in allowed_tools_value
         assert "WebFetch" in allowed_tools_value
         assert "WebSearch" in allowed_tools_value
-        assert "Edit(.cafe/issues/test/spec/output.md)" in allowed_tools_value
+        assert "Edit(" in allowed_tools_value
+        assert "/.cafe/issues/test/spec/output.md)" in allowed_tools_value
         assert "Webfetch" not in allowed_tools_value
         assert "Websearch" not in allowed_tools_value
 
@@ -928,7 +1059,8 @@ class TestCLICommandArgsGeneration:
             allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
 
             # 不再額外加雙引號, 應直接是傳給 CLI 參數值
-            assert allowed_tools_value == "Write,Read,Edit(/views/admin/topics.php)"
+            assert allowed_tools_value.startswith("Write,Read,Edit(//")
+            assert allowed_tools_value.endswith("/views/admin/topics.php)")
 
     def test_execute_gemini_generates_cli_command_args_without_allowed_tools(self) -> None:
         """測試 Gemini 在沒有 allowed_tools 時生成正確 cli_command_args"""
@@ -1538,6 +1670,7 @@ class TestWriteToolPathStripping:
         mock_run_result = MagicMock(stdout='{"session_id": "test123"}', returncode=0)
 
         with patch("subprocess.run", return_value=mock_run_result), \
+             patch("cafe.agents.cli.claude.get_git_toplevel", return_value=Path("/test/repo")), \
              patch("subprocess.Popen", return_value=mock_process), \
              patch("sys.platform", "win32"):
             allowed_tools = ["Read", "Write(/.cafe/test.txt)", "Write(/.cafe/test2.txt)"]
@@ -1548,10 +1681,10 @@ class TestWriteToolPathStripping:
             tools_index = response.cli_command_args.index("--allowed-tools")
             tools_value = response.cli_command_args[tools_index + 1]
 
-            # Should contain Read and Write with paths (converted to git ignore format)
+            # Should contain Read and Write with canonical absolute paths.
             assert "Read" in tools_value
-            assert "Write(/.cafe/test.txt)" in tools_value
-            assert "Write(/.cafe/test2.txt)" in tools_value
+            assert "Write(//test/repo/.cafe/test.txt)" in tools_value
+            assert "Write(//test/repo/.cafe/test2.txt)" in tools_value
             # Should have separate Write entries for different paths
             tools_list = tools_value.strip('"').split(",")
             write_tools = [t for t in tools_list if t.startswith("Write")]
@@ -1815,8 +1948,8 @@ class TestAllowedDirectoriesParameter:
             call_args = mock_popen.call_args[0][0]
             assert "--add-dir" in call_args
 
-    def test_claude_adds_add_dir_parameters(self) -> None:
-        """測試 Claude 使用 --add-dir 參數"""
+    def test_claude_adds_canonical_add_dir_parameters(self) -> None:
+        """測試 Claude 使用 canonical 絕對路徑的 --add-dir 參數"""
         config = AgentConfig(
             name="Roger",
             cli=AgentCLI.CLAUDE,
@@ -1844,10 +1977,10 @@ class TestAllowedDirectoriesParameter:
             called_cmd = mock_popen.call_args[0][0]
             assert "--add-dir" in called_cmd
             cafe_index = called_cmd.index("--add-dir")
-            assert called_cmd[cafe_index + 1] == ".cafe"
+            assert called_cmd[cafe_index + 1] == str((Path.cwd() / ".cafe").resolve())
             # Find second --add-dir
             src_index = called_cmd.index("--add-dir", cafe_index + 2)
-            assert called_cmd[src_index + 1] == "src"
+            assert called_cmd[src_index + 1] == str((Path.cwd() / "src").resolve())
 
     def test_gemini_adds_include_directories_parameters(self) -> None:
         """測試 Gemini 使用 --include-directories 參數"""

@@ -9,6 +9,7 @@ from typing import Dict, List, Optional
 
 import yaml
 
+from cafe.skills.contracts import SkillWorkflowContract
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.utils.config import get_global_cafe_dir
 
@@ -16,14 +17,57 @@ _logger = logging.getLogger(__name__)
 
 # Deprecated skill names that resolve to a newer skill. Issued for backward
 # compatibility with user playbooks / presets that still reference the old
-# split skills. Plan to remove in a future minor release.
+# names. Builtin workflow skills carry the "cafe-" prefix in their folder
+# names since the internal/external skill reorganization; unprefixed names
+# remain valid via these aliases. Plan to remove in a future minor release.
 _SKILL_ALIASES: Dict[str, str] = {
-    "spec_first": "spec",
-    "spec_revise": "spec",
+    "spec_first": "cafe-spec",
+    "spec_revise": "cafe-spec",
+    "write-skill": "write-cafe-phase",
+    "write-cafe-skill": "write-cafe-phase",
+    **{
+        name: f"cafe-{name}"
+        for name in (
+            "alignment",
+            "brief_first",
+            "brief_revise",
+            "chat-develop-change",
+            "chat-plan-revision",
+            "chat-spec-revision",
+            "common-chat-handoff",
+            "develop",
+            "draft",
+            "editorial_review",
+            "github_sync",
+            "incident_detect",
+            "incident_mitigate",
+            "incident_postmortem",
+            "incident_triage",
+            "plan",
+            "pr",
+            "publish",
+            "research_collect",
+            "research_question",
+            "research_report",
+            "research_synthesize",
+            "review",
+            "spec",
+            "workflow-common",
+        )
+    },
 }
 
 
-def read_skill_frontmatter(skill_file: Path) -> Dict[str, str]:
+def canonical_skill_name(name: str) -> str:
+    """Map a possibly-deprecated skill name to its canonical name.
+
+    Does not consult the catalog; project/global skills that intentionally
+    reuse an old builtin name still win at `get_skill_dir` resolution time.
+    """
+    return _SKILL_ALIASES.get(name, name)
+
+
+def read_skill_frontmatter(skill_file: Path) -> Dict[str, object]:
     """Read YAML frontmatter from one skill file."""
     content = skill_file.read_text(encoding="utf-8")
     if not content.startswith("---"):
@@ -79,7 +123,7 @@ class SkillLoader:
         ]
 
     @staticmethod
-    def _read_skill_frontmatter(skill_file: Path) -> Dict[str, str]:
+    def _read_skill_frontmatter(skill_file: Path) -> Dict[str, object]:
         return read_skill_frontmatter(skill_file)
 
     def discover(self, *, strict: bool = False) -> List[SkillCatalogEntry]:
@@ -108,6 +152,12 @@ class SkillLoader:
                     if source == "builtin" or strict:
                         raise ValueError(mismatch)
                     warning = mismatch
+                elif source != "builtin" and skill_dir.name in _SKILL_ALIASES:
+                    warning = (
+                        f"Skill '{skill_dir.name}' uses a deprecated builtin name; "
+                        f"rename it to '{_SKILL_ALIASES[skill_dir.name]}' to override the builtin, "
+                        "or pick a distinct name"
+                    )
 
                 catalog[skill_dir.name] = SkillCatalogEntry(
                     name=skill_dir.name,
@@ -162,6 +212,42 @@ class SkillLoader:
         for key, value in context.items():
             text = text.replace(f"{{{key}}}", str(value))
         return text
+
+    def get_workflow_contract(self, name: str) -> SkillWorkflowContract:
+        """Load and validate optional workflow metadata from the resolved skill."""
+        skill_dir = self.get_skill_dir(name)
+        metadata = self._read_skill_frontmatter(skill_dir / "SKILL.md")
+        raw_contract = metadata.get("workflow", {})
+        try:
+            contract = SkillWorkflowContract.model_validate(raw_contract)
+        except Exception as exc:
+            raise ValueError(
+                f"Invalid workflow contract for skill {skill_dir.name}: {exc}"
+            ) from exc
+        references = list(contract.prompt_references.values())
+        if contract.checklist is not None:
+            references.extend(contract.checklist.context_references.values())
+            references.extend(
+                section.reference
+                for variant in contract.checklist.variants
+                for section in variant.sections
+                if section.reference is not None
+            )
+        for reference in references:
+            reference_path = skill_dir / "references" / reference
+            if not reference_path.is_file():
+                raise ValueError(
+                    f"Invalid workflow contract for skill {skill_dir.name}: "
+                    f"workflow reference not found: {reference}"
+                )
+        if contract.output_templates is not None:
+            template_dir = skill_dir / "assets" / "templates"
+            if not template_dir.is_dir():
+                raise ValueError(
+                    f"Invalid workflow contract for skill {skill_dir.name}: "
+                    f"template catalog {contract.output_templates.catalog!r} is unavailable"
+                )
+        return contract
 
     def get_reference(self, name: str, ref: str) -> str:
         """Read one reference file under skill references directory."""

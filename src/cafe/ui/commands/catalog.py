@@ -9,12 +9,17 @@ import typer
 import yaml
 from rich.console import Console
 
+from cafe.core.playbook import confirmation_gate_steps
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook, format_dot, format_text_report
+from cafe.skills.global_installer import GlobalSkillSyncSummary, sync_global_skills
 from cafe.skills.importer import SkillImportSummary, import_skills, preview_importable_skills
-from cafe.skills.loader import SkillLoader
+from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.skills.remover import SkillRemoveSummary, remove_skills
-from cafe.ui.inquirer_prompts import prompt_checkbox, prompt_confirm  # noqa: F401 — kept for type resolution; actual calls go through cli for test-patch compat
+from cafe.ui.inquirer_prompts import (  # noqa: F401 — kept for type resolution; actual calls go through cli for test-patch compat
+    prompt_checkbox,
+    prompt_confirm,
+)
 
 # Late-import proxies for test-patch compatibility (tests patch cafe.ui.cli.prompt_confirm etc.)
 
@@ -85,7 +90,14 @@ def playbook_show(
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
 
-    console.print(yaml.dump(loaded.as_dict(), allow_unicode=True, default_flow_style=False, sort_keys=False))
+    console.print(
+        yaml.dump(
+            loaded.as_dict(),
+            allow_unicode=True,
+            default_flow_style=False,
+            sort_keys=False,
+        )
+    )
     console.print(f"\n[dim]source={loaded.source} path={loaded.path}[/dim]")
     for warning in loaded.warnings:
         console.print(f"[yellow]warning:[/yellow] {warning}")
@@ -109,10 +121,40 @@ def playbook_validate(
             console.print(f"[yellow]warning:[/yellow] {warning}")
 
 
+@playbook_app.command(name="confirmation-gates")
+def playbook_confirmation_gates(
+    name: str = typer.Argument(..., help="Playbook name"),
+) -> None:
+    """List planned user confirmation candidates declared by a playbook."""
+    try:
+        loaded = _build_playbook_loader().load_model(name)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+    gates = confirmation_gate_steps(loaded.model)
+    console.print(f"Playbook: {loaded.model.playbook.id}")
+    console.print(f"Conversation locale: {loaded.model.playbook.conversation_locale}")
+    console.print("Confirmation gates (steps declaring on.confirm_output):")
+    if gates:
+        for step_name in gates:
+            console.print(f"  - {step_name}")
+    else:
+        console.print("  (none)")
+    console.print(
+        "[dim]Reactive clarification, permission, and alignment pauses are not "
+        "kickoff confirmation candidates.[/dim]"
+    )
+
+
 @playbook_app.command(name="simulate")
 def playbook_simulate(
     name: str = typer.Argument(..., help="Playbook name"),
-    dot: bool = typer.Option(False, "--dot", help="Append a DOT graph of transitions after the summary"),
+    dot: bool = typer.Option(
+        False,
+        "--dot",
+        help="Append a DOT graph of transitions after the summary",
+    ),
 ) -> None:
     """Statically trace playbook transitions (read-only; no agents, hooks, or shell helpers)."""
     loader = _build_playbook_loader()
@@ -160,7 +202,7 @@ def skill_show(
         loader = _build_skill_loader()
         items = {item.name: item for item in loader.discover()}
         body = loader.activate(name)
-        item = items[name]
+        item = items.get(name) or items[canonical_skill_name(name)]
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
@@ -204,6 +246,30 @@ def _print_skill_import_summary(summary: SkillImportSummary) -> None:
             console.print(f"[yellow]skipped:[/yellow] {item.name} ({item.reason})")
         else:
             console.print(f"[red]failed:[/red] {item.name} ({item.reason})")
+
+
+def _print_global_skill_sync_summary(summary: GlobalSkillSyncSummary) -> None:
+    """Print user-level CLI skill installation and update results."""
+    console.print(
+        f"[green]Synced {len(summary.results)} installation(s)[/green]: "
+        f"{summary.installed_count} installed, {summary.updated_count} updated, "
+        f"{summary.unchanged_count} unchanged"
+    )
+    if summary.failed_count:
+        console.print(f"[red]{summary.failed_count} failed[/red]")
+
+    for item in summary.results:
+        if item.status == "failed":
+            console.print(
+                f"[red]failed:[/red] {item.cli}/{item.skill} -> "
+                f"{item.destination} ({item.reason})"
+            )
+        else:
+            style = "dim" if item.status == "unchanged" else "green"
+            console.print(
+                f"[{style}]{item.status}:[/{style}] "
+                f"{item.cli}/{item.skill} -> {item.destination}"
+            )
 
 
 def _print_skill_remove_summary(summary: SkillRemoveSummary) -> None:
@@ -257,6 +323,33 @@ def skill_import(
         raise typer.Exit(1)
 
     _print_skill_import_summary(summary)
+
+
+@skill_app.command(name="sync-global")
+def skill_sync_global(
+    skills: Optional[list[str]] = typer.Argument(
+        None,
+        help="Bundled skill names; defaults to the CAFE workflow helper skills",
+    ),
+    cli_names: Optional[list[str]] = typer.Option(
+        None,
+        "--cli",
+        help="Target CLI; repeat for multiple (claude, codex, copilot, cursor, gemini)",
+    ),
+) -> None:
+    """Install or update bundled CAFE helper skills in user-level CLI directories."""
+    try:
+        summary = sync_global_skills(
+            skill_names=skills or None,
+            cli_names=cli_names or None,
+        )
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+    _print_global_skill_sync_summary(summary)
+    if summary.failed_count:
+        raise typer.Exit(1)
 
 
 @skill_app.command(name="rm")

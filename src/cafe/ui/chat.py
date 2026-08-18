@@ -8,20 +8,14 @@ from typing import Optional
 
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.core.types import AgentCLI, AgentConfig
+from cafe.core.playbook import resolve_playbook_skills
+from cafe.core.types import AgentCLI, AgentConfig, CliEntry
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.config import ConfigManager
-from cafe.utils.crew import CrewManager, normalize_role_config
-
-
-CHAT_SKILL_NAMES = [
-    "common-chat-handoff",
-    "chat-develop-change",
-    "chat-spec-revision",
-    "chat-plan-revision",
-]
+from cafe.utils.git_utils import get_git_toplevel, get_repo_root
+from cafe.utils.phase_config import load_phase_step_model
 
 CURSOR_NATIVE_MODULE_HINT = "@anysphere/file-service-"
 
@@ -56,54 +50,71 @@ def _extract_latest_codex_session_id(
 
     return latest_session_id
 
+
 def get_chat_next_step_path(issue_dir: Path) -> Path:
     return issue_dir / "next_step.txt"
 
 
-def _load_chat_role_config(config_manager: ConfigManager, role: str, issue_dir: Optional[Path] = None) -> Optional[dict]:
-    """Load role config from crew.yaml first, then config.yaml."""
-    try:
-        cafe_dir = Path(getattr(config_manager, "config_dir"))
-        crew_data = CrewManager(cafe_dir=cafe_dir).load()
-        role_config = crew_data.get(role)
-        if isinstance(role_config, dict):
-            return role_config
-    except Exception:
-        pass
-
-    role_config = config_manager.get(f"agents.{role}", None)
-    if isinstance(role_config, dict):
-        return role_config
-
-    if issue_dir is not None:
-        playbook_role_config = _load_playbook_role_config(issue_dir, role)
-        if playbook_role_config is not None:
-            return playbook_role_config
-    return None
-
-
-def _load_playbook_role_config(issue_dir: Path, role: str) -> Optional[dict]:
-    try:
-        _, _, playbook_id = _load_chat_workflow_context(issue_dir)
-        playbook = PlaybookLoader(project_root=Path.cwd()).load(playbook_id)
-    except Exception:
+def _load_chat_role_config(
+    config_manager: ConfigManager, role: str, issue_dir: Optional[Path] = None
+) -> Optional[dict]:
+    """Load the active step's sole execution chain from phases.yaml."""
+    if issue_dir is None:
         return None
+    execution_step = _load_chat_execution_step(issue_dir)
+    resolution = load_phase_step_model(
+        step_name=execution_step,
+        local_path=get_git_toplevel() / ".cafe" / "phases.yaml",
+        repo_path=get_repo_root() / ".cafe" / "phases.yaml",
+    )
+    if resolution.role and resolution.role != role:
+        return None
+    return {
+        "name": resolution.name or execution_step,
+        "role": resolution.role or role,
+        "clis": [{"cli": cli, "model": model} for cli, model in resolution.clis],
+    }
 
-    role_def = playbook.get("roles", {}).get(role, {})
-    if not isinstance(role_def, dict):
-        return None
 
-    agent_name = role_def.get("default_agent")
-    cli = role_def.get("default_cli")
-    if not isinstance(agent_name, str) or not agent_name.strip():
-        return None
-    if not isinstance(cli, str) or not cli.strip():
-        return None
-    return {"name": agent_name.strip(), "cli": cli.strip()}
+def _load_chat_execution_step(issue_dir: Path) -> str:
+    """Resolve the agent step whose execution chain should launch paused chat."""
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    current_step = blackboard.current_step
+    if current_step != "user":
+        return current_step
+
+    contract = blackboard.handoff_contract
+    if (
+        contract is None
+        or contract.to_owner != HandoffOwner.USER
+        or contract.to_step != "user"
+        or not contract.from_step
+        or contract.from_step == "user"
+    ):
+        raise ValueError(
+            "invalid paused chat handoff: current_step='user': "
+            "field='handoff_contract.from_step': expected originating agent step"
+        )
+    return contract.from_step
+
+
+def _phase_entries(role_config: dict) -> list[CliEntry]:
+    raw_entries = role_config.get("clis")
+    if not isinstance(raw_entries, list):
+        return []
+    entries: list[CliEntry] = []
+    for item in raw_entries:
+        if not isinstance(item, dict):
+            continue
+        try:
+            entries.append(CliEntry(cli=AgentCLI(item.get("cli")), model=item.get("model")))
+        except (TypeError, ValueError):
+            continue
+    return entries
 
 
 def _configured_cli_values(role_config: dict) -> set[str]:
-    chain = normalize_role_config(role_config)
+    chain = _phase_entries(role_config)
     values = {entry.cli.value for entry in chain}
     cli = role_config.get("cli")
     if isinstance(cli, str):
@@ -116,7 +127,7 @@ def _configured_model_for_cli(
     cli: str,
     phase_name: Optional[str],
 ) -> Optional[str]:
-    for entry in normalize_role_config(role_config):
+    for entry in _phase_entries(role_config):
         if entry.cli.value == cli:
             return entry.resolve_model(phase_name)
 
@@ -127,7 +138,7 @@ def _configured_model_for_cli(
 
 
 def _resolve_primary_chat_cli(role_config: dict) -> tuple[Optional[str], Optional[str]]:
-    chain = normalize_role_config(role_config)
+    chain = _phase_entries(role_config)
     if chain:
         primary = chain[0]
         return primary.cli.value, primary.resolve_model(None)
@@ -165,6 +176,16 @@ def _load_active_chat_cli(
     if configured and cli not in configured:
         return None
 
+    # An explicit phase-chain primary change invalidates the sticky record:
+    # ignore it unless the recorded configured_primary still matches (or the
+    # sticky CLI already is the current primary). Mirrors AgentManager.
+    chain = _phase_entries(role_config)
+    current_primary = chain[0].cli.value if chain else None
+    recorded_primary = record.get("configured_primary")
+    if current_primary is not None and cli != current_primary:
+        if not isinstance(recorded_primary, str) or recorded_primary != current_primary:
+            return None
+
     model = record.get("model")
     if not isinstance(model, str):
         step_name = record.get("step_name")
@@ -173,6 +194,19 @@ def _load_active_chat_cli(
             cli,
             step_name if isinstance(step_name, str) else None,
         )
+
+    recorded_chain = record.get("chain")
+    if isinstance(recorded_chain, list):
+        def _extract_cli_value(item):
+            if isinstance(item, dict):
+                return item.get("cli")
+            return item
+
+        recorded_chain_values = [_extract_cli_value(i) for i in recorded_chain]
+        current_chain = [entry.cli.value for entry in _phase_entries(role_config)]
+        if recorded_chain_values != current_chain:
+            return None
+
     return cli, model if isinstance(model, str) else None
 
 
@@ -273,10 +307,7 @@ def _resolve_chat_cli(
 
 
 def _load_chat_workflow_context(issue_dir: Path) -> tuple[str, list[str], str]:
-    # LEGACY: Accept plain-text `next_step.txt` (v0.1 format) during chat
-    # bootstrap so sessions started by an older build remain readable.
-    # New chat handoffs always write structured JSON batons.
-    blackboard = BlackboardStore(issue_dir).load_or_create("spec", allow_legacy_text=True)
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
     playbook_id = getattr(blackboard, "playbook_id", "default") or "default"
     current_step = blackboard.current_step
 
@@ -293,9 +324,7 @@ def _prepare_chat_handoff_state(issue_dir: Path) -> tuple[str, list[str], str]:
     current_step, valid_steps, playbook_id = _load_chat_workflow_context(issue_dir)
     issue_dir.mkdir(parents=True, exist_ok=True)
     store = BlackboardStore(issue_dir)
-    # LEGACY: Allow legacy text when preparing chat handoff state; resumed
-    # sessions may have been written by an older build.
-    blackboard = store.load_or_create(current_step, allow_legacy_text=True)
+    blackboard = store.load_or_create(current_step)
     if current_step == "done":
         store.update_handoff_contract(
             blackboard,
@@ -336,8 +365,11 @@ def _prepare_chat_handoff_state(issue_dir: Path) -> tuple[str, list[str], str]:
 def _prepare_chat_environment(
     *,
     agent_cli: AgentCLI | object,
+    playbook: dict,
+    role: str,
+    step_name: str,
 ) -> None:
-    """Install shared chat skills for the target CLI."""
+    """Install chat skills resolved from the active playbook."""
     if not isinstance(agent_cli, AgentCLI):
         return
 
@@ -345,8 +377,15 @@ def _prepare_chat_environment(
     loader.discover()
     bridge = NativeSkillBridge(loader)
 
-    for skill_name in CHAT_SKILL_NAMES:
-        bridge.install_skill(skill_name, agent_cli)
+    bridge.synchronize_skills(
+        resolve_playbook_skills(
+            playbook,
+            channel="chat",
+            role=role,
+            step_name=step_name,
+        ),
+        agent_cli,
+    )
 
 
 def _format_cli_specific_error(agent_cli: AgentCLI, stderr: str, stdout: str) -> Optional[str]:
@@ -361,7 +400,9 @@ def _format_cli_specific_error(agent_cli: AgentCLI, stderr: str, stdout: str) ->
     return None
 
 
-def _handle_chat_launch_failure(agent_cli: AgentCLI, result: subprocess.CompletedProcess[object]) -> int:
+def _handle_chat_launch_failure(
+    agent_cli: AgentCLI, result: subprocess.CompletedProcess[object]
+) -> int:
     """Print a concise launch failure and return the CLI's exit code."""
     stderr = (getattr(result, "stderr", None) or "").strip()
     stdout = (getattr(result, "stdout", None) or "").strip()
@@ -378,7 +419,14 @@ def _handle_chat_launch_failure(agent_cli: AgentCLI, result: subprocess.Complete
     return result.returncode
 
 
-def launch_chat_session(role: str, issue_name: str) -> int:
+def launch_chat_session(
+    role: str,
+    issue_name: str,
+    *,
+    chat_mode: Optional[str] = None,
+    extra_env: Optional[dict[str, str]] = None,
+    initial_prompt: Optional[str] = None,
+) -> int:
     """Launch an inline chat session with the agent for the given role.
 
     Resolves agent config from ConfigManager, loads the existing session,
@@ -389,12 +437,31 @@ def launch_chat_session(role: str, issue_name: str) -> int:
     Args:
         role: Agent role ("pm", "developer", or "reviewer")
         issue_name: Current issue name (used to load issue-specific session)
+        initial_prompt: Optional first message to send when the interactive CLI supports it.
     """
     issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
 
+    playbook_id = "default"
+    try:
+        _current_step, _valid_steps, playbook_id = _load_chat_workflow_context(issue_dir)
+        chat_playbook = PlaybookLoader(project_root=Path.cwd()).load(playbook_id)
+    except Exception as exc:
+        print(
+            f"\n⚠️  Chat cannot start because playbook validation failed for "
+            f"'{playbook_id}': {exc}. Fix the declaration and retry.\n"
+        )
+        return 1
+
     # Load configuration
     config_manager = ConfigManager()
-    agent_config = _load_chat_role_config(config_manager, role, issue_dir=issue_dir)
+    try:
+        agent_config = _load_chat_role_config(config_manager, role, issue_dir=issue_dir)
+    except Exception as exc:
+        print(
+            f"\n⚠️  Chat cannot start because phase configuration failed for "
+            f"role '{role}': {exc}. Fix .cafe/phases.yaml and retry.\n"
+        )
+        return 1
 
     if agent_config is None:
         print(f"\n⚠️  No agent configured for role '{role}'. Skipping chat.\n")
@@ -425,6 +492,7 @@ def launch_chat_session(role: str, issue_name: str) -> int:
             name=agent_name,
             cli=agent_cli,
             model=agent_model,
+            clis=_phase_entries(agent_config),
         )
     )
 
@@ -436,31 +504,28 @@ def launch_chat_session(role: str, issue_name: str) -> int:
     cli_strategy = executor._get_cli_strategy()
 
     _current_step, _valid_steps, _playbook_id = _prepare_chat_handoff_state(issue_dir)
-
     _prepare_chat_environment(
         agent_cli=agent_cli,
+        playbook=chat_playbook,
+        role=role,
+        step_name=_current_step,
     )
     session_id: Optional[str] = executor.config.session_id
-
-    cli_command = [agent_cli_str]
     codex_history_start_ts = int(time.time())
-
-    if agent_cli_str == "codex" and agent_model:
-        cli_command.extend(["--model", agent_model])
-
-    if session_id:
-        if agent_cli_str in ("claude", "copilot", "gemini"):
-            cli_command.extend(["--resume", session_id])
-        elif agent_cli_str == "cursor-agent":
-            cli_command.extend(["--resume", session_id])
-        elif agent_cli_str == "codex":
-            cli_command.extend(["resume", session_id])
-
-    if agent_model:
-        if agent_cli_str in ("claude", "copilot", "gemini"):
-            cli_command.extend(["--model", agent_model])
+    cli_command = cli_strategy.build_interactive_command(initial_prompt=initial_prompt)
 
     env = cli_strategy.build_environment()
+    env["CAFE_ISSUE_NAME"] = issue_name
+    env["CAFE_ISSUE_DIR"] = str(issue_dir)
+    env["CAFE_CHAT_CURRENT_STEP"] = _current_step
+    env["CAFE_CHAT_PLAYBOOK_ID"] = _playbook_id
+    if initial_prompt:
+        env["CAFE_CHAT_INITIAL_PROMPT"] = initial_prompt
+    if chat_mode:
+        env["CAFE_CHAT_MODE"] = chat_mode
+    if extra_env:
+        for key, value in extra_env.items():
+            env[str(key)] = str(value)
     print(f"\nOpening chat with {role} ({agent_name})...")
     if session_id:
         print(f"Resuming session: {session_id}")
@@ -491,18 +556,15 @@ def launch_chat_session(role: str, issue_name: str) -> int:
         return _handle_chat_launch_failure(agent_cli, result)
 
     store = BlackboardStore(issue_dir)
-    # LEGACY: After chat CLI exit, reload blackboard allowing legacy
-    # `next_step.txt` formats so older chat handoffs remain consumable.
-    # New chat handoffs should always write structured JSON batons.
-    blackboard = store.load_or_create(_current_step, allow_legacy_text=True)
-    # LEGACY: Load handoff contract with legacy text fallback for the same
-    # backward-compatibility reason.
+    blackboard = store.load_or_create(_current_step)
     contract = store.load_handoff_contract(
         blackboard,
         allowed_steps=_valid_steps,
-        allow_legacy_text=True,
     )
     if contract.source == "chat.bootstrap":
-        print("\n⚠️  Chat ended without writing a next-step baton. The agent did not complete workflow handoff.\n")
+        print(
+            "\n⚠️  Chat ended without writing a next-step baton. "
+            "The agent did not complete workflow handoff.\n"
+        )
 
     return result.returncode

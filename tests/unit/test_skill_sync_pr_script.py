@@ -68,7 +68,7 @@ exit 1
 
 
 def _run_sync_pr(project_root: Path, output_file: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    script = project_root / "src/cafe/data/skills/pr/scripts/sync_pr.sh"
+    script = project_root / "src/cafe/data/skills/cafe-pr/scripts/sync_pr.sh"
     return subprocess.run(
         ["/bin/bash", str(script), "--output", str(output_file), "--base", "main"],
         capture_output=True,
@@ -112,7 +112,7 @@ def test_builtin_playbooks_publish_pr_through_sync_hook() -> None:
         "src/cafe/data/playbooks/hotfix.yaml",
     ]:
         content = (project_root / rel_path).read_text(encoding="utf-8")
-        assert "publish_output: [GitHubPRCreator, LocalPRReviewer, PRLinkOpener]" in content
+        assert "publish_output: [GitHubPRCreator, LocalReviewContextProvider, PRLinkOpener]" in content
 def test_sync_pr_rejects_uncommitted_changes(tmp_path: Path) -> None:
     project_root = Path(__file__).resolve().parents[2]
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 import subprocess
 import sys
@@ -13,30 +14,42 @@ from rich.console import Console
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.issue_resolution import ActiveIssueResolutionError, resolve_active_issue
+from cafe.core.phase_state_mixin import next_runnable_iteration_number
+from cafe.core.playbook import resolve_step_behavior
 from cafe.core.types import CriticalPhaseError
-from cafe.core.workflow_models import StepExecutionResult, StepInterrupted
+from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.phases.generic_phase import GenericPhase
-from cafe.playbooks.loader import PlaybookLoader
+from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 from cafe.skills.loader import SkillLoader
 from cafe.ui.cli_shared import (
     VALID_CONTENT_TYPES,
+    apply_alignment_decision_from_payload,
+    parse_alignment_decision_payload,
+)
+from cafe.ui.cli_shared import (
     get_show_file_path as _get_show_file_path,
+)
+from cafe.ui.cli_shared import (
     resolve_iteration_number as _resolve_iteration_number,
 )
-from cafe.agents.executor import AgentExecutionError
+from cafe.ui.human_tasks import apply_human_task_payload
 from cafe.utils.config import ConfigError, validate_directories_exist
+
 
 # Lazy access to GitOperations via cli for backward-compat test patching.
 def _get_GitOperations():
     from cafe.ui.cli import GitOperations
+
     return GitOperations
 
 
 # Lazy access to ConfigManager via cli for backward-compat test patching.
 def _get_ConfigManager():
     from cafe.ui.cli import ConfigManager
+
     return ConfigManager
+
 
 # Functions moved to cli_shared, accessed through cli module for
 # backward-compatible test patching (tests patch ``cafe.ui.cli._func``).
@@ -45,63 +58,79 @@ def _get_ConfigManager():
 
 def _build_workflow_pause_guidance(*a, **kw):
     from cafe.ui.cli import _build_workflow_pause_guidance as _fn
+
     return _fn(*a, **kw)
 
 
 def _build_workflow_step_executor(*a, **kw):
     from cafe.ui.cli import _build_workflow_step_executor as _fn
+
     return _fn(*a, **kw)
 
 
 def _check_agent_clis_available(*a, **kw):
     from cafe.ui.cli import _check_agent_clis_available as _fn
+
     return _fn(*a, **kw)
 
 
 def _consume_pending_chat_handoff(*a, **kw):
     from cafe.ui.cli import _consume_pending_chat_handoff as _fn
+
     return _fn(*a, **kw)
 
 
 def _find_external_resume_step(*a, **kw):
     from cafe.ui.cli import _find_external_resume_step as _fn
+
     return _fn(*a, **kw)
 
 
 def _find_incomplete_workflow_step(*a, **kw):
     from cafe.ui.cli import _find_incomplete_workflow_step as _fn
+
     return _fn(*a, **kw)
 
 
 def _handle_phase_exception(*a, **kw):
     from cafe.ui.cli import _handle_phase_exception as _fn
+
     return _fn(*a, **kw)
 
 
 def _handle_user_phase(*a, **kw):
     from cafe.ui.cli import _handle_user_phase as _fn
+
     return _fn(*a, **kw)
 
 
 def _load_issue_step_names(*a, **kw):
     from cafe.ui.cli import _load_issue_step_names as _fn
+
     return _fn(*a, **kw)
 
 
 def _print_workflow_pause_guidance(*a, **kw):
     from cafe.ui.cli import _print_workflow_pause_guidance as _fn
+
     return _fn(*a, **kw)
 
 
 def _resolve_selected_playbook(*a, **kw):
     from cafe.ui.cli import _resolve_selected_playbook as _fn
+
     return _fn(*a, **kw)
+
+
+def _resolve_issue_playbook_name(*a, **kw):
+    from cafe.ui.cli import _resolve_issue_playbook_name as _fn
+
+    return _fn(*a, **kw)
+
 
 console = Console()
 
-_USER_INPUT_HELP = (
-    "Initial workflow input, or answer to write when resuming from a user handoff"
-)
+_USER_INPUT_HELP = "Initial workflow input, or answer to write when resuming from a user handoff"
 
 
 def _normalize_cli_user_input(user_input: Any) -> Optional[str]:
@@ -122,6 +151,25 @@ def _build_initial_step_user_inputs(
         return None
     entry_point = playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))
     return {str(entry_point): normalized}
+
+
+def _resolve_initial_step_user_inputs(
+    playbook_data: Dict[str, Any],
+    user_input: Optional[str],
+    start_step: Optional[str],
+    resume_current_step: Optional[str],
+) -> tuple[Optional[Dict[str, str]], Optional[str]]:
+    """Decide where --user-input goes; return (step_user_inputs, remaining_user_input).
+
+    With an explicit --start-step, the input belongs to that step and is consumed
+    here. Otherwise, a blackboard parked at a user handoff defers the input to the
+    user-handoff resume branch; a cold start maps it to the entry point.
+    """
+    if user_input and start_step and start_step in playbook_data["steps"]:
+        return {str(start_step): user_input}, None
+    if user_input and resume_current_step in {"user", "done"}:
+        return None, user_input
+    return _build_initial_step_user_inputs(playbook_data, user_input), None
 
 
 def _validate_allowed_directories(config_manager: Any, add_dir: List[str]) -> None:
@@ -159,11 +207,6 @@ def make(
         "--timeout",
         "-t",
         help="Overall workflow timeout in seconds (0 = no timeout)",
-    ),
-    fallback_preset: Optional[str] = typer.Option(
-        None,
-        "--fallback-preset",
-        help="Crew preset to switch to when primary CLI is rate-limited, missing, unavailable, or has a bad model",
     ),
     add_dir: List[str] = typer.Option(
         [],
@@ -230,8 +273,6 @@ def make(
     cmd = [sys.executable, "-m", "cafe.ui.cli", "workflow", "--execute"]
     if user_input:
         cmd.extend(["--user-input", user_input])
-    if fallback_preset:
-        cmd.extend(["--fallback-preset", fallback_preset])
     for directory in add_dir_values:
         cmd.extend(["--add-dir", directory])
 
@@ -254,18 +295,13 @@ def make(
 
 
 def show(
-    phase_name: str = typer.Argument(
-        ...,
-        help="Playbook step name"
-    ),
-    content_type: Optional[str] = typer.Argument(
-        None,
-        help="Content type (default: output)"
-    ),
+    phase_name: str = typer.Argument(..., help="Playbook step name"),
+    content_type: Optional[str] = typer.Argument(None, help="Content type (default: output)"),
     iteration: int = typer.Option(
         0,
-        "--iteration", "-i",
-        help="Iteration number (positive, 0=latest, negative=relative index)"
+        "--iteration",
+        "-i",
+        help="Iteration number (positive, 0=latest, negative=relative index)",
     ),
 ) -> None:
     """Display iteration file contents.
@@ -332,7 +368,9 @@ def show(
             if content_type == "status":
                 from cafe.services.summary_service import SummaryService
 
-                status = SummaryService(issues_root=cafe_dir / "issues").load_phase_status(issue_name, phase_name)
+                status = SummaryService(issues_root=cafe_dir / "issues").load_phase_status(
+                    issue_name, phase_name
+                )
                 if status:
                     console.print_json(data=status)
                     return
@@ -342,7 +380,9 @@ def show(
             else:
                 console.print(f"[red]Error: File not found: {file_path}[/red]")
                 if resolved_iteration is not None:
-                    console.print(f"[dim]File '{content_type}' does not exist in iteration {resolved_iteration}[/dim]")
+                    console.print(
+                        f"[dim]File '{content_type}' does not exist in iteration {resolved_iteration}[/dim]"
+                    )
             raise typer.Exit(1)
 
         # Read and display file content
@@ -353,6 +393,7 @@ def show(
             if file_path.suffix == ".json":
                 try:
                     import json
+
                     json_data = json.loads(content)
                     console.print_json(data=json_data)
                 except json.JSONDecodeError:
@@ -367,7 +408,7 @@ def show(
                 console.print(content)
 
         except UnicodeDecodeError:
-            console.print(f"[red]Error: Failed to read file (not UTF-8 encoded)[/red]")
+            console.print("[red]Error: Failed to read file (not UTF-8 encoded)[/red]")
             raise typer.Exit(1)
 
     except ValueError as e:
@@ -382,7 +423,7 @@ def show(
         raise typer.Exit(1)
 
 
-def summary() -> None:
+def status() -> None:
     """Display a comprehensive timeline of all workflow phases and iterations.
 
     Shows the start time, end time, duration, and current status for each phase
@@ -390,11 +431,11 @@ def summary() -> None:
 
     \b
     Examples:
-        cafe summary
+        cafe status
     """
+    from cafe.services.summary_display import SummaryDisplay
     from cafe.services.summary_service import SummaryService
     from cafe.services.timeline_builder import TimelineBuilder
-    from cafe.services.summary_display import SummaryDisplay
 
     try:
         # Get current issue from git context
@@ -423,12 +464,24 @@ def summary() -> None:
         display = SummaryDisplay()
         display.render_table(entries)
 
+        load_context_packets = getattr(service, "load_context_packets", None)
+        context_packets = display.format_context_packets(
+            load_context_packets(issue_name) if callable(load_context_packets) else []
+        )
+        if context_packets:
+            console.print(context_packets)
+
         # Display aggregated model token usage summary
         display.render_model_summary_table(entries)
 
     except Exception as e:
         console.print(f"[red]Error: Failed to display summary: {e}[/red]")
         raise typer.Exit(1)
+
+
+def summary() -> None:
+    """Backward-compatible alias for the previous `cafe summary` command."""
+    status()
 
 
 def _is_baton_contract_error(error: Exception) -> bool:
@@ -469,6 +522,13 @@ def _reset_baton_for_explicit_start_step(
     """Make an explicit --start-step runnable even when the persisted baton is stale."""
     store = BlackboardStore(issue_dir)
     store.set_current_step(blackboard, active_step)
+    store.set_handoff_summary(
+        blackboard,
+        (
+            f"Explicit workflow start requested for {active_step}; "
+            "the prior handoff is superseded."
+        ),
+    )
     store.update_handoff_contract(
         blackboard,
         from_step=active_step,
@@ -511,19 +571,18 @@ def _print_workflow_event_display(event: Any) -> None:
 def workflow(
     playbook: Optional[str] = typer.Option(None, "--playbook", help="Playbook name"),
     issue: Optional[str] = typer.Option(None, "--issue", help="Issue directory name"),
-    start_step: Optional[str] = typer.Option(None, "--start-step", help="Start execution from a specific step"),
+    start_step: Optional[str] = typer.Option(
+        None, "--start-step", help="Start execution from a specific step"
+    ),
     single_step: bool = typer.Option(False, "--single-step", help="Run only one playbook step"),
-    dry_run: bool = typer.Option(True, "--dry-run/--execute", help="Run with built-in dry executor"),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--execute", help="Preview the read-only workflow simulation"
+    ),
     user_input: Optional[str] = typer.Option(
         None,
         "--user-input",
         "-u",
         help=_USER_INPUT_HELP,
-    ),
-    fallback_preset: Optional[str] = typer.Option(
-        None,
-        "--fallback-preset",
-        help="Crew preset to switch to when primary CLI is rate-limited, missing, unavailable, or has a bad model",
     ),
     add_dir: List[str] = typer.Option(
         [],
@@ -534,30 +593,6 @@ def workflow(
     """Run playbook workflow using the new generic runner."""
     user_input = _normalize_cli_user_input(user_input)
     try:
-        def _predict_next_iteration(issue_root: Path, step_name: str) -> int:
-            step_dir = issue_root / step_name
-            iter_dirs = sorted(d for d in step_dir.glob("iteration_*") if d.is_dir())
-            existing = [
-                d for d in iter_dirs
-                if (d / "iteration.json").exists() or (d / "context.json").exists()
-            ]
-            if not existing:
-                return 1
-            count = len(existing)
-            try:
-                import json as _json
-                last_dir = existing[-1]
-                last_file = (
-                    last_dir / "iteration.json"
-                    if (last_dir / "iteration.json").exists()
-                    else last_dir / "context.json"
-                )
-                last_data = _json.loads(last_file.read_text(encoding="utf-8"))
-                if not last_data.get("status_code"):
-                    return last_data.get("iteration", count)
-            except Exception:
-                return count
-            return count + 1
 
         git = _get_GitOperations()()
         cafe_dir = Path(".cafe")
@@ -573,7 +608,20 @@ def workflow(
             raise typer.Exit(1)
         issue_name = resolved.issue_name
         issue_dir = cafe_dir / "issues" / issue_name
-        selected_playbook = _resolve_selected_playbook(playbook)
+        # An explicit flag starts a requested playbook; otherwise an existing
+        # issue must resume the playbook persisted in its own workflow state.
+        has_issue_workflow = (issue_dir / "blackboard.json").exists() or (
+            issue_dir / "issue.yaml"
+        ).exists()
+        selected_playbook = (
+            _resolve_selected_playbook(playbook)
+            if playbook
+            else (
+                _resolve_issue_playbook_name(issue_name)
+                if has_issue_workflow
+                else _resolve_selected_playbook(None)
+            )
+        )
         config_manager = _get_ConfigManager()(".cafe")
         try:
             config_manager.load_config()
@@ -588,163 +636,168 @@ def workflow(
 
         playbook_loader = PlaybookLoader()
         playbook_data = playbook_loader.load(selected_playbook)
-        interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
+        playbook_data = apply_issue_playbook_overrides(
+            playbook_data,
+            issue_dir / "issue.yaml",
+        )
+        if dry_run:
+            # Dry-run is a planning surface, not a fake execution mode. It
+            # must not create workflow state, phase output, tasks, hooks, or
+            # agent/automatic executor sessions.
+            from cafe.core.playbook import PlaybookDefinition
+            from cafe.playbooks.simulate import analyze_playbook, format_text_report
+
+            model = PlaybookDefinition.model_validate(playbook_data)
+            preview_step = start_step or model.entry_point or next(iter(model.steps))
+            console.print(
+                f"[dim]Workflow context[/dim] playbook={model.playbook.id} step={preview_step}"
+            )
+            console.print(format_text_report(analyze_playbook(model)))
+            return
+        tty_interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
         generic_phase = GenericPhase(SkillLoader())
 
-        def dry_executor(step_name: str, step_def: Dict, blackboard_state: object, extra_prompt: Optional[str] = None) -> StepExecutionResult:
-            output_key = step_def.get("output_artifact", step_name)
-            output_path = issue_dir / step_name / "output.md"
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(f"# {step_name}\n\nDry-run output\n", encoding="utf-8")
-            if step_name == "pr":
-                store = BlackboardStore(issue_dir)
-                blackboard = store.load_or_create(
-                    str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
-                    playbook_id=str(playbook_data["playbook"]["id"]),
-                )
-                store.update_handoff_contract(
-                    blackboard,
-                    from_step="pr",
-                    to_owner=HandoffOwner.DONE,
-                    to_step="done",
-                    intent=HandoffIntent.WORKFLOW_COMPLETE,
-                    source="workflow.dry_run",
-                )
-                return StepExecutionResult(
-                    response="dry run",
-                    artifacts={str(output_key): str(output_path)},
-                    events=[
-                        {
-                            "type": "pr_synced",
-                            "url": "https://example.com/dry-run-pr",
-                            "display": {
-                                "style": "green",
-                                "lines": ["PR synced", "  URL: https://example.com/dry-run-pr"],
-                            },
-                        }
-                    ],
-                )
-            return StepExecutionResult(
-                response="dry-run",
-                artifacts={str(output_key): str(output_path)},
-                status_code="confirmed",
-            )
         entry_point = str(
             playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))
         )
-        # LEGACY: Bootstrap load accepts plain-text `next_step.txt` (v0.1 format) so
-        # existing sessions started with an older CLI build remain resumable.
-        # New sessions always write structured JSON batons. See issue #316.
         resume_blackboard = BlackboardStore(issue_dir).load_or_create(
             entry_point,
             playbook_id=str(playbook_data["playbook"]["id"]),
-            allow_legacy_text=True,
         )
-        if user_input and resume_blackboard.current_step in {"user", "done"}:
-            initial_step_user_inputs = None
-        else:
-            initial_step_user_inputs = _build_initial_step_user_inputs(playbook_data, user_input)
+        initial_step_user_inputs, user_input = _resolve_initial_step_user_inputs(
+            playbook_data,
+            user_input,
+            start_step,
+            resume_blackboard.current_step,
+        )
 
-        # Mutable holder so wrapped_executor can swap executors on fallback
-        _executor_holder: Dict[str, Any] = {
-            "executor": None if dry_run else _build_workflow_step_executor(
+        def _interactive_mode() -> bool:
+            # An explicit payload is authoritative for the current user gate,
+            # then normal TTY interaction resumes after that payload is consumed.
+            return tty_interactive and user_input is None
+
+        initial_phase_name = start_step or resume_blackboard.current_step
+        if initial_phase_name not in playbook_data["steps"]:
+            initial_phase_name = None
+
+        def _build_executor_for_phase(phase_name: Optional[str]):
+            return _build_workflow_step_executor(
                 config_manager=config_manager,
                 issue_dir=issue_dir,
                 issue_name=issue_name,
                 playbook_data=playbook_data,
                 generic_phase=generic_phase,
+                phase_name=phase_name,
                 step_user_inputs=initial_step_user_inputs,
-                interactive=interactive,
-                extra_allowed_directories=add_dir_values,
-            ),
-            "fallback_applied": False,
-        }
-
-        def _apply_fallback_preset_and_rebuild() -> None:
-            """Apply fallback preset and rebuild the step executor in-place."""
-            from cafe.utils.preset import PresetManager, PresetNotFoundError
-            assert fallback_preset is not None
-            try:
-                PresetManager().apply(fallback_preset)
-                console.print(f"[yellow]⚡ Switched to fallback preset '{fallback_preset}' — remaining steps will use this crew.[/yellow]")
-            except PresetNotFoundError as e:
-                console.print(f"[red]Fallback preset error: {e}[/red]")
-                raise
-            _executor_holder["executor"] = _build_workflow_step_executor(
-                config_manager=config_manager,
-                issue_dir=issue_dir,
-                issue_name=issue_name,
-                playbook_data=playbook_data,
-                generic_phase=generic_phase,
-                step_user_inputs=initial_step_user_inputs,
-                interactive=interactive,
+                interactive=_interactive_mode(),
                 extra_allowed_directories=add_dir_values,
             )
-            _executor_holder["fallback_applied"] = True
 
-        def wrapped_executor(step_name: str, step_def: Dict, blackboard_state: object, extra_prompt: Optional[str] = None) -> Any:
-            iteration = _predict_next_iteration(issue_dir, step_name)
+        # Mutable holder so wrapped_executor can swap executors when the active
+        # phase changes. Agent setup resolves
+        # the CLI/model chain for one phase, so reusing it for another phase can
+        # silently retain the previous role's default chain.
+        _executor_holder: Dict[str, Any] = {
+            "executor": None,
+            "phase_name": None,
+        }
+
+        def wrapped_executor(
+            step_name: str,
+            step_def: Dict,
+            blackboard_state: object,
+            extra_prompt: Optional[str] = None,
+            same_invocation_retry: bool = False,
+        ) -> Any:
+            iteration = next_runnable_iteration_number(issue_dir / step_name)
             console.print(f"[dim]Executing[/dim] step={step_name} iteration={iteration:03d}")
-            if dry_run:
-                return dry_executor(step_name, step_def, blackboard_state, extra_prompt=extra_prompt)
+            if _executor_holder["phase_name"] != step_name:
+                _executor_holder["executor"] = _build_executor_for_phase(step_name)
+                _executor_holder["phase_name"] = step_name
+            step_role = step_def.get("role") if isinstance(step_def, dict) else None
+            missing_clis = _check_agent_clis_available(
+                config_manager,
+                active_step=step_name,
+                active_role=step_role if isinstance(step_role, str) else None,
+            )
+            if missing_clis:
+                console.print(
+                    f"[red]Error: No executable CLI candidates for step={step_name} field=clis[/red]"
+                )
+                for cli in missing_clis:
+                    console.print(f"  [red]✗[/red] {cli}")
+                raise typer.Exit(1)
             step_executor = _executor_holder["executor"]
             assert step_executor is not None
-            try:
-                result = step_executor.execute_step(step_name, step_def, blackboard_state, extra_prompt=extra_prompt)
-            except AgentExecutionError as exc:
-                if (
-                    fallback_preset
-                    and not _executor_holder["fallback_applied"]
-                    and getattr(exc, "error_type", None) in ("rate_limit", "cli_not_found", "cli_unavailable", "model_not_found")
-                ):
-                    _apply_fallback_preset_and_rebuild()
-                    result = _executor_holder["executor"].execute_step(
-                        step_name, step_def, blackboard_state, extra_prompt=extra_prompt
-                    )
-                else:
-                    raise
+            execute_kwargs = {"extra_prompt": extra_prompt}
+            execute_signature = inspect.signature(step_executor.execute_step)
+            if "same_invocation_retry" in execute_signature.parameters or any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in execute_signature.parameters.values()
+            ):
+                execute_kwargs["same_invocation_retry"] = same_invocation_retry
+            result = step_executor.execute_step(
+                step_name,
+                step_def,
+                blackboard_state,
+                **execute_kwargs,
+            )
             if isinstance(result, StepExecutionResult):
                 for event in result.events:
                     _print_workflow_event_display(event)
             return result
 
         pending_start_step = start_step
+        explicit_start_step_pending = start_step is not None
         while True:
-            has_explicit_start_step = pending_start_step is not None
-            if dry_run:
-                pending_start_step = pending_start_step or str(
-                    playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))
-                )
-            else:
-                pending_start_step = _consume_pending_chat_handoff(
-                    issue_dir=issue_dir,
-                    playbook_data=playbook_data,
-                    requested_start_step=pending_start_step,
-                )
-            if pending_start_step is not None and pending_start_step not in playbook_data["steps"] and pending_start_step not in {"user", "done"}:
+            interactive = _interactive_mode()
+            has_explicit_start_step = explicit_start_step_pending
+            pending_start_step = _consume_pending_chat_handoff(
+                issue_dir=issue_dir,
+                playbook_data=playbook_data,
+                requested_start_step=pending_start_step,
+            )
+            if (
+                pending_start_step is not None
+                and pending_start_step not in playbook_data["steps"]
+                and pending_start_step not in {"user", "done"}
+            ):
                 raise ValueError(f"Unknown playbook step '{pending_start_step}'")
 
-            # LEGACY: Load current blackboard state allowing legacy plain-text
-            # `next_step.txt` for backward compatibility with sessions that pre-date
-            # structured batons. Prefer JSON baton format for new sessions.
             blackboard = BlackboardStore(issue_dir).load_or_create(
                 str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
                 playbook_id=str(playbook_data["playbook"]["id"]),
-                allow_legacy_text=True,
             )
 
             active_step = pending_start_step or blackboard.current_step
-            if not dry_run and has_explicit_start_step and active_step not in {"user", "done"}:
-                _reset_baton_for_explicit_start_step(
-                    issue_dir=issue_dir,
-                    blackboard=blackboard,
-                    active_step=active_step,
+            if has_explicit_start_step:
+                if active_step not in {"user", "done"}:
+                    _reset_baton_for_explicit_start_step(
+                        issue_dir=issue_dir,
+                        blackboard=blackboard,
+                        active_step=active_step,
+                    )
+                explicit_start_step_pending = False
+            if active_step in {"user", "done"}:
+                handoff_contract = getattr(blackboard, "handoff_contract", None)
+                # A phase-authored user baton is authoritative. A bootstrap
+                # baton only mirrors a legacy current_step and may still need
+                # unfinished-iteration recovery.
+                waiting_for_user_handoff = (
+                    handoff_contract is not None
+                    and handoff_contract.to_owner == HandoffOwner.USER
+                    and handoff_contract.to_step == "user"
+                    and (
+                        handoff_contract.has_meaningful_source
+                        or handoff_contract.intent == HandoffIntent.ALIGNMENT_CHECKPOINT
+                    )
                 )
-            if not dry_run and active_step in {"user", "done"}:
-                incomplete_step = _find_incomplete_workflow_step(
-                    issue_dir=issue_dir,
-                    playbook_data=playbook_data,
-                )
+                incomplete_step = None
+                if not waiting_for_user_handoff:
+                    incomplete_step = _find_incomplete_workflow_step(
+                        issue_dir=issue_dir,
+                        playbook_data=playbook_data,
+                    )
                 if incomplete_step is not None:
                     pending_start_step = incomplete_step
                     store = BlackboardStore(issue_dir)
@@ -761,18 +814,20 @@ def workflow(
                         f"[yellow]Resuming unfinished iteration[/yellow] step={incomplete_step}"
                     )
                     continue
-                external_step = _find_external_resume_step(
-                    issue_dir=issue_dir,
-                    playbook_data=playbook_data,
-                    git_ops=git,
-                )
+                external_step = None
+                if not waiting_for_user_handoff:
+                    external_step = _find_external_resume_step(
+                        issue_dir=issue_dir,
+                        playbook_data=playbook_data,
+                        git_ops=git,
+                    )
                 if external_step is not None:
                     pending_start_step = external_step
                     store = BlackboardStore(issue_dir)
                     store.set_current_step(blackboard, external_step)
                     store.set_handoff_summary(
                         blackboard,
-                        "Unresolved PR discussion detected while the workflow was paused; resuming the PR step.",
+                        "Durable workflow feedback detected while the workflow was paused; resuming its declared target.",
                     )
                     store.update_handoff_contract(
                         blackboard,
@@ -786,7 +841,7 @@ def workflow(
                         f"[yellow]Detected external workflow feedback[/yellow] step={external_step}"
                     )
                     continue
-            if not dry_run and active_step in {"user", "done"}:
+            if active_step in {"user", "done"}:
                 if active_step == "done" and not interactive:
                     console.print("[green]Workflow already completed[/green] step=done")
                     console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
@@ -800,13 +855,78 @@ def workflow(
                             allowed_steps=step_keys,
                         )
                         from_step = getattr(contract, "from_step", None) or blackboard.current_step
+                        if contract.intent == HandoffIntent.ALIGNMENT_CHECKPOINT:
+                            decision_payload = parse_alignment_decision_payload(user_input)
+                            if decision_payload is None:
+                                console.print(
+                                    "[yellow]Workflow is waiting for an explicit alignment decision payload.[/yellow]"
+                                )
+                                console.print(
+                                    '[dim]Use JSON such as {"decision":"approve"}, '
+                                    '{"decision":"narrow","correction":"..."}, '
+                                    'or {"decision":"update_strategic_documents_first"}.[/dim]'
+                                )
+                                return
+                            selected_step = apply_alignment_decision_from_payload(
+                                issue_dir=issue_dir,
+                                playbook_data=playbook_data,
+                                blackboard=blackboard,
+                                payload=decision_payload,
+                            )
+                            user_input = None
+                            if selected_step:
+                                pending_start_step = selected_step
+                                continue
+                            return
+                        owner_trigger = None
+                        source_step_def = playbook_data.get("steps", {}).get(from_step, {})
+                        if isinstance(source_step_def, dict):
+                            if source_step_def.get("assignee_type") == "human":
+                                owner_trigger = "initial"
+                            elif source_step_def.get("assignee_type") == "hybrid":
+                                cursor = getattr(blackboard, "ownership_cursor", None)
+                                if isinstance(cursor, dict) and cursor.get("step") == from_step:
+                                    portion = cursor.get("portion")
+                                    if isinstance(portion, str):
+                                        owner_trigger = portion
+                        if (
+                            contract.intent
+                            in {
+                                HandoffIntent.CONFIRM_OUTPUT,
+                                HandoffIntent.NEED_CLARIFICATION,
+                                HandoffIntent.NO_CHANGES_NEEDED,
+                            }
+                            or owner_trigger is not None
+                        ):
+                            result = apply_human_task_payload(
+                                issue_dir=issue_dir,
+                                playbook_data=playbook_data,
+                                blackboard=blackboard,
+                                from_step=from_step,
+                                trigger=owner_trigger or contract.intent.value,
+                                raw_payload=user_input,
+                                source="command",
+                            )
+                            if result.rejection is not None:
+                                console.print(f"[yellow]{result.rejection.message}[/yellow]")
+                                console.print(f"[dim]{result.rejection.correction_guidance}[/dim]")
+                                return
+                            user_input = None
+                            pending_start_step = result.target
+                            continue
                         store = BlackboardStore(issue_dir)
                         from_step_dir = issue_dir / from_step
-                        iteration_dirs = sorted(from_step_dir.glob("iteration_*")) if from_step_dir.exists() else []
+                        iteration_dirs = (
+                            sorted(from_step_dir.glob("iteration_*"))
+                            if from_step_dir.exists()
+                            else []
+                        )
                         next_iteration_num = len(iteration_dirs) + 1
                         next_iteration_dir = from_step_dir / f"iteration_{next_iteration_num:03d}"
                         next_iteration_dir.mkdir(parents=True, exist_ok=True)
-                        (next_iteration_dir / "user_input.md").write_text(user_input, encoding="utf-8")
+                        (next_iteration_dir / "user_input.md").write_text(
+                            user_input, encoding="utf-8"
+                        )
                         store.set_current_step(blackboard, from_step)
                         store.set_handoff_summary(
                             blackboard,
@@ -820,9 +940,7 @@ def workflow(
                             intent=HandoffIntent.AWAIT_AGENT,
                             source="workflow.user_input_flag",
                         )
-                        console.print(
-                            f"[dim]Resuming[/dim] {from_step} with --user-input"
-                        )
+                        console.print(f"[dim]Resuming[/dim] {from_step} with --user-input")
                         # Consume user_input so it is not replayed on
                         # subsequent user handoffs for different steps.
                         user_input = None
@@ -852,22 +970,26 @@ def workflow(
                 playbook=playbook_data,
                 executor=wrapped_executor,
             )
-            result = runner.run(start_step=effective_start_step, single_step=single_step)
+            result = runner.run(start_step=pending_start_step, single_step=single_step)
             latest_blackboard = BlackboardStore(issue_dir).load_or_create(
                 str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
                 playbook_id=str(playbook_data["playbook"]["id"]),
             )
             if (
                 not single_step
-                and latest_blackboard.current_step == "pr"
-                and effective_start_step != "pr"
+                and result.final_status_code != "BATON_POSITION_REALIGNED"
+                and latest_blackboard.current_step in playbook_data["steps"]
+                and resolve_step_behavior(
+                    playbook_data, latest_blackboard.current_step
+                ).publish_confirmation
+                and effective_start_step != latest_blackboard.current_step
             ):
-                pending_start_step = "pr"
+                pending_start_step = latest_blackboard.current_step
                 continue
-            if interactive and not dry_run and not single_step and latest_blackboard.current_step == "user":
+            if interactive and not single_step and latest_blackboard.current_step == "user":
                 pending_start_step = "user"
                 continue
-            if not interactive and not dry_run and not single_step and latest_blackboard.current_step == "user":
+            if not interactive and not single_step and latest_blackboard.current_step == "user":
                 if user_input and user_input.strip():
                     pending_start_step = "user"
                     continue
@@ -878,7 +1000,11 @@ def workflow(
                     f"[green]Workflow completed[/green] step={result.final_step} status={result.final_status_code} next={latest_blackboard.current_step}"
                 )
             elif result.final_status_code.startswith("INTERRUPTED"):
-                reason = result.final_status_code.split(":", 1)[1] if ":" in result.final_status_code else "interrupted"
+                reason = (
+                    result.final_status_code.split(":", 1)[1]
+                    if ":" in result.final_status_code
+                    else "interrupted"
+                )
                 console.print(
                     f"[yellow]Workflow interrupted[/yellow] step={result.final_step} reason={reason}"
                 )
@@ -886,21 +1012,24 @@ def workflow(
                     console.print(f"[red]{result.detail.rstrip()}[/red]")
                 if reason.startswith("agent_"):
                     console.print(
-                        "[dim]Agent execution failed. Switch to a different CLI in your config, then run 'cafe make' again.[/dim]"
+                        "[dim]Agent execution failed. Update the active step chain in .cafe/phases.yaml, then retry.[/dim]"
                     )
                 elif reason == "publish_error":
                     console.print(
                         "[dim]PR publish failed after the agent completed. Fix the publish error, then run 'cafe make' again.[/dim]"
                     )
                 else:
-                    console.print(
-                        "[dim]Run 'cafe make' again to resume from this step.[/dim]"
-                    )
+                    console.print("[dim]Run 'cafe make' again to resume from this step.[/dim]")
                 return
             else:
                 console.print(
                     f"[yellow]Workflow paused[/yellow] step={result.final_step} status={result.final_status_code} next={latest_blackboard.current_step}"
                 )
+                if result.detail and result.final_status_code in {
+                    "HUMAN_TASK_PENDING",
+                    "HYBRID_HUMAN_TASK_PENDING",
+                }:
+                    console.print(f"[dim]Human task ID: {result.detail}[/dim]")
                 console.print(
                     f"[dim]{_build_workflow_pause_guidance(blackboard=latest_blackboard, final_status_code=result.final_status_code)}[/dim]"
                 )
@@ -910,7 +1039,6 @@ def workflow(
                 )
                 if (
                     interactive
-                    and not dry_run
                     and not single_step
                     and result.final_status_code in {"NO_BATON_TRANSITION", "NO_STATUS_TRANSITION"}
                 ):

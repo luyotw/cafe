@@ -1,6 +1,16 @@
 playbook:
   id: simple
   name: "Simple Workflow"
+  conversation_locale: en-US
+
+behavior:
+  completion: status_code
+
+skills:
+  workflow:
+    shared: [cafe-workflow-common, cafe-github_sync]
+  chat:
+    shared: [cafe-common-chat-handoff, cafe-chat-develop-change, cafe-chat-spec-revision, cafe-chat-plan-revision, cafe-chat-alignment-decision]
 
 roles:
   pm:
@@ -14,47 +24,32 @@ roles:
 
 commands:
   prepare:
-    prompt_for_spec_plan_config: true
-    setup_modes:
-      quick:
-        enabled: true
-        label: "Quick setup (use recommended defaults)"
-      custom:
-        enabled: true
-        label: "Custom configuration"
-    quick_setup:
-      spec:
-        rigor: medium
-        template: auto
-      plan:
-        template: auto
-      sync_github:
-        when_issue_id_present: true
-        when_manual_input: false
-      pr:
-        auto_create_on_github_repo: true
-        post_todo_list_when_auto_create: true
-    non_interactive_defaults:
-      rigor: medium
-      spec_template: auto
-      plan_template: default
-    input_method:
-      prompt_on_github_repo: true
-      non_github_default: manual
-    constraints:
-      rigor: [low, medium, high]
+    fields_ref: skill://cafe-spec/assets/prepare/default_prepare_fields.yaml
 
 steps:
   spec:
     type: skill
-    skill: spec
+    skill: cafe-spec
     role: pm
     assignee_type: agent
     input_artifacts: []
     output_artifact: spec
+    initial_input:
+      providers: [manual_text, github_issue]
+      bind:
+        artifact: spec
+        prompt_context: user_input
+      legacy_presentation: true
+    human_tasks:
+      - trigger: confirm_output
+        task_id: output-review
+        outcomes: {confirm: develop, revise: spec}
+      - trigger: need_clarification
+        task_id: clarification-answers
+        outcomes: {submit: spec}
     allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
     hooks:
-      prepare_input: [GitHubIssueFetcher, UserInputCollector]
+      prepare_input: [InitialInputProviderResolver, UserInputCollector]
       after_execute: [InteractiveQAHandler]
     "on":
       confirm_output: spec
@@ -64,11 +59,15 @@ steps:
 
   develop:
     type: skill
-    skill: develop
+    skill: cafe-develop
     role: developer
     assignee_type: agent
-    input_artifacts: [spec]
+    input_artifacts: [spec, workflow_feedback]
     output_artifact: code
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: develop}
     allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
     hooks:
       prepare_input: [UserInputCollector]
@@ -80,17 +79,29 @@ steps:
 
   pr:
     type: skill
-    skill: pr
+    skill: cafe-pr
     role: developer
     assignee_type: agent
-    input_artifacts: [spec, code]
+    input_artifacts: [spec, code, workflow_feedback]
     output_artifact: pr_result
+    behavior:
+      completion: baton
+      publish_confirmation: true
+      feedback_target: develop
+      context_providers: [git_history, local_review]
+    capability_requests: [cafe.pr.publish]
     allowed_tools: [Read, Edit, Write, Grep, Glob]
     allowed_goto: [develop]
     hooks:
-      prepare_input: [GitHubPRCreator, UserInputCollector]
-      publish_output: [GitHubPRCreator, LocalPRReviewer, PRLinkOpener]
+      prepare_input: [GitHubPRCreator, GitHubPRFeedbackSource, UserInputCollector]
+      publish_output: [GitHubPRCreator, LocalReviewContextProvider, PRLinkOpener]
+    human_tasks:
+      - trigger: confirm_output
+        task_id: local-review
+        outcomes: {approve: _done, request_changes: develop}
+        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
     "on":
+      confirm_output: pr
       await_agent: _done
       need_permission: pr
       manual_handoff: develop

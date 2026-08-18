@@ -1,0 +1,44 @@
+---
+name: cafe-brief_first
+description: 建立初版內容大綱與撰稿需求（編輯流程）
+version: 1.1.0
+workflow:
+  execution_profile:
+    workload: content
+    reasoning: standard
+    risk_domains: [audience-alignment]
+    fallback_strength: equivalent
+  human_tasks:
+    - id: editorial-output-review
+      pattern: confirm_output
+      prompt: Approve the editorial brief or request a revision.
+      input_schema: decision
+      decisions:
+        - id: approve
+          label: Approve brief
+        - id: revise
+          label: Request brief revision
+          requires_feedback: true
+          correction: true
+    - id: editorial-clarification
+      pattern: answer_questions
+      prompt: Answer the editorial clarification questions.
+      input_schema: answers
+      questions:
+        - id: audience
+          prompt: Who is the intended audience?
+---
+
+# Editorial Brief
+
+## Role
+Read your agent file: {agent_file}
+
+## Instructions
+將需求整理成清楚的內容大綱：受眾、角度、需補強的資訊與驗收重點。
+
+## Output
+Write brief to: {output_file}
+
+## Handoff
+- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。

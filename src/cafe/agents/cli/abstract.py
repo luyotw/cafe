@@ -1,8 +1,8 @@
 """Abstract base class defining the common interface for all CLI tools."""
 
 import os
-from pathlib import Path
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 from cafe.core.types import AgentConfig, PermissionDenial, TokenUsage
@@ -128,3 +128,30 @@ class AbstractCLI(ABC):
     def build_environment(self) -> dict[str, str]:
         """Build process environment for this CLI."""
         return dict(os.environ)
+
+    def build_interactive_command(self, initial_prompt: Optional[str] = None) -> List[str]:
+        """Build the command used for a user-owned interactive chat session.
+
+        Interactive chat intentionally omits the non-interactive execution flags
+        added by :meth:`build_command`, while preserving each CLI's resume/model
+        conventions in one strategy-layer contract.
+        """
+        cli = self.config.cli.value
+        command = [cli]
+
+        if cli == "codex" and self.config.model:
+            command.extend(["--model", self.config.model])
+
+        if self.config.session_id:
+            if cli == "codex":
+                command.extend(["resume", self.config.session_id])
+            else:
+                command.extend(["--resume", self.config.session_id])
+
+        if self.config.model and cli in {"claude", "copilot", "gemini"}:
+            command.extend(["--model", self.config.model])
+
+        if initial_prompt and cli in {"codex", "claude"}:
+            command.append(initial_prompt)
+
+        return command

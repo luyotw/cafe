@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 from cafe.agents.manager import AgentManager, AgentNotFoundError
-from cafe.agents.executor import AgentExecutor
+from cafe.agents.executor import AgentExecutionError, AgentExecutor
 from cafe.core.types import AgentConfig, AgentCLI
 from cafe.core.session import SessionManager
 
@@ -190,7 +190,6 @@ class TestAgentExecution:
         with pytest.raises(AgentNotFoundError, match="No current agent selected"):
             manager.execute_current("Test prompt")
 
-
 class TestSessionManagement:
     """Test session management through AgentManager."""
 
@@ -218,6 +217,56 @@ class TestSessionManagement:
 
         assert executor.config.session_id == "existing-session-456"
         session_mgr.load_session.assert_called_once_with("David", AgentCLI.CLAUDE, None)
+
+    def test_execution_config_reuses_only_same_phase_session(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        session_mgr = SessionManager(str(tmp_path / "sessions"))
+        session_mgr.save_session(
+            "David", AgentCLI.CODEX, "plan-session", "issue365", "plan"
+        )
+        session_mgr.save_session(
+            "David", AgentCLI.CODEX, "develop-session", "issue365", "develop"
+        )
+        manager = AgentManager(session_manager=session_mgr, issue_name="issue365")
+        manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CODEX))
+
+        plan_config = manager.get_execution_config("David", phase_name="plan")
+        develop_config = manager.get_execution_config("David", phase_name="develop")
+        review_config = manager.get_execution_config("David", phase_name="review")
+
+        assert plan_config.session_id == "plan-session"
+        assert develop_config.session_id == "develop-session"
+        assert review_config.session_id is None
+
+    def test_execute_persists_session_under_current_phase(self) -> None:
+        from cafe.core.types import AgentResponse, TokenUsage
+
+        session_mgr = MagicMock(spec=SessionManager)
+        session_mgr.load_session.return_value = None
+        manager = AgentManager(session_manager=session_mgr, issue_name="issue365")
+        manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CODEX))
+
+        with patch.object(
+            AgentExecutor,
+            "execute",
+            return_value=AgentResponse(
+                response="done",
+                token_usage=TokenUsage(),
+                cli=AgentCLI.CODEX,
+                session_id="develop-session",
+            ),
+        ):
+            manager.execute("David", "prompt", phase_name="develop")
+
+        session_mgr.save_session.assert_called_once_with(
+            "David",
+            AgentCLI.CODEX,
+            "develop-session",
+            "issue365",
+            "develop",
+        )
 
     def test_session_lazy_creation(self) -> None:
         """Test that session creation is deferred until first execution."""

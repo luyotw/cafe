@@ -218,8 +218,9 @@ playbook:
   id: custom
 steps:
   qa:
-    skill: review
+    skill: cafe-review
     role: reviewer
+    allowed_tools: ["Bash(cafe verification check:*)"]
     valid_intents: [confirmed]
     on:
       await_agent: _done

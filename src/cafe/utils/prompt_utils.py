@@ -133,11 +133,13 @@ def get_template_allowed_directories(template_mode: str, template_path: Optional
     if template_mode == "auto":
         # Auto mode: add both system and custom templates directories
         # System templates directory (bundled under owning skill's assets/)
+        from cafe.skills.loader import canonical_skill_name
+
         package_data_dir = (
             Path(__file__).parent.parent
             / "data"
             / "skills"
-            / template_type
+            / canonical_skill_name(template_type)
             / "assets"
             / "templates"
         )

@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# Keep globally installed helper skills current after a source commit.
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+
+if ! "$REPO_ROOT/scripts/auto-sync-global-skills.sh"; then
+    echo "⚠️  Commit succeeded, but global helper skill auto-sync failed." >&2
+fi
+
+exit 0

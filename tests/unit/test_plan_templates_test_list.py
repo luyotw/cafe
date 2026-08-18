@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-TEMPLATES_DIR = Path("src/cafe/data/skills/plan/assets/templates")
+TEMPLATES_DIR = Path("src/cafe/data/skills/cafe-plan/assets/templates")
 BUILTIN_TEMPLATES = ("default.md", "simple.md", "bug.md")
 
 

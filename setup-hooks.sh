@@ -11,5 +11,6 @@ git config --local core.hooksPath .githooks
 echo "✅ Git hooks configured successfully!"
 echo "   Hooks directory: .githooks"
 echo ""
-echo "Pre-commit hook will now run the fast test suite."
-echo "Pre-push hook will run the full test suite, including slow tests."
+echo "Pre-commit hook will run the selected fast test suite."
+echo "Pre-push hook will run the full no-coverage test suite."
+echo "Post-commit and post-merge hooks will verify global helper skills."

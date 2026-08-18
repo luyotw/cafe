@@ -15,6 +15,10 @@ def test_custom_step_command_routes_to_workflow_runtime(tmp_path: Path, monkeypa
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".cafe").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".cafe" / "config.yaml").write_text("playbook: custom\n", encoding="utf-8")
+    (tmp_path / ".cafe" / "phases.yaml").write_text(
+        "qa:\n  name: Richard\n  clis:\n    - cli: codex\n      model: test-model\n",
+        encoding="utf-8",
+    )
 
     playbook_dir = tmp_path / ".cafe" / "playbooks"
     playbook_dir.mkdir(parents=True, exist_ok=True)
@@ -24,8 +28,9 @@ playbook:
   id: custom
 steps:
   qa:
-    skill: review
+    skill: cafe-review
     role: reviewer
+    allowed_tools: ["Bash(cafe verification check:*)"]
     valid_intents: [confirmed]
     on:
       await_agent: _done

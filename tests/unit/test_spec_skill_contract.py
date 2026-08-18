@@ -4,10 +4,10 @@ from pathlib import Path
 def test_spec_skill_requires_user_handoff_before_advance() -> None:
     project_root = Path(__file__).resolve().parents[2]
 
-    spec = (project_root / "src" / "cafe" / "data" / "skills" / "spec" / "SKILL.md").read_text(
+    spec = (project_root / "src" / "cafe" / "data" / "skills" / "cafe-spec" / "SKILL.md").read_text(
         encoding="utf-8"
     )
-    plan = (project_root / "src" / "cafe" / "data" / "skills" / "plan" / "SKILL.md").read_text(
+    plan = (project_root / "src" / "cafe" / "data" / "skills" / "cafe-plan" / "SKILL.md").read_text(
         encoding="utf-8"
     )
 
@@ -20,8 +20,8 @@ def test_spec_skill_requires_user_handoff_before_advance() -> None:
 def test_spec_and_plan_skills_require_script_sync_before_confirm() -> None:
     project_root = Path(__file__).resolve().parents[2]
 
-    spec = project_root / "src" / "cafe" / "data" / "skills" / "spec"
-    plan = project_root / "src" / "cafe" / "data" / "skills" / "plan"
+    spec = project_root / "src" / "cafe" / "data" / "skills" / "cafe-spec"
+    plan = project_root / "src" / "cafe" / "data" / "skills" / "cafe-plan"
 
     spec_skill = (spec / "SKILL.md").read_text(encoding="utf-8")
     plan_skill = (plan / "SKILL.md").read_text(encoding="utf-8")

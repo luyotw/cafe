@@ -1,6 +1,16 @@
 playbook:
   id: editorial
   name: "Editorial Workflow（撰稿 → 審閱 → 發佈）"
+  conversation_locale: en-US
+
+behavior:
+  completion: status_code
+
+skills:
+  workflow:
+    shared: [cafe-workflow-common, cafe-github_sync]
+  chat:
+    shared: [cafe-common-chat-handoff, cafe-chat-develop-change, cafe-chat-spec-revision, cafe-chat-plan-revision, cafe-chat-alignment-decision]
 
 roles:
   editor:
@@ -12,22 +22,35 @@ roles:
     default_agent: "David"
     default_cli: "claude"
 
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+
 steps:
   brief:
     type: skill
     skill:
-      "1": brief_first
-      default: brief_revise
+      "1": cafe-brief_first
+      default: cafe-brief_revise
     role: editor
     handoff_label: "Revise editorial brief"
     chat_role: editor
     assignee_type: agent
     output_artifact: brief
+    human_tasks:
+      - trigger: confirm_output
+        task_id: editorial-output-review
+        outcomes: {approve: draft, revise: brief}
+      - trigger: need_clarification
+        task_id: editorial-clarification
+        outcomes: {submit: brief}
     valid_intents:
       - confirmed
       - need_clarification
       - ready_for_review
     allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
+    hooks:
+      prepare_input: [UserInputCollector]
     "on":
       await_agent: draft
       need_clarification: brief
@@ -35,13 +58,17 @@ steps:
 
   draft:
     type: skill
-    skill: draft
+    skill: cafe-draft
     role: writer
     handoff_label: "Continue manuscript draft"
     chat_role: writer
     assignee_type: agent
     input_artifacts: [brief]
     output_artifact: manuscript
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: draft}
     valid_intents:
       - confirmed
       - need_clarification
@@ -52,7 +79,7 @@ steps:
 
   review:
     type: skill
-    skill: editorial_review
+    skill: cafe-editorial_review
     role: editor
     handoff_label: "Run editorial review"
     chat_role: editor
@@ -70,7 +97,7 @@ steps:
 
   publish:
     type: skill
-    skill: publish
+    skill: cafe-publish
     role: writer
     handoff_label: "Prepare publication output"
     chat_role: writer

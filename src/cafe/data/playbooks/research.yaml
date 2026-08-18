@@ -1,6 +1,16 @@
 playbook:
   id: research
   name: "Research Workflow（問題 → 搜尋整理 → 綜合 → 報告）"
+  conversation_locale: en-US
+
+behavior:
+  completion: status_code
+
+skills:
+  workflow:
+    shared: [cafe-workflow-common, cafe-github_sync]
+  chat:
+    shared: [cafe-common-chat-handoff, cafe-chat-develop-change, cafe-chat-spec-revision, cafe-chat-plan-revision, cafe-chat-alignment-decision]
 
 roles:
   researcher:
@@ -8,15 +18,23 @@ roles:
     default_agent: "Morgan"
     default_cli: "claude"
 
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+
 steps:
   question:
     type: skill
-    skill: research_question
+    skill: cafe-research_question
     role: researcher
     handoff_label: "Refine research question"
     chat_role: researcher
     assignee_type: agent
     output_artifact: research_question_brief
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: question}
     valid_intents:
       - confirmed
       - need_clarification
@@ -27,13 +45,17 @@ steps:
 
   collect:
     type: skill
-    skill: research_collect
+    skill: cafe-research_collect
     role: researcher
     handoff_label: "Continue evidence collection"
     chat_role: researcher
     assignee_type: agent
     input_artifacts: [research_question_brief]
     output_artifact: research_notes
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: collect}
     valid_intents:
       - confirmed
       - need_clarification
@@ -45,13 +67,17 @@ steps:
 
   synthesize:
     type: skill
-    skill: research_synthesize
+    skill: cafe-research_synthesize
     role: researcher
     handoff_label: "Revise research synthesis"
     chat_role: researcher
     assignee_type: agent
     input_artifacts: [research_question_brief, research_notes]
     output_artifact: research_synthesis
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: synthesize}
     valid_intents:
       - confirmed
       - need_clarification
@@ -63,13 +89,17 @@ steps:
 
   report:
     type: skill
-    skill: research_report
+    skill: cafe-research_report
     role: researcher
     handoff_label: "Update research report"
     chat_role: researcher
     assignee_type: agent
     input_artifacts: [research_question_brief, research_notes, research_synthesis]
     output_artifact: research_report_doc
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: report}
     valid_intents:
       - confirmed
       - need_clarification

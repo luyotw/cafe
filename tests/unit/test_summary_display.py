@@ -8,6 +8,33 @@ from cafe.services.timeline_builder import TimelineEntry
 from cafe.services.summary_display import SummaryDisplay
 
 
+def test_context_packet_status_uses_the_shared_sanitized_diagnostic() -> None:
+    """UT-006: status and workflow context expose the same fallback detail."""
+    rendered = SummaryDisplay().format_context_packets(
+        [
+            {
+                "consumer": "develop",
+                "iteration": 1,
+                "placeholders": ["plan_file"],
+                "source": {"artifact_name": "plan", "artifact_version": 1},
+                "requested_mode": "packet",
+                "effective_mode": "full_fallback",
+                "path": "plan.md",
+                "fallback_reason": "packet_invalid",
+                "detail": "context packet validation failed",
+            }
+        ]
+    )
+
+    assert "full_fallback:packet_invalid (context packet validation failed)" in rendered
+
+
+def test_context_packet_status_omits_untrusted_diagnostic_detail() -> None:
+    assert SummaryDisplay().format_context_packets(
+        [{"detail": "raw secret from an agent"}]
+    ) == ""
+
+
 class TestFormatPhaseEntry:
     """Test cases for format_phase_entry() method."""
 
@@ -361,8 +388,9 @@ class TestFormatTokenCount:
 class TestRenderModelSummaryTable:
     """Test render_model_summary_table() method"""
 
-    def test_render_model_summary_table_with_single_model(self):
+    def test_render_model_summary_table_with_single_model(self, capsys, monkeypatch):
         """Test rendering aggregated summary with single model"""
+        monkeypatch.setattr("cafe.services.summary_display.RICH_AVAILABLE", False)
         display = SummaryDisplay()
         entries = [
             TimelineEntry(
@@ -378,11 +406,17 @@ class TestRenderModelSummaryTable:
                 model="gemini-2.5-flash",
                 input_tokens=109260,
                 output_tokens=1607,
+                cache_write_tokens=321,
                 cache_read_tokens=48179,
+                reasoning_output_tokens=654,
             )
         ]
-        # Should render without crashing
         display.render_model_summary_table(entries)
+        output = capsys.readouterr().out
+        assert "Cache Write" in output
+        assert "Reasoning" in output
+        assert "321" in output
+        assert "654" in output
 
     def test_render_model_summary_table_with_multiple_models(self):
         """Test aggregating statistics across multiple models"""

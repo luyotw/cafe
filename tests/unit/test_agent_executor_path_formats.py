@@ -1,8 +1,8 @@
 """測試 AgentExecutor 路徑格式處理.
 
 確保：
-1. Git ignore 格式路徑（/.cafe/...）正確傳遞給 agent CLI
-2. 絕對路徑正確轉換為 git ignore 格式
+1. 專案根目錄格式路徑（/.cafe/...）正確轉換為 Claude 絕對權限格式
+2. 絕對路徑正確轉換為 Claude 絕對權限格式
 3. 不同 CLI (Claude, Gemini, Copilot) 正確處理路徑
 """
 
@@ -77,13 +77,13 @@ class TestTranslateToolNamesWithPaths:
 class TestClaudePathProcessing:
     """測試 Claude 執行器路徑處理邏輯"""
 
-    @patch("os.getcwd")
-    def test_relative_paths_converted_to_git_ignore_format(self, mock_getcwd):
-        """Claude 應該保持相對路徑格式不變，並移除 ./ 前綴"""
+    @patch("cafe.agents.cli.claude.get_git_toplevel")
+    def test_relative_paths_converted_to_absolute_permission_format(self, mock_get_toplevel):
+        """Claude 應將相對路徑轉為不受 cwd 影響的絕對權限格式"""
         from cafe.agents.cli.claude import ClaudeCLI
 
         # Setup
-        mock_getcwd.return_value = "/Users/me/repo"
+        mock_get_toplevel.return_value = Path("/Users/me/repo")
 
         config = AgentConfig(name="Test", cli=AgentCLI.CLAUDE, session_id="test-123")
         cli = ClaudeCLI(config)
@@ -98,23 +98,16 @@ class TestClaudePathProcessing:
         # Execute translate_allowed_tools
         result = cli.translate_allowed_tools(allowed_tools)
 
-        # 應該保持相對路徑不變
-        assert "Write(.cafe/issues/test/spec/spec_001.md)" in result
-        assert "Edit(.cafe/issues/test/spec/spec_001.md)" in result
-        # ./ 前綴應該被移除
-        assert "Write(src/main.py)" in result
+        assert "Write(//Users/me/repo/.cafe/issues/test/spec/spec_001.md)" in result
+        assert "Edit(//Users/me/repo/.cafe/issues/test/spec/spec_001.md)" in result
+        assert "Write(//Users/me/repo/src/main.py)" in result
 
-    @patch("cafe.agents.cli.claude.get_repo_root")
-    @patch("cafe.agents.cli.claude.to_git_ignore_path")
-    def test_absolute_paths_converted_to_git_ignore_format(
-        self, mock_to_git_ignore, mock_get_repo
-    ):
-        """絕對路徑應該被轉換為 git ignore 格式"""
+    @patch("cafe.agents.cli.claude.get_git_toplevel")
+    def test_absolute_paths_converted_to_absolute_permission_format(self, mock_get_toplevel):
+        """worktree 內的絕對路徑應轉換為 Claude 的雙斜線格式"""
         from cafe.agents.cli.claude import ClaudeCLI
 
-        # Setup: Mock git utils functions
-        mock_get_repo.return_value = Path("/Users/me/repo")
-        mock_to_git_ignore.side_effect = lambda p, r: f"/.cafe/issues/test/spec/{p.name}"
+        mock_get_toplevel.return_value = Path("/Users/me/repo")
 
         config = AgentConfig(name="Test", cli=AgentCLI.CLAUDE)
         cli = ClaudeCLI(config)
@@ -128,11 +121,8 @@ class TestClaudePathProcessing:
         # Execute translate_allowed_tools
         result = cli.translate_allowed_tools(allowed_tools)
 
-        # 絕對路徑應該被轉換為 git ignore 格式
-        assert "Write(/.cafe/issues/test/spec/spec_001.md)" in result
-        assert "Edit(/.cafe/issues/test/spec/spec_001.md)" in result
-        # 不應該包含絕對路徑
-        assert "/Users/me/repo/.cafe" not in str(result)
+        assert "Write(//Users/me/repo/.cafe/issues/test/spec/spec_001.md)" in result
+        assert "Edit(//Users/me/repo/.cafe/issues/test/spec/spec_001.md)" in result
 
 
 class TestGeminiPathProcessing:

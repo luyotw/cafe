@@ -1,13 +1,16 @@
 """Service layer for cafe summary command."""
 
 import json
-from datetime import datetime
+import re
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
-from cafe.core.blackboard import HandoffContract, HandoffOwner, BlackboardState
+from cafe.core.blackboard import BlackboardState, HandoffContract, HandoffOwner
 from cafe.core.git import GitOperations
 from cafe.core.types import PhaseStatus
+
+_RUNTIME_PHASE_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+_RUNTIME_ITERATION_DIR = re.compile(r"^iteration_(0*[1-9][0-9]{0,5})$")
 
 
 class SummaryService:
@@ -113,11 +116,9 @@ class SummaryService:
                     iterations.append(iteration_info)
             except (json.JSONDecodeError, IOError) as e:
                 # Track errors for reporting to user later
-                self._load_errors.append({
-                    'file': str(context_file),
-                    'error': str(e),
-                    'type': 'iteration'
-                })
+                self._load_errors.append(
+                    {"file": str(context_file), "error": str(e), "type": "iteration"}
+                )
                 continue
 
         return iterations
@@ -130,7 +131,48 @@ class SummaryService:
         """
         return self._load_errors
 
-    def _load_workflow_state(self, issue_name: str) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+    def load_context_packets(self, issue_name: str) -> List[Dict[str, Any]]:
+        """Project only persisted packet relations from consumer iteration records."""
+        issue_dir = self.issues_root / issue_name
+        packets: List[Dict[str, Any]] = []
+        if not issue_dir.exists():
+            return packets
+        for phase_dir in sorted(path for path in issue_dir.iterdir() if path.is_dir()):
+            if not _RUNTIME_PHASE_NAME.fullmatch(phase_dir.name):
+                continue
+            for iteration_dir in sorted(phase_dir.glob("iteration_*")):
+                match = _RUNTIME_ITERATION_DIR.fullmatch(iteration_dir.name)
+                if match is None:
+                    continue
+                path = iteration_dir / "iteration.json"
+                if not path.exists():
+                    continue
+                try:
+                    raw = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if not isinstance(raw, dict):
+                    continue
+                try:
+                    from cafe.core.context_packet import build_context_packet_diagnostics
+
+                    diagnostics = build_context_packet_diagnostics(raw.get("effective_inputs", {}))
+                except ValueError:
+                    # Never leak an agent-authored diagnostic record.
+                    continue
+                for diagnostic in diagnostics:
+                    packets.append(
+                        {
+                            "consumer": phase_dir.name,
+                            "iteration": int(match.group(1)),
+                            **diagnostic,
+                        }
+                    )
+        return packets
+
+    def _load_workflow_state(
+        self, issue_name: str
+    ) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
         """Load the current workflow pointer and baton contract if available."""
         issue_dir = self.issues_root / issue_name
         blackboard_file = issue_dir / "blackboard.json"
@@ -150,7 +192,12 @@ class SummaryService:
 
         try:
             payload = json.loads(next_step_file.read_text(encoding="utf-8"))
-            contract = HandoffContract.from_dict(payload)
+            if not isinstance(payload, dict):
+                return state.current_step, None
+            contract = HandoffContract.from_dict_with_current_step(
+                payload,
+                current_step=state.current_step,
+            )
         except Exception:
             return state.current_step, None
 
@@ -177,8 +224,7 @@ class SummaryService:
             and baton_to_owner == HandoffOwner.USER.value
         )
         awaiting_agent_in_phase = (
-            baton_to_step == phase_name
-            and baton_to_owner == HandoffOwner.AGENT.value
+            baton_to_step == phase_name and baton_to_owner == HandoffOwner.AGENT.value
         )
         active_in_phase = current_step == phase_name or paused_in_phase or awaiting_agent_in_phase
 

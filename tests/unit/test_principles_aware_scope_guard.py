@@ -8,7 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 def test_spec_skill_reads_strategic_context() -> None:
     spec_skill = (
-        PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "spec" / "SKILL.md"
+        PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "cafe-spec" / "SKILL.md"
     ).read_text(encoding="utf-8")
 
     assert "strategic_context.yaml" in spec_skill, (
@@ -29,7 +29,7 @@ def test_spec_default_template_has_principles_alignment_section() -> None:
         / "cafe"
         / "data"
         / "skills"
-        / "spec"
+        / "cafe-spec"
         / "assets"
         / "templates"
         / "default.md"
@@ -45,7 +45,7 @@ def test_spec_default_template_has_principles_alignment_section() -> None:
 
 def test_plan_skill_reads_strategic_context_for_architecture_sections() -> None:
     plan_skill = (
-        PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "plan" / "SKILL.md"
+        PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "cafe-plan" / "SKILL.md"
     ).read_text(encoding="utf-8")
 
     assert "strategic_context.yaml" in plan_skill
@@ -62,7 +62,7 @@ def test_review_checklist_has_anti_over_engineering_section() -> None:
         / "cafe"
         / "data"
         / "skills"
-        / "review"
+        / "cafe-review"
         / "references"
         / "execution_steps.md"
     ).read_text(encoding="utf-8")

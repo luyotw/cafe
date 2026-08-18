@@ -14,6 +14,8 @@ class StepExecutionResult:
     artifacts: dict[str, str]
     status_code: str | None = None
     auto_continue: bool = False
+    artifact_ready: bool = True
+    agent_invoked: bool = False
     events: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -48,7 +50,7 @@ class StepInterrupted(Exception):
 
 
 class BatonRejected(Exception):
-    """Raised when a baton payload contains an invalid enum value.
+    """Raised when a baton payload fails recoverable contract validation.
 
     Carries enough detail for the runtime to build a feedback prompt so the
     agent can correct the baton on retry.

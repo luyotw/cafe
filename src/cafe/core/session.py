@@ -24,7 +24,11 @@ class SessionManager:
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
     def get_session_file(
-        self, agent_name: str, cli: AgentCLI, issue_name: Optional[str] = None
+        self,
+        agent_name: str,
+        cli: AgentCLI,
+        issue_name: Optional[str] = None,
+        phase_name: Optional[str] = None,
     ) -> Path:
         """Get the session file path for an agent.
 
@@ -44,13 +48,18 @@ class SessionManager:
             # Issue-specific sessions go under .cafe/issues/{issue_name}/sessions/
             issue_sessions_dir = Path(".cafe/issues") / issue_name / "sessions"
             issue_sessions_dir.mkdir(parents=True, exist_ok=True)
-            return issue_sessions_dir / f"{agent_name}_{cli.value}.json"
+            phase_suffix = f"_{phase_name}" if phase_name else ""
+            return issue_sessions_dir / f"{agent_name}_{cli.value}{phase_suffix}.json"
 
         # Global sessions (no issue) go under .cafe/sessions/
         return self.sessions_dir / f"{agent_name}_{cli.value}.json"
 
     def load_session(
-        self, agent_name: str, cli: AgentCLI, issue_name: Optional[str] = None
+        self,
+        agent_name: str,
+        cli: AgentCLI,
+        issue_name: Optional[str] = None,
+        phase_name: Optional[str] = None,
     ) -> Optional[SessionData]:
         """Load existing session data for an agent.
 
@@ -62,7 +71,7 @@ class SessionManager:
         Returns:
             SessionData if exists, None otherwise
         """
-        session_file = self.get_session_file(agent_name, cli, issue_name)
+        session_file = self.get_session_file(agent_name, cli, issue_name, phase_name)
         if not session_file.exists():
             return None
 
@@ -80,6 +89,7 @@ class SessionManager:
         cli: AgentCLI,
         session_id: str,
         issue_name: Optional[str] = None,
+        phase_name: Optional[str] = None,
     ) -> None:
         """Save session data for an agent.
 
@@ -89,10 +99,10 @@ class SessionManager:
             session_id: Session ID to save
             issue_name: Name of the issue (for issue-specific sessions)
         """
-        session_file = self.get_session_file(agent_name, cli, issue_name)
+        session_file = self.get_session_file(agent_name, cli, issue_name, phase_name)
 
         # Load existing session to preserve created_at, or create new
-        existing = self.load_session(agent_name, cli, issue_name)
+        existing = self.load_session(agent_name, cli, issue_name, phase_name)
         now = datetime.now()
 
         session_data = SessionData(
@@ -101,13 +111,18 @@ class SessionManager:
             session_id=session_id,
             created_at=existing.created_at if existing else now,
             last_used_at=now,
+            phase_name=phase_name,
         )
 
         with open(session_file, "w") as f:
             json.dump(session_data.model_dump(mode="json"), f, indent=2, default=str)
 
     def delete_session(
-        self, agent_name: str, cli: AgentCLI, issue_name: Optional[str] = None
+        self,
+        agent_name: str,
+        cli: AgentCLI,
+        issue_name: Optional[str] = None,
+        phase_name: Optional[str] = None,
     ) -> None:
         """Delete session for an agent.
 
@@ -116,7 +131,7 @@ class SessionManager:
             cli: CLI type
             issue_name: Name of the issue (for issue-specific sessions)
         """
-        session_file = self.get_session_file(agent_name, cli, issue_name)
+        session_file = self.get_session_file(agent_name, cli, issue_name, phase_name)
         if session_file.exists():
             session_file.unlink()
 

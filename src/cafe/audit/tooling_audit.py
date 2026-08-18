@@ -11,7 +11,7 @@ from typing import Dict, List, Sequence, Tuple, Union
 import cafe
 from cafe.core.blackboard import HandoffIntent
 from cafe.core.hooks import BUILTIN_HOOKS
-from cafe.core.playbook import load_playbook_file
+from cafe.core.playbook import iter_declared_playbook_skills, load_playbook_file
 from cafe.core.status_codes import PLAYBOOK_INTENT_KEYS
 from cafe.skills.loader import SkillLoader, read_skill_frontmatter
 
@@ -132,6 +132,7 @@ def run_builtin_tooling_audit() -> List[AuditLine]:
     skill_loader.discover(strict=True)
 
     playbook_skill_refs: Dict[str, List[Tuple[str, str, str, str]]] = {}
+    support_skill_refs: set[str] = set()
     skill_needs_output: Dict[str, bool] = {}
 
     if not playbooks_dir.is_dir():
@@ -154,6 +155,9 @@ def run_builtin_tooling_audit() -> List[AuditLine]:
         lines.append(AuditLine(True, f"Playbook {pb_id!r} loads (strict) with no warnings"))
         model = loaded.model
         roles = model.roles
+        support_skill_refs.update(
+            skill_name for _, skill_name in iter_declared_playbook_skills(model)
+        )
 
         for step_name, step in model.steps.items():
             role = step.role
@@ -252,7 +256,7 @@ def run_builtin_tooling_audit() -> List[AuditLine]:
         if fm_ok:
             lines.append(AuditLine(True, f"Skill {sdir.name}: SKILL.md frontmatter is valid"))
 
-    referenced = set(playbook_skill_refs.keys())
+    referenced = set(playbook_skill_refs.keys()) | support_skill_refs
     all_skill_names = {p.name for p in skill_dirs}
 
     orphan = sorted(all_skill_names - referenced)
@@ -276,23 +280,24 @@ def run_builtin_tooling_audit() -> List[AuditLine]:
     for skill_name in sorted(referenced):
         sdir = skills_root / skill_name
         bundle = _skill_markdown_bundle(sdir)
-        if "{agent_file}" not in bundle:
-            lines.append(
-                AuditLine(
-                    False,
-                    f"Skill {skill_name}: markdown bundle must mention placeholder {{agent_file}} "
-                    "(playbook-bound)",
+        if skill_name in playbook_skill_refs:
+            if "{agent_file}" not in bundle:
+                lines.append(
+                    AuditLine(
+                        False,
+                        f"Skill {skill_name}: markdown bundle must mention placeholder {{agent_file}} "
+                        "(playbook-bound)",
+                    )
                 )
-            )
-        else:
-            lines.append(
-                AuditLine(
-                    True,
-                    f"Skill {skill_name}: bundle documents {{agent_file}}",
+            else:
+                lines.append(
+                    AuditLine(
+                        True,
+                        f"Skill {skill_name}: bundle documents {{agent_file}}",
+                    )
                 )
-            )
 
-        if skill_needs_output.get(skill_name):
+        if skill_name in playbook_skill_refs and skill_needs_output.get(skill_name):
             if "{output_file}" not in bundle:
                 lines.append(
                     AuditLine(

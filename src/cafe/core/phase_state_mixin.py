@@ -15,6 +15,44 @@ if TYPE_CHECKING:
     from cafe.core.git import GitOperations
 
 
+def next_runnable_iteration_number(phase_dir: Path) -> int:
+    """Return the iteration number the phase executor will run next."""
+    if not phase_dir.exists():
+        return 1
+
+    iter_dirs = sorted(d for d in phase_dir.glob("iteration_*") if d.is_dir())
+    existing_iterations = [
+        d
+        for d in iter_dirs
+        if (d / "iteration.json").exists() or (d / "context.json").exists()
+    ]
+    if not existing_iterations:
+        return 1
+
+    last_iter_dir = existing_iterations[-1]
+    try:
+        last_iteration = int(last_iter_dir.name.removeprefix("iteration_"))
+    except ValueError:
+        last_iteration = len(existing_iterations)
+    if last_iteration >= 999:
+        raise ValueError("Cannot exceed 999")
+
+    last_context_file = (
+        last_iter_dir / "iteration.json"
+        if (last_iter_dir / "iteration.json").exists()
+        else last_iter_dir / "context.json"
+    )
+    try:
+        with open(last_context_file, "r", encoding="utf-8") as f:
+            last_iteration_data = json.load(f)
+        if not last_iteration_data.get("end_time"):
+            return last_iteration
+    except (json.JSONDecodeError, KeyError, FileNotFoundError):
+        return last_iteration
+
+    return last_iteration + 1
+
+
 class PhaseStateMixin:
     """Mixin with status-analysis and issue-state helpers for Phase."""
 
@@ -201,38 +239,7 @@ class PhaseStateMixin:
         phase_dir: Path,
     ) -> int:
         """Get next iteration number."""
-        if not phase_dir.exists():
-            return 1
-
-        iter_dirs = sorted(d for d in phase_dir.glob("iteration_*") if d.is_dir())
-        existing_iterations = [
-            d for d in iter_dirs
-            if (d / "iteration.json").exists() or (d / "context.json").exists()
-        ]
-        if not existing_iterations:
-            return 1
-
-        count = len(existing_iterations)
-
-        if count >= 999:
-            raise ValueError("Cannot exceed 999")
-
-        last_iter_dir = existing_iterations[-1]
-        last_context_file = (
-            last_iter_dir / "iteration.json"
-            if (last_iter_dir / "iteration.json").exists()
-            else last_iter_dir / "context.json"
-        )
-        try:
-            with open(last_context_file, "r", encoding="utf-8") as f:
-                last_iteration_data = json.load(f)
-
-            if not last_iteration_data.get("end_time"):
-                return count
-        except (json.JSONDecodeError, KeyError, FileNotFoundError):
-            return count
-
-        return count + 1
+        return next_runnable_iteration_number(phase_dir)
 
     def _copy_previous_version(
         self,

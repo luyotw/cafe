@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 
-SCRIPT_PATH = Path("src/cafe/data/skills/pr/scripts/sync_pr.sh")
+SCRIPT_PATH = Path("src/cafe/data/skills/cafe-pr/scripts/sync_pr.sh")
 
 
 def _write_executable(path: Path, content: str) -> None:

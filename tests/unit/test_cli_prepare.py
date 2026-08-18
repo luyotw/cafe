@@ -1,6 +1,6 @@
 """Tests for prepare CLI command."""
 
-from pathlib import Path
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,6 +8,7 @@ import yaml
 from typer.testing import CliRunner
 
 from cafe.ui.cli import app
+from cafe.ui.commands.lifecycle import _ensure_worktree_cafe_excluded
 
 runner = CliRunner()
 
@@ -80,7 +81,7 @@ class TestPrepareCommand:
             config_data = yaml.safe_load(f)
             assert config_data["base_branch"] == "main"
             assert config_data["feature_branch"] == "test-issue"
-            assert config_data["auto"]["max_review_iterations"] == 5
+            assert "auto" not in config_data
 
         # Verify git operations called
         mock_git_ops.branch_exists.assert_called_once_with("test-issue")
@@ -99,13 +100,10 @@ class TestPrepareCommand:
         """測試互動式輸入 issue name"""
         # Mock user inputs
         mock_prompt_text.return_value = "my-feature"
-        mock_cli_confirm.return_value = False  # worktree (n)
-        mock_phase_confirm.return_value = True  # pr auto_create (y)
-        mock_cli_list.return_value = "Custom configuration"  # setup mode
-        mock_phase_list.side_effect = [
-            "1. Manual input",  # input method (manual)
-            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
-        ]
+        mock_cli_confirm.side_effect = [False, True, True]  # worktree, pr auto_create, post_todo_list
+        mock_phase_confirm.return_value = True
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
+        mock_phase_list.return_value = "1. Manual input"
         mock_template_list.return_value = "default (system default)"  # template
 
         result = runner.invoke(app, ["prepare"])
@@ -197,17 +195,147 @@ class TestPrepareCommand:
         # has_uncommitted_changes should not be called
         mock_git_ops.has_uncommitted_changes.assert_not_called()
 
-    def test_prepare_not_git_repo(self, temp_repo_dir):
-        """測試在非 git repo 時失敗"""
-        # Mock GitOperations to raise exception
-        with patch('cafe.ui.cli.GitOperations') as MockGitOperations:
-            MockGitOperations.side_effect = Exception("Not a git repository")
+    def test_prepare_non_interactive_requires_explicit_git_initialization(self, temp_repo_dir):
+        """非互動模式不得無聲建立 Git，需提供明確旗標。"""
+        with patch("cafe.ui.cli.GitOperations") as mock_git_operations:
+            mock_git_operations.is_repository.return_value = False
+
+            result = runner.invoke(
+                app,
+                [
+                    "prepare",
+                    "test-issue",
+                    "--no-interactive",
+                    "--input-method=manual",
+                    "--rigor=medium",
+                    "--spec-template=auto",
+                    "--plan-template=default",
+                ],
+            )
+
+            assert result.exit_code == 1
+            assert "local version history" in result.stdout
+            assert "--init-git" in result.stdout
+            mock_git_operations.initialize_repository.assert_not_called()
+
+    def test_prepare_interactive_can_initialize_git_after_plain_language_confirmation(
+        self, temp_repo_dir
+    ):
+        """互動模式說明用途並取得同意後建立本機 Git。"""
+        initialized = MagicMock()
+        initialized.has_uncommitted_changes.return_value = False
+        initialized.has_tracked_or_staged_changes.return_value = False
+        initialized.get_current_branch.return_value = "main"
+        initialized.branch_exists.return_value = False
+        initialized.worktree_exists.return_value = False
+
+        with (
+            patch("cafe.ui.cli.GitOperations") as mock_git_operations,
+            patch("cafe.ui.cli.prompt_confirm", return_value=True),
+        ):
+            mock_git_operations.is_repository.return_value = False
+            mock_git_operations.initialize_repository.return_value = initialized
 
             result = runner.invoke(app, ["prepare", "test-issue"])
 
-            assert result.exit_code == 1
-            assert "Not a git repository" in result.stdout
-            assert "git init" in result.stdout
+        assert result.exit_code == 0
+        assert "does not create or upload anything to GitHub" in result.stdout
+        assert "Local version history is ready" in result.stdout
+        mock_git_operations.initialize_repository.assert_called_once_with(initial_branch="main")
+        initialized.has_uncommitted_changes.assert_not_called()
+        initialized.create_branch.assert_called_once_with("test-issue")
+
+    def test_prepare_interactive_decline_does_not_initialize_git(self, temp_repo_dir):
+        """互動模式拒絕後停止，且不得建立 Git。"""
+        with (
+            patch("cafe.ui.cli.GitOperations") as mock_git_operations,
+            patch("cafe.ui.cli.prompt_confirm", return_value=False),
+        ):
+            mock_git_operations.is_repository.return_value = False
+
+            result = runner.invoke(app, ["prepare", "test-issue"])
+
+        assert result.exit_code == 1
+        assert "Git was not initialized" in result.stdout
+        mock_git_operations.initialize_repository.assert_not_called()
+
+    def test_prepare_non_interactive_can_initialize_git_with_explicit_flag(
+        self, temp_repo_dir
+    ):
+        """非互動模式收到明確旗標後可建立 Git 並繼續。"""
+        initialized = MagicMock()
+        initialized.has_uncommitted_changes.return_value = False
+        initialized.has_tracked_or_staged_changes.return_value = False
+        initialized.get_current_branch.return_value = "main"
+        initialized.branch_exists.return_value = False
+        initialized.worktree_exists.return_value = False
+
+        with patch("cafe.ui.cli.GitOperations") as mock_git_operations:
+            mock_git_operations.is_repository.return_value = False
+            mock_git_operations.initialize_repository.return_value = initialized
+
+            result = runner.invoke(
+                app,
+                [
+                    "prepare",
+                    "test-issue",
+                    "--no-interactive",
+                    "--init-git",
+                    "--input-method=manual",
+                    "--rigor=medium",
+                    "--spec-template=auto",
+                    "--plan-template=default",
+                ],
+            )
+
+        assert result.exit_code == 0
+        mock_git_operations.initialize_repository.assert_called_once_with(initial_branch="main")
+        initialized.has_uncommitted_changes.assert_not_called()
+        initialized.create_branch.assert_called_once_with("test-issue")
+
+    def test_prepare_first_initialized_task_rejects_worktree(self, temp_repo_dir):
+        """新 repo 的第一個任務留在目前資料夾，避免遺漏初始未提交檔案。"""
+        initialized = MagicMock()
+        initialized.has_uncommitted_changes.return_value = False
+        initialized.has_tracked_or_staged_changes.return_value = False
+        initialized.get_current_branch.return_value = "main"
+
+        with patch("cafe.ui.cli.GitOperations") as mock_git_operations:
+            mock_git_operations.is_repository.return_value = False
+            mock_git_operations.initialize_repository.return_value = initialized
+
+            result = runner.invoke(
+                app,
+                ["prepare", "test-issue", "--init-git", "--worktree", "worktrees/test-issue"],
+            )
+
+        assert result.exit_code == 1
+        assert "initial project files" in result.stdout
+        initialized.create_worktree.assert_not_called()
+
+    def test_prepare_pending_bootstrap_still_checks_tracked_changes(
+        self, temp_repo_dir
+    ):
+        """初始 untracked 檔可保留，但 tracked 變更仍須確認。"""
+        git = MagicMock()
+        git.has_commits.return_value = True
+        git.requires_bootstrap_checkout.return_value = True
+        git.has_tracked_or_staged_changes.return_value = True
+
+        with (
+            patch("cafe.ui.cli.GitOperations") as mock_git_operations,
+            patch("cafe.ui.cli.prompt_confirm", return_value=False),
+        ):
+            mock_git_operations.is_repository.return_value = True
+            mock_git_operations.return_value = git
+
+            result = runner.invoke(app, ["prepare", "second-task"])
+
+        assert result.exit_code == 0
+        assert "Warning: You have uncommitted changes" in result.stdout
+        assert "Cancelled" in result.stdout
+        git.has_tracked_or_staged_changes.assert_called_once_with()
+        git.create_branch.assert_not_called()
 
     def test_prepare_creates_proper_directory_structure(self, temp_repo_dir, mock_git_ops):
         """測試創建正確目錄結構"""
@@ -241,9 +369,8 @@ class TestPrepareCommand:
             # Parse YAML
             config_data = yaml.safe_load(content)
             assert isinstance(config_data, dict)
-            assert len(config_data) == 3  # base_branch, feature_branch, auto
-            assert "auto" in config_data
-            assert config_data["auto"]["max_review_iterations"] == 5
+            assert len(config_data) == 2  # base_branch, feature_branch
+            assert "auto" not in config_data
 
     def test_prepare_idempotent(self, temp_repo_dir, mock_git_ops):
         """測試重複執行 prepare 是否安全（冪等性）"""
@@ -334,18 +461,6 @@ class TestPrepareCommandWorktree:
             config_data = yaml.safe_load(f)
             assert config_data["worktree_path"] == worktree_path
 
-    def test_prepare_with_worktree_default_path_suggestion(self, temp_repo_dir, mock_git_ops):
-        """測試 --worktree 使用預設路徑格式 worktrees/{issue-name}"""
-        # 非互動模式下, --worktree 必須帶路徑參數
-        # 這個測試驗證使用預設路徑格式情況
-        default_worktree_path = "worktrees/my-feature"
-        result = runner.invoke(app, ["prepare", "my-feature", "--worktree", default_worktree_path])
-
-        assert result.exit_code == 0
-        # 應使用指定路徑
-        call_args = mock_git_ops.create_worktree.call_args
-        assert call_args[0][0] == default_worktree_path  # 第一個參數是路徑
-
     def test_prepare_without_worktree_uses_branch(self, temp_repo_dir, mock_git_ops):
         """測試不使用 --worktree 時應建立分支"""
         result = runner.invoke(app, ["prepare", "normal-issue"])
@@ -360,14 +475,6 @@ class TestPrepareCommandWorktree:
         with open(config_file) as f:
             config_data = yaml.safe_load(f)
             assert "worktree_path" not in config_data
-
-    def test_prepare_success_message_includes_worktree_path(self, temp_repo_dir, mock_git_ops):
-        """測試成功訊息包含 worktree 路徑資訊"""
-        worktree_path = "worktrees/feature-x"
-        result = runner.invoke(app, ["prepare", "feature-x", "--worktree", worktree_path])
-
-        assert result.exit_code == 0
-        assert "worktree" in result.stdout.lower() or worktree_path in result.stdout
 
     def test_prepare_with_worktree_calls_create_worktree_with_correct_params(self, temp_repo_dir, mock_git_ops):
         """測試 create_worktree 使用正確參數"""
@@ -395,13 +502,10 @@ class TestPrepareCommandWorktree:
         """測試互動模式詢問是否使用 worktree, 使用者選擇 Yes"""
         # Mock user inputs: issue name, worktree path
         mock_prompt_text.side_effect = ["my-feature", "worktrees/my-feature"]
-        mock_cli_confirm.return_value = True  # worktree (y)
-        mock_phase_confirm.return_value = True  # pr auto_create (y)
-        mock_cli_list.return_value = "Custom configuration"  # setup mode
-        mock_phase_list.side_effect = [
-            "1. Manual input",  # input method (manual)
-            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
-        ]
+        mock_cli_confirm.side_effect = [True, True, True]  # worktree, pr auto_create, post_todo_list
+        mock_phase_confirm.return_value = True
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
+        mock_phase_list.return_value = "1. Manual input"
         mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
@@ -431,13 +535,10 @@ class TestPrepareCommandWorktree:
         """測試互動模式詢問是否使用 worktree, 使用者選擇 No"""
         # Mock user inputs
         mock_prompt_text.return_value = "normal-feature"
-        mock_cli_confirm.return_value = False  # worktree (n)
-        mock_phase_confirm.return_value = True  # pr auto_create (y)
-        mock_cli_list.return_value = "Custom configuration"  # setup mode
-        mock_phase_list.side_effect = [
-            "1. Manual input",  # input method (manual)
-            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
-        ]
+        mock_cli_confirm.side_effect = [False, True, True]  # worktree, pr auto_create, post_todo_list
+        mock_phase_confirm.return_value = True
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
+        mock_phase_list.return_value = "1. Manual input"
         mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
@@ -463,13 +564,10 @@ class TestPrepareCommandWorktree:
         """測試互動模式建議預設路徑 .cafe/worktrees/{issue-name}"""
         # Mock user inputs: issue name, default path (empty string)
         mock_prompt_text.side_effect = ["test-issue", ".cafe/worktrees/test-issue"]
-        mock_cli_confirm.return_value = True  # worktree (y)
-        mock_phase_confirm.return_value = True  # pr auto_create (y)
-        mock_cli_list.return_value = "Custom configuration"  # setup mode
-        mock_phase_list.side_effect = [
-            "1. Manual input",  # input method (manual)
-            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
-        ]
+        mock_cli_confirm.side_effect = [True, True, True]  # worktree, pr auto_create, post_todo_list
+        mock_phase_confirm.return_value = True
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
+        mock_phase_list.return_value = "1. Manual input"
         mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
@@ -489,6 +587,10 @@ class TestPrepareCommandWorktree:
         repo_cafe_dir.mkdir(parents=True, exist_ok=True)
         repo_config = repo_cafe_dir / "config.yaml"
         repo_config.write_text("test_config: value\n")
+        (repo_cafe_dir / "phases.yaml").write_text(
+            "develop:\n  clis:\n    - {cli: codex, model: repo-owned}\n",
+            encoding="utf-8",
+        )
 
         # 創建 worktree 目錄（模擬 git worktree add 行為）
         worktree_path = temp_repo_dir / "worktrees" / "test-issue"
@@ -511,12 +613,90 @@ class TestPrepareCommandWorktree:
         worktree_config = worktree_cafe_dir / "config.yaml"
         assert worktree_config.exists(), "config.yaml should be copied to worktree"
         assert worktree_config.read_text() == "test_config: value\n"
+        assert not (worktree_cafe_dir / "phases.yaml").exists()
 
         # 驗證 issue 目錄結構被創建
         worktree_issue_dir = worktree_cafe_dir / "issues" / "test-issue"
         assert worktree_issue_dir.exists(), "Issue directory should be created in worktree"
         assert (worktree_issue_dir / "spec").exists(), "spec directory should exist"
         assert (worktree_issue_dir / "sessions").exists(), "sessions directory should exist"
+
+    def test_worktree_cafe_state_is_added_to_local_git_exclude(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+        (repo / ".cafe" / "issues" / "demo").mkdir(parents=True)
+        (repo / ".cafe" / "issues" / "demo" / "blackboard.json").write_text("{}\n")
+
+        _ensure_worktree_cafe_excluded(repo)
+        _ensure_worktree_cafe_excluded(repo)
+
+        exclude_path = subprocess.run(
+            ["git", "rev-parse", "--git-path", "info/exclude"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        exclude_file = repo / exclude_path
+        assert exclude_file.read_text(encoding="utf-8").splitlines().count(".cafe/") == 1
+        status = subprocess.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert ".cafe/" not in status
+
+    def test_linked_worktree_cafe_state_is_excluded_without_hiding_tracked_changes(
+        self, tmp_path
+    ):
+        repo = tmp_path / "repo"
+        linked = tmp_path / "linked"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"], cwd=repo, check=True
+        )
+        (repo / "tracked.txt").write_text("clean\n", encoding="utf-8")
+        subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "worktree", "add", "-b", "feature", str(linked)],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+        (linked / ".cafe" / "issues" / "demo").mkdir(parents=True)
+        (linked / ".cafe" / "issues" / "demo" / "blackboard.json").write_text(
+            "{}\n", encoding="utf-8"
+        )
+
+        _ensure_worktree_cafe_excluded(linked)
+        status = subprocess.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=linked,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert ".cafe/" not in status
+
+        (linked / "tracked.txt").write_text("dirty\n", encoding="utf-8")
+        dirty_status = subprocess.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=linked,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert " M tracked.txt" in dirty_status
 
     # Tests removed: Agents and templates are no longer copied to worktree .cafe directory
     # They are now managed globally at ~/.cafe/
@@ -531,13 +711,10 @@ class TestPrepareCommandWorktree:
         """測試互動模式選擇自動建立 PR (yes)"""
         # Mock user inputs
         mock_prompt_text.return_value = "test-issue"
-        mock_cli_confirm.return_value = False  # worktree (n)
-        mock_phase_confirm.return_value = True  # pr auto_create (y)
-        mock_cli_list.return_value = "Custom configuration"  # setup mode
-        mock_phase_list.side_effect = [
-            "1. Manual input",  # input method (manual)
-            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
-        ]
+        mock_cli_confirm.side_effect = [False, True, True]  # worktree, pr auto_create, post_todo_list
+        mock_phase_confirm.return_value = True
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
+        mock_phase_list.return_value = "1. Manual input"
         mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
@@ -562,13 +739,10 @@ class TestPrepareCommandWorktree:
         """測試互動模式選擇不自動建立 PR (no)"""
         # Mock user inputs
         mock_prompt_text.return_value = "test-issue"
-        mock_cli_confirm.return_value = False  # worktree (n)
-        mock_phase_confirm.return_value = False  # pr auto_create (n)
-        mock_cli_list.return_value = "Custom configuration"  # setup mode
-        mock_phase_list.side_effect = [
-            "1. Manual input",  # input method (manual)
-            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
-        ]
+        mock_cli_confirm.side_effect = [False, False]  # worktree, pr auto_create
+        mock_phase_confirm.return_value = False
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
+        mock_phase_list.return_value = "1. Manual input"
         mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
@@ -642,31 +816,6 @@ class TestPrepareCommandWorktree:
 class TestPrepareNonInteractiveMode:
     """測試 prepare 命令的 non-interactive 模式"""
 
-    def test_no_interactive_flag_exists(self, temp_repo_dir, mock_git_ops):
-        """Test 1.1: 驗證 --no-interactive flag 存在且型別正確"""
-        # 測試 --no-interactive flag 可以被接受
-        result = runner.invoke(app, ["prepare", "test-issue", "--no-interactive", "--input-method=manual"])
-
-        # 應該不會因為 --no-interactive flag 而報錯（可能因為其他驗證失敗）
-        # 此測試主要確認參數存在
-        assert "--no-interactive" not in result.stdout or "Error" not in result.stdout
-
-    def test_all_new_parameters_exist(self, temp_repo_dir, mock_git_ops):
-        """Test 1.2: 驗證所有新增參數的定義存在"""
-        # 測試所有新參數都能被接受
-        result = runner.invoke(app, [
-            "prepare", "test-issue",
-            "--no-interactive",
-            "--input-method=manual",
-            "--issue-id=123",
-            "--rigor=medium",
-            "--plan-template=default",
-            "--auto-create-pr"
-        ])
-
-        # 參數應該被接受（不會有 "no such option" 錯誤）
-        assert "no such option" not in result.stdout.lower()
-
     def test_non_interactive_missing_required_input_method(self, temp_repo_dir, mock_git_ops):
         """Test 1.3: 驗證 non-interactive 模式下缺少必填參數時顯示錯誤"""
         # 測試場景：--no-interactive 但缺少 --input-method
@@ -714,64 +863,6 @@ class TestPrepareNonInteractiveMode:
 
 class TestPrepareSpecTemplateParameter:
     """測試 prepare 命令的 spec template 參數"""
-
-    def test_spec_template_parameter_exists(self, temp_repo_dir, mock_git_ops):
-        """測試 --spec-template 參數存在"""
-        result = runner.invoke(app, [
-            "prepare", "test-issue",
-            "--no-interactive",
-            "--input-method=manual",
-            "--spec-template=simple"
-        ])
-
-        assert "no such option" not in result.stdout.lower()
-
-    def test_plan_template_parameter_renamed(self, temp_repo_dir, mock_git_ops):
-        """測試 --plan-template 參數存在（從 --template 重新命名）"""
-        result = runner.invoke(app, [
-            "prepare", "test-issue",
-            "--no-interactive",
-            "--input-method=manual",
-            "--plan-template=bug"
-        ])
-
-        assert "no such option" not in result.stdout.lower()
-
-    def test_spec_template_saved_to_issue_yaml(self, temp_repo_dir, mock_git_ops):
-        """測試 spec template 設定儲存到 issue.yaml"""
-        result = runner.invoke(app, [
-            "prepare", "test-issue",
-            "--no-interactive",
-            "--input-method=manual",
-            "--spec-template=detailed"
-        ])
-
-        assert result.exit_code == 0
-
-        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "issue.yaml"
-        with open(config_file) as f:
-            config_data = yaml.safe_load(f)
-            assert "spec" in config_data
-            assert "template" in config_data["spec"]
-            assert config_data["spec"]["template"] == "detailed"
-
-    def test_plan_template_saved_to_plan_section(self, temp_repo_dir, mock_git_ops):
-        """測試 plan template 設定儲存到 plan section"""
-        result = runner.invoke(app, [
-            "prepare", "test-issue",
-            "--no-interactive",
-            "--input-method=manual",
-            "--plan-template=simple"
-        ])
-
-        assert result.exit_code == 0
-
-        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "issue.yaml"
-        with open(config_file) as f:
-            config_data = yaml.safe_load(f)
-            assert "plan" in config_data
-            assert "template" in config_data["plan"]
-            assert config_data["plan"]["template"] == "simple"
 
     def test_both_templates_can_be_specified(self, temp_repo_dir, mock_git_ops):
         """測試可以同時指定 spec 和 plan template"""
@@ -875,11 +966,8 @@ class TestPrepareCommandSetupMode:
         # Input method 選擇 -> Manual input (第一個 prompt)
         # Setup mode 選擇 -> Custom configuration (第二個 prompt)
         # Rigor 選擇 -> High (第三個 prompt)
-        mock_phase_list.side_effect = [
-            "1. Manual input",  # input method (manual)
-            "High - Precise specification mode\n   • Ask all details and edge cases\n   • Ensure requirements are testable, no ambiguity\n   • Suitable for: core features, API design, external products",  # rigor
-        ]
-        mock_cli_list.return_value = "Custom configuration"
+        mock_phase_list.return_value = "1. Manual input"
+        mock_cli_list.side_effect = ["Custom configuration", "High"]
         mock_template_list.return_value = "default (system default)"  # template selector parses this
 
         result = runner.invoke(app, ["prepare"])
@@ -896,37 +984,12 @@ class TestPrepareCommandSetupMode:
             assert config_data["spec"]["template"] == "default"
             assert config_data["plan"]["template"] == "default"
 
-        # 驗證詢問了 input method 和設定模式
-        assert mock_cli_list.call_count == 1  # setup mode
-        # 驗證詢問了 input method、rigor (2 個 prompt_list)
-        assert mock_phase_list.call_count == 2
+        # 驗證詢問了 setup mode 與 rigor
+        assert mock_cli_list.call_count == 2
+        # 驗證詢問了 input method
+        assert mock_phase_list.call_count == 1
         # 驗證詢問了 templates (2 次：spec 和 plan)
         assert mock_template_list.call_count == 2
-
-    @patch("cafe.ui.phase_prompts.prompt_confirm")
-    @patch("cafe.ui.cli.prompt_confirm")
-    @patch("cafe.ui.template_selector.prompt_list")
-    @patch("cafe.ui.phase_prompts.prompt_list")
-    @patch("cafe.ui.cli.prompt_list")
-    @patch("cafe.ui.cli.prompt_text")
-    def test_quick_setup_displays_default_values_summary(self, mock_prompt_text, mock_cli_list, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
-        """測試 Quick setup 顯示預設值摘要"""
-        # Mock user inputs
-        mock_prompt_text.return_value = "summary-test"
-        mock_cli_confirm.return_value = False  # worktree (n)
-        
-        # Input method 選擇 -> Manual input
-        mock_phase_list.return_value = "1. Manual input"
-        
-        # Setup mode 選擇 -> Quick setup
-        mock_cli_list.return_value = "Quick setup (use recommended defaults)"
-
-        result = runner.invoke(app, ["prepare"])
-
-        assert result.exit_code == 0
-        
-        # 驗證輸出包含預設值摘要資訊
-        assert "Quick setup" in result.stdout or "default" in result.stdout.lower() or "recommended" in result.stdout.lower()
 
     def test_non_interactive_mode_not_affected_by_setup_mode(self, temp_repo_dir, mock_git_ops):
         """測試 non-interactive mode 不受設定模式影響"""
@@ -990,7 +1053,7 @@ class TestPrepareCommandSetupMode:
         mock_cli_confirm.return_value = False  # worktree (n)
         
         # Input method 選擇 -> Fetch from GitHub Issue (第一個 prompt)
-        mock_phase_list.return_value = "2. Fetch from GitHub Issue"
+        mock_phase_list.return_value = "2. GitHub issue"
         
         # Setup mode 選擇 -> Quick setup (第二個 prompt，在輸入 Issue ID 後)
         mock_cli_list.return_value = "Quick setup (use recommended defaults)"
@@ -1059,7 +1122,7 @@ class TestPrepareCommandPostPrTodoList:
         mock_prompt_text_phase.return_value = "123"
         mock_cli_confirm.return_value = False  # worktree (n)
 
-        mock_phase_list.return_value = "2. Fetch from GitHub Issue"
+        mock_phase_list.return_value = "2. GitHub issue"
         mock_cli_list.return_value = "Quick setup (use recommended defaults)"
 
         result = runner.invoke(app, ["prepare"])
@@ -1105,10 +1168,9 @@ class TestPrepareCommandPostPrTodoList:
         mock_prompt_text_phase.return_value = "42"
         # worktree=No, sync_spec=True, sync_plan=True, auto_create=True, post_todo_list=False
         mock_cli_confirm.side_effect = [False, True, True, True, False]
-        mock_phase_confirm.side_effect = [True]  # auto_create prompt in phase_prompts
 
-        mock_phase_list.return_value = "2. Fetch from GitHub Issue"
-        mock_cli_list.return_value = "Custom configuration"
+        mock_phase_list.return_value = "2. GitHub issue"
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
         mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
@@ -1153,13 +1215,11 @@ class TestPrepareCommandPostPrTodoList:
 
         mock_prompt_text_cli.return_value = "custom-no-auto-create"
         mock_prompt_text_phase.return_value = "42"
-        # worktree=No, sync_spec=True, sync_plan=True
-        mock_cli_confirm.side_effect = [False, True, True]
-        # auto_create prompt in phase_prompts returns False
-        mock_phase_confirm.side_effect = [False]
+        # worktree=No, sync_spec=True, sync_plan=True, auto_create=False
+        mock_cli_confirm.side_effect = [False, True, True, False]
 
-        mock_phase_list.return_value = "2. Fetch from GitHub Issue"
-        mock_cli_list.return_value = "Custom configuration"
+        mock_phase_list.return_value = "2. GitHub issue"
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
         mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
@@ -1189,6 +1249,49 @@ class TestPrepareCommandPostPrTodoList:
         with open(config_file) as f:
             config_data = yaml.safe_load(f)
             assert config_data["pr"]["post_todo_list"] is True
+
+    def test_non_interactive_no_auto_create_pr_persists_false(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "prepare",
+                "noninteractive-local-pr",
+                "--no-interactive",
+                "--input-method",
+                "manual",
+                "--rigor",
+                "medium",
+                "--no-auto-create-pr",
+            ],
+        )
+
+        assert result.exit_code == 0
+        config_file = (
+            temp_repo_dir
+            / ".cafe"
+            / "issues"
+            / "noninteractive-local-pr"
+            / "issue.yaml"
+        )
+        config_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        assert config_data["pr"]["auto_create"] is False
+
+    def test_issue_argument_no_auto_create_pr_persists_false(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        result = runner.invoke(
+            app,
+            ["prepare", "argument-local-pr", "--no-auto-create-pr"],
+        )
+
+        assert result.exit_code == 0
+        config_file = (
+            temp_repo_dir / ".cafe" / "issues" / "argument-local-pr" / "issue.yaml"
+        )
+        config_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        assert config_data["pr"]["auto_create"] is False
 
     def test_non_interactive_no_post_pr_todo_list_flag_saves_false_to_config(self, temp_repo_dir, mock_git_ops):
         """Test 3.4b: --no-interactive モードで --no-post-pr-todo-list フラグが issue.yaml に保存される。"""

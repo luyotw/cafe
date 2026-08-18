@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -11,6 +12,7 @@ import typer
 import yaml
 
 from cafe.core.active_issue import clear_marker_if_matches, write_marker
+from cafe.utils.issue_config import resolve_issue_id
 
 VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
 
@@ -29,6 +31,30 @@ prompt_for_rigor: Any = None
 select_template: Any = None
 _ensure_default_content: Any = None
 _resolve_iteration_index: Any = None
+
+
+def _ensure_worktree_cafe_excluded(worktree_root: Path) -> None:
+    """Keep CAFE-managed worktree state out of Git without editing .gitignore."""
+    result = subprocess.run(
+        ["git", "-C", str(worktree_root), "rev-parse", "--git-path", "info/exclude"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        detail = result.stderr.strip() or result.stdout.strip() or "empty Git path"
+        raise RuntimeError(f"cannot resolve local Git exclude file: {detail}")
+    exclude_file = Path(result.stdout.strip())
+    if not exclude_file.is_absolute():
+        exclude_file = worktree_root / exclude_file
+    entry = ".cafe/"
+    existing = exclude_file.read_text(encoding="utf-8") if exclude_file.exists() else ""
+    if entry in {line.strip() for line in existing.splitlines()}:
+        return
+    exclude_file.parent.mkdir(parents=True, exist_ok=True)
+    separator = "" if not existing or existing.endswith("\n") else "\n"
+    with exclude_file.open("a", encoding="utf-8") as stream:
+        stream.write(f"{separator}# CAFE worktree runtime state (auto-excluded)\n{entry}\n")
 
 
 def set_runtime(
@@ -77,6 +103,170 @@ def set_runtime(
     Path = path_cls
 
 
+def _run_legacy_prepare_prompts(
+    profile: Any,
+    *,
+    display: Any,
+    github_ops: Any,
+    issue_name: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], Optional[int]]:
+    """Run legacy interactive prepare prompts when no declarative fields exist."""
+    from cafe.core.prepare_profile import PrepareRigorError
+    from cafe.ui.phase_prompts import prompt_and_save_auto_create
+
+    spec_config: dict[str, Any] = {}
+    plan_config: dict[str, Any] = {}
+    pr_config: dict[str, Any] = {}
+    issue_id: Optional[int] = None
+
+    if profile.should_prompt_input_method():
+        input_method, issue_id = prompt_for_input_method(display, github_ops)
+        spec_config["input_method"] = input_method
+        if issue_id is not None:
+            spec_config["issue_id"] = str(issue_id)
+    else:
+        spec_config["input_method"] = profile.default_input_method()
+
+    console.print()
+    setup_mode_choices = profile.enabled_setup_mode_labels()
+    setup_mode_choice = prompt_list(
+        message="Choose setup mode:",
+        choices=setup_mode_choices,
+        default=setup_mode_choices[0],
+    )
+
+    if profile.is_quick_setup_choice(setup_mode_choice):
+        quick_config = profile.quick_setup_issue_config(issue_id)
+        spec_config.update(quick_config.spec)
+        plan_config.update(quick_config.plan)
+        pr_config.update(quick_config.pr)
+
+        console.print()
+        console.print("[green]✓ Quick setup applied with recommended defaults:[/green]")
+        console.print(f"  • Rigor level: {spec_config['rigor']}")
+        console.print(f"  • Spec template: {spec_config['template']}")
+        console.print(f"  • Plan template: {plan_config['template']}")
+        console.print(f"  • Input method: {spec_config['input_method']}")
+        if profile.is_github_repo:
+            console.print(f"  • Sync to GitHub: {spec_config.get('sync_github', False)}")
+        if profile.supports_pr_config() and profile.is_github_repo:
+            console.print(f"  • Auto create PR: {pr_config.get('auto_create', False)}")
+            console.print(f"  • Post PR todo list: {pr_config.get('post_todo_list', False)}")
+        console.print()
+        return spec_config, plan_config, pr_config, issue_id
+
+    if issue_id is not None:
+        console.print()
+        spec_config["sync_github"] = prompt_confirm(
+            "Sync spec to GitHub issue when confirmed?",
+            default=True,
+        )
+        console.print()
+        plan_config["sync_github"] = prompt_confirm(
+            "Sync plan to GitHub issue when confirmed?",
+            default=True,
+        )
+        console.print()
+
+    rigor = prompt_for_rigor(display, allowed=profile.allowed_rigor_values())
+    try:
+        profile.validate_rigor(rigor)
+    except PrepareRigorError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
+    spec_config["rigor"] = rigor
+
+    spec_template_manager = TemplateManager(template_type="spec")
+    spec_templates_with_source = spec_template_manager.list_templates()
+    spec_templates = [name for name, _ in spec_templates_with_source]
+    if spec_templates:
+        console.print()
+        console.print("[bold cyan]Please select a spec template:[/bold cyan]")
+        spec_template_paths = {
+            name: spec_template_manager.get_template_path(name) for name in spec_templates
+        }
+        selected_spec_template = select_template(
+            spec_templates, spec_template_paths, spec_templates_with_source
+        )
+        if selected_spec_template:
+            spec_config["template"] = selected_spec_template
+
+    plan_template_manager = TemplateManager(template_type="plan")
+    plan_templates_with_source = plan_template_manager.list_templates()
+    plan_templates = [name for name, _ in plan_templates_with_source]
+    if plan_templates:
+        console.print()
+        console.print("[bold cyan]Please select a plan template:[/bold cyan]")
+        plan_template_paths = {
+            name: plan_template_manager.get_template_path(name) for name in plan_templates
+        }
+        selected_plan_template = select_template(
+            plan_templates, plan_template_paths, plan_templates_with_source
+        )
+        if selected_plan_template:
+            plan_config["template"] = selected_plan_template
+    else:
+        console.print()
+        console.print("[yellow]⚠️  No plan templates found. Using default template.[/yellow]")
+        console.print(
+            "[dim]    Tip: Use 'cafe template add <source> <name>' to add templates.[/dim]"
+        )
+
+    if profile.supports_pr_config():
+        config_file = Path(".cafe") / "issues" / issue_name / "issue.yaml"
+        auto_create_pr_result = prompt_and_save_auto_create(config_file, "pr.auto_create")
+        pr_config["auto_create"] = auto_create_pr_result
+        if auto_create_pr_result:
+            console.print()
+            pr_config["post_todo_list"] = prompt_confirm(
+                "Post organized PR comments as todo list to PR?",
+                default=True,
+            )
+    return spec_config, plan_config, pr_config, issue_id
+
+
+def _run_field_driven_prepare_prompts(
+    profile: Any,
+    parsed: Any,
+    *,
+    display: Any,
+    github_ops: Any,
+    template_managers: Optional[dict[str, Any]] = None,
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, dict[str, Any]],
+    dict[str, Any],
+    Optional[int],
+]:
+    """Run interactive prepare prompts from declarative PrepareField definitions."""
+    from cafe.ui.prepare_field_renderer import RendererDeps, run_field_driven_prepare_flow
+
+    deps = RendererDeps(
+        prompt_list=prompt_list,
+        prompt_confirm=prompt_confirm,
+        prompt_text=prompt_text,
+        prompt_for_input_method=prompt_for_input_method,
+        select_template=select_template,
+        spec_template_manager=TemplateManager(template_type="spec"),
+        plan_template_manager=TemplateManager(template_type="plan"),
+        template_managers=template_managers or {},
+        console=console,
+        display=display,
+        github_ops=github_ops,
+    )
+    config, issue_id = run_field_driven_prepare_flow(parsed, profile, deps=deps)
+    return (
+        config.spec,
+        config.plan,
+        config.pr,
+        config.steps,
+        getattr(config, "initial_input", {}),
+        issue_id,
+    )
+
+
 def prepare(
     issue_name: Optional[str] = typer.Argument(
         None,
@@ -92,6 +282,11 @@ def prepare(
         True,
         "--check/--no-check",
         help="Check for uncommitted changes before switching branch (default: True)",
+    ),
+    init_git: bool = typer.Option(
+        False,
+        "--init-git",
+        help="Initialize local Git version history when this folder is not yet a repository.",
     ),
     worktree: Optional[str] = typer.Option(
         "",
@@ -128,8 +323,8 @@ def prepare(
         "--spec-template",
         help="Spec template name (default: auto)",
     ),
-    auto_create_pr: bool = typer.Option(
-        False,
+    auto_create_pr: Optional[bool] = typer.Option(
+        None,
         "--auto-create-pr/--no-auto-create-pr",
         help="Automatically create PR after development (default: False, GitHub repos only)",
     ),
@@ -147,11 +342,6 @@ def prepare(
         None,
         "--post-pr-todo-list/--no-post-pr-todo-list",
         help="Post organized PR comments as todo list to PR (default: True when auto-create PR is enabled)",
-    ),
-    preset: Optional[str] = typer.Option(
-        None,
-        "--preset",
-        help="Apply a named crew preset as .cafe/crew.yaml (e.g. --preset gemini-team)",
     ),
 ) -> None:
     """Prepare issue environment (directory, config, git branch) before running spec phase.
@@ -184,25 +374,20 @@ def prepare(
 
         # 1.1. Sync agents and templates at the beginning of prepare
         from cafe.ui.init_helpers import sync_agents, sync_templates
+
         cafe_dir = Path(".cafe")
         agent_success, agent_failed = sync_agents(cafe_dir)
         template_success, template_failed = sync_templates(cafe_dir)
 
         # Display sync summary
         if agent_success > 0 or template_success > 0:
-            console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s) and {template_success} template(s)")
+            console.print(
+                f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s) and {template_success} template(s)"
+            )
         if agent_failed > 0 or template_failed > 0:
-            console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed + template_failed} file(s)")
-
-        # 1.2. Apply preset if specified
-        if preset:
-            from cafe.utils.preset import PresetManager, PresetNotFoundError
-            try:
-                PresetManager().apply(preset, cafe_dir=cafe_dir)
-                console.print(f"  [green]✓[/green] Applied preset '[cyan]{preset}[/cyan]' as crew.yaml")
-            except PresetNotFoundError as e:
-                console.print(f"[red]Error: {e}[/red]")
-                raise typer.Exit(1)
+            console.print(
+                f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed + template_failed} file(s)"
+            )
 
         from cafe.core.prepare_profile import PrepareProfile, PrepareRigorError
         from cafe.playbooks.loader import PlaybookLoader
@@ -220,6 +405,7 @@ def prepare(
             raise typer.Exit(1)
 
         profile = PrepareProfile.from_playbook(loaded_playbook.model, is_github_repo())
+        entry_step_name = str(loaded_playbook.model.entry_point)
 
         # 2. Determine interactive mode and config prompt behavior
         # should_prompt_for_config: Should we show config prompts?
@@ -240,49 +426,95 @@ def prepare(
                 console.print("[red]Error: Issue name is required in non-interactive mode.[/red]")
                 raise typer.Exit(1)
 
-        # 4. Validate non-interactive mode parameters (only when user explicitly passed --no-interactive)
-        if not interactive:
-            # 4.1. input_method is required in non-interactive mode
-            if input_method is None:
-                console.print("[red]Error: --input-method is required in non-interactive mode[/red]")
-                raise typer.Exit(1)
-
-            # 4.2. input_method must be 'manual' or 'github'
-            if input_method not in ["manual", "github"]:
-                console.print("[red]Error: --input-method must be 'manual' or 'github'[/red]")
-                raise typer.Exit(1)
-
-            # 4.3. When input_method is 'github', issue_id is required
-            if input_method == "github" and issue_id is None:
-                console.print("[red]Error: --issue-id is required when using --input-method=github[/red]")
-                raise typer.Exit(1)
-
-            # 4.4. Apply playbook non-interactive defaults
-            defaults = profile.non_interactive_defaults()
-            if rigor is None:
-                rigor = defaults.rigor
-            if plan_template is None:
-                plan_template = defaults.plan_template
-            if spec_template is None:
-                spec_template = defaults.spec_template
-
-            # 4.5. Validate rigor against playbook constraints
-            try:
-                profile.validate_rigor(rigor)
-            except PrepareRigorError as exc:
-                console.print(f"[red]Error: {exc}[/red]")
-                raise typer.Exit(1)
-
-        # 5. Initialize Git operations
+        # 4. Initialize Git operations
+        initialized_git_now = False
         try:
+            repository_exists = GitOperations.is_repository()
             git_ops = GitOperations()
+            bootstrap_needs_baseline = repository_exists and not git_ops.has_commits()
+            resume_approved_bootstrap = (
+                bootstrap_needs_baseline and git_ops.is_bootstrap_pending()
+            )
+
+            if not repository_exists or bootstrap_needs_baseline:
+                should_initialize = init_git or resume_approved_bootstrap
+                if not should_initialize and interactive:
+                    console.print(
+                        "[yellow]CAFE needs local version history before it can safely "
+                        "make changes.[/yellow]"
+                    )
+                    console.print(
+                        "[dim]This lets you return to an earlier version if something goes wrong. "
+                        "It stays on this computer and does not create or upload anything to "
+                        "GitHub.[/dim]"
+                    )
+                    should_initialize = bool(
+                        prompt_confirm("Turn on local version history now?", default=True)
+                    )
+
+                if not should_initialize:
+                    if not interactive:
+                        console.print(
+                            "[yellow]CAFE needs local version history before it can safely "
+                            "make changes.[/yellow]"
+                        )
+                        console.print(
+                            "[dim]It stays on this computer and does not create or upload "
+                            "anything to GitHub.[/dim]"
+                        )
+                    console.print(
+                        "[yellow]Git was not initialized, so preparation has stopped.[/yellow]"
+                    )
+                    if not interactive:
+                        console.print(
+                            "[dim]After approval, rerun this command with --init-git.[/dim]"
+                        )
+                    raise typer.Exit(1)
+
+                if not repository_exists:
+                    git_ops = GitOperations.initialize_repository(initial_branch="main")
+                else:
+                    if not git_ops.is_bootstrap_pending():
+                        git_ops.run_git(
+                            "config", "--local", "cafe.bootstrap-pending", "true"
+                        )
+                    git_ops.complete_repository_initialization()
+                initialized_git_now = True
+                initialized_branch = git_ops.get_current_branch()
+                console.print(
+                    "[green]✓ Local version history is ready on branch "
+                    f"'{initialized_branch}'.[/green]"
+                )
+                console.print(
+                    "[dim]Existing files were not added automatically; CAFE will review "
+                    "them before committing.[/dim]"
+                )
+                if git_ops.uses_placeholder_identity():
+                    console.print(
+                        "[yellow]This folder is using CAFE and/or cafe@local.invalid for "
+                        "a missing Git author setting. This local-only setting remains "
+                        "until you change it; update it before publishing if you want "
+                        "commits to show your own identity.[/yellow]"
+                    )
         except Exception as e:
-            console.print(f"[red]Error: Not a git repository. {e}[/red]")
-            console.print("[yellow]Hint: Run 'git init' to initialize a git repository.[/yellow]")
+            if isinstance(e, typer.Exit):
+                raise
+            console.print(f"[red]Error: Could not initialize local version history. {e}[/red]")
             raise typer.Exit(1)
 
+        bootstrap_requires_current_checkout = (
+            initialized_git_now or git_ops.requires_bootstrap_checkout() is True
+        )
+
         # 6. Check for uncommitted changes (warning only)
-        if check_uncommitted and git_ops.has_uncommitted_changes():
+        has_changes_to_confirm = False
+        if check_uncommitted:
+            if bootstrap_requires_current_checkout:
+                has_changes_to_confirm = git_ops.has_tracked_or_staged_changes()
+            else:
+                has_changes_to_confirm = git_ops.has_uncommitted_changes()
+
+        if has_changes_to_confirm:
             console.print("[yellow]⚠️  Warning: You have uncommitted changes.[/yellow]")
             console.print(
                 "[yellow]    It's recommended to commit or stash them before switching branches.[/yellow]"
@@ -309,8 +541,12 @@ def prepare(
             )
             console.print()
             console.print("[dim]To fix this, either:[/dim]")
-            console.print(f"[dim]  1. Switch to the base branch first: git checkout main && cafe prepare {issue_name}[/dim]")
-            console.print(f"[dim]  2. Specify the base branch explicitly: cafe prepare {issue_name} --base main[/dim]")
+            console.print(
+                f"[dim]  1. Switch to the base branch first: git checkout main && cafe prepare {issue_name}[/dim]"
+            )
+            console.print(
+                f"[dim]  2. Specify the base branch explicitly: cafe prepare {issue_name} --base main[/dim]"
+            )
             raise typer.Exit(1)
 
         # 8. Determine worktree mode (interactive or from parameter)
@@ -319,12 +555,33 @@ def prepare(
 
         # If --worktree parameter is provided (non-interactive)
         if worktree and worktree.strip():
+            if bootstrap_requires_current_checkout:
+                console.print(
+                    "[red]A separate worktree cannot be created until the initial project "
+                    "files have been committed.[/red]"
+                )
+                console.print(
+                    "[yellow]Rerun without --worktree. Worktrees become available after "
+                    "all starting files are committed or ignored.[/yellow]"
+                )
+                raise typer.Exit(1)
             use_worktree = True
             worktree_path = worktree.strip()
         # If in config prompt mode and no --worktree parameter
         elif should_prompt_for_config and not worktree:
-            # Ask user if they want to use worktree mode
-            use_worktree = prompt_confirm("Use Git worktree mode for this issue?", default=False)
+            # A repository created moments ago only has its empty safety
+            # baseline. Keep the first task in the current folder so existing
+            # files remain visible for review and are not silently omitted.
+            if bootstrap_requires_current_checkout:
+                console.print(
+                    "[dim]The first task will use this folder. Separate workspaces become "
+                    "available after all starting files are committed or ignored.[/dim]"
+                )
+            else:
+                # Ask user if they want to use worktree mode
+                use_worktree = prompt_confirm(
+                    "Use Git worktree mode for this issue?", default=False
+                )
 
             if use_worktree:
                 # Suggest default path
@@ -347,27 +604,13 @@ def prepare(
         cafe_dir = Path(".cafe")
         _ensure_default_content(cafe_dir)
 
-        # 9.1. Validate plan template exists (only in non-interactive mode after templates are initialized)
-        if not interactive and plan_template and plan_template != "auto":
-            plan_template_manager = TemplateManager(template_type="plan")
-            template_path = plan_template_manager.get_template_path(plan_template)
-            if not template_path:
-                console.print(f"[red]Error: Plan template '{plan_template}' not found[/red]")
-                console.print()
-                console.print("[yellow]Available plan templates:[/yellow]")
-                available_templates = plan_template_manager.list_templates()
-                if available_templates:
-                    for name, source_type in available_templates:
-                        source_label = " (system default)" if source_type == "system" else " (custom)"
-                        console.print(f"  - {name}{source_label}")
-                else:
-                    console.print("  (none)")
-                raise typer.Exit(1)
-
         # 10. Assemble spec/plan/pr configuration (prompt mode or parameter mode)
         spec_config = {}
         plan_config = {}
         pr_config = {}
+        step_configs: dict[str, dict[str, Any]] = {}
+        initial_input_config: dict[str, Any] = {}
+        parsed_fields = None
 
         if profile.should_prompt_spec_plan_config(should_prompt_for_config):
             console.print()
@@ -377,179 +620,163 @@ def prepare(
             )
             console.print()
 
-            # Initialize Display for prompts
             display = Display()
             github_ops = GitHubOps()
+            from cafe.core.playbook import declared_template_managers
+            from cafe.skills.loader import SkillLoader
 
-            # Step 1: Input method and issue ID (playbook-driven)
-            if profile.should_prompt_input_method():
-                input_method, issue_id = prompt_for_input_method(display, github_ops)
-                spec_config["input_method"] = input_method
-                if issue_id is not None:
-                    spec_config["issue_id"] = str(issue_id)
+            skill_loader = SkillLoader()
+            parsed_fields = profile.resolved_prepare_fields(
+                playbook_path=loaded_playbook.path,
+                skill_loader=skill_loader,
+            )
+            issue_id: Optional[int] = None
+            if parsed_fields is None:
+                console.print(
+                    "[yellow]Deprecated: this playbook uses legacy interactive prepare "
+                    "metadata. Migrate to commands.prepare.fields or fields_ref.[/yellow]"
+                )
+                spec_config, plan_config, pr_config, issue_id = _run_legacy_prepare_prompts(
+                    profile,
+                    display=display,
+                    github_ops=github_ops,
+                    issue_name=issue_name,
+                )
             else:
-                spec_config["input_method"] = profile.default_input_method()
-                issue_id = None
+                field_result = _run_field_driven_prepare_prompts(
+                    profile,
+                    parsed_fields,
+                    display=display,
+                    github_ops=github_ops,
+                    template_managers=declared_template_managers(
+                        loaded_playbook.model,
+                        skill_loader,
+                    ),
+                )
+                if len(field_result) == 4:
+                    spec_config, plan_config, pr_config, issue_id = field_result
+                elif len(field_result) == 5:
+                    spec_config, plan_config, pr_config, step_configs, issue_id = field_result
+                else:
+                    (
+                        spec_config,
+                        plan_config,
+                        pr_config,
+                        step_configs,
+                        initial_input_config,
+                        issue_id,
+                    ) = field_result
+                if not initial_input_config:
+                    from cafe.core.initial_input import normalize_initial_input_provider
 
-            # Step 2: Prompt for setup mode (after input method selection)
-            console.print()
-            setup_mode_choices = profile.enabled_setup_mode_labels()
-            setup_mode_choice = prompt_list(
-                message="Choose setup mode:",
-                choices=setup_mode_choices,
-                default=setup_mode_choices[0],
+                    provider = normalize_initial_input_provider(spec_config.get("input_method"))
+                    if provider is not None:
+                        initial_input_config = {"provider": provider}
+                        if provider == "github_issue" and issue_id is not None:
+                            initial_input_config["issue_id"] = issue_id
+        elif not interactive:
+            from cafe.core.playbook import declared_template_managers
+            from cafe.skills.loader import SkillLoader
+            from cafe.ui.prepare_field_renderer import (
+                NonInteractiveCliAnswers,
+                NonInteractiveResolverDeps,
+                PrepareNonInteractiveError,
+                PrepareNonInteractiveTemplateError,
+                resolve_non_interactive_issue_config,
             )
 
-            use_quick_setup = profile.is_quick_setup_choice(setup_mode_choice)
-
-            if use_quick_setup:
-                quick_config = profile.quick_setup_issue_config(issue_id)
-                spec_config.update(quick_config.spec)
-                plan_config.update(quick_config.plan)
-                pr_config.update(quick_config.pr)
-
-                # Display default values summary
+            skill_loader = SkillLoader()
+            parsed_fields = profile.resolved_prepare_fields(
+                playbook_path=loaded_playbook.path,
+                skill_loader=skill_loader,
+            )
+            resolver_deps = NonInteractiveResolverDeps(
+                spec_template_manager=TemplateManager(template_type="spec"),
+                plan_template_manager=TemplateManager(template_type="plan"),
+                template_managers=declared_template_managers(
+                    loaded_playbook.model,
+                    skill_loader,
+                ),
+            )
+            try:
+                resolved_config = resolve_non_interactive_issue_config(
+                    profile,
+                    NonInteractiveCliAnswers(
+                        input_method=input_method,
+                        issue_id=issue_id,
+                        rigor=rigor,
+                        spec_template=spec_template,
+                        plan_template=plan_template,
+                        sync_spec_github=sync_spec_github,
+                        sync_plan_github=sync_plan_github,
+                        auto_create_pr=auto_create_pr,
+                        post_pr_todo_list=post_pr_todo_list,
+                    ),
+                    parsed_fields=parsed_fields,
+                    deps=resolver_deps,
+                )
+            except PrepareRigorError as exc:
+                console.print(f"[red]Error: {exc}[/red]")
+                raise typer.Exit(1)
+            except PrepareNonInteractiveTemplateError as exc:
+                console.print(
+                    f"[red]Error: {exc.template_kind} template '{exc.template_name}' not found[/red]"
+                )
                 console.print()
-                console.print("[green]✓ Quick setup applied with recommended defaults:[/green]")
-                console.print(f"  • Rigor level: {spec_config['rigor']}")
-                console.print(f"  • Spec template: {spec_config['template']}")
-                console.print(f"  • Plan template: {plan_config['template']}")
-                console.print(f"  • Input method: {spec_config['input_method']}")
-                if profile.is_github_repo:
-                    console.print(f"  • Sync to GitHub: {spec_config.get('sync_github', False)}")
-                    console.print(f"  • Auto create PR: {pr_config.get('auto_create', False)}")
-                    console.print(f"  • Post PR todo list: {pr_config.get('post_todo_list', False)}")
-                console.print()
-            else:
-                # Custom configuration: Prompt for remaining settings
-                
-                # Prompt for sync settings (only when issue_id is present)
-                if issue_id is not None:
-                    console.print()
-                    sync_spec = prompt_confirm(
-                        "Sync spec to GitHub issue when confirmed?",
-                        default=True
-                    )
-                    spec_config["sync_github"] = sync_spec
-
-                    console.print()
-                    sync_plan = prompt_confirm(
-                        "Sync plan to GitHub issue when confirmed?",
-                        default=True
-                    )
-                    plan_config["sync_github"] = sync_plan
-                    console.print()
-
-                # Prompt for rigor level
-                rigor = prompt_for_rigor(display, allowed=profile.allowed_rigor_values())
-                try:
-                    profile.validate_rigor(rigor)
-                except PrepareRigorError as exc:
-                    console.print(f"[red]Error: {exc}[/red]")
-                    raise typer.Exit(1)
-                spec_config["rigor"] = rigor
-
-                # Prompt for spec template
-                spec_template_manager = TemplateManager(template_type="spec")
-                spec_templates_with_source = spec_template_manager.list_templates()
-                spec_templates = [name for name, _ in spec_templates_with_source]
-
-                if spec_templates:
-                    console.print()
-                    console.print("[bold cyan]Please select a spec template:[/bold cyan]")
-                    spec_template_paths = {
-                        name: spec_template_manager.get_template_path(name) for name in spec_templates
-                    }
-                    selected_spec_template = select_template(
-                        spec_templates, spec_template_paths, spec_templates_with_source
-                    )
-                    if selected_spec_template:
-                        spec_config["template"] = selected_spec_template
-
-                # Prompt for plan template
-                plan_template_manager = TemplateManager(template_type="plan")
-                plan_templates_with_source = plan_template_manager.list_templates()
-                plan_templates = [name for name, _ in plan_templates_with_source]
-
-                if plan_templates:
-                    console.print()
-                    console.print("[bold cyan]Please select a plan template:[/bold cyan]")
-                    plan_template_paths = {
-                        name: plan_template_manager.get_template_path(name) for name in plan_templates
-                    }
-                    selected_plan_template = select_template(
-                        plan_templates, plan_template_paths, plan_templates_with_source
-                    )
-                    if selected_plan_template:
-                        plan_config["template"] = selected_plan_template
+                console.print(f"[yellow]Available {exc.template_kind.lower()} templates:[/yellow]")
+                if exc.available:
+                    for name, source_type in exc.available:
+                        source_label = (
+                            " (system default)" if source_type == "system" else " (custom)"
+                        )
+                        console.print(f"  - {name}{source_label}")
                 else:
-                    console.print()
-                    console.print(
-                        "[yellow]⚠️  No plan templates found. Using default template.[/yellow]"
-                    )
-                    console.print(
-                        "[dim]    Tip: Use 'cafe template add <source> <name>' to add templates.[/dim]"
-                    )
+                    console.print("  (none)")
+                raise typer.Exit(1)
+            except PrepareNonInteractiveError as exc:
+                console.print(f"[red]Error: {exc}[/red]")
+                raise typer.Exit(1)
 
-                # Prompt for PR auto-create setting (only for GitHub repos)
-                from cafe.ui.phase_prompts import prompt_and_save_auto_create
-
-                config_file = Path(".cafe") / "issues" / issue_name / "issue.yaml"
-                auto_create_pr_result = prompt_and_save_auto_create(config_file, "pr.auto_create")
-                pr_config["auto_create"] = auto_create_pr_result
-
-                # Prompt for post_todo_list only when auto_create is enabled
-                if auto_create_pr_result:
-                    console.print()
-                    post_todo_list_result = prompt_confirm(
-                        "Post organized PR comments as todo list to PR?",
-                        default=True,
-                    )
-                    pr_config["post_todo_list"] = post_todo_list_result
-        elif not interactive:
-            # Explicit non-interactive mode (--no-interactive): use CLI parameters
-            from cafe.utils.git_utils import is_github_repo
-
-            # Spec config
-            spec_config["input_method"] = input_method
-            if input_method == "github" and issue_id is not None:
-                spec_config["issue_id"] = str(issue_id)
-            spec_config["rigor"] = rigor
-            if spec_template:
-                spec_config["template"] = spec_template
-            if sync_spec_github is not None:
-                spec_config["sync_github"] = sync_spec_github
-
-            # Plan config
-            if plan_template:
-                plan_config["template"] = plan_template
-            if sync_plan_github is not None:
-                plan_config["sync_github"] = sync_plan_github
-
-            # PR config (only for GitHub repos)
-            if is_github_repo() and auto_create_pr:
-                pr_config["auto_create"] = True
-            if post_pr_todo_list is not None:
-                pr_config["post_todo_list"] = post_pr_todo_list
+            spec_config = resolved_config.spec
+            plan_config = resolved_config.plan
+            pr_config = resolved_config.pr
+            step_configs = resolved_config.steps
+            initial_input_config = resolved_config.initial_input
         # else: issue_name was provided as argument but not --no-interactive
         #       Don't save any config (old behavior for backward compatibility)
+
+        # Explicit PR flags are authoritative in every invocation shape, including
+        # ``cafe prepare ISSUE --no-auto-create-pr`` where an issue argument
+        # suppresses the interactive configuration prompts.
+        if auto_create_pr is not None:
+            if not profile.supports_pr_config(parsed_fields):
+                console.print(
+                    "[red]Error: --auto-create-pr/--no-auto-create-pr requires a "
+                    "playbook with PR configuration.[/red]"
+                )
+                raise typer.Exit(1)
+            if auto_create_pr and not profile.is_github_repo:
+                console.print("[red]Error: --auto-create-pr requires a GitHub repository.[/red]")
+                raise typer.Exit(1)
+            pr_config["auto_create"] = auto_create_pr
+            if not auto_create_pr:
+                pr_config.pop("post_todo_list", None)
+        if post_pr_todo_list is not None:
+            if not profile.supports_pr_config(parsed_fields):
+                console.print(
+                    "[red]Error: --post-pr-todo-list/--no-post-pr-todo-list requires a "
+                    "playbook with PR configuration.[/red]"
+                )
+                raise typer.Exit(1)
+            if auto_create_pr is not False:
+                pr_config["post_todo_list"] = post_pr_todo_list
 
         # 11. Prepare config data (but don't write yet)
         feature_branch = issue_name
 
-        # Load global config to get default auto settings
-        from cafe.utils.config import ConfigManager
-
-        config_manager = ConfigManager(".cafe")
-        global_config = config_manager.load_config()
-        max_review_iterations = global_config.get("auto", {}).get("max_review_iterations", 5)
-
         config_data = {
             "base_branch": base_branch,
             "feature_branch": feature_branch,
-            "auto": {
-                "max_review_iterations": max_review_iterations,
-            },
         }
 
         # Add spec config if present
@@ -563,6 +790,13 @@ def prepare(
         # Add pr config if present
         if pr_config:
             config_data["pr"] = pr_config
+
+        if initial_input_config:
+            config_data["initial_input"] = initial_input_config
+
+        for step_name, step_config in step_configs.items():
+            if step_config:
+                config_data[step_name] = step_config
 
         # Add worktree_path if using worktree mode
         if use_worktree:
@@ -578,11 +812,15 @@ def prepare(
                 # Check if branch already exists
                 if git_ops.branch_exists(feature_branch):
                     # Branch exists but worktree doesn't - create worktree with existing branch
-                    console.print(f"[dim]Branch '{feature_branch}' exists, creating worktree...[/dim]")
+                    console.print(
+                        f"[dim]Branch '{feature_branch}' exists, creating worktree...[/dim]"
+                    )
                     git_ops.run_git("worktree", "add", worktree_path, feature_branch)
                 else:
                     # Neither branch nor worktree exists - create both
-                    console.print(f"[dim]Creating worktree at '{worktree_path}' with new branch...[/dim]")
+                    console.print(
+                        f"[dim]Creating worktree at '{worktree_path}' with new branch...[/dim]"
+                    )
                     git_ops.create_worktree(worktree_path, feature_branch, base_branch)
 
             # Create actual .cafe directory in worktree instead of symlink
@@ -596,20 +834,32 @@ def prepare(
             # Create .cafe directory structure in worktree
             worktree_cafe_dir.mkdir(parents=True, exist_ok=True)
 
-            # Copy config.yaml from repo root
-            repo_config = repo_cafe_dir / "config.yaml"
-            worktree_config = worktree_cafe_dir / "config.yaml"
-            if repo_config.exists():
-                shutil.copy2(repo_config, worktree_config)
+            # Copy only project-owned configuration. Issue-owned phases.yaml is
+            # installed by the workflow driver after kickoff confirmation.
+            for config_name in ("config.yaml", "strategic_context.yaml"):
+                repo_file = repo_cafe_dir / config_name
+                if repo_file.exists():
+                    shutil.copy2(repo_file, worktree_cafe_dir / config_name)
+
+            repo_docs = repo_cafe_dir / "docs"
+            if repo_docs.is_dir():
+                shutil.copytree(repo_docs, worktree_cafe_dir / "docs", dirs_exist_ok=True)
 
             # Create issues directory structure in worktree
             worktree_issues_dir = worktree_cafe_dir / "issues" / issue_name
             worktree_issues_dir.mkdir(parents=True, exist_ok=True)
-            (worktree_issues_dir / "spec").mkdir(exist_ok=True)
+            (worktree_issues_dir / entry_step_name).mkdir(exist_ok=True)
             (worktree_issues_dir / "sessions").mkdir(exist_ok=True)
 
             # Initialize default templates and agents in worktree .cafe
             _ensure_default_content(worktree_cafe_dir)
+            try:
+                _ensure_worktree_cafe_excluded(worktree_abs)
+            except (OSError, RuntimeError) as exc:
+                console.print(
+                    "[yellow]Warning: Could not exclude CAFE worktree state from Git: "
+                    f"{exc}[/yellow]"
+                )
 
             # Set issue_dir to worktree location for config writing
             issue_dir = worktree_issues_dir
@@ -617,10 +867,10 @@ def prepare(
             # Normal branch mode
             # First create issue directory structure
             issue_dir = Path(f".cafe/issues/{issue_name}")
-            spec_dir = issue_dir / "spec"
+            entry_step_dir = issue_dir / entry_step_name
             sessions_dir = issue_dir / "sessions"
 
-            spec_dir.mkdir(parents=True, exist_ok=True)
+            entry_step_dir.mkdir(parents=True, exist_ok=True)
             sessions_dir.mkdir(parents=True, exist_ok=True)
 
             # Then perform git operations
@@ -733,7 +983,107 @@ def _backup_issue_directory(issue_dir: Path, issue_name: str) -> Path:
     return archive_path
 
 
-def close() -> None:
+def _resolve_squash_message(
+    issue_name: str,
+    override: Optional[str],
+    issue_config_file: Optional[Path] = None,
+    github_ops: Any = None,
+) -> str:
+    """Resolve the commit message for a squash merge.
+
+    Resolution order:
+    1. ``override`` (the ``-m`` / ``--message`` value) if provided.
+    2. GitHub issue title from ``issue.yaml``'s issue id, when available.
+    3. Fallback to ``issue_name``.
+
+    Args:
+        issue_name: Issue name, used as the final fallback.
+        override: Explicit message from --message, or None.
+        issue_config_file: Optional path to ``issue.yaml`` for GitHub issue id lookup.
+        github_ops: Optional GitHubOps instance. A new one is created when needed.
+
+    Returns:
+        The resolved commit message.
+    """
+    if override is not None and override.strip():
+        return override.strip()
+
+    if issue_config_file is not None:
+        issue_id = resolve_issue_id(issue_config_file)
+        if issue_id:
+            try:
+                ops = github_ops if github_ops is not None else GitHubOps()
+                issue = ops.get_issue(issue_id)
+            except GitHubError:
+                issue = None
+            if isinstance(issue, dict):
+                title = issue.get("title")
+                if isinstance(title, str) and title.strip():
+                    return title.strip()
+
+    return issue_name
+
+
+def _perform_squash_merge(
+    git_ops,
+    feature_branch,
+    issue_name,
+    message,
+    issue_config_file: Optional[Path] = None,
+    github_ops: Any = None,
+):
+    """Run a squash merge and commit the result.
+
+    Stages the feature branch via ``git merge --squash``, then commits with a
+    resolved message. If nothing was staged (feature branch is not ahead of
+    base), skips the commit and reports that no merge was needed.
+
+    Args:
+        git_ops: GitOperations instance bound to the base-branch checkout.
+        feature_branch: Branch to squash-merge.
+        issue_name: Issue name, used as the fallback commit message.
+        message: Optional --message override.
+        issue_config_file: Optional issue config used for GitHub issue title lookup.
+        github_ops: Optional GitHubOps instance reused from the PR check.
+    """
+    console.print("[dim]Squash-merging feature branch into base branch...[/dim]")
+    git_ops.merge_squash(feature_branch)
+
+    # A squash merge stages nothing when the feature branch is not ahead of
+    # base. Committing then fails with "nothing to commit", so guard for it.
+    # Check staged changes specifically: untracked files (e.g. .cafe issue
+    # data) would make has_uncommitted_changes() true even with nothing staged.
+    if not git_ops.has_staged_changes():
+        console.print(
+            f"[green]✓ Base branch already up to date; no merge needed for: {feature_branch}[/green]"
+        )
+        return
+
+    commit_message = _resolve_squash_message(
+        issue_name,
+        message,
+        issue_config_file=issue_config_file,
+        github_ops=github_ops,
+    )
+    git_ops.commit(commit_message)
+    console.print(
+        f"[green]✓ Squash-merged feature branch: {feature_branch} ({commit_message})[/green]"
+    )
+
+
+def close(
+    squash: bool = typer.Option(
+        False,
+        "--squash",
+        help="Squash-merge the feature branch into the base branch (local review mode only)",
+    ),
+    message: Optional[str] = typer.Option(
+        None,
+        "-m",
+        "--message",
+        help="Override the squash commit message (only used with --squash)",
+    ),
+) -> None:
     """Close current feature and return to base branch.
 
     \b
@@ -762,6 +1112,7 @@ def close() -> None:
             raise typer.Exit(1)
 
         # 3. Check for open/draft PRs
+        github_ops = None
         try:
             github_ops = GitHubOps()
             pr = github_ops.get_pr_for_branch(current_branch)
@@ -788,7 +1139,7 @@ def close() -> None:
             pass
 
         # 4. Load issue config
-        issue_config_file = Path(f".cafe/issues/{current_branch}/issue.yaml")
+        issue_config_file = Path(f".cafe/issues/{current_branch}/issue.yaml").resolve()
         if not issue_config_file.exists():
             console.print(f"[red]Error: Issue config not found: {issue_config_file}[/red]")
             console.print(
@@ -858,9 +1209,22 @@ def close() -> None:
                 raise typer.Exit(1)
 
             # Step 3: Merge or pull changes based on pr.auto_create config
-            pr_auto_create = config_data.get("pr", {}).get("auto_create", True)
+            pr_auto_create = config_data.get("pr", {}).get("auto_create", False)
+            worktree_abs = Path(worktree_path).resolve()
+            worktree_issue_dir = worktree_abs / ".cafe" / "issues" / feature_branch
             try:
-                if pr_auto_create is False:
+                if squash:
+                    # Explicit --squash always squash-merges locally into the base
+                    # branch, even when pr.auto_create is true.
+                    _perform_squash_merge(
+                        git_ops,
+                        feature_branch,
+                        issue_name,
+                        message,
+                        issue_config_file=issue_config_file,
+                        github_ops=github_ops,
+                    )
+                elif pr_auto_create is False:
                     # Local review mode: merge feature branch into base branch
                     console.print("[dim]Merging feature branch into base branch...[/dim]")
                     git_ops.merge(feature_branch)
@@ -874,7 +1238,9 @@ def close() -> None:
                 console.print(f"[red]❌ Failed to update base branch: {e}[/red]")
                 console.print()
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
-                if pr_auto_create is False:
+                if squash:
+                    console.print(f"  1. git merge --squash {feature_branch} && git commit")
+                elif pr_auto_create is False:
                     console.print(f"  1. git merge {feature_branch}")
                 else:
                     console.print("  1. git pull")
@@ -886,9 +1252,7 @@ def close() -> None:
 
             # Step 4: Move worktree config.yaml into issue dir before sync
             # so it gets archived and restore puts it back in issue dir (override)
-            worktree_abs = Path(worktree_path).resolve()
             worktree_config = worktree_abs / ".cafe" / "config.yaml"
-            worktree_issue_dir = worktree_abs / ".cafe" / "issues" / feature_branch
             if worktree_config.exists() and worktree_issue_dir.exists():
                 shutil.move(str(worktree_config), str(worktree_issue_dir / "config.yaml"))
 
@@ -938,9 +1302,16 @@ def close() -> None:
             clear_marker_if_matches(worktree_abs / ".cafe", issue_name)
 
             # Step 6: Delete feature branch
+            # Squash merges leave no merge commit pointing at the feature branch,
+            # so Git treats it as "not merged" and `git branch -d` would fail.
+            # Force-delete in that case.
+            force_delete = squash
             try:
                 console.print(f"[dim]Deleting feature branch: {feature_branch}[/dim]")
-                git_ops.delete_branch(feature_branch)
+                if force_delete:
+                    git_ops.delete_branch(feature_branch, force=True)
+                else:
+                    git_ops.delete_branch(feature_branch)
                 console.print(f"[green]✓ Deleted feature branch: {feature_branch}[/green]")
             except Exception as e:
                 console.print(f"[red]❌ Failed to delete branch: {e}[/red]")
@@ -974,9 +1345,20 @@ def close() -> None:
                 raise typer.Exit(1)
 
             # Step 2: Merge or pull changes based on pr.auto_create config
-            pr_auto_create = config_data.get("pr", {}).get("auto_create", True)
+            pr_auto_create = config_data.get("pr", {}).get("auto_create", False)
             try:
-                if pr_auto_create is False:
+                if squash:
+                    # Explicit --squash always squash-merges locally into the base
+                    # branch, even when pr.auto_create is true.
+                    _perform_squash_merge(
+                        git_ops,
+                        feature_branch,
+                        issue_name,
+                        message,
+                        issue_config_file=issue_config_file,
+                        github_ops=github_ops,
+                    )
+                elif pr_auto_create is False:
                     # Local review mode: merge feature branch into base branch
                     console.print("[dim]Merging feature branch into base branch...[/dim]")
                     git_ops.merge(feature_branch)
@@ -990,7 +1372,9 @@ def close() -> None:
                 console.print(f"[red]❌ Failed to update base branch: {e}[/red]")
                 console.print()
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
-                if pr_auto_create is False:
+                if squash:
+                    console.print(f"  1. git merge --squash {feature_branch} && git commit")
+                elif pr_auto_create is False:
                     console.print(f"  1. git merge {feature_branch}")
                 else:
                     console.print("  1. git pull")
@@ -1000,9 +1384,15 @@ def close() -> None:
                 raise typer.Exit(1)
 
             # Step 3: Delete feature branch
+            # Squash merges leave no merge commit, so `git branch -d` fails;
+            # force-delete when we squashed.
+            force_delete = squash
             try:
                 console.print(f"[dim]Deleting feature branch: {feature_branch}[/dim]")
-                git_ops.delete_branch(feature_branch)
+                if force_delete:
+                    git_ops.delete_branch(feature_branch, force=True)
+                else:
+                    git_ops.delete_branch(feature_branch)
                 console.print(f"[green]✓ Deleted feature branch: {feature_branch}[/green]")
             except Exception as e:
                 console.print(f"[red]❌ Failed to delete branch: {e}[/red]")
@@ -1076,9 +1466,7 @@ def close() -> None:
         raise typer.Exit(1)
 
 
-def restore(
-    issue_name: str = typer.Argument(..., help="Issue name to restore")
-) -> None:
+def restore(issue_name: str = typer.Argument(..., help="Issue name to restore")) -> None:
     """Restore archived issue from backup.
 
     This command restores an archived issue from ~/.cafe/projects/<project-path>/archived/<issue-name>/
@@ -1160,16 +1548,22 @@ def restore(
                 except Exception as e:
                     # If branch already exists, try without -b flag
                     if "already exists" in str(e):
-                        console.print(f"[yellow]ℹ️  Branch '{feature_branch}' already exists, creating worktree[/yellow]")
+                        console.print(
+                            f"[yellow]ℹ️  Branch '{feature_branch}' already exists, creating worktree[/yellow]"
+                        )
                         try:
                             git_ops.run_git("worktree", "add", worktree_path, feature_branch)
                             console.print(f"[green]✓ Created worktree at: {worktree_path}[/green]")
                             current_branch = feature_branch
                         except Exception as e2:
                             if "already used by worktree" in str(e2):
-                                console.print(f"[yellow]ℹ️  Branch '{feature_branch}' is already in another worktree[/yellow]")
+                                console.print(
+                                    f"[yellow]ℹ️  Branch '{feature_branch}' is already in another worktree[/yellow]"
+                                )
                             else:
-                                console.print(f"[red]❌ Error: Failed to create worktree: {e2}[/red]")
+                                console.print(
+                                    f"[red]❌ Error: Failed to create worktree: {e2}[/red]"
+                                )
                                 raise typer.Exit(1)
                     else:
                         console.print(f"[red]❌ Error: Failed to create worktree: {e}[/red]")
@@ -1186,7 +1580,9 @@ def restore(
                 git_ops.checkout_branch(feature_branch)
                 console.print(f"[green]✓ Checked out branch: {feature_branch}[/green]")
             except Exception as e:
-                console.print(f"[red]❌ Error: Failed to checkout branch {feature_branch}: {e}[/red]")
+                console.print(
+                    f"[red]❌ Error: Failed to checkout branch {feature_branch}: {e}[/red]"
+                )
                 raise typer.Exit(1)
 
         # 7. Remember main repo root before potentially changing directory
@@ -1195,6 +1591,13 @@ def restore(
         # Resolve worktree_path to absolute before any chdir
         if worktree_path:
             worktree_path = str(Path(worktree_path).resolve())
+            try:
+                _ensure_worktree_cafe_excluded(Path(worktree_path))
+            except (OSError, RuntimeError) as exc:
+                console.print(
+                    "[yellow]Warning: Could not exclude restored CAFE worktree state "
+                    f"from Git: {exc}[/yellow]"
+                )
 
         # Navigate to worktree directory if it was created
         if worktree_path:
@@ -1214,18 +1617,27 @@ def restore(
                         is_in_worktree = False
 
                 if not is_in_worktree:
-                    console.print(f"[yellow]ℹ️  Navigating to worktree directory: {worktree_path}[/yellow]")
+                    console.print(
+                        f"[yellow]ℹ️  Navigating to worktree directory: {worktree_path}[/yellow]"
+                    )
                     try:
                         import os
+
                         os.chdir(worktree_path)
                         console.print(f"[green]✓ Changed directory to: {worktree_path}[/green]")
                     except Exception as e:
-                        console.print(f"[red]❌ Error: Failed to change directory to {worktree_path}: {e}[/red]")
+                        console.print(
+                            f"[red]❌ Error: Failed to change directory to {worktree_path}: {e}[/red]"
+                        )
                         raise typer.Exit(1)
 
         # 8. Prompt user for confirmation
         console.print("[yellow]⚠️  Warning: This will restore the issue from backup.[/yellow]")
-        console.print("[yellow]   Any current changes in .cafe/issues/{} will be overwritten.[/yellow]".format(issue_name))
+        console.print(
+            "[yellow]   Any current changes in .cafe/issues/{} will be overwritten.[/yellow]".format(
+                issue_name
+            )
+        )
         console.print()
 
         # Use typer.confirm for confirmation
@@ -1271,12 +1683,13 @@ def restore(
 def reset(
     phase: Optional[str] = typer.Argument(
         None,
-        help="Phase name (spec, plan, develop, review, pr). If not provided, resets the last phase with iterations"
+        help="Phase name (spec, plan, develop, review, pr). If not provided, resets the last phase with iterations",
     ),
     iteration: int = typer.Option(
         0,
-        "--iteration", "-i",
-        help="Iteration number to keep (positive, 0=remove latest only, negative=relative)"
+        "--iteration",
+        "-i",
+        help="Iteration number to keep (positive, 0=remove latest only, negative=relative)",
     ),
 ) -> None:
     """Remove iterations from a phase when agent behaves unexpectedly.
@@ -1300,17 +1713,29 @@ def reset(
             console.print(f"[red]Error: Failed to get current branch: {e}[/red]")
             raise typer.Exit(1)
 
+        # Lifecycle commands operate on the issue's declared workflow.  The
+        # shared resolver retains the legacy list only when metadata is absent
+        # and surfaces configured-playbook failures instead of hiding them.
+        from cafe.ui.cli_shared import _load_issue_step_names
+
+        try:
+            valid_phases = _load_issue_step_names(issue_name)
+        except ValueError as exc:
+            console.print(f"[red]Error: {exc}[/red]")
+            raise typer.Exit(1) from exc
+
         # 2. If phase not provided, find the last phase with iterations based on end_time or timestamp
         if phase is None:
-            from cafe.services.summary_service import SummaryService
             from datetime import datetime
+
+            from cafe.services.summary_service import SummaryService
 
             service = SummaryService()
             latest_phase = None
             latest_time = None
 
             # Check all phases to find the one with the latest end_time (or timestamp if incomplete)
-            for phase_name in VALID_PHASES:
+            for phase_name in valid_phases:
                 iterations = service.load_iteration_statuses(issue_name, phase_name)
                 if not iterations:
                     continue
@@ -1335,9 +1760,9 @@ def reset(
             console.print(f"[dim]Auto-detected last phase: {phase}[/dim]")
 
         # 3. Validate phase name
-        if phase not in VALID_PHASES:
+        if phase not in valid_phases:
             console.print(f"[red]Error: Invalid phase '{phase}'[/red]")
-            console.print(f"[dim]Valid phases: {', '.join(VALID_PHASES)}[/dim]")
+            console.print(f"[dim]Valid phases: {', '.join(valid_phases)}[/dim]")
             raise typer.Exit(1)
 
         # 4. Verify phase directory exists
@@ -1443,7 +1868,9 @@ def reset(
                 if iter_dir.exists():
                     shutil.rmtree(iter_dir)
 
-            console.print(f"[green]✓ Removed iterations: {', '.join([f'iteration_{i:03d}' for i in sorted(to_remove)])}[/green]")
+            console.print(
+                f"[green]✓ Removed iterations: {', '.join([f'iteration_{i:03d}' for i in sorted(to_remove)])}[/green]"
+            )
         except Exception as e:
             console.print(f"[red]❌ Failed to remove iterations: {e}[/red]")
             console.print()
@@ -1481,14 +1908,20 @@ def reset(
                     "status_code": target_status_code,
                     "timestamp": target_timestamp or datetime.now().astimezone().isoformat(),
                     "iteration": target_iteration,
-                    "message": f"Phase completed with {target_status_code}" if target_status_code else "Phase reset to this iteration",
-                    "end_time": target_end_time or target_timestamp or datetime.now().astimezone().isoformat(),
+                    "message": f"Phase completed with {target_status_code}"
+                    if target_status_code
+                    else "Phase reset to this iteration",
+                    "end_time": target_end_time
+                    or target_timestamp
+                    or datetime.now().astimezone().isoformat(),
                 }
 
                 with open(status_file, "w", encoding="utf-8") as f:
                     json.dump(status_data, f, indent=2, ensure_ascii=False)
 
-                console.print(f"[green]✓ Updated {phase} phase status to iteration_{target_iteration:03d}[/green]")
+                console.print(
+                    f"[green]✓ Updated {phase} phase status to iteration_{target_iteration:03d}[/green]"
+                )
 
                 # Update iterations.jsonl to remove deleted iterations
                 if iterations_file.exists():
@@ -1499,7 +1932,11 @@ def reset(
                             if line.strip():
                                 iterations_data.append(json.loads(line))
 
-                    kept_iterations = [rec for rec in iterations_data if rec.get("iteration", 0) <= target_iteration]
+                    kept_iterations = [
+                        rec
+                        for rec in iterations_data
+                        if rec.get("iteration", 0) <= target_iteration
+                    ]
                     with open(iterations_file, "w", encoding="utf-8") as f:
                         for record in kept_iterations:
                             f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -1511,7 +1948,9 @@ def reset(
                     status_file.unlink()
                 if iterations_file.exists():
                     iterations_file.unlink()
-                console.print(f"[green]✓ Phase restarted (status.json and iterations.jsonl removed)[/green]")
+                console.print(
+                    f"[green]✓ Phase restarted (status.json and iterations.jsonl removed)[/green]"
+                )
 
             console.print("[green]✓ Status saved[/green]")
         except Exception as e:

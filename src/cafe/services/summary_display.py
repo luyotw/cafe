@@ -1,10 +1,14 @@
 """Display formatter for cafe summary timeline."""
 
-from typing import List, Optional
+from typing import Any, List, Mapping, Optional
 
 from cafe.services.timeline_builder import TimelineEntry
 from cafe.services.time_formatter import format_timestamp_local, format_timestamp_utc, format_duration, calculate_elapsed_time
 from cafe.core.types import PhaseStatus
+from cafe.core.context_packet import (
+    format_context_packet_diagnostic,
+    validate_context_packet_diagnostic,
+)
 
 try:
     from rich.console import Console
@@ -44,6 +48,35 @@ class SummaryDisplay:
         if count is None or count == 0:
             return "--"
         return f"{count:,}"
+
+    def format_context_packets(self, packets: List[Mapping[str, Any]]) -> str:
+        """Render the independent, narrow Context Packets read model."""
+        validated_packets = []
+        for packet in packets:
+            try:
+                validated_packets.append(validate_context_packet_diagnostic(packet))
+            except ValueError:
+                continue
+        if not validated_packets:
+            return ""
+        lines = ["Context Packets", "Consumer | Source | Requested | Effective | Reason"]
+        for packet in validated_packets:
+            source = packet.get("source")
+            source_name = source.get("artifact_name", "unknown") if isinstance(source, Mapping) else "unknown"
+            consumer = f"{packet.get('consumer', 'unknown')}#{packet.get('iteration', '?')}"
+            diagnostic = format_context_packet_diagnostic(packet)
+            lines.append(
+                " | ".join(
+                    [
+                        consumer,
+                        str(source_name),
+                        str(packet.get("requested_mode", "")),
+                        str(packet.get("effective_mode", "")),
+                        diagnostic,
+                    ]
+                )
+            )
+        return "\n".join(lines)
 
     def _format_entry(self, entry: TimelineEntry, prefix: str) -> str:
         """Format an entry for display with the given prefix.
@@ -174,14 +207,16 @@ class SummaryDisplay:
         # Add columns
         table.add_column("Phase", style="green")
         table.add_column("Iteration", style="cyan", justify="right")
-        table.add_column("Status Code", style="yellow", no_wrap=False, overflow="fold")
         table.add_column("Start", style="dim")
         table.add_column("End", style="dim")
         table.add_column("Duration", style="magenta")
+        table.add_column("CLI", style="blue")
         table.add_column("Model", style="blue", no_wrap=False, overflow="fold")
         table.add_column("Input Tokens", style="cyan", justify="right")
         table.add_column("Output Tokens", style="cyan", justify="right")
+        table.add_column("Cache Write", style="cyan", justify="right")
         table.add_column("Cache Read", style="cyan", justify="right")
+        table.add_column("Reasoning", style="cyan", justify="right")
 
         # Add data rows
         for entry in entries:
@@ -202,20 +237,24 @@ class SummaryDisplay:
             model_str = entry.model or "--"
             input_tokens_str = self.format_token_count(entry.input_tokens)
             output_tokens_str = self.format_token_count(entry.output_tokens)
+            cache_write_str = self.format_token_count(entry.cache_write_tokens)
             cache_read_str = self.format_token_count(entry.cache_read_tokens)
+            reasoning_str = self.format_token_count(entry.reasoning_output_tokens)
 
             # Add row
             table.add_row(
                 entry.phase,
                 str(entry.iteration) if entry.iteration else "N/A",
-                entry.status_code or "N/A",
                 start_str,
                 end_str,
                 duration_str,
+                entry.cli or "--",
                 model_str,
                 input_tokens_str,
                 output_tokens_str,
-                cache_read_str
+                cache_write_str,
+                cache_read_str,
+                reasoning_str,
             )
 
         # Print table
@@ -245,7 +284,9 @@ class SummaryDisplay:
                         "model": entry.model,
                         "input_tokens": 0,
                         "output_tokens": 0,
+                        "cache_write_tokens": 0,
                         "cache_read_tokens": 0,
+                        "reasoning_output_tokens": 0,
                         "cost_usd": 0.0,
                     }
 
@@ -253,8 +294,12 @@ class SummaryDisplay:
                     aggregated[key]["input_tokens"] += entry.input_tokens
                 if entry.output_tokens:
                     aggregated[key]["output_tokens"] += entry.output_tokens
+                if entry.cache_write_tokens:
+                    aggregated[key]["cache_write_tokens"] += entry.cache_write_tokens
                 if entry.cache_read_tokens:
                     aggregated[key]["cache_read_tokens"] += entry.cache_read_tokens
+                if entry.reasoning_output_tokens:
+                    aggregated[key]["reasoning_output_tokens"] += entry.reasoning_output_tokens
                 if entry.cost_usd:
                     aggregated[key]["cost_usd"] += entry.cost_usd
 
@@ -267,7 +312,11 @@ class SummaryDisplay:
                 print(f"\n{stats['cli']} - {stats['model']}")
                 print(f"  Input Tokens:  {self.format_token_count(stats['input_tokens'])}")
                 print(f"  Output Tokens: {self.format_token_count(stats['output_tokens'])}")
+                print(f"  Cache Write:   {self.format_token_count(stats['cache_write_tokens'])}")
                 print(f"  Cache Read:    {self.format_token_count(stats['cache_read_tokens'])}")
+                print(
+                    f"  Reasoning:     {self.format_token_count(stats['reasoning_output_tokens'])}"
+                )
                 cost_str = f"${stats['cost_usd']:.4f}" if stats['cost_usd'] > 0 else "--"
                 print(f"  Cost (USD):    {cost_str}")
             print()
@@ -286,7 +335,9 @@ class SummaryDisplay:
                     "model": entry.model,
                     "input_tokens": 0,
                     "output_tokens": 0,
+                    "cache_write_tokens": 0,
                     "cache_read_tokens": 0,
+                    "reasoning_output_tokens": 0,
                     "cost_usd": 0.0,
                 }
 
@@ -295,8 +346,12 @@ class SummaryDisplay:
                 aggregated[key]["input_tokens"] += entry.input_tokens
             if entry.output_tokens:
                 aggregated[key]["output_tokens"] += entry.output_tokens
+            if entry.cache_write_tokens:
+                aggregated[key]["cache_write_tokens"] += entry.cache_write_tokens
             if entry.cache_read_tokens:
                 aggregated[key]["cache_read_tokens"] += entry.cache_read_tokens
+            if entry.reasoning_output_tokens:
+                aggregated[key]["reasoning_output_tokens"] += entry.reasoning_output_tokens
             if entry.cost_usd:
                 aggregated[key]["cost_usd"] += entry.cost_usd
 
@@ -316,7 +371,9 @@ class SummaryDisplay:
         table.add_column("Model", style="blue")
         table.add_column("Input Tokens", style="cyan", justify="right")
         table.add_column("Output Tokens", style="cyan", justify="right")
+        table.add_column("Cache Write", style="cyan", justify="right")
         table.add_column("Cache Read", style="cyan", justify="right")
+        table.add_column("Reasoning", style="cyan", justify="right")
         table.add_column("Cost (USD)", style="magenta", justify="right")
 
         # Add rows for each model
@@ -327,7 +384,9 @@ class SummaryDisplay:
                 stats["model"],
                 self.format_token_count(stats["input_tokens"]),
                 self.format_token_count(stats["output_tokens"]),
+                self.format_token_count(stats["cache_write_tokens"]),
                 self.format_token_count(stats["cache_read_tokens"]),
+                self.format_token_count(stats["reasoning_output_tokens"]),
                 f"${stats['cost_usd']:.4f}" if stats['cost_usd'] > 0 else "--",
             )
 

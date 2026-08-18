@@ -1,13 +1,14 @@
 """Tests for skill loader."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from cafe.core.types import AgentCLI
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.importer import import_skills
-from cafe.skills.loader import SkillLoader
+from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.skills.native_bridge import NativeSkillBridge
 
 
@@ -72,6 +73,33 @@ def test_activate_replaces_placeholders(tmp_path: Path) -> None:
     assert "Hello World" in text
 
 
+def test_prompt_only_workflow_rejects_missing_reference(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    skill_dir = project_root / ".cafe" / "skills" / "prompt-only"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: prompt-only
+description: Prompt-only workflow contract.
+workflow:
+  prompt_references:
+    optional_instruction: missing.md
+---
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+
+    loader.discover()
+
+    with pytest.raises(ValueError, match="workflow reference not found: missing.md"):
+        loader.get_workflow_contract("prompt-only")
+
+
 def test_builtin_catalog_includes_pr_skill(tmp_path: Path) -> None:
     builtin_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
     loader = SkillLoader(
@@ -82,7 +110,12 @@ def test_builtin_catalog_includes_pr_skill(tmp_path: Path) -> None:
 
     items = loader.discover()
 
-    assert any(item.name == "pr" and item.source == "builtin" for item in items)
+    assert any(item.name == "cafe-pr" and item.source == "builtin" for item in items)
+
+
+def test_write_cafe_phase_legacy_aliases_resolve_to_renamed_skill() -> None:
+    assert canonical_skill_name("write-cafe-skill") == "write-cafe-phase"
+    assert canonical_skill_name("write-skill") == "write-cafe-phase"
 
 
 def test_imported_project_skill_is_discovered_with_project_precedence(tmp_path: Path) -> None:
@@ -108,6 +141,7 @@ def test_imported_project_skill_is_discovered_with_project_precedence(tmp_path: 
     assert any(item.name == "plan" and item.source == "project" for item in items)
     assert "Imported project body" in loader.activate("plan")
 
+
 def test_builtin_catalog_includes_chat_handoff_skills(tmp_path: Path) -> None:
     builtin_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
     loader = SkillLoader(
@@ -120,10 +154,10 @@ def test_builtin_catalog_includes_chat_handoff_skills(tmp_path: Path) -> None:
     names = {item.name for item in items if item.source == "builtin"}
 
     assert {
-        "common-chat-handoff",
-        "chat-develop-change",
-        "chat-spec-revision",
-        "chat-plan-revision",
+        "cafe-common-chat-handoff",
+        "cafe-chat-develop-change",
+        "cafe-chat-spec-revision",
+        "cafe-chat-plan-revision",
     }.issubset(names)
 
 
@@ -204,16 +238,15 @@ def test_global_overrides_builtin_when_no_project_skill(tmp_path: Path) -> None:
     assert items[0].source == "global"
 
 
-
 def test_install_skill_uses_project_version_over_global(tmp_path: Path) -> None:
     """When a project skill overrides a global skill, install_skill uses the project version."""
     global_root = tmp_path / "global" / "skills"
     project = tmp_path / "project" / ".cafe" / "skills"
-    _write_skill(global_root, "plan")
-    project_skill_dir = project / "plan"
+    _write_skill(global_root, "cafe-plan")
+    project_skill_dir = project / "cafe-plan"
     project_skill_dir.mkdir(parents=True, exist_ok=True)
     (project_skill_dir / "SKILL.md").write_text(
-        "---\nname: plan\ndescription: project plan\n---\n\nProject version\n",
+        "---\nname: cafe-plan\ndescription: project plan\n---\n\nProject version\n",
         encoding="utf-8",
     )
 
@@ -228,7 +261,7 @@ def test_install_skill_uses_project_version_over_global(tmp_path: Path) -> None:
         project_root=tmp_path / "project",
         home_dir=tmp_path / "home",
     )
-    bridge.install_skill("plan", AgentCLI.CLAUDE)
+    bridge.install_skill("cafe-plan", AgentCLI.CLAUDE)
 
     installed = tmp_path / "project" / ".claude" / "skills" / "cafe-plan" / "SKILL.md"
     assert "Project version" in installed.read_text(encoding="utf-8")
@@ -236,7 +269,7 @@ def test_install_skill_uses_project_version_over_global(tmp_path: Path) -> None:
 
 def test_install_skill_recovers_when_skills_root_is_file(tmp_path: Path) -> None:
     global_root = tmp_path / "global" / "skills"
-    _write_skill(global_root, "plan")
+    _write_skill(global_root, "cafe-plan")
     project_root = tmp_path / "project"
     bad_root = project_root / ".copilot" / "skills"
     bad_root.parent.mkdir(parents=True, exist_ok=True)
@@ -250,14 +283,14 @@ def test_install_skill_recovers_when_skills_root_is_file(tmp_path: Path) -> None
     loader.discover()
     bridge = NativeSkillBridge(loader, project_root=project_root, home_dir=tmp_path / "home")
 
-    installed = bridge.install_skill("plan", AgentCLI.COPILOT)
+    installed = bridge.synchronize_skills(["cafe-plan"], AgentCLI.COPILOT)[0]
     assert installed.exists()
     assert bad_root.is_dir()
 
 
 def test_install_skill_recovers_when_skills_root_is_broken_symlink(tmp_path: Path) -> None:
     global_root = tmp_path / "global" / "skills"
-    _write_skill(global_root, "plan")
+    _write_skill(global_root, "cafe-plan")
     project_root = tmp_path / "project"
     bad_root = project_root / ".copilot" / "skills"
     bad_root.parent.mkdir(parents=True, exist_ok=True)
@@ -271,6 +304,61 @@ def test_install_skill_recovers_when_skills_root_is_broken_symlink(tmp_path: Pat
     loader.discover()
     bridge = NativeSkillBridge(loader, project_root=project_root, home_dir=tmp_path / "home")
 
-    installed = bridge.install_skill("plan", AgentCLI.COPILOT)
+    installed = bridge.synchronize_skills(["cafe-plan"], AgentCLI.COPILOT)[0]
     assert installed.exists()
     assert bad_root.is_dir()
+
+
+@pytest.mark.parametrize("manifest_contents", ["{broken", "{}"])
+def test_synchronize_skills_recovers_stale_skills_from_a_corrupted_manifest(
+    tmp_path: Path, manifest_contents: str
+) -> None:
+    """A damaged manifest still permits replace-style native skill cleanup."""
+    global_root = tmp_path / "global" / "skills"
+    _write_skill(global_root, "cafe-plan")
+    _write_skill(global_root, "cafe-stale")
+    project_root = tmp_path / "project"
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    loader.discover()
+    bridge = NativeSkillBridge(loader, project_root=project_root, home_dir=tmp_path / "home")
+
+    bridge.synchronize_skills(["cafe-stale"], AgentCLI.COPILOT)
+    native_skills = project_root / ".copilot" / "skills"
+    (native_skills / bridge.MANAGED_SKILLS_MANIFEST).write_text(
+        manifest_contents, encoding="utf-8"
+    )
+
+    bridge.synchronize_skills(["cafe-plan"], AgentCLI.COPILOT)
+
+    assert not (native_skills / "cafe-stale").exists()
+    assert (native_skills / "cafe-plan" / "SKILL.md").is_file()
+
+
+def test_synchronize_skills_can_reconcile_without_reinstalling_desired_skills(
+    tmp_path: Path,
+) -> None:
+    """Workflow prompt preparation remains the single installation path."""
+    global_root = tmp_path / "global" / "skills"
+    _write_skill(global_root, "cafe-plan")
+    _write_skill(global_root, "cafe-stale")
+    project_root = tmp_path / "project"
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    loader.discover()
+    bridge = NativeSkillBridge(loader, project_root=project_root, home_dir=tmp_path / "home")
+
+    bridge.synchronize_skills(["cafe-stale"], AgentCLI.COPILOT)
+    with patch.object(bridge, "install_skill") as install_skill:
+        installed = bridge.synchronize_skills(["cafe-plan"], AgentCLI.COPILOT, install=False)
+
+    native_skills = project_root / ".copilot" / "skills"
+    assert installed == []
+    install_skill.assert_not_called()
+    assert not (native_skills / "cafe-stale").exists()

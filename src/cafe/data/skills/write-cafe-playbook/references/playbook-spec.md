@@ -1,0 +1,465 @@
+# CAFE Playbook Authoring Reference
+
+Use this reference while designing or validating a CAFE playbook. The runtime schema remains authoritative in `src/cafe/core/playbook.py`.
+
+## 1. Location And Identity
+
+| Scope | Path | Use |
+| --- | --- | --- |
+| Builtin | `src/cafe/data/playbooks/<id>.yaml` | Shipped by CAFE for general reuse |
+| Project | `.cafe/playbooks/<id>.yaml` | Domain/project-specific workflow committed with its custom skills |
+
+- Keep `<id>`, filename stem, and `playbook.id` identical so strict validation does not report structural drift.
+- A project playbook overrides a builtin playbook with the same id.
+- Custom phase skills belong in `.cafe/skills/`; builtin phase skills belong in `src/cafe/data/skills/`.
+
+## 2. Minimal Shape
+
+```yaml
+playbook:
+  id: example
+  name: "Example Workflow"
+  conversation_locale: zh-TW
+
+roles:
+  developer:
+    description: "Workflow operator"
+    default_agent: "David"
+    default_cli: "claude"
+
+steps:
+  plan_work:
+    type: skill
+    skill: cafe-domain_plan
+    role: developer
+    assignee_type: agent
+    input_artifacts: []
+    output_artifact: plan
+    valid_intents: [confirmed, ready_for_review, need_clarification, needs_changes]
+    allowed_tools: [Read, Edit, Write, Grep, Glob]
+    hooks:
+      prepare_input: [UserInputCollector]
+    "on":
+      await_agent: execute_work
+      confirm_output: plan_work
+      need_clarification: plan_work
+      manual_handoff: plan_work
+
+  execute_work:
+    type: skill
+    skill: cafe-domain_execute
+    role: developer
+    assignee_type: agent
+    input_artifacts: [plan]
+    output_artifact: domain_result
+    valid_intents: [confirmed, ready_for_review, need_clarification, need_permission, needs_changes]
+    allowed_tools: [Read, Edit, Write, Grep, Glob, Bash]
+    hooks:
+      prepare_input: [UserInputCollector]
+      after_execute: [PermissionRetryHandler]
+    "on":
+      await_agent: _done
+      confirm_output: execute_work
+      need_clarification: execute_work
+      need_permission: execute_work
+      manual_handoff: execute_work
+
+entry_point: plan_work
+```
+
+### Conversation locale
+
+`playbook.conversation_locale` controls the natural language used by the outer
+workflow driver when it talks with the user. Use a BCP 47 language tag such as
+`zh-TW`, `en`, or `pt-BR`. Use `auto` only when the driver should inherit the
+language of the user's current request; omitted conversation locale values
+resolve to `auto` for backward compatibility with existing custom playbooks.
+
+The configured conversation locale is authoritative and does not require a
+separate user confirmation. The workflow driver must display the effective
+locale and its playbook source as informational kickoff context. A direct
+language instruction from the user may override it for the current thread;
+merely writing in another language or asking about the language choice is not
+an override.
+
+The conversation locale applies to kickoff, clarification/permission questions,
+alignment checkpoints, progress/error reports, and completion messages. It does
+not translate commands, paths, playbook or step names, intents, artifact keys,
+structured payload fields, quoted source text, or the language of workflow
+artifacts.
+
+## 3. Step Fields
+
+| Field | Rule |
+| --- | --- |
+| `type` | Usually `skill`; use `subflow` only when an actual subflow exists |
+| `skill` | Existing resolved skill name, or an iteration mapping with numbered keys/default |
+| `role` / `chat_role` | Must exist in top-level `roles` |
+| `assignee_type` | `agent` (or a v0.2-compatible omission), `human`, `auto`, or `hybrid` |
+| `input_artifacts` | Artifact keys already produced by earlier or conditional paths |
+| `output_artifact` | The key registered when `{output_file}` exists |
+| `initial_input` | Entry-step-only trusted input providers and explicit artifact/prompt bindings |
+| `template` | Optional default selected from the step skill's declared output-template catalog |
+| `valid_intents` | Supported `PhaseStatusCode` tokens the phase may return |
+| `allowed_tools` | Least broad set that still allows the skill to complete |
+| `hooks` | Runtime-supported prepare/execute/publish hooks only |
+| `allowed_goto` | Explicit non-default routes; do not use as the happy path |
+| `"on"` | Complete intent-key → step transition map |
+| `human_tasks` | Explicit user-task bindings for user-facing handoff triggers |
+
+Quote `"on"`; unquoted YAML 1.1 may parse it as a boolean before normalization.
+
+### Human-task bindings
+
+`human_tasks` makes a user handoff explicit.  A binding selects a policy declared
+by the step's selected skill and maps each accepted outcome to a playbook step:
+
+```yaml
+human_tasks:
+  - trigger: confirm_output
+    task_id: output-review
+    outcomes: {confirm: execute_work, revise: plan_work}
+```
+
+- Supported policy patterns are `confirm_output`, `answer_questions`,
+  `revision_feedback`, `no_changes_needed`, and `select_next_step`.
+- Bind every user-facing `confirm_output`, `need_clarification`, or
+  `no_changes_needed` pause. `initial` is available for an optional first-run
+  input task and does not require an `"on"` entry.
+- A binding must name exactly one policy supplied by the selected skill. Its
+  non-terminal outcome targets must be existing playbook steps; use `_done` only
+  for a declared terminal outcome.
+- Do not put prompts, decision labels, questions, or validation rules in the
+  playbook. Those belong to the skill policy. A binding may only override prompt
+  or correction copy and constrain allowed targets.
+- When the selected policy has one `revise` decision with
+  `correction: true` and `requires_target: true`, keep the normal continuation in `outcomes` and list
+  every valid correction destination in `allowed_targets`:
+
+  ```yaml
+  human_tasks:
+    - trigger: confirm_output
+      task_id: output-review
+      outcomes: {confirm: closeout}
+      allowed_targets: [build, review, knowledge]
+  ```
+
+  A revision payload must include `decision: revise`, one listed `target`, and
+  the policy-required `feedback`. Runtime writes that feedback for the selected
+  target phase. Only list phases whose declared input artifacts are already
+  available at the gate.
+- CLI `--user-input` supplies the same payload as the interactive UI: JSON
+  objects using `task` plus `decision`, `answers`, `feedback`, or `target` as
+  required by the selected policy. Plain text is accepted only for a feedback
+  policy. Invalid payloads keep the workflow paused and display the policy's
+  correction guidance.
+
+### Ownership declarations
+
+Omitting `assignee_type` is the compatibility form of `agent`: it retains the
+normal agent session and transition behavior. New ownership-specific fields
+must always be paired with their explicit owner; the loader rejects an
+ambiguous or incomplete declaration before any step runs.
+
+```yaml
+  approval:
+    skill: cafe-approval
+    role: operator
+    assignee_type: human
+    human_tasks:
+      - trigger: initial
+        task_id: approval
+        outcomes: {approve: publish}
+    "on": {}
+
+  publish:
+    skill: cafe-publish
+    role: operator
+    assignee_type: auto
+    automatic:
+      executor: declared_transition
+      inputs: {intent: await_agent}
+    "on": {await_agent: _done}
+```
+
+- A `human` owner has exactly one `initial` binding. It creates or recovers a
+  durable task and pauses without starting an agent.
+- An `auto` owner names a host-registered executor ID and its data-only inputs.
+  Paths, scripts, modules, and playbook-side registration are not authority;
+  unknown executors fail closed and never fall back to an agent.
+- A `hybrid` owner declares every agent/human portion and every typed edge. A
+  human portion's root binding uses its portion ID as `trigger`; its outcomes
+  return to the containing hybrid step so the persisted cursor, rather than
+  user input, applies its typed edge.
+
+```yaml
+  release:
+    skill: cafe-release
+    role: operator
+    assignee_type: hybrid
+    human_tasks:
+      - trigger: approve
+        task_id: release-approval
+        outcomes: {approve: release}
+    hybrid:
+      entry_portion: prepare
+      portions:
+        - id: prepare
+          owner: agent
+          on: {await_agent: {portion: approve}}
+        - id: approve
+          owner: human
+          on: {approve: {step: _done}}
+    "on": {}
+```
+
+Hybrid portion list order is presentation only. `entry_portion`, every
+continuation, and the human boundary must be explicit; no top-level exit may
+bypass the human portion. `cafe playbook simulate` and `workflow --dry-run`
+render this ownership plan read-only: they do not create state, tasks, output
+files, agent sessions, automatic work, or hooks.
+
+## 4. Outcome To Transition Mapping
+
+`valid_intents` contains outcome tokens. The `"on"` map uses transition keys.
+
+| Outcome token | `"on"` key | Typical target |
+| --- | --- | --- |
+| `confirmed`, `await_agent` | `await_agent` | Next normal step |
+| `ready_for_review`, `confirm_output` | `confirm_output` | Current step, pausing for user review |
+| `need_clarification` | `need_clarification` | Current step |
+| `need_permission` | `need_permission` | Current step |
+| `needs_changes`, `rejected`, `skip_review` | `manual_handoff` | Current step or an allowed exceptional target |
+| `no_changes_needed` | `no_changes_needed` | Forward skip target |
+| `workflow_complete` | `workflow_complete` | `_done` |
+
+Every declared intent must have a resolvable key. `cafe playbook simulate` reports missing handlers.
+
+## 5. User Gates And Loops
+
+`on.confirm_output` is the first-class declaration of a planned kickoff
+confirmation gate. The workflow driver derives the user's stop-contract
+candidates from steps that declare this key. Use it only when the user can
+meaningfully approve the completed output before the normal path continues.
+Reactive `need_clarification`, `need_permission`, and `alignment_checkpoint`
+pauses are safety interruptions, not scheduled confirmation candidates.
+
+Use a self-loop when the user is reviewing the current phase's output:
+
+```yaml
+"on":
+  await_agent: next_step
+  confirm_output: current_step
+  need_clarification: current_step
+  need_permission: current_step
+  manual_handoff: current_step
+```
+
+- Add `UserInputCollector` so resumed input reaches the same phase.
+- Add `PermissionRetryHandler` when local/external execution may be permission-gated.
+- Keep preview revisions in execute phases and scope/solution revisions in plan phases.
+- Use a backward route only when a previously confirmed source of truth is invalidated, not for ordinary tuning.
+
+## 6. Artifact Matrix
+
+Build this table before writing YAML:
+
+| Producer | Output key | Artifact meaning | Consumer | Consumer input |
+| --- | --- | --- | --- | --- |
+| `domain_plan` | `plan` | Confirmed implementation checklist | `domain_execute` | `[plan]` |
+| `domain_execute` | `domain_result` | Execution report/result paths | `next_analysis` | `[domain_result]` when useful |
+
+Use `plan` only when the artifact itself contains the executable worklist, including Test List, Definition of Done, stable IDs, and `- [ ]` tasks. Reports and manifests should use domain result keys.
+
+### Serial Plan Bridge
+
+```yaml
+  discover_and_plan:
+    output_artifact: plan
+
+  execute_and_plan_next:
+    input_artifacts: [plan]
+    output_artifact: plan
+
+  execute_next:
+    input_artifacts: [plan]
+    output_artifact: next_result
+```
+
+The bridge receives the old plan as `{plan_file}` and writes the next plan to `{output_file}`. Runtime resolves the incoming artifact before registering the new one, so these are separate versioned files. The bridge must:
+
+1. Complete and check the incoming plan.
+2. Obtain user acceptance of its result.
+3. Produce and confirm the next plan, or produce `not_required` with no unchecked tasks.
+
+Do not duplicate plan tasks in a sidecar checklist. Runtime `checklist.md` is procedural; the plan checkboxes are the cross-phase implementation worklist.
+
+## 7. Optional Phases And Skips
+
+Prefer an explicit forward skip:
+
+```yaml
+  analyze:
+    output_artifact: plan
+    valid_intents: [confirmed, no_changes_needed]
+    allowed_goto: [optional_execute, next_required_step]
+    "on":
+      await_agent: optional_execute
+      no_changes_needed: next_required_step
+```
+
+- The no-work plan should be `not_required`, state the reason, and contain no unchecked tasks.
+- In interactive mode, an explicit skill-written baton may bypass a redundant confirmation after the user already approved the skip.
+- Ensure every skip target has enough source information to continue without an artifact that only the skipped phase would have produced.
+
+## 8. Tools, Hooks, And Prepare
+
+- Use standard tool names such as `Read`, `Edit`, `Write`, `Grep`, `Glob`, `Bash`, `WebFetch`, and `WebSearch`. Scope Bash when a narrower command contract is practical.
+- Resolve `workflow.required_tools` for every selected skill. Each declaration
+  needs an exact `allowed_tools` grant, or a deliberately broader grant for the
+  same tool such as `Bash` / `Bash(*)`; validation rejects missing grants.
+- `UserInputCollector` belongs on phases that pause and resume with user feedback.
+- `PermissionRetryHandler` belongs on execution phases that may hit permission boundaries.
+- Use specialized hooks only when their implementation exists and their lifecycle stage is valid.
+- A playbook with interactive prepare must declare `commands.prepare.fields` or
+  `fields_ref`; bundled playbooks are rejected otherwise. A promptless workflow must
+  set `commands.prepare.prompt_for_spec_plan_config: false`.
+- Declarative fields may write `<declared-step>.<config-key>` and persist that value
+  in the matching `issue.yaml` block. A `template` field still requires the target
+  skill to declare `workflow.output_templates`; other workflow-owned settings need
+  no development-stage or PR metadata.
+
+### Per-issue iteration override
+
+An issue may adjust one step's visit cap without copying the full playbook. The
+override surface is intentionally limited to `steps.<name>.max_iterations`:
+
+```yaml
+playbook_overrides:
+  steps:
+    review:
+      max_iterations: 7
+```
+
+The step must exist in the selected playbook and the value must be a positive
+integer. Unknown steps, fields, or non-integer values fail before workflow
+execution. Other graph, skill, hook, and presentation changes still require a
+project playbook under `.cafe/playbooks/`.
+
+### Initial input for a custom entry step
+
+Use this contract when an entry step needs operator text or a GitHub issue before
+the agent executes:
+
+```yaml
+entry_point: intake
+steps:
+  intake:
+    type: skill
+    skill: cafe-intake
+    role: researcher
+    output_artifact: intake_brief
+    initial_input:
+      providers: [manual_text, github_issue]
+      bind:
+        artifact: intake_brief
+        prompt_context: user_input
+    hooks:
+      prepare_input: [InitialInputProviderResolver]
+    "on": {await_agent: _done}
+```
+
+`initial_input` is permitted only on `entry_point`. Providers must be unique and
+implemented by CAFE's trusted host registry; this release supplies only
+`manual_text` and `github_issue`. `bind` must name an artifact equal to this
+step's `output_artifact`, `user_input` prompt context, or both. Validation fails
+before agent execution for unsupported providers, non-entry declarations, missing
+bindings, or invalid destinations.
+
+Prepare persists a canonical `initial_input` block in `issue.yaml` using the
+stable field IDs `input_method` and `github_issue_id`; those fields may write to
+the entry step's own config section. Built-in development playbooks also retain
+their legacy `spec.input_method` / `spec.issue_id` keys. The provider resolver is
+host-side only, runs on first iteration without overwriting existing output, and
+does not grant agent credentials or arbitrary host execution.
+
+`legacy_presentation: true` is reserved for bundled development playbooks. It
+keeps their established requirements heading and guided manual/GitHub interaction
+while they use `InitialInputProviderResolver`; custom playbooks should omit it so
+the resolver writes only the declared input content.
+
+## 8.1 Skill environments
+
+Every playbook explicitly owns both `skills.workflow` and `skills.chat`. Each
+channel has a required `shared` list; an explicit empty list is the way to
+install no shared skills. Runtime resolves names in stable `shared → role → step`
+order and removes duplicates while keeping their first position.
+
+```yaml
+skills:
+  workflow:
+    shared: [cafe-workflow-common]
+    roles:
+      developer: {mode: extend, skills: [project-dev-common]}
+    steps:
+      review: {mode: replace, skills: [project-review-common]}
+  chat:
+    shared: []
+```
+
+Role and step overlays must name a declared role or step. `extend` retains the
+previous layer and appends its names; `replace` discards the previous layer.
+All referenced skills, including overlay-only skills, are validated through the
+normal project/global/builtin discovery order. A missing channel is a warning in
+non-strict custom-playbook loading and resolves to an empty environment; it is a
+failure for `cafe playbook validate <id> --strict`. Add the missing channel with
+`shared: []` to make isolation intentional.
+
+The phase `steps.<name>.skill` remains separate: it selects the phase behavior
+and is installed once, after resolved workflow support skills. Do not add
+development revision skills to `skills.chat` unless that playbook needs them.
+
+## 9. Validation Sequence
+
+Run all applicable checks from the target repo:
+
+```bash
+cafe skill validate --strict
+cafe playbook validate <id> --strict
+cafe playbook show <id>
+cafe playbook simulate <id> --dot
+```
+
+The simulation should report:
+
+- no unreachable steps;
+- no missing intent handlers;
+- no dead-end steps;
+- no unexplained directed cycles beyond intentional self-loops.
+
+For a serial plan bridge, also assert the contract directly:
+
+```python
+assert steps["bridge"]["input_artifacts"] == ["plan"]
+assert steps["bridge"]["output_artifact"] == "plan"
+```
+
+## 10. Acceptance Checklist
+
+- [ ] Filename stem equals `playbook.id`.
+- [ ] `playbook.conversation_locale` is `auto` or a valid BCP 47 language tag
+      and matches the intended driver-to-user conversation language.
+- [ ] Every skill resolves and passes strict skill validation.
+- [ ] Every role and `chat_role` is declared.
+- [ ] Every step is reachable from `entry_point`.
+- [ ] Every declared intent has an `"on"` handler.
+- [ ] Every user-facing pause has a matching `human_tasks` binding and a policy
+      in the selected skill.
+- [ ] Every normal path reaches `_done` or an intentional user pause.
+- [ ] Plan producers output `plan`; execute consumers input `plan` and read `{plan_file}`.
+- [ ] Serial bridges distinguish incoming `{plan_file}` from next `{output_file}`.
+- [ ] Optional phases have a safe forward skip and a `not_required` contract.
+- [ ] User review loops remain in the phase that owns the current output.
+- [ ] Tools and hooks are sufficient but not gratuitously broad.
+- [ ] Every selected skill's `workflow.required_tools` declarations are satisfied by `allowed_tools`.
+- [ ] Strict validation, show, and simulation results are reported.

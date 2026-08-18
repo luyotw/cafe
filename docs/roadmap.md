@@ -60,9 +60,20 @@ CAFE 長期採 **repo-first** 的 definition model，但不預設最終所有流
 - `v0.2~v0.3` 的 runtime store 以 file-based（`.cafe/issues/ + JSON/YAML/MD`）為主
 - `v0.4` 再評估是否需要抽離到 structured store（如 SQLite 或 remote store）
 
+## 版本週期語意
+
+本 roadmap 的 `v0.N` 是**開發週期標記**：
+
+- `0.N.0` 表示進入 `v0.N` 開發週期。
+- `v0.N` 節列出的核心能力會在 `0.N.x` 系列中逐步交付。
+- `v0.N` 節的「完成標準」是結束該週期、發布 `0.(N+1).0` 前應滿足的 exit criteria，不是 `0.N.0` 單一版本的 release gate。
+- 各版本實際已交付內容以 `CHANGELOG.md` 與對應 release guide 為準。
+
+例如，`0.3.0` 代表進入 `v0.3` 開發週期；`HumanTask`、task inbox、assignment 與 capability policy 等 `v0.3` 目標預計在 `0.3.x` 期間逐步完成，並於發布 `0.4.0` 前滿足本節完成標準。
+
 ## 路線圖總覽
 
-### v0.2
+### v0.2 開發週期：核心架構
 
 目標：
 把 CAFE 從固定 phase 開發工具，重構成通用流程引擎底座。
@@ -98,16 +109,19 @@ CAFE 長期採 **repo-first** 的 definition model，但不預設最終所有流
 - `assignee_type` step 欄位（`agent` / `human` / `auto`；v0.2 只正式執行 `agent`）
 
 說明：
-- `assignee_type: auto` 在 v0.2 僅作為保留值存在，精確語意延後到 v0.3 前定義
+- `assignee_type: auto` 在 v0.2 僅作為保留值存在，精確語意在 v0.3 開發週期內定義
 
-### v0.2.x
+### v0.2 開發週期：0.2.x 收尾
 
 目標：
-補齊流程引擎周邊能力，讓 v0.3 可以專注在 HumanTask。
+補齊流程引擎周邊能力，讓 v0.3 開發週期可以專注在 HumanTask。
 
 核心能力：
 - custom hooks / scripts automation
 - host-side capability execution 雛型
+- capability contract consolidation：可把 PR-specific publish plumbing 收斂成
+  generic request validation 與 execution receipt handling，但必須維持既有 PR
+  publish 行為穩定，且不得放寬 trusted host capability boundary
 - playbook / skill tooling
 - validation / simulation / dry-run 強化
 - 更多 custom playbook 驗證樣本
@@ -121,7 +135,7 @@ CAFE 長期採 **repo-first** 的 definition model，但不預設最終所有流
 - 可用至少一條非軟體開發流程做 validate / dry-run 驗證
 
 建議先用 `pr` phase 做雛型：
-- agent 只負責產生本地 artifact 與 `publish_request.json`
+- agent 只負責產生本地 artifact 與 `capability_request.json`（`publish_request.json` 作為 PR legacy alias 保留）
 - host-side hook 讀 contract 後才執行受信任 script（例如 `sync_pr.sh`）
 - 第一期只允許 **agent 選擇既有 trusted script 並填參數**
 - 不在 v0.2.x 直接開放 agent 任意新寫 script 後自動拿 host 權限執行
@@ -131,7 +145,7 @@ CAFE 長期採 **repo-first** 的 definition model，但不預設最終所有流
 - host capability 決定「用什麼系統權限去做」
 - workflow 產物必須是 declarative contract，不是直接的 shell privilege
 
-### v0.3 前置：Agent-Written Automation Boundary
+### v0.3 開發週期前置：Agent-Written Automation Boundary
 
 目標：
 讓 CAFE 能走向「agent 可擴充自己的 automation」，但不把 host execution 退化成任意 RCE。
@@ -152,13 +166,15 @@ CAFE 長期採 **repo-first** 的 definition model，但不預設最終所有流
 - 若 agent 寫完 script 就能直接用 host 權限執行，等於把 workflow authoring 變成 privilege escalation 機制
 - 非技術使用者無法判斷自己究竟授權了哪種外部 mutation
 
-因此 v3 應區分兩種 script execution：
+因此 v0.3 開發週期應區分兩種 script execution：
 - **sandbox execution**
   - agent 自己在受限環境執行，用於開發、測試、dry-run
 - **host execution**
   - host 根據 contract / manifest / policy 執行，用於 GitHub、deploy、外部 API、系統寫入
 
-### v0.3
+### v0.3 開發週期
+
+交付窗口：`0.3.x`。本節完成標準是發布 `0.4.0` 前的 exit criteria。
 
 目標：
 把 CAFE 從「流程引擎」推進到「人機協作流程系統」。
@@ -249,7 +265,9 @@ agent-authored script 若要變成可重複使用的 host capability，需要 pr
 - agent 可以自我擴充 automation
 - host execution 仍可審計、可限制、可回收
 
-### v0.4
+### v0.4 開發週期
+
+交付窗口：`0.4.x`。本節完成標準是發布 `0.5.0` 前的 exit criteria。
 
 目標：
 把 CAFE 從單一流程系統推進到可遞迴的流程網路。
@@ -284,7 +302,7 @@ agent-authored script 若要變成可重複使用的 host capability，需要 pr
 - Business Object 的生命週期跨流程、跨 instance、跨時間
 - 不應過早把 Blackboard 綁成 org-wide object store
 
-### v0.5
+### v0.5 開發週期
 
 目標：
 把 CAFE 從流程網路推進到組織級 operating layer。
@@ -393,7 +411,7 @@ agent-authored script 若要變成可重複使用的 host capability，需要 pr
 
 1. custom playbook 是否真的足以表達非軟體開發流程？
 2. suspend / resume 是否足夠穩，能支撐跨天流程？
-3. `HumanTask` 是否能自然嵌進 v0.3 的 playbook / blackboard 模型？
+3. `HumanTask` 是否能在 v0.3 開發週期自然嵌進 playbook / blackboard 模型？
 4. `Subflow` 未來是否能無痛接進現在的 step model？
 5. Blackboard 未來是否應只作為 instance state，而不是 business object store？
 
@@ -401,8 +419,8 @@ agent-authored script 若要變成可重複使用的 host capability，需要 pr
 
 1. 先確認 v0.2 不納入 `HumanTask` 正式實作，只預留入口
 2. 再確認 v0.2 Milestone C 要加入非軟體開發流程 dry-run 驗證
-3. 再確認 v0.3 是否聚焦在 HumanTask，而非與 custom hooks 綁在一起
-4. 再確認 v0.4 的主軸是否就是 `Subflow + BusinessObject`
+3. 再確認 v0.3 開發週期是否聚焦在 HumanTask，而非與 custom hooks 綁在一起
+4. 再確認 v0.4 開發週期的主軸是否就是 `Subflow + BusinessObject`
 5. 最後才討論 dashboard / governance / org analytics
 
 ## 各版本的關鍵實驗
@@ -411,9 +429,9 @@ agent-authored script 若要變成可重複使用的 host capability，需要 pr
 |------|----------|
 | v0.2 | custom playbook 能否表達非 default 的流程，至少可 dry-run 一條非軟體開發流程？ |
 | v0.2.x | custom hooks / tooling 是否足以支撐使用者真正開始自訂 skill / playbook？ |
-| v0.3 | HumanTask 能否自然嵌入流程，而不是退化成另一種 clarification？ |
-| v0.4 | subflow 能否支撐流程串接，而不讓 step model 失控？ |
-| v0.5 | org memory / governance / analytics 是否提供實際組織價值，而不是更多配置負擔？ |
+| v0.3 開發週期 | HumanTask 能否自然嵌入流程，而不是退化成另一種 clarification？ |
+| v0.4 開發週期 | subflow 能否支撐流程串接，而不讓 step model 失控？ |
+| v0.5 開發週期 | org memory / governance / analytics 是否提供實際組織價值，而不是更多配置負擔？ |
 
 ## 驗證層級
 
@@ -447,7 +465,7 @@ agent-authored script 若要變成可重複使用的 host capability，需要 pr
 - `blackboard.json`：此 instance 的共享狀態
 - `iteration_*`：各 step 的歷史與產出
 
-這個命名雖然不一定在 v0.2 就變成獨立 class，但文件上先定義好，能讓 v0.4 的 subflow 更自然落地。
+這個命名雖然不一定在 v0.2 就變成獨立 class，但文件上先定義好，能讓 v0.4 開發週期的 subflow 更自然落地。
 
 ## 向下相容原則
 
@@ -467,11 +485,11 @@ Roadmap 預設所有版本沿用以下原則：
   - 技術使用者是否能自己寫 custom playbook，且不只侷限於 default 開發流程
 - `v0.2.x`
   - skill / playbook tooling 是否足以支撐真實的自訂流程迭代
-- `v0.3`
+- `v0.3` 開發週期
   - 小團隊是否願意把人類任務正式掛進系統，而不是退回外部工具協作
-- `v0.4`
+- `v0.4` 開發週期
   - subflow 是否真的讓複雜流程更清楚，而不是更難理解
-- `v0.5`
+- `v0.5` 開發週期
   - governance / analytics / org memory 是否在不增加太多認知負擔的前提下提供價值
 
 ## Adoption 風險與產品現實

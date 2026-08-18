@@ -58,111 +58,6 @@ class TestAgentConfigBackupFields:
         assert config.model == "opus"
 
 
-class TestSetupAgentsBackupConfig:
-    """Tests for _setup_agents reading backup configuration."""
-
-    def test_setup_agents_loads_backup_clis(self, tmp_path: Path) -> None:
-        """Test that _setup_agents reads the backup list from config file."""
-        from cafe.ui.cli import _setup_agents
-        from cafe.utils.config import ConfigManager
-
-        config_file = tmp_path / "config.yaml"
-        config_manager = ConfigManager(str(config_file))
-
-        custom_config = {
-            "agents": {
-                "pm": {"name": "Roger", "cli": "copilot"},
-                "developer": {
-                    "name": "David",
-                    "cli": "claude",
-                    "backup": ["gemini", "copilot"],
-                },
-                "reviewer": {"name": "Richard", "cli": "copilot"},
-            }
-        }
-        config_manager.save_config(custom_config)
-
-        agent_manager = _setup_agents(config_manager, phase_name="develop")
-        david_config = agent_manager.agents["David"].config
-        assert david_config.backup_clis == [AgentCLI.GEMINI, AgentCLI.COPILOT]
-
-    def test_setup_agents_excludes_primary_cli_from_backup(self, tmp_path: Path) -> None:
-        """Test that entries in the backup list matching the primary CLI are filtered out."""
-        from cafe.ui.cli import _setup_agents
-        from cafe.utils.config import ConfigManager
-
-        config_file = tmp_path / "config.yaml"
-        config_manager = ConfigManager(str(config_file))
-
-        custom_config = {
-            "agents": {
-                "pm": {"name": "Roger", "cli": "copilot"},
-                "developer": {
-                    "name": "David",
-                    "cli": "claude",
-                    "backup": ["claude", "gemini"],  # "claude" matches primary CLI, should be filtered
-                },
-                "reviewer": {"name": "Richard", "cli": "copilot"},
-            }
-        }
-        config_manager.save_config(custom_config)
-
-        agent_manager = _setup_agents(config_manager, phase_name="develop")
-        david_config = agent_manager.agents["David"].config
-        assert AgentCLI.CLAUDE not in david_config.backup_clis
-        assert AgentCLI.GEMINI in david_config.backup_clis
-
-    def test_setup_agents_loads_models_config(self, tmp_path: Path) -> None:
-        """Test that _setup_agents reads the models dict from config file."""
-        from cafe.ui.cli import _setup_agents
-        from cafe.utils.config import ConfigManager
-
-        config_file = tmp_path / "config.yaml"
-        config_manager = ConfigManager(str(config_file))
-
-        custom_config = {
-            "agents": {
-                "pm": {"name": "Roger", "cli": "copilot"},
-                "developer": {
-                    "name": "David",
-                    "cli": "claude",
-                    "models": {
-                        "claude": {"plan": "opus", "develop": "sonnet", "pr": "haiku"},
-                        "gemini": {"plan": "gemini-3-flash-preview", "develop": "gemini-3-flash-preview"},
-                    },
-                },
-                "reviewer": {"name": "Richard", "cli": "copilot"},
-            }
-        }
-        config_manager.save_config(custom_config)
-
-        agent_manager = _setup_agents(config_manager, phase_name="develop")
-        david_config = agent_manager.agents["David"].config
-        assert david_config.models_config["claude"]["plan"] == "opus"
-        assert david_config.models_config["gemini"]["develop"] == "gemini-3-flash-preview"
-
-    def test_setup_agents_empty_backup_when_not_configured(self, tmp_path: Path) -> None:
-        """Test that backup_clis is empty when not configured."""
-        from cafe.ui.cli import _setup_agents
-        from cafe.utils.config import ConfigManager
-
-        config_file = tmp_path / "config.yaml"
-        config_manager = ConfigManager(str(config_file))
-
-        custom_config = {
-            "agents": {
-                "pm": {"name": "Roger", "cli": "copilot"},
-                "developer": {"name": "David", "cli": "claude"},
-                "reviewer": {"name": "Richard", "cli": "copilot"},
-            }
-        }
-        config_manager.save_config(custom_config)
-
-        agent_manager = _setup_agents(config_manager)
-        assert agent_manager.agents["David"].config.backup_clis == []
-        assert agent_manager.agents["David"].config.models_config == {}
-
-
 class TestAgentManagerBackupRetry:
     """Tests for AgentManager backup agent retry logic."""
 
@@ -216,6 +111,86 @@ class TestAgentManagerBackupRetry:
             response, *_ = manager.execute("David", "test prompt", phase_name="develop")
 
         assert response == "backup success"
+
+    def test_backup_receives_fresh_takeover_context_without_primary_session(self) -> None:
+        manager = AgentManager()
+        manager.register_agent(
+            AgentConfig(name="David", cli=AgentCLI.CLAUDE, backup_clis=[AgentCLI.GEMINI])
+        )
+        seen_prompts = []
+
+        def side_effect(prompt, *args, **kwargs):
+            seen_prompts.append(prompt)
+            if len(seen_prompts) == 1:
+                raise self._make_rate_limit_error()
+            return self._make_success_response("backup success")
+
+        with patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect):
+            response, *_ = manager.execute(
+                "David",
+                "primary prompt",
+                backup_context_callback=lambda _error: '{"operation":{"state":"running"}}',
+            )
+
+        assert response == "backup success"
+        assert len(seen_prompts) == 2
+        assert "Cold backup takeover context" in seen_prompts[1]
+        assert '"operation":{"state":"running"}' in seen_prompts[1]
+        assert "session-" not in seen_prompts[1]
+
+    def test_each_backup_receives_the_immediately_preceding_failure(self) -> None:
+        """A later cold backup must see the failed backup, not stale primary context."""
+        manager = AgentManager()
+        manager.register_agent(
+            AgentConfig(
+                name="David",
+                cli=AgentCLI.CLAUDE,
+                backup_clis=[AgentCLI.GEMINI, AgentCLI.COPILOT],
+            )
+        )
+        primary_error = self._make_rate_limit_error()
+        backup_error = AgentExecutionError("backup rate limit", error_type="rate_limit")
+        callback_errors = []
+        execution_calls = 0
+
+        def side_effect(*_args, **_kwargs):
+            nonlocal execution_calls
+            execution_calls += 1
+            if execution_calls == 1:
+                raise primary_error
+            if execution_calls == 2:
+                raise backup_error
+            return self._make_success_response("second backup success")
+
+        with patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect):
+            response, *_ = manager.execute(
+                "David",
+                "primary prompt",
+                backup_context_callback=callback_errors.append,
+            )
+
+        assert response == "second backup success"
+        assert callback_errors == [primary_error, backup_error]
+
+    def test_backup_is_not_started_when_takeover_snapshot_cannot_be_built(self) -> None:
+        manager = AgentManager()
+        manager.register_agent(
+            AgentConfig(name="David", cli=AgentCLI.CLAUDE, backup_clis=[AgentCLI.GEMINI])
+        )
+
+        with patch(
+            "cafe.agents.executor.AgentExecutor.execute", side_effect=self._make_rate_limit_error()
+        ) as execute:
+            with pytest.raises(AgentExecutionError, match="takeover context unavailable"):
+                manager.execute(
+                    "David",
+                    "primary prompt",
+                    backup_context_callback=lambda _error: (_ for _ in ()).throw(
+                        OSError("snapshot unavailable")
+                    ),
+                )
+
+        assert execute.call_count == 1
 
     def test_first_backup_fails_second_succeeds(self) -> None:
         """Test that when the first backup also fails, the second backup is tried."""
@@ -311,7 +286,9 @@ class TestAgentManagerBackupRetry:
         manager.register_agent(config)
 
         with patch("cafe.agents.executor.AgentExecutor.execute") as mock_exec:
-            mock_exec.side_effect = AgentExecutionError("permission denied", error_type="permission_denied")
+            mock_exec.side_effect = AgentExecutionError(
+                "permission denied", error_type="permission_denied"
+            )
 
             with pytest.raises(AgentExecutionError):
                 manager.execute("David", "test prompt")
@@ -332,7 +309,9 @@ class TestAgentManagerBackupRetry:
 
         created_executors = []
 
-        original_init = __import__("cafe.agents.executor", fromlist=["AgentExecutor"]).AgentExecutor.__init__
+        original_init = __import__(
+            "cafe.agents.executor", fromlist=["AgentExecutor"]
+        ).AgentExecutor.__init__
 
         def capture_executor(self, config):
             created_executors.append(config)
@@ -347,8 +326,10 @@ class TestAgentManagerBackupRetry:
                 raise AgentExecutionError("rate limit", error_type="rate_limit")
             return AgentResponse(response="ok", token_usage=TokenUsage())
 
-        with patch("cafe.agents.executor.AgentExecutor.__init__", capture_executor), \
-             patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect):
+        with (
+            patch("cafe.agents.executor.AgentExecutor.__init__", capture_executor),
+            patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect),
+        ):
             manager.execute("David", "test prompt", phase_name="plan")
 
         # The second executor should be the backup CLI (gemini) with the correct model
@@ -368,7 +349,9 @@ class TestAgentManagerBackupRetry:
         manager.register_agent(config)
 
         created_configs = []
-        original_init = __import__("cafe.agents.executor", fromlist=["AgentExecutor"]).AgentExecutor.__init__
+        original_init = __import__(
+            "cafe.agents.executor", fromlist=["AgentExecutor"]
+        ).AgentExecutor.__init__
 
         def capture_executor(self, config):
             created_configs.append(config)
@@ -383,8 +366,10 @@ class TestAgentManagerBackupRetry:
                 raise AgentExecutionError("rate limit", error_type="rate_limit")
             return AgentResponse(response="ok", token_usage=TokenUsage())
 
-        with patch("cafe.agents.executor.AgentExecutor.__init__", capture_executor), \
-             patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect):
+        with (
+            patch("cafe.agents.executor.AgentExecutor.__init__", capture_executor),
+            patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect),
+        ):
             manager.execute("David", "test prompt", phase_name="develop")
 
         backup_configs = [c for c in created_configs if c.cli == AgentCLI.GEMINI]
@@ -435,7 +420,7 @@ class TestRateLimitErrorDisplay:
             _handle_phase_exception(error, "develop")
 
         captured = capsys.readouterr()
-        assert "backup" in captured.out.lower() or "cafe config edit" in captured.out
+        assert ".cafe/phases.yaml" in captured.out
 
     def test_rate_limit_shows_tried_agents_when_all_exhausted(self, capsys) -> None:
         """Test that the error message shows the list of tried agents when all are exhausted."""

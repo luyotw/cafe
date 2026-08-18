@@ -69,8 +69,8 @@ class TestPrepareNonGitHubRepo:
         # Note: Should NOT ask for input method or PR auto-create in non-GitHub repos
         mock_prompt_text.return_value = "test-issue"
         mock_prompt_confirm.return_value = False  # worktree (n)
-        mock_cli_list.return_value = "Custom configuration"  # setup mode
-        mock_phase_list.return_value = "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development"
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
+        mock_phase_list.return_value = "Medium"
         mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
@@ -102,8 +102,8 @@ class TestPrepareNonGitHubRepo:
         # Mock user inputs
         mock_prompt_text.return_value = "my-feature"
         mock_prompt_confirm.return_value = False  # worktree (n)
-        mock_cli_list.return_value = "Custom configuration"  # setup mode
-        mock_phase_list.return_value = "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development"
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
+        mock_phase_list.return_value = "Medium"
         mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
@@ -139,6 +139,25 @@ class TestPrepareNonGitHubRepo:
 
         # Should not have spec or pr config in non-interactive mode
         assert "spec" not in config_data
+        assert "pr" not in config_data
+
+    def test_prepare_non_github_repo_explicit_no_interactive_writes_spec(
+        self, temp_repo_dir, mock_git_ops_non_github
+    ):
+        """Explicit --no-interactive on non-GitHub repo writes spec/plan defaults."""
+        result = runner.invoke(
+            app,
+            ["prepare", "ni-non-github", "--no-interactive", "--input-method=manual"],
+        )
+
+        assert result.exit_code == 0
+        config_file = temp_repo_dir / ".cafe" / "issues" / "ni-non-github" / "issue.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+
+        assert config_data["spec"]["input_method"] == "manual"
+        assert config_data["spec"]["rigor"] == "medium"
+        assert config_data["plan"]["template"] == "default"
         assert "pr" not in config_data
 
 
@@ -180,13 +199,13 @@ class TestPrepareGitHubRepo:
         """測試在 GitHub repo 中執行 prepare 會詢問 input method."""
         # Mock user inputs: issue name, worktree (n), input method (manual), rigor, template, pr (y)
         mock_prompt_text.return_value = "gh-issue"
-        mock_cli_confirm.return_value = False  # worktree (n)
-        mock_phase_confirm.return_value = True  # pr (y)
-        mock_cli_list.return_value = "Custom configuration"  # setup mode
+        mock_cli_confirm.side_effect = [False, True, True]  # worktree, pr auto_create, post_todo_list
+        mock_phase_confirm.return_value = True
+        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
         # Note: phase_prompts has input method selection too, need to handle both
         mock_phase_list.side_effect = [
             "1. Manual input",  # input method
-            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
+            "Medium",  # rigor from field choices
         ]
         mock_template_list.return_value = "default (system default)"  # template
 

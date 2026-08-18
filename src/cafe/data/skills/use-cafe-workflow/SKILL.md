@@ -1,177 +1,131 @@
 ---
 name: use-cafe-workflow
-description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands instead of manually performing each phase.
-version: 1.3.0
+description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
+version: 1.19.1
 ---
 
 # Use CAFE Workflow
 
 ## Purpose
-- Let CAFE run the spec, plan, develop, review, and PR phases through `cafe make`.
-- Prefer non-interactive commands so the workflow can run unattended and resume cleanly.
-- Treat CAFE artifacts, blackboard state, and baton handoffs as the source of workflow progress.
-- Ground Q&A and PR review in **`.cafe/strategic_context.yaml`**—the single file for strategic documents, decision authority, and per-issue overrides. If referenced documents do not exist yet, **help the user create them before** `cafe make`.
 
-## Strategic Context (one file: `.cafe/strategic_context.yaml`)
+- Drive CAFE through spec, plan, develop, review, and PR without bypassing its
+  artifacts, blackboard state, or baton handoffs.
+- Keep driver decisions grounded in the confirmed kickoff contract and
+  `.cafe/strategic_context.yaml`.
+- Prefer non-interactive commands so work can run unattended and resume cleanly.
+- Diagnose abnormal workflow behavior only far enough to choose the correct,
+  safe repair layer.
 
-All higher-scope material lives in **one** project-root file. It answers:
-1. **Which strategic documents exist** (roadmap, positioning, department norms, …) and their paths.
-2. **How much the agent may decide** on each concern (axes + levels)—default for the repo, with optional per-issue overrides.
+## Progressive disclosure
 
-Do not split this into `mandate.yaml` or other parallel config files.
+Read this file completely, then load only the references required by the current
+situation. Resolve every path relative to this `SKILL.md`.
 
-### Document categories (agree paths with the user)
+| Situation | Read before acting |
+| --- | --- |
+| Start or resume before the first workflow execution; answer a locale or kickoff question | `references/kickoff.md`, `references/model_selection.md`, and `references/strategic_context.md` |
+| Run, resume, inspect, retry, or recover ordinary workflow work | `references/running_workflow.md` |
+| Handle `to_owner=user`, confirmation, clarification, permission, or alignment | `references/handoffs_and_alignment.md`; also read `references/strategic_context.md` |
+| Start or resume linked work; confirm a spec or plan with an issue-decomposition assessment | `references/issue_decomposition.md`; also read `references/strategic_context.md` and `references/handoffs_and_alignment.md` |
+| Diagnose incorrect workflow behavior or choose a repair layer | `references/diagnosis_and_repair.md`; also read the relevant runtime reference above |
+| Review or ship after the PR phase | `references/convergent_pr_review.md`; also read `references/strategic_context.md` |
+| Measure fresh-versus-resumed correction efficiency | `references/correction_ab_experiment.md` |
 
-| Category | What it answers | Example paths |
-| --- | --- | --- |
-| Product direction | What we are building, priorities, boundaries | `docs/roadmap.md` |
-| Company positioning | Who we serve, positioning, non-goals | `docs/positioning.md` |
-| Department / function norms | How a team operates | `CONTRIBUTING.md`, `docs/guidelines/*.md` |
-| Playbook-specific policy | Rules for this workflow type | `docs/policies/<name>.md` |
+If more than one situation applies, read every listed reference before acting.
+Do not preload unrelated references.
 
-**Gate:** If a needed category is `missing`, **do not start `cafe make`**. Interview the user, draft the document, get confirmation, save at the agreed path, set `status: exists` (or user-approved `draft`) in `strategic_context.yaml`, then continue.
+## Core invariants
 
-### Kickoff (required before first `cafe make`)
+- The complete kickoff contract is the first blocking gate. Do not run
+  `cafe prepare`, mutate the repository, or execute the first workflow phase
+  before the user confirms it.
+- Assess the issue nature, scale, and risk before kickoff. Include one exact
+  primary/fallback model chain per phase and model-adjustment authority in the
+  contract. Resolve provider-neutral phase execution profiles from the active
+  playbook skills, classify the remaining work into a capability band, and
+  record a phase-specific selection rationale; no provider or model is built
+  into this driver skill.
+- Resolve the effective conversation locale from a direct user override first,
+  then a reliably inferred user preference from the current thread, and finally
+  the active playbook. Use that locale for every driver-to-user message.
+- Obtain explicit kickoff confirmation for the repository content locale used
+  by documentation and code comments. Conversation-locale inference may supply
+  a recommended default, but it cannot confirm this convention for the user.
+- Use `.cafe/strategic_context.yaml` as the single source for strategic
+  documents and authority. Do not invent strategy or silently create issue
+  overrides.
+- Treat planned output confirmation, reactive user handoffs, and semantic
+  alignment as separate decisions. The driver owns alignment; phase agents do
+  not approve themselves.
+- Validate issue-decomposition assessments before confirming spec or plan;
+  coordinate any authorized split through existing authority boundaries and
+  reconstruct linked-work position from durable records.
+- Drive every agent phase with `cafe workflow --execute --single-step`; add
+  `--start-step <step>` only for the initial entry or a justified bounded retry.
+  Do not use `cafe make` to execute an unattended multi-phase chain.
+- After each completed phase, reassess the remaining phase model chains. Change
+  them only within the confirmed model-adjustment authority.
+- Do not manually edit workflow artifacts, blackboard state, or
+  `next_step.txt` except when repairing confirmed broken workflow state.
+- Do not bypass CAFE by directly asking an agent to implement an issue that the
+  user asked CAFE to run.
+- Modify source-of-truth playbooks and phase skills, never generated artifacts
+  or installed global copies. Driver and CAFE core defects require escalation
+  unless the user explicitly authorizes that source change.
+- A phase or PR reporting success is evidence, not final proof. Ship only after
+  the independent driver review has no unresolved in-mandate blockers.
 
-1. Inventory existing docs; co-create any that are `missing`.
-2. Confirm with the user: active playbook, **preset** (`issue-scoped` | `product-led` | `technical-led` | `full-stack` | `custom`), **axes** for that playbook (examples only—user may rename/add), **level** per axis (`agent` | `propose` | `escalate`), and **out_of_mandate** (billing, legal, production access, …).
-3. Write everything to `.cafe/strategic_context.yaml`. For this issue only, add an entry under `issues.<issue-name>` when it differs from the repo default.
+## Driver checklist
 
-**Levels:** `agent` = decide within strategic docs + issue artifacts; `propose` = recommend then continue per playbook; `escalate` = must ask the user.
+### Start or resume
 
-### Schema (single file)
+- [ ] Read the kickoff and strategic-context references.
+- [ ] Resolve the active playbook, effective conversation locale, proposed
+  repository content locale, confirmation gates, reactive handoffs, mandate,
+  and worktree behavior.
+- [ ] Assess issue nature, scale, and risk factors; resolve
+  every phase skill's execution profile, classify each phase's capability band,
+  resolve exact primary and fallback models with a phase-specific rationale,
+  reuse valid cached preflight evidence or test candidate availability and the
+  configured fallback path, and propose model-adjustment authority.
+- [ ] Present the deterministic kickoff table and obtain explicit confirmation.
+- [ ] Check Git state, initialize CAFE if needed, prepare the issue, enter the
+  recorded worktree, and persist the issue-owned contract.
 
-```yaml
-version: 1
+### Run
 
-documents:
-  roadmap:
-    path: docs/roadmap.md
-    status: exists          # exists | draft | missing
-  positioning:
-    path: docs/positioning.md
-    status: missing
-  engineering_guidelines:
-    path: CONTRIBUTING.md
-    status: exists
+- [ ] Read the running-workflow reference.
+- [ ] Execute only the current phase with `--single-step`, including the initial
+  requirement or authorized resume input as needed; otherwise follow the
+  persisted baton without forcing `--start-step`.
+- [ ] After the phase, inspect its output and execution evidence, then keep or
+  revise the next model chain under the confirmed authority.
+- [ ] Inspect progress through `cafe status` and `cafe show`; consult the
+  blackboard only when command output is insufficient.
+- [ ] When CAFE pauses, classify the handoff before supplying any input.
+- [ ] When behavior is wrong, stop normal execution and use the bounded
+  diagnosis reference.
 
-mandate:
-  preset: technical-led
-  playbook_id: default
-  axes:
-    product_scope:
-      level: escalate
-      grounds: [roadmap, positioning]
-    technical:
-      level: agent
-      grounds: [engineering_guidelines]
-    quality:
-      level: agent
-  out_of_mandate:
-    - pricing
-    - production deploy approval
-  notes: |
-    Default for this repo. User confirmed 2026-05-23.
+### Complete
 
-issues:
-  issue301:
-    playbook_id: default
-    axes:
-      product_scope: { level: escalate }
-      technical: { level: agent }
-    notes: |
-      This issue only: stay within v0.2 roadmap scope.
-```
+- [ ] Confirm the terminal state is `Workflow completed ... next=done`.
+- [ ] Read the convergent PR review reference and finish its full review matrix.
+- [ ] Merge only after all blockers are resolved, close the linked issue, run
+  `cafe close`, and confirm the issue is absent from `cafe ls`.
+- [ ] Report the relevant test evidence and final state in the effective locale.
 
-- **`documents`** — strategic layer; agent reads these paths for direction.
-- **`mandate`** — repo-wide default authority.
-- **`issues.<name>`** — optional; only fields that differ from `mandate`. Omit when the default applies.
+## Reference index
 
-Re-read `.cafe/strategic_context.yaml` and linked documents before answering questions, reviewing PRs, or merging.
-
-### Apply
-
-**Answering questions:** Resolve `issues.<current-issue>` over `mandate` over documents. Classify by axis → level → strategic docs + issue spec/plan. Contradicting or extending a strategic document = escalate. `missing` document = go back to co-creation, do not invent strategy.
-
-**PR review:** Blocking findings only for in-mandate axes backed by `exists`/`draft` documents. Merge/close/`cafe close` only when those blockers are resolved.
-
-## Initial Setup
-1. Check the repo state with `git status --short --branch`.
-2. If CAFE is not initialized, run `cafe init --preset <preset>` instead of interactive `cafe init`.
-3. Prepare the issue non-interactively:
-   ```bash
-   cafe prepare <issue-name> --no-interactive --input-method=manual --rigor=medium --spec-template=auto --plan-template=default
-   ```
-4. For a GitHub-backed issue, use:
-   ```bash
-   cafe prepare <issue-name> --no-interactive --input-method=github --issue-id=<number> --rigor=medium --spec-template=auto --plan-template=default --auto-create-pr
-   ```
-5. If the prepare command creates or reports a worktree, `cd` into that worktree before running workflow commands.
-6. **Strategic Context:** inventory, co-create missing documents, confirm mandate with user, write `.cafe/strategic_context.yaml` (including `issues.<issue-name>` if needed), then run the first `cafe make`.
-
-## Running Work
-1. Start the workflow with the user's requirement. Point agents at the single config when useful:
-   ```bash
-   cafe make --user-input "<requirement or answer>. Strategic context: .cafe/strategic_context.yaml (issue: <issue-name>)"
-   ```
-2. Resume later with:
-   ```bash
-   cafe make
-   ```
-3. If the workflow is paused for user input and the answer is known, resume non-interactively:
-   ```bash
-   cafe make --user-input "<answer>"
-   ```
-4. If a specific step must be retried, use the generic workflow command:
-   ```bash
-   cafe workflow --execute --start-step <step>
-   ```
-5. For one-step diagnosis, add `--single-step`:
-   ```bash
-   cafe workflow --execute --start-step <step> --single-step
-   ```
-
-## Useful Options
-- Use `--fallback-preset <preset>` when the primary CLI is rate-limited, unavailable, missing, or configured with a bad model.
-- Use repeated `--add-dir <path>` for extra directories the agents must read or edit.
-- Prefer configuring stable extra directories in `.cafe/config.yaml` as `allowed_directories`.
-- Keep `--add-dir` values relative to the current worktree and make sure the directories exist before running CAFE.
-
-## Inspecting Progress
-- Use `cafe summary` for the phase timeline.
-- Use `cafe show <step> output` to inspect the latest step result.
-- Use `cafe show <step> questions` when the workflow is waiting for clarification.
-- Use `cafe show <step> checklist` to see what the agent still must complete.
-- Read `.cafe/issues/<issue>/blackboard.json` only when command output is insufficient to understand the current handoff.
-
-## Operating Rules
-- Prefer `cafe make` over legacy per-step commands (removed in issue #315). For a single step use `cafe workflow --start-step <step> --execute`.
-- Do not manually edit workflow artifacts, blackboard, or `next_step.txt` unless you are repairing a broken workflow state.
-- Do not bypass CAFE by directly asking an agent to implement the issue when the user asked to use the CAFE workflow.
-- If CAFE reports uncommitted chat handoff changes, commit or stash the relevant changes before resuming.
-- If CAFE reports a baton contract error, rerun the responsible step with `cafe workflow --execute --start-step <step>` so the agent can rewrite the baton.
-- If PR sync fails because the branch has uncommitted changes, commit or stash them, then rerun `cafe make`.
-
-## Completion
-- The normal terminal state is `Workflow completed ... next=done`.
-- If PR auto-create is enabled, verify the PR URL printed by CAFE (or `gh pr view` on the feature branch).
-- If PR auto-create is disabled, inspect the local PR artifact with `cafe show pr output` and open the PR before shipping.
-
-### PR review and ship
-After the PR phase completes, do not stop at the handoff:
-1. Re-read `.cafe/strategic_context.yaml` (resolve `issues.<current-issue>` if present) and linked documents. Review the PR within that scope. Apply required fixes through CAFE (`cafe make`, focused commits) or direct edits, push the branch, and repeat until there are **no blocking findings within mandate**.
-2. When review is clean, **merge and close without waiting for a separate human approval**:
-   ```bash
-   PR=$(gh pr view --json number -q .number)
-   gh pr merge "$PR" --merge
-   ```
-   Use `--squash` instead of `--merge` only when the target repo's convention requires it.
-3. Close the linked GitHub issue when `issue.yaml` has `spec.issue_id`:
-   ```bash
-   gh issue close <issue-id> --comment "Merged via PR #${PR}."
-   ```
-4. Tear down the CAFE issue locally. Run `cafe close` from the issue worktree if `worktree_path` is set; otherwise run it from the main repo while on the feature branch. (`cafe close` blocks while the PR is still open; merge first.)
-
-### Before reporting done
-- Run the relevant tests or confirm which CAFE test plan already ran.
-- Confirm the issue no longer appears in `cafe ls` (data archived under `~/.cafe/projects/<project>/archived/`).
+- `references/kickoff.md` — locale, confirmation contract, formatter, prepare.
+- `references/strategic_context.md` — documents, mandate, protected overrides.
+- `references/running_workflow.md` — commands, inspection, retries, operating rules.
+- `references/model_selection.md` — issue sizing, provider-neutral phase
+  profiles, configured fallback preflight, reassessment, and adjustment authority.
+- `references/phases_yaml.md` — confirmed-chain writer contract and
+  non-authoritative field guidance.
+- `references/handoffs_and_alignment.md` — user pauses and driver decisions.
+- `references/diagnosis_and_repair.md` — bounded classification and disposition.
+- `references/convergent_pr_review.md` — batched final review, merge, close, teardown.
+- `references/correction_ab_experiment.md` — controlled efficiency experiment.
+- `references/issue_decomposition.md` — assessment validation, authority,
+  delivery gate, and durable project position.

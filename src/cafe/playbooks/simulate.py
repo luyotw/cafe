@@ -19,6 +19,7 @@ class PlaybookSimulationResult:
     dead_end_steps: Tuple[str, ...]
     cycles: Tuple[str, ...]
     missing_intent_handlers: Tuple[str, ...]
+    ownership: Tuple[str, ...] = ()
 
 
 def validate_entry_point(model: PlaybookDefinition) -> None:
@@ -145,6 +146,26 @@ def _multi_step_cycle_summaries(model: PlaybookDefinition) -> List[str]:
     return sorted(set(summaries))
 
 
+def _ownership_preview(model: PlaybookDefinition) -> Tuple[str, ...]:
+    """Describe declared ownership without invoking owners or creating state."""
+    lines: List[str] = []
+    for step_name, step in model.steps.items():
+        lines.append(f"{step_name}: owner={step.assignee_type}")
+        if step.assignee_type == "auto" and step.automatic is not None:
+            lines.append(f"  automatic executor={step.automatic.executor}")
+        if step.assignee_type == "human":
+            lines.append("  human wait=initial")
+        if step.assignee_type == "hybrid" and step.hybrid is not None:
+            for portion in step.hybrid.portions:
+                transitions = ", ".join(
+                    f"{key}->{target.portion if target.portion is not None else target.step}"
+                    for key, target in sorted(portion.on.items())
+                )
+                wait = " wait" if portion.owner == "human" else ""
+                lines.append(f"  portion={portion.id} owner={portion.owner}{wait} on={transitions}")
+    return tuple(lines)
+
+
 def analyze_playbook(model: PlaybookDefinition) -> PlaybookSimulationResult:
     validate_entry_point(model)
     entry = model.entry_point or next(iter(model.steps.keys()))
@@ -164,6 +185,7 @@ def analyze_playbook(model: PlaybookDefinition) -> PlaybookSimulationResult:
         dead_end_steps=dead,
         cycles=cycles,
         missing_intent_handlers=missing,
+        ownership=_ownership_preview(model),
     )
 
 
@@ -175,6 +197,12 @@ def format_text_report(result: PlaybookSimulationResult) -> str:
     lines: List[str] = []
     lines.append(f"Playbook: {result.playbook_id}")
     lines.append(f"Entry point: {result.entry_point}")
+    lines.append("")
+    lines.append("Ownership plan (read-only)")
+    if result.ownership:
+        lines.extend(f"  {line}" for line in result.ownership)
+    else:
+        lines.append("  (no declarations)")
     lines.append("")
     lines.append("Transitions (intent -> next step)")
     by_from: Dict[str, List[Tuple[str, str]]] = {}
@@ -221,11 +249,20 @@ def format_dot(result: PlaybookSimulationResult) -> str:
     for f, _i, t in result.edges:
         nodes.add(f)
         nodes.add(t)
+    ownership_by_step: Dict[str, List[str]] = {}
+    current_step: str | None = None
+    for line in result.ownership:
+        if not line.startswith("  ") and ": owner=" in line:
+            current_step, detail = line.split(": ", 1)
+            ownership_by_step[current_step] = [detail]
+            nodes.add(current_step)
+        elif current_step is not None:
+            ownership_by_step[current_step].append(line.strip())
     for n in sorted(nodes):
-        lines.append(f'  "{_dot_escape(n)}";')
+        details = ownership_by_step.get(n, [])
+        label = "\\n".join([n, *details])
+        lines.append(f'  "{_dot_escape(n)}" [label="{_dot_escape(label)}"];')
     for f, intent, t in result.edges:
-        lines.append(
-            f'  "{_dot_escape(f)}" -> "{_dot_escape(t)}" [label="{_dot_escape(intent)}"];'
-        )
+        lines.append(f'  "{_dot_escape(f)}" -> "{_dot_escape(t)}" [label="{_dot_escape(intent)}"];')
     lines.append("}")
     return "\n".join(lines)

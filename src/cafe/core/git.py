@@ -1,6 +1,7 @@
 """Git operations for CAFE."""
 
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -31,6 +32,132 @@ class GitOperations:
             repo_path: Path to git repository
         """
         self.repo_path = Path(repo_path)
+
+    @classmethod
+    def is_repository(cls, repo_path: str = ".") -> bool:
+        """Return whether ``repo_path`` is inside a Git work tree."""
+        result = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=Path(repo_path),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result.returncode == 0 and result.stdout.strip() == "true"
+
+    @classmethod
+    def initialize_repository(
+        cls,
+        repo_path: str = ".",
+        *,
+        initial_branch: str = "main",
+    ) -> "GitOperations":
+        """Initialize a local repository with a baseline commit.
+
+        The baseline is intentionally empty. Existing project files remain
+        visible as uncommitted changes so CAFE can review them before the first
+        feature commit instead of silently adding possible secrets.
+        """
+        path = Path(repo_path)
+        try:
+            subprocess.run(
+                ["git", "init", "-b", initial_branch],
+                cwd=path,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise GitError(f"Git initialization failed: {exc.stderr}") from exc
+
+        operations = cls(repo_path)
+        operations.run_git("config", "--local", "cafe.bootstrap-pending", "true")
+        operations.complete_repository_initialization()
+        return operations
+
+    def has_commits(self) -> bool:
+        """Return whether the repository has a valid ``HEAD`` commit."""
+        try:
+            self.run_git("rev-parse", "--verify", "HEAD")
+        except GitError:
+            return False
+        return True
+
+    def is_bootstrap_pending(self) -> bool:
+        """Return whether a CAFE-owned repository bootstrap is incomplete."""
+        try:
+            marker = self.run_git(
+                "config", "--local", "--get", "cafe.bootstrap-pending"
+            )
+        except GitError:
+            return False
+        return marker.lower() == "true"
+
+    def complete_repository_initialization(self) -> None:
+        """Complete or resume CAFE's empty baseline commit."""
+        if self.has_commits():
+            return
+
+        # A new non-developer setup often has no Git identity yet. Fill only
+        # missing values and keep the fallback local to this repository.
+        for key, fallback in (
+            ("user.name", "CAFE"),
+            ("user.email", "cafe@local.invalid"),
+        ):
+            try:
+                configured_value = self.run_git("config", "--get", key)
+            except GitError:
+                configured_value = ""
+            if not configured_value.strip():
+                self.run_git("config", "--local", key, fallback)
+
+        # A synthetic safety baseline must not run repository/global hooks,
+        # which may publish or perform other external actions. It must also
+        # leave any user-staged files untouched.
+        with tempfile.TemporaryDirectory(prefix="cafe-empty-hooks-") as hooks_path:
+            self.run_git(
+                "-c",
+                f"core.hooksPath={hooks_path}",
+                "commit",
+                "--allow-empty",
+                "--only",
+                "--no-gpg-sign",
+                "-m",
+                "Initialize repository",
+            )
+
+    def uses_placeholder_identity(self) -> bool:
+        """Return whether this repository uses CAFE's local author fallback."""
+        local_values = []
+        for key in ("user.name", "user.email"):
+            try:
+                local_values.append(
+                    self.run_git("config", "--local", "--get", key)
+                )
+            except GitError:
+                continue
+
+        return "CAFE" in local_values or "cafe@local.invalid" in local_values
+
+    def requires_bootstrap_checkout(self) -> bool:
+        """Return whether CAFE's initial untracked files still need this checkout.
+
+        The repository-local marker survives a stopped or retried ``prepare``
+        command. Worktrees become safe once every initial file is either
+        committed or deliberately excluded by Git ignore rules.
+        """
+        if not self.is_bootstrap_pending():
+            return False
+
+        untracked_files = self.run_git("ls-files", "--others", "--exclude-standard")
+        uncommitted_additions = self.run_git(
+            "diff", "HEAD", "--name-only", "--diff-filter=A"
+        )
+        if untracked_files or uncommitted_additions:
+            return True
+
+        self.run_git("config", "--local", "--unset", "cafe.bootstrap-pending")
+        return False
 
     def run_git(self, *args: str) -> str:
         """Run a git command.
@@ -192,16 +319,42 @@ class GitOperations:
         """
         return bool(self.get_status())
 
-    def delete_branch(self, branch_name: str) -> None:
+    def has_tracked_or_staged_changes(self) -> bool:
+        """Return whether tracked or staged files differ, ignoring untracked files."""
+        return bool(self.run_git("status", "--porcelain", "--untracked-files=no"))
+
+    def has_staged_changes(self) -> bool:
+        """Check if there are staged (index) changes ready to commit.
+
+        Unlike :meth:`has_uncommitted_changes`, this ignores untracked and
+        unstaged files, so it correctly reports whether a commit would
+        actually produce a change. Used to guard against committing an empty
+        squash merge.
+
+        Returns:
+            True if the index differs from HEAD
+        """
+        try:
+            self.run_git("diff", "--cached", "--quiet")
+            return False
+        except GitError:
+            # Non-zero exit means there are staged differences.
+            return True
+
+    def delete_branch(self, branch_name: str, force: bool = False) -> None:
         """Delete a local branch.
 
         Args:
             branch_name: Name of branch to delete
+            force: Use force delete (-D) instead of safe delete (-d).
+                Required for squash-merged branches, which Git still
+                considers "not merged" because no merge commit points at them.
 
         Raises:
             GitError: If branch deletion fails
         """
-        self.run_git("branch", "-d", branch_name)
+        flag = "-D" if force else "-d"
+        self.run_git("branch", flag, branch_name)
 
     def pull(self) -> None:
         """Pull latest changes from remote.
@@ -221,6 +374,17 @@ class GitOperations:
             GitError: If merge fails
         """
         self.run_git("merge", branch_name)
+
+    def merge_squash(self, branch_name: str) -> None:
+        """Squash-merge a branch into the current branch (stages only, no commit).
+
+        Args:
+            branch_name: Name of the branch to squash-merge
+
+        Raises:
+            GitError: If merge fails
+        """
+        self.run_git("merge", "--squash", branch_name)
 
     def get_main_branch(self) -> str:
         """Get the main branch name (main or master).

@@ -2,21 +2,25 @@
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from cafe.core.blackboard import HandoffIntent
 from cafe.core.hooks import BUILTIN_HOOKS, HookResult
 from cafe.core.hooks.script_schema import validate_script_args_schema
 from cafe.core.questions_schema import validate_questions_xml
-from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
-from cafe.core.blackboard import HandoffIntent
-from cafe.skills.loader import SkillLoader
-from cafe.skills.native_bridge import NativeSkillBridge
+from cafe.core.status_codes import (
+    PhaseStatusCode,
+    StatusCodeParser,
+    effective_step_status_codes,
+)
 from cafe.core.types import AgentCLI
-
+from cafe.skills.loader import SkillLoader, canonical_skill_name
+from cafe.skills.native_bridge import NativeSkillBridge
 
 AgentExecutor = Callable[[str], str]
 
@@ -32,12 +36,14 @@ class GenericPhaseExecution:
     events: List[Dict[str, Any]] = field(default_factory=list)
     artifact_ready: bool = True
     published: bool = False
+    agent_invoked: bool = False
 
 
 class GenericPhase:
     """Build prompts from skill content and run lifecycle hooks."""
 
     GOTO_PATTERN = re.compile(r"GOTO\s*:\s*([a-zA-Z0-9_-]+)")
+    PLACEHOLDER_PATTERN = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
     SCRIPT_HOOK_STAGES = {"before_execute", "after_execute"}
 
     def __init__(
@@ -53,15 +59,70 @@ class GenericPhase:
         if hook_registry:
             self.hook_registry.update(hook_registry)
 
-    def prepare_skill(self, *, skill_name: str, agent_cli: AgentCLI) -> str:
+    def prepare_skill(
+        self,
+        *,
+        skill_name: str,
+        agent_cli: AgentCLI,
+        context: Optional[Dict[str, str]] = None,
+    ) -> str:
         """Install one skill for the target CLI and return its invocation syntax."""
-        self.skill_bridge.install_skill(skill_name, agent_cli)
+        installed_dir = self.skill_bridge.install_skill(skill_name, agent_cli, context=context)
+        contract = self.skill_loader.get_workflow_contract(skill_name)
+        prompt_references = self._render_prompt_references(
+            skill_name=skill_name,
+            references=contract.prompt_references,
+            context=context or {},
+        )
+        resolved_inputs = [
+            (mapping.placeholder, str((context or {})[mapping.placeholder]))
+            for mapping in contract.prompt_inputs
+            if (context or {}).get(mapping.placeholder)
+        ]
+        if prompt_references or resolved_inputs:
+            skill_file = installed_dir / "SKILL.md"
+            rendered = skill_file.read_text(encoding="utf-8")
+            for placeholder, content in prompt_references.items():
+                rendered = rendered.replace(f"{{{placeholder}}}", content)
+            if resolved_inputs:
+                rendered += "\n\n## Workflow Inputs\n" + "\n".join(
+                    f"- {placeholder}: {path}" for placeholder, path in resolved_inputs
+                )
+            skill_file.write_text(rendered, encoding="utf-8")
         return self.skill_bridge.get_invocation(skill_name, agent_cli)
 
-    def prepare_skills(self, *, skill_names: list[str], agent_cli: AgentCLI) -> list[str]:
+    def _render_prompt_references(
+        self,
+        *,
+        skill_name: str,
+        references: Dict[str, str],
+        context: Dict[str, str],
+    ) -> Dict[str, str]:
+        """Render named prompt sections only when every referenced input is available."""
+        resolved: Dict[str, str] = {}
+        for placeholder, reference in references.items():
+            content = self.skill_loader.get_reference(skill_name, reference)
+            names = self.PLACEHOLDER_PATTERN.findall(content)
+            if not all(context.get(name) for name in names):
+                resolved[placeholder] = ""
+                continue
+            for name in set(names):
+                content = content.replace(f"{{{name}}}", str(context[name]))
+            resolved[placeholder] = content
+        return resolved
+
+    def prepare_skills(
+        self,
+        *,
+        skill_names: list[str],
+        agent_cli: AgentCLI,
+        context: Optional[Dict[str, str]] = None,
+    ) -> list[str]:
         """Install a list of skills for the target CLI and return invocation syntax."""
-        self.skill_bridge.install_skills(skill_names, agent_cli)
-        return [self.skill_bridge.get_invocation(name, agent_cli) for name in skill_names]
+        return [
+            self.prepare_skill(skill_name=name, agent_cli=agent_cli, context=context)
+            for name in skill_names
+        ]
 
     def build_prompt(
         self,
@@ -105,15 +166,66 @@ class GenericPhase:
             lines.extend(runtime_files)
             lines.append("")
 
-        baton_intents = ", ".join(intent.value for intent in HandoffIntent)
-        runtime_context.extend(
-            [
-                "Baton contract (single source of truth):",
-                f"- valid intent values: [{baton_intents}]",
-                "- when asking user questions, handoff must be to_owner='user', to_step='user', intent='need_clarification'",
-                "- stay within this prompt's listed shared skills + phase skill; do not invoke external workflow-driving skills (e.g. use-cafe-workflow)",
-            ]
+        baton_intents = (
+            context.get("valid_baton_intents", "")
+            if context
+            else ""
+        ) or ", ".join(intent.value for intent in HandoffIntent)
+        runtime_context.append("Baton contract (single source of truth):")
+        runtime_context.append(
+            '- write next_step_file as JSON with exactly these required fields: '
+            '{"version":1,"to_owner":"<agent|user|done>",'
+            '"to_step":"<target>","intent":"<intent>"}'
         )
+        runtime_context.append(
+            "- never write blackboard_file; the runtime derives audit metadata "
+            "and updates the blackboard"
+        )
+        runtime_context.append(f"- valid intent values: [{baton_intents}]")
+        # 列出本 playbook 實際合法的 to_step，避免 agent 沿用共用 skill 範例裡的 step
+        # （如 pr）而寫出此 playbook 不存在的目標導致 baton 被拒。
+        if context and context.get("valid_to_steps"):
+            runtime_context.append(
+                f"- valid to_step values: [{context['valid_to_steps']}] "
+                "— use ONLY these; this playbook has no other steps (e.g. do not assume 'pr')"
+            )
+        if context and context.get("step_transitions"):
+            runtime_context.append(
+                f"- this step's defined transitions (intent→to_step): {context['step_transitions']}"
+            )
+        runtime_context.append(
+            "- when asking user questions, handoff must be to_owner='user', to_step='user', intent='need_clarification'"
+        )
+        runtime_context.append(
+            "- stay within this prompt's listed shared skills + phase skill; do not invoke external workflow-driving skills (e.g. use-cafe-workflow)"
+        )
+        issue_dir = str(context.get("issue_dir", "")) if context else ""
+        step = str(context.get("current_step") or context.get("step") or "") if context else ""
+        iteration_dir = str(context.get("iteration_dir", "")) if context else ""
+        playbook_id = str(context.get("playbook_id", "")) if context else ""
+        operation_run = (
+            f"cafe operation run --issue-dir {issue_dir} --step {step} "
+            f"--iteration-dir {iteration_dir} --playbook {playbook_id} -- <command>"
+        )
+        operation_status = (
+            f"cafe operation status --issue-dir {issue_dir} --step {step} "
+            f"--iteration-dir {iteration_dir} --playbook {playbook_id}"
+        )
+        runtime_context.append(
+            "- for legitimate long-running subprocess work that may exceed the agent tool window, "
+            f"use `{operation_run}` and recheck that same operation with `{operation_status}`; "
+            "do not relaunch the phase executor or command while it reports running"
+        )
+
+        if context and context.get("blackboard_digest"):
+            runtime_context.extend(
+                [
+                    "Bounded blackboard digest:",
+                    context["blackboard_digest"],
+                    "Use this digest for initial workflow grounding. Do not read the full blackboard file; it is an unbounded audit history and may exceed the agent context window.",
+                    "If a concrete conflict requires older history, query only the specific field or event needed, and do not print event data payloads wholesale.",
+                ]
+            )
 
         if context and context.get("handoff_summary"):
             runtime_context.extend(
@@ -125,7 +237,7 @@ class GenericPhase:
                     "If the handoff asks for a retry, re-run, re-sync, or re-open action, do not treat an old artifact or a closed external object as completion.",
                 ]
             )
-            if skill_name == "pr":
+            if canonical_skill_name(skill_name) == "cafe-pr":
                 runtime_context.extend(
                     [
                         "For the PR phase, completion is local-only: finish the PR artifact and checklist, then update the workflow baton.",
@@ -133,8 +245,34 @@ class GenericPhase:
                         "Remote PR publish happens later in the host-side publish_output hook.",
                     ]
                 )
+        if context and context.get("resume_input_artifacts"):
+            runtime_context.extend(
+                [
+                    "Current resume scope (declared step inputs):",
+                    "Read every listed current source before selecting work.",
+                    context["resume_input_artifacts"],
+                ]
+            )
+        if context and context.get("input_loading_modes"):
+            runtime_context.extend(
+                [
+                    "Declared input loading modes:",
+                    context["input_loading_modes"],
+                    "A packet is a validated exact Downstream Contract; full and full_fallback paths remain complete authoritative sources.",
+                ]
+            )
+        if context and context.get("delta_packet"):
+            runtime_context.extend(
+                [
+                    f"Correction delta packet ({context.get('delta_packet_path', 'inline')}):",
+                    context["delta_packet"],
+                    "This is a derived manifest, not a new source of truth. Read previous_output and re-verify prior findings or requested changes item by item before completing this step.",
+                ]
+            )
         if context and context.get("user_input"):
-            runtime_context.extend(["Current user input for this iteration:", context["user_input"]])
+            runtime_context.extend(
+                ["Current user input for this iteration:", context["user_input"]]
+            )
 
         if runtime_context:
             lines.extend(["Runtime context:"])
@@ -247,6 +385,7 @@ class GenericPhase:
         response = ""
         status_code: Optional[PhaseStatusCode] = None
         goto_target: Optional[str] = None
+        agent_invoked = False
         attempt = 0
         while True:
             prompt = self.build_prompt(
@@ -262,6 +401,7 @@ class GenericPhase:
             if continuation:
                 prompt = f"{prompt}\n\n{continuation}"
             response = agent_executor(prompt)
+            agent_invoked = True
 
             after = self._run_hook_stage(
                 "after_execute",
@@ -287,6 +427,7 @@ class GenericPhase:
                     events=events,
                     artifact_ready=artifact_ready,
                     published=False,
+                    agent_invoked=agent_invoked,
                 )
 
             if not after.retry_requested:
@@ -321,14 +462,25 @@ class GenericPhase:
             events=events,
             artifact_ready=artifact_ready,
             published=published,
+            agent_invoked=agent_invoked,
         )
+
+    # Hooks that run on every step regardless of playbook declaration.
+    # The alignment gate is registered on every step, but it is opt-in: it only
+    # fires when the step declares an `alignment:` block (omitting the block, or
+    # `alignment: {enabled: false}`, disables it).
+    DEFAULT_STAGE_HOOKS: Dict[str, tuple] = {"prepare_input": ("AlignmentCheckpointGate",)}
 
     def _run_hook_stage(
         self,
         stage: str,
         **kwargs: Any,
     ) -> HookResult:
-        hook_entries = kwargs["step_def"].get("hooks", {}).get(stage, [])
+        declared = kwargs["step_def"].get("hooks", {}).get(stage, [])
+        defaults = [
+            name for name in self.DEFAULT_STAGE_HOOKS.get(stage, ()) if name not in declared
+        ]
+        hook_entries = [*defaults, *declared]
         aggregate = HookResult()
 
         for hook_entry in hook_entries:
@@ -350,9 +502,14 @@ class GenericPhase:
                     hook_kwargs=kwargs,
                 )
             else:
-                raise ValueError(f"Unsupported hook entry type '{type(hook_entry).__name__}' in stage '{stage}'")
+                raise ValueError(
+                    f"Unsupported hook entry type '{type(hook_entry).__name__}' in stage '{stage}'"
+                )
 
             aggregate.context_updates.update(result.context_updates)
+            stage_context = kwargs.get("context")
+            if isinstance(stage_context, dict):
+                stage_context.update(result.context_updates)
             aggregate.events.extend(result.events)
             aggregate.artifact_ready = aggregate.artifact_ready and result.artifact_ready
             aggregate.retry_requested = aggregate.retry_requested or result.retry_requested
@@ -376,14 +533,21 @@ class GenericPhase:
         hook_kwargs: Dict[str, Any],
     ) -> HookResult:
         if stage not in self.SCRIPT_HOOK_STAGES:
-            raise ValueError(f"Script hooks are only supported in {sorted(self.SCRIPT_HOOK_STAGES)}")
+            raise ValueError(
+                f"Script hooks are only supported in {sorted(self.SCRIPT_HOOK_STAGES)}"
+            )
 
-        script, args_template, schema, when_intents, timeout_seconds = self._parse_script_hook_declaration(
-            declaration
+        script, args_template, schema, when_intents, timeout_seconds = (
+            self._parse_script_hook_declaration(declaration)
         )
 
         if when_intents:
-            detected_status = self._detect_status_code(response=response or "", step_def=step_def)
+            detected_status = self._detect_status_code(
+                response=response or "",
+                step_def=step_def,
+                context=context,
+                step_name=hook_kwargs.get("step_name"),
+            )
             if detected_status not in when_intents:
                 return HookResult(
                     events=[
@@ -534,7 +698,9 @@ class GenericPhase:
         timeout_seconds_raw = declaration.get("timeout_seconds")
         timeout_seconds: Optional[float] = None
         if timeout_seconds_raw is not None:
-            if isinstance(timeout_seconds_raw, bool) or not isinstance(timeout_seconds_raw, (int, float)):
+            if isinstance(timeout_seconds_raw, bool) or not isinstance(
+                timeout_seconds_raw, (int, float)
+            ):
                 raise ValueError("Script hook 'timeout_seconds' must be a positive number")
             if timeout_seconds_raw <= 0:
                 raise ValueError("Script hook 'timeout_seconds' must be a positive number")
@@ -603,7 +769,9 @@ class GenericPhase:
 
         resolved: Dict[str, Any] = {}
         for key, value in args_template.items():
-            resolved[str(key)] = self._resolve_script_arg_value(value=value, template_values=template_values)
+            resolved[str(key)] = self._resolve_script_arg_value(
+                value=value, template_values=template_values
+            )
         return resolved
 
     def _resolve_script_arg_value(
@@ -616,12 +784,19 @@ class GenericPhase:
             try:
                 return value.format(**template_values)
             except KeyError as exc:
-                raise ValueError(f"Missing template value for '{exc.args[0]}' in script hook args") from exc
+                raise ValueError(
+                    f"Missing template value for '{exc.args[0]}' in script hook args"
+                ) from exc
         if isinstance(value, list):
-            return [self._resolve_script_arg_value(value=item, template_values=template_values) for item in value]
+            return [
+                self._resolve_script_arg_value(value=item, template_values=template_values)
+                for item in value
+            ]
         if isinstance(value, dict):
             return {
-                str(key): self._resolve_script_arg_value(value=item, template_values=template_values)
+                str(key): self._resolve_script_arg_value(
+                    value=item, template_values=template_values
+                )
                 for key, item in value.items()
             }
         return value
@@ -642,11 +817,65 @@ class GenericPhase:
         return cmd
 
     @staticmethod
-    def _detect_status_code(*, response: str, step_def: Dict[str, Any]) -> Optional[str]:
-        valid = [
-            PhaseStatusCode(code)
-            for code in step_def.get("valid_intents", [])
-            if code in {item.value for item in PhaseStatusCode}
-        ]
-        status_code = StatusCodeParser.extract(response, valid_codes=valid or list(PhaseStatusCode))
+    def _read_baton_intent(
+        *, next_step_path: Optional[str], step_name: Optional[str]
+    ) -> Optional[str]:
+        if not next_step_path:
+            return None
+
+        try:
+            raw = Path(next_step_path).read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+
+        if not raw:
+            return None
+
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+        if not isinstance(payload, dict):
+            return None
+
+        if payload.get("source") == "workflow.start_step_override" and (
+            not step_name
+            or str(payload.get("to_step", payload.get("from_step", ""))) == str(step_name)
+        ):
+            return None
+
+        if (
+            step_name
+            and payload.get("from_step")
+            and str(payload.get("from_step", "")) != str(step_name)
+        ):
+            return None
+
+        intent = payload.get("intent")
+        if not isinstance(intent, str):
+            return None
+        return intent.strip() or None
+
+    @staticmethod
+    def _detect_status_code(
+        *,
+        response: str,
+        step_def: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+        step_name: Optional[str] = None,
+    ) -> Optional[str]:
+        valid = effective_step_status_codes(step_def)
+
+        context = context or {}
+        valid_values = {status.value for status in valid}
+
+        next_step_intent = GenericPhase._read_baton_intent(
+            next_step_path=context.get("next_step_path"),
+            step_name=step_name,
+        )
+        if next_step_intent in valid_values:
+            return next_step_intent
+
+        status_code = StatusCodeParser.extract(response, valid_codes=valid)
         return status_code.value if status_code is not None else None

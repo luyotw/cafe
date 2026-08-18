@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional, Any, Dict, List, Tuple
 import yaml
 
+from cafe.core.prepare_fields import PrepareField
 from cafe.core.types import SpecRigor
 from cafe.ui.display import Display
 from cafe.ui.inquirer_prompts import prompt_list, prompt_text, prompt_confirm
@@ -14,7 +15,13 @@ from cafe.utils.github import GitHubOps, GitHubError
 from cafe.utils.git_utils import is_github_repo
 
 
-def prompt_for_input_method(display: Display, github_ops: GitHubOps) -> tuple[str, Optional[int]]:
+def prompt_for_input_method(
+    display: Display,
+    github_ops: GitHubOps,
+    *,
+    field: Optional[PrepareField] = None,
+    issue_field: Optional[PrepareField] = None,
+) -> tuple[str, Optional[int]]:
     """Ask user to select input method (manual vs GitHub Issue)
 
     Args:
@@ -26,45 +33,67 @@ def prompt_for_input_method(display: Display, github_ops: GitHubOps) -> tuple[st
         - method: "manual" or "github"
         - issue_id: Issue ID (int) if GitHub is selected, None otherwise
     """
-    choices = [
-        "1. Manual input",
-        "2. Fetch from GitHub Issue",
-    ]
+    if field is not None and field.choices:
+        choices = [f"{index + 1}. {choice.label}" for index, choice in enumerate(field.choices)]
+        message = field.label
+        if field.help:
+            message = f"{field.label}\n{field.help}"
+    else:
+        choices = [
+            "1. Manual input",
+            "2. Fetch from GitHub Issue",
+        ]
+        message = "Please select input method:"
 
     choice = prompt_list(
-        message="Please select input method:",
+        message=message,
         choices=choices,
     )
 
-    if choice.startswith("1"):
-        return ("manual", None)
+    selected_value = "manual"
+    if field is not None and field.choices:
+        for index, entry in enumerate(field.choices):
+            if choice.startswith(f"{index + 1}") or choice.endswith(entry.label):
+                selected_value = entry.value
+                break
+    elif choice.startswith("1"):
+        selected_value = "manual"
     else:
-        # GitHub Issue mode
-        print()
-        print("⚠️  Note: Upon completion, spec.md will be posted back to GitHub Issue as a comment")
-        print()
+        selected_value = "github"
 
-        # Ask for Issue ID or URL, with error retry handling
-        while True:
-            issue_input = prompt_text(
-                message="Please enter GitHub Issue ID or URL:",
-                default="",
-            )
+    if selected_value == "manual":
+        return ("manual", None)
 
-            try:
-                # Use GitHubOps to extract issue number
+    # GitHub Issue mode
+    print()
+    print("⚠️  Note: Upon completion, spec.md will be posted back to GitHub Issue as a comment")
+    print()
+
+    # Ask for Issue ID or URL, with error retry handling
+    while True:
+        issue_message = "Please enter GitHub Issue ID or URL:"
+        if issue_field is not None:
+            issue_message = issue_field.label
+            if issue_field.help:
+                issue_message = f"{issue_field.label}\n{issue_field.help}"
+        issue_input = prompt_text(message=issue_message, default="")
+
+        try:
+            if issue_field is None or issue_field.normalize == "github_issue":
                 issue_id_str = github_ops.extract_issue_number(issue_input)
-                issue_id = int(issue_id_str)
+            else:
+                issue_id_str = issue_input
+            issue_id = int(issue_id_str)
 
-                print()
-                print(f"✓ Will fetch requirements from GitHub Issue #{issue_id}")
-                print()
+            print()
+            print(f"✓ Will fetch requirements from GitHub Issue #{issue_id}")
+            print()
 
-                return ("github", issue_id)
-            except (ValueError, GitHubError) as e:
-                print(f"❌ Invalid Issue ID or URL: {e}")
-                print("Please try again...")
-                print()
+            return ("github", issue_id)
+        except (ValueError, GitHubError) as e:
+            print(f"❌ Invalid Issue ID or URL: {e}")
+            print("Please try again...")
+            print()
 
 
 def prompt_for_rigor(display: Display, allowed: Optional[List[str]] = None) -> str:
@@ -84,11 +113,7 @@ def prompt_for_rigor(display: Display, allowed: Optional[List[str]] = None) -> s
     }
     allowed_values = allowed or ["low", "medium", "high"]
     choices = [choice_by_value[value] for value in allowed_values if value in choice_by_value]
-    default_choice = (
-        choice_by_value["medium"]
-        if "medium" in allowed_values
-        else choices[0]
-    )
+    default_choice = choice_by_value["medium"] if "medium" in allowed_values else choices[0]
 
     choice = prompt_list(
         message="Please select specification rigor level:",
@@ -180,7 +205,7 @@ def prompt_and_save_auto_create(config_file: Path, config_key: str) -> bool:
     # Save the choice to issue config
     try:
         if config_file.exists():
-            with open(config_file, 'r', encoding='utf-8') as f:
+            with open(config_file, "r", encoding="utf-8") as f:
                 config_data = yaml.safe_load(f) or {}
         else:
             config_data = {}
@@ -188,8 +213,8 @@ def prompt_and_save_auto_create(config_file: Path, config_key: str) -> bool:
         config_data = {}
 
     # Support dot notation for nested keys (e.g., "pr.auto_create")
-    if '.' in config_key:
-        keys = config_key.split('.')
+    if "." in config_key:
+        keys = config_key.split(".")
         current = config_data
         for key in keys[:-1]:
             if key not in current:
@@ -201,7 +226,7 @@ def prompt_and_save_auto_create(config_file: Path, config_key: str) -> bool:
 
     # Write back to config file
     config_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(config_file, 'w', encoding='utf-8') as f:
+    with open(config_file, "w", encoding="utf-8") as f:
         yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
 
     return auto_create

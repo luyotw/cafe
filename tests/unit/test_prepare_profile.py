@@ -20,7 +20,18 @@ def _write_skill(root: Path, name: str) -> None:
     )
 
 
-def _minimal_playbook_yaml(*, prepare_block: str = "") -> str:
+def _minimal_playbook_yaml(*, prepare_block: str = "", include_pr_step: bool = False) -> str:
+    pr_step = (
+        """
+  pr:
+    role: developer
+    skill: spec_first
+    "on":
+      await_agent: _done
+"""
+        if include_pr_step
+        else ""
+    )
     return f"""
 playbook: {{id: test}}
 steps:
@@ -29,6 +40,7 @@ steps:
     skill: spec_first
     "on":
       await_agent: _done
+{pr_step}
 {prepare_block}
 """
 
@@ -43,9 +55,11 @@ def _loader(tmp_path: Path) -> PlaybookLoader:
     )
 
 
-def _profile_from_yaml(tmp_path: Path, prepare_yaml: str, *, is_github_repo: bool) -> PrepareProfile:
+def _profile_from_yaml(
+    tmp_path: Path, prepare_yaml: str, *, is_github_repo: bool
+) -> PrepareProfile:
     loader = _loader(tmp_path)
-    playbook_dir = loader._roots()[0]
+    playbook_dir = loader._roots()[-1]
     playbook_dir.mkdir(parents=True, exist_ok=True)
     (playbook_dir / "test.yaml").write_text(
         _minimal_playbook_yaml(prepare_block=prepare_yaml),
@@ -58,9 +72,7 @@ def _profile_from_yaml(tmp_path: Path, prepare_yaml: str, *, is_github_repo: boo
 class TestPrepareProfilePromptGating:
     """Test List unit #1 — profile gates spec/plan prompts."""
 
-    def test_disables_spec_plan_prompts_when_playbook_metadata_false(
-        self, tmp_path: Path
-    ) -> None:
+    def test_disables_spec_plan_prompts_when_playbook_metadata_false(self, tmp_path: Path) -> None:
         profile = _profile_from_yaml(
             tmp_path,
             "commands:\n  prepare:\n    prompt_for_spec_plan_config: false\n",
@@ -70,9 +82,7 @@ class TestPrepareProfilePromptGating:
 
     def test_respects_base_flag_when_metadata_allows(self) -> None:
         profile = PrepareProfile.from_playbook(
-            PlaybookDefinition.model_validate(
-                yaml.safe_load(_minimal_playbook_yaml())
-            ),
+            PlaybookDefinition.model_validate(yaml.safe_load(_minimal_playbook_yaml())),
             is_github_repo=True,
         )
         assert profile.should_prompt_spec_plan_config(True) is True
@@ -105,7 +115,9 @@ class TestPrepareProfileQuickSetup:
 
     def test_github_repo_sets_pr_defaults_from_metadata(self) -> None:
         profile = PrepareProfile.from_playbook(
-            PlaybookDefinition.model_validate(yaml.safe_load(_minimal_playbook_yaml())),
+            PlaybookDefinition.model_validate(
+                yaml.safe_load(_minimal_playbook_yaml(include_pr_step=True))
+            ),
             is_github_repo=True,
         )
         result = profile.quick_setup_issue_config(issue_id=None)
@@ -114,12 +126,22 @@ class TestPrepareProfileQuickSetup:
 
     def test_non_github_repo_skips_pr_auto_create(self) -> None:
         profile = PrepareProfile.from_playbook(
-            PlaybookDefinition.model_validate(yaml.safe_load(_minimal_playbook_yaml())),
+            PlaybookDefinition.model_validate(
+                yaml.safe_load(_minimal_playbook_yaml(include_pr_step=True))
+            ),
             is_github_repo=False,
         )
         result = profile.quick_setup_issue_config(issue_id=None)
         assert result.pr["auto_create"] is False
         assert "post_todo_list" not in result.pr
+
+    def test_playbook_without_pr_step_omits_pr_config(self) -> None:
+        profile = PrepareProfile.from_playbook(
+            PlaybookDefinition.model_validate(yaml.safe_load(_minimal_playbook_yaml())),
+            is_github_repo=True,
+        )
+        result = profile.quick_setup_issue_config(issue_id=None)
+        assert result.pr == {}
 
 
 class TestPrepareProfileNonInteractive:
@@ -222,3 +244,30 @@ commands:
 """
         profile = _profile_from_yaml(tmp_path, prepare_yaml, is_github_repo=True)
         assert profile.should_prompt_input_method() is False
+
+
+class TestPrepareProfileResolvedFields:
+    """Test List unit #14 — resolved prepare field contract."""
+
+    def test_simple_playbook_resolves_declared_fields(self) -> None:
+        loader = PlaybookLoader()
+        loaded = loader.load_model("simple")
+        profile = PrepareProfile.from_playbook(loaded.model, is_github_repo=True)
+        assert (
+            profile.resolved_prepare_fields(
+                playbook_path=loaded.path,
+                skill_loader=SkillLoader(),
+            )
+            is not None
+        )
+
+    def test_returns_fields_for_default_playbook(self) -> None:
+        loader = PlaybookLoader()
+        loaded = loader.load_model("default")
+        profile = PrepareProfile.from_playbook(loaded.model, is_github_repo=True)
+        parsed = profile.resolved_prepare_fields(
+            playbook_path=loaded.path,
+            skill_loader=SkillLoader(),
+        )
+        assert parsed is not None
+        assert any(field.id == "setup_mode" for field in parsed.fields)

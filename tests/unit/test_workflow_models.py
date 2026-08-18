@@ -15,7 +15,6 @@ from cafe.core.blackboard import (
 )
 from cafe.core.workflow_models import BatonRejected
 
-
 # ---------------------------------------------------------------------------
 # BatonRejected 例外單元測試
 # ---------------------------------------------------------------------------
@@ -52,13 +51,9 @@ def _base_payload(**overrides) -> dict:
     """最小合法 payload，方便各測試覆寫特定欄位。"""
     base = {
         "version": 1,
-        "from_step": "develop",
         "to_owner": "agent",
         "to_step": "review",
         "intent": "await_agent",
-        "status_code": "",
-        "created_at": "2026-05-14T10:00:00+08:00",
-        "source": "test",
     }
     base.update(overrides)
     return base
@@ -119,8 +114,8 @@ class TestLoadHandoffContractBatonRejected:
         assert contract.to_owner == HandoffOwner.AGENT
         assert not any(e.event_type == "baton_auto_corrected" for e in state.events)
 
-    def test_allow_legacy_text_json_invalid_raises_baton_rejected(self, tmp_path: Path) -> None:
-        """JSON 解析成功但 enum 無效時，即使 allow_legacy_text=True 也拋 BatonRejected。"""
+    def test_invalid_enum_value_raises_baton_rejected(self, tmp_path: Path) -> None:
+        """JSON 解析成功但 enum 無效時，一律拋 BatonRejected。"""
         issue_dir = tmp_path / "issue-reject-4"
         issue_dir.mkdir(parents=True)
         store = BlackboardStore(issue_dir)
@@ -128,20 +123,84 @@ class TestLoadHandoffContractBatonRejected:
         _write_baton(issue_dir, _base_payload(to_owner="human", to_step="user", intent="need_clarification"))
 
         with pytest.raises(BatonRejected):
-            store.load_handoff_contract(state, allowed_steps=["develop", "review"], allow_legacy_text=True)
+            store.load_handoff_contract(state, allowed_steps=["develop", "review"])
 
-    def test_allow_legacy_text_non_json_falls_back_to_legacy_step(self, tmp_path: Path) -> None:
-        """JSON 解析失敗（非 enum 問題）且 allow_legacy_text=True 時走 legacy step 解析。"""
+    @pytest.mark.parametrize(
+        "missing_field",
+        ["version", "to_owner", "to_step", "intent"],
+    )
+    def test_missing_required_field_raises_baton_rejected(
+        self,
+        tmp_path: Path,
+        missing_field: str,
+    ) -> None:
+        """缺少必要欄位時需直接拋 BatonRejected，不得走 legacy。"""
+        issue_dir = tmp_path / "issue-reject-missing"
+        issue_dir.mkdir(parents=True)
+        store = BlackboardStore(issue_dir)
+        state = store.load_or_create("develop")
+        payload = _base_payload()
+        payload.pop(missing_field)
+        _write_baton(issue_dir, payload)
+
+        with pytest.raises(BatonRejected) as exc_info:
+            store.load_handoff_contract(state, allowed_steps=["develop", "review"])
+
+        exc = exc_info.value
+        assert exc.field == missing_field
+        assert not exc.valid_values
+
+    def test_minimal_payload_without_legacy_keys_is_supported(self, tmp_path: Path) -> None:
+        """最小四欄位 payload 可被正常載入，不依賴 legacy 額外欄位。"""
+        issue_dir = tmp_path / "issue-minimal-payload"
+        issue_dir.mkdir(parents=True)
+        store = BlackboardStore(issue_dir)
+        state = store.load_or_create("develop")
+        payload = {
+            "version": 1,
+            "to_owner": "agent",
+            "to_step": "review",
+            "intent": "await_agent",
+        }
+        _write_baton(issue_dir, payload)
+
+        contract = store.load_handoff_contract(state, allowed_steps=["develop", "review"])
+
+        assert contract.to_owner == HandoffOwner.AGENT
+        assert contract.to_step == "review"
+        assert contract.intent == HandoffIntent.AWAIT_AGENT
+        assert contract.from_step == "develop"
+        assert contract.status_code == ""
+
+    def test_json_scalar_payload_raises_baton_rejected(self, tmp_path: Path) -> None:
+        """能 parse 的 JSON 非 object 時一律拒絕，不接受純文字或 scalar。"""
+        issue_dir = tmp_path / "issue-reject-scalar"
+        issue_dir.mkdir(parents=True)
+        store = BlackboardStore(issue_dir)
+        state = store.load_or_create("develop")
+        (issue_dir / "next_step.txt").write_text('"review"', encoding="utf-8")
+
+        with pytest.raises(BatonRejected) as exc_info:
+            store.load_handoff_contract(
+                state,
+                allowed_steps=["develop", "review"],
+            )
+
+        exc = exc_info.value
+        assert exc.field == "payload"
+        assert exc.invalid_value == "str"
+        assert exc.valid_values == ["JSON object"]
+
+    def test_plain_step_name_raises_value_error(self, tmp_path: Path) -> None:
+        """純文字 step name（非 JSON）在每個讀取路徑都必須失敗，不得被視為合法 baton。"""
         issue_dir = tmp_path / "issue-reject-5"
         issue_dir.mkdir(parents=True)
         store = BlackboardStore(issue_dir)
         state = store.load_or_create("develop")
         (issue_dir / "next_step.txt").write_text("review", encoding="utf-8")
 
-        contract = store.load_handoff_contract(state, allowed_steps=["develop", "review"], allow_legacy_text=True)
-
-        assert contract.to_step == "review"
-        assert contract.source == "legacy_text"
+        with pytest.raises(ValueError):
+            store.load_handoff_contract(state, allowed_steps=["develop", "review"])
 
 
 def test_blackboard_load_or_create_persists_current_step_and_playbook(tmp_path: Path) -> None:
@@ -155,6 +214,106 @@ def test_blackboard_load_or_create_persists_current_step_and_playbook(tmp_path: 
     loaded = store.load_or_create("spec", playbook_id="default")
     assert loaded.current_step == "plan"
     assert loaded.playbook_id == "default"
+
+
+def test_blackboard_migrates_a_legacy_state_to_a_stable_workflow_id(tmp_path: Path) -> None:
+    """UT-005: old taskless workflow state gains identity without a task record."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "legacy"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps({"schema_version": 1, "current_step": "user", "playbook_id": "default"}),
+        encoding="utf-8",
+    )
+
+    state = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    persisted = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
+
+    assert state.workflow_id
+    assert persisted["workflow_id"] == state.workflow_id
+    assert not (issue_dir / "human_tasks.json").exists()
+
+
+def test_alignment_checkpoint_baton_must_be_user_owned_user_target(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-align-baton"
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+
+    _write_baton(
+        issue_dir,
+        _base_payload(
+            from_step="develop",
+            to_owner="user",
+            to_step="user",
+            intent="alignment_checkpoint",
+            status_code="alignment_checkpoint",
+        ),
+    )
+    valid = store.load_handoff_contract(state, allowed_steps=["develop", "review"])
+    assert valid.intent == HandoffIntent.ALIGNMENT_CHECKPOINT
+
+    _write_baton(
+        issue_dir,
+        _base_payload(
+            from_step="develop",
+            to_owner="agent",
+            to_step="review",
+            intent="alignment_checkpoint",
+            status_code="alignment_checkpoint",
+        ),
+    )
+    with pytest.raises(BatonRejected) as exc_info:
+        store.load_handoff_contract(state, allowed_steps=["develop", "review"])
+    assert exc_info.value.field == "to_owner"
+    assert exc_info.value.valid_values == ["user"]
+
+
+@pytest.mark.parametrize(
+    ("to_owner", "to_step", "intent", "valid_intents"),
+    [
+        ("done", "done", "need_clarification", ["workflow_complete"]),
+        (
+            "user",
+            "user",
+            "workflow_complete",
+            [
+                "alignment_checkpoint",
+                "confirm_output",
+                "manual_handoff",
+                "need_clarification",
+                "need_permission",
+                "no_changes_needed",
+            ],
+        ),
+        ("user", "user", "await_agent", None),
+        ("agent", "review", "workflow_complete", ["await_agent", "manual_handoff"]),
+    ],
+)
+def test_handoff_contract_rejects_owner_intent_mismatch(
+    tmp_path: Path,
+    to_owner: str,
+    to_step: str,
+    intent: str,
+    valid_intents: list[str] | None,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "owner-intent"
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+    _write_baton(
+        issue_dir,
+        _base_payload(
+            from_step="spec",
+            to_owner=to_owner,
+            to_step=to_step,
+            intent=intent,
+        ),
+    )
+
+    with pytest.raises(BatonRejected) as exc_info:
+        store.load_handoff_contract(state, allowed_steps=["spec", "review"])
+
+    assert exc_info.value.field == "intent"
+    if valid_intents is not None:
+        assert exc_info.value.valid_values == valid_intents
 
 
 def test_blackboard_store_records_artifacts_events_and_decisions(tmp_path: Path) -> None:
@@ -179,7 +338,7 @@ def test_blackboard_store_records_artifacts_events_and_decisions(tmp_path: Path)
 
     reloaded = store.load_or_create("spec")
     assert reloaded.current_step == "plan"
-    assert reloaded.schema_version == 1
+    assert reloaded.schema_version == 3
     assert reloaded.handoff_summary == "developer owns the next step"
     assert reloaded.artifacts["spec"].path == "spec/output.md"
     assert reloaded.artifacts["spec"].version == 1
@@ -350,3 +509,119 @@ def test_blackboard_rebuild_save_has_no_top_level_owner(tmp_path: Path) -> None:
     store.rebuild_from_iterations(initial_step="spec")
     raw = json.loads(store.file_path.read_text(encoding="utf-8"))
     assert "owner" not in raw
+
+
+class TestLegacyBatonFormatsAreRejected:
+    """Issue #386: legacy baton text shapes must fail clearly, never route.
+
+    Sibling of issue #357's ``key=value`` compatibility parsing, which has
+    since been removed entirely along with ``allow_legacy_text``.
+    """
+
+    def _store_and_state(self, tmp_path: Path):
+        issue_dir = tmp_path / "issue-legacy-kv"
+        issue_dir.mkdir(parents=True)
+        store = BlackboardStore(issue_dir)
+        state = store.load_or_create("schema-comment")
+        return issue_dir, store, state
+
+    def test_multiline_key_value_is_rejected(self, tmp_path: Path) -> None:
+        issue_dir, store, state = self._store_and_state(tmp_path)
+        (issue_dir / "next_step.txt").write_text(
+            "to_step=user\nto_owner=user\nintent=need_clarification\n"
+            "message=Schema comment updated. Please confirm schema and import 6 pending datasets, then reply to continue.\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError):
+            store.load_handoff_contract(
+                state,
+                allowed_steps=["build", "review", "schema-comment"],
+            )
+
+    def test_key_value_without_to_step_is_rejected(self, tmp_path: Path) -> None:
+        issue_dir, store, state = self._store_and_state(tmp_path)
+        (issue_dir / "next_step.txt").write_text(
+            "to_owner=agent\nsummary=long text without routing target\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError):
+            store.load_handoff_contract(
+                state,
+                allowed_steps=["build", "review"],
+            )
+
+    def test_single_step_name_is_rejected(self, tmp_path: Path) -> None:
+        issue_dir, store, state = self._store_and_state(tmp_path)
+        (issue_dir / "next_step.txt").write_text("review\n", encoding="utf-8")
+
+        with pytest.raises(ValueError):
+            store.load_handoff_contract(
+                state,
+                allowed_steps=["build", "review"],
+            )
+
+    def test_unknown_single_step_name_is_rejected(self, tmp_path: Path) -> None:
+        issue_dir, store, state = self._store_and_state(tmp_path)
+        (issue_dir / "next_step.txt").write_text("no_such_step\n", encoding="utf-8")
+
+        with pytest.raises(ValueError):
+            store.load_handoff_contract(
+                state,
+                allowed_steps=["build", "review"],
+            )
+
+    def test_key_value_with_invalid_intent_is_rejected(self, tmp_path: Path) -> None:
+        issue_dir, store, state = self._store_and_state(tmp_path)
+        (issue_dir / "next_step.txt").write_text(
+            "to_step=review\nto_owner=agent\nintent=not_a_real_intent\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError):
+            store.load_handoff_contract(
+                state,
+                allowed_steps=["build", "review"],
+            )
+
+    def test_load_handoff_contract_has_no_allow_legacy_text_parameter(self) -> None:
+        import inspect
+
+        signature = inspect.signature(BlackboardStore.load_handoff_contract)
+        assert "allow_legacy_text" not in signature.parameters
+
+    def test_ensure_baton_has_no_allow_legacy_text_parameter(self) -> None:
+        import inspect
+
+        signature = inspect.signature(BlackboardStore.ensure_baton)
+        assert "allow_legacy_text" not in signature.parameters
+
+    def test_load_or_create_has_no_allow_legacy_text_parameter(self) -> None:
+        import inspect
+
+        signature = inspect.signature(BlackboardStore.load_or_create)
+        assert "allow_legacy_text" not in signature.parameters
+
+    def test_handoff_contract_has_no_from_legacy_step(self) -> None:
+        from cafe.core.blackboard import HandoffContract
+
+        assert not hasattr(HandoffContract, "from_legacy_step")
+
+    def test_store_has_no_legacy_key_value_helper(self) -> None:
+        assert not hasattr(BlackboardStore, "_contract_from_legacy_key_values")
+
+    def test_chat_handoff_intent_is_rejected_not_aliased(self, tmp_path: Path) -> None:
+        """``intent: "chat_handoff"`` must raise BatonRejected(field="intent"), never normalize."""
+        issue_dir, store, state = self._store_and_state(tmp_path)
+        _write_baton(
+            issue_dir,
+            _base_payload(to_owner="agent", to_step="review", intent="chat_handoff"),
+        )
+
+        with pytest.raises(BatonRejected) as exc_info:
+            store.load_handoff_contract(state, allowed_steps=["build", "review", "schema-comment"])
+
+        assert exc_info.value.field == "intent"
+        assert exc_info.value.invalid_value == "chat_handoff"
+        assert "manual_handoff" in exc_info.value.valid_values

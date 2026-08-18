@@ -54,7 +54,15 @@ class TestCodexCLIBuildCommand:
         cli = CodexCLI(codex_config_with_session)
         cmd = cli.build_command("test prompt")
 
-        assert cmd[:7] == ["codex", "-C", str(Path.cwd().resolve()), "-a", "never", "exec", "resume"]
+        assert cmd[:7] == [
+            "codex",
+            "-C",
+            str(Path.cwd().resolve()),
+            "-a",
+            "never",
+            "exec",
+            "resume",
+        ]
         assert "--json" in cmd
         assert cmd[7] == "session-123"
         assert cmd[8] == "test prompt"
@@ -68,7 +76,9 @@ class TestCodexCLIBuildCommand:
         model_idx = cmd.index("--model")
         assert cmd[model_idx + 1] == "gpt-5-codex"
 
-    def test_build_command_with_session_places_model_after_prompt(self, codex_config_with_session_and_model):
+    def test_build_command_with_session_places_model_after_prompt(
+        self, codex_config_with_session_and_model
+    ):
         cli = CodexCLI(codex_config_with_session_and_model)
         cmd = cli.build_command("test prompt")
 
@@ -83,11 +93,7 @@ class TestCodexCLIBuildCommand:
         cli = CodexCLI(codex_config)
         cmd = cli.build_command("test prompt", allowed_directories=["src", ".cafe"])
 
-        add_dir_values = [
-            cmd[index + 1]
-            for index, token in enumerate(cmd)
-            if token == "--add-dir"
-        ]
+        add_dir_values = [cmd[index + 1] for index, token in enumerate(cmd) if token == "--add-dir"]
         assert "src" in add_dir_values
         assert ".cafe" in add_dir_values
 
@@ -104,20 +110,17 @@ class TestCodexCLIBuildCommand:
         with patch("cafe.agents.cli.codex.get_git_dir", return_value=worktree_git_dir):
             cmd = cli.build_command("test prompt", allowed_directories=[".cafe"])
 
-        add_dir_values = [
-            cmd[index + 1]
-            for index, token in enumerate(cmd)
-            if token == "--add-dir"
-        ]
+        add_dir_values = [cmd[index + 1] for index, token in enumerate(cmd) if token == "--add-dir"]
         assert ".cafe" in add_dir_values
         assert str(worktree_git_dir) in add_dir_values
 
-    def test_build_environment_does_not_override_codex_home(self, codex_config):
+    def test_build_environment_preserves_codex_home(self, codex_config, monkeypatch):
+        monkeypatch.setenv("CODEX_HOME", "/custom/codex-home")
         cli = CodexCLI(codex_config)
 
         env = cli.build_environment()
 
-        assert "CODEX_HOME" not in env
+        assert env["CODEX_HOME"] == "/custom/codex-home"
 
 
 class TestCodexCLITranslateAllowedTools:
@@ -153,7 +156,9 @@ class TestCodexCLIParseResponse:
                     "usage": {
                         "input_tokens": 100,
                         "cached_input_tokens": 20,
+                        "cache_write_input_tokens": 4,
                         "output_tokens": 30,
+                        "reasoning_output_tokens": 7,
                     },
                 }
             ),
@@ -165,14 +170,18 @@ class TestCodexCLIParseResponse:
         assert isinstance(token_usage, TokenUsage)
         assert token_usage.input_tokens == 100
         assert token_usage.cache_read_input_tokens == 20
+        assert token_usage.cache_write_input_tokens == 4
         assert token_usage.output_tokens == 30
+        assert token_usage.reasoning_output_tokens == 7
         assert token_usage.turn_usages == [
             {
                 "turn": 1,
                 "input_tokens": 100,
                 "output_tokens": 30,
                 "cache_creation_input_tokens": 0,
+                "cache_write_input_tokens": 4,
                 "cache_read_input_tokens": 20,
+                "reasoning_output_tokens": 7,
             }
         ]
         assert permission_denials == []
@@ -224,17 +233,73 @@ class TestCodexCLIParseResponse:
                 "input_tokens": 80,
                 "output_tokens": 20,
                 "cache_creation_input_tokens": 0,
+                "cache_write_input_tokens": 0,
                 "cache_read_input_tokens": 10,
+                "reasoning_output_tokens": 0,
             },
             {
                 "turn": 2,
                 "input_tokens": 120,
                 "output_tokens": 40,
                 "cache_creation_input_tokens": 5,
+                "cache_write_input_tokens": 0,
                 "cache_read_input_tokens": 30,
+                "reasoning_output_tokens": 0,
             },
         ]
         assert permission_denials == []
+
+    @pytest.mark.parametrize("cost_location", ["event", "usage"])
+    def test_parse_response_uses_provider_reported_cost(self, codex_config, cost_location):
+        cli = CodexCLI(codex_config)
+        usage = {
+            "input_tokens": 1_000_000,
+            "cached_input_tokens": 200_000,
+            "output_tokens": 100_000,
+        }
+        event = {"type": "turn.completed", "usage": usage}
+        if cost_location == "event":
+            event["total_cost_usd"] = 1.234
+        else:
+            usage["total_cost_usd"] = 1.234
+        output_lines = [
+            json.dumps(event),
+        ]
+
+        _, token_usage, _ = cli.parse_response(output_lines)
+
+        assert token_usage.total_cost_usd == pytest.approx(1.234)
+
+    def test_parse_response_uses_cost_event_after_turn_completion(self, codex_config):
+        cli = CodexCLI(codex_config)
+        output_lines = [
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {"input_tokens": 100, "output_tokens": 10},
+                }
+            ),
+            json.dumps({"type": "result", "total_cost_usd": 0.42}),
+        ]
+
+        _, token_usage, _ = cli.parse_response(output_lines)
+
+        assert token_usage.total_cost_usd == pytest.approx(0.42)
+
+    def test_parse_response_leaves_cost_unknown_when_provider_omits_it(self, codex_config):
+        cli = CodexCLI(codex_config)
+        output_lines = [
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {"input_tokens": 1_000_000, "output_tokens": 100_000},
+                }
+            )
+        ]
+
+        _, token_usage, _ = cli.parse_response(output_lines)
+
+        assert token_usage.total_cost_usd == 0.0
 
     def test_parse_response_ignores_invalid_json(self, codex_config):
         cli = CodexCLI(codex_config)
@@ -282,3 +347,15 @@ class TestCodexCLICreateSession:
 
         assert session_id == ""
         mock_run.assert_not_called()
+def test_codex_environment_preserves_inherited_codex_home(monkeypatch) -> None:
+    """An explicit provider home remains available to child sessions."""
+    from cafe.agents.cli.codex import CodexCLI
+    from cafe.core.types import AgentCLI, AgentConfig
+
+    monkeypatch.setenv("CODEX_HOME", "/custom/codex-home")
+
+    environment = CodexCLI(
+        AgentConfig(name="test", cli=AgentCLI.CODEX)
+    ).build_environment()
+
+    assert environment["CODEX_HOME"] == "/custom/codex-home"

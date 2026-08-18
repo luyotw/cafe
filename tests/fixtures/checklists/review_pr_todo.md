@@ -29,6 +29,7 @@
 [ ] Confirm: Verified all requirements are met, nothing missed
 
 ## Code Quality Review
+[ ] Trace each candidate defect to its root cause, inspect directly related modes, aliases, entry points, and lifecycle paths in the same pass, and consolidate sibling symptoms into one actionable finding
 [ ] Check conformance to existing project coding style
 [ ] Check if existing code patterns and utilities were reused
 [ ] Check for code duplication or excessive duplicate code
@@ -67,7 +68,7 @@
 [ ] Each issue should be a checkbox item with file path and line number
 [ ] If no issues found, all items should be marked [x]
 [ ] Do NOT provide code solutions, only identify issues
-[ ] Update blackboard and next-step baton to hand off to the next workflow target
+[ ] Write the next-step baton to hand off to the next workflow target; the runtime updates blackboard
 [ ] Keep the response brief; workflow transitions are controlled by the baton
 
 

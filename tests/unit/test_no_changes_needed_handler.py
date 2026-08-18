@@ -7,6 +7,14 @@ from cafe.core.hooks.native import NoChangesNeededHandler, UserInputCollector
 from cafe.core.status_codes import PhaseStatusCode
 
 
+def _no_change_step_def() -> dict:
+    return {
+        "role": "developer",
+        "skill": "cafe-develop",
+        "human_tasks": [{"trigger": "no_changes_needed", "task_id": "no-change-decision"}],
+    }
+
+
 class _FakeDevelopStep:
     def __init__(self, issue_dir: Path, iteration: int = 2, interactive: bool = True) -> None:
         self.issue_dir = issue_dir
@@ -45,6 +53,7 @@ def test_no_changes_handler_retries_when_output_missing(tmp_path: Path, monkeypa
     result = handler.run(
         stage="after_execute",
         step_name="develop",
+        step_def=_no_change_step_def(),
         response="no_changes_needed",
         context={"output_file": str(output_file)},
     )
@@ -69,6 +78,7 @@ def test_no_changes_handler_pauses_when_reasoning_present(tmp_path: Path, monkey
     result = handler.run(
         stage="after_execute",
         step_name="develop",
+        step_def=_no_change_step_def(),
         response="no_changes_needed",
         context={"output_file": str(output_file)},
     )
@@ -78,8 +88,8 @@ def test_no_changes_handler_pauses_when_reasoning_present(tmp_path: Path, monkey
     assert result.override_status_code == PhaseStatusCode.NO_CHANGES_NEEDED
 
 
-@patch("cafe.ui.inquirer_prompts.prompt_list", return_value="c")
-def test_user_input_collector_confirm_routes_manual_handoff(
+@patch("cafe.ui.inquirer_prompts.prompt_list", return_value="agree")
+def test_user_input_collector_confirm_routes_declared_successor(
     mock_prompt_list,
     tmp_path: Path,
 ) -> None:
@@ -97,12 +107,12 @@ def test_user_input_collector_confirm_routes_manual_handoff(
         stage="prepare_input",
         phase=phase,
         step_name="develop",
-        step_def={"role": "developer", "name": "develop"},
+        step_def=_no_change_step_def(),
         agent_name="David",
     )
 
-    assert result.override_status_code == PhaseStatusCode.MANUAL_HANDOFF
-    assert result.events[0]["type"] == "no_changes_user_confirmed"
+    assert result.override_status_code == PhaseStatusCode.CONFIRMED
+    assert result.events[0]["type"] == "human_task_completed"
 
 
 def test_user_input_collector_non_interactive_confirm_reads_user_input_file(
@@ -116,7 +126,9 @@ def test_user_input_collector_non_interactive_confirm_reads_user_input_file(
 
     current_iter = phase_dir / "iteration_002"
     current_iter.mkdir(parents=True, exist_ok=True)
-    (current_iter / "user_input.md").write_text("confirm", encoding="utf-8")
+    (current_iter / "user_input.md").write_text(
+        '{"task":"no-change-decision","decision":"agree"}', encoding="utf-8"
+    )
 
     _record_no_changes_event(issue_dir)
 
@@ -126,16 +138,16 @@ def test_user_input_collector_non_interactive_confirm_reads_user_input_file(
         stage="prepare_input",
         phase=phase,
         step_name="develop",
-        step_def={"role": "developer", "name": "develop"},
+        step_def=_no_change_step_def(),
         agent_name="David",
     )
 
-    assert result.override_status_code == PhaseStatusCode.MANUAL_HANDOFF
-    assert result.events[0]["type"] == "no_changes_user_confirmed"
+    assert result.override_status_code == PhaseStatusCode.CONFIRMED
+    assert result.events[0]["type"] == "human_task_completed"
 
 
 @patch("cafe.ui.inquirer_prompts.prompt_multiline", return_value="Please fix the naming")
-@patch("cafe.ui.inquirer_prompts.prompt_list", return_value="m")
+@patch("cafe.ui.inquirer_prompts.prompt_list", return_value="disagree")
 def test_user_input_collector_disagree_returns_feedback(
     mock_prompt_list, mock_multiline, tmp_path: Path
 ) -> None:
@@ -153,19 +165,17 @@ def test_user_input_collector_disagree_returns_feedback(
         stage="prepare_input",
         phase=phase,
         step_name="develop",
-        step_def={"role": "developer", "name": "develop"},
+        step_def=_no_change_step_def(),
         agent_name="David",
     )
 
     assert result.context_updates["user_input"] == "Please fix the naming"
-    assert result.events[0]["type"] == "no_changes_user_feedback"
+    assert result.events[0]["type"] == "human_task_completed"
 
 
-@patch("cafe.ui.chat.launch_chat_session")
-@patch("cafe.ui.inquirer_prompts.prompt_list", side_effect=["chat", "c"])
-def test_user_input_collector_chat_then_confirm(
+@patch("cafe.ui.inquirer_prompts.prompt_list", return_value="agree")
+def test_user_input_collector_decision_labels_are_policy_owned(
     mock_prompt_list,
-    mock_chat,
     tmp_path: Path,
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
@@ -182,12 +192,15 @@ def test_user_input_collector_chat_then_confirm(
         stage="prepare_input",
         phase=phase,
         step_name="develop",
-        step_def={"role": "developer", "name": "develop"},
+        step_def=_no_change_step_def(),
         agent_name="David",
     )
 
-    mock_chat.assert_called_once_with("developer", "demo")
-    assert result.override_status_code == PhaseStatusCode.MANUAL_HANDOFF
+    assert result.override_status_code == PhaseStatusCode.CONFIRMED
+    assert (
+        mock_prompt_list.call_args.args[0]
+        == "Review the implementation reasoning and choose how to continue."
+    )
 
 
 def test_user_input_collector_non_interactive_pauses_when_no_user_input_file_present(
@@ -218,9 +231,9 @@ def test_user_input_collector_non_interactive_pauses_when_no_user_input_file_pre
         stage="prepare_input",
         phase=phase,
         step_name="develop",
-        step_def={"role": "developer", "name": "develop"},
+        step_def=_no_change_step_def(),
         agent_name="David",
     )
 
     assert result.continue_pipeline is False
-    assert any(e.get("type") == "no_changes_missing_user_input" for e in result.events)
+    assert any(e.get("type") == "human_task_rejected" for e in result.events)

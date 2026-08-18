@@ -12,6 +12,10 @@ from cafe.utils.git_utils import get_git_dir
 class CodexCLI(AbstractCLI):
     """Concrete implementation of Codex CLI tool."""
 
+    def build_environment(self) -> dict[str, str]:
+        """Build the child environment without changing provider configuration."""
+        return super().build_environment()
+
     @staticmethod
     def extract_turn_usages(output_lines: List[str]) -> List[Dict[str, Any]]:
         """Extract per-turn token usage from Codex JSONL output."""
@@ -36,7 +40,9 @@ class CodexCLI(AbstractCLI):
                     "input_tokens": usage_data.get("input_tokens", 0),
                     "output_tokens": usage_data.get("output_tokens", 0),
                     "cache_creation_input_tokens": usage_data.get("cache_creation_input_tokens", 0),
+                    "cache_write_input_tokens": usage_data.get("cache_write_input_tokens", 0),
                     "cache_read_input_tokens": usage_data.get("cached_input_tokens", 0),
+                    "reasoning_output_tokens": usage_data.get("reasoning_output_tokens", 0),
                 }
             )
 
@@ -68,7 +74,9 @@ class CodexCLI(AbstractCLI):
         cmd.extend(self.get_output_format())
 
         if allowed_directories and not self.config.session_id:
-            cmd = self.add_directories(cmd, self._expand_initial_allowed_directories(allowed_directories, cwd))
+            cmd = self.add_directories(
+                cmd, self._expand_initial_allowed_directories(allowed_directories, cwd)
+            )
 
         return cmd
 
@@ -82,6 +90,7 @@ class CodexCLI(AbstractCLI):
         token_usage = TokenUsage()
         permission_denials: List[PermissionDenial] = []
         turn_usages = self.extract_turn_usages(output_lines)
+        reported_cost_usd = 0.0
 
         for line in output_lines:
             try:
@@ -89,20 +98,32 @@ class CodexCLI(AbstractCLI):
             except json.JSONDecodeError:
                 continue
 
+            usage_data = data.get("usage", {})
+            raw_cost = data.get("total_cost_usd", usage_data.get("total_cost_usd"))
+            if raw_cost is not None:
+                try:
+                    reported_cost_usd = max(float(raw_cost), 0.0)
+                except (TypeError, ValueError):
+                    pass
+
             if data.get("type") == "item.completed":
                 item = data.get("item", {})
                 if item.get("type") == "agent_message":
                     response_text = item.get("text", "")
 
             if data.get("type") == "turn.completed":
-                usage_data = data.get("usage", {})
                 token_usage = TokenUsage(
                     input_tokens=usage_data.get("input_tokens", 0),
                     output_tokens=usage_data.get("output_tokens", 0),
                     cache_read_input_tokens=usage_data.get("cached_input_tokens", 0),
                     cache_creation_input_tokens=usage_data.get("cache_creation_input_tokens", 0),
+                    cache_write_input_tokens=usage_data.get("cache_write_input_tokens", 0),
+                    reasoning_output_tokens=usage_data.get("reasoning_output_tokens", 0),
+                    total_cost_usd=reported_cost_usd,
                     turn_usages=turn_usages,
                 )
+
+        token_usage.total_cost_usd = reported_cost_usd
 
         return response_text, token_usage, permission_denials
 

@@ -1,0 +1,25 @@
+---
+name: cafe-editorial_review
+description: 審閱稿件品質與對齊大綱
+version: 1.1.0
+workflow:
+  execution_profile:
+    workload: review
+    reasoning: standard
+    risk_domains: [source-fidelity, audience-alignment]
+    fallback_strength: equivalent_or_stronger
+---
+
+# Editorial Review
+
+## Role
+Read your agent file: {agent_file}
+
+## Instructions
+檢視初稿的清晰度、依據與結構；若需修改，提出可執行的修訂方向。
+
+## Output
+Write review to: {output_file}
+
+## Handoff
+- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。

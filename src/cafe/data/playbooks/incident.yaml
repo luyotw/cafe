@@ -1,6 +1,16 @@
 playbook:
   id: incident
   name: "Incident Response Workflow（偵測 → 分類 → 緩解 → 事後檢討）"
+  conversation_locale: en-US
+
+behavior:
+  completion: status_code
+
+skills:
+  workflow:
+    shared: [cafe-workflow-common, cafe-github_sync]
+  chat:
+    shared: [cafe-common-chat-handoff, cafe-chat-develop-change, cafe-chat-spec-revision, cafe-chat-plan-revision, cafe-chat-alignment-decision]
 
 roles:
   ops:
@@ -8,13 +18,21 @@ roles:
     default_agent: "Casey"
     default_cli: "claude"
 
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+
 steps:
   detect:
     type: skill
-    skill: incident_detect
+    skill: cafe-incident_detect
     role: ops
     assignee_type: agent
     output_artifact: incident_signal
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: detect}
     valid_intents:
       - confirmed
       - need_clarification
@@ -25,11 +43,15 @@ steps:
 
   triage:
     type: skill
-    skill: incident_triage
+    skill: cafe-incident_triage
     role: ops
     assignee_type: agent
     input_artifacts: [incident_signal]
     output_artifact: incident_plan
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: triage}
     valid_intents:
       - confirmed
       - need_clarification
@@ -41,11 +63,15 @@ steps:
 
   mitigate:
     type: skill
-    skill: incident_mitigate
+    skill: cafe-incident_mitigate
     role: ops
     assignee_type: agent
     input_artifacts: [incident_signal, incident_plan]
     output_artifact: incident_recovery
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: mitigate}
     valid_intents:
       - confirmed
       - need_clarification
@@ -57,11 +83,15 @@ steps:
 
   postmortem:
     type: skill
-    skill: incident_postmortem
+    skill: cafe-incident_postmortem
     role: ops
     assignee_type: agent
     input_artifacts: [incident_signal, incident_plan, incident_recovery]
     output_artifact: incident_learning
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: postmortem}
     valid_intents:
       - confirmed
       - need_clarification

@@ -4,7 +4,19 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-CONTINUE_USER_INPUT = "continue"
+# Injected when a same-session resume has no real user input (e.g. the CLI was
+# interrupted by a rate limit and restarted). Phrased so agents read it as a
+# system resume marker, never as a user statement or approval.
+CONTINUE_USER_INPUT = (
+    "[system] The previous run was interrupted (e.g. by a rate limit). "
+    "Resume from where you left off. This is not a user message and does not "
+    "grant any confirmation or approval."
+)
+
+# Synthetic inputs the workflow generates when the user provided nothing; only
+# these may be collapsed to the resume marker on a same-session resume.
+# "continue" is kept for user_input.md files written by older builds.
+PLACEHOLDER_USER_INPUTS = ("", CONTINUE_USER_INPUT, "continue", "workflow execute")
 
 
 def resolve_resume_user_input(
@@ -15,7 +27,13 @@ def resolve_resume_user_input(
     current_cli: Optional[str],
     current_session_id: Optional[str],
 ) -> str:
-    """Return ``continue`` when resuming with the same CLI and session id."""
+    """Return ``continue`` only when resuming the same CLI session with no real input.
+
+    A candidate outside PLACEHOLDER_USER_INPUTS is the user's actual answer or
+    correction and must never be discarded, even on a same-session resume.
+    """
+    if candidate and candidate.strip() not in PLACEHOLDER_USER_INPUTS:
+        return candidate
     if not prior_cli or not prior_session_id:
         return candidate
     if not current_cli or not current_session_id:
@@ -25,19 +43,45 @@ def resolve_resume_user_input(
     return candidate
 
 
+def is_interrupted_iteration(
+    *,
+    iteration: int,
+    previous_iteration_data: Optional[Dict[str, Any]],
+    current_iteration_data: Optional[Dict[str, Any]],
+) -> bool:
+    """True only when the current iteration was started but did not complete."""
+    if current_iteration_data and current_iteration_data.get("cli"):
+        if not current_iteration_data.get("end_time"):
+            return True
+    return False
+
+
+def is_followup_iteration(
+    *,
+    iteration: int,
+    previous_iteration_data: Optional[Dict[str, Any]],
+    current_iteration_data: Optional[Dict[str, Any]],
+) -> bool:
+    """True for either a correction iteration or an interrupted same iteration."""
+    return iteration > 1 or is_interrupted_iteration(
+        iteration=iteration,
+        previous_iteration_data=previous_iteration_data,
+        current_iteration_data=current_iteration_data,
+    )
+
+
 def is_resume_iteration(
     *,
     iteration: int,
     previous_iteration_data: Optional[Dict[str, Any]],
     current_iteration_data: Optional[Dict[str, Any]],
 ) -> bool:
-    """True when this step iteration continues a prior agent run in the same step."""
-    if iteration > 1:
-        return True
-    if current_iteration_data and current_iteration_data.get("cli"):
-        if not current_iteration_data.get("end_time"):
-            return True
-    return False
+    """Backward-compatible alias for interrupted same-iteration continuation."""
+    return is_interrupted_iteration(
+        iteration=iteration,
+        previous_iteration_data=previous_iteration_data,
+        current_iteration_data=current_iteration_data,
+    )
 
 
 def load_prior_run_context(
@@ -47,8 +91,6 @@ def load_prior_run_context(
     current_iteration_data: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     """Load iteration metadata from the prior run being resumed."""
-    if iteration > 1:
-        return previous_iteration_data
     if current_iteration_data and current_iteration_data.get("cli"):
         if not current_iteration_data.get("end_time"):
             return current_iteration_data

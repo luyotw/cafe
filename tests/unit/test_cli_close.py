@@ -65,7 +65,8 @@ def issue_with_config(temp_repo_dir):
     config_file = issue_dir / "issue.yaml"
     config_data = {
         "base_branch": "main",
-        "feature_branch": "test-issue"
+        "feature_branch": "test-issue",
+        "pr": {"auto_create": True},
     }
     with open(config_file, "w") as f:
         yaml.dump(config_data, f)

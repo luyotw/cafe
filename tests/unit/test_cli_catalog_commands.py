@@ -7,7 +7,6 @@ from typer.testing import CliRunner
 
 from cafe.ui.cli import app
 
-
 runner = CliRunner()
 
 
@@ -35,7 +34,7 @@ playbook:
   id: custom
 steps:
   develop:
-    skill: develop
+    skill: cafe-develop
     role: developer
     valid_intents: [confirmed]
     on:
@@ -48,15 +47,76 @@ steps:
 
     assert result.exit_code == 0
     assert "id: custom" in result.stdout
+    assert "conversation_locale: auto" in result.stdout
     assert "source=project" in result.stdout
+
+
+def test_playbook_confirmation_gates_are_derived_from_confirm_output(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    default_result = runner.invoke(app, ["playbook", "confirmation-gates", "default"])
+    research_result = runner.invoke(app, ["playbook", "confirmation-gates", "research"])
+
+    assert default_result.exit_code == 0
+    assert "Conversation locale: en-US" in default_result.stdout
+    assert "steps declaring on.confirm_output" in default_result.stdout
+    assert "  - spec" in default_result.stdout
+    assert "  - plan" in default_result.stdout
+    assert "  - develop" not in default_result.stdout
+    assert research_result.exit_code == 0
+    assert "(none)" in research_result.stdout
+    assert "Reactive clarification, permission, and alignment pauses" in research_result.stdout
+
+
+def test_skill_sync_global_installs_bundled_helper_skills(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    home_dir = tmp_path / "home"
+
+    with patch(
+        "cafe.skills.global_installer._default_home_dir",
+        return_value=home_dir,
+    ):
+        result = runner.invoke(app, ["skill", "sync-global"])
+
+    assert result.exit_code == 0
+    assert "Synced 15 installation(s)" in result.stdout
+    assert (home_dir / ".claude/skills/use-cafe-workflow/SKILL.md").is_file()
+    assert (home_dir / ".codex/skills/write-cafe-playbook/SKILL.md").is_file()
+    assert (home_dir / ".copilot/skills/write-cafe-phase/SKILL.md").is_file()
+    assert (home_dir / ".cursor/skills/use-cafe-workflow/SKILL.md").is_file()
+    assert (home_dir / ".gemini/skills/write-cafe-playbook/SKILL.md").is_file()
+
+
+def test_skill_sync_global_can_limit_target_clis(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    home_dir = tmp_path / "home"
+
+    with patch(
+        "cafe.skills.global_installer._default_home_dir",
+        return_value=home_dir,
+    ):
+        result = runner.invoke(
+            app,
+            ["skill", "sync-global", "--cli", "codex", "--cli", "cursor"],
+        )
+
+    assert result.exit_code == 0
+    assert "Synced 6 installation(s)" in result.stdout
+    assert (home_dir / ".codex/skills/use-cafe-workflow/SKILL.md").is_file()
+    assert (home_dir / ".cursor/skills/use-cafe-workflow/SKILL.md").is_file()
+    assert not (home_dir / ".claude").exists()
 
 
 def test_playbook_validate_reports_warning_and_strict_failure(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    skill_dir = tmp_path / ".cafe" / "skills" / "develop"
+    skill_dir = tmp_path / ".cafe" / "skills" / "cafe-develop"
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(
-        "---\nname: develop\ndescription: custom\n---\n\nDevelop\n",
+        "---\nname: cafe-develop\ndescription: custom\n---\n\nDevelop\n",
         encoding="utf-8",
     )
     playbook_dir = tmp_path / ".cafe" / "playbooks"
@@ -67,7 +127,7 @@ playbook:
   id: custom
 steps:
   develop:
-    skill: develop
+    skill: cafe-develop
     role: developer
     allowed_tools: [Bash, "Bash(git:*)"]
     valid_intents: [confirmed]
@@ -88,10 +148,10 @@ steps:
 
 def test_skill_list_and_show_prefer_project_override(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    skill_dir = tmp_path / ".cafe" / "skills" / "plan"
+    skill_dir = tmp_path / ".cafe" / "skills" / "cafe-plan"
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(
-        "---\nname: plan\ndescription: custom plan\n---\n\nProject override body\n",
+        "---\nname: cafe-plan\ndescription: custom plan\n---\n\nProject override body\n",
         encoding="utf-8",
     )
 
@@ -108,7 +168,7 @@ def test_skill_list_and_show_prefer_project_override(tmp_path: Path, monkeypatch
 
 def test_skill_validate_supports_strict_mode(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    skill_dir = tmp_path / ".cafe" / "skills" / "plan"
+    skill_dir = tmp_path / ".cafe" / "skills" / "cafe-plan"
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(
         "---\nname: wrong_name\ndescription: custom plan\n---\n\nProject override body\n",
@@ -200,7 +260,9 @@ def test_skill_import_skips_mismatched_frontmatter_name(tmp_path: Path, monkeypa
     assert not (tmp_path / ".cafe" / "skills" / "alpha").exists()
 
 
-def test_skill_import_prompts_before_overwriting_existing_skill(tmp_path: Path, monkeypatch) -> None:
+def test_skill_import_prompts_before_overwriting_existing_skill(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     existing_dir = tmp_path / ".cafe" / "skills" / "alpha"
     existing_dir.mkdir(parents=True, exist_ok=True)
@@ -249,7 +311,9 @@ def test_skill_import_overwrites_existing_skill_when_confirmed(tmp_path: Path, m
     assert (existing_dir / "SKILL.md").read_text(encoding="utf-8").endswith("New body\n")
 
 
-def test_skill_import_cancelled_when_initial_confirmation_declined(tmp_path: Path, monkeypatch) -> None:
+def test_skill_import_cancelled_when_initial_confirmation_declined(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".cafe").mkdir(parents=True, exist_ok=True)
     source_dir = tmp_path / "incoming-skills" / "alpha"
@@ -385,8 +449,9 @@ playbook:
   id: custom
 steps:
   qa:
-    skill: review
+    skill: cafe-review
     role: reviewer
+    allowed_tools: ["Bash(cafe verification check:*)"]
     valid_intents: [confirmed]
     on:
       await_agent: _done

@@ -6,9 +6,10 @@ import json
 import logging
 import inspect
 from abc import ABC, abstractmethod
+from copy import copy
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +20,23 @@ from cafe.core.phase_checklist_mixin import PhaseChecklistMixin
 from cafe.core.phase_sandbox_mixin import PhaseSandboxMixin
 from cafe.core.phase_review_mixin import PhaseReviewMixin
 from cafe.core.phase_state_mixin import PhaseStateMixin
+from cafe.core.session_continuation import (
+    SessionContinuation,
+    SessionContinuationPolicy,
+)
+from cafe.agents.executor import AgentExecutor, AgentExecutionError
 
 # Backward-compat re-export for test imports
 from cafe.core.phase_state_mixin import ensure_agent_file_exists  # noqa: F401
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
-from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, TokenUsage
+from cafe.core.types import (
+    AgentCLI,
+    AgentConfig,
+    PhaseProgress,
+    PhaseResult,
+    PhaseStatus,
+    TokenUsage,
+)
 
 
 class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklistMixin, ABC):
@@ -33,7 +46,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
     implementation analysis, development, code review, etc.).
 
     Subclasses must implement the execute() method to define the phase's behavior.
-    
+
     Attributes:
         interactive: Whether to allow interactive user prompts (default: True)
     """
@@ -50,29 +63,31 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         # Automatically set issue_dir from current branch if git_ops is provided
         if git_ops is not None:
             self.issue_dir = self._get_issue_dir(git_ops)
-    
-    def _handle_exception_in_execute(self, e: Exception, default_message: str = "Phase failed") -> PhaseResult:
+
+    def _handle_exception_in_execute(
+        self, e: Exception, default_message: str = "Phase failed"
+    ) -> PhaseResult:
         """Unified exception handling for phase execute().
-        
+
         This method should be called in the except Exception block of each phase's execute().
         It checks if it is CriticalPhaseError, if so re-raises, otherwise returns FAILED result.
-        
+
         Args:
             e: Caught exception
             default_message: Default error message prefix
-            
+
         Returns:
             PhaseResult with FAILED status (only for non-critical errors)
-            
+
         Raises:
             CriticalPhaseError: Re-raise if critical error
         """
         from cafe.core.types import CriticalPhaseError
-        
+
         # Re-raise critical errors to stop the workflow
         if isinstance(e, CriticalPhaseError):
             raise e
-        
+
         # Non-critical error - return FAILED result
         return PhaseResult(
             status=PhaseStatus.FAILED,
@@ -80,32 +95,36 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             data={},
         )
 
-    def _handle_keyboard_interrupt(self, phase_name: str, data: Optional[Dict[str, Any]] = None) -> PhaseResult:
+    def _handle_keyboard_interrupt(
+        self, phase_name: str, data: Optional[Dict[str, Any]] = None
+    ) -> PhaseResult:
         """Unified KeyboardInterrupt handling for all phases.
-        
+
         This method should be called in the except KeyboardInterrupt block of each phase's execute().
         It displays pause message and returns IN_PROGRESS result with user_interrupted flag.
-        
+
         Args:
             phase_name: Name of the phase (e.g., "spec", "develop", "review")
             data: Additional data to include in the result (e.g., iterations, file paths)
-            
+
         Returns:
             PhaseResult with IN_PROGRESS status and user_interrupted flag set to True
         """
-        issue_name = getattr(self, 'issue_name', None) or getattr(self, 'issue_id', 'unknown')
-        iteration = getattr(self, 'iteration', None)
-        
+        issue_name = getattr(self, "issue_name", None) or getattr(self, "issue_id", "unknown")
+        iteration = getattr(self, "iteration", None)
+
         print("\n\n⏸️  Paused by user (Ctrl+C).")
         if iteration is not None:
             print(f"💾 Progress saved. Current iteration: {iteration}")
-        print(f"📝 To resume, run: cafe {phase_name} {issue_name if issue_name != 'unknown' else ''}")
-        
+        print(
+            f"📝 To resume, run: cafe {phase_name} {issue_name if issue_name != 'unknown' else ''}"
+        )
+
         result_data = data or {}
         result_data["user_interrupted"] = True
         if iteration is not None:
             result_data.setdefault("iterations", iteration)
-        
+
         return PhaseResult(
             status=PhaseStatus.IN_PROGRESS,
             message="Paused by user - can resume later",
@@ -142,15 +161,11 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         """
         # Ensure phase_dir exists
         if not hasattr(self, "phase_dir"):
-            raise AttributeError(
-                "Phase must have 'phase_dir' attribute to use _save_user_input"
-            )
+            raise AttributeError("Phase must have 'phase_dir' attribute to use _save_user_input")
 
         # Ensure iteration exists
         if not hasattr(self, "iteration"):
-            raise AttributeError(
-                "Phase must have 'iteration' attribute to use _save_user_input"
-            )
+            raise AttributeError("Phase must have 'iteration' attribute to use _save_user_input")
 
         # Create iteration directory
         iteration_dir = self._get_iteration_dir(self.iteration)
@@ -161,20 +176,29 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         with open(user_input_file, "w", encoding="utf-8") as f:
             f.write(user_input)
 
-        # Create initial context data (user_input is stored in user_input.md,
-        # no longer duplicated into context.json)
-        context_data: Dict[str, Any] = {
-            "iteration": self.iteration,
-            "timestamp": datetime.now().astimezone().isoformat(),
-        }
+        # Preserve metadata and usage from an interrupted attempt in the same
+        # iteration. The new attempt is marked incomplete until history is
+        # updated after execution.
+        context_file = self._resolve_iteration_context_file(iteration_dir)
+        context_data: Dict[str, Any] = {}
+        if context_file.exists():
+            try:
+                loaded = json.loads(context_file.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                loaded = None
+            if isinstance(loaded, dict):
+                context_data.update(loaded)
+        context_data["iteration"] = self.iteration
+        context_data.setdefault("timestamp", datetime.now().astimezone().isoformat())
+        context_data.pop("end_time", None)
+        context_data.pop("status_code", None)
 
         # Add phase-specific initial data
         if phase_specific_data:
             context_data.update(phase_specific_data)
 
         # Save as iteration.json file
-        context_file = iteration_dir / "iteration.json"
-        with open(context_file, "w", encoding="utf-8") as f:
+        with open(iteration_dir / "iteration.json", "w", encoding="utf-8") as f:
             json.dump(context_data, f, ensure_ascii=False, indent=2)
 
     def _load_user_input(self, iteration: int) -> str:
@@ -297,9 +321,12 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         if model is not None:
             context_data["model"] = model
 
-        # Save stats (token usage) if provided
+        # Save cumulative stats across retries in the same iteration.
         if token_usage is not None:
-            context_data["stats"] = token_usage.model_dump()
+            context_data["stats"] = self._merge_token_usage_stats(
+                context_data.get("stats"),
+                token_usage,
+            )
 
         # Save end_time for this iteration
         context_data["end_time"] = datetime.now().astimezone().isoformat()
@@ -326,15 +353,110 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         except Exception as e:
             logger.warning(f"Failed to append iteration index: {e}")
 
+    @staticmethod
+    def _merge_token_usage_stats(
+        existing: Any,
+        incoming: TokenUsage,
+    ) -> Dict[str, Any]:
+        """Merge one raw attempt into persisted iteration-level telemetry."""
+        merged = dict(existing) if isinstance(existing, dict) else {}
+        incoming_data = incoming.model_dump()
+        additive_fields = (
+            "input_tokens",
+            "output_tokens",
+            "cache_creation_input_tokens",
+            "cache_write_input_tokens",
+            "cache_read_input_tokens",
+            "reasoning_output_tokens",
+            "total_cost_usd",
+        )
+        for field in additive_fields:
+            prior = merged.get(field, 0)
+            value = incoming_data.get(field, 0)
+            merged[field] = (prior if isinstance(prior, (int, float)) else 0) + (
+                value if isinstance(value, (int, float)) else 0
+            )
+
+        for field in ("duration_ms", "duration_api_ms"):
+            prior = merged.get(field)
+            value = incoming_data.get(field)
+            if isinstance(value, int):
+                merged[field] = (prior if isinstance(prior, int) else 0) + value
+            elif field not in merged:
+                merged[field] = None
+
+        prior_turns = merged.get("turn_usages")
+        incoming_turns = incoming_data.get("turn_usages")
+        merged["turn_usages"] = (
+            list(prior_turns) if isinstance(prior_turns, list) else []
+        ) + (list(incoming_turns) if isinstance(incoming_turns, list) else [])
+        return merged
+
+    def _merge_iteration_token_usage(self, token_usage: TokenUsage) -> None:
+        """Persist telemetry from an auxiliary retry immediately."""
+        iteration_dir = self._get_iteration_dir(self.iteration)
+        context_file = self._resolve_iteration_context_file(iteration_dir)
+        if not context_file.exists():
+            return
+        try:
+            context_data = json.loads(context_file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return
+        if not isinstance(context_data, dict):
+            return
+        context_data["stats"] = self._merge_token_usage_stats(
+            context_data.get("stats"),
+            token_usage,
+        )
+        (iteration_dir / "iteration.json").write_text(
+            json.dumps(context_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _configured_primary_cli_value(self, agent_name: str) -> Optional[str]:
+        """Crew-configured primary CLI for this agent as a plain string, if resolvable."""
+        getter = getattr(self.agent_manager, "configured_primary_cli", None)
+        if not callable(getter):
+            return None
+        try:
+            config = self.agent_manager.get_agent(agent_name).config
+            primary = getter(config)
+        except Exception:
+            return None
+        if primary is None:
+            return None
+        return primary.value if hasattr(primary, "value") else str(primary)
+
+    def _canonical_execution_chain(
+        self,
+        agent_name: str,
+        fallback: Optional[Iterable[Any]],
+    ) -> Optional[Iterable[Any]]:
+        """Return the registered execution chain without invocation-local reordering."""
+        getter = getattr(self.agent_manager, "configured_execution_chain", None)
+        if callable(getter):
+            try:
+                chain = getter(agent_name)
+            except Exception:
+                chain = None
+            if chain:
+                return chain
+        try:
+            chain = getattr(self.agent_manager.get_agent(agent_name).config, "clis", None)
+        except Exception:
+            return fallback
+        return chain if chain else fallback
+
     def _record_active_agent_cli(
         self,
         *,
         agent_name: str,
         agent_cli: Optional[str],
         model: Optional[str],
+        execution_chain: Optional[Iterable[Any]] = None,
         phase_specific_data: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Remember the last successful CLI for chat handoff resolution."""
+        """Remember the last successful CLI for handoff resolution."""
         if not agent_cli:
             return
         issue_dir = getattr(self, "issue_dir", None)
@@ -350,15 +472,195 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 data = {}
 
             extra = phase_specific_data or {}
+            configured_primary = self._configured_primary_cli_value(agent_name)
+            execution_chain_snapshot = []
+            if execution_chain is not None:
+                for entry in execution_chain:
+                    if isinstance(entry, str):
+                        entry_text = entry.strip()
+                        if not entry_text:
+                            continue
+                        cli_text, _, model_text = entry_text.partition(":")
+                        if not cli_text:
+                            continue
+                        normalized_model = model_text if model_text else None
+                        execution_chain_snapshot.append(
+                            {
+                                "cli": cli_text,
+                                "model": normalized_model or None,
+                            }
+                        )
+                        continue
+                    if isinstance(entry, AgentCLI):
+                        cli_name = entry.value
+                        execution_chain_snapshot.append({"cli": cli_name, "model": None})
+                        continue
+                    if isinstance(entry, dict):
+                        cli_name = entry.get("cli")
+                        model_value = entry.get("model")
+                        if isinstance(cli_name, str):
+                            execution_chain_snapshot.append(
+                                {
+                                    "cli": cli_name,
+                                    "model": str(model_value).strip()
+                                    if isinstance(model_value, str)
+                                    else None,
+                                }
+                            )
+                        continue
+                    cli_name = getattr(entry, "cli", None)
+                    if cli_name is None or not hasattr(cli_name, "value"):
+                        continue
+                    model_value = getattr(entry, "model", None)
+                    resolved_phase = getattr(entry, "resolve_model", None)
+                    if callable(resolved_phase):
+                        model_value = (
+                            resolved_phase(phase_specific_data.get("step_name"))
+                            if hasattr(phase_specific_data, "get")
+                            else None
+                        )
+                    execution_chain_snapshot.append(
+                        {
+                            "cli": str(cli_name.value),
+                            "model": str(model_value).strip()
+                            if isinstance(model_value, str)
+                            else None,
+                        }
+                    )
             data[agent_name] = {
                 "cli": agent_cli,
                 "model": model,
+                # Configured primary at record time, so a later chain change
+                # invalidates this sticky record instead of being overridden by it.
+                "configured_primary": configured_primary,
+                "chain": execution_chain_snapshot,
                 "step_name": extra.get("step_name"),
                 "updated_at": datetime.now().astimezone().isoformat(),
             }
             active_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as exc:
             logger.debug("failed to record active CLI for %s: %s", agent_name, exc)
+
+    def _resolve_execution_config_for_iteration(
+        self,
+        agent_name: str,
+        step_name: Optional[str] = None,
+        continuation: Optional[SessionContinuation] = None,
+    ) -> AgentConfig:
+        """Return execution config for this step, including fallback continuation targets."""
+        default_config = self.agent_manager.get_agent(agent_name).config
+        requested_continuation = continuation or SessionContinuation.auto()
+        get_execution_config = getattr(self.agent_manager, "get_execution_config", None)
+        if not callable(get_execution_config):
+            return self._fail_closed_execution_config(
+                default_config,
+                requested_continuation,
+            )
+
+        try:
+            kwargs: Dict[str, Any] = {"phase_name": step_name}
+            signature = inspect.signature(get_execution_config)
+            if "continuation" in signature.parameters or any(
+                param.kind == inspect.Parameter.VAR_KEYWORD
+                for param in signature.parameters.values()
+            ):
+                kwargs["continuation"] = requested_continuation
+            execution_config = get_execution_config(agent_name, **kwargs)
+        except Exception:
+            return self._fail_closed_execution_config(
+                default_config,
+                requested_continuation,
+            )
+
+        if isinstance(execution_config, AgentConfig):
+            return execution_config
+
+        if isinstance(execution_config, AgentCLI):
+            return AgentConfig(
+                name=agent_name,
+                cli=execution_config,
+            )
+
+        if not all(
+            hasattr(execution_config, attr)
+            for attr in ("cli", "session_id", "model", "clis", "backup_clis", "models_config")
+        ):
+            return self._fail_closed_execution_config(
+                default_config,
+                requested_continuation,
+            )
+
+        if not isinstance(execution_config.clis, list):
+            return self._fail_closed_execution_config(
+                default_config,
+                requested_continuation,
+            )
+        if not isinstance(execution_config.backup_clis, list):
+            return self._fail_closed_execution_config(
+                default_config,
+                requested_continuation,
+            )
+        if not isinstance(execution_config.models_config, dict):
+            return self._fail_closed_execution_config(
+                default_config,
+                requested_continuation,
+            )
+
+        cli = execution_config.cli
+        if not isinstance(cli, (AgentCLI, str)):
+            return self._fail_closed_execution_config(
+                default_config,
+                requested_continuation,
+            )
+
+        if execution_config.session_id is not None and not isinstance(
+            execution_config.session_id, str
+        ):
+            return self._fail_closed_execution_config(
+                default_config,
+                requested_continuation,
+            )
+        if execution_config.model is not None and not isinstance(execution_config.model, str):
+            return self._fail_closed_execution_config(
+                default_config,
+                requested_continuation,
+            )
+
+        return execution_config
+
+    @staticmethod
+    def _fail_closed_execution_config(
+        default_config: AgentConfig,
+        continuation: SessionContinuation,
+    ) -> AgentConfig:
+        """Avoid implicit sticky-session reuse when continuation resolution fails."""
+        if continuation.is_exact and continuation.cli == default_config.cli:
+            session_id = continuation.session_id
+        elif continuation.policy == SessionContinuationPolicy.AUTO:
+            return default_config
+        else:
+            session_id = None
+        if hasattr(default_config, "model_copy"):
+            return default_config.model_copy(update={"session_id": session_id})
+        copied_config = copy(default_config)
+        copied_config.session_id = session_id
+        return copied_config
+
+    def _current_session_continuation(self) -> SessionContinuation:
+        continuation = getattr(self, "_session_continuation", None)
+        if isinstance(continuation, SessionContinuation):
+            return continuation
+        return SessionContinuation.auto()
+
+    @staticmethod
+    def _call_accepts_keyword(callable_obj: Any, keyword: str) -> bool:
+        try:
+            parameters = inspect.signature(callable_obj).parameters
+        except (TypeError, ValueError):
+            return False
+        return keyword in parameters or any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+        )
 
     def _get_iteration_dir(self, iteration: int) -> Path:
         """Get iteration directory path.
@@ -370,9 +672,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             Path object of iteration directory, format is iteration_XXX/
         """
         if not hasattr(self, "phase_dir"):
-            raise AttributeError(
-                "Phase must have 'phase_dir' attribute to use _get_iteration_dir"
-            )
+            raise AttributeError("Phase must have 'phase_dir' attribute to use _get_iteration_dir")
 
         return Path(self.phase_dir) / f"iteration_{iteration:03d}"
 
@@ -423,7 +723,6 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 result.append(json.loads(line))
 
         return result
-
 
     def _check_empty_response(self, response: str) -> Optional[PhaseStatusCode]:
         """Check if agent response is empty, if empty return NO_RESPONSE status code.
@@ -511,6 +810,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         allowed_tools: Optional[List[str]] = None,
         denied_tools: Optional[List[str]] = None,
         phase_specific_data: Optional[Dict[str, Any]] = None,
+        backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
     ) -> tuple[str, Optional[PhaseStatusCode]]:
         """Common agent execution flow that all phases can use.
 
@@ -552,23 +852,81 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             raise AttributeError("Phase must have 'agent_manager' attribute")
 
         # 1. Save user_input to history
+        requested_continuation = self._current_session_continuation()
+        initial_phase_data = dict(phase_specific_data or {})
+        initial_phase_data["session_continuation"] = requested_continuation.to_dict()
         self._save_user_input(
             user_input=user_input,
-            phase_specific_data=phase_specific_data or {},
+            phase_specific_data=initial_phase_data,
         )
 
-        # 2. Get agent metadata
-        agent_executor = self.agent_manager.get_agent(agent_name)
-        agent_cli = agent_executor.config.cli.value
-        agent_session_id = agent_executor.config.session_id
-        allowed_directories = self._get_allowed_directories()
-        cli_command_args = self.agent_manager.preview_cli_command_args(
-            agent_name,
-            prompt,
-            allowed_tools=allowed_tools,
-            allowed_directories=allowed_directories,
+        # 2. Resolve execution metadata (primary may be effective fallback CLI)
+        execution_phase_name = None
+        if phase_specific_data:
+            raw_step_name = phase_specific_data.get("step_name")
+            if isinstance(raw_step_name, str):
+                execution_phase_name = raw_step_name
+        if execution_phase_name is None:
+            execution_phase_name = getattr(self, "phase_name", None)
+
+        execution_config = self._resolve_execution_config_for_iteration(
+            agent_name=agent_name,
+            step_name=execution_phase_name,
+            continuation=requested_continuation,
         )
-        cli_environment = self.agent_manager.preview_cli_environment(agent_name) or {}
+        agent_cli_obj = execution_config.cli
+        agent_cli = (
+            agent_cli_obj.value if isinstance(agent_cli_obj, AgentCLI) else str(agent_cli_obj)
+        )
+        agent_session_id = execution_config.session_id
+        allowed_directories = self._get_allowed_directories()
+        preview_cli_command_args = getattr(self.agent_manager, "preview_cli_command_args", None)
+        preview_cli_environment = getattr(self.agent_manager, "preview_cli_environment", None)
+
+        if callable(preview_cli_command_args):
+            try:
+                preview_kwargs: Dict[str, Any] = {
+                    "allowed_tools": allowed_tools,
+                    "allowed_directories": allowed_directories,
+                }
+                if self._call_accepts_keyword(preview_cli_command_args, "phase_name"):
+                    preview_kwargs["phase_name"] = execution_phase_name
+                if self._call_accepts_keyword(preview_cli_command_args, "continuation"):
+                    preview_kwargs["continuation"] = requested_continuation
+                cli_command_args = preview_cli_command_args(
+                    agent_name,
+                    prompt,
+                    **preview_kwargs,
+                )
+            except TypeError:
+                cli_command_args = preview_cli_command_args(
+                    agent_name,
+                    prompt,
+                    allowed_tools,
+                    allowed_directories,
+                )
+            except Exception:
+                cli_command_args = AgentExecutor(execution_config).preview_cli_command_args(
+                    prompt,
+                    allowed_tools=allowed_tools,
+                    allowed_directories=allowed_directories,
+                )
+        else:
+            cli_command_args = AgentExecutor(execution_config).preview_cli_command_args(
+                prompt,
+                allowed_tools=allowed_tools,
+                allowed_directories=allowed_directories,
+            )
+
+        if callable(preview_cli_environment):
+            environment_kwargs: Dict[str, Any] = {}
+            if self._call_accepts_keyword(preview_cli_environment, "phase_name"):
+                environment_kwargs["phase_name"] = execution_phase_name
+            if self._call_accepts_keyword(preview_cli_environment, "continuation"):
+                environment_kwargs["continuation"] = requested_continuation
+            cli_environment = preview_cli_environment(agent_name, **environment_kwargs) or {}
+        else:
+            cli_environment = AgentExecutor(execution_config).preview_cli_environment() or {}
         cli_environment_preview = {
             key: value
             for key, value in cli_environment.items()
@@ -583,6 +941,10 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 context_data = json.load(f)
             context_data["prompt"] = prompt
             context_data["cli"] = agent_cli
+            # 開始執行前就記下已解析的 model,讓 summary 在 iteration 一開始就抓得到 CLI/Model
+            # (執行後會再以 agent 實際回報的 model 覆寫;見下方 model 更新)。
+            if execution_config.model:
+                context_data["model"] = execution_config.model
             context_data["session_id"] = agent_session_id
             context_data["allowed_tools"] = allowed_tools
             context_data["denied_tools"] = denied_tools
@@ -594,10 +956,13 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         # 4. Execute agent (with error recovery)
         # Prepare streaming.jsonl file path for real-time writing
         streaming_jsonl_file = iteration_dir / "streaming.jsonl"
-        pre_execution_output_snapshot = self._snapshot_output_files(self._detect_written_output_files())
+        pre_execution_output_snapshot = self._snapshot_output_files(
+            self._detect_written_output_files()
+        )
 
         # Initialize cumulative token usage for this iteration
         from cafe.core.types import TokenUsage
+
         cumulative_token_usage = TokenUsage()
 
         def accumulate_token_usage(target: TokenUsage, source: TokenUsage) -> None:
@@ -605,7 +970,9 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             target.input_tokens += source.input_tokens
             target.output_tokens += source.output_tokens
             target.cache_creation_input_tokens += source.cache_creation_input_tokens
+            target.cache_write_input_tokens += source.cache_write_input_tokens
             target.cache_read_input_tokens += source.cache_read_input_tokens
+            target.reasoning_output_tokens += source.reasoning_output_tokens
             target.total_cost_usd += source.total_cost_usd
             if source.turn_usages:
                 target.turn_usages.extend(source.turn_usages)
@@ -622,13 +989,20 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
 
         # Track model separately (use latest value, don't accumulate)
         model: Optional[str] = None
-        execution_phase_name = None
-        if phase_specific_data:
-            raw_step_name = phase_specific_data.get("step_name")
-            if isinstance(raw_step_name, str):
-                execution_phase_name = raw_step_name
-        if execution_phase_name is None:
-            execution_phase_name = getattr(self, "phase_name", None)
+        failed_attempts: List[Dict[str, Any]] = []
+
+        def get_failed_attempts() -> List[Dict[str, Any]]:
+            """Read optional manager diagnostics without breaking legacy test doubles."""
+            getter = getattr(self.agent_manager, "get_failed_attempts", None)
+            if not callable(getter):
+                return []
+            try:
+                attempts = getter()
+            except Exception:
+                return []
+            if not isinstance(attempts, list):
+                return []
+            return [dict(attempt) for attempt in attempts if isinstance(attempt, dict)]
 
         try:
             execute_kwargs = {
@@ -637,20 +1011,34 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 "streaming_output_file": str(streaming_jsonl_file),
             }
             execute_signature = inspect.signature(self.agent_manager.execute)
-            if (
-                "phase_name" in execute_signature.parameters
-                or any(
+            if "phase_name" in execute_signature.parameters or any(
+                param.kind == inspect.Parameter.VAR_KEYWORD
+                for param in execute_signature.parameters.values()
+            ):
+                execute_kwargs["phase_name"] = execution_phase_name
+            if "continuation" in execute_signature.parameters or any(
+                param.kind == inspect.Parameter.VAR_KEYWORD
+                for param in execute_signature.parameters.values()
+            ):
+                execute_kwargs["continuation"] = requested_continuation
+            if backup_context_callback is not None and getattr(
+                self.agent_manager, "SUPPORTS_COLD_TAKEOVER", False
+            ) and (
+                "backup_context_callback" in execute_signature.parameters or any(
                     param.kind == inspect.Parameter.VAR_KEYWORD
                     for param in execute_signature.parameters.values()
                 )
             ):
-                execute_kwargs["phase_name"] = execution_phase_name
+                execute_kwargs["backup_context_callback"] = backup_context_callback
 
-            response, token_usage, permission_denials, cli_command_args, streaming_log, model = self.agent_manager.execute(
-                agent_name,
-                prompt,
-                **execute_kwargs,
+            response, token_usage, permission_denials, cli_command_args, streaming_log, model = (
+                self.agent_manager.execute(
+                    agent_name,
+                    prompt,
+                    **execute_kwargs,
+                )
             )
+            failed_attempts = get_failed_attempts()
 
             actual_agent_cli = getattr(self.agent_manager, "get_last_cli", lambda: None)()
             if (
@@ -668,12 +1056,26 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                     agent_session_id = actual_session_id
                     has_valid_last_session = True
             if not has_valid_last_session:
-                agent_session_id = agent_executor.config.session_id
+                agent_session_id = execution_config.session_id
+
+            try:
+                actual_cli_enum = AgentCLI(agent_cli)
+            except ValueError:
+                actual_cli_enum = None
+            if actual_cli_enum is not None and agent_session_id:
+                self._session_continuation = SessionContinuation.resume_exact(
+                    actual_cli_enum,
+                    agent_session_id,
+                )
 
             self._record_active_agent_cli(
                 agent_name=agent_name,
                 agent_cli=agent_cli,
                 model=model,
+                execution_chain=self._canonical_execution_chain(
+                    agent_name,
+                    getattr(execution_config, "clis", None),
+                ),
                 phase_specific_data=phase_specific_data,
             )
 
@@ -685,16 +1087,20 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             from cafe.agents.executor import AgentExecutionError
             from cafe.core.types import CriticalPhaseError
 
-            display_error = getattr(e, "display_message", None) or str(e)
+            from cafe.agents.diagnostics import sanitize_error_excerpt
+
+            failed_attempts = get_failed_attempts()
+            display_error = sanitize_error_excerpt(e)
             print(f"⚠️  Agent execution failed: {display_error}")
 
             # 4a. Check if it's a critical error - fail immediately without recovery
             is_critical_error = (
-                isinstance(e, AgentExecutionError) and 
-                hasattr(e, "error_type") and 
-                e.error_type in ("rate_limit", "cli_not_found", "cli_unavailable", "model_not_found")
+                isinstance(e, AgentExecutionError)
+                and hasattr(e, "error_type")
+                and e.error_type
+                in ("rate_limit", "cli_not_found", "cli_unavailable", "model_not_found")
             )
-            
+
             if is_critical_error:
                 print(f"❌ Critical error detected ({e.error_type}) - stopping execution\n")
 
@@ -708,19 +1114,32 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                         context_data["status_code"] = None
                     else:
                         context_data.pop("status_code", None)
-                    context_data["error"] = str(e)
+                    context_data["error"] = display_error
                     context_data["display_error"] = display_error
                     context_data["error_type"] = e.error_type
                     context_data["is_critical"] = True
+                    if failed_attempts:
+                        context_data["failed_attempts"] = failed_attempts
 
                     with open(context_file, "w", encoding="utf-8") as f:
                         json.dump(context_data, f, ensure_ascii=False, indent=2)
+
+                error_file = iteration_dir / "error.json"
+                error_data = {
+                    "error": display_error,
+                    "error_type": e.error_type,
+                    "is_critical": True,
+                    "timestamp": datetime.now().astimezone().isoformat(),
+                    "failed_attempts": failed_attempts,
+                }
+                with open(error_file, "w", encoding="utf-8") as f:
+                    json.dump(error_data, f, ensure_ascii=False, indent=2)
 
                 # Create a CriticalError wrapper to signal this should stop the workflow
                 raise CriticalPhaseError(
                     message=display_error,
                     error_type=e.error_type,
-                    phase_name=getattr(self, '__class__', type(self)).__name__
+                    phase_name=getattr(self, "__class__", type(self)).__name__,
                 ) from e
 
             # 4b. Check if agent wrote output files
@@ -741,14 +1160,15 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             iteration_dir.mkdir(parents=True, exist_ok=True)
             error_file = iteration_dir / "error.json"
             error_data = {
-                "error": str(e),
-                "error_type": type(e).__name__,
+                "error": display_error,
+                "error_type": getattr(e, "error_type", None) or type(e).__name__,
                 "is_critical": isinstance(e, CriticalPhaseError),
                 "timestamp": datetime.now().astimezone().isoformat(),
                 "written_files": [str(f) for f in written_files],
                 "changed_written_files": [str(f) for f in changed_written_files],
                 "recovered_response": bool(recovered_response),
                 "recovered_status": recovered_status_code.value if recovered_status_code else None,
+                "failed_attempts": failed_attempts,
             }
             with open(error_file, "w", encoding="utf-8") as f:
                 json.dump(error_data, f, ensure_ascii=False, indent=2)
@@ -768,7 +1188,9 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 phase_specific_data["response"] = response
                 phase_specific_data["permission_denials"] = []
                 phase_specific_data["recovered_from_error"] = True
-                phase_specific_data["original_error"] = str(e)
+                phase_specific_data["original_error"] = display_error
+                if failed_attempts:
+                    phase_specific_data["failed_attempts"] = failed_attempts
 
                 # Update history（Including recovered response and status）
                 # Record actual CLI arguments if possible (if error object has them)
@@ -809,7 +1231,9 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                         history_data["status_code"] = None
                     else:
                         history_data.pop("status_code", None)
-                    history_data["error"] = str(e)
+                    history_data["error"] = display_error
+                    if failed_attempts:
+                        history_data["failed_attempts"] = failed_attempts
 
                     # Record error type (if any)
                     if isinstance(e, AgentExecutionError) and hasattr(e, "error_type"):
@@ -833,12 +1257,15 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         if no_response_status:
             # Agent returned empty response - save and return NO_RESPONSE
             # Note: streaming.jsonl is already written in real-time by executor
+            history_data = {
+                "response": response,
+                "permission_denials": [denial.model_dump() for denial in permission_denials],
+                "streaming_log": streaming_log,
+            }
+            if failed_attempts:
+                history_data["failed_attempts"] = failed_attempts
             self._update_iteration_history(
-                phase_specific_data={
-                    "response": response,
-                    "permission_denials": [denial.model_dump() for denial in permission_denials],
-                    "streaming_log": streaming_log
-                },
+                phase_specific_data=history_data,
                 prompt=prompt,
                 agent_cli=agent_cli,
                 agent_session_id=agent_session_id,
@@ -853,12 +1280,15 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             return response, no_response_status
 
         if not require_status_code:
+            history_data = {
+                "response": response,
+                "permission_denials": [denial.model_dump() for denial in permission_denials],
+                "streaming_log": streaming_log,
+            }
+            if failed_attempts:
+                history_data["failed_attempts"] = failed_attempts
             self._update_iteration_history(
-                phase_specific_data={
-                    "response": response,
-                    "permission_denials": [denial.model_dump() for denial in permission_denials],
-                    "streaming_log": streaming_log,
-                },
+                phase_specific_data=history_data,
                 prompt=prompt,
                 agent_cli=agent_cli,
                 agent_session_id=agent_session_id,
@@ -911,8 +1341,10 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         phase_data = {
             "response": response,
             "permission_denials": [denial.model_dump() for denial in permission_denials],
-            "streaming_log": streaming_log
+            "streaming_log": streaming_log,
         }
+        if failed_attempts:
+            phase_data["failed_attempts"] = failed_attempts
 
         # Note: streaming.jsonl is already written in real-time by executor
         self._update_iteration_history(
@@ -1046,7 +1478,9 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         # Determine phase status based on status code
         if complete_codes is None:
             complete_codes = [PhaseStatusCode.CONFIRMED, PhaseStatusCode.READY_FOR_REVIEW]
-        phase_status = PhaseStatus.COMPLETED if status_code in complete_codes else PhaseStatus.IN_PROGRESS
+        phase_status = (
+            PhaseStatus.COMPLETED if status_code in complete_codes else PhaseStatus.IN_PROGRESS
+        )
 
         # Always set end_time since status.json reflects the last iteration
         end_time = datetime.now().astimezone()
@@ -1057,11 +1491,13 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             status_code=status_code.value,
             timestamp=datetime.now().astimezone(),
             iteration=self.iteration,
-            message=f"Phase completed with {status_code.value}" if phase_status == PhaseStatus.COMPLETED else f"Iteration {self.iteration}",
+            message=f"Phase completed with {status_code.value}"
+            if phase_status == PhaseStatus.COMPLETED
+            else f"Iteration {self.iteration}",
             end_time=end_time,
         )
 
-        with open(status_file, 'w', encoding='utf-8') as f:
+        with open(status_file, "w", encoding="utf-8") as f:
             json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
 
     def _load_progress(self) -> Optional["PhaseProgress"]:
@@ -1074,10 +1510,11 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         if not status_file.exists():
             return None
 
-        with open(status_file, 'r', encoding='utf-8') as f:
+        with open(status_file, "r", encoding="utf-8") as f:
             data = json.load(f)
 
         from cafe.core.types import PhaseProgress
+
         return PhaseProgress.from_dict(data)
 
     def _get_phase_end_time(self, phase_name: str) -> Optional[str]:
@@ -1100,7 +1537,7 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             return None
 
         try:
-            with open(phase_status_file, 'r', encoding='utf-8') as f:
+            with open(phase_status_file, "r", encoding="utf-8") as f:
                 phase_status = json.load(f)
             return phase_status.get("end_time")
         except (json.JSONDecodeError, KeyError, IOError):
@@ -1127,10 +1564,16 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         if not phase_dir.exists():
             return None
 
-        for context_file in reversed(sorted(
-            [self._resolve_iteration_context_file(d) for d in phase_dir.glob("iteration_*") if d.is_dir()],
-            key=lambda p: p.parent.name,
-        )):
+        for context_file in reversed(
+            sorted(
+                [
+                    self._resolve_iteration_context_file(d)
+                    for d in phase_dir.glob("iteration_*")
+                    if d.is_dir()
+                ],
+                key=lambda p: p.parent.name,
+            )
+        ):
             try:
                 with open(context_file, "r", encoding="utf-8") as f:
                     context = json.load(f)
@@ -1183,11 +1626,19 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         print(f"Output tokens:             {output_str}")
 
         # Cache creation tokens
-        cache_create_str = f"{token_usage.cache_creation_input_tokens:,}" if token_usage.cache_creation_input_tokens > 0 else "--"
+        cache_create_str = (
+            f"{token_usage.cache_creation_input_tokens:,}"
+            if token_usage.cache_creation_input_tokens > 0
+            else "--"
+        )
         print(f"Cache creation tokens:     {cache_create_str}")
 
         # Cache read tokens
-        cache_read_str = f"{token_usage.cache_read_input_tokens:,}" if token_usage.cache_read_input_tokens > 0 else "--"
+        cache_read_str = (
+            f"{token_usage.cache_read_input_tokens:,}"
+            if token_usage.cache_read_input_tokens > 0
+            else "--"
+        )
         print(f"Cache read tokens:         {cache_read_str}")
 
         # Duration (API)
@@ -1364,10 +1815,13 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 valid_codes=complete_status_codes,
             )
             if latest_context:
-                status_code_value = self._context_status_code(
-                    latest_context,
-                    valid_codes=complete_status_codes,
-                ) or ""
+                status_code_value = (
+                    self._context_status_code(
+                        latest_context,
+                        valid_codes=complete_status_codes,
+                    )
+                    or ""
+                )
         for complete_code in complete_status_codes:
             if status_code_value == complete_code.value:
                 self._cleanup_sandbox_approval_artifacts()
@@ -1383,7 +1837,17 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                             "input_tokens": token_usage.input_tokens,
                             "output_tokens": token_usage.output_tokens,
                             "cache_creation_input_tokens": token_usage.cache_creation_input_tokens,
+                            "cache_write_input_tokens": getattr(
+                                token_usage,
+                                "cache_write_input_tokens",
+                                0,
+                            ),
                             "cache_read_input_tokens": token_usage.cache_read_input_tokens,
+                            "reasoning_output_tokens": getattr(
+                                token_usage,
+                                "reasoning_output_tokens",
+                                0,
+                            ),
                             "total_cost_usd": token_usage.total_cost_usd,
                         },
                     },
@@ -1451,12 +1915,13 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             (PhaseResult If should end phase, None if should continue next round, agent response)
         """
         # Generate prompt for this iteration (subclass implements this)
-        if not hasattr(self, '_generate_prompt'):
+        if not hasattr(self, "_generate_prompt"):
             raise AttributeError("Phase must implement '_generate_prompt' method")
 
         # Call _generate_prompt with or without user_input parameter
         # Try with user_input first, fall back to no parameter
         import inspect
+
         sig = inspect.signature(self._generate_prompt)
         if len(sig.parameters) > 0:
             prompt = self._generate_prompt(user_input)
@@ -1482,24 +1947,27 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         # Universal rule: NEED_PERMISSION should never trigger checklist validation
         # Automatically move NEED_PERMISSION from complete_codes to continue_codes if present
         if PhaseStatusCode.NEED_PERMISSION in complete_codes:
-            complete_codes = [code for code in complete_codes if code != PhaseStatusCode.NEED_PERMISSION]
+            complete_codes = [
+                code for code in complete_codes if code != PhaseStatusCode.NEED_PERMISSION
+            ]
             if PhaseStatusCode.NEED_PERMISSION not in continue_codes:
                 continue_codes = list(continue_codes) + [PhaseStatusCode.NEED_PERMISSION]
 
         should_validate_checklist = (
-            status_code == PhaseStatusCode.CONFIRMED or
-            status_code in complete_codes
+            status_code == PhaseStatusCode.CONFIRMED or status_code in complete_codes
         )
 
         if should_validate_checklist and status_code not in continue_codes:
             print(f"\n🔍 Validating checklist completion...")
-            final_response, final_status_code, validation_passed = self._validate_and_retry_checklist_completion(
-                agent_name=agent_name,
-                prompt=prompt,
-                user_input=user_input,
-                valid_intents=valid_intents,
-                allowed_tools=allowed_tools or ["write", "read"],
-                max_retries=3,
+            final_response, final_status_code, validation_passed = (
+                self._validate_and_retry_checklist_completion(
+                    agent_name=agent_name,
+                    prompt=prompt,
+                    user_input=user_input,
+                    valid_intents=valid_intents,
+                    allowed_tools=allowed_tools or ["write", "read"],
+                    max_retries=3,
+                )
             )
 
             # Update response and status_code with validated results
@@ -1530,7 +1998,9 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         else:
             # No checklist validation needed - save status_code to iteration.json directly
             if status_code is None:
-                raise ValueError(f"Failed to extract status code from agent response in iteration {self.iteration}")
+                raise ValueError(
+                    f"Failed to extract status code from agent response in iteration {self.iteration}"
+                )
             iteration_dir = self._get_iteration_dir(self.iteration)
             context_file = self._resolve_iteration_context_file(iteration_dir)
             if context_file.exists():
@@ -1609,13 +2079,23 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                     "input_tokens": token_usage.input_tokens,
                     "output_tokens": token_usage.output_tokens,
                     "cache_creation_input_tokens": token_usage.cache_creation_input_tokens,
+                    "cache_write_input_tokens": getattr(
+                        token_usage,
+                        "cache_write_input_tokens",
+                        0,
+                    ),
                     "cache_read_input_tokens": token_usage.cache_read_input_tokens,
+                    "reasoning_output_tokens": getattr(
+                        token_usage,
+                        "reasoning_output_tokens",
+                        0,
+                    ),
                     "total_cost_usd": token_usage.total_cost_usd,
-                }
+                },
             }
 
             # Allow phases to add phase-specific data
-            if hasattr(self, '_get_completion_data'):
+            if hasattr(self, "_get_completion_data"):
                 phase_data = self._get_completion_data()
                 result_data.update(phase_data)
 
@@ -1641,11 +2121,21 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                     "input_tokens": token_usage.input_tokens,
                     "output_tokens": token_usage.output_tokens,
                     "cache_creation_input_tokens": token_usage.cache_creation_input_tokens,
+                    "cache_write_input_tokens": getattr(
+                        token_usage,
+                        "cache_write_input_tokens",
+                        0,
+                    ),
                     "cache_read_input_tokens": token_usage.cache_read_input_tokens,
+                    "reasoning_output_tokens": getattr(
+                        token_usage,
+                        "reasoning_output_tokens",
+                        0,
+                    ),
                     "total_cost_usd": token_usage.total_cost_usd,
-                }
+                },
             }
-            if hasattr(self, '_get_completion_data'):
+            if hasattr(self, "_get_completion_data"):
                 phase_data = self._get_completion_data()
                 result_data.update(phase_data)
 
@@ -1670,11 +2160,21 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                     "input_tokens": token_usage.input_tokens,
                     "output_tokens": token_usage.output_tokens,
                     "cache_creation_input_tokens": token_usage.cache_creation_input_tokens,
+                    "cache_write_input_tokens": getattr(
+                        token_usage,
+                        "cache_write_input_tokens",
+                        0,
+                    ),
                     "cache_read_input_tokens": token_usage.cache_read_input_tokens,
+                    "reasoning_output_tokens": getattr(
+                        token_usage,
+                        "reasoning_output_tokens",
+                        0,
+                    ),
                     "total_cost_usd": token_usage.total_cost_usd,
-                }
+                },
             }
-            if hasattr(self, '_get_completion_data'):
+            if hasattr(self, "_get_completion_data"):
                 phase_data = self._get_completion_data()
                 result_data.update(phase_data)
 

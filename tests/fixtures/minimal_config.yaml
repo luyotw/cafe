@@ -8,6 +8,3 @@ agents:
   reviewer:
     name: Richard
     cli: copilot
-
-auto:
-  max_review_iterations: 5

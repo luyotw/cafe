@@ -1,17 +1,15 @@
 """Tests for non-software playbook loading and lightweight command coverage."""
 
-import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from cafe.playbooks.simulate import analyze_playbook
 from cafe.core.workflow_models import PlaybookRunResult
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.playbooks.simulate import analyze_playbook
 from cafe.skills.loader import SkillLoader
 from cafe.ui.cli import app
-
 
 runner = CliRunner()
 
@@ -27,11 +25,11 @@ def test_editorial_example_skills_and_playbook_validate() -> None:
     playbook = PlaybookLoader(project_root=example_root).load_model("editorial").model
 
     assert {item.name for item in skills} >= {
-        "brief_first",
-        "brief_revise",
-        "draft",
-        "editorial_review",
-        "publish",
+        "cafe-brief_first",
+        "cafe-brief_revise",
+        "cafe-draft",
+        "cafe-editorial_review",
+        "cafe-publish",
     }
     assert playbook.entry_point == "brief"
     assert list(playbook.steps.keys()) == ["brief", "draft", "review", "publish"]
@@ -74,6 +72,10 @@ def test_builtin_non_software_playbooks_simulate_reports_no_findings(monkeypatch
 
 def test_builtin_non_software_workflow_dry_run_accepts_editorial(monkeypatch) -> None:
     monkeypatch.chdir(_repo_root())
+    blackboard_path = _repo_root() / ".cafe" / "issues" / "issue253" / "blackboard.json"
+    original_blackboard = (
+        blackboard_path.read_bytes() if blackboard_path.exists() else None
+    )
     with (
         patch("cafe.ui.commands.workflow._get_GitOperations") as mock_git_factory,
         patch("cafe.ui.commands.workflow.BlackboardWorkflowRuntime") as mock_runtime_cls,
@@ -92,11 +94,10 @@ def test_builtin_non_software_workflow_dry_run_accepts_editorial(monkeypatch) ->
         )
 
     assert result.exit_code == 0
-    blackboard_data = json.loads(
-        (_repo_root() / ".cafe" / "issues" / "issue253" / "blackboard.json").read_text(encoding="utf-8")
-    )
-    assert blackboard_data["playbook_id"] == "editorial"
-    assert "Workflow completed" in result.stdout
+    assert "Ownership plan (read-only)" in result.stdout
+    assert (
+        blackboard_path.read_bytes() if blackboard_path.exists() else None
+    ) == original_blackboard
 
 
 def test_builtin_non_software_playbook_load_strict(monkeypatch) -> None:

@@ -28,14 +28,14 @@ def test_generate_plan_checklist_uses_skill_references(tmp_path: Path) -> None:
 
 def test_load_skill_body_prefers_project_override(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    skill_dir = tmp_path / ".cafe" / "skills" / "plan"
+    skill_dir = tmp_path / ".cafe" / "skills" / "cafe-plan"
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(
         "---\nname: plan\ndescription: custom\n---\n\nCustom project plan skill\n",
         encoding="utf-8",
     )
 
-    body = load_skill_body("plan")
+    body = load_skill_body("cafe-plan")
 
     assert "Custom project plan skill" in body
 
@@ -55,7 +55,7 @@ def test_try_load_skill_body_returns_empty_string_on_file_not_found_error() -> N
 def test_try_load_skill_body_propagates_unexpected_errors() -> None:
     with patch("cafe.skills.bridge.load_skill_body", side_effect=RuntimeError("boom")):
         with pytest.raises(RuntimeError):
-            try_load_skill_body("plan")
+            try_load_skill_body("cafe-plan")
 
 
 def test_try_load_skill_reference_returns_empty_string_on_skill_discovery_error() -> None:
@@ -71,4 +71,4 @@ def test_try_load_skill_reference_propagates_unexpected_errors() -> None:
         "cafe.skills.bridge.load_skill_reference", side_effect=RuntimeError("boom")
     ):
         with pytest.raises(RuntimeError):
-            try_load_skill_reference("plan", "checklist.md")
+            try_load_skill_reference("cafe-plan", "checklist.md")

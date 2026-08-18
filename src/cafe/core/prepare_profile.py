@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from cafe.core.playbook import PlaybookDefinition, PrepareConfig, resolve_prepare_config
+from cafe.core.prepare_fields import ParsedPrepareFields, resolve_prepare_fields
+from cafe.skills.loader import SkillLoader
 
 
 class PrepareRigorError(ValueError):
@@ -14,11 +17,20 @@ class PrepareRigorError(ValueError):
 
 @dataclass(frozen=True)
 class PrepareIssueConfig:
-    """Resolved spec/plan/pr blocks for ``issue.yaml``."""
+    """Resolved step configuration blocks for ``issue.yaml``."""
 
     spec: Dict[str, Any]
     plan: Dict[str, Any]
     pr: Dict[str, Any]
+    steps: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    initial_input: Dict[str, Any] = field(default_factory=dict)
+
+    def section(self, step_name: str) -> Dict[str, Any]:
+        """Return a mutable issue-config section, retaining legacy views."""
+        legacy = {"spec": self.spec, "plan": self.plan, "pr": self.pr}
+        if step_name in legacy:
+            return legacy[step_name]
+        return self.steps.setdefault(step_name, {})
 
 
 @dataclass(frozen=True)
@@ -36,10 +48,26 @@ class PrepareProfile:
 
     prepare: PrepareConfig
     is_github_repo: bool
+    step_names: frozenset[str] = frozenset()
 
     @classmethod
     def from_playbook(cls, model: PlaybookDefinition, is_github_repo: bool) -> PrepareProfile:
-        return cls(prepare=resolve_prepare_config(model), is_github_repo=is_github_repo)
+        return cls(
+            prepare=resolve_prepare_config(model),
+            is_github_repo=is_github_repo,
+            step_names=frozenset(model.steps),
+        )
+
+    def supports_pr_config(
+        self,
+        parsed_fields: Optional[ParsedPrepareFields] = None,
+    ) -> bool:
+        """Return whether prepare may write PR-related issue config."""
+        if "pr" in self.step_names:
+            return True
+        if parsed_fields is None:
+            return False
+        return any((field.write or "").startswith("pr.") for field in parsed_fields.fields)
 
     def should_prompt_spec_plan_config(self, base_should_prompt: bool) -> bool:
         return base_should_prompt and self.prepare.prompt_for_spec_plan_config
@@ -69,11 +97,11 @@ class PrepareProfile:
         spec["sync_github"] = sync.when_issue_id_present if has_issue_id else sync.when_manual_input
         plan["sync_github"] = sync.when_issue_id_present if has_issue_id else sync.when_manual_input
 
-        if self.is_github_repo and quick.pr.auto_create_on_github_repo:
+        if self.supports_pr_config() and self.is_github_repo and quick.pr.auto_create_on_github_repo:
             pr["auto_create"] = True
             if quick.pr.post_todo_list_when_auto_create:
                 pr["post_todo_list"] = True
-        else:
+        elif self.supports_pr_config():
             pr["auto_create"] = False
 
         return PrepareIssueConfig(spec=spec, plan=plan, pr=pr)
@@ -102,3 +130,16 @@ class PrepareProfile:
 
     def default_input_method(self) -> str:
         return self.prepare.input_method.non_github_default
+
+    def resolved_prepare_fields(
+        self,
+        *,
+        playbook_path: Path,
+        skill_loader: SkillLoader,
+    ) -> Optional[ParsedPrepareFields]:
+        """Return declarative prepare fields for this playbook, if declared."""
+        return resolve_prepare_fields(
+            self.prepare,
+            playbook_path=playbook_path,
+            skill_loader=skill_loader,
+        )

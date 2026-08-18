@@ -12,6 +12,7 @@ import yaml
 from rich.console import Console
 
 from cafe.ui.commands import lifecycle as lifecycle_commands
+from cafe.ui.cli_shared import _load_issue_step_names
 from cafe.ui.inquirer_prompts import prompt_confirm, prompt_text  # noqa: F401 — kept for type resolution; actual calls go through cli for test-patch compat
 from cafe.utils.config import ConfigError, ConfigManager
 
@@ -51,11 +52,8 @@ def config(
     \b
     Examples:
         cafe config
-        cafe config set pm gemini
-        cafe config set pm.cli gemini
-        cafe config set agents.pm.cli gemini
-        cafe config get pm
-        cafe config get agents.pm.cli
+        cafe config set settings.playbook default
+        cafe config get settings.playbook
         cafe config edit
         cafe config reset
     """
@@ -201,6 +199,17 @@ def list_issues() -> None:
                 # If read fails, keep default value "-"
                 pass
 
+        # Use the issue's declared workflow steps so custom flows remain
+        # visible; metadata-absent issues retain the legacy fallback inside
+        # the shared resolver.
+        issue_name = str(issue.relative_to(issues_dir))
+        step_resolution_error = None
+        try:
+            phase_names = _load_issue_step_names(issue_name)
+        except ValueError as exc:
+            phase_names = []
+            step_resolution_error = str(exc)
+
         # Check which phases exist
         # If worktree_path exists, read phases from worktree location
         phases = []
@@ -208,30 +217,33 @@ def list_issues() -> None:
             # Read phases from worktree/.cafe/issues/{issue_name}/
             worktree_issue_dir = Path(worktree_path) / ".cafe" / "issues" / issue.relative_to(issues_dir)
             if worktree_issue_dir.exists():
-                for phase in ALL_PHASES:
+                for phase in phase_names:
                     phase_dir = worktree_issue_dir / phase
                     if phase_dir.exists():
                         phases.append(phase)
             # If worktree issue dir doesn't exist, fall back to current location
             if not phases:
-                for phase in ALL_PHASES:
+                for phase in phase_names:
                     phase_dir = issue / phase
                     if phase_dir.exists():
                         phases.append(phase)
         else:
             # No worktree, read phases from current location
-            for phase in ALL_PHASES:
+            for phase in phase_names:
                 phase_dir = issue / phase
                 if phase_dir.exists():
                     phases.append(phase)
 
-        phases_str = ", ".join(phases) if phases else "empty"
+        phases_str = (
+            step_resolution_error
+            if step_resolution_error is not None
+            else ", ".join(phases) if phases else "empty"
+        )
 
         # Get last modified time
         mtime = datetime.fromtimestamp(issue.stat().st_mtime)
         mtime_str = mtime.strftime("%Y-%m-%d %H:%M")
 
-        issue_name = str(issue.relative_to(issues_dir))
         table.add_row(issue_name, phases_str, worktree_path, mtime_str)
 
     console.print(table)

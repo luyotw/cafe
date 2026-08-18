@@ -2,12 +2,74 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+import yaml
 
 from cafe.core.playbook import LoadedPlaybook, load_playbook_file
 from cafe.skills.loader import SkillLoader
 from cafe.utils.config import get_global_cafe_dir
+
+
+def apply_issue_playbook_overrides(
+    playbook: Dict[str, Any], issue_config_path: Path
+) -> Dict[str, Any]:
+    """Apply the deliberately narrow per-issue playbook override contract."""
+    if not issue_config_path.is_file():
+        return playbook
+    try:
+        loaded_issue_config = yaml.safe_load(
+            issue_config_path.read_text(encoding="utf-8")
+        )
+    except (OSError, yaml.YAMLError) as exc:
+        raise ValueError(f"issue.yaml is unreadable: {exc}") from exc
+    issue_config = {} if loaded_issue_config is None else loaded_issue_config
+    if not isinstance(issue_config, dict):
+        raise ValueError("issue.yaml must contain a mapping")
+    overrides = issue_config.get("playbook_overrides")
+    if overrides is None:
+        return playbook
+    if not isinstance(overrides, dict):
+        raise ValueError("playbook_overrides must be a mapping")
+    unsupported_root = sorted(str(key) for key in set(overrides) - {"steps"})
+    if unsupported_root:
+        raise ValueError(
+            "playbook_overrides supports only 'steps'; unsupported field(s): "
+            + ", ".join(unsupported_root)
+        )
+    step_overrides = overrides.get("steps", {})
+    if not isinstance(step_overrides, dict):
+        raise ValueError("playbook_overrides.steps must be a mapping")
+
+    resolved = deepcopy(playbook)
+    playbook_steps = resolved.get("steps")
+    if not isinstance(playbook_steps, dict):
+        raise ValueError("playbook steps must be a mapping")
+    for step_name, step_override in step_overrides.items():
+        field_path = f"playbook_overrides.steps.{step_name}"
+        if step_name not in playbook_steps:
+            raise ValueError(f"{field_path} names unknown playbook step '{step_name}'")
+        if not isinstance(step_override, dict):
+            raise ValueError(f"{field_path} must be a mapping")
+        unsupported = sorted(
+            str(key) for key in set(step_override) - {"max_iterations"}
+        )
+        if unsupported:
+            raise ValueError(
+                f"{field_path} supports only max_iterations; unsupported field(s): "
+                + ", ".join(unsupported)
+            )
+        if "max_iterations" not in step_override:
+            continue
+        max_iterations = step_override["max_iterations"]
+        if isinstance(max_iterations, bool) or not isinstance(max_iterations, int):
+            raise ValueError(f"{field_path}.max_iterations must be a positive integer")
+        if max_iterations < 1:
+            raise ValueError(f"{field_path}.max_iterations must be a positive integer")
+        playbook_steps[step_name]["max_iterations"] = max_iterations
+    return resolved
 
 
 class PlaybookLoader:

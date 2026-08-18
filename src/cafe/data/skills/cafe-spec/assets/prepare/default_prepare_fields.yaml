@@ -1,0 +1,211 @@
+meta:
+  prompt_for_spec_plan_config: true
+
+fields:
+  - id: input_method
+    type: enum
+    label: "Input method"
+    help: "Choose how issue requirements are provided."
+    write: spec.input_method
+    default: manual
+    required: true
+    show_when:
+      github_repo: true
+    choices:
+      - value: manual
+        label: "Manual input"
+      - value: github
+        label: "GitHub issue"
+
+  - id: github_issue_id
+    type: text
+    label: "GitHub issue ID or URL"
+    write: spec.issue_id
+    normalize: github_issue
+    show_when:
+      issue_id_present: true
+
+  - id: setup_mode
+    type: setup_mode
+    label: "Choose setup mode"
+    group: setup
+    choices:
+      - value: quick
+        label: "Quick setup (use recommended defaults)"
+      - value: custom
+        label: "Custom configuration"
+
+  - id: quick_rigor
+    type: enum
+    label: "Rigor level"
+    write: spec.rigor
+    default: medium
+    group: quick_defaults
+    show_when:
+      setup_mode: quick
+    choices:
+      - value: low
+        label: "Low"
+      - value: medium
+        label: "Medium"
+      - value: high
+        label: "High"
+
+  - id: quick_spec_template
+    type: template
+    label: "Spec template"
+    write: spec.template
+    default: auto
+    group: quick_defaults
+    show_when:
+      setup_mode: quick
+
+  - id: quick_plan_template
+    type: template
+    label: "Plan template"
+    write: plan.template
+    default: auto
+    non_interactive_default: default
+    group: quick_defaults
+    show_when:
+      setup_mode: quick
+
+  - id: quick_sync_spec_with_issue
+    type: boolean
+    label: "Sync spec to GitHub when issue id is present"
+    write: spec.sync_github
+    default: true
+    non_interactive: false
+    group: quick_defaults
+    show_when:
+      setup_mode: quick
+      issue_id_present: true
+
+  - id: quick_sync_spec_manual
+    type: boolean
+    label: "Sync spec to GitHub for manual input"
+    write: spec.sync_github
+    default: false
+    non_interactive: false
+    group: quick_defaults
+    show_when:
+      setup_mode: quick
+      issue_id_present: false
+
+  - id: quick_sync_plan_with_issue
+    type: boolean
+    label: "Sync plan to GitHub when issue id is present"
+    write: plan.sync_github
+    default: true
+    non_interactive: false
+    group: quick_defaults
+    show_when:
+      setup_mode: quick
+      issue_id_present: true
+
+  - id: quick_sync_plan_manual
+    type: boolean
+    label: "Sync plan to GitHub for manual input"
+    write: plan.sync_github
+    default: false
+    non_interactive: false
+    group: quick_defaults
+    show_when:
+      setup_mode: quick
+      issue_id_present: false
+
+  - id: quick_pr_auto_create
+    type: boolean
+    label: "Auto create pull request"
+    write: pr.auto_create
+    default: true
+    non_interactive: false
+    group: quick_defaults
+    show_when:
+      setup_mode: quick
+      github_repo: true
+
+  - id: quick_pr_post_todo_list
+    type: boolean
+    label: "Post PR todo list"
+    write: pr.post_todo_list
+    default: true
+    non_interactive: false
+    group: quick_defaults
+    show_when:
+      setup_mode: quick
+      github_repo: true
+
+  - id: custom_sync_spec
+    type: boolean
+    label: "Sync spec to GitHub issue when confirmed?"
+    write: spec.sync_github
+    default: true
+    non_interactive: false
+    group: custom
+    show_when:
+      setup_mode: custom
+      issue_id_present: true
+
+  - id: custom_sync_plan
+    type: boolean
+    label: "Sync plan to GitHub issue when confirmed?"
+    write: plan.sync_github
+    default: true
+    non_interactive: false
+    group: custom
+    show_when:
+      setup_mode: custom
+      issue_id_present: true
+
+  - id: custom_rigor
+    type: enum
+    label: "Rigor level"
+    write: spec.rigor
+    group: custom
+    show_when:
+      setup_mode: custom
+    choices:
+      - value: low
+        label: "Low"
+      - value: medium
+        label: "Medium"
+      - value: high
+        label: "High"
+
+  - id: custom_spec_template
+    type: template
+    label: "Spec template"
+    write: spec.template
+    group: custom
+    show_when:
+      setup_mode: custom
+
+  - id: custom_plan_template
+    type: template
+    label: "Plan template"
+    write: plan.template
+    group: custom
+    show_when:
+      setup_mode: custom
+
+  - id: custom_pr_auto_create
+    type: boolean
+    label: "Auto create pull request"
+    write: pr.auto_create
+    group: custom
+    non_interactive: false
+    show_when:
+      setup_mode: custom
+      github_repo: true
+
+  - id: custom_pr_post_todo_list
+    type: boolean
+    label: "Post organized PR comments as todo list to PR?"
+    write: pr.post_todo_list
+    default: true
+    non_interactive: false
+    group: custom
+    show_when:
+      setup_mode: custom
+      github_repo: true

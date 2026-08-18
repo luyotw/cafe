@@ -9,16 +9,24 @@
 [ ] Confirm: Maximized code reuse by looking for existing patterns and utilities
 [ ] Confirm: Commit messages strictly match existing format, language, and structure
 [ ] Confirm: All issues are fixed
-[ ] Read the plan **Test List** in .cafe/issues/test/plan/iteration_001/output.md; new or changed tests still map to listed items and follow `src/cafe/data/skills/plan/references/test_invariants_policy.md`
+[ ] Read the plan **Test List** in .cafe/issues/test/plan/iteration_001/output.md; new or changed tests still map to listed items and follow `src/cafe/data/skills/cafe-plan/references/test_invariants_policy.md`
 [ ] Confirm: Corrected tests do not reintroduce brittle bindings (UI copy, CSS classes, DOM structure, internal state shape) unless the spec explicitly allows them
+[ ] Confirm: All correction commits are made and the worktree is clean, then run the final repository-defined full test command exactly once through `cafe verification run --output-file .cafe/issues/test/develop/iteration_001/output.md --scope full -- <command>`
+[ ] Confirm: `cafe verification run` reported a valid receipt; do not change HEAD or tracked files afterward
 [ ] Confirm: All tests pass and are not fragile
-[ ] Update blackboard and next-step baton to hand off to the next workflow target
+[ ] Write a non-empty development summary to .cafe/issues/test/develop/iteration_001/output.md; the verification receipt does not replace this summary
+[ ] Write the next-step baton to hand off to the next workflow target; the runtime updates blackboard
 
 ## Handoff Targets
 
 - `review`: All issues fixed or you have written a technical dispute to .cafe/issues/test/develop/iteration_001/output.md
 - `user`: The dispute needs user arbitration
 
+
+## Basic Principles
+
+[ ] 新增或修改 declaration、設定欄位或共用 runtime 參數時，追蹤 `schema/validation → effective resolver/defaults → production callers` 的完整接線；明確檢查適用的 primary、backup、retry 與 resume 路徑，不適用者需留下理由
+[ ] 為上述接線新增至少一個經過 public caller path 的 regression test，且移除任一必要 forwarding 時該測試必須失敗；只直接測 helper 或手動傳值不足以證明 production 接線
 
 
 ## Agent Guidelines Checklist
