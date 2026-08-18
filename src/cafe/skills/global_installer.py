@@ -29,6 +29,13 @@ GLOBAL_CLI_SKILL_DIRS = {
     "cursor": Path(".cursor/skills"),
     "gemini": Path(".gemini/skills"),
 }
+GLOBAL_CLI_EXECUTABLES = {
+    "claude": ("claude",),
+    "codex": ("codex",),
+    "copilot": ("copilot",),
+    "cursor": ("cursor-agent",),
+    "gemini": ("gemini",),
+}
 
 GlobalSkillSyncStatus = Literal["installed", "updated", "unchanged", "failed"]
 AUTO_SYNC_STATE_VERSION = 1
@@ -92,6 +99,7 @@ class _ResolvedGlobalSkillSync:
     home_dir: Path
     skill_names: list[str]
     cli_names: list[str]
+    default_cli_selection: bool
 
 
 @dataclass
@@ -122,9 +130,8 @@ def _normalize_unique(values: list[str]) -> list[str]:
     return list(dict.fromkeys(values))
 
 
-def _validate_cli_names(cli_names: Optional[list[str]]) -> list[str]:
-    requested = list(GLOBAL_CLI_SKILL_DIRS) if cli_names is None else cli_names
-    names = _normalize_unique(requested)
+def _validate_cli_names(cli_names: list[str]) -> list[str]:
+    names = _normalize_unique(cli_names)
     if not names:
         raise GlobalSkillSyncError("At least one CLI is required")
     for name in names:
@@ -132,6 +139,35 @@ def _validate_cli_names(cli_names: Optional[list[str]]) -> list[str]:
             supported = ", ".join(GLOBAL_CLI_SKILL_DIRS)
             raise GlobalSkillSyncError(f"Unsupported CLI '{name}'; choose from: {supported}")
     return names
+
+
+def _has_existing_agent_state(home_dir: Path, cli: str) -> bool:
+    """Detect vendor state while ignoring directories created only by CAFE."""
+    skills_root = home_dir / GLOBAL_CLI_SKILL_DIRS[cli]
+    agent_root = skills_root.parent
+    if agent_root.is_symlink() or (agent_root.exists() and not agent_root.is_dir()):
+        return True
+    if not agent_root.is_dir():
+        return False
+    for child in agent_root.iterdir():
+        if child != skills_root:
+            return True
+    if not skills_root.is_dir():
+        return False
+    return any(child.name not in DEFAULT_GLOBAL_SKILLS for child in skills_root.iterdir())
+
+
+def detect_global_skill_clis(*, home_dir: Optional[Path] = None) -> list[str]:
+    """Return supported agent CLIs evidenced by PATH or existing vendor state."""
+    resolved_home = (home_dir or _default_home_dir()).expanduser().resolve()
+    detected: list[str] = []
+    for cli in GLOBAL_CLI_SKILL_DIRS:
+        executable_found = any(
+            shutil.which(name) is not None for name in GLOBAL_CLI_EXECUTABLES[cli]
+        )
+        if executable_found or _has_existing_agent_state(resolved_home, cli):
+            detected.append(cli)
+    return detected
 
 
 def _validate_sources(source_root: Path, skill_names: Optional[list[str]]) -> list[str]:
@@ -166,7 +202,10 @@ def _file_digest(path: Path) -> str:
 def _tree_manifest(root: Path) -> list[tuple[str, str, str]]:
     manifest: list[tuple[str, str, str]] = []
     for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
-        relative = path.relative_to(root).as_posix()
+        relative_path = path.relative_to(root)
+        if "__pycache__" in relative_path.parts or path.suffix in {".pyc", ".pyo"}:
+            continue
+        relative = relative_path.as_posix()
         if path.is_symlink():
             manifest.append((relative, "symlink", os.readlink(path)))
         elif path.is_dir():
@@ -243,9 +282,7 @@ def _build_auto_sync_state(
 
 
 def _is_complete_default_sync(request: _ResolvedGlobalSkillSync) -> bool:
-    return request.skill_names == list(DEFAULT_GLOBAL_SKILLS) and request.cli_names == list(
-        GLOBAL_CLI_SKILL_DIRS
-    )
+    return request.skill_names == list(DEFAULT_GLOBAL_SKILLS) and request.default_cli_selection
 
 
 def _expected_auto_sync_state(
@@ -322,7 +359,12 @@ def _stage_directory_replacement(
     had_destination = destination.exists() or destination.is_symlink()
 
     try:
-        shutil.copytree(source, staged, symlinks=True)
+        shutil.copytree(
+            source,
+            staged,
+            symlinks=True,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+        )
     except Exception:
         shutil.rmtree(workspace, ignore_errors=True)
         raise
@@ -404,7 +446,12 @@ def _resolve_global_skill_sync(
         source_root=resolved_source_root,
         home_dir=resolved_home_dir,
         skill_names=_validate_sources(resolved_source_root, skill_names),
-        cli_names=_validate_cli_names(cli_names),
+        cli_names=(
+            detect_global_skill_clis(home_dir=resolved_home_dir)
+            if cli_names is None
+            else _validate_cli_names(cli_names)
+        ),
+        default_cli_selection=cli_names is None,
     )
 
 
@@ -543,7 +590,7 @@ def sync_global_skills(
     skill_names: Optional[list[str]] = None,
     cli_names: Optional[list[str]] = None,
 ) -> GlobalSkillSyncSummary:
-    """Install or update bundled skills in selected user-level CLI directories.
+    """Install or update bundled skills in detected or selected user CLI directories.
 
     Sources always come from CAFE's bundled skill catalog, not project or global
     overrides. Validation completes before acquiring one per-machine batch lock,
@@ -556,6 +603,12 @@ def sync_global_skills(
         skill_names=skill_names,
         cli_names=cli_names,
     )
+    if not request.cli_names:
+        return GlobalSkillSyncSummary(
+            source_root=request.source_root,
+            home_dir=request.home_dir,
+            results=[],
+        )
     with _global_skill_sync_lock(
         request.home_dir,
         timeout_seconds=EXPLICIT_SYNC_LOCK_TIMEOUT_SECONDS,
@@ -588,6 +641,8 @@ def auto_sync_global_skills(
         source_root=source_root,
         home_dir=home_dir,
     )
+    if not request.cli_names:
+        return None
     try:
         with _global_skill_sync_lock(
             request.home_dir,

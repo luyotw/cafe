@@ -250,6 +250,11 @@ def _print_skill_import_summary(summary: SkillImportSummary) -> None:
 
 def _print_global_skill_sync_summary(summary: GlobalSkillSyncSummary) -> None:
     """Print user-level CLI skill installation and update results."""
+    if not summary.results:
+        console.print(
+            "[yellow]No supported CLI agents detected. Use --cli to target one explicitly.[/yellow]"
+        )
+        return
     console.print(
         f"[green]Synced {len(summary.results)} installation(s)[/green]: "
         f"{summary.installed_count} installed, {summary.updated_count} updated, "
@@ -334,10 +339,13 @@ def skill_sync_global(
     cli_names: Optional[list[str]] = typer.Option(
         None,
         "--cli",
-        help="Target CLI; repeat for multiple (claude, codex, copilot, cursor, gemini)",
+        help=(
+            "Target CLI instead of auto-detection; repeat for multiple "
+            "(claude, codex, copilot, cursor, gemini)"
+        ),
     ),
 ) -> None:
-    """Install or update bundled CAFE helper skills in user-level CLI directories."""
+    """Install helper skills for detected CLIs or explicit --cli targets."""
     try:
         summary = sync_global_skills(
             skill_names=skills or None,

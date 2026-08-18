@@ -76,19 +76,21 @@ def test_skill_sync_global_installs_bundled_helper_skills(
     monkeypatch.chdir(tmp_path)
     home_dir = tmp_path / "home"
 
-    with patch(
-        "cafe.skills.global_installer._default_home_dir",
-        return_value=home_dir,
+    with (
+        patch("cafe.skills.global_installer._default_home_dir", return_value=home_dir),
+        patch(
+            "cafe.skills.global_installer.shutil.which",
+            side_effect=lambda executable: (
+                "/test-bin/codex" if executable == "codex" else None
+            ),
+        ),
     ):
         result = runner.invoke(app, ["skill", "sync-global"])
 
     assert result.exit_code == 0
-    assert "Synced 15 installation(s)" in result.stdout
-    assert (home_dir / ".claude/skills/use-cafe-workflow/SKILL.md").is_file()
+    assert "Synced 3 installation(s)" in result.stdout
     assert (home_dir / ".codex/skills/write-cafe-playbook/SKILL.md").is_file()
-    assert (home_dir / ".copilot/skills/write-cafe-phase/SKILL.md").is_file()
-    assert (home_dir / ".cursor/skills/use-cafe-workflow/SKILL.md").is_file()
-    assert (home_dir / ".gemini/skills/write-cafe-playbook/SKILL.md").is_file()
+    assert not (home_dir / ".claude").exists()
 
 
 def test_skill_sync_global_can_limit_target_clis(tmp_path: Path, monkeypatch) -> None:
@@ -109,6 +111,23 @@ def test_skill_sync_global_can_limit_target_clis(tmp_path: Path, monkeypatch) ->
     assert (home_dir / ".codex/skills/use-cafe-workflow/SKILL.md").is_file()
     assert (home_dir / ".cursor/skills/use-cafe-workflow/SKILL.md").is_file()
     assert not (home_dir / ".claude").exists()
+
+
+def test_skill_sync_global_reports_when_no_cli_is_detected(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    home_dir = tmp_path / "home"
+
+    with (
+        patch("cafe.skills.global_installer._default_home_dir", return_value=home_dir),
+        patch("cafe.skills.global_installer.shutil.which", return_value=None),
+    ):
+        result = runner.invoke(app, ["skill", "sync-global"])
+
+    assert result.exit_code == 0
+    assert "No supported CLI agents detected" in result.stdout
+    assert not home_dir.exists()
 
 
 def test_playbook_validate_reports_warning_and_strict_failure(tmp_path: Path, monkeypatch) -> None:

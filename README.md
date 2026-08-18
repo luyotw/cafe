@@ -7,6 +7,8 @@ CAFE (CLI Agent Flow Engine) is an AI-driven development workflow automation sys
 
 CAFE is actively evolving—we're continuously iterating based on real-world usage and feedback to improve stability, usability, and integration with various AI agents.
 
+To install CAFE, see [INSTALL.md](INSTALL.md), or ask your CLI agent to follow it.
+
 ![image](https://github.com/luyotw/cafe/blob/main/images/cafe-flow.png)
 
 ---
@@ -107,13 +109,31 @@ Support for more CLI agent tools is planned for the future. Stay tuned!
 
 ## Installation
 
-### From PyPI
+### Ask Your CLI Agent (Recommended)
+
+CAFE does not require a vendor-specific plugin. Ask any CLI agent that can
+inspect repository files and run local commands to install it for you:
+
+```text
+Install the latest stable CAFE release from https://github.com/luyotw/cafe.
+Follow INSTALL.md. I authorize the user-scoped changes described there.
+Do not use sudo, do not modify system Python, and do not change my shell profile.
+```
+
+The repository bootstrap installs CAFE in an isolated user environment and
+synchronizes the bundled workflow skills for detected Claude, Codex, Copilot,
+Cursor, and Gemini installations. See [INSTALL.md](INSTALL.md) for the exact
+safety boundaries and agent instructions.
+
+### Manual Installation
+
+From PyPI:
 
 ```bash
 pip install cafe-engine
 ```
 
-### From Source
+From source:
 
 ```bash
 # Clone repository
@@ -205,10 +225,12 @@ Configured and CLI-provided directories must exist before the workflow starts.
 
 ### Global Workflow Helper Skills
 
-Every `cafe` CLI startup performs a fast per-machine fingerprint check and
-automatically installs or updates bundled workflow helper skills when their
-sources changed or an installed copy is missing. This covers fresh machines,
-new checkouts, and package upgrades without a manual sync command.
+Every `cafe` CLI startup detects supported agent installations, performs a fast
+per-machine fingerprint check, and installs or updates bundled workflow helper
+skills when their sources changed or an installed copy is missing. Detection
+uses an agent executable on `PATH` or existing vendor state other than copies
+managed only by CAFE. This covers fresh machines, new checkouts, and package
+upgrades without creating directories for agents that are not installed.
 
 The fingerprint and installed copies are local to each machine. Multiple
 machines can develop CAFE concurrently: each one syncs from its current local
@@ -234,7 +256,8 @@ cafe skill sync-global
 ```
 
 The default sync copies `use-cafe-workflow`, `write-cafe-playbook`, and
-`write-cafe-phase`, including their references and scripts, to:
+`write-cafe-phase`, including their references and scripts, to the detected
+subset of:
 
 - `~/.claude/skills/`
 - `~/.codex/skills/`
@@ -243,7 +266,8 @@ The default sync copies `use-cafe-workflow`, `write-cafe-playbook`, and
 - `~/.gemini/skills/`
 
 The command is safe to rerun: it reports each destination as installed,
-updated, or unchanged. Limit the sync to selected CLIs with repeatable options:
+updated, or unchanged. Explicit `--cli` targets bypass detection and may create
+the selected vendor directory:
 
 ```bash
 cafe skill sync-global --cli codex --cli cursor
