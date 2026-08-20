@@ -26,6 +26,7 @@ from cafe.core.blackboard import (
     LongRunningOperationState,
     validate_operation_decision,
 )
+from cafe.core.sandbox_execution import sandbox_command
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 
@@ -251,6 +252,8 @@ def run_operation_command(
         "cwd": str(cwd_path),
         "playbook": playbook,
         "created_at": _now_iso(),
+        "execution_class": "sandbox",
+        "trust_source": "workflow",
     }
     request_file = _request_path(iteration_dir)
     _write_json(request_file, request)
@@ -377,12 +380,24 @@ def _monitor(request_file: Path) -> int:
     cwd = Path(str(request["cwd"]))
     playbook = dict(request["playbook"])
 
+    try:
+        command = sandbox_command(command, cwd=cwd)
+    except RuntimeError:
+        _record_terminal_receipt(
+            issue_dir=issue_dir, playbook=playbook, step=step,
+            iteration_dir=iteration_dir, operation_id=operation_id,
+            state=LongRunningOperationState.FAILED,
+            reason="sandbox_backend_unavailable",
+        )
+        return 1
+
     stdout_path = iteration_dir / "operation.stdout.log"
     stderr_path = iteration_dir / "operation.stderr.log"
     with stdout_path.open("ab") as stdout, stderr_path.open("ab") as stderr:
         process = subprocess.Popen(
             command,
             cwd=str(cwd),
+            env={key: value for key, value in os.environ.items() if key in {"PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "TZ"}},
             stdin=subprocess.DEVNULL,
             stdout=stdout,
             stderr=stderr,

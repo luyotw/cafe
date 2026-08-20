@@ -17,6 +17,12 @@ from cafe.skills.native_bridge import NativeSkillBridge
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture(autouse=True)
+def _sandbox_cli_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mock only the external sandbox CLI; hook behavior remains real."""
+    monkeypatch.setattr("cafe.phases.generic_phase.sandbox_command", lambda command, cwd: command)
+
+
 def _setup_loader(tmp_path: Path) -> SkillLoader:
     skill_root = tmp_path / "builtin" / "skills"
     for name, body in {

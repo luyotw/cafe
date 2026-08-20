@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -12,6 +13,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from cafe.core.blackboard import HandoffIntent
 from cafe.core.hooks import BUILTIN_HOOKS, HookResult
 from cafe.core.hooks.script_schema import validate_script_args_schema
+from cafe.core.execution_boundary import ExecutionClass
+from cafe.core.sandbox_execution import sandbox_command
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import (
     PhaseStatusCode,
@@ -596,10 +599,26 @@ class GenericPhase:
                 )
 
         cmd = self._build_script_command(script_path=script_path, args=resolved_args)
+        cwd = Path.cwd().resolve()
+        try:
+            cmd = sandbox_command(cmd, cwd=cwd)
+        except RuntimeError as exc:
+            return HookResult(
+                continue_pipeline=False,
+                override_status_code=PhaseStatusCode.NEED_PERMISSION,
+                events=[{
+                    "type": "script_hook", "step": str(hook_kwargs.get("step_name") or ""),
+                    "skill": skill_name, "stage": stage, "script": script,
+                    "status": "denied", "reason": str(exc), "exit_code": None,
+                    "stdout": "", "stderr": "", "validation_errors": [],
+                    "execution_class": ExecutionClass.SANDBOX.value, "trust_source": "workflow",
+                }],
+            )
         try:
             result = subprocess.run(
                 cmd,
-                cwd=str(Path.cwd().resolve()),
+                cwd=str(cwd),
+                env={key: value for key, value in os.environ.items() if key in {"PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "TZ"}},
                 capture_output=True,
                 text=True,
                 check=False,
@@ -667,10 +686,14 @@ class GenericPhase:
     def _parse_script_hook_declaration(
         declaration: Dict[str, Any],
     ) -> tuple[str, Dict[str, Any], Optional[Dict[str, Any]], list[str], Optional[float]]:
-        allowed_fields = {"script", "args", "schema", "when_intents", "timeout_seconds"}
+        allowed_fields = {"script", "args", "schema", "when_intents", "timeout_seconds", "execution_class"}
         unknown = sorted(set(declaration.keys()) - allowed_fields)
         if unknown:
             raise ValueError(f"Script hook contains unsupported fields: {unknown}")
+
+        execution_class = declaration.get("execution_class", ExecutionClass.SANDBOX.value)
+        if execution_class != ExecutionClass.SANDBOX.value:
+            raise ValueError("Script hooks may only declare sandbox execution")
 
         script = declaration.get("script")
         if not isinstance(script, str) or not script.strip():
