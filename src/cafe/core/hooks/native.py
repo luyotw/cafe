@@ -205,7 +205,7 @@ class UserInputCollector(NoOpHook):
     def _get_previous_output_file(phase: Any, step_name: str) -> Optional[Path]:
         if getattr(phase, "iteration", 0) <= 1:
             return None
-        return phase._get_versioned_file_path(step_name, phase.iteration - 1, phase.phase_dir)
+        return Path(phase._get_versioned_file_path(step_name, phase.iteration - 1, phase.phase_dir))
 
     @staticmethod
     def _display_previous_output(
@@ -432,6 +432,7 @@ class UserInputCollector(NoOpHook):
         except HumanTaskPolicyError:
             return None
 
+        payload: Any
         if getattr(phase, "interactive", False):
             payload = collect_human_task_payload(policy)
         else:
@@ -769,7 +770,7 @@ class InitialInputProviderResolver(NoOpHook):
         if not config_file.exists():
             return {}
         try:
-            import yaml
+            import yaml  # type: ignore[import-untyped]
 
             data = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
         except Exception:
@@ -954,7 +955,9 @@ class GitHubIssueFetcher(NoOpHook):
         source = (
             "workflow_user_input"
             if prefilled is not None
-            else "github" if provider == GITHUB_ISSUE_PROVIDER else "manual"
+            else "github"
+            if provider == GITHUB_ISSUE_PROVIDER
+            else "manual"
         )
         return HookResult(
             continue_pipeline=result.continue_pipeline,
@@ -1136,12 +1139,18 @@ class GitHubPRCreator(NoOpHook):
             SCRIPT_EXIT_ERROR,
             TIMEOUT_ERROR,
             CapabilityRegistryError,
+            ExecutionRequest,
+            PolicyDecision,
+            PrPublishRun,
+            _normalize_legacy_pr_request,
             capability_receipt_hook_event,
             default_capability_definition_dirs,
+            evaluate_capability_request,
             load_capability_registry,
             run_capability_request,
             validation_rejection_receipt,
         )
+        from cafe.core.capability_approvals import CapabilityApprovalService
 
         phase = kwargs.get("phase")
         step_name = str(kwargs.get("step_name") or "")
@@ -1181,7 +1190,9 @@ class GitHubPRCreator(NoOpHook):
         request_file = (
             capability_request_file
             if isinstance(capability_request_file, Path)
-            else publish_request_file if isinstance(publish_request_file, Path) else None
+            else publish_request_file
+            if isinstance(publish_request_file, Path)
+            else None
         )
         try:
             request_payload = self._load_publish_request(
@@ -1198,9 +1209,7 @@ class GitHubPRCreator(NoOpHook):
             if isinstance(request_file, Path):
                 try:
                     rejected_bytes = request_file.resolve().read_bytes()
-                    rejection_source["content_sha256"] = hashlib.sha256(
-                        rejected_bytes
-                    ).hexdigest()
+                    rejection_source["content_sha256"] = hashlib.sha256(rejected_bytes).hexdigest()
                     rejected_value = rejected_bytes.decode("utf-8", errors="replace")
                 except OSError:
                     pass
@@ -1218,8 +1227,35 @@ class GitHubPRCreator(NoOpHook):
         try:
             registry = load_capability_registry(definition_dirs)
         except CapabilityRegistryError as exc:
-            events: list[dict[str, Any]] = []
+            rejection_events: list[dict[str, Any]] = []
             for request in requests:
+                policy_receipt: dict[str, Any] | None = None
+                if isinstance(issue_dir, Path) and isinstance(blackboard_state, BlackboardState):
+                    try:
+                        exact_request = ExecutionRequest.model_validate(
+                            _normalize_legacy_pr_request(request)
+                        )
+                    except (TypeError, ValueError):
+                        exact_request = None
+                    if exact_request is not None:
+                        service = CapabilityApprovalService(
+                            issue_dir=issue_dir,
+                            workflow_id=blackboard_state.workflow_id,
+                            step=step_name,
+                            iteration=int(getattr(phase, "iteration", 1)),
+                        )
+                        policy_receipt = service.terminalize_policy_failure(
+                            request=exact_request,
+                            reason_code="registry_load_error",
+                            evidence={
+                                "error_detail": str(exc),
+                                "registry_paths": [str(path) for path in definition_dirs],
+                            },
+                        )
+                if policy_receipt is not None:
+                    persist_receipt(policy_receipt)
+                    rejection_events.append(capability_receipt_hook_event(policy_receipt))
+                    continue
                 receipt = validation_rejection_receipt(
                     capability=str(request.get("capability") or fallback_capability),
                     code="registry_load_error",
@@ -1232,8 +1268,8 @@ class GitHubPRCreator(NoOpHook):
                     error_detail=str(exc),
                 )
                 persist_receipt(receipt)
-                events.append(capability_receipt_hook_event(receipt))
-            return HookResult(events=events)
+                rejection_events.append(capability_receipt_hook_event(receipt))
+            return HookResult(events=rejection_events)
 
         events: list[dict[str, Any]] = []
         context_updates: dict[str, str] = {}
@@ -1244,6 +1280,56 @@ class GitHubPRCreator(NoOpHook):
                 capability_request=request,
                 output_file=output_file,
             )
+            decision = run.receipt.get("decision")
+            requires_approval = (
+                isinstance(decision, dict)
+                and decision.get("outcome") == PolicyDecision.REQUIRE_APPROVAL.value
+            )
+            if (
+                requires_approval
+                and isinstance(issue_dir, Path)
+                and isinstance(blackboard_state, BlackboardState)
+            ):
+                normalized_request = _normalize_legacy_pr_request(request)
+                evaluation = evaluate_capability_request(registry, normalized_request)
+                service = CapabilityApprovalService(
+                    issue_dir=issue_dir,
+                    workflow_id=blackboard_state.workflow_id,
+                    step=step_name,
+                    iteration=int(getattr(phase, "iteration", 1)),
+                )
+                task = service.request_approval(
+                    request=evaluation.request,
+                    manifest=evaluation.manifest,
+                    correlation_id=str(run.receipt["correlation_id"]),
+                )
+                approval = service.inspect(task.id)
+                if approval["state"] == "pending":
+                    events.append(
+                        {
+                            "type": "capability_approval_pending",
+                            "capability": evaluation.request.capability,
+                            "task_id": task.id,
+                            "request_fingerprint": evaluation.fingerprint,
+                            "correlation_id": approval["correlation_id"],
+                        }
+                    )
+                    continue
+                receipt = service.resume(
+                    task.id,
+                    correlation_id=str(approval["correlation_id"]),
+                    request=evaluation.request,
+                    registry=registry,
+                    repo_root=repo_root,
+                    output_file=output_file,
+                )
+                execution = receipt.get("execution")
+                run_receipt = dict(execution) if isinstance(execution, dict) else receipt
+                run = PrPublishRun(
+                    receipt=run_receipt,
+                    pr_synced_event=None,
+                    error_message=None if run_receipt.get("success") else str(receipt["outcome"]),
+                )
             persist_receipt(run.receipt)
 
             if run.pr_synced_event is not None:
@@ -1341,9 +1427,7 @@ class GitHubPRCreator(NoOpHook):
         try:
             payload = json.loads(request_file.read_text(encoding="utf-8"))
         except UnicodeError as exc:
-            raise RuntimeError(
-                f"PR publish request is not valid UTF-8: {request_file}"
-            ) from exc
+            raise RuntimeError(f"PR publish request is not valid UTF-8: {request_file}") from exc
         except OSError as exc:
             raise RuntimeError(f"PR publish request cannot be read: {request_file}") from exc
         except json.JSONDecodeError as exc:

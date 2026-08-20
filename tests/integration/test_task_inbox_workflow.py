@@ -122,9 +122,7 @@ def test_unsafe_completion_stops_without_workflow_progress(
     )
     payload = '{"decision":"unknown"}' if case == "invalid" else '{"decision":"confirm"}'
 
-    result = runner.invoke(
-        app, ["task", "complete", task.id, "--result", payload, "--json"]
-    )
+    result = runner.invoke(app, ["task", "complete", task.id, "--result", payload, "--json"])
 
     assert result.exit_code != 0
     assert json.loads(result.stdout)["error"]["code"] in {
@@ -178,9 +176,7 @@ def test_resume_failure_reports_committed_completion_and_direct_recovery(
     def unavailable_resume(_issue: str, _playbook: str) -> None:
         raise RuntimeError("runner unavailable")
 
-    monkeypatch.setattr(
-        "cafe.ui.commands.tasks._resume_issue_workflow", unavailable_resume
-    )
+    monkeypatch.setattr("cafe.ui.commands.tasks._resume_issue_workflow", unavailable_resume)
 
     result = runner.invoke(
         app,
@@ -205,3 +201,155 @@ def test_resume_failure_reports_committed_completion_and_direct_recovery(
     assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
     assert len(records.results()) == 1
     assert BlackboardStore(issue_dir).load_or_create("spec").current_step == "plan"
+
+
+def test_capability_task_inspection_exposes_exact_approval_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test List I6: inbox inspection exposes the stable capability boundary."""
+    from cafe.core.capabilities import CapabilityManifest, ExecutionRequest
+    from cafe.core.capability_approvals import CapabilityApprovalService
+
+    monkeypatch.chdir(tmp_path)
+    issue_dir, _ordinary = _pending_issue(tmp_path / ".cafe", "capability-inspect")
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    manifest = CapabilityManifest.model_validate(
+        {
+            "id": "demo.inspect",
+            "version": 1,
+            "implementation": "open_current_pr",
+            "arguments": {
+                "required": ["target"],
+                "properties": {"target": {"type": "string"}},
+            },
+            "outputs": {
+                "required": ["receipt_path"],
+                "properties": {"receipt_path": {"type": "string"}},
+            },
+            "effects": {
+                "writes": ["approval.txt"],
+                "network_destinations": ["api.example.test"],
+                "browser_open": [],
+            },
+            "credentials": ["example-token"],
+            "permissions": {"network": ["api.example.test"]},
+            "idempotency": "unsafe",
+            "risk": "high",
+            "approval": "required",
+            "policy": "allow",
+        }
+    )
+    request = ExecutionRequest.model_validate(
+        {
+            "capability": manifest.id,
+            "args": {"target": "reviewed"},
+            "effects": {
+                "writes": ["approval.txt"],
+                "network_destinations": ["api.example.test"],
+                "browser_open": [],
+            },
+            "credentials": ["example-token"],
+            "permissions": {"network": ["api.example.test"]},
+        }
+    )
+    task = CapabilityApprovalService(
+        issue_dir=issue_dir,
+        workflow_id=state.workflow_id,
+        step="spec",
+        iteration=1,
+    ).request_approval(request=request, manifest=manifest)
+
+    result = runner.invoke(app, ["task", "inspect", task.id, "--json"])
+    approval = json.loads(result.stdout)["data"]["task"]["capability_approval"]
+
+    assert approval["state"] == "pending"
+    assert approval["capability"] == manifest.id
+    assert approval["request"]["capability"] == manifest.id
+
+    readable = runner.invoke(app, ["task", "inspect", task.id])
+
+    assert readable.exit_code == 0
+    for reviewed_value in (
+        "demo.inspect",
+        "high",
+        "reviewed",
+        "approval.txt",
+        "api.example.test",
+        "example-token",
+        "network",
+        "receipt_path",
+    ):
+        assert reviewed_value in readable.stdout
+
+    monkeypatch.setattr("cafe.ui.commands.tasks._resume_issue_workflow", lambda *_args: None)
+    interactive = runner.invoke(app, ["task", "complete", task.id], input="deny\n")
+
+    assert interactive.exit_code == 0
+    assert "demo.inspect" in interactive.stdout
+    assert "approval.txt" in interactive.stdout
+    assert interactive.stdout.index("demo.inspect") < interactive.stdout.index(
+        "Capability decision"
+    )
+
+
+def test_capability_task_cancel_command_persists_terminal_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test List I2: the production inbox cancel path releases the exact task."""
+    from cafe.core.capabilities import CapabilityManifest, ExecutionRequest
+    from cafe.core.capability_approvals import CapabilityApprovalService
+
+    monkeypatch.chdir(tmp_path)
+    issue_dir, _ordinary = _pending_issue(tmp_path / ".cafe", "capability-cancel")
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    manifest = CapabilityManifest.model_validate(
+        {
+            "id": "demo.cancel",
+            "version": 1,
+            "implementation": "open_current_pr",
+            "arguments": {"required": [], "properties": {}},
+            "outputs": {"required": [], "properties": {}},
+            "effects": {"writes": [], "network_destinations": [], "browser_open": []},
+            "credentials": [],
+            "permissions": {},
+            "idempotency": "unsafe",
+            "risk": "high",
+            "approval": "required",
+            "policy": "allow",
+        }
+    )
+    request = ExecutionRequest.model_validate(
+        {
+            "capability": manifest.id,
+            "args": {},
+            "effects": {"writes": [], "network_destinations": [], "browser_open": []},
+            "credentials": [],
+            "permissions": {},
+        }
+    )
+    service = CapabilityApprovalService(
+        issue_dir=issue_dir,
+        workflow_id=state.workflow_id,
+        step="spec",
+        iteration=1,
+    )
+    task = service.request_approval(request=request, manifest=manifest)
+    monkeypatch.setattr("cafe.ui.commands.tasks._resume_issue_workflow", lambda *_args: None)
+
+    result = runner.invoke(
+        app,
+        ["task", "cancel", task.id, "--reason", "operator stopped request", "--json"],
+    )
+    resumed = service.resume(
+        task.id,
+        correlation_id=service.inspect(task.id)["correlation_id"],
+        request=request,
+        registry={manifest.id: manifest},
+        repo_root=tmp_path,
+        output_file=tmp_path / "output.md",
+    )
+
+    assert result.exit_code == 0
+    assert resumed["outcome"] == "cancelled"
+    assert resumed["executed"] is False
+    assert resumed["correlation_id"] == service.inspect(task.id)["correlation_id"]

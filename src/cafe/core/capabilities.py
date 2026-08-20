@@ -17,7 +17,7 @@ from types import MappingProxyType
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -149,6 +149,22 @@ class ExecutionRequest(StrictCapabilityModel):
     effects: CapabilityEffects
     credentials: Tuple[str, ...]
     permissions: Mapping[str, Tuple[str, ...]]
+    expires_at: Optional[str] = None
+
+    @field_validator("expires_at")
+    @classmethod
+    def validate_expires_at(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("expires_at must be a timezone-aware ISO 8601 timestamp")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("expires_at must be a timezone-aware ISO 8601 timestamp") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("expires_at must include a timezone")
+        return value
 
     @field_validator("credentials", mode="before")
     @classmethod
@@ -742,7 +758,8 @@ def _normalize_legacy_pr_request(request: Mapping[str, Any]) -> Dict[str, Any]:
     if str(normalized.get("capability") or "") != CAPABILITY_PR_PUBLISH_ID:
         return normalized
     if "effects" not in normalized:
-        args = normalized.get("args") if isinstance(normalized.get("args"), Mapping) else {}
+        raw_args = normalized.get("args")
+        args = raw_args if isinstance(raw_args, Mapping) else {}
         output = str(args.get("output") or "")
         output_parts = Path(output).parts
         try:
@@ -1088,8 +1105,6 @@ def run_capability_request(
             inputs=_receipt_inputs(raw_request.get("args")),
         )
 
-    manifest = raw_manifest
-
     evaluation = evaluate_capability_request(registry, raw_request)
     if evaluation.decision != PolicyDecision.ALLOW:
         outcome = (
@@ -1104,6 +1119,39 @@ def run_capability_request(
             code=evaluation.reason_code,
             decision=evaluation.decision,
             outcome=outcome,
+            inputs=dict(request.args),
+            evaluation=evaluation,
+        )
+
+    return dispatch_revalidated_capability_request(
+        repo_root=repo_root,
+        evaluation=evaluation,
+        output_file=output_file,
+        timeout_sec=timeout_sec,
+        correlation_id=correlation_id,
+    )
+
+
+def dispatch_revalidated_capability_request(
+    *,
+    repo_root: Path,
+    evaluation: CapabilityEvaluation,
+    output_file: Path,
+    timeout_sec: float = 600.0,
+    correlation_id: Optional[str] = None,
+) -> PrPublishRun:
+    """Dispatch one exact evaluation after its caller has established authorization."""
+    correlation_id = correlation_id or uuid.uuid4().hex[:20]
+    request = evaluation.request
+    manifest = evaluation.manifest
+    if evaluation.decision not in {PolicyDecision.ALLOW, PolicyDecision.REQUIRE_APPROVAL}:
+        return _non_dispatch_run(
+            correlation_id=correlation_id,
+            capability=request.capability,
+            fingerprint=evaluation.fingerprint,
+            code=evaluation.reason_code,
+            decision=evaluation.decision,
+            outcome="policy_denied",
             inputs=dict(request.args),
             evaluation=evaluation,
         )

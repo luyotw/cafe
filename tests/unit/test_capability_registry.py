@@ -291,6 +291,30 @@ def test_dispatch_gate_records_approval_without_calling_adapter(
     assert run.receipt["requested_effects"]["browser_open"] == ["current_pr"]
 
 
+@pytest.mark.parametrize("expires_at", ["not-a-timestamp", "2026-08-20T12:00:00"])
+def test_dispatch_gate_rejects_malformed_request_expiry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, expires_at: str
+) -> None:
+    """Test List unit 4: the public dispatch gate validates request-owned expiry."""
+    import cafe.core.capabilities as cap_mod
+
+    monkeypatch.setattr(
+        cap_mod,
+        "HOST_CAPABILITY_ADAPTERS",
+        {"open_current_pr": lambda **_kwargs: (_ for _ in ()).throw(AssertionError())},
+    )
+    run = run_capability_request(
+        repo_root=tmp_path,
+        registry={"demo.echo": _typed_manifest(approval="required")},
+        capability_request={**_browser_request(), "expires_at": expires_at},
+        output_file=tmp_path / "output.md",
+    )
+
+    assert run.receipt["success"] is False
+    assert run.receipt["outcome"] == "validation_rejection"
+    assert run.receipt["code"] == "malformed_request"
+
+
 def test_dispatch_gate_records_policy_denial_without_calling_adapter(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

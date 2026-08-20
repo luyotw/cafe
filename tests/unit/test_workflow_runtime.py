@@ -9,11 +9,13 @@ from cafe.core.blackboard import (
     BlackboardStore,
     HandoffIntent,
     HandoffOwner,
-    LongRunningOperationArtifact as _LongRunningOperationArtifact,
     LongRunningOperationState,
     OperationLogPolicy,
     OperationMonitoring,
     OperationRisk,
+)
+from cafe.core.blackboard import (
+    LongRunningOperationArtifact as _LongRunningOperationArtifact,
 )
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
@@ -29,7 +31,7 @@ _OPERATION_DECISION = {
 }
 
 
-def LongRunningOperationArtifact(**kwargs):
+def LongRunningOperationArtifact(**kwargs):  # noqa: N802
     """Create explicit test operation decisions without production defaults."""
     return _LongRunningOperationArtifact(
         risk=OperationRisk.LOW,
@@ -135,9 +137,7 @@ def test_runtime_rejects_undeclared_alignment_baton_before_routing(
     assert result.completed is True
     assert calls == 2
     blackboard = BlackboardStore(issue_dir).load_or_create("develop")
-    rejected = [
-        event for event in blackboard.events if event.event_type == "baton_rejected"
-    ]
+    rejected = [event for event in blackboard.events if event.event_type == "baton_rejected"]
     assert rejected[-1].data["field"] == "intent"
     assert rejected[-1].data["invalid_value"] == "alignment_checkpoint"
 
@@ -179,7 +179,13 @@ def test_runtime_blocks_pr_done_without_publish_receipt(tmp_path: Path) -> None:
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "behavior": {"completion": "baton", "publish_confirmation": True}, "capability_requests": ["cafe.pr.publish"], "on": {"await_agent": "_done"}},
+            "pr": {
+                "skill": "spec_first",
+                "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
+                "on": {"await_agent": "_done"},
+            },
         },
     }
 
@@ -242,7 +248,13 @@ def test_runtime_completes_pr_when_publish_receipt_exists(tmp_path: Path) -> Non
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "behavior": {"completion": "baton", "publish_confirmation": True}, "capability_requests": ["cafe.pr.publish"], "on": {"await_agent": "_done"}},
+            "pr": {
+                "skill": "spec_first",
+                "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
+                "on": {"await_agent": "_done"},
+            },
         },
     }
 
@@ -273,7 +285,13 @@ def test_runtime_completes_pr_when_capability_receipt_success_exists(tmp_path: P
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "behavior": {"completion": "baton", "publish_confirmation": True}, "capability_requests": ["cafe.pr.publish"], "on": {"await_agent": "_done"}},
+            "pr": {
+                "skill": "spec_first",
+                "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
+                "on": {"await_agent": "_done"},
+            },
         },
     }
 
@@ -347,6 +365,56 @@ def test_runtime_blocks_declared_capability_step_without_receipt(tmp_path: Path)
         event for event in blackboard.events if event.event_type == "workflow_blocked"
     ]
     assert blocked_events[-1].data["missing_capabilities"] == ["demo.publish"]
+
+
+def test_runtime_pauses_on_distinct_capability_approval_task(tmp_path: Path) -> None:
+    """Test List integration 1/7: approval pending routes to user, not alignment."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-capability-approval"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "publish": {
+                "skill": "spec_first",
+                "role": "developer",
+                "capability_requests": ["demo.publish"],
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        _write_baton(
+            issue_dir,
+            from_step="publish",
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
+        return StepExecutionResult(
+            response="done",
+            artifacts={"publish_result": "p1"},
+            events=[
+                {
+                    "type": "capability_approval_pending",
+                    "capability": "demo.publish",
+                    "task_id": "approval-task",
+                    "request_fingerprint": "fingerprint",
+                }
+            ],
+        )
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="publish")
+
+    assert result.final_status_code == "CAPABILITY_APPROVAL_PENDING"
+    assert result.detail == "approval-task"
+    blackboard = BlackboardStore(issue_dir).load_or_create("publish")
+    assert blackboard.current_step == "user"
+    assert blackboard.handoff_contract is not None
+    assert blackboard.handoff_contract.intent.value == "manual_handoff"
 
 
 def test_runtime_completes_declared_capability_step_with_receipt(tmp_path: Path) -> None:
@@ -1700,7 +1768,7 @@ def test_runtime_prefers_step_baton_over_invalid_status_text(tmp_path: Path) -> 
 
 
 def test_runtime_status_code_missing_no_handoff_contract(tmp_path: Path) -> None:
-    """When the agent omits a status code and no handoff contract exists, the runtime still pauses."""
+    """When status and handoff are absent, the runtime still pauses."""
     issue_dir = tmp_path / ".cafe" / "issues" / "missing-no-handoff"
     playbook = {
         "playbook": {"id": "default"},
@@ -1773,7 +1841,9 @@ def test_runtime_pauses_ready_for_review_with_confirm_output_intent(tmp_path: Pa
     assert blackboard.handoff_contract.intent == HandoffIntent.CONFIRM_OUTPUT
 
 
-def test_runtime_materializes_one_declared_task_and_recovers_it_after_restart(tmp_path: Path) -> None:
+def test_runtime_materializes_one_declared_task_and_recovers_it_after_restart(
+    tmp_path: Path,
+) -> None:
     """IT-001: pause/restart preserves the exact durable task and wait state."""
     issue_dir = tmp_path / ".cafe" / "issues" / "durable-restart"
     playbook = PlaybookLoader().load("default")
@@ -1972,7 +2042,13 @@ def test_runtime_emits_expected_runtime_labels_per_path(tmp_path: Path) -> None:
                 "valid_intents": ["confirmed"],
                 "on": {"await_agent": "pr"},
             },
-            "pr": {"skill": "spec_first", "role": "developer", "behavior": {"completion": "baton", "publish_confirmation": True}, "capability_requests": ["cafe.pr.publish"], "on": {"await_agent": "_done"}},
+            "pr": {
+                "skill": "spec_first",
+                "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
+                "on": {"await_agent": "_done"},
+            },
         },
     }
 
@@ -2012,7 +2088,13 @@ def test_runtime_emits_expected_runtime_labels_per_path(tmp_path: Path) -> None:
     playbook_pr = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "behavior": {"completion": "baton", "publish_confirmation": True}, "capability_requests": ["cafe.pr.publish"], "on": {"await_agent": "_done"}},
+            "pr": {
+                "skill": "spec_first",
+                "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
+                "on": {"await_agent": "_done"},
+            },
         },
     }
 
@@ -2103,7 +2185,13 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "assignee_type": "agent", "behavior": {"completion": "baton", "feedback_target": "develop"}, "on": {}},
+            "pr": {
+                "skill": "spec_first",
+                "role": "developer",
+                "assignee_type": "agent",
+                "behavior": {"completion": "baton", "feedback_target": "develop"},
+                "on": {},
+            },
             "develop": {
                 "skill": "develop",
                 "role": "developer",
@@ -2178,7 +2266,7 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
 
 
 def test_runtime_rejects_plain_text_baton_written_by_pr_agent(tmp_path: Path) -> None:
-    """Issue #386: a plain step-name baton is never normalized, even at the pr/baton-driven boundary."""
+    """Issue #386: a plain step-name baton is never normalized at the PR boundary."""
     issue_dir = tmp_path / ".cafe" / "issues" / "legacy-pr-handoff"
     issue_dir.mkdir(parents=True)
     _write_baton(issue_dir, from_step="pr", to_owner="agent", to_step="pr", intent="await_agent")
@@ -2218,7 +2306,7 @@ def test_runtime_rejects_plain_text_baton_written_by_pr_agent(tmp_path: Path) ->
 
 
 def test_runtime_handles_keyboard_interrupt(tmp_path: Path) -> None:
-    """KeyboardInterrupt during step execution records step_interrupted event and returns INTERRUPTED result."""
+    """KeyboardInterrupt records step_interrupted and returns INTERRUPTED."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-interrupt"
     playbook = {
         "playbook": {"id": "default"},
@@ -2268,7 +2356,7 @@ def test_runtime_handles_keyboard_interrupt(tmp_path: Path) -> None:
 
 
 def test_runtime_handles_agent_execution_error(tmp_path: Path) -> None:
-    """AgentExecutionError (e.g. rate_limit) records step_interrupted event and returns INTERRUPTED result."""
+    """AgentExecutionError records step_interrupted and returns INTERRUPTED."""
     from cafe.agents.executor import AgentExecutionError
 
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-agent-error"
@@ -2739,7 +2827,7 @@ def _make_invalid_target_baton_text(
 def _make_missing_intent_baton_text(
     issue_dir: Path, *, from_step: str = "spec", to_step: str = "done"
 ) -> None:
-    """Write JSON baton payload missing `intent`. """
+    """Write JSON baton payload missing `intent`."""
     (issue_dir / "next_step.txt").write_text(
         json.dumps(
             {
@@ -2757,7 +2845,7 @@ def _make_missing_intent_baton_text(
 
 
 def test_runtime_retries_once_on_baton_rejected_then_succeeds(tmp_path: Path) -> None:
-    """第 1 次寫出無效 baton，第 2 次（retry 1）寫出合法 baton → workflow 正常繼續，blackboard 有 1 筆 baton_rejected 事件。"""
+    """第一次 baton 無效、第二次合法時 workflow 繼續並記錄 rejection。"""
     issue_dir = tmp_path / ".cafe" / "issues" / "retry-1"
     issue_dir.mkdir(parents=True)
     call_count = [0]
@@ -2855,7 +2943,7 @@ def test_runtime_retries_owner_intent_mismatch_then_succeeds(tmp_path: Path) -> 
 
 
 def test_runtime_retries_twice_on_baton_rejected_then_succeeds(tmp_path: Path) -> None:
-    """第 1、2 次無效，第 3 次（retry 2）合法 → workflow 繼續，blackboard 有 2 筆 baton_rejected 事件。"""
+    """前兩次 baton 無效、第三次合法時 workflow 繼續並記錄兩次 rejection。"""
     issue_dir = tmp_path / ".cafe" / "issues" / "retry-2"
     issue_dir.mkdir(parents=True)
     call_count = [0]
@@ -3277,7 +3365,9 @@ def test_running_operation_without_helper_evidence_becomes_lost_without_duplicat
 
     playbook = {
         "playbook": {"id": "default"},
-        "steps": {"develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}},
+        "steps": {
+            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}
+        },
     }
     calls: list[str] = []
 
@@ -3427,7 +3517,9 @@ def test_failed_receipt_promoted_during_reconciliation_records_failed_not_runnin
 
     playbook = {
         "playbook": {"id": "default"},
-        "steps": {"develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}},
+        "steps": {
+            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}
+        },
     }
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
@@ -3534,7 +3626,9 @@ def test_failed_or_lost_operation_blocks_without_retry(tmp_path: Path, op_state:
 
     playbook = {
         "playbook": {"id": "default"},
-        "steps": {"develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}},
+        "steps": {
+            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}
+        },
     }
     calls: list[str] = []
 
@@ -3550,8 +3644,7 @@ def test_failed_or_lost_operation_blocks_without_retry(tmp_path: Path, op_state:
     assert result.final_status_code == f"OPERATION_{op_state.upper()}"
     bb = BlackboardStore(issue_dir).load_or_create("develop")
     assert any(
-        e.event_type == "operation_blocked" and e.data.get("outcome") == op_state
-        for e in bb.events
+        e.event_type == "operation_blocked" and e.data.get("outcome") == op_state for e in bb.events
     )
 
 
@@ -3560,11 +3653,15 @@ def test_schema_invalid_operation_blocks_clearly(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-invalid"
     _setup_interrupted_step(issue_dir, step="develop")
     iteration_dir = _write_iteration_evidence(issue_dir, "develop")
-    (iteration_dir / "operation.json").write_text(json.dumps({"state": "pending"}), encoding="utf-8")
+    (iteration_dir / "operation.json").write_text(
+        json.dumps({"state": "pending"}), encoding="utf-8"
+    )
 
     playbook = {
         "playbook": {"id": "default"},
-        "steps": {"develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}},
+        "steps": {
+            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}
+        },
     }
     calls: list[str] = []
 
@@ -3603,7 +3700,9 @@ def test_succeeded_operation_without_evidence_blocks_as_unverified(tmp_path: Pat
 
     playbook = {
         "playbook": {"id": "default"},
-        "steps": {"develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}},
+        "steps": {
+            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}
+        },
     }
     calls: list[str] = []
 
@@ -3667,7 +3766,9 @@ def test_generic_agent_error_does_not_create_operation_artifact(tmp_path: Path) 
         call_count[0] += 1
         iteration_dir = issue_dir / step_name / "iteration_001"
         iteration_dir.mkdir(parents=True, exist_ok=True)
-        (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
+        (iteration_dir / "iteration.json").write_text(
+            json.dumps({"iteration": 1}), encoding="utf-8"
+        )
         raise TimeoutError("simulated unrelated tool error")
 
     runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
@@ -3701,7 +3802,9 @@ def test_agent_timeout_cannot_fabricate_an_operation_policy(tmp_path: Path) -> N
         call_count[0] += 1
         iteration_dir = issue_dir / step_name / "iteration_001"
         iteration_dir.mkdir(parents=True, exist_ok=True)
-        (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
+        (iteration_dir / "iteration.json").write_text(
+            json.dumps({"iteration": 1}), encoding="utf-8"
+        )
         raise AgentExecutionError(
             "agent did not produce output before the execution timeout", error_type="timeout"
         )
@@ -3991,7 +4094,9 @@ def test_recorded_operation_artifact_state_mismatch_is_not_trusted(tmp_path: Pat
 
     playbook = {
         "playbook": {"id": "default"},
-        "steps": {"develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}},
+        "steps": {
+            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}
+        },
     }
     calls: list[str] = []
 
@@ -4032,7 +4137,9 @@ def test_status_code_missing_does_not_create_operation_artifact(tmp_path: Path) 
     def executor(step_name: str, step_def: dict, state: object):
         iteration_dir = issue_dir / step_name / "iteration_001"
         iteration_dir.mkdir(parents=True, exist_ok=True)
-        (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
+        (iteration_dir / "iteration.json").write_text(
+            json.dumps({"iteration": 1}), encoding="utf-8"
+        )
         return ("plain response without status token", {})
 
     runtime = BlackboardWorkflowRuntime(

@@ -108,6 +108,7 @@ class TaskDetail:
     due_state: str
     wait: dict[str, Any]
     result: Optional[dict[str, Any]]
+    capability_approval: Optional[dict[str, Any]]
     timestamps: dict[str, Optional[str]]
 
     def to_dict(self) -> dict[str, Any]:
@@ -129,6 +130,7 @@ class TaskDetail:
             "due_state": self.due_state,
             "wait": self.wait,
             "result": self.result,
+            "capability_approval": self.capability_approval,
             "timestamps": self.timestamps,
         }
 
@@ -403,6 +405,9 @@ class TaskInboxService:
                 "released_at": record.wait.released_at,
             },
             result=record.result.to_dict() if record.result else None,
+            capability_approval=(
+                dict(task.capability_approval) if task.capability_approval is not None else None
+            ),
             timestamps={
                 "created_at": task.created_at,
                 "completed_at": task.completed_at,
