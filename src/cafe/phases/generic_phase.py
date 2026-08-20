@@ -498,9 +498,9 @@ class GenericPhase:
         trusted_hooks: list[object] = []
         if (
             stage == "after_execute"
-            and canonical_skill_name(str(kwargs.get("skill_name") or ""))
-            in {"cafe-spec", "cafe-plan"}
-            and kwargs["step_def"].get("output_artifact") in {"spec", "plan"}
+            and str(kwargs.get("skill_name") or "") in {"cafe-spec", "cafe-plan"}
+            and isinstance(kwargs.get("blackboard_state"), BlackboardState)
+            and isinstance(getattr(kwargs.get("phase"), "issue_dir", None), Path)
         ):
             trusted_hooks.append(self._CONFIRMED_ARTIFACT_SYNC_HOOK)
         hook_entries = [*trusted_hooks, *defaults, *declared]
@@ -686,7 +686,7 @@ class GenericPhase:
     ) -> HookResult:
         if stage != "after_execute":
             raise ValueError("Confirmed artifact sync is restricted to after_execute")
-        phase_name = "spec" if canonical_skill_name(skill_name) == "cafe-spec" else "plan"
+        phase_name = "spec" if skill_name == "cafe-spec" else "plan"
         detected = self._detect_status_code(
             response=response or "",
             step_def=step_def,
