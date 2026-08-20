@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import hashlib
 import uuid
 from enum import Enum
 from datetime import datetime
@@ -76,6 +77,120 @@ class CapabilityManifest(StrictCapabilityModel):
         if self.approval == "required" and self.policy == "deny":
             raise ValueError("approval-required capability cannot also be policy denied")
         return self
+
+
+class ExecutionRequest(StrictCapabilityModel):
+    capability: str = Field(min_length=1)
+    args: Mapping[str, Any]
+    effects: CapabilityEffects
+    credentials: Tuple[str, ...]
+    permissions: Mapping[str, Tuple[str, ...]]
+
+
+class PolicyDecision(str, Enum):
+    ALLOW = "allow"
+    REQUIRE_APPROVAL = "require_approval"
+    DENY = "deny"
+
+
+@dataclass(frozen=True)
+class CapabilityEvaluation:
+    request: ExecutionRequest
+    manifest: CapabilityManifest
+    fingerprint: str
+    decision: PolicyDecision
+    reason_code: str
+    explanation: str
+    allowed_effects: CapabilityEffects
+
+
+def canonical_request_fingerprint(request: ExecutionRequest) -> str:
+    """Hash the canonical security-relevant request boundary."""
+    payload = request.model_dump(mode="json")
+    effects = payload["effects"]
+    for key in ("writes", "network_destinations", "browser_open"):
+        effects[key] = sorted(effects[key])
+    payload["credentials"] = sorted(payload["credentials"])
+    payload["permissions"] = {
+        key: sorted(values) for key, values in sorted(payload["permissions"].items())
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _validate_request_arguments(
+    request: ExecutionRequest, manifest: CapabilityManifest
+) -> Optional[str]:
+    declared = manifest.arguments.properties
+    if not set(manifest.arguments.required).issubset(request.args):
+        return "missing_argument"
+    if not set(request.args).issubset(declared):
+        return "argument_not_allowed"
+    python_types = {"string": str, "integer": int, "boolean": bool}
+    for key, value in request.args.items():
+        field = declared[key]
+        expected = python_types[field.type]
+        if type(value) is not expected:
+            return "argument_type_invalid"
+        if field.enum is not None and value not in field.enum:
+            return "argument_not_allowed"
+    return None
+
+
+def _is_effect_subset(requested: CapabilityEffects, allowed: CapabilityEffects) -> bool:
+    return all(
+        set(getattr(requested, field)).issubset(getattr(allowed, field))
+        for field in ("writes", "network_destinations", "browser_open")
+    )
+
+
+def evaluate_capability_request(
+    registry: Mapping[str, CapabilityManifest], raw_request: Mapping[str, Any]
+) -> CapabilityEvaluation:
+    """Return one explicit, fail-closed policy decision for a parsed request."""
+    request = ExecutionRequest.model_validate(raw_request)
+    manifest = registry.get(request.capability)
+    if not isinstance(manifest, CapabilityManifest):
+        raise CapabilityRegistryError(f"Unknown capability {request.capability!r}")
+    fingerprint = canonical_request_fingerprint(request)
+
+    reason = _validate_request_arguments(request, manifest)
+    if reason is None and not _is_effect_subset(request.effects, manifest.effects):
+        reason = "effect_not_allowed"
+    if reason is None and not set(request.credentials).issubset(manifest.credentials):
+        reason = "credential_not_allowed"
+    if reason is None:
+        for permission, values in request.permissions.items():
+            allowed = manifest.permissions.get(permission)
+            if allowed is None or not set(values).issubset(allowed):
+                reason = "permission_not_allowed"
+                break
+
+    if reason is not None:
+        decision = PolicyDecision.DENY
+        explanation = "The request exceeds its registered capability boundary."
+    elif manifest.policy == "deny":
+        decision = PolicyDecision.DENY
+        reason = "policy_denied"
+        explanation = "The registered policy denies this capability."
+    elif manifest.approval == "required":
+        decision = PolicyDecision.REQUIRE_APPROVAL
+        reason = "approval_required"
+        explanation = "The registered policy requires approval before execution."
+    else:
+        decision = PolicyDecision.ALLOW
+        reason = "policy_allowed"
+        explanation = "The request is within the registered capability boundary."
+
+    return CapabilityEvaluation(
+        request=request,
+        manifest=manifest,
+        fingerprint=fingerprint,
+        decision=decision,
+        reason_code=reason,
+        explanation=explanation,
+        allowed_effects=manifest.effects,
+    )
 
 
 def _package_capabilities_dir() -> Path:

@@ -9,6 +9,10 @@ from cafe.core.capabilities import (
     CAPABILITY_PR_PUBLISH_ID,
     CapabilityManifest,
     CapabilityRegistryError,
+    ExecutionRequest,
+    PolicyDecision,
+    canonical_request_fingerprint,
+    evaluate_capability_request,
     load_capability_registry,
     run_capability_request,
     run_pr_publish_capability,
@@ -89,6 +93,98 @@ def test_load_registry_rejects_extra_and_unsupported_implementation(tmp_path: Pa
 
     with pytest.raises(CapabilityRegistryError):
         load_capability_registry([cap_dir])
+
+
+def _typed_manifest(**overrides: object) -> CapabilityManifest:
+    return CapabilityManifest.model_validate(_manifest(**overrides))
+
+
+def _browser_request(**overrides: object) -> dict[str, object]:
+    request: dict[str, object] = {
+        "capability": "demo.echo",
+        "args": {"target_ref": "current_pr"},
+        "effects": {
+            "writes": [],
+            "network_destinations": [],
+            "browser_open": ["current_pr"],
+        },
+        "credentials": [],
+        "permissions": {},
+    }
+    request.update(overrides)
+    return request
+
+
+def test_execution_request_is_strict_and_fingerprint_covers_security_boundary() -> None:
+    first = ExecutionRequest.model_validate(_browser_request())
+    reordered = ExecutionRequest.model_validate(
+        {
+            "permissions": {},
+            "credentials": [],
+            "effects": {
+                "browser_open": ["current_pr"],
+                "network_destinations": [],
+                "writes": [],
+            },
+            "args": {"target_ref": "current_pr"},
+            "capability": "demo.echo",
+        }
+    )
+    assert canonical_request_fingerprint(first) == canonical_request_fingerprint(reordered)
+
+    changed = ExecutionRequest.model_validate(
+        _browser_request(effects={"writes": [], "network_destinations": [], "browser_open": []})
+    )
+    assert canonical_request_fingerprint(first) != canonical_request_fingerprint(changed)
+
+    with pytest.raises(ValueError):
+        ExecutionRequest.model_validate({**_browser_request(), "script": "./owned.sh"})
+
+
+@pytest.mark.parametrize(
+    ("request_update", "reason_code"),
+    [
+        ({"args": {"target_ref": "https://evil.test"}}, "argument_not_allowed"),
+        (
+            {
+                "effects": {
+                    "writes": ["../outside"],
+                    "network_destinations": [],
+                    "browser_open": ["current_pr"],
+                }
+            },
+            "effect_not_allowed",
+        ),
+        ({"credentials": ["admin-token"]}, "credential_not_allowed"),
+        ({"permissions": {"network": ["evil.test"]}}, "permission_not_allowed"),
+    ],
+)
+def test_policy_denies_broadened_request(
+    request_update: dict[str, object], reason_code: str
+) -> None:
+    evaluation = evaluate_capability_request(
+        {"demo.echo": _typed_manifest()}, _browser_request(**request_update)
+    )
+    assert evaluation.decision == PolicyDecision.DENY
+    assert evaluation.reason_code == reason_code
+
+
+def test_policy_decision_is_total_for_allow_approval_and_deny() -> None:
+    allowed = evaluate_capability_request(
+        {"demo.echo": _typed_manifest()}, _browser_request()
+    )
+    approval = evaluate_capability_request(
+        {"demo.echo": _typed_manifest(approval="required")}, _browser_request()
+    )
+    denied = evaluate_capability_request(
+        {"demo.echo": _typed_manifest(policy="deny")}, _browser_request()
+    )
+
+    assert allowed.decision == PolicyDecision.ALLOW
+    assert approval.decision == PolicyDecision.REQUIRE_APPROVAL
+    assert denied.decision == PolicyDecision.DENY
+    assert allowed.fingerprint
+    assert allowed.allowed_effects == allowed.request.effects
 
 
 def test_load_registry_duplicate_ids(tmp_path: Path) -> None:
