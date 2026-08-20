@@ -5,16 +5,20 @@ from __future__ import annotations
 import json
 import subprocess
 import uuid
+from enum import Enum
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from types import MappingProxyType
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 
 import yaml
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from cafe.skills.loader import SkillLoader
 
 CAPABILITY_PR_PUBLISH_ID = "cafe.pr.publish"
+CAPABILITY_BROWSER_OPEN_ID = "cafe.browser.open"
 
 # Failure categories surfaced on capability receipts (distinct from validation_error).
 SCRIPT_EXIT_ERROR = "script_exit_error"
@@ -27,6 +31,53 @@ class CapabilityRegistryError(ValueError):
     """Raised when capability definitions cannot be loaded."""
 
 
+class StrictCapabilityModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class ValueSchema(StrictCapabilityModel):
+    type: Literal["string", "integer", "boolean"]
+    enum: Optional[Tuple[Any, ...]] = None
+
+
+class ObjectSchema(StrictCapabilityModel):
+    required: Tuple[str, ...]
+    properties: Mapping[str, ValueSchema]
+
+    @model_validator(mode="after")
+    def required_fields_are_declared(self) -> "ObjectSchema":
+        if not set(self.required).issubset(self.properties):
+            raise ValueError("required fields must be declared in properties")
+        return self
+
+
+class CapabilityEffects(StrictCapabilityModel):
+    writes: Tuple[str, ...]
+    network_destinations: Tuple[str, ...]
+    browser_open: Tuple[str, ...] = ()
+
+
+class CapabilityManifest(StrictCapabilityModel):
+    id: str = Field(min_length=1)
+    version: int = Field(ge=1)
+    implementation: Literal["sync_pr", "open_current_pr"]
+    arguments: ObjectSchema
+    outputs: ObjectSchema
+    effects: CapabilityEffects
+    credentials: Tuple[str, ...]
+    permissions: Mapping[str, Tuple[str, ...]]
+    idempotency: Literal["safe", "update_in_place", "unsafe"]
+    risk: Literal["low", "medium", "high"]
+    approval: Literal["not_required", "required"]
+    policy: Literal["allow", "deny"]
+
+    @model_validator(mode="after")
+    def reject_contradictory_policy(self) -> "CapabilityManifest":
+        if self.approval == "required" and self.policy == "deny":
+            raise ValueError("approval-required capability cannot also be policy denied")
+        return self
+
+
 def _package_capabilities_dir() -> Path:
     return Path(__file__).resolve().parents[1] / "data" / "capabilities"
 
@@ -36,12 +87,14 @@ def default_capability_definition_dirs(repo_root: Path) -> List[Path]:
     return [repo_root / "data" / "capabilities", _package_capabilities_dir()]
 
 
-def load_capability_registry(capabilities_dirs: Sequence[Path]) -> Dict[str, Dict[str, Any]]:
+def load_capability_registry(
+    capabilities_dirs: Sequence[Path],
+) -> Mapping[str, CapabilityManifest]:
     """Load all *.yaml / *.yml / *.json capability definitions.
 
     Duplicate ``id`` values across files are rejected with both paths listed.
     """
-    merged: Dict[str, Tuple[Dict[str, Any], Path]] = {}
+    merged: Dict[str, Tuple[CapabilityManifest, Path]] = {}
     for base in capabilities_dirs:
         if not base.is_dir():
             continue
@@ -62,15 +115,17 @@ def load_capability_registry(capabilities_dirs: Sequence[Path]) -> Dict[str, Dic
                 raise CapabilityRegistryError(f"Invalid capability document {path}") from exc
             if not isinstance(data, dict):
                 raise CapabilityRegistryError(f"Capability root must be a mapping: {path}")
-            cap_id = str(data.get("id") or "").strip()
-            if not cap_id:
-                raise CapabilityRegistryError(f"Capability missing id: {path}")
+            try:
+                manifest = CapabilityManifest.model_validate(data)
+            except ValidationError as exc:
+                raise CapabilityRegistryError(f"Invalid capability manifest {path}") from exc
+            cap_id = manifest.id
             if cap_id in merged:
                 raise CapabilityRegistryError(
                     f"Duplicate capability id {cap_id!r}: {merged[cap_id][1]} and {path}"
                 )
-            merged[cap_id] = (data, path)
-    return {key: value[0] for key, value in merged.items()}
+            merged[cap_id] = (manifest, path)
+    return MappingProxyType({key: value[0] for key, value in merged.items()})
 
 
 def _schema_required(schema: Mapping[str, Any], *, label: str) -> List[str]:

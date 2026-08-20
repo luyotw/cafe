@@ -7,6 +7,7 @@ import yaml
 
 from cafe.core.capabilities import (
     CAPABILITY_PR_PUBLISH_ID,
+    CapabilityManifest,
     CapabilityRegistryError,
     load_capability_registry,
     run_capability_request,
@@ -14,15 +15,86 @@ from cafe.core.capabilities import (
 )
 
 
+def _manifest(capability_id: str = "demo.echo", **overrides: object) -> dict[str, object]:
+    manifest: dict[str, object] = {
+        "id": capability_id,
+        "version": 1,
+        "implementation": "sync_pr" if capability_id == CAPABILITY_PR_PUBLISH_ID else "open_current_pr",
+        "arguments": {
+            "required": ["target_ref"],
+            "properties": {"target_ref": {"type": "string", "enum": ["current_pr"]}},
+        },
+        "outputs": {"required": [], "properties": {}},
+        "effects": {
+            "writes": [],
+            "network_destinations": [],
+            "browser_open": ["current_pr"],
+        },
+        "credentials": [],
+        "permissions": {},
+        "idempotency": "safe",
+        "risk": "low",
+        "approval": "not_required",
+        "policy": "allow",
+    }
+    manifest.update(overrides)
+    return manifest
+
+
+def test_load_registry_returns_typed_complete_manifests(tmp_path: Path) -> None:
+    cap_dir = tmp_path / "caps"
+    cap_dir.mkdir()
+    (cap_dir / "demo.yaml").write_text(yaml.safe_dump(_manifest()), encoding="utf-8")
+
+    registry = load_capability_registry([cap_dir])
+
+    assert isinstance(registry["demo.echo"], CapabilityManifest)
+    assert registry["demo.echo"].implementation == "open_current_pr"
+    with pytest.raises(TypeError):
+        registry["new"] = registry["demo.echo"]  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "version",
+        "implementation",
+        "arguments",
+        "outputs",
+        "effects",
+        "credentials",
+        "permissions",
+        "idempotency",
+        "risk",
+        "approval",
+        "policy",
+    ],
+)
+def test_load_registry_rejects_incomplete_manifest(tmp_path: Path, field: str) -> None:
+    cap_dir = tmp_path / "caps"
+    cap_dir.mkdir()
+    data = _manifest()
+    data.pop(field)
+    (cap_dir / "demo.yaml").write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    with pytest.raises(CapabilityRegistryError):
+        load_capability_registry([cap_dir])
+
+
+def test_load_registry_rejects_extra_and_unsupported_implementation(tmp_path: Path) -> None:
+    cap_dir = tmp_path / "caps"
+    cap_dir.mkdir()
+    malformed = _manifest(implementation="repo_script", executable="./run.sh")
+    (cap_dir / "demo.yaml").write_text(yaml.safe_dump(malformed), encoding="utf-8")
+
+    with pytest.raises(CapabilityRegistryError):
+        load_capability_registry([cap_dir])
+
+
 def test_load_registry_duplicate_ids(tmp_path: Path) -> None:
     cap_dir = tmp_path / "caps"
     cap_dir.mkdir()
-    one = {
-        "id": "dup",
-        "script_ref": "sync_pr",
-        "args_schema": {"required": []},
-        "expected_outputs": {"required": ["pr_url", "pr_number"]},
-    }
+    one = _manifest("dup")
     two = dict(one)
     (cap_dir / "a.yaml").write_text(yaml.safe_dump(one), encoding="utf-8")
     (cap_dir / "b.yaml").write_text(yaml.safe_dump(two), encoding="utf-8")
