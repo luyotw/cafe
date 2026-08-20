@@ -496,9 +496,15 @@ class GenericPhase:
             name for name in self.DEFAULT_STAGE_HOOKS.get(stage, ()) if name not in declared
         ]
         trusted_hooks: list[object] = []
+        trusted_artifact = {
+            "cafe-spec": "spec",
+            "cafe-plan": "plan",
+        }.get(str(kwargs.get("skill_name") or ""))
         if (
             stage == "after_execute"
-            and str(kwargs.get("skill_name") or "") in {"cafe-spec", "cafe-plan"}
+            and trusted_artifact is not None
+            and kwargs["step_def"].get("output_artifact") == trusted_artifact
+            and self.skill_loader.get_skill_entry(str(kwargs["skill_name"])).source == "builtin"
             and isinstance(kwargs.get("blackboard_state"), BlackboardState)
             and isinstance(getattr(kwargs.get("phase"), "issue_dir", None), Path)
         ):

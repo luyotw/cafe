@@ -126,3 +126,112 @@ def test_runtime_injects_confirmed_sync_and_persists_exact_receipt(
     )
     receipts = BlackboardStore(issue_dir).load_or_create(phase_name).capability_receipts
     assert receipts[-1]["correlation_id"] == "sync-correlation"
+
+
+@pytest.mark.parametrize("override_source", ["project", "global"])
+def test_runtime_does_not_inject_confirmed_sync_for_skill_override(
+    monkeypatch, tmp_path: Path, override_source: str
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue1"
+    output = issue_dir / "plan" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("untrusted plan override", encoding="utf-8")
+    (issue_dir / "issue.yaml").write_text(
+        "spec:\n  issue_id: 42\nplan:\n  sync_github: true\n", encoding="utf-8"
+    )
+    builtin = tmp_path / "builtin" / "skills" / "cafe-plan"
+    builtin.mkdir(parents=True)
+    (builtin / "SKILL.md").write_text(
+        "---\nname: cafe-plan\ndescription: builtin\n---\n", encoding="utf-8"
+    )
+    override_root = (
+        tmp_path / "project" / ".cafe" / "skills"
+        if override_source == "project"
+        else tmp_path / "global" / "skills"
+    )
+    override = override_root / "cafe-plan"
+    override.mkdir(parents=True)
+    (override / "SKILL.md").write_text(
+        "---\nname: cafe-plan\ndescription: override\n---\n", encoding="utf-8"
+    )
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    loader.discover()
+    capability_calls = []
+    monkeypatch.setattr(
+        "cafe.phases.generic_phase.run_capability_request",
+        lambda **kwargs: capability_calls.append(kwargs),
+    )
+
+    result = GenericPhase(loader).execute(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        step_def={
+            "output_artifact": "plan",
+            "hooks": {},
+            "valid_intents": ["confirmed", "need_permission"],
+        },
+        agent_executor=lambda _prompt: "confirmed",
+        output_file=output,
+        hook_context={
+            "phase": SimpleNamespace(issue_dir=issue_dir),
+            "step_name": "plan",
+            "output_file": output,
+            "blackboard_state": BlackboardStore(issue_dir).load_or_create("plan"),
+        },
+    )
+
+    assert capability_calls == []
+    assert not any(event.get("type") == "capability_hook" for event in result.events)
+
+
+def test_runtime_does_not_inject_confirmed_sync_for_mismatched_artifact(
+    monkeypatch, tmp_path: Path
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue1"
+    output = issue_dir / "custom" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("custom artifact", encoding="utf-8")
+    (issue_dir / "issue.yaml").write_text(
+        "spec:\n  issue_id: 42\nplan:\n  sync_github: true\n", encoding="utf-8"
+    )
+    builtin = tmp_path / "builtin" / "skills" / "cafe-plan"
+    builtin.mkdir(parents=True)
+    (builtin / "SKILL.md").write_text(
+        "---\nname: cafe-plan\ndescription: builtin\n---\n", encoding="utf-8"
+    )
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    loader.discover()
+    capability_calls = []
+    monkeypatch.setattr(
+        "cafe.phases.generic_phase.run_capability_request",
+        lambda **kwargs: capability_calls.append(kwargs),
+    )
+
+    result = GenericPhase(loader).execute(
+        skill_name="cafe-plan",
+        skill_invocation="/custom",
+        step_def={
+            "output_artifact": "custom",
+            "hooks": {},
+            "valid_intents": ["confirmed", "need_permission"],
+        },
+        agent_executor=lambda _prompt: "confirmed",
+        output_file=output,
+        hook_context={
+            "phase": SimpleNamespace(issue_dir=issue_dir),
+            "step_name": "custom",
+            "output_file": output,
+            "blackboard_state": BlackboardStore(issue_dir).load_or_create("custom"),
+        },
+    )
+
+    assert capability_calls == []
+    assert not any(event.get("type") == "capability_hook" for event in result.events)
