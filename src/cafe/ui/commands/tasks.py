@@ -6,18 +6,23 @@ import json
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from cafe.core.blackboard import BlackboardStore
+from cafe.core.capability_approvals import CapabilityApprovalError
 from cafe.core.human_tasks import HumanTaskPolicy
 from cafe.core.task_inbox import TaskInboxError, TaskInboxService
 from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 from cafe.ui.commands import workflow as workflow_commands
-from cafe.ui.human_tasks import apply_human_task_payload, collect_human_task_payload
+from cafe.ui.human_tasks import (
+    apply_capability_approval_payload,
+    apply_human_task_payload,
+    collect_human_task_payload,
+)
 
 task_app = typer.Typer(help="List, inspect, and complete durable repository tasks")
 console = Console()
@@ -190,9 +195,7 @@ def inspect_task(
 @task_app.command("complete")
 def complete_task(
     task_id: str = typer.Argument(..., help="Stable task identifier"),
-    result: Optional[str] = typer.Option(
-        None, "--result", help="Non-interactive JSON response"
-    ),
+    result: Optional[str] = typer.Option(None, "--result", help="Non-interactive JSON response"),
     result_file: Optional[Path] = typer.Option(
         None, "--result-file", help="Read a non-interactive JSON response from a file"
     ),
@@ -203,7 +206,40 @@ def complete_task(
     try:
         preflight = service.preflight_completion(task_id)
         raw_payload = _load_result(result, result_file)
-        if raw_payload is None:
+        applied: Any
+        if preflight.task.capability_approval is not None:
+            approval = dict(preflight.task.capability_approval)
+            if raw_payload is None:
+                decision = typer.prompt("Capability decision (approve/deny)").strip().lower()
+                raw_payload = {
+                    "decision": decision,
+                    "workflow_id": preflight.workflow_id,
+                    "task_id": task_id,
+                    "request_fingerprint": approval["fingerprint"],
+                }
+            try:
+                blackboard = BlackboardStore(preflight.issue_dir).load_or_create(
+                    preflight.task.step, playbook_id=preflight.playbook_id
+                )
+                applied = apply_capability_approval_payload(
+                    issue_dir=preflight.issue_dir,
+                    blackboard=blackboard,
+                    task=preflight.task,
+                    raw_payload=raw_payload,
+                )
+            except CapabilityApprovalError as exc:
+                raise TaskInboxError(
+                    "invalid_response",
+                    str(exc),
+                    recovery=(
+                        "Inspect capability_approval and submit an exact structured "
+                        "approve or deny decision."
+                    ),
+                    task_id=task_id,
+                    issue=preflight.issue,
+                    workflow_id=preflight.workflow_id,
+                ) from exc
+        elif raw_payload is None:
             try:
                 policy = HumanTaskPolicy.model_validate(preflight.task.expected_result)
             except (TypeError, ValueError) as exc:
@@ -216,45 +252,48 @@ def complete_task(
                     workflow_id=preflight.workflow_id,
                 ) from exc
             raw_payload = collect_human_task_payload(policy)
-        if isinstance(raw_payload, dict):
+        if preflight.task.capability_approval is None and isinstance(raw_payload, dict):
             raw_payload = dict(raw_payload)
             raw_payload.setdefault("task", preflight.task.policy_id)
             raw_payload["human_task_id"] = task_id
         assert raw_payload is not None
 
-        # Reload immediately before the existing locked validator/mutator so a
-        # stale concurrent completion cannot proceed on old ownership evidence.
-        preflight = service.preflight_completion(task_id)
-        playbook_data = PlaybookLoader(project_root=Path.cwd()).load(preflight.playbook_id)
-        playbook_data = apply_issue_playbook_overrides(
-            playbook_data, preflight.issue_dir / "issue.yaml"
-        )
-        blackboard = BlackboardStore(preflight.issue_dir).load_or_create(
-            preflight.task.step, playbook_id=preflight.playbook_id
-        )
-        applied = apply_human_task_payload(
-            issue_dir=preflight.issue_dir,
-            playbook_data=playbook_data,
-            blackboard=blackboard,
-            from_step=preflight.task.step,
-            trigger=preflight.task.trigger,
-            raw_payload=raw_payload,
-            source="command" if result is not None or result_file is not None else "interactive",
-        )
-        if applied.rejection is not None or applied.target is None:
-            message = (
-                applied.rejection.message
-                if applied.rejection is not None
-                else "The response did not select a continuation."
+        if preflight.task.capability_approval is None:
+            # Reload immediately before the existing locked validator/mutator so a
+            # stale concurrent completion cannot proceed on old ownership evidence.
+            preflight = service.preflight_completion(task_id)
+            playbook_data = PlaybookLoader(project_root=Path.cwd()).load(preflight.playbook_id)
+            playbook_data = apply_issue_playbook_overrides(
+                playbook_data, preflight.issue_dir / "issue.yaml"
             )
-            raise TaskInboxError(
-                "invalid_response",
-                message,
-                recovery="Inspect the expected result and submit one declared response.",
-                task_id=task_id,
-                issue=preflight.issue,
-                workflow_id=preflight.workflow_id,
+            blackboard = BlackboardStore(preflight.issue_dir).load_or_create(
+                preflight.task.step, playbook_id=preflight.playbook_id
             )
+            applied = apply_human_task_payload(
+                issue_dir=preflight.issue_dir,
+                playbook_data=playbook_data,
+                blackboard=blackboard,
+                from_step=preflight.task.step,
+                trigger=preflight.task.trigger,
+                raw_payload=raw_payload,
+                source="command"
+                if result is not None or result_file is not None
+                else "interactive",
+            )
+            if applied.rejection is not None or applied.target is None:
+                message = (
+                    applied.rejection.message
+                    if applied.rejection is not None
+                    else "The response did not select a continuation."
+                )
+                raise TaskInboxError(
+                    "invalid_response",
+                    message,
+                    recovery="Inspect the expected result and submit one declared response.",
+                    task_id=task_id,
+                    issue=preflight.issue,
+                    workflow_id=preflight.workflow_id,
+                )
         try:
             if json_output:
                 # The workflow runner is historically stdout-oriented. Capture its
