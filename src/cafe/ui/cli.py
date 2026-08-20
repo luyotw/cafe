@@ -22,6 +22,7 @@ from cafe.ui.commands import tasks as task_commands
 from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.commands import audit as audit_commands
 from cafe.ui.commands import verification as verification_commands
+from cafe.ui.commands import trust as trust_commands
 from cafe.ui.cli_shared import (
     CONTENT_TYPE_FILE_MAP as _SHARED_CONTENT_TYPE_FILE_MAP,
     VALID_CONTENT_TYPES as _SHARED_VALID_CONTENT_TYPES,
@@ -769,6 +770,7 @@ app.add_typer(catalog_commands.skill_app, name="skill")
 
 # Workflow verification receipts
 app.add_typer(verification_commands.verification_app, name="verification")
+app.add_typer(trust_commands.trust_app, name="trust")
 
 
 def _print_agents(custom_only: bool = False) -> None:
