@@ -2,23 +2,22 @@
 
 from __future__ import annotations
 
+import json
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
-import json
 from pathlib import Path
-import threading
-from typing import Any, Mapping, Optional
+from typing import Any, Iterator, Mapping, Optional
 from uuid import uuid4
 
 try:
     import fcntl
 except ImportError:  # pragma: no cover - Windows falls back to the local lock.
-    fcntl = None
+    fcntl = None  # type: ignore[assignment]
 
 from cafe.core.packet_io import atomic_write_bytes, canonical_json
-
 
 HUMAN_TASK_RECORD_FILENAME = "human_tasks.json"
 HUMAN_TASK_RECORD_SCHEMA_VERSION = 1
@@ -65,6 +64,7 @@ class HumanTask:
     continuations: dict[str, str]
     status: HumanTaskStatus
     created_at: str
+    capability_approval: Optional[dict[str, Any]] = None
     completed_at: Optional[str] = None
     cancelled_at: Optional[str] = None
 
@@ -82,6 +82,9 @@ class HumanTask:
             "continuations": dict(self.continuations),
             "status": self.status.value,
             "created_at": self.created_at,
+            "capability_approval": (
+                dict(self.capability_approval) if self.capability_approval is not None else None
+            ),
             "completed_at": self.completed_at,
             "cancelled_at": self.cancelled_at,
         }
@@ -102,6 +105,11 @@ class HumanTask:
                 continuations=_string_mapping(data, "continuations"),
                 status=HumanTaskStatus(_required_text(data, "status")),
                 created_at=_required_text(data, "created_at"),
+                capability_approval=(
+                    _mapping(data, "capability_approval")
+                    if data.get("capability_approval") is not None
+                    else None
+                ),
                 completed_at=_optional_text(data.get("completed_at")),
                 cancelled_at=_optional_text(data.get("cancelled_at")),
             )
@@ -270,7 +278,8 @@ class _Envelope:
         version = data.get("schema_version")
         if version != HUMAN_TASK_RECORD_SCHEMA_VERSION:
             raise HumanTaskRecordSchemaError(
-                f"unsupported human-task schema version {version!r}; expected {HUMAN_TASK_RECORD_SCHEMA_VERSION}"
+                f"unsupported human-task schema version {version!r}; "
+                f"expected {HUMAN_TASK_RECORD_SCHEMA_VERSION}"
             )
         workflow_id = _required_text(data, "workflow_id")
         tasks = _records_by_task_id(data, "tasks", HumanTask.from_dict)
@@ -280,7 +289,10 @@ class _Envelope:
         raw_events = data.get("lifecycle_events", [])
         if not isinstance(raw_events, list):
             raise HumanTaskRecordSchemaError("lifecycle_events must be a list")
-        events = [LifecycleEvent.from_dict(_as_mapping(item, "lifecycle event")) for item in raw_events]
+        events = [
+            LifecycleEvent.from_dict(_as_mapping(item, "lifecycle event"))
+            for item in raw_events
+        ]
         envelope = cls(workflow_id, tasks, assignments, waits, results, events)
         envelope.validate()
         return envelope
@@ -288,17 +300,25 @@ class _Envelope:
     def validate(self) -> None:
         for task_id, task in self.tasks.items():
             if task_id != task.id or task.workflow_id != self.workflow_id:
-                raise HumanTaskRecordSchemaError("task identity does not match its workflow envelope")
+                raise HumanTaskRecordSchemaError(
+                    "task identity does not match its workflow envelope"
+                )
             assignment = self.assignments.get(task_id)
             wait_state = self.wait_states.get(task_id)
             if assignment is None or assignment.task_id != task_id:
                 raise HumanTaskRecordSchemaError("every task requires a matching assignment")
-            if wait_state is None or wait_state.task_id != task_id or wait_state.workflow_id != self.workflow_id:
+            if (
+                wait_state is None
+                or wait_state.task_id != task_id
+                or wait_state.workflow_id != self.workflow_id
+            ):
                 raise HumanTaskRecordSchemaError("every task requires a matching wait state")
             result = self.results.get(task_id)
             if task.status is HumanTaskStatus.COMPLETED and result is None:
                 raise HumanTaskRecordSchemaError("completed task has no result")
-            if result is not None and (result.task_id != task_id or result.workflow_id != self.workflow_id):
+            if result is not None and (
+                result.task_id != task_id or result.workflow_id != self.workflow_id
+            ):
                 raise HumanTaskRecordSchemaError("result does not match its task/workflow")
 
 
@@ -381,19 +401,35 @@ class HumanTaskRecordStore:
         continuations: Mapping[str, str],
         assignee_type: str,
         assignee_id: Optional[str] = None,
+        capability_approval: Optional[Mapping[str, Any]] = None,
+        handoff_key: Optional[str] = None,
     ) -> HumanTask:
         with self.transaction():
             envelope = self._load_for_workflow(workflow_id, create=True)
-            handoff_key = _handoff_key(workflow_id, step, iteration, trigger, policy_id)
+            resolved_handoff_key = handoff_key or _handoff_key(
+                workflow_id, step, iteration, trigger, policy_id
+            )
             existing = next(
-                (task for task in envelope.tasks.values() if task.handoff_key == handoff_key), None
+                (
+                    task
+                    for task in envelope.tasks.values()
+                    if task.handoff_key == resolved_handoff_key
+                    and task.status is HumanTaskStatus.PENDING
+                ),
+                None,
             )
             if existing is not None:
                 return existing
             now = _now_iso()
+            task_id = str(uuid4())
+            capability_metadata = (
+                {**dict(capability_approval), "task_id": task_id}
+                if capability_approval is not None
+                else None
+            )
             task = HumanTask(
-                id=str(uuid4()),
-                handoff_key=handoff_key,
+                id=task_id,
+                handoff_key=resolved_handoff_key,
                 workflow_id=workflow_id,
                 step=_text(step, "step"),
                 iteration=_positive(iteration, "iteration"),
@@ -404,6 +440,7 @@ class HumanTaskRecordStore:
                 continuations=_string_mapping_value(continuations, "continuations"),
                 status=HumanTaskStatus.PENDING,
                 created_at=now,
+                capability_approval=capability_metadata,
             )
             envelope.tasks[task.id] = task
             envelope.assignments[task.id] = Assignment(
@@ -418,9 +455,94 @@ class HumanTaskRecordStore:
                 pause_reason=task.trigger,
                 created_at=now,
             )
-            self._append_event(envelope, "created", task_id=task.id, context={"handoff_key": handoff_key})
+            self._append_event(
+                envelope,
+                "created",
+                task_id=task.id,
+                context={"handoff_key": resolved_handoff_key},
+            )
             self._save(envelope)
             return task
+
+    def update_capability_approval(
+        self,
+        *,
+        workflow_id: str,
+        task_id: str,
+        metadata: Mapping[str, Any],
+        event_type: str,
+    ) -> HumanTask:
+        """Atomically replace capability-specific state and append audit evidence."""
+        with self.transaction():
+            envelope = self._load_for_workflow(workflow_id, create=False)
+            task = self._task(envelope, task_id)
+            if task.capability_approval is None:
+                raise HumanTaskCorrelationError(f"task {task.id} is not a capability approval")
+            updated = replace(task, capability_approval=dict(metadata))
+            envelope.tasks[task.id] = updated
+            self._append_event(
+                envelope,
+                _text(event_type, "event_type"),
+                task_id=task.id,
+                context={
+                    "request_fingerprint": metadata.get("fingerprint"),
+                    "state": metadata.get("state"),
+                },
+            )
+            self._save(envelope)
+            return updated
+
+    def transition_capability_approval(
+        self,
+        *,
+        workflow_id: str,
+        task_id: str,
+        metadata: Mapping[str, Any],
+        event_type: str,
+        terminal_status: Optional[HumanTaskStatus] = None,
+        result_payload: Optional[Mapping[str, Any]] = None,
+        result_source: str = "capability_approval",
+    ) -> HumanTask:
+        """Persist capability state and its wait/result boundary in one transaction."""
+        with self.transaction():
+            envelope = self._load_for_workflow(workflow_id, create=False)
+            task = self._task(envelope, task_id)
+            if task.capability_approval is None:
+                raise HumanTaskCorrelationError(f"task {task.id} is not a capability approval")
+            now = _now_iso()
+            updates: dict[str, Any] = {"capability_approval": dict(metadata)}
+            if terminal_status is HumanTaskStatus.COMPLETED:
+                updates["status"] = HumanTaskStatus.COMPLETED
+                updates["completed_at"] = task.completed_at or now
+            elif terminal_status is HumanTaskStatus.CANCELLED:
+                updates["status"] = HumanTaskStatus.CANCELLED
+                updates["cancelled_at"] = task.cancelled_at or now
+            updated = replace(task, **updates)
+            envelope.tasks[task.id] = updated
+            if terminal_status is not None:
+                wait = envelope.wait_states[task.id]
+                if wait.released_at is None:
+                    envelope.wait_states[task.id] = replace(wait, released_at=now)
+            if result_payload is not None and task.id not in envelope.results:
+                envelope.results[task.id] = TaskResult(
+                    id=str(uuid4()),
+                    task_id=task.id,
+                    workflow_id=workflow_id,
+                    payload=dict(result_payload),
+                    source=_text(result_source, "result_source"),
+                    completed_at=now,
+                )
+            self._append_event(
+                envelope,
+                _text(event_type, "event_type"),
+                task_id=task.id,
+                context={
+                    "request_fingerprint": metadata.get("fingerprint"),
+                    "state": metadata.get("state"),
+                },
+            )
+            self._save(envelope)
+            return updated
 
     def complete(
         self,
@@ -451,9 +573,13 @@ class HumanTaskRecordStore:
                 completed_at=now,
             )
             envelope.results[task.id] = result
-            envelope.tasks[task.id] = replace(task, status=HumanTaskStatus.COMPLETED, completed_at=now)
+            envelope.tasks[task.id] = replace(
+                task, status=HumanTaskStatus.COMPLETED, completed_at=now
+            )
             envelope.wait_states[task.id] = replace(wait_state, released_at=now)
-            self._append_event(envelope, "completed", task_id=task.id, context={"result_id": result.id})
+            self._append_event(
+                envelope, "completed", task_id=task.id, context={"result_id": result.id}
+            )
             self._save(envelope)
             return result
 
@@ -507,7 +633,7 @@ class HumanTaskRecordStore:
             self._save(envelope)
 
     @contextmanager
-    def transaction(self):
+    def transaction(self) -> Iterator[None]:
         """Serialize a durable record transition across threads and POSIX processes."""
         if self._transaction_depth:
             self._transaction_depth += 1
@@ -616,7 +742,10 @@ def _string_mapping(data: Mapping[str, Any], field_name: str) -> dict[str, str]:
 
 
 def _string_mapping_value(value: Mapping[str, Any], field_name: str) -> dict[str, str]:
-    return {_text(str(key), field_name): _text(str(item), field_name) for key, item in value.items()}
+    return {
+        _text(str(key), field_name): _text(str(item), field_name)
+        for key, item in value.items()
+    }
 
 
 def _required_text(data: Mapping[str, Any], field_name: str) -> str:
