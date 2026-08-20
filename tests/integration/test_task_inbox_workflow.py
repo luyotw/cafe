@@ -122,9 +122,7 @@ def test_unsafe_completion_stops_without_workflow_progress(
     )
     payload = '{"decision":"unknown"}' if case == "invalid" else '{"decision":"confirm"}'
 
-    result = runner.invoke(
-        app, ["task", "complete", task.id, "--result", payload, "--json"]
-    )
+    result = runner.invoke(app, ["task", "complete", task.id, "--result", payload, "--json"])
 
     assert result.exit_code != 0
     assert json.loads(result.stdout)["error"]["code"] in {
@@ -178,9 +176,7 @@ def test_resume_failure_reports_committed_completion_and_direct_recovery(
     def unavailable_resume(_issue: str, _playbook: str) -> None:
         raise RuntimeError("runner unavailable")
 
-    monkeypatch.setattr(
-        "cafe.ui.commands.tasks._resume_issue_workflow", unavailable_resume
-    )
+    monkeypatch.setattr("cafe.ui.commands.tasks._resume_issue_workflow", unavailable_resume)
 
     result = runner.invoke(
         app,
@@ -205,3 +201,53 @@ def test_resume_failure_reports_committed_completion_and_direct_recovery(
     assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
     assert len(records.results()) == 1
     assert BlackboardStore(issue_dir).load_or_create("spec").current_step == "plan"
+
+
+def test_capability_task_inspection_exposes_exact_approval_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test List I6: inbox inspection exposes the stable capability boundary."""
+    from cafe.core.capabilities import CapabilityManifest, ExecutionRequest
+    from cafe.core.capability_approvals import CapabilityApprovalService
+
+    monkeypatch.chdir(tmp_path)
+    issue_dir, _ordinary = _pending_issue(tmp_path / ".cafe", "capability-inspect")
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    manifest = CapabilityManifest.model_validate(
+        {
+            "id": "demo.inspect",
+            "version": 1,
+            "implementation": "open_current_pr",
+            "arguments": {"required": [], "properties": {}},
+            "outputs": {"required": [], "properties": {}},
+            "effects": {"writes": [], "network_destinations": [], "browser_open": []},
+            "credentials": [],
+            "permissions": {},
+            "idempotency": "unsafe",
+            "risk": "high",
+            "approval": "required",
+            "policy": "allow",
+        }
+    )
+    request = ExecutionRequest.model_validate(
+        {
+            "capability": manifest.id,
+            "args": {},
+            "effects": {"writes": [], "network_destinations": [], "browser_open": []},
+            "credentials": [],
+            "permissions": {},
+        }
+    )
+    task = CapabilityApprovalService(
+        issue_dir=issue_dir,
+        workflow_id=state.workflow_id,
+        step="spec",
+        iteration=1,
+    ).request_approval(request=request, manifest=manifest)
+
+    result = runner.invoke(app, ["task", "inspect", task.id, "--json"])
+    approval = json.loads(result.stdout)["data"]["task"]["capability_approval"]
+
+    assert approval["state"] == "pending"
+    assert approval["capability"] == manifest.id
+    assert approval["request"]["capability"] == manifest.id

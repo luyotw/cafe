@@ -11,7 +11,8 @@ from typer.testing import CliRunner
 
 import cafe.core.capabilities as capability_module
 from cafe.core.blackboard import BlackboardStore
-from cafe.core.capabilities import CapabilityManifest
+from cafe.core.capabilities import CapabilityManifest, ExecutionRequest
+from cafe.core.capability_approvals import CapabilityApprovalService
 from cafe.core.hooks.native import GitHubPRCreator
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.status_codes import PhaseStatusCode
@@ -152,9 +153,6 @@ def test_malformed_and_mismatched_cli_decisions_leave_request_blocked(
     iteration_dir.mkdir(parents=True)
     (issue_dir / "issue.yaml").write_text("playbook: default\n", encoding="utf-8")
     state = BlackboardStore(issue_dir).load_or_create("develop", playbook_id="default")
-    from cafe.core.capabilities import ExecutionRequest
-    from cafe.core.capability_approvals import CapabilityApprovalService
-
     service = CapabilityApprovalService(
         issue_dir=issue_dir,
         workflow_id=state.workflow_id,
@@ -189,3 +187,99 @@ def test_malformed_and_mismatched_cli_decisions_leave_request_blocked(
     assert mismatched.exit_code != 0
     assert service.inspect(task.id)["state"] == "pending"
     assert service.store.get_wait_state(task.id).released_at is None
+
+
+@pytest.mark.parametrize("outcome", ["deny", "cancel", "expire"])
+def test_denial_cancellation_and_expiry_are_durable_without_mutation(
+    tmp_path: Path, outcome: str
+) -> None:
+    """Test List integration 2: terminal decisions release wait without mutation."""
+    manifest = _manifest()
+    service = CapabilityApprovalService(
+        issue_dir=tmp_path / outcome,
+        workflow_id="workflow-one",
+        step="develop",
+        iteration=1,
+    )
+    task = service.request_approval(
+        request=ExecutionRequest.model_validate(_request()),
+        manifest=manifest,
+        expires_at="2000-01-01T00:00:00+00:00" if outcome == "expire" else None,
+    )
+
+    if outcome == "deny":
+        approval = service.inspect(task.id)
+        state = service.record_decision(
+            task.id,
+            {
+                "decision": "deny",
+                "workflow_id": "workflow-one",
+                "task_id": task.id,
+                "request_fingerprint": approval["fingerprint"],
+            },
+        )
+    elif outcome == "cancel":
+        state = service.cancel(task.id, reason="operator cancelled")
+    else:
+        state = service.inspect(task.id)
+
+    assert state["state"] in {"denied", "cancelled", "expired"}
+    assert service.store.get_wait_state(task.id).released_at is not None
+
+
+def test_restrictive_policy_and_tampered_resume_remain_non_executed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test List integration 3/4: changed request or policy wins over approval."""
+    manifest = _manifest()
+    monkeypatch.setattr(
+        capability_module,
+        "HOST_CAPABILITY_ADAPTERS",
+        {"open_current_pr": lambda **_kwargs: (_ for _ in ()).throw(AssertionError())},
+    )
+
+    def approved_service(name: str) -> tuple[CapabilityApprovalService, str]:
+        service = CapabilityApprovalService(
+            issue_dir=tmp_path / name,
+            workflow_id="workflow-one",
+            step="develop",
+            iteration=1,
+        )
+        task = service.request_approval(
+            request=ExecutionRequest.model_validate(_request()), manifest=manifest
+        )
+        current = service.inspect(task.id)
+        service.record_decision(
+            task.id,
+            {
+                "decision": "approve",
+                "workflow_id": "workflow-one",
+                "task_id": task.id,
+                "request_fingerprint": current["fingerprint"],
+            },
+        )
+        return service, task.id
+
+    policy_service, policy_task_id = approved_service("policy")
+    restrictive = manifest.model_copy(update={"policy": "deny"})
+    policy_receipt = policy_service.resume(
+        policy_task_id,
+        request=ExecutionRequest.model_validate(_request()),
+        registry={manifest.id: restrictive},
+        repo_root=tmp_path,
+        output_file=tmp_path / "output.md",
+    )
+    tamper_service, tamper_task_id = approved_service("tamper")
+    changed = {**_request(), "args": {"target_ref": "replacement"}}
+    tamper_receipt = tamper_service.resume(
+        tamper_task_id,
+        request=ExecutionRequest.model_validate(changed),
+        registry={manifest.id: manifest},
+        repo_root=tmp_path,
+        output_file=tmp_path / "output.md",
+    )
+
+    assert policy_receipt["outcome"] == "policy_rejected"
+    assert tamper_receipt["outcome"] == "tampered"
+    assert not policy_receipt["executed"]
+    assert not tamper_receipt["executed"]
