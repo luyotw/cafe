@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import json
-import sys
 import uuid
-import webbrowser
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -1469,18 +1467,41 @@ class PRLinkOpener(NoOpHook):
         ):
             return HookResult()
 
+        from cafe.core.blackboard import BlackboardStore
+        from cafe.core.capabilities import (
+            CAPABILITY_BROWSER_OPEN_ID,
+            CapabilityRegistryError,
+            default_capability_definition_dirs,
+            load_capability_registry,
+            run_capability_request,
+        )
+
+        repo_root = GitHubPRCreator._resolve_repo_root(phase) if phase is not None else Path.cwd()
         try:
-            pr_url = GitHubOps().get_current_pr_url()
-        except GitHubError:
-            return HookResult()
-        except Exception:
+            registry = load_capability_registry(default_capability_definition_dirs(repo_root))
+            run = run_capability_request(
+                repo_root=repo_root,
+                registry=registry,
+                capability_request={
+                    "capability": CAPABILITY_BROWSER_OPEN_ID,
+                    "args": {"target_ref": "current_pr"},
+                    "effects": {
+                        "browser_open": ["current_pr"],
+                        "writes": [],
+                        "network_destinations": [],
+                    },
+                    "credentials": [],
+                    "permissions": {},
+                },
+                output_file=Path(kwargs.get("output_file") or repo_root),
+            )
+        except (CapabilityRegistryError, OSError, ValueError):
             return HookResult()
 
-        if sys.stdin.isatty():
-            try:
-                webbrowser.open(pr_url)
-            except Exception:
-                return HookResult()
-            return HookResult(events=[{"type": "pr_link_opened", "url": pr_url}])
-
+        blackboard_state = kwargs.get("blackboard_state")
+        issue_dir = getattr(phase, "issue_dir", None)
+        if isinstance(blackboard_state, BlackboardState) and isinstance(issue_dir, Path):
+            BlackboardStore(issue_dir).append_capability_receipt(blackboard_state, run.receipt)
+        if run.receipt.get("success") and run.pr_synced_event is not None:
+            return HookResult(events=[run.pr_synced_event])
         return HookResult()

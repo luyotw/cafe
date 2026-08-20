@@ -5,18 +5,23 @@ from __future__ import annotations
 import json
 import subprocess
 import hashlib
+import re
+import sys
 import uuid
+import webbrowser
 from enum import Enum
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
+from urllib.parse import urlparse
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from cafe.skills.loader import SkillLoader
+from cafe.utils.github import GitHubOps
 
 CAPABILITY_PR_PUBLISH_ID = "cafe.pr.publish"
 CAPABILITY_BROWSER_OPEN_ID = "cafe.browser.open"
@@ -818,13 +823,82 @@ def _sync_pr_adapter(
     return dict(run.receipt.get("outputs") or {}), run.pr_synced_event
 
 
-def _unimplemented_browser_adapter(**_kwargs: Any) -> tuple[Dict[str, Any], None]:
-    raise CapabilityExecutionError(VALIDATION_ERROR, "unsupported_implementation")
+def _current_repo_slug(repo_root: Path) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "config", "--get", "remote.origin.url"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise CapabilityExecutionError(VALIDATION_ERROR, "repo_resolution_failed") from exc
+    if result.returncode != 0:
+        raise CapabilityExecutionError(VALIDATION_ERROR, "repo_resolution_failed")
+    remote = str(result.stdout or "").strip()
+    match = re.fullmatch(
+        r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([^/]+/[^/]+?)(?:\.git)?",
+        remote,
+    )
+    if match is None:
+        raise CapabilityExecutionError(VALIDATION_ERROR, "repo_resolution_failed")
+    return match.group(1)
+
+
+def _canonical_current_pr_url(url: str, repo_slug: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.netloc != "github.com":
+        return False
+    expected = repo_slug.split("/")
+    parts = [part for part in parsed.path.split("/") if part]
+    return (
+        len(expected) == 2
+        and len(parts) == 4
+        and parts[:2] == expected
+        and parts[2] == "pull"
+        and parts[3].isdigit()
+        and not parsed.params
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def _open_current_pr_adapter(
+    *,
+    repo_root: Path,
+    request: ExecutionRequest,
+    manifest: CapabilityManifest,
+    output_file: Path,
+    timeout_sec: float,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    del manifest, output_file, timeout_sec
+    if request.args != {"target_ref": "current_pr"}:
+        raise CapabilityExecutionError(VALIDATION_ERROR, "target_not_allowed")
+    try:
+        resolved_url = GitHubOps().get_current_pr_url()
+        repo_slug = _current_repo_slug(repo_root)
+    except Exception as exc:
+        if isinstance(exc, CapabilityExecutionError):
+            raise
+        raise CapabilityExecutionError(VALIDATION_ERROR, "target_resolution_failed") from exc
+    if not _canonical_current_pr_url(resolved_url, repo_slug):
+        raise CapabilityExecutionError(VALIDATION_ERROR, "resolved_target_not_allowed")
+    if not sys.stdin.isatty():
+        return {"opened": False}, None
+    try:
+        webbrowser.open(resolved_url)
+    except Exception as exc:
+        raise CapabilityExecutionError("adapter_error", "browser_open_failed") from exc
+    return {"opened": True, "url": resolved_url}, {
+        "type": "pr_link_opened",
+        "url": resolved_url,
+    }
 
 
 HOST_CAPABILITY_ADAPTERS: Mapping[str, Any] = {
     "sync_pr": _sync_pr_adapter,
-    "open_current_pr": _unimplemented_browser_adapter,
+    "open_current_pr": _open_current_pr_adapter,
 }
 
 

@@ -1581,9 +1581,15 @@ def test_generic_workflow_step_writes_pr_publish_request_contract(
     }
     assert publish_request["permissions"]["network"] == ["github.com", "api.github.com"]
     assert publish_request["permissions"]["writes"] == [".git", ".cafe/issues/issue-pr-contract"]
+    assert publish_request["effects"] == {
+        "browser_open": [],
+        "network_destinations": ["github.com", "api.github.com"],
+        "writes": [".git", ".cafe/issues/issue-pr-contract"],
+    }
+    assert publish_request["credentials"] == ["gh"]
 
 
-def test_generic_workflow_step_writes_declared_capability_request_for_non_pr_step(
+def test_generic_workflow_step_writes_exact_current_pr_browser_request(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1598,7 +1604,7 @@ def test_generic_workflow_step_writes_declared_capability_request_for_non_pr_ste
                 "role": "developer",
                 "output_artifact": "code",
                 "allowed_tools": ["Read"],
-                "capability_requests": ["demo.unknown"],
+                "capability_requests": ["cafe.browser.open"],
                 "valid_intents": ["confirmed"],
                 "on": {"await_agent": "_done"},
             }
@@ -1632,8 +1638,14 @@ def test_generic_workflow_step_writes_declared_capability_request_for_non_pr_ste
         )
     )
     assert capability_request == {
-        "capability": "demo.unknown",
-        "args": {},
+        "capability": "cafe.browser.open",
+        "args": {"target_ref": "current_pr"},
+        "effects": {
+            "browser_open": ["current_pr"],
+            "writes": [],
+            "network_destinations": [],
+        },
+        "credentials": [],
         "permissions": {},
     }
     assert not (issue_dir / "publish" / "iteration_001" / "publish_request.json").exists()
@@ -1689,8 +1701,28 @@ def test_generic_workflow_step_writes_multi_capability_request_contract(
     )
     assert capability_request == {
         "requests": [
-            {"capability": "demo.first", "args": {}, "permissions": {}},
-            {"capability": "demo.second", "args": {}, "permissions": {}},
+            {
+                "capability": "demo.first",
+                "args": {},
+                "effects": {
+                    "browser_open": [],
+                    "writes": [],
+                    "network_destinations": [],
+                },
+                "credentials": [],
+                "permissions": {},
+            },
+            {
+                "capability": "demo.second",
+                "args": {},
+                "effects": {
+                    "browser_open": [],
+                    "writes": [],
+                    "network_destinations": [],
+                },
+                "credentials": [],
+                "permissions": {},
+            },
         ]
     }
     assert not (issue_dir / "publish" / "iteration_001" / "publish_request.json").exists()

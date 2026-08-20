@@ -2011,10 +2011,29 @@ class GenericWorkflowStepExecutor(Phase):
         output_file: Path,
         capability_id: str,
     ) -> Dict[str, Any]:
+        if capability_id == "cafe.browser.open":
+            return {
+                "capability": capability_id,
+                "args": {"target_ref": "current_pr"},
+                "effects": {
+                    "browser_open": ["current_pr"],
+                    "writes": [],
+                    "network_destinations": [],
+                },
+                "credentials": [],
+                "permissions": {},
+            }
+
         if capability_id != CAPABILITY_PR_PUBLISH_ID:
             return {
                 "capability": capability_id,
                 "args": {},
+                "effects": {
+                    "browser_open": [],
+                    "writes": [],
+                    "network_destinations": [],
+                },
+                "credentials": [],
                 "permissions": {},
             }
 
@@ -2026,6 +2045,15 @@ class GenericWorkflowStepExecutor(Phase):
                 "output": self._repo_relative_path(output_file),
                 "base": resolved_base,
             },
+            "effects": {
+                "browser_open": [],
+                "network_destinations": ["github.com", "api.github.com"],
+                "writes": [
+                    ".git",
+                    self._repo_relative_path(self.issue_dir),
+                ],
+            },
+            "credentials": ["gh"],
             "permissions": {
                 "network": ["github.com", "api.github.com"],
                 "writes": [

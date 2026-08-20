@@ -911,9 +911,10 @@ def test_pr_link_opener_opens_current_pr_url_when_confirmed() -> None:
     hook = PRLinkOpener()
 
     with (
-        patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
-        patch("cafe.core.hooks.native.webbrowser.open") as mock_open,
-        patch("cafe.core.hooks.native.sys.stdin.isatty", return_value=True),
+        patch("cafe.core.capabilities.GitHubOps") as mock_github_ops,
+        patch("cafe.core.capabilities.webbrowser.open") as mock_open,
+        patch("cafe.core.capabilities.sys.stdin.isatty", return_value=True),
+        patch("cafe.core.capabilities._current_repo_slug", return_value="test/repo"),
     ):
         mock_github_ops.return_value.get_current_pr_url.return_value = (
             "https://github.com/test/repo/pull/123"
@@ -933,9 +934,10 @@ def test_pr_link_opener_skips_browser_in_non_interactive() -> None:
     hook = PRLinkOpener()
 
     with (
-        patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
-        patch("cafe.core.hooks.native.webbrowser.open") as mock_open,
-        patch("cafe.core.hooks.native.sys.stdin.isatty", return_value=False),
+        patch("cafe.core.capabilities.GitHubOps") as mock_github_ops,
+        patch("cafe.core.capabilities.webbrowser.open") as mock_open,
+        patch("cafe.core.capabilities.sys.stdin.isatty", return_value=False),
+        patch("cafe.core.capabilities._current_repo_slug", return_value="test/repo"),
     ):
         mock_github_ops.return_value.get_current_pr_url.return_value = (
             "https://github.com/test/repo/pull/123"
@@ -953,8 +955,9 @@ def test_pr_link_opener_noops_when_pr_url_unavailable() -> None:
     hook = PRLinkOpener()
 
     with (
-        patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
-        patch("cafe.core.hooks.native.webbrowser.open") as mock_open,
+        patch("cafe.core.capabilities.GitHubOps") as mock_github_ops,
+        patch("cafe.core.capabilities.webbrowser.open") as mock_open,
+        patch("cafe.core.capabilities._current_repo_slug", return_value="test/repo"),
     ):
         mock_github_ops.return_value.get_current_pr_url.side_effect = Exception("no pr")
 
@@ -970,11 +973,12 @@ def test_pr_link_opener_noops_when_browser_open_fails() -> None:
     hook = PRLinkOpener()
 
     with (
-        patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
+        patch("cafe.core.capabilities.GitHubOps") as mock_github_ops,
         patch(
-            "cafe.core.hooks.native.webbrowser.open", side_effect=Exception("blocked")
+            "cafe.core.capabilities.webbrowser.open", side_effect=Exception("blocked")
         ) as mock_open,
-        patch("cafe.core.hooks.native.sys.stdin.isatty", return_value=True),
+        patch("cafe.core.capabilities.sys.stdin.isatty", return_value=True),
+        patch("cafe.core.capabilities._current_repo_slug", return_value="test/repo"),
     ):
         mock_github_ops.return_value.get_current_pr_url.return_value = (
             "https://github.com/test/repo/pull/123"
@@ -1424,10 +1428,10 @@ def test_github_pr_creator_publish_output_fails_safe_without_explicit_true(
     assert result.events == []
 
 
-def test_github_pr_creator_publish_ignores_untrusted_script_field_in_request(
+def test_github_pr_creator_publish_rejects_untrusted_script_field_before_dispatch(
     tmp_path: Path,
 ) -> None:
-    """Registry-resolved script is used; agent-supplied script path must not change dispatch."""
+    """Agent-supplied executable authority invalidates the request."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     _enable_remote_pr(issue_dir)
     phase_dir = issue_dir / "pr"
@@ -1462,7 +1466,7 @@ def test_github_pr_creator_publish_ignores_untrusted_script_field_in_request(
 
     hook = GitHubPRCreator()
     with patch("cafe.core.capabilities.subprocess.run", return_value=completed) as mock_run:
-        hook.run(
+        result = hook.run(
             stage="publish_output",
             phase=phase,
             step_name="pr",
@@ -1472,8 +1476,10 @@ def test_github_pr_creator_publish_ignores_untrusted_script_field_in_request(
             status_code=PhaseStatusCode.CONFIRMED,
         )
 
-    cmd = mock_run.call_args.args[0]
-    assert cmd[1] == str(hook._resolve_sync_script(tmp_path))
+    mock_run.assert_not_called()
+    assert result.events[-1]["type"] == "capability_receipt"
+    assert result.events[-1]["success"] is False
+    assert result.events[-1]["code"] == "malformed_request"
 
 
 def test_pr_comment_poster_posts_todo_comment_only_when_confirmed_and_complete(

@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 from cafe.core.capabilities import (
+    CAPABILITY_BROWSER_OPEN_ID,
     CAPABILITY_PR_PUBLISH_ID,
     CapabilityManifest,
     CapabilityRegistryError,
@@ -284,6 +285,80 @@ def test_enriched_blackboard_receipt_remains_backward_readable(tmp_path: Path) -
     assert loaded.capability_receipts[-2:] == [enriched, {
         "capability": "legacy", "success": True, "correlation_id": "old"
     }]
+
+
+def test_current_pr_browser_adapter_opens_only_resolved_repository_pr(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import cafe.core.capabilities as cap_mod
+
+    registry = load_capability_registry([cap_mod._package_capabilities_dir()])
+    monkeypatch.setattr(cap_mod.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(
+        cap_mod.GitHubOps,
+        "get_current_pr_url",
+        lambda _self: "https://github.com/acme/widgets/pull/42",
+    )
+    opened: list[str] = []
+    monkeypatch.setattr(cap_mod.webbrowser, "open", opened.append)
+    monkeypatch.setattr(
+        cap_mod,
+        "_current_repo_slug",
+        lambda _repo_root: "acme/widgets",
+    )
+
+    run = run_capability_request(
+        repo_root=tmp_path,
+        registry=registry,
+        capability_request={
+            "capability": CAPABILITY_BROWSER_OPEN_ID,
+            "args": {"target_ref": "current_pr"},
+            "effects": {
+                "browser_open": ["current_pr"],
+                "writes": [],
+                "network_destinations": [],
+            },
+            "credentials": [],
+            "permissions": {},
+        },
+        output_file=tmp_path / "output.md",
+    )
+
+    assert run.receipt["success"] is True
+    assert opened == ["https://github.com/acme/widgets/pull/42"]
+
+
+@pytest.mark.parametrize(
+    "resolved_url",
+    [
+        "http://github.com/acme/widgets/pull/42",
+        "https://evil.test/acme/widgets/pull/42",
+        "https://github.com/acme/other/pull/42",
+        "https://github.com/acme/widgets/issues/42",
+        "https://github.com/acme/widgets/pull/not-a-number",
+    ],
+)
+def test_current_pr_browser_adapter_rejects_noncanonical_resolution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resolved_url: str
+) -> None:
+    import cafe.core.capabilities as cap_mod
+
+    registry = load_capability_registry([cap_mod._package_capabilities_dir()])
+    monkeypatch.setattr(cap_mod.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cap_mod.GitHubOps, "get_current_pr_url", lambda _self: resolved_url)
+    monkeypatch.setattr(cap_mod, "_current_repo_slug", lambda _repo_root: "acme/widgets")
+    opened: list[str] = []
+    monkeypatch.setattr(cap_mod.webbrowser, "open", opened.append)
+
+    run = run_capability_request(
+        repo_root=tmp_path,
+        registry=registry,
+        capability_request=_browser_request(capability=CAPABILITY_BROWSER_OPEN_ID),
+        output_file=tmp_path / "output.md",
+    )
+
+    assert run.receipt["success"] is False
+    assert opened == []
 
 
 def test_load_registry_duplicate_ids(tmp_path: Path) -> None:
