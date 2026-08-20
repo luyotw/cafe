@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
@@ -73,6 +74,7 @@ class CapabilityApprovalService:
         request: ExecutionRequest,
         manifest: CapabilityManifest,
         expires_at: Optional[str] = None,
+        correlation_id: Optional[str] = None,
     ) -> HumanTask:
         evaluation = evaluate_capability_request({manifest.id: manifest}, request.model_dump())
         if evaluation.decision is not PolicyDecision.REQUIRE_APPROVAL:
@@ -83,10 +85,12 @@ class CapabilityApprovalService:
         existing = self._find_request(fingerprint, _manifest_digest(manifest))
         if existing is not None:
             return existing
+        correlation_id = correlation_id or uuid.uuid4().hex[:20]
         snapshot = {
             "kind": CAPABILITY_APPROVAL_TRIGGER,
             "state": "pending",
             "workflow_id": self.workflow_id,
+            "correlation_id": correlation_id,
             "fingerprint": fingerprint,
             "request": _json(request),
             "manifest": _json(manifest),
@@ -122,6 +126,7 @@ class CapabilityApprovalService:
                     "workflow_id",
                     "task_id",
                     "request_fingerprint",
+                    "correlation_id",
                 ],
                 "decisions": ["approve", "deny"],
                 "request_fingerprint": fingerprint,
@@ -134,7 +139,13 @@ class CapabilityApprovalService:
             ),
         )
 
-    def _find_request(self, fingerprint: str, manifest_digest: str) -> Optional[HumanTask]:
+    def _find_request(
+        self,
+        fingerprint: str,
+        manifest_digest: Optional[str] = None,
+        *,
+        states: Optional[set[str]] = None,
+    ) -> Optional[HumanTask]:
         if not self.store.exists:
             return None
         matches = [
@@ -143,7 +154,12 @@ class CapabilityApprovalService:
             if task.workflow_id == self.workflow_id
             and task.capability_approval is not None
             and task.capability_approval.get("fingerprint") == fingerprint
-            and task.capability_approval.get("manifest_digest") == manifest_digest
+            and (
+                manifest_digest is None
+                or task.capability_approval.get("manifest_digest") == manifest_digest
+            )
+            and (states is not None or task.capability_approval.get("state") != "policy_rejected")
+            and (states is None or str(task.capability_approval.get("state")) in states)
         ]
         return max(matches, key=lambda task: task.created_at) if matches else None
 
@@ -172,8 +188,6 @@ class CapabilityApprovalService:
     def record_decision(self, task_id: str, payload: object) -> dict[str, Any]:
         with self.store.transaction():
             current = self.inspect(task_id)
-            if current["state"] != "pending":
-                return current
             if not isinstance(payload, Mapping):
                 raise CapabilityApprovalError("capability approval must be structured JSON")
             required = {
@@ -181,6 +195,7 @@ class CapabilityApprovalService:
                 "workflow_id",
                 "task_id",
                 "request_fingerprint",
+                "correlation_id",
             }
             if not required.issubset(payload):
                 raise CapabilityApprovalError("capability approval correlation is incomplete")
@@ -190,15 +205,19 @@ class CapabilityApprovalService:
                 payload.get("workflow_id") != self.workflow_id
                 or payload.get("task_id") != task_id
                 or payload.get("request_fingerprint") != current["fingerprint"]
+                or payload.get("correlation_id") != current["correlation_id"]
             ):
                 raise CapabilityApprovalError(
                     "capability approval does not match the exact request"
                 )
+            if current["state"] != "pending":
+                return current
             now = self._now().astimezone().isoformat()
             current["state"] = "approved" if payload["decision"] == "approve" else "denied"
             current["decision"] = {
                 "outcome": payload["decision"],
                 "source": "capability_approval",
+                "correlation_id": current["correlation_id"],
                 "recorded_at": now,
             }
             if current["state"] == "denied":
@@ -244,10 +263,48 @@ class CapabilityApprovalService:
         )
         return current
 
+    def terminalize_policy_failure(
+        self,
+        *,
+        request: ExecutionRequest,
+        reason_code: str,
+        evidence: Mapping[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """Consume an approved exact request when current policy is unavailable."""
+        with self.store.transaction():
+            task = self._find_request(
+                canonical_request_fingerprint(request),
+                states={"approved", "policy_rejected"},
+            )
+            if task is None:
+                return None
+            current = self.inspect(task.id)
+            if current["state"] == "policy_rejected":
+                receipt = current.get("receipt")
+                return dict(receipt) if isinstance(receipt, Mapping) else None
+            if current["state"] != "approved":
+                return None
+            current["revalidation"] = {
+                "outcome": "error",
+                "reason_code": reason_code,
+                "checked_at": self._now().astimezone().isoformat(),
+                **_json(evidence),
+            }
+            current["state"] = "policy_rejected"
+            return self._finish(
+                task.id,
+                current,
+                outcome="policy_rejected",
+                executed=False,
+                recovery="Restore a verifiable policy and create a new approval task.",
+                event_type="capability_policy_rejected",
+            )
+
     def resume(
         self,
         task_id: str,
         *,
+        correlation_id: str,
         request: ExecutionRequest,
         registry: Mapping[str, CapabilityManifest],
         repo_root: Path,
@@ -258,6 +315,7 @@ class CapabilityApprovalService:
         with self.store.transaction():
             return self._resume_locked(
                 task_id,
+                correlation_id=correlation_id,
                 request=request,
                 registry=registry,
                 repo_root=repo_root,
@@ -269,6 +327,7 @@ class CapabilityApprovalService:
         self,
         task_id: str,
         *,
+        correlation_id: str,
         request: ExecutionRequest,
         registry: Mapping[str, CapabilityManifest],
         repo_root: Path,
@@ -276,6 +335,8 @@ class CapabilityApprovalService:
         timeout_sec: float,
     ) -> dict[str, Any]:
         current = self.inspect(task_id)
+        if correlation_id != current["correlation_id"]:
+            raise CapabilityApprovalError("capability resume does not match the host request")
         if current["state"] in TERMINAL_STATES:
             receipt = current.get("receipt")
             if isinstance(receipt, Mapping):
@@ -369,6 +430,7 @@ class CapabilityApprovalService:
             evaluation=evaluation,
             output_file=output_file,
             timeout_sec=timeout_sec,
+            correlation_id=str(current["correlation_id"]),
         )
         succeeded = bool(run.receipt.get("success"))
         current["state"] = "succeeded" if succeeded else "failed"
@@ -471,6 +533,7 @@ class CapabilityApprovalService:
     ) -> dict[str, Any]:
         return {
             "workflow_id": self.workflow_id,
+            "correlation_id": current["correlation_id"],
             "task_id": task_id,
             "capability": current["capability"],
             "request_fingerprint": current["fingerprint"],

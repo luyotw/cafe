@@ -20,12 +20,35 @@ from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.human_tasks import (
     apply_capability_approval_payload,
+    apply_capability_cancellation,
     apply_human_task_payload,
     collect_human_task_payload,
 )
 
 task_app = typer.Typer(help="List, inspect, and complete durable repository tasks")
 console = Console()
+
+
+def _render_capability_approval(approval: dict[str, Any]) -> None:
+    """Render the exact reviewed effects without exposing credential values."""
+    effects = approval.get("effects")
+    effects = effects if isinstance(effects, dict) else {}
+    rows = (
+        ("Capability", approval.get("capability")),
+        ("Risk", approval.get("risk")),
+        ("Arguments", approval.get("argument_summary")),
+        ("Writes", effects.get("writes")),
+        ("Network destinations", effects.get("network_destinations")),
+        ("Credential names", approval.get("credentials")),
+        ("Permissions", approval.get("permissions")),
+        ("Expected outputs", approval.get("expected_outputs")),
+    )
+    table = Table(title="Capability approval: exact reviewed request")
+    table.add_column("Field")
+    table.add_column("Reviewed value")
+    for label, value in rows:
+        table.add_row(label, json.dumps(value, ensure_ascii=False, sort_keys=True))
+    console.print(table)
 
 
 def _envelope(
@@ -186,6 +209,8 @@ def inspect_task(
     console.print(f"Status: {detail.status}  Due: {detail.due_state}")
     console.print(f"Assignment: {detail.assignment['type']} / {detail.assignment['id'] or '-'}")
     console.print(f"Prompt: {detail.prompt}")
+    if detail.capability_approval is not None:
+        _render_capability_approval(detail.capability_approval)
     console.print("Expected result:")
     console.print_json(data=detail.expected_result)
     console.print("Continuations:")
@@ -210,12 +235,14 @@ def complete_task(
         if preflight.task.capability_approval is not None:
             approval = dict(preflight.task.capability_approval)
             if raw_payload is None:
+                _render_capability_approval(approval)
                 decision = typer.prompt("Capability decision (approve/deny)").strip().lower()
                 raw_payload = {
                     "decision": decision,
                     "workflow_id": preflight.workflow_id,
                     "task_id": task_id,
                     "request_fingerprint": approval["fingerprint"],
+                    "correlation_id": approval["correlation_id"],
                 }
             try:
                 blackboard = BlackboardStore(preflight.issue_dir).load_or_create(
@@ -349,4 +376,73 @@ def complete_task(
     console.print(
         f"[green]Completed[/green] task {task_id}; resumed issue {preflight.issue} "
         f"at {applied.target}."
+    )
+
+
+@task_app.command("cancel")
+def cancel_task(
+    task_id: str = typer.Argument(..., help="Stable capability task identifier"),
+    reason: str = typer.Option(..., "--reason", help="Why the capability request was cancelled"),
+    json_output: bool = typer.Option(False, "--json", help="Emit one JSON result object"),
+) -> None:
+    """Cancel one pending capability approval and resume its owning workflow."""
+    service = TaskInboxService(Path(".cafe"))
+    try:
+        preflight = service.preflight_completion(task_id)
+        if preflight.task.capability_approval is None:
+            raise TaskInboxError(
+                "invalid_task_type",
+                "Only capability approval tasks can be cancelled through this command.",
+                recovery="Complete the ordinary task with its declared response contract.",
+                task_id=task_id,
+                issue=preflight.issue,
+                workflow_id=preflight.workflow_id,
+            )
+        blackboard = BlackboardStore(preflight.issue_dir).load_or_create(
+            preflight.task.step, playbook_id=preflight.playbook_id
+        )
+        applied = apply_capability_cancellation(
+            issue_dir=preflight.issue_dir,
+            blackboard=blackboard,
+            task=preflight.task,
+            reason=reason,
+        )
+        if json_output:
+            with redirect_stdout(StringIO()):
+                _resume_issue_workflow(preflight.issue, preflight.playbook_id)
+        else:
+            _resume_issue_workflow(preflight.issue, preflight.playbook_id)
+        detail = service.inspect(task_id)
+    except TaskInboxError as exc:
+        _fail("cancel", exc, json_output)
+    except (CapabilityApprovalError, OSError, ValueError, RuntimeError, typer.Exit) as exc:
+        _fail(
+            "cancel",
+            TaskInboxError(
+                "workflow_unavailable",
+                f"The capability task could not be cancelled and resumed: {exc}",
+                recovery="Inspect the exact task state and retry cancellation if it is pending.",
+                task_id=task_id,
+            ),
+            json_output,
+        )
+    if json_output:
+        _emit_json(
+            _envelope(
+                "cancel",
+                data={
+                    "task": detail.to_dict(),
+                    "workflow": {
+                        "issue": preflight.issue,
+                        "id": preflight.workflow_id,
+                        "playbook": preflight.playbook_id,
+                        "continuation": applied.target,
+                    },
+                },
+            )
+        )
+        return
+    console.print(
+        f"[yellow]Cancelled[/yellow] capability task {task_id}; resumed issue "
+        f"{preflight.issue} at {applied.target}."
     )

@@ -224,6 +224,39 @@ def apply_capability_approval_payload(
     return HumanTaskApplication(target=task.step, policy=None)
 
 
+def apply_capability_cancellation(
+    *,
+    issue_dir: Path,
+    blackboard: Any,
+    task: HumanTask,
+    reason: str,
+) -> HumanTaskApplication:
+    """Cancel one exact capability task and release its owning workflow."""
+    service = CapabilityApprovalService(
+        issue_dir=issue_dir,
+        workflow_id=task.workflow_id,
+        step=task.step,
+        iteration=task.iteration,
+    )
+    service.cancel(task.id, reason=reason)
+    store = BlackboardStore(issue_dir)
+    store.update_handoff_contract(
+        blackboard,
+        from_step=task.step,
+        to_owner=HandoffOwner.AGENT,
+        to_step=task.step,
+        intent=HandoffIntent.AWAIT_AGENT,
+        source="command.capability_approval_cancel",
+    )
+    store.set_current_step(blackboard, task.step)
+    store.record_event(
+        blackboard,
+        "capability_approval_cancelled",
+        {"step": task.step, "task_id": task.id},
+    )
+    return HumanTaskApplication(target=task.step, policy=None)
+
+
 def apply_human_task_payload(
     *,
     issue_dir: Path,
@@ -414,9 +447,7 @@ def _apply_human_task_payload(
             )
             return HumanTaskApplication(target=None, policy=policy, rejection=continuation)
 
-    validated_completion = (
-        completion if isinstance(completion, HumanTaskCompletion) else None
-    )
+    validated_completion = completion if isinstance(completion, HumanTaskCompletion) else None
     if durable_result is None:
         assert validated_completion is not None
 
@@ -517,9 +548,7 @@ def _apply_human_task_payload(
                 record_store.complete(
                     workflow_id=blackboard.workflow_id,
                     task_id=durable_task.id,
-                    payload=_validated_completion_payload(
-                        validated_completion, continuation
-                    ),
+                    payload=_validated_completion_payload(validated_completion, continuation),
                     source=source,
                 )
             except HumanTaskCorrelationError as exc:

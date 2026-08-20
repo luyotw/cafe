@@ -205,9 +205,7 @@ class UserInputCollector(NoOpHook):
     def _get_previous_output_file(phase: Any, step_name: str) -> Optional[Path]:
         if getattr(phase, "iteration", 0) <= 1:
             return None
-        return Path(
-            phase._get_versioned_file_path(step_name, phase.iteration - 1, phase.phase_dir)
-        )
+        return Path(phase._get_versioned_file_path(step_name, phase.iteration - 1, phase.phase_dir))
 
     @staticmethod
     def _display_previous_output(
@@ -1141,6 +1139,7 @@ class GitHubPRCreator(NoOpHook):
             SCRIPT_EXIT_ERROR,
             TIMEOUT_ERROR,
             CapabilityRegistryError,
+            ExecutionRequest,
             PolicyDecision,
             PrPublishRun,
             _normalize_legacy_pr_request,
@@ -1230,6 +1229,33 @@ class GitHubPRCreator(NoOpHook):
         except CapabilityRegistryError as exc:
             rejection_events: list[dict[str, Any]] = []
             for request in requests:
+                policy_receipt: dict[str, Any] | None = None
+                if isinstance(issue_dir, Path) and isinstance(blackboard_state, BlackboardState):
+                    try:
+                        exact_request = ExecutionRequest.model_validate(
+                            _normalize_legacy_pr_request(request)
+                        )
+                    except (TypeError, ValueError):
+                        exact_request = None
+                    if exact_request is not None:
+                        service = CapabilityApprovalService(
+                            issue_dir=issue_dir,
+                            workflow_id=blackboard_state.workflow_id,
+                            step=step_name,
+                            iteration=int(getattr(phase, "iteration", 1)),
+                        )
+                        policy_receipt = service.terminalize_policy_failure(
+                            request=exact_request,
+                            reason_code="registry_load_error",
+                            evidence={
+                                "error_detail": str(exc),
+                                "registry_paths": [str(path) for path in definition_dirs],
+                            },
+                        )
+                if policy_receipt is not None:
+                    persist_receipt(policy_receipt)
+                    rejection_events.append(capability_receipt_hook_event(policy_receipt))
+                    continue
                 receipt = validation_rejection_receipt(
                     capability=str(request.get("capability") or fallback_capability),
                     code="registry_load_error",
@@ -1275,6 +1301,8 @@ class GitHubPRCreator(NoOpHook):
                 task = service.request_approval(
                     request=evaluation.request,
                     manifest=evaluation.manifest,
+                    expires_at=evaluation.request.expires_at,
+                    correlation_id=str(run.receipt["correlation_id"]),
                 )
                 approval = service.inspect(task.id)
                 if approval["state"] == "pending":
@@ -1284,11 +1312,13 @@ class GitHubPRCreator(NoOpHook):
                             "capability": evaluation.request.capability,
                             "task_id": task.id,
                             "request_fingerprint": evaluation.fingerprint,
+                            "correlation_id": approval["correlation_id"],
                         }
                     )
                     continue
                 receipt = service.resume(
                     task.id,
+                    correlation_id=str(approval["correlation_id"]),
                     request=evaluation.request,
                     registry=registry,
                     repo_root=repo_root,

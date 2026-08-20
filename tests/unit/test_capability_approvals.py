@@ -82,6 +82,7 @@ def _approve(service: CapabilityApprovalService, task_id: str) -> None:
             "workflow_id": "workflow-one",
             "task_id": task_id,
             "request_fingerprint": approval["fingerprint"],
+            "correlation_id": approval["correlation_id"],
         },
     )
 
@@ -89,10 +90,13 @@ def _approve(service: CapabilityApprovalService, task_id: str) -> None:
 def test_task_snapshots_exact_request_and_material_effects(tmp_path: Path) -> None:
     """Test List unit 1/8: task is capability-specific and exposes reviewed effects."""
     service = _service(tmp_path)
-    task = service.request_approval(request=_request(), manifest=_manifest())
+    task = service.request_approval(
+        request=_request(), manifest=_manifest(), correlation_id="host-request-one"
+    )
 
     approval = task.capability_approval
     assert approval is not None
+    assert approval["correlation_id"] == "host-request-one"
     assert approval["request"]["capability"] == "demo.mutate"
     assert approval["risk"] == "high"
     assert approval["effects"]["writes"] == ["artifact.json"]
@@ -143,12 +147,49 @@ def test_same_pending_request_deduplicates_but_changed_request_does_not(tmp_path
 def test_decision_requires_structured_exact_correlation(tmp_path: Path, payload: object) -> None:
     """Test List unit 3/8: generic consent and other approval domains fail closed."""
     service = _service(tmp_path)
-    task = service.request_approval(request=_request(), manifest=_manifest())
+    task = service.request_approval(
+        request=_request(), manifest=_manifest(), correlation_id="host-request-one"
+    )
 
     with pytest.raises(CapabilityApprovalError):
         service.record_decision(task.id, payload)
 
     assert service.inspect(task.id)["state"] == "pending"
+
+
+def test_decision_and_receipt_reject_mismatched_host_correlation(tmp_path: Path) -> None:
+    """Test List unit 3/7: approval remains bound to the originating host request."""
+    service = _service(tmp_path)
+    task = service.request_approval(
+        request=_request(), manifest=_manifest(), correlation_id="host-request-one"
+    )
+    approval = service.inspect(task.id)
+
+    with pytest.raises(CapabilityApprovalError):
+        service.record_decision(
+            task.id,
+            {
+                "decision": "approve",
+                "workflow_id": "workflow-one",
+                "task_id": task.id,
+                "request_fingerprint": approval["fingerprint"],
+                "correlation_id": "host-request-two",
+            },
+        )
+
+    assert service.inspect(task.id)["state"] == "pending"
+
+    _approve(service, task.id)
+    with pytest.raises(CapabilityApprovalError):
+        service.resume(
+            task.id,
+            correlation_id="host-request-two",
+            request=_request(),
+            registry={"demo.mutate": _manifest()},
+            repo_root=tmp_path,
+            output_file=tmp_path / "output.md",
+        )
+    assert service.inspect(task.id)["state"] == "approved"
 
 
 def test_denial_is_terminal_and_cannot_be_reopened(tmp_path: Path) -> None:
@@ -161,6 +202,7 @@ def test_denial_is_terminal_and_cannot_be_reopened(tmp_path: Path) -> None:
         "workflow_id": "workflow-one",
         "task_id": task.id,
         "request_fingerprint": fingerprint,
+        "correlation_id": task.capability_approval["correlation_id"],  # type: ignore[index]
     }
 
     denied = service.record_decision(task.id, payload)
@@ -231,6 +273,7 @@ def test_approved_request_revalidates_and_dispatches_at_most_once(
 
     first = service.resume(
         task.id,
+        correlation_id=service.inspect(task.id)["correlation_id"],
         request=_request(),
         registry={manifest.id: manifest},
         repo_root=tmp_path,
@@ -238,6 +281,7 @@ def test_approved_request_revalidates_and_dispatches_at_most_once(
     )
     repeated = service.resume(
         task.id,
+        correlation_id=service.inspect(task.id)["correlation_id"],
         request=_request(),
         registry={manifest.id: manifest},
         repo_root=tmp_path,
@@ -247,6 +291,7 @@ def test_approved_request_revalidates_and_dispatches_at_most_once(
     assert calls == ["called"]
     assert first["outcome"] == "succeeded"
     assert repeated == first
+    assert first["correlation_id"] == service.inspect(task.id)["correlation_id"]
     assert first["attempt"]["state"] == "finished"
 
 
@@ -310,6 +355,7 @@ def test_concurrent_resumes_cross_one_atomic_attempt_fence(
     def resume(service: CapabilityApprovalService) -> dict[str, object]:
         return service.resume(
             task.id,
+            correlation_id=service.inspect(task.id)["correlation_id"],
             request=_request(),
             registry={manifest.id: manifest},
             repo_root=tmp_path,
@@ -345,6 +391,7 @@ def test_policy_rejection_and_tampering_never_dispatch(
     restrictive = manifest.model_copy(update={"policy": "deny"})
     policy_receipt = service.resume(
         policy_task.id,
+        correlation_id=service.inspect(policy_task.id)["correlation_id"],
         request=_request(),
         registry={manifest.id: restrictive},
         repo_root=tmp_path,
@@ -357,6 +404,7 @@ def test_policy_rejection_and_tampering_never_dispatch(
     tampered = _request().model_copy(update={"args": {"target_ref": "other"}})
     tamper_receipt = tamper_service.resume(
         tamper_task.id,
+        correlation_id=tamper_service.inspect(tamper_task.id)["correlation_id"],
         request=tampered,
         registry={manifest.id: manifest},
         repo_root=tmp_path,
@@ -394,6 +442,7 @@ def test_restart_after_attempt_fence_becomes_uncertain_without_retry(
 
     receipt = service.resume(
         task.id,
+        correlation_id=service.inspect(task.id)["correlation_id"],
         request=_request(),
         registry={manifest.id: manifest},
         repo_root=tmp_path,
@@ -425,6 +474,7 @@ def test_failure_receipt_is_terminal_and_pre_fence_persistence_failure_is_safe(
 
     failed = failed_service.resume(
         failed_task.id,
+        correlation_id=failed_service.inspect(failed_task.id)["correlation_id"],
         request=_request(),
         registry={manifest.id: manifest},
         repo_root=tmp_path,
@@ -456,6 +506,7 @@ def test_failure_receipt_is_terminal_and_pre_fence_persistence_failure_is_safe(
     with pytest.raises(OSError, match="disk unavailable"):
         safe_service.resume(
             safe_task.id,
+            correlation_id=safe_service.inspect(safe_task.id)["correlation_id"],
             request=_request(),
             registry={manifest.id: manifest},
             repo_root=tmp_path,

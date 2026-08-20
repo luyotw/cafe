@@ -149,6 +149,7 @@ class ExecutionRequest(StrictCapabilityModel):
     effects: CapabilityEffects
     credentials: Tuple[str, ...]
     permissions: Mapping[str, Tuple[str, ...]]
+    expires_at: Optional[str] = None
 
     @field_validator("credentials", mode="before")
     @classmethod
