@@ -229,6 +229,22 @@ class BlackboardWorkflowRuntime:
         return False
 
     @staticmethod
+    def _pending_capability_approval(execution_result: Any) -> Optional[dict[str, Any]]:
+        events = getattr(execution_result, "events", None)
+        if not isinstance(events, list):
+            return None
+        return next(
+            (
+                event
+                for event in events
+                if isinstance(event, dict)
+                and event.get("type") == "capability_approval_pending"
+                and isinstance(event.get("task_id"), str)
+            ),
+            None,
+        )
+
+    @staticmethod
     def _step_declared_capability_ids(step_def: Dict) -> list[str]:
         raw = step_def.get("capability_requests") or []
         if not isinstance(raw, list):
@@ -273,7 +289,8 @@ class BlackboardWorkflowRuntime:
             f"[BATON ERROR] Your baton was rejected because field '{br.field}' has {value_msg}. "
             f"Valid values are: {br.valid_values}. "
             "Please rewrite next_step.txt with a correct structured baton. "
-            "Retry in baton-only mode: do not rewrite output.md, checklist.md, or questions.xml unless strictly required. "
+            "Retry in baton-only mode: do not rewrite output.md, checklist.md, or "
+            "questions.xml unless strictly required. "
             "If you are asking the user a question, use to_owner='user', "
             "to_step='user', and intent='need_clarification'. "
             "If your step omits safe defaults, you may keep status_code and source empty; "
@@ -300,11 +317,13 @@ class BlackboardWorkflowRuntime:
         )
         if contract.to_owner != HandoffOwner.AGENT:
             raise RuntimeError(
-                f"Baton owner mismatch before step '{current_step}': expected agent, got {contract.to_owner.value}"
+                f"Baton owner mismatch before step '{current_step}': expected agent, "
+                f"got {contract.to_owner.value}"
             )
         if contract.to_step != current_step:
             raise RuntimeError(
-                f"Baton target mismatch before step '{current_step}': baton points to '{contract.to_step}'"
+                f"Baton target mismatch before step '{current_step}': baton points to "
+                f"'{contract.to_step}'"
             )
 
     def _resolve_runtime_position_from_handoff(self) -> RuntimePositionResolution:
@@ -495,7 +514,7 @@ class BlackboardWorkflowRuntime:
         receipt = LongRunningOperationArtifact(
             operation_id=operation_id,
             state=state,
-            reason=reason,
+            reason=reason or "operation_result",
             exit_code=exit_code,
             created_at=current_operation.created_at,
             risk=current_operation.risk,
@@ -762,7 +781,8 @@ class BlackboardWorkflowRuntime:
         assignee_type = str(step_def.get("assignee_type", "agent"))
         if assignee_type != "agent":
             raise RuntimeError(
-                f"Step '{step_name}' has assignee_type={assignee_type}, which is not supported in v0.2. "
+                f"Step '{step_name}' has assignee_type={assignee_type}, which is not "
+                "supported in v0.2. "
                 "Use v0.3+ or change to assignee_type=agent."
             )
 
@@ -1980,6 +2000,7 @@ class BlackboardWorkflowRuntime:
                 missing.append("operation_schema_invalid")
 
         if operation is not None:
+            assert iteration_dir is not None
             if not self._operation_artifact_trusted(
                 current_step=current_step, iteration_dir=iteration_dir, artifact=operation
             ):
@@ -2625,6 +2646,34 @@ class BlackboardWorkflowRuntime:
                     execution_result=frame.execution_result,
                 )
                 if missing_capabilities:
+                    pending_approval = self._pending_capability_approval(frame.execution_result)
+                    if pending_approval is not None:
+                        self.blackboard_store.update_handoff_contract(
+                            self.blackboard,
+                            from_step=current_step,
+                            to_owner=HandoffOwner.USER,
+                            to_step="user",
+                            intent=HandoffIntent.MANUAL_HANDOFF,
+                            status_code="CAPABILITY_APPROVAL_PENDING",
+                            source="workflow.capability_approval",
+                        )
+                        self.blackboard_store.record_event(
+                            self.blackboard,
+                            "capability_approval_requested",
+                            {
+                                "step": current_step,
+                                "capability": pending_approval.get("capability"),
+                                "task_id": pending_approval["task_id"],
+                                "request_fingerprint": pending_approval.get("request_fingerprint"),
+                            },
+                        )
+                        self.blackboard_store.set_current_step(self.blackboard, "user")
+                        return PlaybookRunResult(
+                            final_step=current_step,
+                            final_status_code="CAPABILITY_APPROVAL_PENDING",
+                            completed=False,
+                            detail=str(pending_approval["task_id"]),
+                        )
                     self.blackboard_store.update_handoff_contract(
                         self.blackboard,
                         from_step=current_step,

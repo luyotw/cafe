@@ -80,6 +80,9 @@ class CapabilityApprovalService:
                 f"current policy does not require approval: {evaluation.reason_code}"
             )
         fingerprint = canonical_request_fingerprint(request)
+        existing = self._find_request(fingerprint, _manifest_digest(manifest))
+        if existing is not None:
+            return existing
         snapshot = {
             "kind": CAPABILITY_APPROVAL_TRIGGER,
             "state": "pending",
@@ -130,6 +133,19 @@ class CapabilityApprovalService:
                 f"capability:{self.workflow_id}:{self.step}:{request.capability}:{fingerprint}"
             ),
         )
+
+    def _find_request(self, fingerprint: str, manifest_digest: str) -> Optional[HumanTask]:
+        if not self.store.exists:
+            return None
+        matches = [
+            task
+            for task in self.store.tasks()
+            if task.workflow_id == self.workflow_id
+            and task.capability_approval is not None
+            and task.capability_approval.get("fingerprint") == fingerprint
+            and task.capability_approval.get("manifest_digest") == manifest_digest
+        ]
+        return max(matches, key=lambda task: task.created_at) if matches else None
 
     def inspect(self, task_id: str) -> dict[str, Any]:
         task = self.store.get_task(task_id)
@@ -426,12 +442,16 @@ class CapabilityApprovalService:
         return {
             "workflow_id": self.workflow_id,
             "task_id": task_id,
+            "capability": current["capability"],
             "request_fingerprint": current["fingerprint"],
             "request": current["request"],
             "approval": current.get("decision"),
             "revalidation": current.get("revalidation"),
             "attempt": current.get("attempt"),
             "outcome": outcome,
+            "success": outcome == "succeeded",
+            "category": None if outcome == "succeeded" else "capability_approval",
+            "code": None if outcome == "succeeded" else outcome,
             "executed": False,
             "recovery": recovery,
             "recorded_at": self._now().astimezone().isoformat(),

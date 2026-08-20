@@ -271,10 +271,11 @@ def test_policy_rejection_and_tampering_never_dispatch(
         output_file=tmp_path / "output.md",
     )
 
-    tamper_task = service.request_approval(request=_request(), manifest=manifest)
-    _approve(service, tamper_task.id)
+    tamper_service = _service(tmp_path / "tamper")
+    tamper_task = tamper_service.request_approval(request=_request(), manifest=manifest)
+    _approve(tamper_service, tamper_task.id)
     tampered = _request().model_copy(update={"args": {"target_ref": "other"}})
-    tamper_receipt = service.resume(
+    tamper_receipt = tamper_service.resume(
         tamper_task.id,
         request=tampered,
         registry={manifest.id: manifest},
