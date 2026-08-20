@@ -31,8 +31,7 @@ situation. Resolve every path relative to this `SKILL.md`.
 | Review or ship after the PR phase | `references/convergent_pr_review.md`; also read `references/strategic_context.md` |
 | Measure fresh-versus-resumed correction efficiency | `references/correction_ab_experiment.md` |
 
-If more than one situation applies, read every listed reference before acting.
-Do not preload unrelated references.
+If more than one situation applies, read every listed reference before acting; do not preload unrelated references.
 
 ## Core invariants
 
@@ -95,7 +94,6 @@ Do not preload unrelated references.
   replaced by process-only monitoring.
 
 ## Driver checklist
-
 ### Start or resume
 
 - [ ] Read the kickoff and strategic-context references.
@@ -129,7 +127,6 @@ Do not preload unrelated references.
   diagnosis reference.
 
 ### Complete
-
 - [ ] Confirm the terminal state is `Workflow completed ... next=done`.
 - [ ] Read the convergent PR review reference and finish its full review matrix.
 - [ ] Merge only after all blockers are resolved, close the linked issue, run

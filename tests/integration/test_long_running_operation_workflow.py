@@ -20,6 +20,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from cafe.agents.executor import AgentExecutionError
 from cafe.core.blackboard import (
     LongRunningOperationState,
@@ -49,6 +51,27 @@ _LOW_OPERATION_DECISION = {
     "stop_condition": "stop at the declared test boundary",
     "recovery": "inspect the same operation id",
 }
+
+
+@pytest.fixture(autouse=True)
+def _codex_sandbox_process_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provide a deterministic external sandbox CLI boundary for worker subprocesses."""
+    binary = tmp_path / "bin" / "codex"
+    binary.parent.mkdir()
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, sys\n"
+        "args = sys.argv[1:]\n"
+        "if not args or args.pop(0) != 'sandbox': raise SystemExit(2)\n"
+        "while args and args[0].startswith('--'):\n"
+        "    option = args.pop(0)\n"
+        "    if option in {'--sandbox-state-json', '--sandbox-state-readable-root'}: args.pop(0)\n"
+        "if not args: raise SystemExit(2)\n"
+        "os.execvp(args[0], args)\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    monkeypatch.setenv("PATH", f"{binary.parent}{os.pathsep}{os.environ.get('PATH', '')}")
 
 
 def _write_baton(issue_dir: Path, *, from_step: str, to_step: str) -> None:
