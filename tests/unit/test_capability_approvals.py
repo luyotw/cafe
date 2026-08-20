@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -271,6 +270,24 @@ def test_concurrent_resumes_cross_one_atomic_attempt_fence(
     active_lock = threading.Lock()
     overlapped = threading.Event()
     first_entered = threading.Event()
+    second_reached_transaction_boundary = threading.Event()
+    transaction_lock = threading.RLock()
+
+    class ObservedTransactionLock:
+        def __enter__(self) -> ObservedTransactionLock:
+            if first_entered.is_set():
+                second_reached_transaction_boundary.set()
+            transaction_lock.acquire()
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            transaction_lock.release()
+
+    monkeypatch.setattr(
+        first_service.store,
+        "_thread_lock_for",
+        lambda _file_path: ObservedTransactionLock(),
+    )
 
     def track_resume_overlap(task_id: str, **kwargs: object) -> dict[str, object]:
         nonlocal active
@@ -278,9 +295,10 @@ def test_concurrent_resumes_cross_one_atomic_attempt_fence(
             active += 1
             if active > 1:
                 overlapped.set()
+                second_reached_transaction_boundary.set()
             else:
                 first_entered.set()
-        time.sleep(0.1)
+        assert second_reached_transaction_boundary.wait(timeout=1)
         try:
             return original_resume_locked(task_id, **kwargs)  # type: ignore[arg-type]
         finally:
