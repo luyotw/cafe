@@ -634,7 +634,9 @@ def test_high_risk_explicit_stop_and_recovery_journey_preserves_policy(
         except ProcessLookupError:
             pass
 
-    deadline = time.time() + 2
+    # The monitor allows its child the full two-second graceful shutdown window
+    # before escalating to SIGKILL, so the observer must wait longer than that.
+    deadline = time.time() + 5
     while command_alive() and time.time() < deadline:
         time.sleep(0.02)
     try:
