@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import uuid
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -1136,7 +1134,6 @@ class GitHubPRCreator(NoOpHook):
             CAPABILITY_PR_PUBLISH_ID,
             SCRIPT_EXIT_ERROR,
             TIMEOUT_ERROR,
-            VALIDATION_ERROR,
             CapabilityRegistryError,
             capability_receipt_hook_event,
             default_capability_definition_dirs,
@@ -1180,33 +1177,53 @@ class GitHubPRCreator(NoOpHook):
             if isinstance(blackboard_state, BlackboardState) and isinstance(issue_dir, Path):
                 BlackboardStore(issue_dir).append_capability_receipt(blackboard_state, receipt)
 
+        request_file = (
+            capability_request_file
+            if isinstance(capability_request_file, Path)
+            else publish_request_file if isinstance(publish_request_file, Path) else None
+        )
         try:
             request_payload = self._load_publish_request(
-                publish_request_file=(
-                    capability_request_file
-                    if isinstance(capability_request_file, Path)
-                    else publish_request_file if isinstance(publish_request_file, Path) else None
-                ),
+                publish_request_file=request_file,
                 repo_root=repo_root,
             )
             requests = self._normalize_capability_requests(request_payload)
-        except RuntimeError:
+        except RuntimeError as exc:
+            rejected_value: Any = None
+            if isinstance(request_file, Path):
+                try:
+                    rejected_value = request_file.resolve().read_text(encoding="utf-8")
+                except OSError:
+                    pass
             receipt = validation_rejection_receipt(
                 capability=fallback_capability,
                 code="request_load_error",
+                rejected_value=rejected_value,
+                rejection_source={
+                    "kind": "request_artifact",
+                    "path": str(request_file.resolve()) if isinstance(request_file, Path) else None,
+                },
+                error_detail=str(exc),
             )
             persist_receipt(receipt)
             return HookResult(events=[capability_receipt_hook_event(receipt)])
 
+        definition_dirs = default_capability_definition_dirs(repo_root)
         try:
-            registry = load_capability_registry(default_capability_definition_dirs(repo_root))
-        except CapabilityRegistryError:
+            registry = load_capability_registry(definition_dirs)
+        except CapabilityRegistryError as exc:
             events: list[dict[str, Any]] = []
             for request in requests:
                 receipt = validation_rejection_receipt(
                     capability=str(request.get("capability") or fallback_capability),
                     code="registry_load_error",
                     raw_request=request,
+                    rejected_value=request,
+                    rejection_source={
+                        "kind": "capability_registry",
+                        "paths": [str(path) for path in definition_dirs],
+                    },
+                    error_detail=str(exc),
                 )
                 persist_receipt(receipt)
                 events.append(capability_receipt_hook_event(receipt))

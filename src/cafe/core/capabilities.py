@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import json
-import subprocess
 import hashlib
+import json
 import re
+import subprocess
 import sys
 import uuid
 import webbrowser
-from enum import Enum
-from datetime import datetime
 from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
@@ -57,6 +57,16 @@ class ValueSchema(StrictCapabilityModel):
     @classmethod
     def freeze_enum(cls, value: Any) -> Any:
         return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def enum_values_match_declared_type(self) -> "ValueSchema":
+        if self.enum is None:
+            return self
+        python_types = {"string": str, "integer": int, "boolean": bool}
+        expected = python_types[self.type]
+        if any(type(value) is not expected for value in self.enum):
+            raise ValueError("enum values must match the declared type")
+        return self
 
 
 class ObjectSchema(StrictCapabilityModel):
@@ -335,7 +345,7 @@ def load_capability_registry(
             try:
                 manifest = CapabilityManifest.model_validate(data)
             except ValidationError as exc:
-                raise CapabilityRegistryError(f"Invalid capability manifest {path}") from exc
+                raise CapabilityRegistryError(f"Invalid capability manifest {path}: {exc}") from exc
             cap_id = manifest.id
             if cap_id in merged:
                 raise CapabilityRegistryError(
@@ -802,10 +812,17 @@ def validation_rejection_receipt(
     capability: str,
     code: str,
     raw_request: Optional[Mapping[str, Any]] = None,
+    rejected_value: Any = None,
+    rejection_source: Optional[Mapping[str, Any]] = None,
+    error_detail: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build a correlated fail-closed receipt when typed evaluation cannot start."""
     request_boundary: Dict[str, Any] = dict(raw_request) if raw_request is not None else {}
-    fingerprint_payload = {"capability": capability, "request": request_boundary}
+    fingerprint_payload = {
+        "capability": capability,
+        "request": request_boundary,
+        "rejected_value": rejected_value,
+    }
     canonical = json.dumps(
         fingerprint_payload,
         sort_keys=True,
@@ -837,6 +854,11 @@ def validation_rejection_receipt(
                 "explanation": "The request could not be authorized.",
             },
             "outcome": "validation_rejection",
+            "rejection": {
+                "source": dict(rejection_source) if rejection_source is not None else {},
+                "rejected_value": rejected_value,
+                "error_detail": error_detail or code,
+            },
         }
     )
     return receipt

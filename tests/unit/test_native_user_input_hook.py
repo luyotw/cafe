@@ -19,7 +19,6 @@ from cafe.core.workflow_models import StepExecutionResult
 from cafe.phases.generic_phase import GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 
-
 PUBLISH_STEP = {
     "capability_requests": ["cafe.pr.publish"],
     "behavior": {"publish_confirmation": True},
@@ -1108,7 +1107,7 @@ def test_github_pr_creator_load_failures_persist_correlated_rejection_receipts(
     tmp_path: Path, failure: str
 ) -> None:
     from cafe.core.blackboard import BlackboardStore
-    from cafe.core.capabilities import CapabilityRegistryError
+    from cafe.core.capabilities import CapabilityRegistryError, default_capability_definition_dirs
 
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     phase_dir = issue_dir / "publish"
@@ -1155,6 +1154,61 @@ def test_github_pr_creator_load_failures_persist_correlated_rejection_receipts(
     assert receipt["allowed_effects"] == {}
     assert receipt["decision"]["outcome"] == "deny"
     assert receipt["outcome"] == "validation_rejection"
+    assert receipt["rejection"]["error_detail"]
+    if failure == "request":
+        assert receipt["rejection"]["source"] == {
+            "kind": "request_artifact",
+            "path": str(capability_request_file.resolve()),
+        }
+        assert receipt["rejection"]["rejected_value"] == "not-json"
+    else:
+        assert receipt["rejection"]["source"] == {
+            "kind": "capability_registry",
+            "paths": [str(path) for path in default_capability_definition_dirs(tmp_path)],
+        }
+        assert receipt["rejection"]["rejected_value"] == {
+            "capability": "demo.echo",
+            "args": {"target_ref": "current_pr"},
+        }
+        assert "invalid registry" in receipt["rejection"]["error_detail"]
+
+
+def test_github_pr_creator_malformed_request_fingerprint_tracks_rejected_artifact(
+    tmp_path: Path,
+) -> None:
+    from cafe.core.blackboard import BlackboardStore
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "publish"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    capability_request_file = phase_dir / "iteration_001" / "capability_request.json"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Publish\n", encoding="utf-8")
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+    store = BlackboardStore(issue_dir)
+    blackboard_state = store.load_or_create("publish")
+    hook = GitHubPRCreator()
+    fingerprints: list[str] = []
+
+    for malformed in ("not-json", "also-not-json"):
+        capability_request_file.write_text(malformed, encoding="utf-8")
+        hook.run(
+            stage="publish_output",
+            phase=phase,
+            step_name="publish",
+            step_def={"capability_requests": ["demo.echo"]},
+            output_file=output_file,
+            capability_request_file=capability_request_file,
+            blackboard_state=blackboard_state,
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+        fingerprints.append(
+            store.load_or_create("publish").capability_receipts[-1]["request_fingerprint"]
+        )
+
+    assert fingerprints[0] != fingerprints[1]
 
 
 def test_github_pr_creator_publish_output_records_all_multi_capability_receipts(

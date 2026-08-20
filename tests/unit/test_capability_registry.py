@@ -78,6 +78,35 @@ def test_load_registry_rejects_coerced_manifest_scalars(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("declared_type", "enum_value"),
+    [
+        ("integer", True),
+        ("integer", "1"),
+        ("boolean", 1),
+        ("boolean", "true"),
+        ("string", 1),
+        ("string", True),
+    ],
+)
+def test_load_registry_rejects_enum_values_with_wrong_declared_type(
+    tmp_path: Path, declared_type: str, enum_value: object
+) -> None:
+    cap_dir = tmp_path / "caps"
+    cap_dir.mkdir()
+    malformed = _manifest()
+    malformed["arguments"] = {
+        "required": ["target_ref"],
+        "properties": {
+            "target_ref": {"type": declared_type, "enum": [enum_value]},
+        },
+    }
+    (cap_dir / "demo.yaml").write_text(yaml.safe_dump(malformed), encoding="utf-8")
+
+    with pytest.raises(CapabilityRegistryError):
+        load_capability_registry([cap_dir])
+
+
+@pytest.mark.parametrize(
     "field",
     [
         "version",
