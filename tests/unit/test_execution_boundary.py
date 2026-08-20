@@ -27,7 +27,9 @@ def _boundary(tmp_path: Path) -> EffectiveBoundary:
 
 def test_execution_class_is_mandatory_and_reference_cannot_promote_trust(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
-        ScriptLaunchRequest.model_validate({"script": tmp_path / "hook.sh", "boundary": _boundary(tmp_path)})
+        ScriptLaunchRequest.model_validate(
+            {"script": tmp_path / "hook.sh", "boundary": _boundary(tmp_path)}
+        )
 
     request = ScriptLaunchRequest(
         execution_class=ExecutionClass.SANDBOX,
@@ -83,6 +85,77 @@ def test_script_launcher_inventory_covers_workflow_process_calls() -> None:
         relative = path.relative_to(root).as_posix()
         tree = ast.parse(path.read_text(encoding="utf-8"))
 
+        process_modules = {"subprocess": "subprocess", "os": "os"}
+        process_callables: set[str] = set()
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in {"subprocess", "os"}:
+                        process_modules[alias.asname or alias.name] = alias.name
+            elif isinstance(node, ast.ImportFrom) and node.module in {"subprocess", "os"}:
+                for alias in node.names:
+                    if (node.module == "subprocess" and alias.name in {"run", "Popen"}) or (
+                        node.module == "os" and alias.name.startswith("exec")
+                    ):
+                        process_callables.add(alias.asname or alias.name)
+
+        def is_process_callable(node: ast.expr) -> bool:
+            if isinstance(node, ast.Name):
+                return node.id in process_callables
+            if not isinstance(node, ast.Attribute) or not isinstance(node.value, ast.Name):
+                return False
+            module = process_modules.get(node.value.id)
+            return (module == "subprocess" and node.attr in {"run", "Popen"}) or (
+                module == "os" and node.attr.startswith("exec")
+            )
+
+        changed = True
+        while changed:
+            changed = False
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    continue
+                value = node.value
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                if not is_process_callable(value):
+                    continue
+                for target in targets:
+                    if isinstance(target, ast.Name) and target.id not in process_callables:
+                        process_callables.add(target.id)
+                        changed = True
+
+        runner_attributes: set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            positional = [*node.args.posonlyargs, *node.args.args]
+            default_names = {
+                argument.arg
+                for argument, default in zip(
+                    positional[-len(node.args.defaults) :], node.args.defaults
+                )
+                if is_process_callable(default)
+            }
+            default_names.update(
+                argument.arg
+                for argument, default in zip(node.args.kwonlyargs, node.args.kw_defaults)
+                if default is not None and is_process_callable(default)
+            )
+            for child in ast.walk(node):
+                if not isinstance(child, (ast.Assign, ast.AnnAssign)):
+                    continue
+                value = child.value
+                targets = child.targets if isinstance(child, ast.Assign) else [child.target]
+                if not isinstance(value, ast.Name) or value.id not in default_names:
+                    continue
+                for target in targets:
+                    if (
+                        isinstance(target, ast.Attribute)
+                        and isinstance(target.value, ast.Name)
+                        and target.value.id == "self"
+                    ):
+                        runner_attributes.add(target.attr)
+
         class Visitor(ast.NodeVisitor):
             def __init__(self) -> None:
                 self.scope: list[str] = []
@@ -96,12 +169,17 @@ def test_script_launcher_inventory_covers_workflow_process_calls() -> None:
 
             def visit_Call(self, node: ast.Call) -> None:
                 target = node.func
-                owner = target.value.id if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) else ""
-                name = target.attr if isinstance(target, ast.Attribute) else ""
-                if (owner == "subprocess" and name in {"run", "Popen"}) or (owner == "os" and name.startswith("exec")):
+                injected_runner = (
+                    isinstance(target, ast.Attribute)
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "self"
+                    and target.attr in runner_attributes
+                )
+                if is_process_callable(target) or injected_runner:
                     discovered[f"{relative}::{'.'.join(self.scope) or '<module>'}"] += 1
                 self.generic_visit(node)
 
         Visitor().visit(tree)
 
+    assert "src/cafe/core/sandbox_execution.py::run" in discovered
     assert discovered == documented

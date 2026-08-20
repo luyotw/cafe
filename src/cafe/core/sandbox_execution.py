@@ -33,39 +33,100 @@ class SandboxRunResult:
 
 
 class SandboxExecutor:
-    def __init__(self, *, codex_path: str | None = "auto", runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> None:
+    def __init__(
+        self,
+        *,
+        codex_path: str | None = "auto",
+        runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    ) -> None:
         self.codex_path = shutil.which("codex") if codex_path == "auto" else codex_path
         self.runner = runner
 
     def run(self, request: ScriptLaunchRequest) -> SandboxRunResult:
         correlation_id = uuid.uuid4().hex
-        if request.execution_class not in {ExecutionClass.SANDBOX, ExecutionClass.LIFECYCLE}:
-            return self._denied(request, correlation_id, "capability_requires_registered_adapter")
-        if not self.codex_path:
-            return self._denied(request, correlation_id, "sandbox_backend_unavailable")
         try:
             snapshot = snapshot_script(request.script, allowed_root=request.script.parent)
         except (OSError, ValueError) as exc:
             return self._denied(request, correlation_id, "script_identity_invalid", str(exc))
-        state = _sandbox_state(request.boundary, extra_readable=(snapshot.path.parent,))
-        command = [self.codex_path, "sandbox", "--sandbox-state-json", json.dumps(state), "--sandbox-state-disable-network"]
-        for root in request.boundary.readable_roots:
-            command.extend(["--sandbox-state-readable-root", str(root.resolve())])
-        command.extend([str(snapshot.path), *request.args])
         try:
-            completed = self.runner(command, cwd=str(request.boundary.cwd.resolve()), env=dict(request.boundary.environment), capture_output=True, text=True, check=False, timeout=request.timeout_seconds)
+            if request.execution_class not in {ExecutionClass.SANDBOX, ExecutionClass.LIFECYCLE}:
+                return self._denied(
+                    request,
+                    correlation_id,
+                    "capability_requires_registered_adapter",
+                    canonical_identity=snapshot.digest,
+                )
+            if not self.codex_path:
+                return self._denied(
+                    request,
+                    correlation_id,
+                    "sandbox_backend_unavailable",
+                    canonical_identity=snapshot.digest,
+                )
+            state = _sandbox_state(request.boundary, extra_readable=(snapshot.path.parent,))
+            command = [
+                self.codex_path,
+                "sandbox",
+                "--sandbox-state-json",
+                json.dumps(state),
+                "--sandbox-state-disable-network",
+            ]
+            for root in request.boundary.readable_roots:
+                command.extend(["--sandbox-state-readable-root", str(root.resolve())])
+            command.extend([str(snapshot.path), *request.args])
+            completed = self.runner(
+                command,
+                cwd=str(request.boundary.cwd.resolve()),
+                env=dict(request.boundary.environment),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=request.timeout_seconds,
+            )
             outcome = "success" if completed.returncode == 0 else "failed"
-            receipt = ExecutionReceipt(correlation_id=correlation_id, execution_class=request.execution_class, trust_source=request.trust_source, outcome=outcome, boundary=request.boundary, canonical_identity=snapshot.digest, details={"returncode": completed.returncode})
-            return SandboxRunResult(completed.returncode, completed.stdout or "", completed.stderr or "", receipt)
+            receipt = ExecutionReceipt(
+                correlation_id=correlation_id,
+                execution_class=request.execution_class,
+                trust_source=request.trust_source,
+                outcome=outcome,
+                boundary=request.boundary,
+                canonical_identity=snapshot.digest,
+                details={"returncode": completed.returncode},
+            )
+            return SandboxRunResult(
+                completed.returncode, completed.stdout or "", completed.stderr or "", receipt
+            )
         except subprocess.TimeoutExpired as exc:
-            receipt = ExecutionReceipt(correlation_id=correlation_id, execution_class=request.execution_class, trust_source=request.trust_source, outcome="timeout", boundary=request.boundary, canonical_identity=snapshot.digest)
+            receipt = ExecutionReceipt(
+                correlation_id=correlation_id,
+                execution_class=request.execution_class,
+                trust_source=request.trust_source,
+                outcome="timeout",
+                boundary=request.boundary,
+                canonical_identity=snapshot.digest,
+            )
             return SandboxRunResult(None, _output(exc.stdout), _output(exc.stderr), receipt)
         finally:
             snapshot.cleanup()
 
     @staticmethod
-    def _denied(request: ScriptLaunchRequest, correlation_id: str, reason: str, detail: str = "") -> SandboxRunResult:
-        receipt = ExecutionReceipt(correlation_id=correlation_id, execution_class=request.execution_class, trust_source=request.trust_source, outcome="denied", boundary=request.boundary, details={"reason": reason, "detail": detail, "migration": MIGRATION_GUIDANCE})
+    def _denied(
+        request: ScriptLaunchRequest,
+        correlation_id: str,
+        reason: str,
+        detail: str = "",
+        *,
+        canonical_identity: str | None = None,
+    ) -> SandboxRunResult:
+        receipt = ExecutionReceipt(
+            correlation_id=correlation_id,
+            execution_class=request.execution_class,
+            trust_source=request.trust_source,
+            outcome="denied",
+            boundary=request.boundary,
+            canonical_identity=canonical_identity,
+            details={"reason": reason, "detail": detail, "migration": MIGRATION_GUIDANCE},
+        )
         return SandboxRunResult(None, "", reason, receipt)
 
 
@@ -85,9 +146,7 @@ def _path_entry(path: Path, access: str) -> dict[str, object]:
 def _sandbox_state(
     boundary: "EffectiveBoundary", *, extra_readable: Iterable[Path] = ()
 ) -> dict[str, object]:
-    readable = dict.fromkeys(
-        root.resolve() for root in (*boundary.readable_roots, *extra_readable)
-    )
+    readable = dict.fromkeys(root.resolve() for root in (*boundary.readable_roots, *extra_readable))
     writable = dict.fromkeys(root.resolve() for root in boundary.writable_roots)
     entries = [_path_entry(root, "read") for root in readable]
     entries.extend(_path_entry(root, "write") for root in writable)

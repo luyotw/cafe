@@ -15,7 +15,7 @@ Fixed internal executables used to implement CAFE itself (for example Git querie
 
 ## Process launcher inventory
 
-This inventory is executable documentation: the unit contract discovers every direct `subprocess.run`, `subprocess.Popen`, and `os.exec*` call under `src/cafe`, including multiplicity, and fails when it differs from this table. “Internal” entries have fixed program families and typed inputs; boundary adapters are the only entries permitted to launch workflow-selected behavior.
+This inventory is executable documentation: the unit contract discovers every `subprocess.run`, `subprocess.Popen`, and `os.exec*` call under `src/cafe`, including imported aliases, locally assigned aliases, injected runner attributes whose defaults are process launchers, and multiplicity. It fails when the discovered set differs from this table. “Internal” entries have fixed program families and typed inputs; boundary adapters are the only entries permitted to launch workflow-selected behavior.
 
 | Launcher identity | Classification |
 | --- | --- |
@@ -30,6 +30,7 @@ This inventory is executable documentation: the unit contract discovers every di
 | `src/cafe/core/long_running_operation_helper.py::_monitor` | Sandbox operation adapter |
 | `src/cafe/core/long_running_operation_helper.py::run_operation_command` | Internal fixed monitor bootstrap |
 | `src/cafe/core/phase_review_mixin.py::_open_file_with_editor` | Explicit interactive editor |
+| `src/cafe/core/sandbox_execution.py::run` | Sandbox script adapter |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/format_kickoff_contract.py::_reexec_with_cafe_python` | Internal fixed Python re-exec |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::_cli_fingerprint` | Internal version probe |
 | `src/cafe/install/bootstrap.py::_run` | Internal installer command family |
