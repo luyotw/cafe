@@ -84,22 +84,6 @@ steps:
     allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
     hooks:
       prepare_input: [UserInputCollector]
-      after_execute:
-        - script: sync_github.sh
-          when_intents: [confirmed]
-          args:
-            phase: plan
-            output: "{output_file}"
-          schema:
-            type: object
-            required: [phase, output]
-            additionalProperties: false
-            properties:
-              phase:
-                type: string
-                enum: [spec, plan]
-              output:
-                type: string
     "on":
       confirm_output: plan
       need_clarification: plan

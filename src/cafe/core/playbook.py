@@ -137,6 +137,17 @@ class StepHooks(BaseModel):
     after_execute: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
     publish_output: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
 
+    @field_validator("before_execute", "prepare_input", "after_execute", "publish_output")
+    @classmethod
+    def _reject_playbook_capability_hooks(
+        cls, value: List[Union[str, Dict[str, Any]]]
+    ) -> List[Union[str, Dict[str, Any]]]:
+        if any(isinstance(item, dict) and "capability" in item for item in value):
+            raise ValueError(
+                "capability hooks are runtime-owned and cannot be declared by playbooks"
+            )
+        return value
+
 
 SkillSelector = Union[str, Dict[str, str]]
 

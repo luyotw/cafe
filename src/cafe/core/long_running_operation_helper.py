@@ -7,6 +7,7 @@ one command for one phase iteration, one ``operation.json``, one
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
@@ -20,12 +21,14 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 from cafe.core.blackboard import (
     BlackboardStore,
     LongRunningOperationArtifact,
+    LongRunningOperationState,
     OperationLogPolicy,
     OperationMonitoring,
     OperationRisk,
-    LongRunningOperationState,
     validate_operation_decision,
 )
+from cafe.core.execution_boundary import EffectiveBoundary
+from cafe.core.sandbox_execution import sandbox_command
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 
@@ -193,6 +196,8 @@ def run_operation_command(
     stop_condition: str,
     recovery: str,
     cwd: Optional[Path] = None,
+    readable_roots: Optional[Sequence[Path]] = None,
+    writable_roots: Optional[Sequence[Path]] = None,
     reason: str = "operation_helper_launch",
 ) -> OperationLaunchResult:
     """Launch one supervised command for one workflow iteration.
@@ -212,6 +217,15 @@ def run_operation_command(
     issue_dir = Path(issue_dir)
     iteration_dir = Path(iteration_dir)
     cwd_path = Path(cwd) if cwd is not None else Path.cwd()
+    read_paths = tuple(Path(root).resolve() for root in (readable_roots or (cwd_path,)))
+    write_paths = tuple(Path(root).resolve() for root in (writable_roots or (cwd_path,)))
+    canonical_command = json.dumps(
+        {"command": list(command), "cwd": str(cwd_path.resolve())},
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    command_fingerprint = hashlib.sha256(canonical_command.encode("utf-8")).hexdigest()
 
     store = BlackboardStore(issue_dir)
     claim_fd = _acquire_operation_claim(iteration_dir)
@@ -237,6 +251,21 @@ def run_operation_command(
                 log_policy=log_policy,
                 stop_condition=stop_condition,
                 recovery=recovery,
+                effective_boundary={
+                    "cwd": str(cwd_path.resolve()),
+                    "readable_roots": [str(root) for root in read_paths],
+                    "writable_roots": [str(root) for root in write_paths],
+                    "network_destinations": [],
+                    "environment_keys": sorted(
+                        EffectiveBoundary(
+                            cwd=cwd_path,
+                            readable_roots=read_paths,
+                            writable_roots=write_paths,
+                            environment=os.environ,
+                        ).environment
+                    ),
+                },
+                command_fingerprint=command_fingerprint,
             ),
         )
     finally:
@@ -251,6 +280,10 @@ def run_operation_command(
         "cwd": str(cwd_path),
         "playbook": playbook,
         "created_at": _now_iso(),
+        "execution_class": "sandbox",
+        "trust_source": "workflow",
+        "readable_roots": [str(root) for root in read_paths],
+        "writable_roots": [str(root) for root in write_paths],
     }
     request_file = _request_path(iteration_dir)
     _write_json(request_file, request)
@@ -348,8 +381,14 @@ def get_operation_status(
         )
     recorded_start = handle.get("monitor_start_time")
     current_start = _pid_start_time(monitor_pid)
-    if monitor_pid > 0 and _pid_alive(monitor_pid) and (
-        recorded_start is None or current_start is None or str(recorded_start) == str(current_start)
+    if (
+        monitor_pid > 0
+        and _pid_alive(monitor_pid)
+        and (
+            recorded_start is None
+            or current_start is None
+            or str(recorded_start) == str(current_start)
+        )
     ):
         return operation
 
@@ -376,6 +415,27 @@ def _monitor(request_file: Path) -> int:
     command = [str(part) for part in request["command"]]
     cwd = Path(str(request["cwd"]))
     playbook = dict(request["playbook"])
+    boundary = EffectiveBoundary(
+        cwd=cwd,
+        readable_roots=tuple(Path(root) for root in request["readable_roots"]),
+        writable_roots=tuple(Path(root) for root in request["writable_roots"]),
+        network_destinations=(),
+        environment=os.environ,
+    )
+
+    try:
+        command = sandbox_command(command, boundary=boundary)
+    except RuntimeError:
+        _record_terminal_receipt(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            step=step,
+            iteration_dir=iteration_dir,
+            operation_id=operation_id,
+            state=LongRunningOperationState.FAILED,
+            reason="sandbox_backend_unavailable",
+        )
+        return 1
 
     stdout_path = iteration_dir / "operation.stdout.log"
     stderr_path = iteration_dir / "operation.stderr.log"
@@ -383,6 +443,7 @@ def _monitor(request_file: Path) -> int:
         process = subprocess.Popen(
             command,
             cwd=str(cwd),
+            env=dict(boundary.environment),
             stdin=subprocess.DEVNULL,
             stdout=stdout,
             stderr=stderr,
@@ -418,9 +479,7 @@ def _monitor(request_file: Path) -> int:
                 _terminate_process_group(process.pid)
 
     terminal_state = (
-        LongRunningOperationState.SUCCEEDED
-        if exit_code == 0
-        else LongRunningOperationState.FAILED
+        LongRunningOperationState.SUCCEEDED if exit_code == 0 else LongRunningOperationState.FAILED
     )
     _record_terminal_receipt(
         issue_dir=issue_dir,
@@ -438,7 +497,10 @@ def _monitor(request_file: Path) -> int:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = list(argv if argv is not None else sys.argv[1:])
     if len(args) != 2 or args[0] != "monitor":
-        print("usage: python -m cafe.core.long_running_operation_helper monitor REQUEST_JSON", file=sys.stderr)
+        print(
+            "usage: python -m cafe.core.long_running_operation_helper monitor REQUEST_JSON",
+            file=sys.stderr,
+        )
         return 2
     try:
         return _monitor(Path(args[1]))

@@ -118,6 +118,11 @@ class LongRunningOperationArtifact:
     log_policy: OperationLogPolicy
     stop_condition: str
     recovery: str
+    execution_class: str = "sandbox"
+    trust_source: str = "workflow"
+    effective_boundary: Dict[str, Any] = field(default_factory=dict)
+    correlation_id: str = field(default_factory=lambda: uuid.uuid4().hex[:20])
+    command_fingerprint: str = ""
     reason: str = ""
     exit_code: Optional[int] = None
     operation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
@@ -125,6 +130,8 @@ class LongRunningOperationArtifact:
     updated_at: str = field(default_factory=_now_iso)
 
     def __post_init__(self) -> None:
+        if self.execution_class != "sandbox" or self.trust_source != "workflow":
+            raise ValueError("long-running operations require sandbox workflow trust")
         validate_operation_decision(
             risk=self.risk,
             monitoring=self.monitoring,
@@ -146,6 +153,11 @@ class LongRunningOperationArtifact:
             "log_policy": self.log_policy.value,
             "stop_condition": self.stop_condition,
             "recovery": self.recovery,
+            "execution_class": self.execution_class,
+            "trust_source": self.trust_source,
+            "effective_boundary": self.effective_boundary,
+            "correlation_id": self.correlation_id,
+            "command_fingerprint": self.command_fingerprint,
         }
 
     @classmethod
@@ -191,6 +203,11 @@ class LongRunningOperationArtifact:
             log_policy=_strict_operation_value(data, "log_policy", OperationLogPolicy),
             stop_condition=_required_operation_text(data.get("stop_condition"), "stop_condition"),
             recovery=_required_operation_text(data.get("recovery"), "recovery"),
+            execution_class=str(data.get("execution_class", "sandbox")),
+            trust_source=str(data.get("trust_source", "workflow")),
+            effective_boundary=dict(data.get("effective_boundary") or {}),
+            correlation_id=str(data.get("correlation_id") or data["operation_id"]),
+            command_fingerprint=str(data.get("command_fingerprint") or ""),
         )
         validate_operation_decision(
             risk=artifact.risk,

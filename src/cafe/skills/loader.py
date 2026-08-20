@@ -175,12 +175,16 @@ class SkillLoader:
             self.discover()
 
     def get_skill_dir(self, name: str) -> Path:
+        return self.get_skill_entry(name).directory
+
+    def get_skill_entry(self, name: str) -> SkillCatalogEntry:
+        """Return the resolved skill and its discovery trust source."""
         self._ensure_catalog()
         if name in self._catalog:
-            return self._catalog[name].directory
+            return self._catalog[name]
         resolved = self._resolve_alias(name)
         if resolved is not None and resolved in self._catalog:
-            return self._catalog[resolved].directory
+            return self._catalog[resolved]
         raise SkillDiscoveryError(name)
 
     @staticmethod

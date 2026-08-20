@@ -28,11 +28,12 @@ from pydantic import (
     model_validator,
 )
 
-from cafe.skills.loader import SkillLoader
+from cafe.core.execution_boundary import redact
 from cafe.utils.github import GitHubOps
 
 CAPABILITY_PR_PUBLISH_ID = "cafe.pr.publish"
 CAPABILITY_BROWSER_OPEN_ID = "cafe.browser.open"
+CAPABILITY_ISSUE_COMMENT_ID = "cafe.github.issue_comment"
 
 # Failure categories surfaced on capability receipts (distinct from validation_error).
 SCRIPT_EXIT_ERROR = "script_exit_error"
@@ -104,7 +105,7 @@ class CapabilityEffects(StrictCapabilityModel):
 class CapabilityManifest(StrictCapabilityModel):
     id: str = Field(min_length=1)
     version: int = Field(ge=1)
-    implementation: Literal["sync_pr", "open_current_pr"]
+    implementation: Literal["sync_pr", "open_current_pr", "sync_issue_comment"]
     arguments: ObjectSchema
     outputs: ObjectSchema
     effects: CapabilityEffects
@@ -254,6 +255,10 @@ def _resolve_boundary_tokens(
             replacements["issue_dir"] = str(Path(*parts[: issue_index + 2]))
         except (ValueError, IndexError):
             replacements["issue_dir"] = ""
+    elif manifest.id == CAPABILITY_ISSUE_COMMENT_ID:
+        issue_id = str(request.args.get("issue_id") or "").strip()
+        if issue_id:
+            replacements["request_issue_comment"] = f"github_issue_comment:{issue_id}"
 
     def expand(values: Sequence[str]) -> Tuple[str, ...]:
         return tuple(
@@ -326,8 +331,9 @@ def _package_capabilities_dir() -> Path:
 
 
 def default_capability_definition_dirs(repo_root: Path) -> List[Path]:
-    """Repository overrides first, then packaged defaults."""
-    return [repo_root / "data" / "capabilities", _package_capabilities_dir()]
+    """Return only immutable package-owned capability definitions."""
+    del repo_root
+    return [_package_capabilities_dir()]
 
 
 def load_capability_registry(
@@ -460,13 +466,9 @@ def resolve_repo_relative_path(*, repo_root: Path, raw_path: str, field_name: st
 
 
 def resolve_sync_pr_script(repo_root: Path) -> Path:
-    """Resolve packaged ``sync_pr.sh`` (same search order as GitHubPRCreator)."""
-    loader = SkillLoader(project_root=repo_root)
-    skill_dir = loader.get_skill_dir("cafe-pr")
-    script_path = skill_dir / "scripts" / "sync_pr.sh"
-    if script_path.exists():
-        return script_path
-    fallback = (
+    """Resolve the immutable package-owned ``sync_pr.sh`` adapter."""
+    del repo_root
+    script_path = (
         Path(__file__).resolve().parents[1]
         / "data"
         / "skills"
@@ -474,8 +476,8 @@ def resolve_sync_pr_script(repo_root: Path) -> Path:
         / "scripts"
         / "sync_pr.sh"
     )
-    if fallback.exists():
-        return fallback
+    if script_path.is_file() and not script_path.is_symlink():
+        return script_path
     raise FileNotFoundError(f"PR sync script not found: {script_path}")
 
 
@@ -527,8 +529,8 @@ def _base_receipt(
         "success": success,
         "category": category,
         "code": code,
-        "inputs": inputs,
-        "outputs": outputs,
+        "inputs": redact(inputs),
+        "outputs": redact(outputs),
         "finished_at": datetime.now().astimezone().isoformat(),
     }
 
@@ -805,6 +807,8 @@ def _audited_receipt(
     )
     receipt.update(
         {
+            "execution_class": "capability",
+            "trust_source": "package_registry",
             "request_fingerprint": evaluation.fingerprint,
             "manifest": {
                 "id": evaluation.manifest.id,
@@ -1048,9 +1052,61 @@ def _open_current_pr_adapter(
     }
 
 
+def _sync_issue_comment_adapter(
+    *,
+    repo_root: Path,
+    request: ExecutionRequest,
+    manifest: CapabilityManifest,
+    output_file: Path,
+    timeout_sec: float,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    del manifest, timeout_sec
+    phase = str(request.args.get("phase") or "")
+    if phase not in {"spec", "plan"}:
+        raise CapabilityExecutionError(VALIDATION_ERROR, "phase_not_allowed")
+    try:
+        output = resolve_repo_relative_path(
+            repo_root=repo_root, raw_path=str(request.args.get("output") or ""), field_name="output"
+        )
+        output.relative_to(repo_root.resolve())
+        if output.resolve() != output_file.resolve():
+            raise ValueError("output_mismatch")
+        issue_dir = output.parents[2]
+        issue_config = yaml.safe_load((issue_dir / "issue.yaml").read_text(encoding="utf-8")) or {}
+    except (OSError, ValueError, IndexError, yaml.YAMLError) as exc:
+        raise CapabilityExecutionError(VALIDATION_ERROR, "issue_context_invalid") from exc
+    phase_config = issue_config.get(phase) or {}
+    issue_id = str((issue_config.get("spec") or {}).get("issue_id") or "")
+    if not phase_config.get("sync_github"):
+        return {"action": "skipped"}, None
+    if not issue_id:
+        raise CapabilityExecutionError(VALIDATION_ERROR, "issue_id_missing")
+    if str(request.args.get("issue_id") or "") != issue_id:
+        raise CapabilityExecutionError(VALIDATION_ERROR, "issue_destination_mismatch")
+    artifact_bytes = output.read_bytes()
+    artifact_sha256 = hashlib.sha256(artifact_bytes).hexdigest()
+    if str(request.args.get("artifact_sha256") or "") != artifact_sha256:
+        raise CapabilityExecutionError(VALIDATION_ERROR, "artifact_identity_mismatch")
+    header = (
+        "### 📋 Requirements Specification (Confirmed)"
+        if phase == "spec"
+        else "### 📝 Implementation Plan (Confirmed)"
+    )
+    try:
+        GitHubOps().add_issue_comment(issue_id, f"{header}\n\n{artifact_bytes.decode('utf-8')}")
+    except Exception as exc:
+        raise CapabilityExecutionError("adapter_error", "issue_comment_failed") from exc
+    return {"action": "commented", "issue_id": issue_id, "phase": phase}, {
+        "type": "issue_comment_synced",
+        "issue_id": issue_id,
+        "phase": phase,
+    }
+
+
 HOST_CAPABILITY_ADAPTERS: Mapping[str, Any] = {
     "sync_pr": _sync_pr_adapter,
     "open_current_pr": _open_current_pr_adapter,
+    "sync_issue_comment": _sync_issue_comment_adapter,
 }
 
 

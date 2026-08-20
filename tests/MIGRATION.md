@@ -27,7 +27,7 @@ Production spec already runs via `BlackboardWorkflowRuntime` + `GenericPhase` + 
 | `test_spec_phase_qa.py` | Interactive QA / clarification input | `tests/unit/test_native_user_input_hook.py` |
 | `test_spec_interactive_qa_e2e.py` | XML parse, checkbox, `interactive_qa_flow` | `tests/unit/test_questions_schema.py`, `tests/unit/test_native_user_input_hook.py` |
 | `test_spec_phase_sync_github_config.py` | `issue.yaml` `spec.sync_github` | `tests/unit/test_issue_yaml_config.py`, `tests/unit/test_resolve_sync_github.py` |
-| `test_spec_github_sync.py` | No phase-internal confirmed sync | `tests/unit/test_skill_sync_github_script.py`, runtime baton hooks |
+| `test_spec_github_sync.py` | No phase-internal confirmed sync | `tests/unit/test_skill_sync_github_script.py`, trusted runtime confirmed-artifact capability gate |
 | `test_spec_prompt_with_images.py` | Images checklist line | `tests/unit/test_skill_checklist_composer.py` (`spec/execution_steps_iteration_1.md`) |
 | `test_spec_image_download.py` | Image URL download | `tests/unit/test_image_download.py` |
 | `test_spec_interactive_qa_e2e.py` | Spec clarification pause → resume → plan | `tests/integration/test_spec_clarification_runtime.py`, `tests/integration/test_workflow_e2e.py` |
@@ -57,7 +57,7 @@ Production plan already runs via `BlackboardWorkflowRuntime` + `GenericPhase` + 
 | `test_plan_phase_qa.py` | `_validate_and_retry_questions_xml` | `tests/unit/test_phase_review_mixin.py` (from #290) |
 | `test_plan_phase_qa.py` | Interactive QA / clarification input | `tests/unit/test_native_user_input_hook.py`, `tests/integration/test_plan_clarification_runtime.py` |
 | `test_plan_phase_sync_github_config.py` | `issue.yaml` `plan.sync_github` | `tests/unit/test_issue_yaml_config.py`, `tests/unit/test_resolve_sync_github.py` |
-| `test_plan_phase_github_sync.py` | No phase-internal confirmed sync | `tests/unit/test_skill_sync_github_script.py`, default playbook script hooks |
+| `test_plan_phase_github_sync.py` | No phase-internal confirmed sync | `tests/unit/test_skill_sync_github_script.py`, trusted runtime confirmed-artifact capability gate |
 | `test_plan_phase_execute_xml.py` | Plan checklist `questions_xml_file` | `tests/unit/test_plan_checklist_xml.py`, `tests/unit/test_generic_workflow_step.py` |
 | `test_plan_phase_template_mode.py` | Auto/manual checklist template instructions | `tests/unit/test_plan_checklist_xml.py`, `tests/unit/test_cli_prepare.py`, `tests/unit/test_template_selector_auto.py` |
 | `test_plan_phase_status_codes.py` | Status/baton transitions (ready_for_review, need_clarification) | `tests/unit/test_workflow_runtime.py`, `tests/integration/test_workflow_e2e.py` (`test_plan_self_loop_then_confirms`), `tests/integration/test_plan_clarification_runtime.py` |
@@ -72,7 +72,7 @@ Production plan already runs via `BlackboardWorkflowRuntime` + `GenericPhase` + 
 | Behavior | Rationale |
 | --- | --- |
 | `PlanPhase._prepare_user_input_for_iteration` plan review menu / delta display | Runtime uses baton `confirm_output` + skill checklist; legacy interactive review loop not on production path |
-| `PlanPhase._load_plan_config` internal `_sync_github` flag driving phase-internal sync | Sync runs via skill `sync_github.sh` after user confirmation per workflow-common |
+| `PlanPhase._load_plan_config` internal `_sync_github` flag driving phase-internal sync | Trusted runtime evaluates the fixed confirmed-artifact capability gate; phase agents do not run compatibility wrappers |
 | `PlanPhase` legacy `plan/plan.md` monolithic layout | Production uses `.cafe/issues/{issue}/plan/iteration_N/{output,checklist,questions}.md` via GenericPhase |
 | `PlanPhase.template_mode` / `template_path` instance attributes | Template mode resolved via `issue.yaml` + `generate_plan_checklist` / CLI prepare, not a phase class |
 | Duplicate mixin XML retry tests | Covered by `test_phase_review_mixin.py` from #290 |
@@ -211,3 +211,13 @@ Baseline (issue317 develop): `uv run --with pytest pytest tests/unit tests/integ
 | --- | --- |
 | Duplicate legacy-text baton tests outside runtime/models boundaries | No additional deletes this pass; issue #386 removed `allow_legacy_text` and the runtime's legacy-text normalization boundary entirely — batons are now strict JSON-only, enforced by `test_workflow_runtime.py::test_runtime_rejects_plain_text_baton_written_by_pr_agent` and `test_workflow_models.py::TestLegacyBatonFormatsAreRejected` |
 | Tests asserting global home as default install target | None found; new contract tests lock project-local install |
+# Script hook execution boundaries
+
+Custom skill and playbook hooks now run as untrusted sandbox execution by default. Ambient host credentials, proxy configuration, unrestricted network access, and host writes are not inherited. Project/global overrides do not inherit bundled trust.
+
+- Keep hooks that only need declared workspace access in the sandbox.
+- Use `cafe trust lifecycle` only for an explicit user-owned `prepare`/`close` script with a canonical identity and narrow local write scope.
+- Request a registered capability for credentials, network effects, or privileged mutation.
+- Inspect execution receipts for the class and trust source. Revoke/recreate lifecycle declarations after script or scope changes.
+
+Sandbox backend absence, identity changes, unknown launchers, and ambient-authority dependencies are denied. There is no automatic promotion or grandfathered host fallback.

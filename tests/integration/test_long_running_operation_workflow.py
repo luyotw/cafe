@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import sys
 import threading
 import time
 from pathlib import Path
+
+import pytest
 
 from cafe.agents.executor import AgentExecutionError
 from cafe.core.blackboard import (
@@ -49,6 +52,97 @@ _LOW_OPERATION_DECISION = {
     "stop_condition": "stop at the declared test boundary",
     "recovery": "inspect the same operation id",
 }
+
+
+@pytest.fixture(autouse=True)
+def _codex_sandbox_process_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    """Use a strict CLI double for workflow tests and the real backend for its boundary journey."""
+    if request.node.name != "test_real_operation_enforces_declared_sandbox_boundary":
+        binary = tmp_path / "bin" / "codex"
+        binary.parent.mkdir()
+        binary.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, sys\n"
+            "args = sys.argv[1:]\n"
+            "if not args or args.pop(0) != 'sandbox': raise SystemExit(2)\n"
+            "state = None; network_denied = False\n"
+            "while args and args[0].startswith('--'):\n"
+            " option = args.pop(0)\n"
+            " if option == '--sandbox-state-json': state = json.loads(args.pop(0))\n"
+            " elif option == '--sandbox-state-readable-root': args.pop(0)\n"
+            " elif option == '--sandbox-state-disable-network': network_denied = True\n"
+            "if state is None or not network_denied: raise SystemExit(3)\n"
+            "entries = state['permissionProfile']['file_system']['entries']\n"
+            "if not any(item['access'] == 'write' for item in entries): raise SystemExit(4)\n"
+            "if not args: raise SystemExit(2)\n"
+            "os.execvp(args[0], args)\n",
+            encoding="utf-8",
+        )
+        binary.chmod(0o700)
+        monkeypatch.setenv("PATH", f"{binary.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+        return
+
+
+def test_real_operation_enforces_declared_sandbox_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    issue_dir = allowed / ".cafe" / "issues" / "real-boundary"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    outside = tmp_path / "outside.txt"
+    result_file = allowed / "result.txt"
+    script = allowed / "probe.py"
+    script.write_text(
+        "from pathlib import Path\n"
+        "import os, sys\n"
+        "result, outside = map(Path, sys.argv[1:])\n"
+        "try:\n outside.write_text('escaped')\n except OSError:\n pass\n"
+        "result.write_text(str('GH_TOKEN' in os.environ))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GH_TOKEN", "sentinel")
+    launched = run_operation_command(
+        issue_dir=issue_dir,
+        step="develop",
+        iteration_dir=iteration_dir,
+        command=[sys.executable, str(script), str(result_file), str(outside)],
+        cwd=allowed,
+        readable_roots=(allowed,),
+        writable_roots=(allowed,),
+        playbook=_PLAYBOOK,
+        reason="real_sandbox_boundary_probe",
+        **_LOW_OPERATION_DECISION,
+    )
+    assert launched.started is True
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        status = get_operation_status(
+            issue_dir=issue_dir,
+            step="develop",
+            iteration_dir=iteration_dir,
+            playbook=_PLAYBOOK,
+        )
+        if status.state is not LongRunningOperationState.RUNNING:
+            break
+        time.sleep(0.05)
+    if status.state is LongRunningOperationState.SUCCEEDED:
+        assert result_file.read_text(encoding="utf-8") == "False"
+        assert not outside.exists()
+    elif shutil.which("codex") is None:
+        assert status.state is LongRunningOperationState.FAILED
+        assert status.reason == "sandbox_backend_unavailable"
+        assert not result_file.exists()
+        assert not outside.exists()
+    else:
+        assert status.state is LongRunningOperationState.FAILED
+        stderr = (iteration_dir / "operation.stderr.log").read_text(encoding="utf-8")
+        assert "bwrap: loopback:" in stderr
+        assert "Operation not permitted" in stderr
+        assert not result_file.exists()
+        assert not outside.exists()
 
 
 def _write_baton(issue_dir: Path, *, from_step: str, to_step: str) -> None:
@@ -125,8 +219,13 @@ def test_low_risk_silent_single_launch_journey(
     assert executor_calls == 1
     persisted = json.loads((iteration_dir / "operation.json").read_text())
     assert persisted["state"] == "running"
+    assert persisted["correlation_id"]
+    assert len(persisted["command_fingerprint"]) == 64
+    assert persisted["effective_boundary"]["cwd"] == str(tmp_path.resolve())
     assert (persisted["risk"], persisted["monitoring"], persisted["log_policy"]) == (
-        "low", "final-only", "summary-only"
+        "low",
+        "final-only",
+        "summary-only",
     )
 
     def duplicate_launch_executor(
@@ -503,6 +602,9 @@ iteration_dir.mkdir(parents=True, exist_ok=True)
         )
     assert status.state == LongRunningOperationState.SUCCEEDED
     assert status.exit_code == 0
+    assert status.execution_class == "sandbox"
+    assert status.trust_source == "workflow"
+    assert status.effective_boundary["writable_roots"] == [str(tmp_path.resolve())]
     assert (status.risk, status.monitoring, status.log_policy) == (
         OperationRisk.MEDIUM,
         OperationMonitoring.PERIODIC,
@@ -663,7 +765,9 @@ def test_high_risk_explicit_stop_and_recovery_journey_preserves_policy(
     persisted = json.loads((iteration_dir / "operation.json").read_text())
     assert persisted["state"] == "lost"
     assert (persisted["risk"], persisted["monitoring"], persisted["log_policy"]) == (
-        "high", "active", "filtered-stream"
+        "high",
+        "active",
+        "filtered-stream",
     )
     assert persisted["stop_condition"] == "stop if the fake high-risk operation cannot be verified"
     assert persisted["recovery"] == "inspect the same operation id before recovery"

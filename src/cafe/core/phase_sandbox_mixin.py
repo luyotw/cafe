@@ -350,78 +350,14 @@ class PhaseSandboxMixin:
         permission_denials: List["PermissionDenial"],
         approved_indices: List[int],
     ) -> str:
-        """Execute approved sandbox-blocked Bash commands on the host and return agent guidance."""
-        from cafe.utils.git_utils import to_cwd_relative_path
-
-        executed_records: List[dict] = []
-
-        for idx in approved_indices:
-            if idx >= len(permission_denials):
-                continue
-
-            denial = permission_denials[idx]
-            if denial.tool_name != "Bash":
-                continue
-
-            command = denial.tool_input.get("command")
-            if not isinstance(command, str) or not command.strip():
-                continue
-
-            result = subprocess.run(
-                ["/bin/zsh", "-lc", command],
-                check=False,
-                text=True,
-                capture_output=True,
-            )
-            executed_records.append(
-                {
-                    "tool_name": denial.tool_name,
-                    "command": command,
-                    "stdout": result.stdout,
-                    "stderr": result.stderr,
-                    "returncode": result.returncode,
-                    "ok": result.returncode == 0,
-                    "timestamp": datetime.now().astimezone().isoformat(),
-                }
-            )
-
-        if not executed_records:
+        """Keep approvals inside the sandbox; never replay raw commands on the host."""
+        approved = [permission_denials[idx] for idx in approved_indices if idx < len(permission_denials)]
+        if not approved:
             return ""
-
-        iteration_dir = self._get_iteration_dir(self.iteration)
-        iteration_dir.mkdir(parents=True, exist_ok=True)
-        host_execution_file = iteration_dir / "host_execution.json"
-        with open(host_execution_file, "w", encoding="utf-8") as f:
-            json.dump(executed_records, f, ensure_ascii=False, indent=2)
-
-        try:
-            display_path = to_cwd_relative_path(host_execution_file)
-        except (ValueError, OSError):
-            display_path = str(host_execution_file.resolve())
-
-        success_count = sum(1 for record in executed_records if record.get("ok"))
-        failure_count = len(executed_records) - success_count
-        lines = [
-            "Previously blocked approved commands were attempted by the host environment.",
-            f"Review the execution log at {display_path}.",
-        ]
-        if failure_count:
-            lines.append(
-                f"{failure_count} approved command(s) failed. Inspect the log and decide the next step from the current session state."
-            )
-        if success_count:
-            lines.append(
-                f"{success_count} approved command(s) succeeded. Do not rerun those commands unless you have a new reason."
-            )
-        if not success_count:
-            lines.append(
-                "Do not assume the approved commands succeeded; use the log output to continue."
-            )
-        else:
-            lines.append(
-                "Use the log output to understand the current repository state before taking more action."
-            )
-        return "\n".join(lines)
+        return (
+            "The selected commands remain approved only inside the agent sandbox. "
+            "Retry them there; request a registered capability for privileged effects."
+        )
 
     def _is_auto_host_executable_sandbox_denial(self, denial: "PermissionDenial") -> bool:
         """Return True when a denied command is a safe git command we can run on host."""

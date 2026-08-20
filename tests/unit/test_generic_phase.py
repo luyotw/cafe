@@ -13,8 +13,31 @@ from cafe.phases.generic_phase import GenericPhase
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture(autouse=True)
+def _sandbox_cli_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mock the external Codex process while retaining the typed sandbox request."""
+    native_run = subprocess.run
+
+    def run(command, **kwargs):
+        script_index = next(
+            index for index, part in enumerate(command)
+            if index > 1 and Path(part).name == "script"
+        )
+        return native_run(
+            ["/bin/bash", *command[script_index:]],
+            cwd=kwargs["cwd"], env=kwargs["env"], capture_output=True,
+            text=True, check=False, timeout=kwargs["timeout"],
+        )
+
+    from cafe.core.sandbox_execution import SandboxExecutor
+
+    monkeypatch.setattr(
+        "cafe.phases.generic_phase.SandboxExecutor",
+        lambda: SandboxExecutor(codex_path="/usr/bin/codex", runner=run),
+    )
 
 
 def _setup_loader(tmp_path: Path) -> SkillLoader:
@@ -841,6 +864,12 @@ def test_execute_runs_script_hook_with_schema_and_interpolation(tmp_path: Path) 
     assert event["stage"] == "before_execute"
     assert "--phase|plan|--output" in event["stdout"]
     assert str(output_file) in event["stdout"]
+    assert event["execution_class"] == "sandbox"
+    assert event["trust_source"] == "workflow"
+    assert event["canonical_identity"]
+    assert event["correlation_id"] == event["receipt"]["correlation_id"]
+    assert event["effective_boundary"] == event["receipt"]["boundary"]
+    assert event["receipt"]["boundary"]["writable_roots"] == [str(Path.cwd().resolve())]
 
 
 def test_execute_rejects_script_hook_path_traversal(tmp_path: Path) -> None:
@@ -882,24 +911,56 @@ def test_execute_rejects_script_hook_symlink_outside_scripts_dir(tmp_path: Path)
     link_script = scripts_dir / "escape.sh"
     link_script.symlink_to(escaped_script)
 
-    with pytest.raises(ValueError, match="must stay inside"):
-        phase.execute(
-            skill_name="cafe-plan",
-            skill_invocation="/plan",
-            shared_skill_invocations=["/cafe-workflow-common"],
-            step_def={
-                "hooks": {
-                    "before_execute": [
-                        {
-                            "script": "escape.sh",
-                            "args": {},
-                        }
-                    ]
-                },
-                "valid_intents": ["confirmed"],
-            },
-            agent_executor=lambda prompt: "confirmed",
+    result = phase.execute(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/cafe-workflow-common"],
+        step_def={
+            "hooks": {"before_execute": [{"script": "escape.sh", "args": {}}]},
+            "valid_intents": ["confirmed", "need_permission"],
+        },
+        agent_executor=lambda prompt: "confirmed",
+    )
+
+    event = next(item for item in result.events if item.get("type") == "script_hook")
+    assert result.status_code == PhaseStatusCode.NEED_PERMISSION
+    assert event["status"] == "denied"
+    assert event["receipt"]["details"]["reason"] == "script_identity_invalid"
+    assert event["correlation_id"]
+
+
+def test_execute_script_hook_uses_snapshot_if_target_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loader = _setup_loader(tmp_path)
+    script = _write_skill_script(
+        loader, skill_name="cafe-plan", script_name="stable.sh",
+        body="#!/bin/sh\necho safe\n",
+    )
+    native_run = subprocess.run
+
+    def replace_then_run(command, **kwargs):
+        script.write_text("#!/bin/sh\necho attacker\n", encoding="utf-8")
+        snapshot = next(part for part in command if Path(part).name == "script")
+        return native_run(
+            ["/bin/sh", snapshot], cwd=kwargs["cwd"], env=kwargs["env"],
+            capture_output=True, text=True, check=False, timeout=kwargs["timeout"],
         )
+
+    from cafe.core.sandbox_execution import SandboxExecutor
+    monkeypatch.setattr(
+        "cafe.phases.generic_phase.SandboxExecutor",
+        lambda: SandboxExecutor(codex_path="/usr/bin/codex", runner=replace_then_run),
+    )
+
+    result = GenericPhase(loader).execute(
+        skill_name="cafe-plan", skill_invocation="/plan",
+        shared_skill_invocations=["/cafe-workflow-common"],
+        step_def={"hooks": {"before_execute": [{"script": "stable.sh", "args": {}}]}, "valid_intents": ["confirmed"]},
+        agent_executor=lambda _prompt: "confirmed",
+    )
+
+    event = next(item for item in result.events if item.get("type") == "script_hook")
+    assert event["status"] == "success"
+    assert event["stdout"].strip() == "safe"
 
 
 def test_execute_script_hook_validation_failure_stops_pipeline(tmp_path: Path) -> None:
@@ -1291,7 +1352,11 @@ def test_execute_script_hook_passes_timeout_to_subprocess(tmp_path: Path, monkey
         captured["timeout"] = kwargs.get("timeout")
         return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="ok\n", stderr="")
 
-    monkeypatch.setattr("cafe.phases.generic_phase.subprocess.run", _run)
+    from cafe.core.sandbox_execution import SandboxExecutor
+    monkeypatch.setattr(
+        "cafe.phases.generic_phase.SandboxExecutor",
+        lambda: SandboxExecutor(codex_path="/usr/bin/codex", runner=_run),
+    )
 
     result = phase.execute(
         skill_name="cafe-plan",
@@ -1330,7 +1395,11 @@ def test_execute_script_hook_timeout_stops_pipeline(tmp_path: Path, monkeypatch:
     def _run(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd=args[0], timeout=1.0, output="partial", stderr="timed out")
 
-    monkeypatch.setattr("cafe.phases.generic_phase.subprocess.run", _run)
+    from cafe.core.sandbox_execution import SandboxExecutor
+    monkeypatch.setattr(
+        "cafe.phases.generic_phase.SandboxExecutor",
+        lambda: SandboxExecutor(codex_path="/usr/bin/codex", runner=_run),
+    )
 
     result = phase.execute(
         skill_name="cafe-plan",
@@ -1374,7 +1443,11 @@ def test_execute_script_hook_timeout_decodes_bytes_output(
     def _run(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd=args[0], timeout=1.0, output=b"partial-bytes", stderr=b"timed-bytes")
 
-    monkeypatch.setattr("cafe.phases.generic_phase.subprocess.run", _run)
+    from cafe.core.sandbox_execution import SandboxExecutor
+    monkeypatch.setattr(
+        "cafe.phases.generic_phase.SandboxExecutor",
+        lambda: SandboxExecutor(codex_path="/usr/bin/codex", runner=_run),
+    )
 
     result = phase.execute(
         skill_name="cafe-plan",

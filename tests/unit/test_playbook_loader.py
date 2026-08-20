@@ -445,12 +445,8 @@ def test_declared_skill_environment_resolves_layers_with_stable_deduplication() 
             "skills": {
                 "workflow": {
                     "shared": ["base", "shared"],
-                    "roles": {
-                        "developer": {"mode": "extend", "skills": ["shared", "role"]}
-                    },
-                    "steps": {
-                        "build": {"mode": "replace", "skills": ["step", "role", "step"]}
-                    },
+                    "roles": {"developer": {"mode": "extend", "skills": ["shared", "role"]}},
+                    "steps": {"build": {"mode": "replace", "skills": ["step", "role", "step"]}},
                 },
                 "chat": {"shared": []},
             },
@@ -463,9 +459,7 @@ def test_declared_skill_environment_resolves_layers_with_stable_deduplication() 
     assert resolve_playbook_skills(
         model, channel="workflow", role="developer", step_name="build"
     ) == ["step", "role"]
-    assert resolve_playbook_skills(
-        model, channel="chat", role="developer", step_name="build"
-    ) == []
+    assert resolve_playbook_skills(model, channel="chat", role="developer", step_name="build") == []
 
 
 def test_skill_environment_reports_missing_channel_and_missing_skill_before_execution(
@@ -529,7 +523,9 @@ def test_skill_environment_rejects_malformed_and_unknown_overlay_scopes(
             {
                 "playbook": {"id": "invalid"},
                 "skills": {"workflow": {}, "chat": {"shared": []}},
-                "steps": {"run": {"role": "operator", "skill": "phase", "on": {"await_agent": "_done"}}},
+                "steps": {
+                    "run": {"role": "operator", "skill": "phase", "on": {"await_agent": "_done"}}
+                },
             }
         )
     with pytest.raises(ValueError, match="skills.workflow.roles.developer.mode"):
@@ -629,15 +625,20 @@ def test_bundled_playbooks_preserve_declared_skill_environment_parity(
 ) -> None:
     """I1 — each bundled playbook declares the historic support skill order."""
     builtin_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
-    model = PlaybookLoader(
-        project_root=tmp_path / "project",
-        global_root=tmp_path / "global",
-        builtin_root=builtin_root,
-    ).load_model(playbook_id, strict=True).model
+    model = (
+        PlaybookLoader(
+            project_root=tmp_path / "project",
+            global_root=tmp_path / "global",
+            builtin_root=builtin_root,
+        )
+        .load_model(playbook_id, strict=True)
+        .model
+    )
 
-    assert resolve_playbook_skills(
-        model, channel="workflow", role=None, step_name=None
-    ) == ["cafe-workflow-common", "cafe-github_sync"]
+    assert resolve_playbook_skills(model, channel="workflow", role=None, step_name=None) == [
+        "cafe-workflow-common",
+        "cafe-github_sync",
+    ]
     assert resolve_playbook_skills(model, channel="chat", role=None, step_name=None) == [
         "cafe-common-chat-handoff",
         "cafe-chat-develop-change",
@@ -1085,9 +1086,7 @@ def test_initial_input_rejects_legacy_presentation_outside_bundled_playbooks(
     project_root = tmp_path / "project"
     _write_skill(builtin_root / "skills", "intake")
     playbook_root = (
-        project_root / ".cafe" / "playbooks"
-        if source == "project"
-        else global_root / "playbooks"
+        project_root / ".cafe" / "playbooks" if source == "project" else global_root / "playbooks"
     )
     _write_playbook(
         playbook_root,
@@ -1125,11 +1124,15 @@ def test_builtin_entry_steps_use_declared_initial_input_resolver(
 ) -> None:
     """I3 — built-in development flows retain the provider contract."""
     builtin_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
-    model = PlaybookLoader(
-        project_root=tmp_path,
-        global_root=tmp_path / "global",
-        builtin_root=builtin_root,
-    ).load_model(playbook_name).model
+    model = (
+        PlaybookLoader(
+            project_root=tmp_path,
+            global_root=tmp_path / "global",
+            builtin_root=builtin_root,
+        )
+        .load_model(playbook_name)
+        .model
+    )
     entry = model.steps[model.entry_point]
 
     assert entry.initial_input.providers == ["manual_text", "github_issue"]
@@ -1451,6 +1454,42 @@ steps:
         ).load_model("default")
 
 
+@pytest.mark.parametrize(
+    "hook_yaml",
+    [
+        "before_execute:\n        - capability: cafe.github.issue_comment\n          when_intents: [confirmed]",
+        "after_execute:\n        - capability: cafe.github.issue_comment",
+        "after_execute:\n        - capability: cafe.browser.open\n          when_intents: [confirmed]",
+    ],
+)
+def test_project_playbook_cannot_author_capability_hooks(tmp_path: Path, hook_yaml: str) -> None:
+    builtin_root = tmp_path / "builtin"
+    project_root = tmp_path / "project"
+    _write_skill(builtin_root / "skills", "cafe-plan")
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "malicious",
+        f"""
+playbook: {{id: malicious}}
+steps:
+  plan:
+    role: developer
+    skill: cafe-plan
+    output_artifact: plan
+    hooks:
+      {hook_yaml}
+    on: {{confirm_output: _done}}
+""",
+    )
+
+    with pytest.raises(ValueError, match="capability hooks are runtime-owned"):
+        PlaybookLoader(
+            project_root=project_root,
+            global_root=tmp_path / "global",
+            builtin_root=builtin_root,
+        ).load_model("malicious")
+
+
 def test_load_rejects_unknown_alignment_config_key(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
     _write_skill(builtin_root / "skills", "cafe-develop")
@@ -1528,6 +1567,7 @@ steps:
   plan:
     skill: cafe-plan
     role: developer
+    output_artifact: plan
     hooks:
       after_execute:
         - script: sync_github.sh

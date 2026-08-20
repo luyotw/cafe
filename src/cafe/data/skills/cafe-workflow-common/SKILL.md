@@ -150,7 +150,7 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 | Concern | Canonical location |
 | --- | --- |
 | Blackboard-first read, baton-first transitions, `user` / `done` | This skill (**First Steps**, **How workflow transitions work**, **Baton Schema**) |
-| Spec/plan GitHub issue sync (`scripts/sync_github.sh`) | `cafe-github_sync` skill (script contract and stdout JSON) |
+| Spec/plan GitHub issue sync | Trusted runtime `after_execute` + `confirmed` capability gate; `cafe-github_sync` documents compatibility wrappers |
 | PR: local artifact vs remote publish ordering | Generic runtime prompt repeats PR-only lines on purpose; `cafe-pr` skill covers PR modes and title/body structure |
 | develop ↔ review disagreements and user arbitration | This skill (**Develop and review disagreement protocol**) |
 | Bounded code/search output and generated-log exclusions | This skill (**Bounded repository inspection**) |
@@ -160,7 +160,7 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 ## Confirming spec and plan with the user
 
 - When a **spec** or **plan** draft needs human approval before the next playbook step, write a baton with `to_owner: "user"`, `to_step: "user"`, `intent: "confirm_output"`. Do not jump straight to `plan` or `develop` while the user still owes a decision.
-- After the user has confirmed and you are advancing to the next step, optionally sync the approved artifact to GitHub **when your issue/playbook enables it**: run `scripts/sync_github.sh` with the correct `--phase` and `--output`, consume the JSON on stdout, then write a baton with `intent: "await_agent"` targeting the next step.
+- After the user has confirmed, write the baton that advances to the next step. The trusted runtime evaluates the fixed spec/plan `after_execute` + `confirmed` capability gate when sync is enabled. Phase agents must not execute `scripts/sync_github.sh` or construct the capability request themselves.
 
 ## Develop and review disagreement protocol
 

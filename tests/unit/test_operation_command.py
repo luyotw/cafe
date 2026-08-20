@@ -11,7 +11,6 @@ from cafe.core.blackboard import LongRunningOperationState
 from cafe.ui.cli import app
 from cafe.ui.commands import operation as operation_command
 
-
 runner = CliRunner()
 
 
@@ -61,6 +60,10 @@ def test_operation_run_cli_loads_playbook_and_delegates(monkeypatch, tmp_path: P
             "test completes",
             "--recovery",
             "rerun safely",
+            "--readable-root",
+            str(tmp_path),
+            "--writable-root",
+            str(iteration_dir),
             "--",
             "true",
         ],
@@ -72,6 +75,8 @@ def test_operation_run_cli_loads_playbook_and_delegates(monkeypatch, tmp_path: P
     assert calls[0]["command"] == ["true"]
     assert calls[0]["stop_condition"] == "test completes"
     assert calls[0]["recovery"] == "rerun safely"
+    assert calls[0]["readable_roots"] == [tmp_path]
+    assert calls[0]["writable_roots"] == [iteration_dir]
     assert "op-test" in result.stdout
 
 

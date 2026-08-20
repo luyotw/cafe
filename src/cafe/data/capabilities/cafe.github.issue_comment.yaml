@@ -1,0 +1,28 @@
+id: cafe.github.issue_comment
+version: 1
+implementation: sync_issue_comment
+arguments:
+  required: [phase, output, issue_id, artifact_sha256]
+  properties:
+    phase: {type: string, enum: [spec, plan]}
+    output: {type: string}
+    issue_id: {type: string}
+    artifact_sha256: {type: string}
+outputs:
+  required: [action]
+  properties:
+    action: {type: string, enum: [skipped, commented]}
+    issue_id: {type: string}
+    phase: {type: string, enum: [spec, plan]}
+effects:
+  writes: [request_issue_comment]
+  network_destinations: [github.com, api.github.com]
+  browser_open: []
+credentials: [gh]
+permissions:
+  network: [github.com, api.github.com]
+  writes: [request_issue_comment]
+idempotency: unsafe
+risk: medium
+approval: not_required
+policy: allow

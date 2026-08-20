@@ -7,6 +7,7 @@ iteration path is published through existing metadata artifact/event
 helpers rather than a new registry.
 """
 
+import hashlib
 import json
 from dataclasses import MISSING
 from pathlib import Path
@@ -23,6 +24,8 @@ from cafe.core.blackboard import (
     OperationRisk,
     operation_artifact_path,
 )
+from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 
 _OPERATION_DECISION = {
     "risk": "low",
@@ -246,8 +249,10 @@ class TestOperationArtifactPersistence:
             step="develop",
             iteration_dir=iteration_dir,
             artifact=LongRunningOperationArtifact(
-                state=LongRunningOperationState.RUNNING, reason="tool_timeout",
-                risk=OperationRisk.LOW, monitoring=OperationMonitoring.FINAL_ONLY,
+                state=LongRunningOperationState.RUNNING,
+                reason="tool_timeout",
+                risk=OperationRisk.LOW,
+                monitoring=OperationMonitoring.FINAL_ONLY,
                 log_policy=OperationLogPolicy.SUMMARY_ONLY,
                 stop_condition="test operation reaches a terminal state",
                 recovery="inspect the same operation id",
@@ -278,6 +283,68 @@ class TestOperationArtifactPersistence:
         with pytest.raises(ValueError):
             store.read_operation_artifact(iteration_dir)
 
+
+@pytest.mark.parametrize(
+    "terminal_state",
+    [
+        LongRunningOperationState.SUCCEEDED,
+        LongRunningOperationState.FAILED,
+        LongRunningOperationState.LOST,
+    ],
+)
+def test_terminal_operation_receipt_preserves_correlation_command_and_boundary(
+    tmp_path: Path, terminal_state: LongRunningOperationState
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "audit"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    command = ["python", "-m", "demo"]
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            {"command": command, "cwd": str(tmp_path.resolve())},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    store.write_operation_artifact(
+        state,
+        step="develop",
+        iteration_dir=iteration_dir,
+        artifact=LongRunningOperationArtifact(
+            operation_id="operation-1",
+            correlation_id="correlation-1",
+            command_fingerprint=fingerprint,
+            state=LongRunningOperationState.RUNNING,
+            effective_boundary={"cwd": str(tmp_path), "network_destinations": []},
+            risk=OperationRisk.LOW,
+            monitoring=OperationMonitoring.FINAL_ONLY,
+            log_policy=OperationLogPolicy.SUMMARY_ONLY,
+            stop_condition="operation terminates",
+            recovery="inspect receipt",
+        ),
+    )
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook={
+            "playbook": {"id": "default"},
+            "steps": {"develop": {"skill": "develop", "role": "developer", "on": {}}},
+        },
+        executor=lambda *_args: StepExecutionResult(response="", artifacts={}),
+    )
+
+    receipt = runtime.record_long_running_operation_receipt(
+        step="develop",
+        iteration_dir=iteration_dir,
+        operation_id="operation-1",
+        state=terminal_state,
+    )
+
+    assert receipt.correlation_id == "correlation-1"
+    assert receipt.command_fingerprint == fingerprint
+    assert receipt.effective_boundary["cwd"] == str(tmp_path)
+
     def test_write_publishes_metadata_artifact_and_event_not_a_new_collection(
         self, tmp_path: Path
     ) -> None:
@@ -292,9 +359,12 @@ class TestOperationArtifactPersistence:
             step="develop",
             iteration_dir=iteration_dir,
             artifact=LongRunningOperationArtifact(
-                state=LongRunningOperationState.RUNNING, risk=OperationRisk.LOW,
-                monitoring=OperationMonitoring.FINAL_ONLY, log_policy=OperationLogPolicy.SUMMARY_ONLY,
-                stop_condition="test operation reaches a terminal state", recovery="inspect the same operation id",
+                state=LongRunningOperationState.RUNNING,
+                risk=OperationRisk.LOW,
+                monitoring=OperationMonitoring.FINAL_ONLY,
+                log_policy=OperationLogPolicy.SUMMARY_ONLY,
+                stop_condition="test operation reaches a terminal state",
+                recovery="inspect the same operation id",
             ),
         )
 
@@ -318,9 +388,12 @@ class TestOperationArtifactPersistence:
             step="develop",
             iteration_dir=iteration_dir,
             artifact=LongRunningOperationArtifact(
-                state=LongRunningOperationState.RUNNING, risk=OperationRisk.LOW,
-                monitoring=OperationMonitoring.FINAL_ONLY, log_policy=OperationLogPolicy.SUMMARY_ONLY,
-                stop_condition="test operation reaches a terminal state", recovery="inspect the same operation id",
+                state=LongRunningOperationState.RUNNING,
+                risk=OperationRisk.LOW,
+                monitoring=OperationMonitoring.FINAL_ONLY,
+                log_policy=OperationLogPolicy.SUMMARY_ONLY,
+                stop_condition="test operation reaches a terminal state",
+                recovery="inspect the same operation id",
             ),
         )
         store.write_operation_artifact(
@@ -328,9 +401,12 @@ class TestOperationArtifactPersistence:
             step="develop",
             iteration_dir=iteration_dir,
             artifact=LongRunningOperationArtifact(
-                state=LongRunningOperationState.SUCCEEDED, risk=OperationRisk.LOW,
-                monitoring=OperationMonitoring.FINAL_ONLY, log_policy=OperationLogPolicy.SUMMARY_ONLY,
-                stop_condition="test operation reaches a terminal state", recovery="inspect the same operation id",
+                state=LongRunningOperationState.SUCCEEDED,
+                risk=OperationRisk.LOW,
+                monitoring=OperationMonitoring.FINAL_ONLY,
+                log_policy=OperationLogPolicy.SUMMARY_ONLY,
+                stop_condition="test operation reaches a terminal state",
+                recovery="inspect the same operation id",
             ),
         )
 

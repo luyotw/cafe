@@ -65,13 +65,10 @@ Read your agent file: {agent_file}
 ## Context
 - Requirements Specification: {spec_file}
 
-## Available scripts
+## Confirmed artifact sync
 
-- `scripts/sync_github.sh` — Sync confirmed spec/plan output to GitHub issue comment when enabled
-
-```bash
-bash scripts/sync_github.sh --help
-```
+- Do not execute `scripts/sync_github.sh`. After confirmation, the trusted
+  runtime evaluates the fixed `cafe.github.issue_comment` capability gate.
 
 ## Instructions
 - 依規格拆解實作步驟，先列測試，再列實作
@@ -94,7 +91,7 @@ bash scripts/sync_github.sh --help
   產品範圍；僅提出建議，不建立 issue、更新路線圖、變更優先順序，也不得讓尚未解決的
   `split` 進入 develop。
 - 延續既有計畫格式與使用者需求
-- User 確認暫停、交給 `develop` 前是否執行 GitHub sync、以及 baton 順序：請依 shared skill「cafe-workflow-common」的 **Confirming spec and plan with the user**、**Where policies live**，並搭配 `cafe-github_sync` skill 的腳本說明；本 skill 不重複敘述。
+- User 確認暫停、交給 `develop` 前的 GitHub sync 與 baton 順序：請依 shared skill「cafe-workflow-common」的 **Confirming spec and plan with the user**、**Where policies live**；phase agent 不直接執行 sync wrapper。
 - 計畫草稿需 user 確認時：把 next-step baton 寫入 `user`，不要直接交給 `develop`（其餘細節以 cafe-workflow-common 為準）。
 
 ### Required plan sections (must be filled before handoff)
