@@ -822,6 +822,7 @@ def validation_rejection_receipt(
         "capability": capability,
         "request": request_boundary,
         "rejected_value": rejected_value,
+        "rejection_source": dict(rejection_source) if rejection_source is not None else None,
     }
     canonical = json.dumps(
         fingerprint_payload,

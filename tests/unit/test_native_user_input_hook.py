@@ -1,5 +1,6 @@
 """Tests for workflow user-input hooks."""
 
+import hashlib
 import json
 from contextlib import nullcontext
 from pathlib import Path
@@ -1142,7 +1143,12 @@ def test_github_pr_creator_load_failures_persist_correlated_rejection_receipts(
         if failure == "request_read"
         else nullcontext()
     )
-    with registry_patch, read_patch:
+    bytes_patch = (
+        patch("pathlib.Path.read_bytes", side_effect=PermissionError("request unreadable"))
+        if failure == "request_read"
+        else nullcontext()
+    )
+    with registry_patch, read_patch, bytes_patch:
         result = hook.run(
             stage="publish_output",
             phase=phase,
@@ -1164,10 +1170,15 @@ def test_github_pr_creator_load_failures_persist_correlated_rejection_receipts(
     assert receipt["outcome"] == "validation_rejection"
     assert receipt["rejection"]["error_detail"]
     if failure.startswith("request_"):
-        assert receipt["rejection"]["source"] == {
+        expected_source = {
             "kind": "request_artifact",
             "path": str(capability_request_file.resolve()),
         }
+        if failure != "request_read":
+            expected_source["content_sha256"] = hashlib.sha256(
+                capability_request_file.read_bytes()
+            ).hexdigest()
+        assert receipt["rejection"]["source"] == expected_source
         if failure == "request_json":
             assert receipt["rejection"]["rejected_value"] == "not-json"
         elif failure == "request_encoding":
@@ -1219,6 +1230,88 @@ def test_github_pr_creator_malformed_request_fingerprint_tracks_rejected_artifac
         )
         fingerprints.append(
             store.load_or_create("publish").capability_receipts[-1]["request_fingerprint"]
+        )
+
+    assert fingerprints[0] != fingerprints[1]
+
+
+def test_github_pr_creator_unreadable_request_fingerprint_tracks_source_path(
+    tmp_path: Path,
+) -> None:
+    from cafe.core.blackboard import BlackboardStore
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "publish"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Publish\n", encoding="utf-8")
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+    store = BlackboardStore(issue_dir)
+    blackboard_state = store.load_or_create("publish")
+    hook = GitHubPRCreator()
+    fingerprints: list[str] = []
+
+    with (
+        patch("pathlib.Path.read_text", side_effect=PermissionError("request unreadable")),
+        patch("pathlib.Path.read_bytes", side_effect=PermissionError("request unreadable")),
+    ):
+        for filename in ("first.json", "second.json"):
+            request_file = output_file.parent / filename
+            request_file.write_text("same request", encoding="utf-8")
+            hook.run(
+                stage="publish_output",
+                phase=phase,
+                step_name="publish",
+                step_def={"capability_requests": ["demo.echo"]},
+                output_file=output_file,
+                capability_request_file=request_file,
+                blackboard_state=blackboard_state,
+                status_code=PhaseStatusCode.CONFIRMED,
+            )
+            fingerprints.append(
+                blackboard_state.capability_receipts[-1]["request_fingerprint"]
+            )
+
+    assert fingerprints[0] != fingerprints[1]
+
+
+def test_github_pr_creator_invalid_utf8_fingerprint_tracks_original_bytes(
+    tmp_path: Path,
+) -> None:
+    from cafe.core.blackboard import BlackboardStore
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "publish"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    capability_request_file = output_file.parent / "capability_request.json"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Publish\n", encoding="utf-8")
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+    store = BlackboardStore(issue_dir)
+    blackboard_state = store.load_or_create("publish")
+    hook = GitHubPRCreator()
+    fingerprints: list[str] = []
+
+    for malformed in (b"{\xff}", b"{\xfe}"):
+        capability_request_file.write_bytes(malformed)
+        hook.run(
+            stage="publish_output",
+            phase=phase,
+            step_name="publish",
+            step_def={"capability_requests": ["demo.echo"]},
+            output_file=output_file,
+            capability_request_file=capability_request_file,
+            blackboard_state=blackboard_state,
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+        fingerprints.append(
+            store.load_or_create("publish").capability_receipts[-1][
+                "request_fingerprint"
+            ]
         )
 
     assert fingerprints[0] != fingerprints[1]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Optional
@@ -1190,21 +1191,24 @@ class GitHubPRCreator(NoOpHook):
             requests = self._normalize_capability_requests(request_payload)
         except RuntimeError as exc:
             rejected_value: Any = None
+            rejection_source: dict[str, Any] = {
+                "kind": "request_artifact",
+                "path": str(request_file.resolve()) if isinstance(request_file, Path) else None,
+            }
             if isinstance(request_file, Path):
                 try:
-                    rejected_value = request_file.resolve().read_text(
-                        encoding="utf-8", errors="replace"
-                    )
+                    rejected_bytes = request_file.resolve().read_bytes()
+                    rejection_source["content_sha256"] = hashlib.sha256(
+                        rejected_bytes
+                    ).hexdigest()
+                    rejected_value = rejected_bytes.decode("utf-8", errors="replace")
                 except OSError:
                     pass
             receipt = validation_rejection_receipt(
                 capability=fallback_capability,
                 code="request_load_error",
                 rejected_value=rejected_value,
-                rejection_source={
-                    "kind": "request_artifact",
-                    "path": str(request_file.resolve()) if isinstance(request_file, Path) else None,
-                },
+                rejection_source=rejection_source,
                 error_detail=str(exc),
             )
             persist_receipt(receipt)
