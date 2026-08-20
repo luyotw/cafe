@@ -1,6 +1,7 @@
 """Tests for workflow user-input hooks."""
 
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1102,7 +1103,9 @@ def test_github_pr_creator_publish_output_rejects_unknown_generic_capability_wit
     assert loaded.capability_receipts[-1]["success"] is False
 
 
-@pytest.mark.parametrize("failure", ["request", "registry"])
+@pytest.mark.parametrize(
+    "failure", ["request_json", "request_encoding", "request_read", "registry"]
+)
 def test_github_pr_creator_load_failures_persist_correlated_rejection_receipts(
     tmp_path: Path, failure: str
 ) -> None:
@@ -1115,14 +1118,14 @@ def test_github_pr_creator_load_failures_persist_correlated_rejection_receipts(
     capability_request_file = phase_dir / "iteration_001" / "capability_request.json"
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_text("# Publish\n", encoding="utf-8")
-    capability_request_file.write_text(
-        (
-            "not-json"
-            if failure == "request"
-            else json.dumps({"capability": "demo.echo", "args": {"target_ref": "current_pr"}})
-        ),
-        encoding="utf-8",
-    )
+    valid_request = {"capability": "demo.echo", "args": {"target_ref": "current_pr"}}
+    if failure == "request_encoding":
+        capability_request_file.write_bytes(b"{\xff}")
+    else:
+        capability_request_file.write_text(
+            "not-json" if failure == "request_json" else json.dumps(valid_request),
+            encoding="utf-8",
+        )
     phase = _FakePhase(phase_dir=phase_dir, iteration=1)
     phase.git_ops = MagicMock()
     phase.git_ops.get_repo_root.return_value = tmp_path
@@ -1134,7 +1137,12 @@ def test_github_pr_creator_load_failures_persist_correlated_rejection_receipts(
         "cafe.core.capabilities.load_capability_registry",
         side_effect=CapabilityRegistryError("invalid registry"),
     )
-    with registry_patch:
+    read_patch = (
+        patch("pathlib.Path.read_text", side_effect=PermissionError("request unreadable"))
+        if failure == "request_read"
+        else nullcontext()
+    )
+    with registry_patch, read_patch:
         result = hook.run(
             stage="publish_output",
             phase=phase,
@@ -1155,12 +1163,17 @@ def test_github_pr_creator_load_failures_persist_correlated_rejection_receipts(
     assert receipt["decision"]["outcome"] == "deny"
     assert receipt["outcome"] == "validation_rejection"
     assert receipt["rejection"]["error_detail"]
-    if failure == "request":
+    if failure.startswith("request_"):
         assert receipt["rejection"]["source"] == {
             "kind": "request_artifact",
             "path": str(capability_request_file.resolve()),
         }
-        assert receipt["rejection"]["rejected_value"] == "not-json"
+        if failure == "request_json":
+            assert receipt["rejection"]["rejected_value"] == "not-json"
+        elif failure == "request_encoding":
+            assert receipt["rejection"]["rejected_value"] == "{\ufffd}"
+        else:
+            assert receipt["rejection"]["rejected_value"] is None
     else:
         assert receipt["rejection"]["source"] == {
             "kind": "capability_registry",

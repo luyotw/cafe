@@ -1192,7 +1192,9 @@ class GitHubPRCreator(NoOpHook):
             rejected_value: Any = None
             if isinstance(request_file, Path):
                 try:
-                    rejected_value = request_file.resolve().read_text(encoding="utf-8")
+                    rejected_value = request_file.resolve().read_text(
+                        encoding="utf-8", errors="replace"
+                    )
                 except OSError:
                     pass
             receipt = validation_rejection_receipt(
@@ -1334,6 +1336,12 @@ class GitHubPRCreator(NoOpHook):
             raise RuntimeError(f"PR publish request not found: {request_file}")
         try:
             payload = json.loads(request_file.read_text(encoding="utf-8"))
+        except UnicodeError as exc:
+            raise RuntimeError(
+                f"PR publish request is not valid UTF-8: {request_file}"
+            ) from exc
+        except OSError as exc:
+            raise RuntimeError(f"PR publish request cannot be read: {request_file}") from exc
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"PR publish request is invalid JSON: {request_file}") from exc
         if not isinstance(payload, dict):
