@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.19.1
+version: 1.19.2
 ---
 
 # Use CAFE Workflow
@@ -75,6 +75,25 @@ Do not preload unrelated references.
 - A phase or PR reporting success is evidence, not final proof. Ship only after
   the independent driver review has no unresolved in-mandate blockers.
 
+## Driver and phase-agent responsibility boundary
+
+- The phase agent owns implementation exploration: reading source code and
+  diffs, choosing local edits, and running the plan's phase-level checks. The
+  driver must not shadow the same work while the phase is progressing normally.
+- During an active phase, the driver defaults to process-only monitoring. Track
+  the current phase and iteration, command liveness, baton and task state,
+  execution evidence, repeated failures, unnecessary phase restarts, and
+  unexpected full-suite reruns through `cafe status`, `cafe show`, and bounded
+  process output. Reading spec, plan, review, and PR artifacts remains part of
+  the driver's confirmation and handoff duties.
+- Do not inspect implementation code or diffs merely to watch progress. Enter
+  bounded code-level diagnosis only when the same failure repeats without new
+  evidence, the workflow is stuck, an agent crosses the confirmed scope or
+  authority boundary, or reported success conflicts with durable evidence.
+- After the PR phase, perform the independent convergent review once, in a
+  batch. That final review deliberately inspects the implementation and is not
+  replaced by process-only monitoring.
+
 ## Driver checklist
 
 ### Start or resume
@@ -98,10 +117,13 @@ Do not preload unrelated references.
 - [ ] Execute only the current phase with `--single-step`, including the initial
   requirement or authorized resume input as needed; otherwise follow the
   persisted baton without forcing `--start-step`.
-- [ ] After the phase, inspect its output and execution evidence, then keep or
-  revise the next model chain under the confirmed authority.
+- [ ] While the phase runs normally, monitor process state without duplicating
+  the phase agent's code reading, diff review, or tests.
+- [ ] After the phase, inspect its artifacts and execution evidence, then keep
+  or revise the next model chain under the confirmed authority.
 - [ ] Inspect progress through `cafe status` and `cafe show`; consult the
-  blackboard only when command output is insufficient.
+  blackboard only when command output is insufficient, and inspect code only
+  when a bounded-diagnosis trigger above applies.
 - [ ] When CAFE pauses, classify the handoff before supplying any input.
 - [ ] When behavior is wrong, stop normal execution and use the bounded
   diagnosis reference.
