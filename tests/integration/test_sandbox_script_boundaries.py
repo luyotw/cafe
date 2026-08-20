@@ -91,7 +91,9 @@ def test_real_sandbox_enforces_environment_network_and_write_roots(tmp_path: Pat
         "inside, outside, port = Path(sys.argv[1]), Path(sys.argv[2]), int(sys.argv[3])\n"
         "inside.write_text('ok')\n"
         "try:\n outside.write_text('escaped')\n except OSError:\n pass\n"
-        "try:\n socket.create_connection(('127.0.0.1', port), timeout=.2)\n except OSError:\n pass\n"
+        "try:\n"
+        " socket.create_connection(('127.0.0.1', port), timeout=.2)\n"
+        "except OSError:\n pass\n"
         "else:\n raise SystemExit(9)\n"
         "print('secret=' + str('GH_TOKEN' in os.environ))\n",
         encoding="utf-8",
@@ -118,7 +120,14 @@ def test_real_sandbox_enforces_environment_network_and_write_roots(tmp_path: Pat
         assert (allowed / "inside.txt").read_text(encoding="utf-8") == "ok"
         assert not outside.exists()
         assert "secret=False" in result.stdout
+    elif codex is None:
+        assert result.receipt.outcome == "denied"
+        assert result.receipt.details["reason"] == "sandbox_backend_unavailable"
+        assert not (allowed / "inside.txt").exists()
+        assert not outside.exists()
     else:
-        assert result.receipt.outcome in {"denied", "failed"}
+        assert result.receipt.outcome == "failed"
+        assert "bwrap: loopback:" in result.stderr
+        assert "Operation not permitted" in result.stderr
         assert not (allowed / "inside.txt").exists()
         assert not outside.exists()

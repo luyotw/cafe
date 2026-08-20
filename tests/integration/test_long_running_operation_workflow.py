@@ -16,7 +16,6 @@ import json
 import os
 import shutil
 import signal
-import subprocess
 import sys
 import threading
 import time
@@ -60,7 +59,6 @@ def _codex_sandbox_process_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> None:
     """Use a strict CLI double for workflow tests and the real backend for its boundary journey."""
-    codex = shutil.which("codex")
     if request.node.name != "test_real_operation_enforces_declared_sandbox_boundary":
         binary = tmp_path / "bin" / "codex"
         binary.parent.mkdir()
@@ -85,12 +83,6 @@ def _codex_sandbox_process_boundary(
         binary.chmod(0o700)
         monkeypatch.setenv("PATH", f"{binary.parent}{os.pathsep}{os.environ.get('PATH', '')}")
         return
-    if codex is None:
-        binary = tmp_path / "bin" / "codex"
-        binary.parent.mkdir()
-        binary.write_text("#!/bin/sh\nexit 77\n", encoding="utf-8")
-        binary.chmod(0o700)
-        monkeypatch.setenv("PATH", f"{binary.parent}{os.pathsep}{os.environ.get('PATH', '')}")
 
 
 def test_real_operation_enforces_declared_sandbox_boundary(
@@ -139,8 +131,16 @@ def test_real_operation_enforces_declared_sandbox_boundary(
     if status.state is LongRunningOperationState.SUCCEEDED:
         assert result_file.read_text(encoding="utf-8") == "False"
         assert not outside.exists()
+    elif shutil.which("codex") is None:
+        assert status.state is LongRunningOperationState.FAILED
+        assert status.reason == "sandbox_backend_unavailable"
+        assert not result_file.exists()
+        assert not outside.exists()
     else:
         assert status.state is LongRunningOperationState.FAILED
+        stderr = (iteration_dir / "operation.stderr.log").read_text(encoding="utf-8")
+        assert "bwrap: loopback:" in stderr
+        assert "Operation not permitted" in stderr
         assert not result_file.exists()
         assert not outside.exists()
 
