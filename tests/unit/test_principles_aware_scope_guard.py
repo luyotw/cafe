@@ -74,3 +74,20 @@ def test_review_checklist_has_anti_over_engineering_section() -> None:
     assert "Dependency ADR vs manifest diff" in review_steps
     assert "undeclared" in review_steps.lower()
     assert "30 days" in review_steps
+
+
+def test_plan_and_review_checklists_require_minimal_sufficient_design() -> None:
+    skills = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
+    plan_first = (
+        skills / "cafe-plan" / "references" / "execution_steps_iteration_1.md"
+    ).read_text(encoding="utf-8")
+    plan_revise = (
+        skills / "cafe-plan" / "references" / "execution_steps_iteration_n.md"
+    ).read_text(encoding="utf-8")
+    review = (
+        skills / "cafe-review" / "references" / "execution_steps.md"
+    ).read_text(encoding="utf-8")
+
+    assert "smallest design that satisfies the requirements" in plan_first
+    assert "smallest design that satisfies the requirements" in plan_revise
+    assert "smallest design that satisfies the approved requirements" in review

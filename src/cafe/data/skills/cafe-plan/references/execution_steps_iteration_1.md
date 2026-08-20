@@ -6,6 +6,7 @@
 [ ] Before choosing an unset runtime/deployment architecture, treat the user as non-technical by default: check existing repo/spec/conversation answers, then ask only the missing plain-language usage questions and recommend one suitable default before technical details
 [ ] Confirm the plan does not assume a fixed IP, an always-on personal computer/NAS, self-managed server expertise, or authorization to adopt/pay for/deploy an external service
 [ ] Plan implementation steps (planning, not implementation)
+[ ] Confirm the proposed design is the smallest design that satisfies the requirements, with no speculative scope or abstractions
 [ ] Fill required sections **Negative space**, **Layering map**, and **Dependency ADR** (explicit "none" / "no new dependencies" if applicable — empty placeholders are incomplete)
 [ ] If `.cafe/strategic_context.yaml` has `documents.principles.path` with `status: exists`, read that file and ground Negative space and Dependency ADR; otherwise leave principles cross-refs blank
 [ ] For any new major in Dependency ADR, note if released within the last 30 days and justify or pick a stable alternative

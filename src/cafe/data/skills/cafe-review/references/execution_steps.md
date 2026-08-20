@@ -38,6 +38,7 @@
 [ ] Check if existing unused code can be removed
 
 ## Anti-Over-Engineering Review
+[ ] Confirm the implemented design is the smallest design that satisfies the approved requirements; flag speculative scope, abstractions, or extension points that are not needed now
 [ ] Dependency ADR vs manifest diff: diff dependency manifests (`package.json`, `pyproject.toml`, `requirements*.txt`, or equivalent) against the approved plan's **Dependency ADR** list; any package present in the manifest diff but **not declared** in the plan is undeclared — route back to `develop` and name the package in review output
 [ ] Dependency hygiene: every new manifest entry has a matching ADR entry and serves a declared requirement; flag unannounced or undeclared dependencies
 [ ] Stale majors: if the plan or manifests introduce a **new major** released within the last **30 days**, verify the ADR justifies the risk or an acceptable stable alternative was chosen; flag unjustified bleeding-edge majors
