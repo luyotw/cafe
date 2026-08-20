@@ -1,5 +1,6 @@
 """Explicit user-owned lifecycle trust commands."""
 
+import sys
 from pathlib import Path
 
 import typer
@@ -11,6 +12,8 @@ trust_app = typer.Typer(help="Manage user-owned lifecycle script trust")
 
 @trust_app.command("lifecycle")
 def lifecycle(script: Path, stage: str = typer.Option(...), cwd: Path = typer.Option(...), write: list[Path] = typer.Option(...)) -> None:
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise typer.Abort()
     if not typer.confirm(f"Trust {script.resolve()} for lifecycle stage {stage}?"):
         raise typer.Abort()
     declaration = declare_lifecycle_trust(LifecycleTrustStore(), script=script, stage=stage, cwd=cwd, writable_roots=tuple(write))

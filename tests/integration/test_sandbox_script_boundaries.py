@@ -1,8 +1,17 @@
 import os
+import shutil
+import socket
 import subprocess
 from pathlib import Path
 
-from cafe.core.execution_boundary import EffectiveBoundary, ExecutionClass, ScriptLaunchRequest, TrustSource
+import pytest
+
+from cafe.core.execution_boundary import (
+    EffectiveBoundary,
+    ExecutionClass,
+    ScriptLaunchRequest,
+    TrustSource,
+)
 from cafe.core.sandbox_execution import SandboxExecutor
 
 
@@ -44,3 +53,56 @@ def test_symlink_override_is_denied_before_sandbox_process_launch(tmp_path: Path
     result = SandboxExecutor(codex_path="codex", runner=runner).run(request)
     assert result.receipt.outcome == "denied"
     assert called is False
+
+
+def test_real_sandbox_enforces_environment_network_and_write_roots(tmp_path: Path) -> None:
+    codex = shutil.which("codex")
+    if codex is None:
+        pytest.skip("Codex sandbox backend is unavailable")
+    probe = subprocess.run(
+        [codex, "sandbox", "--sandbox-state-disable-network", "/bin/true"],
+        capture_output=True, text=True, check=False,
+    )
+    if probe.returncode != 0:
+        pytest.skip("Codex sandbox backend cannot run in this environment")
+
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "outside.txt"
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    port = listener.getsockname()[1]
+    script = allowed / "probe.py"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, socket, sys\n"
+        "from pathlib import Path\n"
+        "inside, outside, port = Path(sys.argv[1]), Path(sys.argv[2]), int(sys.argv[3])\n"
+        "inside.write_text('ok')\n"
+        "try:\n outside.write_text('escaped')\n except OSError:\n pass\n"
+        "try:\n socket.create_connection(('127.0.0.1', port), timeout=.2)\n except OSError:\n pass\n"
+        "else:\n raise SystemExit(9)\n"
+        "print('secret=' + str('GH_TOKEN' in os.environ))\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o700)
+    request = ScriptLaunchRequest(
+        execution_class=ExecutionClass.SANDBOX,
+        trust_source=TrustSource.WORKFLOW,
+        script=script,
+        args=(str(allowed / "inside.txt"), str(outside), str(port)),
+        boundary=EffectiveBoundary(
+            cwd=allowed, readable_roots=(allowed,), writable_roots=(allowed,),
+            environment={"PATH": os.environ.get("PATH", ""), "GH_TOKEN": "sentinel"},
+        ),
+    )
+    try:
+        result = SandboxExecutor(codex_path=codex).run(request)
+    finally:
+        listener.close()
+
+    assert result.receipt.outcome == "success", result.stderr
+    assert (allowed / "inside.txt").read_text(encoding="utf-8") == "ok"
+    assert not outside.exists()
+    assert "secret=False" in result.stdout

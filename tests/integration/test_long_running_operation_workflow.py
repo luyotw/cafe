@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -54,24 +56,80 @@ _LOW_OPERATION_DECISION = {
 
 
 @pytest.fixture(autouse=True)
-def _codex_sandbox_process_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Provide a deterministic external sandbox CLI boundary for worker subprocesses."""
-    binary = tmp_path / "bin" / "codex"
-    binary.parent.mkdir()
-    binary.write_text(
-        "#!/usr/bin/env python3\n"
+def _codex_sandbox_process_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
+    """Use a strict CLI double for workflow tests and the real backend for its boundary journey."""
+    codex = shutil.which("codex")
+    if codex is None:
+        pytest.skip("Codex sandbox backend is unavailable")
+    if request.node.name != "test_real_operation_enforces_declared_sandbox_boundary":
+        binary = tmp_path / "bin" / "codex"
+        binary.parent.mkdir()
+        binary.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, sys\n"
+            "args = sys.argv[1:]\n"
+            "if not args or args.pop(0) != 'sandbox': raise SystemExit(2)\n"
+            "state = None; network_denied = False\n"
+            "while args and args[0].startswith('--'):\n"
+            " option = args.pop(0)\n"
+            " if option == '--sandbox-state-json': state = json.loads(args.pop(0))\n"
+            " elif option == '--sandbox-state-readable-root': args.pop(0)\n"
+            " elif option == '--sandbox-state-disable-network': network_denied = True\n"
+            "if state is None or not network_denied: raise SystemExit(3)\n"
+            "entries = state['permissionProfile']['file_system']['entries']\n"
+            "if not any(item['access'] == 'write' for item in entries): raise SystemExit(4)\n"
+            "if not args: raise SystemExit(2)\n"
+            "os.execvp(args[0], args)\n",
+            encoding="utf-8",
+        )
+        binary.chmod(0o700)
+        monkeypatch.setenv("PATH", f"{binary.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+        return
+    probe = subprocess.run(
+        [codex, "sandbox", "--sandbox-state-disable-network", "/bin/true"],
+        capture_output=True, text=True, check=False,
+    )
+    if probe.returncode != 0:
+        pytest.skip("Codex sandbox backend cannot run in this environment")
+
+
+def test_real_operation_enforces_declared_sandbox_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    issue_dir = allowed / ".cafe" / "issues" / "real-boundary"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    outside = tmp_path / "outside.txt"
+    result_file = allowed / "result.txt"
+    script = allowed / "probe.py"
+    script.write_text(
+        "from pathlib import Path\n"
         "import os, sys\n"
-        "args = sys.argv[1:]\n"
-        "if not args or args.pop(0) != 'sandbox': raise SystemExit(2)\n"
-        "while args and args[0].startswith('--'):\n"
-        "    option = args.pop(0)\n"
-        "    if option in {'--sandbox-state-json', '--sandbox-state-readable-root'}: args.pop(0)\n"
-        "if not args: raise SystemExit(2)\n"
-        "os.execvp(args[0], args)\n",
+        "result, outside = map(Path, sys.argv[1:])\n"
+        "try:\n outside.write_text('escaped')\n except OSError:\n pass\n"
+        "result.write_text(str('GH_TOKEN' in os.environ))\n",
         encoding="utf-8",
     )
-    binary.chmod(0o700)
-    monkeypatch.setenv("PATH", f"{binary.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("GH_TOKEN", "sentinel")
+    launched = run_operation_command(
+        issue_dir=issue_dir, step="develop", iteration_dir=iteration_dir,
+        command=[sys.executable, str(script), str(result_file), str(outside)],
+        cwd=allowed, readable_roots=(allowed,), writable_roots=(allowed,),
+        playbook=_PLAYBOOK, reason="real_sandbox_boundary_probe",
+        **_LOW_OPERATION_DECISION,
+    )
+    assert launched.started is True
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        status = get_operation_status(
+            issue_dir=issue_dir, step="develop", iteration_dir=iteration_dir,
+            playbook=_PLAYBOOK,
+        )
+        if status.state is not LongRunningOperationState.RUNNING:
+            break
+        time.sleep(0.05)
+    assert status.state is LongRunningOperationState.SUCCEEDED
+    assert result_file.read_text(encoding="utf-8") == "False"
+    assert not outside.exists()
 
 
 def _write_baton(issue_dir: Path, *, from_step: str, to_step: str) -> None:
@@ -526,6 +584,9 @@ iteration_dir.mkdir(parents=True, exist_ok=True)
         )
     assert status.state == LongRunningOperationState.SUCCEEDED
     assert status.exit_code == 0
+    assert status.execution_class == "sandbox"
+    assert status.trust_source == "workflow"
+    assert status.effective_boundary["writable_roots"] == [str(tmp_path.resolve())]
     assert (status.risk, status.monitoring, status.log_policy) == (
         OperationRisk.MEDIUM,
         OperationMonitoring.PERIODIC,

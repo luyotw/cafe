@@ -1,3 +1,6 @@
+import ast
+import re
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -71,12 +74,34 @@ def test_snapshot_rejects_symlinks_and_is_immune_to_target_replacement(tmp_path:
 def test_script_launcher_inventory_covers_workflow_process_calls() -> None:
     root = Path(__file__).resolve().parents[2]
     inventory = (root / "docs" / "script-execution-boundaries.md").read_text(encoding="utf-8")
-    launchers = {
-        "src/cafe/phases/generic_phase.py": "Skill and phase script hooks",
-        "src/cafe/core/phase_sandbox_mixin.py": "Permission retry",
-        "src/cafe/core/long_running_operation_helper.py": "Long-running operation child",
-        "src/cafe/core/capabilities.py": "Registered adapter",
-    }
-    for relative, label in launchers.items():
-        assert (root / relative).is_file()
-        assert label in inventory
+    documented = Counter()
+    for identity, count in re.findall(r"`([^`]+\.py::[^`]+)`(?: ×(\d+))?", inventory):
+        documented[identity] += int(count or "1")
+
+    discovered = Counter()
+    for path in (root / "src" / "cafe").rglob("*.py"):
+        relative = path.relative_to(root).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+
+        class Visitor(ast.NodeVisitor):
+            def __init__(self) -> None:
+                self.scope: list[str] = []
+
+            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                self.scope.append(node.name)
+                self.generic_visit(node)
+                self.scope.pop()
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+            def visit_Call(self, node: ast.Call) -> None:
+                target = node.func
+                owner = target.value.id if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) else ""
+                name = target.attr if isinstance(target, ast.Attribute) else ""
+                if (owner == "subprocess" and name in {"run", "Popen"}) or (owner == "os" and name.startswith("exec")):
+                    discovered[f"{relative}::{'.'.join(self.scope) or '<module>'}"] += 1
+                self.generic_visit(node)
+
+        Visitor().visit(tree)
+
+    assert discovered == documented

@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import uuid
-import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
-from cafe.core.execution_boundary import ExecutionClass, ExecutionReceipt, ScriptLaunchRequest, snapshot_script
+from cafe.core.execution_boundary import (
+    EffectiveBoundary,
+    ExecutionClass,
+    ExecutionReceipt,
+    ScriptLaunchRequest,
+    snapshot_script,
+)
 
 MIGRATION_GUIDANCE = (
     "Keep compatible hooks in sandbox execution, create explicit user lifecycle trust for narrow "
@@ -41,7 +47,7 @@ class SandboxExecutor:
             snapshot = snapshot_script(request.script, allowed_root=request.script.parent)
         except (OSError, ValueError) as exc:
             return self._denied(request, correlation_id, "script_identity_invalid", str(exc))
-        state = {"permissionProfile": {}, "sandboxCwd": request.boundary.cwd.resolve().as_uri()}
+        state = _sandbox_state(request.boundary, extra_readable=(snapshot.path.parent,))
         command = [self.codex_path, "sandbox", "--sandbox-state-json", json.dumps(state), "--sandbox-state-disable-network"]
         for root in request.boundary.readable_roots:
             command.extend(["--sandbox-state-readable-root", str(root.resolve())])
@@ -69,9 +75,38 @@ def _output(value: str | bytes | None) -> str:
     return value or ""
 
 
-def sandbox_command(command: list[str], *, cwd: Path) -> list[str]:
+def _path_entry(path: Path, access: str) -> dict[str, object]:
+    return {
+        "path": {"type": "path", "path": str(path.resolve())},
+        "access": access,
+    }
+
+
+def _sandbox_state(
+    boundary: "EffectiveBoundary", *, extra_readable: Iterable[Path] = ()
+) -> dict[str, object]:
+    readable = dict.fromkeys(
+        root.resolve() for root in (*boundary.readable_roots, *extra_readable)
+    )
+    writable = dict.fromkeys(root.resolve() for root in boundary.writable_roots)
+    entries = [_path_entry(root, "read") for root in readable]
+    entries.extend(_path_entry(root, "write") for root in writable)
+    return {
+        "permissionProfile": {
+            "type": "managed",
+            "file_system": {"type": "restricted", "entries": entries},
+            "network": "restricted",
+        },
+        "sandboxCwd": boundary.cwd.resolve().as_uri(),
+    }
+
+
+def sandbox_command(command: list[str], *, boundary: "EffectiveBoundary") -> list[str]:
     codex = shutil.which("codex")
     if not codex:
         raise RuntimeError("sandbox_backend_unavailable")
-    state = {"permissionProfile": {}, "sandboxCwd": cwd.resolve().as_uri()}
-    return [codex, "sandbox", "--sandbox-state-json", json.dumps(state), "--sandbox-state-readable-root", str(cwd.resolve()), "--sandbox-state-disable-network", *command]
+    state = _sandbox_state(boundary)
+    result = [codex, "sandbox", "--sandbox-state-json", json.dumps(state)]
+    for root in boundary.readable_roots:
+        result.extend(["--sandbox-state-readable-root", str(root.resolve())])
+    return [*result, "--sandbox-state-disable-network", *command]

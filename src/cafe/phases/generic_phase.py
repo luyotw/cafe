@@ -5,18 +5,26 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from cafe.core.blackboard import HandoffIntent
-from cafe.core.capabilities import default_capability_definition_dirs, load_capability_registry, run_capability_request
+from cafe.core.capabilities import (
+    default_capability_definition_dirs,
+    load_capability_registry,
+    run_capability_request,
+)
+from cafe.core.execution_boundary import (
+    EffectiveBoundary,
+    ExecutionClass,
+    ScriptLaunchRequest,
+    TrustSource,
+)
 from cafe.core.hooks import BUILTIN_HOOKS, HookResult
 from cafe.core.hooks.script_schema import validate_script_args_schema
-from cafe.core.execution_boundary import ExecutionClass
-from cafe.core.sandbox_execution import MIGRATION_GUIDANCE, sandbox_command
 from cafe.core.questions_schema import validate_questions_xml
+from cafe.core.sandbox_execution import MIGRATION_GUIDANCE, SandboxExecutor
 from cafe.core.status_codes import (
     PhaseStatusCode,
     StatusCodeParser,
@@ -604,91 +612,50 @@ class GenericPhase:
                     ],
                 )
 
-        cmd = self._build_script_command(script_path=script_path, args=resolved_args)
         cwd = Path.cwd().resolve()
-        try:
-            cmd = sandbox_command(cmd, cwd=cwd)
-        except RuntimeError as exc:
-            return HookResult(
-                continue_pipeline=False,
-                override_status_code=PhaseStatusCode.NEED_PERMISSION,
-                events=[{
-                    "type": "script_hook", "step": str(hook_kwargs.get("step_name") or ""),
-                    "skill": skill_name, "stage": stage, "script": script,
-                    "status": "denied", "reason": str(exc), "exit_code": None,
-                    "stdout": "", "stderr": "", "validation_errors": [],
-                    "execution_class": ExecutionClass.SANDBOX.value, "trust_source": "workflow",
-                    "migration": MIGRATION_GUIDANCE,
-                }],
-            )
-        try:
-            result = subprocess.run(
-                cmd,
-                cwd=str(cwd),
-                env={key: value for key, value in os.environ.items() if key in {"PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "TZ"}},
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=timeout_seconds,
-            )
-        except subprocess.TimeoutExpired as exc:
-            stdout = self._normalize_process_output(exc.stdout)
-            stderr = self._normalize_process_output(exc.stderr)
-            return HookResult(
-                continue_pipeline=False,
-                override_status_code=PhaseStatusCode.NEED_PERMISSION,
-                events=[
-                    {
-                        "type": "script_hook",
-                        "step": str(hook_kwargs.get("step_name") or ""),
-                        "skill": skill_name,
-                        "stage": stage,
-                        "script": script,
-                        "status": "timeout",
-                        "exit_code": None,
-                        "stdout": stdout,
-                        "stderr": stderr,
-                        "validation_errors": [],
-                        "migration": MIGRATION_GUIDANCE,
-                    }
-                ],
-            )
-        if result.returncode != 0:
-            return HookResult(
-                continue_pipeline=False,
-                override_status_code=PhaseStatusCode.NEED_PERMISSION,
-                events=[
-                    {
-                        "type": "script_hook",
-                        "step": str(hook_kwargs.get("step_name") or ""),
-                        "skill": skill_name,
-                        "stage": stage,
-                        "script": script,
-                        "status": "failed",
-                        "exit_code": result.returncode,
-                        "stdout": result.stdout or "",
-                        "stderr": result.stderr or "",
-                        "validation_errors": [],
-                    }
-                ],
-            )
-
-        return HookResult(
-            events=[
-                {
-                    "type": "script_hook",
-                    "step": str(hook_kwargs.get("step_name") or ""),
-                    "skill": skill_name,
-                    "stage": stage,
-                    "script": script,
-                    "status": "success",
-                    "exit_code": result.returncode,
-                    "stdout": result.stdout or "",
-                    "stderr": result.stderr or "",
-                    "validation_errors": [],
-                }
-            ]
+        command = self._build_script_command(script_path=script_path, args=resolved_args)
+        request = ScriptLaunchRequest(
+            execution_class=ExecutionClass.SANDBOX,
+            trust_source=TrustSource.WORKFLOW,
+            script=script_path,
+            args=tuple(command[2:]),
+            boundary=EffectiveBoundary(
+                cwd=cwd,
+                readable_roots=(cwd, script_path.parent),
+                writable_roots=(cwd,),
+                network_destinations=(),
+                environment=os.environ,
+            ),
+            timeout_seconds=timeout_seconds or 60.0,
         )
+        result = SandboxExecutor().run(request)
+        receipt = result.receipt.model_dump(mode="json")
+        event = {
+            "type": "script_hook",
+            "step": str(hook_kwargs.get("step_name") or ""),
+            "skill": skill_name,
+            "stage": stage,
+            "script": script,
+            "status": result.receipt.outcome,
+            "exit_code": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "validation_errors": [],
+            "execution_class": result.receipt.execution_class.value,
+            "trust_source": result.receipt.trust_source.value,
+            "canonical_identity": result.receipt.canonical_identity,
+            "correlation_id": result.receipt.correlation_id,
+            "effective_boundary": receipt["boundary"],
+            "receipt": receipt,
+        }
+        if result.receipt.outcome != "success":
+            event["migration"] = MIGRATION_GUIDANCE
+            return HookResult(
+                continue_pipeline=False,
+                override_status_code=PhaseStatusCode.NEED_PERMISSION,
+                events=[event],
+            )
+        return HookResult(events=[event])
 
     def _run_capability_hook(
         self, *, stage: str, declaration: Dict[str, Any], step_def: Dict[str, Any],
@@ -785,14 +752,6 @@ class GenericPhase:
             timeout_seconds,
         )
 
-    @staticmethod
-    def _normalize_process_output(value: Any) -> str:
-        if isinstance(value, str):
-            return value
-        if isinstance(value, bytes):
-            return value.decode("utf-8", errors="replace")
-        return ""
-
     def _resolve_script_path(self, *, skill_name: str, script: str) -> Path:
         script_path = Path(script)
         if script_path.is_absolute():
@@ -809,7 +768,7 @@ class GenericPhase:
 
         skill_dir = self.skill_loader.get_skill_dir(skill_name)
         scripts_dir = (skill_dir / "scripts").resolve()
-        candidate = (scripts_dir / Path(*script_parts)).resolve()
+        candidate = (scripts_dir / Path(*script_parts)).absolute()
 
         try:
             candidate.relative_to(scripts_dir)

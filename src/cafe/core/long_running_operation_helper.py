@@ -20,12 +20,13 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 from cafe.core.blackboard import (
     BlackboardStore,
     LongRunningOperationArtifact,
+    LongRunningOperationState,
     OperationLogPolicy,
     OperationMonitoring,
     OperationRisk,
-    LongRunningOperationState,
     validate_operation_decision,
 )
+from cafe.core.execution_boundary import EffectiveBoundary
 from cafe.core.sandbox_execution import sandbox_command
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -194,6 +195,8 @@ def run_operation_command(
     stop_condition: str,
     recovery: str,
     cwd: Optional[Path] = None,
+    readable_roots: Optional[Sequence[Path]] = None,
+    writable_roots: Optional[Sequence[Path]] = None,
     reason: str = "operation_helper_launch",
 ) -> OperationLaunchResult:
     """Launch one supervised command for one workflow iteration.
@@ -213,6 +216,8 @@ def run_operation_command(
     issue_dir = Path(issue_dir)
     iteration_dir = Path(iteration_dir)
     cwd_path = Path(cwd) if cwd is not None else Path.cwd()
+    read_paths = tuple(Path(root).resolve() for root in (readable_roots or (cwd_path,)))
+    write_paths = tuple(Path(root).resolve() for root in (writable_roots or (cwd_path,)))
 
     store = BlackboardStore(issue_dir)
     claim_fd = _acquire_operation_claim(iteration_dir)
@@ -238,6 +243,20 @@ def run_operation_command(
                 log_policy=log_policy,
                 stop_condition=stop_condition,
                 recovery=recovery,
+                effective_boundary={
+                    "cwd": str(cwd_path.resolve()),
+                    "readable_roots": [str(root) for root in read_paths],
+                    "writable_roots": [str(root) for root in write_paths],
+                    "network_destinations": [],
+                    "environment_keys": sorted(
+                        EffectiveBoundary(
+                            cwd=cwd_path,
+                            readable_roots=read_paths,
+                            writable_roots=write_paths,
+                            environment=os.environ,
+                        ).environment
+                    ),
+                },
             ),
         )
     finally:
@@ -254,6 +273,8 @@ def run_operation_command(
         "created_at": _now_iso(),
         "execution_class": "sandbox",
         "trust_source": "workflow",
+        "readable_roots": [str(root) for root in read_paths],
+        "writable_roots": [str(root) for root in write_paths],
     }
     request_file = _request_path(iteration_dir)
     _write_json(request_file, request)
@@ -379,9 +400,16 @@ def _monitor(request_file: Path) -> int:
     command = [str(part) for part in request["command"]]
     cwd = Path(str(request["cwd"]))
     playbook = dict(request["playbook"])
+    boundary = EffectiveBoundary(
+        cwd=cwd,
+        readable_roots=tuple(Path(root) for root in request["readable_roots"]),
+        writable_roots=tuple(Path(root) for root in request["writable_roots"]),
+        network_destinations=(),
+        environment=os.environ,
+    )
 
     try:
-        command = sandbox_command(command, cwd=cwd)
+        command = sandbox_command(command, boundary=boundary)
     except RuntimeError:
         _record_terminal_receipt(
             issue_dir=issue_dir, playbook=playbook, step=step,
@@ -397,7 +425,7 @@ def _monitor(request_file: Path) -> int:
         process = subprocess.Popen(
             command,
             cwd=str(cwd),
-            env={key: value for key, value in os.environ.items() if key in {"PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "TZ"}},
+            env=dict(boundary.environment),
             stdin=subprocess.DEVNULL,
             stdout=stdout,
             stderr=stderr,
