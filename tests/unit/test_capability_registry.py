@@ -187,6 +187,105 @@ def test_policy_decision_is_total_for_allow_approval_and_deny() -> None:
     assert allowed.allowed_effects == allowed.request.effects
 
 
+def test_dispatch_gate_records_approval_without_calling_adapter(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import cafe.core.capabilities as cap_mod
+
+    monkeypatch.setattr(
+        cap_mod,
+        "HOST_CAPABILITY_ADAPTERS",
+        {"open_current_pr": lambda **_kwargs: (_ for _ in ()).throw(AssertionError())},
+    )
+    run = run_capability_request(
+        repo_root=tmp_path,
+        registry={"demo.echo": _typed_manifest(approval="required")},
+        capability_request=_browser_request(),
+        output_file=tmp_path / "output.md",
+    )
+
+    assert run.receipt["success"] is False
+    assert run.receipt["decision"]["outcome"] == "require_approval"
+    assert run.receipt["outcome"] == "approval_required"
+    assert run.receipt["request_fingerprint"]
+    assert run.receipt["requested_effects"]["browser_open"] == ["current_pr"]
+
+
+def test_dispatch_gate_records_policy_denial_without_calling_adapter(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import cafe.core.capabilities as cap_mod
+
+    monkeypatch.setattr(
+        cap_mod,
+        "HOST_CAPABILITY_ADAPTERS",
+        {"open_current_pr": lambda **_kwargs: (_ for _ in ()).throw(AssertionError())},
+    )
+    run = run_capability_request(
+        repo_root=tmp_path,
+        registry={"demo.echo": _typed_manifest(policy="deny")},
+        capability_request=_browser_request(),
+        output_file=tmp_path / "output.md",
+    )
+
+    assert run.receipt["decision"]["outcome"] == "deny"
+    assert run.receipt["outcome"] == "policy_denied"
+
+
+def test_dispatch_success_requires_output_contract(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import cafe.core.capabilities as cap_mod
+
+    manifest = _typed_manifest(
+        outputs={
+            "required": ["opened"],
+            "properties": {"opened": {"type": "boolean"}},
+        }
+    )
+    monkeypatch.setattr(
+        cap_mod,
+        "HOST_CAPABILITY_ADAPTERS",
+        {"open_current_pr": lambda **_kwargs: ({"opened": "yes"}, None)},
+    )
+    run = run_capability_request(
+        repo_root=tmp_path,
+        registry={"demo.echo": manifest},
+        capability_request=_browser_request(),
+        output_file=tmp_path / "output.md",
+    )
+
+    assert run.receipt["success"] is False
+    assert run.receipt["outcome"] == "execution_failure"
+    assert run.receipt["category"] == "output_contract_error"
+
+
+def test_enriched_blackboard_receipt_remains_backward_readable(tmp_path: Path) -> None:
+    from cafe.core.blackboard import BlackboardStore
+
+    issue_dir = tmp_path / "issue"
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    enriched = {
+        "capability": "demo.echo",
+        "success": False,
+        "correlation_id": "new",
+        "request_fingerprint": "abc",
+        "manifest": {"id": "demo.echo", "version": 1},
+        "decision": {"outcome": "deny", "reason_code": "policy_denied"},
+        "outcome": "policy_denied",
+    }
+    store.append_capability_receipt(state, enriched)
+    store.append_capability_receipt(
+        state, {"capability": "legacy", "success": True, "correlation_id": "old"}
+    )
+
+    loaded = store.load_or_create("develop")
+    assert loaded.capability_receipts[-2:] == [enriched, {
+        "capability": "legacy", "success": True, "correlation_id": "old"
+    }]
+
+
 def test_load_registry_duplicate_ids(tmp_path: Path) -> None:
     cap_dir = tmp_path / "caps"
     cap_dir.mkdir()

@@ -144,6 +144,35 @@ def _is_effect_subset(requested: CapabilityEffects, allowed: CapabilityEffects) 
     )
 
 
+def _resolve_boundary_tokens(
+    manifest: CapabilityManifest, request: ExecutionRequest
+) -> tuple[CapabilityEffects, Mapping[str, Tuple[str, ...]]]:
+    replacements: Dict[str, str] = {}
+    if manifest.id == CAPABILITY_PR_PUBLISH_ID:
+        output = str(request.args.get("output") or "")
+        output_path = Path(output)
+        if output_path.is_absolute() or ".." in output_path.parts:
+            return CapabilityEffects(writes=(), network_destinations=(), browser_open=()), {}
+        replacements["request_output"] = output
+        parts = output_path.parts
+        try:
+            issue_index = parts.index("issues")
+            replacements["issue_dir"] = str(Path(*parts[: issue_index + 2]))
+        except (ValueError, IndexError):
+            replacements["issue_dir"] = ""
+
+    def expand(values: Sequence[str]) -> Tuple[str, ...]:
+        return tuple(replacements.get(value, value) for value in values if replacements.get(value, value))
+
+    effects = CapabilityEffects(
+        writes=expand(manifest.effects.writes),
+        network_destinations=manifest.effects.network_destinations,
+        browser_open=manifest.effects.browser_open,
+    )
+    permissions = {key: expand(values) for key, values in manifest.permissions.items()}
+    return effects, permissions
+
+
 def evaluate_capability_request(
     registry: Mapping[str, CapabilityManifest], raw_request: Mapping[str, Any]
 ) -> CapabilityEvaluation:
@@ -153,15 +182,16 @@ def evaluate_capability_request(
     if not isinstance(manifest, CapabilityManifest):
         raise CapabilityRegistryError(f"Unknown capability {request.capability!r}")
     fingerprint = canonical_request_fingerprint(request)
+    allowed_effects, allowed_permissions = _resolve_boundary_tokens(manifest, request)
 
     reason = _validate_request_arguments(request, manifest)
-    if reason is None and not _is_effect_subset(request.effects, manifest.effects):
+    if reason is None and not _is_effect_subset(request.effects, allowed_effects):
         reason = "effect_not_allowed"
     if reason is None and not set(request.credentials).issubset(manifest.credentials):
         reason = "credential_not_allowed"
     if reason is None:
         for permission, values in request.permissions.items():
-            allowed = manifest.permissions.get(permission)
+            allowed = allowed_permissions.get(permission)
             if allowed is None or not set(values).issubset(allowed):
                 reason = "permission_not_allowed"
                 break
@@ -189,7 +219,7 @@ def evaluate_capability_request(
         decision=decision,
         reason_code=reason,
         explanation=explanation,
-        allowed_effects=manifest.effects,
+        allowed_effects=allowed_effects,
     )
 
 
@@ -617,6 +647,187 @@ def run_pr_publish_capability(
     return PrPublishRun(receipt=receipt, pr_synced_event=pr_synced, error_message=None)
 
 
+class CapabilityExecutionError(RuntimeError):
+    def __init__(
+        self, category: str, code: str, outputs: Optional[Dict[str, Any]] = None
+    ) -> None:
+        super().__init__(code)
+        self.category = category
+        self.code = code
+        self.outputs = outputs or {}
+
+
+def _normalize_legacy_pr_request(request: Mapping[str, Any]) -> Dict[str, Any]:
+    normalized = dict(request)
+    if str(normalized.get("capability") or "") != CAPABILITY_PR_PUBLISH_ID:
+        return normalized
+    legacy_permissions = normalized.get("permissions")
+    if not isinstance(legacy_permissions, Mapping):
+        legacy_permissions = {}
+    args = normalized.get("args") if isinstance(normalized.get("args"), Mapping) else {}
+    writes = list(legacy_permissions.get("writes") or [str(args.get("output") or "")])
+    network = list(legacy_permissions.get("network") or ["github.com", "api.github.com"])
+    normalized.setdefault(
+        "effects",
+        {"writes": [value for value in writes if value], "network_destinations": network},
+    )
+    if isinstance(normalized.get("effects"), Mapping):
+        normalized["effects"] = {"browser_open": [], **dict(normalized["effects"])}
+    normalized.setdefault("credentials", ["gh"])
+    normalized["permissions"] = {"network": network, "writes": writes}
+    return normalized
+
+
+def _manifest_digest(manifest: CapabilityManifest) -> str:
+    payload = json.dumps(
+        manifest.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _audited_receipt(
+    *,
+    correlation_id: str,
+    evaluation: CapabilityEvaluation,
+    success: bool,
+    category: Optional[str],
+    code: Optional[str],
+    outputs: Dict[str, Any],
+    outcome: str,
+) -> Dict[str, Any]:
+    receipt = _base_receipt(
+        correlation_id=correlation_id,
+        capability=evaluation.request.capability,
+        success=success,
+        category=category,
+        code=code,
+        inputs=dict(evaluation.request.args),
+        outputs=outputs,
+    )
+    receipt.update(
+        {
+            "request_fingerprint": evaluation.fingerprint,
+            "manifest": {
+                "id": evaluation.manifest.id,
+                "version": evaluation.manifest.version,
+                "digest": _manifest_digest(evaluation.manifest),
+            },
+            "requested_effects": evaluation.request.effects.model_dump(mode="json"),
+            "allowed_effects": evaluation.allowed_effects.model_dump(mode="json"),
+            "decision": {
+                "outcome": evaluation.decision.value,
+                "reason_code": evaluation.reason_code,
+                "explanation": evaluation.explanation,
+            },
+            "outcome": outcome,
+        }
+    )
+    return receipt
+
+
+def _non_dispatch_run(
+    *,
+    correlation_id: str,
+    capability: str,
+    fingerprint: str,
+    code: str,
+    decision: PolicyDecision,
+    outcome: str,
+    inputs: Dict[str, Any],
+    evaluation: Optional[CapabilityEvaluation] = None,
+) -> PrPublishRun:
+    if evaluation is not None:
+        receipt = _audited_receipt(
+            correlation_id=correlation_id,
+            evaluation=evaluation,
+            success=False,
+            category=VALIDATION_ERROR,
+            code=code,
+            outputs={},
+            outcome=outcome,
+        )
+    else:
+        receipt = _base_receipt(
+            correlation_id=correlation_id,
+            capability=capability,
+            success=False,
+            category=VALIDATION_ERROR,
+            code=code,
+            inputs=inputs,
+            outputs={},
+        )
+        receipt.update(
+            {
+                "request_fingerprint": fingerprint,
+                "manifest": None,
+                "requested_effects": {},
+                "allowed_effects": {},
+                "decision": {
+                    "outcome": decision.value,
+                    "reason_code": code,
+                    "explanation": "The request could not be authorized.",
+                },
+                "outcome": outcome,
+            }
+        )
+    return PrPublishRun(receipt=receipt, pr_synced_event=None, error_message=code)
+
+
+def _validate_typed_outputs(outputs: Mapping[str, Any], schema: ObjectSchema) -> Optional[str]:
+    if not set(schema.required).issubset(outputs):
+        return "missing_output"
+    if not set(outputs).issubset(schema.properties):
+        return "undeclared_output"
+    python_types = {"string": str, "integer": int, "boolean": bool}
+    for key, value in outputs.items():
+        field = schema.properties[key]
+        if type(value) is not python_types[field.type]:
+            return "output_type_invalid"
+        if field.enum is not None and value not in field.enum:
+            return "output_value_invalid"
+    return None
+
+
+def _sync_pr_adapter(
+    *,
+    repo_root: Path,
+    request: ExecutionRequest,
+    manifest: CapabilityManifest,
+    output_file: Path,
+    timeout_sec: float,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    legacy_definition = {
+        "id": manifest.id,
+        "script_ref": manifest.implementation,
+        "args_schema": manifest.arguments.model_dump(mode="json"),
+        "expected_outputs": manifest.outputs.model_dump(mode="json"),
+    }
+    run = run_pr_publish_capability(
+        repo_root=repo_root,
+        registry={manifest.id: legacy_definition},
+        publish_request={"capability": manifest.id, "args": dict(request.args)},
+        pr_markdown_file=output_file,
+        timeout_sec=timeout_sec,
+    )
+    if not run.receipt.get("success"):
+        raise CapabilityExecutionError(
+            str(run.receipt.get("category") or VALIDATION_ERROR),
+            str(run.receipt.get("code") or "execution_failed"),
+            dict(run.receipt.get("outputs") or {}),
+        )
+    return dict(run.receipt.get("outputs") or {}), run.pr_synced_event
+
+
+def _unimplemented_browser_adapter(**_kwargs: Any) -> tuple[Dict[str, Any], None]:
+    raise CapabilityExecutionError(VALIDATION_ERROR, "unsupported_implementation")
+
+
+HOST_CAPABILITY_ADAPTERS: Mapping[str, Any] = {
+    "sync_pr": _sync_pr_adapter,
+    "open_current_pr": _unimplemented_browser_adapter,
+}
+
+
 def run_capability_request(
     *,
     repo_root: Path,
@@ -625,34 +836,124 @@ def run_capability_request(
     output_file: Path,
     timeout_sec: float = 600.0,
 ) -> PrPublishRun:
-    """Execute one trusted capability request or return a validation receipt.
+    """Evaluate and dispatch one request through the host-owned adapter allow-list."""
+    correlation_id = uuid.uuid4().hex[:20]
+    raw_request = _normalize_legacy_pr_request(capability_request)
+    cap_id = str(raw_request.get("capability") or "").strip()
+    raw_fingerprint = hashlib.sha256(
+        json.dumps(raw_request, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
 
-    The generic entry point intentionally only dispatches allow-listed
-    implementations. Unknown or not-yet-implemented capability ids become
-    validation receipts and never execute host-side scripts.
-    """
-    cap_id = str(capability_request.get("capability") or "").strip()
-    if cap_id == CAPABILITY_PR_PUBLISH_ID:
-        return run_pr_publish_capability(
-            repo_root=repo_root,
-            registry=registry,
-            publish_request=capability_request,
-            pr_markdown_file=output_file,
-            timeout_sec=timeout_sec,
+    raw_manifest = registry.get(cap_id)
+    if raw_manifest is None:
+        return _non_dispatch_run(
+            correlation_id=correlation_id,
+            capability=cap_id or "unknown",
+            fingerprint=raw_fingerprint,
+            code="unknown_capability",
+            decision=PolicyDecision.DENY,
+            outcome="validation_rejection",
+            inputs=_receipt_inputs(raw_request.get("args")),
+        )
+    if not isinstance(raw_manifest, CapabilityManifest):
+        return _non_dispatch_run(
+            correlation_id=correlation_id,
+            capability=cap_id or "unknown",
+            fingerprint=raw_fingerprint,
+            code="unsupported_capability",
+            decision=PolicyDecision.DENY,
+            outcome="validation_rejection",
+            inputs=_receipt_inputs(raw_request.get("args")),
         )
 
-    definition = registry.get(cap_id)
-    code = "unknown_capability" if definition is None else "unsupported_capability"
-    receipt = _base_receipt(
-        correlation_id=uuid.uuid4().hex[:20],
-        capability=cap_id or "unknown",
-        success=False,
-        category=VALIDATION_ERROR,
-        code=code,
-        inputs=_receipt_inputs(capability_request.get("args")),
-        outputs={},
+    try:
+        request = ExecutionRequest.model_validate(raw_request)
+    except ValidationError:
+        return _non_dispatch_run(
+            correlation_id=correlation_id,
+            capability=cap_id or "unknown",
+            fingerprint=raw_fingerprint,
+            code="malformed_request",
+            decision=PolicyDecision.DENY,
+            outcome="validation_rejection",
+            inputs=_receipt_inputs(raw_request.get("args")),
+        )
+
+    manifest = raw_manifest
+
+    evaluation = evaluate_capability_request(registry, raw_request)
+    if evaluation.decision != PolicyDecision.ALLOW:
+        outcome = (
+            "approval_required"
+            if evaluation.decision == PolicyDecision.REQUIRE_APPROVAL
+            else "policy_denied"
+        )
+        return _non_dispatch_run(
+            correlation_id=correlation_id,
+            capability=request.capability,
+            fingerprint=evaluation.fingerprint,
+            code=evaluation.reason_code,
+            decision=evaluation.decision,
+            outcome=outcome,
+            inputs=dict(request.args),
+            evaluation=evaluation,
+        )
+
+    adapter = HOST_CAPABILITY_ADAPTERS.get(manifest.implementation)
+    if adapter is None:
+        return _non_dispatch_run(
+            correlation_id=correlation_id,
+            capability=request.capability,
+            fingerprint=evaluation.fingerprint,
+            code="unsupported_implementation",
+            decision=PolicyDecision.DENY,
+            outcome="validation_rejection",
+            inputs=dict(request.args),
+            evaluation=evaluation,
+        )
+
+    try:
+        outputs, event = adapter(
+            repo_root=repo_root,
+            request=request,
+            manifest=manifest,
+            output_file=output_file,
+            timeout_sec=timeout_sec,
+        )
+    except CapabilityExecutionError as exc:
+        receipt = _audited_receipt(
+            correlation_id=correlation_id,
+            evaluation=evaluation,
+            success=False,
+            category=exc.category,
+            code=exc.code,
+            outputs=exc.outputs,
+            outcome="execution_failure",
+        )
+        return PrPublishRun(receipt=receipt, pr_synced_event=None, error_message=exc.code)
+    output_error = _validate_typed_outputs(outputs, manifest.outputs)
+    if output_error:
+        receipt = _audited_receipt(
+            correlation_id=correlation_id,
+            evaluation=evaluation,
+            success=False,
+            category=OUTPUT_CONTRACT_ERROR,
+            code=output_error,
+            outputs=outputs,
+            outcome="execution_failure",
+        )
+        return PrPublishRun(receipt=receipt, pr_synced_event=None, error_message=output_error)
+
+    receipt = _audited_receipt(
+        correlation_id=correlation_id,
+        evaluation=evaluation,
+        success=True,
+        category=None,
+        code=None,
+        outputs=outputs,
+        outcome="success",
     )
-    return PrPublishRun(receipt=receipt, pr_synced_event=None, error_message=code)
+    return PrPublishRun(receipt=receipt, pr_synced_event=event, error_message=None)
 
 
 def capability_receipt_hook_event(receipt: Mapping[str, Any]) -> Dict[str, Any]:
