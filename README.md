@@ -255,6 +255,49 @@ project.
 Issue worktrees can carry their own `.cafe/phases.yaml`, allowing model choices
 to differ between issues without changing repository-wide defaults.
 
+### Repository task inbox
+
+Use the task inbox when you need to find human work across every live workflow
+in the repository. Pending tasks are shown by default in deterministic order;
+completed and cancelled tasks appear only when requested.
+
+```bash
+cafe task ls
+cafe task ls --assignee alice --step review --due-state unscheduled
+cafe task ls --historical
+cafe task ls --status completed
+```
+
+Inspect a task by its stable identifier before answering it:
+
+```bash
+cafe task inspect 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43
+cafe task inspect 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43 --json
+```
+
+Completion is interactive when no result option is supplied. Automation may
+provide the task's declared response as JSON directly or in a file:
+
+```bash
+cafe task complete 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43
+cafe task complete 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43 \
+  --result '{"decision":"confirm"}' --json
+cafe task complete 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43 \
+  --result-file response.json
+```
+
+Add `--json` to list, inspect, or complete to receive one result object with
+`ok`, `operation`, `data`, and `error` fields. Filters combine with AND
+semantics. Current HumanTask records have no due timestamp, so their due state
+is `unscheduled`; the inbox does not invent or manage due dates.
+
+Inbox operations fail closed when an identifier is missing or duplicated, a
+task is stale or terminal, its workflow is missing or archived, or durable
+records are corrupt. The error identifies the affected task or workflow when
+known and includes a recovery action. Repair or explicitly restore the named
+workflow, then retry the same stable identifier; the inbox never switches the
+active issue or chooses an ambiguous record automatically.
+
 ### Inspect and recover
 
 Ask the driver for the information or recovery outcome you need:
