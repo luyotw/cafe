@@ -492,6 +492,38 @@ class HumanTaskRecordStore:
             self._save(envelope)
             return updated
 
+    def transition_capability_approval_if_state(
+        self,
+        *,
+        workflow_id: str,
+        task_id: str,
+        expected_state: str,
+        metadata: Mapping[str, Any],
+        event_type: str,
+    ) -> tuple[HumanTask, bool]:
+        """Replace capability state only when the persisted prior state matches."""
+        with self.transaction():
+            envelope = self._load_for_workflow(workflow_id, create=False)
+            task = self._task(envelope, task_id)
+            current = task.capability_approval
+            if current is None:
+                raise HumanTaskCorrelationError(f"task {task.id} is not a capability approval")
+            if current.get("state") != expected_state:
+                return task, False
+            updated = replace(task, capability_approval=dict(metadata))
+            envelope.tasks[task.id] = updated
+            self._append_event(
+                envelope,
+                _text(event_type, "event_type"),
+                task_id=task.id,
+                context={
+                    "request_fingerprint": metadata.get("fingerprint"),
+                    "state": metadata.get("state"),
+                },
+            )
+            self._save(envelope)
+            return updated, True
+
     def transition_capability_approval(
         self,
         *,

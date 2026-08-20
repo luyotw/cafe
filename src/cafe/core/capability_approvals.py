@@ -201,6 +201,13 @@ class CapabilityApprovalService:
                 "source": "capability_approval",
                 "recorded_at": now,
             }
+            if current["state"] == "denied":
+                current["receipt"] = self._terminal_receipt(
+                    task_id=task_id,
+                    current=current,
+                    outcome="denied",
+                    recovery="Create a new capability request if execution is still required.",
+                )
             self.store.transition_capability_approval(
                 workflow_id=self.workflow_id,
                 task_id=task_id,
@@ -248,6 +255,26 @@ class CapabilityApprovalService:
         timeout_sec: float = 600.0,
     ) -> dict[str, Any]:
         """Resume only the approved unchanged request behind its one-attempt fence."""
+        with self.store.transaction():
+            return self._resume_locked(
+                task_id,
+                request=request,
+                registry=registry,
+                repo_root=repo_root,
+                output_file=output_file,
+                timeout_sec=timeout_sec,
+            )
+
+    def _resume_locked(
+        self,
+        task_id: str,
+        *,
+        request: ExecutionRequest,
+        registry: Mapping[str, CapabilityManifest],
+        repo_root: Path,
+        output_file: Path,
+        timeout_sec: float,
+    ) -> dict[str, Any]:
         current = self.inspect(task_id)
         if current["state"] in TERMINAL_STATES:
             receipt = current.get("receipt")
@@ -318,21 +345,24 @@ class CapabilityApprovalService:
                 event_type="capability_policy_rejected",
             )
 
-        self.store.update_capability_approval(
-            workflow_id=self.workflow_id,
-            task_id=task_id,
-            metadata=current,
-            event_type="capability_policy_revalidated",
-        )
         started_at = self._now().astimezone().isoformat()
         current["state"] = "attempt_started"
         current["attempt"] = {"state": "started", "started_at": started_at}
-        self.store.update_capability_approval(
+        persisted, transitioned = self.store.transition_capability_approval_if_state(
             workflow_id=self.workflow_id,
             task_id=task_id,
+            expected_state="approved",
             metadata=current,
             event_type="capability_attempt_started",
         )
+        if not transitioned:
+            persisted_state = persisted.capability_approval
+            if persisted_state is None:
+                raise CapabilityApprovalError("task is not a capability approval")
+            receipt = persisted_state.get("receipt")
+            if isinstance(receipt, Mapping):
+                return dict(receipt)
+            raise CapabilityApprovalError("capability execution attempt is already in progress")
 
         run = dispatch_revalidated_capability_request(
             repo_root=repo_root,

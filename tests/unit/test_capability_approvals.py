@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -248,6 +251,53 @@ def test_approved_request_revalidates_and_dispatches_at_most_once(
     assert first["attempt"]["state"] == "finished"
 
 
+def test_concurrent_resumes_cross_one_atomic_attempt_fence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test List unit 6: concurrent resumes serialize before host dispatch."""
+    calls: list[str] = []
+
+    def adapter(**_kwargs: object) -> tuple[dict[str, object], None]:
+        calls.append("called")
+        return {}, None
+
+    monkeypatch.setattr(capability_module, "HOST_CAPABILITY_ADAPTERS", {"open_current_pr": adapter})
+    first_service = _service(tmp_path)
+    manifest = _manifest()
+    task = first_service.request_approval(request=_request(), manifest=manifest)
+    _approve(first_service, task.id)
+    second_service = _service(tmp_path)
+    original_transition = first_service.store.__class__.transition_capability_approval_if_state
+
+    def widen_pre_fence_race(self: object, **kwargs: object) -> object:
+        time.sleep(0.05)
+        return original_transition(self, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        first_service.store.__class__,
+        "transition_capability_approval_if_state",
+        widen_pre_fence_race,
+    )
+    start = threading.Barrier(2)
+
+    def resume(service: CapabilityApprovalService) -> dict[str, object]:
+        start.wait()
+        return service.resume(
+            task.id,
+            request=_request(),
+            registry={manifest.id: manifest},
+            repo_root=tmp_path,
+            output_file=tmp_path / "output.md",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(resume, (first_service, second_service)))
+
+    assert calls == ["called"]
+    assert results[0] == results[1]
+    assert results[0]["outcome"] == "succeeded"
+
+
 def test_policy_rejection_and_tampering_never_dispatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -357,14 +407,16 @@ def test_failure_receipt_is_terminal_and_pre_fence_persistence_failure_is_safe(
     safe_service = _service(tmp_path / "persistence")
     safe_task = safe_service.request_approval(request=_request(), manifest=manifest)
     _approve(safe_service, safe_task.id)
-    original_update = safe_service.store.update_capability_approval
+    original_transition = safe_service.store.transition_capability_approval_if_state
 
     def fail_before_fence(**kwargs: object) -> object:
-        if kwargs.get("event_type") == "capability_policy_revalidated":
+        if kwargs.get("event_type") == "capability_attempt_started":
             raise OSError("disk unavailable")
-        return original_update(**kwargs)  # type: ignore[arg-type]
+        return original_transition(**kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(safe_service.store, "update_capability_approval", fail_before_fence)
+    monkeypatch.setattr(
+        safe_service.store, "transition_capability_approval_if_state", fail_before_fence
+    )
     monkeypatch.setattr(
         capability_module,
         "HOST_CAPABILITY_ADAPTERS",

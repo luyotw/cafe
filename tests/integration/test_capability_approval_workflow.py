@@ -191,7 +191,7 @@ def test_malformed_and_mismatched_cli_decisions_leave_request_blocked(
 
 @pytest.mark.parametrize("outcome", ["deny", "cancel", "expire"])
 def test_denial_cancellation_and_expiry_are_durable_without_mutation(
-    tmp_path: Path, outcome: str
+    tmp_path: Path, outcome: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Test List integration 2: terminal decisions release wait without mutation."""
     manifest = _manifest()
@@ -223,7 +223,22 @@ def test_denial_cancellation_and_expiry_are_durable_without_mutation(
     else:
         state = service.inspect(task.id)
 
+    monkeypatch.setattr(
+        capability_module,
+        "HOST_CAPABILITY_ADAPTERS",
+        {"open_current_pr": lambda **_kwargs: (_ for _ in ()).throw(AssertionError())},
+    )
+    receipt = service.resume(
+        task.id,
+        request=ExecutionRequest.model_validate(_request()),
+        registry={manifest.id: manifest},
+        repo_root=tmp_path,
+        output_file=tmp_path / "output.md",
+    )
+
     assert state["state"] in {"denied", "cancelled", "expired"}
+    assert receipt["outcome"] == state["state"]
+    assert not receipt["executed"]
     assert service.store.get_wait_state(task.id).released_at is not None
 
 
