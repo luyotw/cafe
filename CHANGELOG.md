@@ -1,5 +1,7 @@
 # Changelog
 
+- Enforce explicit sandbox, user lifecycle, and registered capability boundaries for workflow-managed scripts.
+
 All notable changes to this project will be documented in this file.
 
 ## [0.3.2] - 2026-08-18

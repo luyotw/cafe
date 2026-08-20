@@ -211,3 +211,13 @@ Baseline (issue317 develop): `uv run --with pytest pytest tests/unit tests/integ
 | --- | --- |
 | Duplicate legacy-text baton tests outside runtime/models boundaries | No additional deletes this pass; issue #386 removed `allow_legacy_text` and the runtime's legacy-text normalization boundary entirely — batons are now strict JSON-only, enforced by `test_workflow_runtime.py::test_runtime_rejects_plain_text_baton_written_by_pr_agent` and `test_workflow_models.py::TestLegacyBatonFormatsAreRejected` |
 | Tests asserting global home as default install target | None found; new contract tests lock project-local install |
+# Script hook execution boundaries
+
+Custom skill and playbook hooks now run as untrusted sandbox execution by default. Ambient host credentials, proxy configuration, unrestricted network access, and host writes are not inherited. Project/global overrides do not inherit bundled trust.
+
+- Keep hooks that only need declared workspace access in the sandbox.
+- Use `cafe trust lifecycle` only for an explicit user-owned `prepare`/`close` script with a canonical identity and narrow local write scope.
+- Request a registered capability for credentials, network effects, or privileged mutation.
+- Inspect execution receipts for the class and trust source. Revoke/recreate lifecycle declarations after script or scope changes.
+
+Sandbox backend absence, identity changes, unknown launchers, and ambient-authority dependencies are denied. There is no automatic promotion or grandfathered host fallback.

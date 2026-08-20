@@ -15,7 +15,7 @@ from cafe.core.capabilities import default_capability_definition_dirs, load_capa
 from cafe.core.hooks import BUILTIN_HOOKS, HookResult
 from cafe.core.hooks.script_schema import validate_script_args_schema
 from cafe.core.execution_boundary import ExecutionClass
-from cafe.core.sandbox_execution import sandbox_command
+from cafe.core.sandbox_execution import MIGRATION_GUIDANCE, sandbox_command
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import (
     PhaseStatusCode,
@@ -618,6 +618,7 @@ class GenericPhase:
                     "status": "denied", "reason": str(exc), "exit_code": None,
                     "stdout": "", "stderr": "", "validation_errors": [],
                     "execution_class": ExecutionClass.SANDBOX.value, "trust_source": "workflow",
+                    "migration": MIGRATION_GUIDANCE,
                 }],
             )
         try:
@@ -648,6 +649,7 @@ class GenericPhase:
                         "stdout": stdout,
                         "stderr": stderr,
                         "validation_errors": [],
+                        "migration": MIGRATION_GUIDANCE,
                     }
                 ],
             )

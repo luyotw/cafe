@@ -5,11 +5,17 @@ from __future__ import annotations
 import shutil
 import subprocess
 import uuid
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 from cafe.core.execution_boundary import ExecutionClass, ExecutionReceipt, ScriptLaunchRequest, snapshot_script
+
+MIGRATION_GUIDANCE = (
+    "Keep compatible hooks in sandbox execution, create explicit user lifecycle trust for narrow "
+    "prepare/close automation, or request a registered capability for privileged effects."
+)
 
 
 @dataclass(frozen=True)
@@ -35,10 +41,11 @@ class SandboxExecutor:
             snapshot = snapshot_script(request.script, allowed_root=request.script.parent)
         except (OSError, ValueError) as exc:
             return self._denied(request, correlation_id, "script_identity_invalid", str(exc))
-        command = [self.codex_path, "sandbox", "--sandbox-state-disable-network"]
+        state = {"permissionProfile": {}, "sandboxCwd": request.boundary.cwd.resolve().as_uri()}
+        command = [self.codex_path, "sandbox", "--sandbox-state-json", json.dumps(state), "--sandbox-state-disable-network"]
         for root in request.boundary.readable_roots:
             command.extend(["--sandbox-state-readable-root", str(root.resolve())])
-        command.extend(["-C", str(request.boundary.cwd.resolve()), str(snapshot.path), *request.args])
+        command.extend([str(snapshot.path), *request.args])
         try:
             completed = self.runner(command, cwd=str(request.boundary.cwd.resolve()), env=dict(request.boundary.environment), capture_output=True, text=True, check=False, timeout=request.timeout_seconds)
             outcome = "success" if completed.returncode == 0 else "failed"
@@ -52,7 +59,7 @@ class SandboxExecutor:
 
     @staticmethod
     def _denied(request: ScriptLaunchRequest, correlation_id: str, reason: str, detail: str = "") -> SandboxRunResult:
-        receipt = ExecutionReceipt(correlation_id=correlation_id, execution_class=request.execution_class, trust_source=request.trust_source, outcome="denied", boundary=request.boundary, details={"reason": reason, "detail": detail})
+        receipt = ExecutionReceipt(correlation_id=correlation_id, execution_class=request.execution_class, trust_source=request.trust_source, outcome="denied", boundary=request.boundary, details={"reason": reason, "detail": detail, "migration": MIGRATION_GUIDANCE})
         return SandboxRunResult(None, "", reason, receipt)
 
 
@@ -66,4 +73,5 @@ def sandbox_command(command: list[str], *, cwd: Path) -> list[str]:
     codex = shutil.which("codex")
     if not codex:
         raise RuntimeError("sandbox_backend_unavailable")
-    return [codex, "sandbox", "--sandbox-state-disable-network", "-C", str(cwd.resolve()), *command]
+    state = {"permissionProfile": {}, "sandboxCwd": cwd.resolve().as_uri()}
+    return [codex, "sandbox", "--sandbox-state-json", json.dumps(state), "--sandbox-state-readable-root", str(cwd.resolve()), "--sandbox-state-disable-network", *command]

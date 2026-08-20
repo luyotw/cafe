@@ -1,5 +1,7 @@
 # CAFE Roadmap
 
+> Script hooks are untrusted sandbox work by default. User lifecycle declarations and package-owned registered capabilities are the only host-side trust sources; see `docs/script-execution-boundaries.md`.
+
 ## 北極星
 
 讓創業者用 CAFE 遞迴建立、執行、追蹤整個公司的流程，並把 agent 做不到的工作明確切分給人執行，再把結果餵回流程繼續推進。
