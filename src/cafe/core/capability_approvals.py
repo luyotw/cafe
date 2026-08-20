@@ -7,10 +7,12 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
 from cafe.core.capabilities import (
+    CapabilityEvaluation,
     CapabilityManifest,
     ExecutionRequest,
     PolicyDecision,
     canonical_request_fingerprint,
+    dispatch_revalidated_capability_request,
     evaluate_capability_request,
 )
 from cafe.core.human_task_records import HumanTask, HumanTaskRecordStore, HumanTaskStatus
@@ -177,9 +179,7 @@ class CapabilityApprovalService:
                     "capability approval does not match the exact request"
                 )
             now = self._now().astimezone().isoformat()
-            current["state"] = (
-                "approved" if payload["decision"] == "approve" else "denied"
-            )
+            current["state"] = "approved" if payload["decision"] == "approve" else "denied"
             current["decision"] = {
                 "outcome": payload["decision"],
                 "source": "capability_approval",
@@ -220,6 +220,188 @@ class CapabilityApprovalService:
             terminal_status=HumanTaskStatus.CANCELLED,
         )
         return current
+
+    def resume(
+        self,
+        task_id: str,
+        *,
+        request: ExecutionRequest,
+        registry: Mapping[str, CapabilityManifest],
+        repo_root: Path,
+        output_file: Path,
+        timeout_sec: float = 600.0,
+    ) -> dict[str, Any]:
+        """Resume only the approved unchanged request behind its one-attempt fence."""
+        current = self.inspect(task_id)
+        if current["state"] in TERMINAL_STATES:
+            receipt = current.get("receipt")
+            if isinstance(receipt, Mapping):
+                return dict(receipt)
+            raise CapabilityApprovalError("terminal capability approval has no receipt")
+        if current["state"] == "attempt_started":
+            current["state"] = "uncertain"
+            current["attempt"] = {
+                **dict(current.get("attempt") or {}),
+                "state": "uncertain",
+                "finished_at": self._now().astimezone().isoformat(),
+            }
+            return self._finish(
+                task_id,
+                current,
+                outcome="uncertain",
+                executed=True,
+                recovery=(
+                    "Inspect the host system and reconcile manually; automatic retry is disabled."
+                ),
+                event_type="capability_attempt_uncertain",
+            )
+        if current["state"] != "approved":
+            raise CapabilityApprovalError("matching capability approval is still required")
+
+        fingerprint = canonical_request_fingerprint(request)
+        if fingerprint != current["fingerprint"]:
+            current["state"] = "tampered"
+            return self._finish(
+                task_id,
+                current,
+                outcome="tampered",
+                executed=False,
+                recovery="Evaluate the changed request and create a new approval task.",
+                event_type="capability_request_tampered",
+            )
+
+        try:
+            evaluation = evaluate_capability_request(registry, request.model_dump(mode="json"))
+        except Exception as exc:
+            current["revalidation"] = {
+                "outcome": "error",
+                "reason_code": type(exc).__name__,
+                "checked_at": self._now().astimezone().isoformat(),
+            }
+            current["state"] = "policy_rejected"
+            return self._finish(
+                task_id,
+                current,
+                outcome="policy_rejected",
+                executed=False,
+                recovery="Restore a verifiable policy and create a new approval task.",
+                event_type="capability_policy_rejected",
+            )
+
+        current["revalidation"] = self._revalidation_record(evaluation)
+        if evaluation.decision is PolicyDecision.DENY or not self._same_reviewed_boundary(
+            current, evaluation.manifest
+        ):
+            current["state"] = "policy_rejected"
+            return self._finish(
+                task_id,
+                current,
+                outcome="policy_rejected",
+                executed=False,
+                recovery="Evaluate the current request and policy through a new approval task.",
+                event_type="capability_policy_rejected",
+            )
+
+        self.store.update_capability_approval(
+            workflow_id=self.workflow_id,
+            task_id=task_id,
+            metadata=current,
+            event_type="capability_policy_revalidated",
+        )
+        started_at = self._now().astimezone().isoformat()
+        current["state"] = "attempt_started"
+        current["attempt"] = {"state": "started", "started_at": started_at}
+        self.store.update_capability_approval(
+            workflow_id=self.workflow_id,
+            task_id=task_id,
+            metadata=current,
+            event_type="capability_attempt_started",
+        )
+
+        run = dispatch_revalidated_capability_request(
+            repo_root=repo_root,
+            evaluation=evaluation,
+            output_file=output_file,
+            timeout_sec=timeout_sec,
+        )
+        succeeded = bool(run.receipt.get("success"))
+        current["state"] = "succeeded" if succeeded else "failed"
+        current["attempt"] = {
+            **dict(current["attempt"]),
+            "state": "finished",
+            "finished_at": self._now().astimezone().isoformat(),
+            "outcome": "succeeded" if succeeded else "failed",
+        }
+        return self._finish(
+            task_id,
+            current,
+            outcome=current["state"],
+            executed=True,
+            recovery=(
+                "No recovery is required."
+                if succeeded
+                else "Inspect the recorded failure; automatic retry is disabled."
+            ),
+            event_type="capability_attempt_finished",
+            execution_receipt=run.receipt,
+        )
+
+    def _finish(
+        self,
+        task_id: str,
+        current: dict[str, Any],
+        *,
+        outcome: str,
+        executed: bool,
+        recovery: str,
+        event_type: str,
+        execution_receipt: Optional[Mapping[str, Any]] = None,
+    ) -> dict[str, Any]:
+        receipt = self._terminal_receipt(
+            task_id=task_id,
+            current=current,
+            outcome=outcome,
+            recovery=recovery,
+        )
+        receipt["executed"] = executed
+        if execution_receipt is not None:
+            receipt["execution"] = dict(execution_receipt)
+        current["receipt"] = receipt
+        self.store.update_capability_approval(
+            workflow_id=self.workflow_id,
+            task_id=task_id,
+            metadata=current,
+            event_type=event_type,
+        )
+        return receipt
+
+    def _revalidation_record(self, evaluation: CapabilityEvaluation) -> dict[str, Any]:
+        return {
+            "outcome": evaluation.decision.value,
+            "reason_code": evaluation.reason_code,
+            "manifest_digest": _manifest_digest(evaluation.manifest),
+            "checked_at": self._now().astimezone().isoformat(),
+        }
+
+    @staticmethod
+    def _same_reviewed_boundary(current: Mapping[str, Any], manifest: CapabilityManifest) -> bool:
+        reviewed = current.get("manifest")
+        if not isinstance(reviewed, Mapping):
+            return False
+        live = manifest.model_dump(mode="json")
+        security_fields = {
+            "id",
+            "version",
+            "implementation",
+            "arguments",
+            "outputs",
+            "effects",
+            "credentials",
+            "permissions",
+            "idempotency",
+            "risk",
+        }
+        return all(reviewed.get(field) == live.get(field) for field in security_fields)
 
     def _is_expired(self, current: Mapping[str, Any]) -> bool:
         raw = current.get("expires_at")
