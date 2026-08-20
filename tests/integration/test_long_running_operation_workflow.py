@@ -219,6 +219,9 @@ def test_low_risk_silent_single_launch_journey(
     assert executor_calls == 1
     persisted = json.loads((iteration_dir / "operation.json").read_text())
     assert persisted["state"] == "running"
+    assert persisted["correlation_id"]
+    assert len(persisted["command_fingerprint"]) == 64
+    assert persisted["effective_boundary"]["cwd"] == str(tmp_path.resolve())
     assert (persisted["risk"], persisted["monitoring"], persisted["log_policy"]) == (
         "low",
         "final-only",

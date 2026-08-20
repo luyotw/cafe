@@ -1,4 +1,5 @@
 import ast
+import os
 import re
 from collections import Counter
 from pathlib import Path
@@ -71,6 +72,36 @@ def test_snapshot_rejects_symlinks_and_is_immune_to_target_replacement(tmp_path:
     with pytest.raises(ValueError):
         snapshot_script(link, allowed_root=root)
     snap.cleanup()
+
+
+def test_snapshot_rejects_ancestor_swap_during_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "skills"
+    ancestor = root / "nested"
+    ancestor.mkdir(parents=True)
+    script = ancestor / "hook.sh"
+    script.write_text("#!/bin/sh\necho safe\n", encoding="utf-8")
+    attacker = tmp_path / "attacker"
+    attacker.mkdir()
+    (attacker / "hook.sh").write_text("#!/bin/sh\necho attacker\n", encoding="utf-8")
+    displaced = root / "displaced"
+    native_open = os.open
+    swapped = False
+
+    def swap_ancestor(path, flags, *args, **kwargs):
+        nonlocal swapped
+        if not swapped and str(path) in {"nested", str(script)}:
+            swapped = True
+            ancestor.rename(displaced)
+            ancestor.symlink_to(attacker, target_is_directory=True)
+        return native_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", swap_ancestor)
+
+    with pytest.raises((OSError, ValueError)):
+        snapshot_script(script, allowed_root=root)
+    assert swapped is True
 
 
 def test_script_launcher_inventory_covers_workflow_process_calls() -> None:

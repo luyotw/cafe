@@ -6,7 +6,7 @@ Every workflow-managed script launch is classified before path resolution. Unkno
 | --- | --- | --- | --- | --- | --- | --- |
 | Skill and phase script hooks | sandbox | workflow declaration | constructed allowlist; no credentials | denied unless sandbox policy declares it | workflow cwd; declared roots | execution receipt |
 | Permission retry | sandbox | agent permission boundary | constructed allowlist; no credentials | sandbox policy only | original sandbox roots | execution receipt |
-| Long-running operation child | sandbox | workflow operation request | constructed allowlist; no credentials | sandbox policy only | issue workspace; declared roots | operation and execution receipts |
+| Long-running operation child | sandbox | workflow operation request | constructed allowlist; no credentials | sandbox policy only | issue workspace; declared roots | every terminal receipt includes correlation, requested-command fingerprint, and effective boundary |
 | Prepare/close lifecycle script | lifecycle | user-owned canonical declaration | constructed allowlist; no credentials | denied | declared cwd and local write roots | declaration identity and execution receipt |
 | Registered adapter | capability | immutable package registry | manifest grants only | manifest destinations only | manifest cwd/write effects | policy decision and capability receipt |
 | Bundled GitHub helpers | capability | immutable package registry | manifest grants only | GitHub only | declared issue artifacts | policy decision and capability receipt |
@@ -85,3 +85,9 @@ Existing custom hooks are attempted as sandbox execution and are never grandfath
 3. For credentials, external network access, or privileged mutation, define a package-owned registered capability with exact effects and policy. Do not point a capability at a project or global skill script.
 
 An unavailable sandbox backend, changed lifecycle identity, unknown launcher, ambient credential dependency, or undeclared network/write request is a safe denial. Correct the boundary and retry; CAFE does not automatically promote or fall back to host execution.
+
+Confirmed spec/plan GitHub sync is not a custom-hook migration target. The
+trusted runtime owns its fixed `after_execute` + `confirmed` gate, binds the
+resolved issue destination and artifact digest into the capability request,
+and persists the capability receipt. Compatibility `sync_github.sh` wrappers
+must not be invoked by phase agents.

@@ -69,19 +69,18 @@ def test_sync_script_skips_when_sync_disabled_without_gh(
     assert payload["reason"] == "sync_disabled"
 
 
-def test_default_playbook_routes_plan_sync_to_registered_capability() -> None:
+def test_default_playbook_leaves_confirmed_sync_to_trusted_runtime() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    playbook_path = project_root / "src/cafe/data/playbooks/default.yaml"
-    data = yaml.safe_load(playbook_path.read_text(encoding="utf-8"))
-
-    plan_hooks = data["steps"]["plan"]["hooks"]["after_execute"]
-    assert isinstance(plan_hooks, list) and plan_hooks
-    capability_hook = plan_hooks[0]
-    assert capability_hook["capability"] == "cafe.github.issue_comment"
-    assert capability_hook["execution_class"] == "capability"
-    assert capability_hook["args"]["phase"] == "plan"
-    assert capability_hook["args"]["output"] == "{output_file}"
-    assert capability_hook["when_intents"] == ["confirmed"]
+    for playbook_name in ("default", "tdd"):
+        playbook_path = project_root / f"src/cafe/data/playbooks/{playbook_name}.yaml"
+        data = yaml.safe_load(playbook_path.read_text(encoding="utf-8"))
+        for phase in ("spec", "plan"):
+            hooks = data["steps"][phase]["hooks"]
+            assert not any(
+                isinstance(entry, dict) and "capability" in entry
+                for entries in hooks.values()
+                for entry in entries
+            )
 
 
 def test_default_playbook_no_changes_needed_routes_to_review() -> None:

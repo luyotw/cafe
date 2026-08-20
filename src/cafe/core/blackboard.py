@@ -121,6 +121,8 @@ class LongRunningOperationArtifact:
     execution_class: str = "sandbox"
     trust_source: str = "workflow"
     effective_boundary: Dict[str, Any] = field(default_factory=dict)
+    correlation_id: str = field(default_factory=lambda: uuid.uuid4().hex[:20])
+    command_fingerprint: str = ""
     reason: str = ""
     exit_code: Optional[int] = None
     operation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
@@ -154,6 +156,8 @@ class LongRunningOperationArtifact:
             "execution_class": self.execution_class,
             "trust_source": self.trust_source,
             "effective_boundary": self.effective_boundary,
+            "correlation_id": self.correlation_id,
+            "command_fingerprint": self.command_fingerprint,
         }
 
     @classmethod
@@ -202,6 +206,8 @@ class LongRunningOperationArtifact:
             execution_class=str(data.get("execution_class", "sandbox")),
             trust_source=str(data.get("trust_source", "workflow")),
             effective_boundary=dict(data.get("effective_boundary") or {}),
+            correlation_id=str(data.get("correlation_id") or data["operation_id"]),
+            command_fingerprint=str(data.get("command_fingerprint") or ""),
         )
         validate_operation_decision(
             risk=artifact.risk,

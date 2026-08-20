@@ -7,16 +7,16 @@ version: 1.0.0
 # GitHub Sync Shared Skill
 
 ## Purpose
-- Provide a single implementation for spec/plan GitHub sync behavior.
-- Keep calling skills lightweight by delegating to shared scripts.
+- Document the runtime-owned confirmed spec/plan GitHub sync behavior.
+- Keep phase agents outside the host capability authority path.
 
-## Available scripts
-- `scripts/sync_github.sh` — Sync confirmed spec/plan output to GitHub issue comment when enabled
+## Runtime contract
+- The trusted workflow runtime invokes `cafe.github.issue_comment` only from its
+  fixed `after_execute` + `confirmed` gate for spec and plan artifacts.
+- Phase agents write the confirmation baton only. They must not invoke a sync
+  script or construct a capability request.
 
-```bash
-bash scripts/sync_github.sh --help
-```
-
-## Notes
-- This skill is intended to be invoked by other skill-local wrapper scripts.
-- Keep CLI/JSON contract stable because multiple skills depend on it.
+## Compatibility
+- `scripts/sync_github.sh` and skill-local wrappers remain for compatibility
+  testing and migration only. They are not an authority path and must not be
+  executed by phase agents.

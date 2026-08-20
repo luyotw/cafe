@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -9,8 +10,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from cafe.core.blackboard import HandoffIntent
+import yaml
+
+from cafe.core.blackboard import BlackboardState, BlackboardStore, HandoffIntent
 from cafe.core.capabilities import (
+    CAPABILITY_ISSUE_COMMENT_ID,
     default_capability_definition_dirs,
     load_capability_registry,
     run_capability_request,
@@ -57,6 +61,7 @@ class GenericPhase:
     GOTO_PATTERN = re.compile(r"GOTO\s*:\s*([a-zA-Z0-9_-]+)")
     PLACEHOLDER_PATTERN = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
     SCRIPT_HOOK_STAGES = {"before_execute", "after_execute"}
+    _CONFIRMED_ARTIFACT_SYNC_HOOK = object()
 
     def __init__(
         self,
@@ -178,14 +183,12 @@ class GenericPhase:
             lines.extend(runtime_files)
             lines.append("")
 
-        baton_intents = (
-            context.get("valid_baton_intents", "")
-            if context
-            else ""
-        ) or ", ".join(intent.value for intent in HandoffIntent)
+        baton_intents = (context.get("valid_baton_intents", "") if context else "") or ", ".join(
+            intent.value for intent in HandoffIntent
+        )
         runtime_context.append("Baton contract (single source of truth):")
         runtime_context.append(
-            '- write next_step_file as JSON with exactly these required fields: '
+            "- write next_step_file as JSON with exactly these required fields: "
             '{"version":1,"to_owner":"<agent|user|done>",'
             '"to_step":"<target>","intent":"<intent>"}'
         )
@@ -492,12 +495,29 @@ class GenericPhase:
         defaults = [
             name for name in self.DEFAULT_STAGE_HOOKS.get(stage, ()) if name not in declared
         ]
-        hook_entries = [*defaults, *declared]
+        trusted_hooks: list[object] = []
+        if (
+            stage == "after_execute"
+            and canonical_skill_name(str(kwargs.get("skill_name") or ""))
+            in {"cafe-spec", "cafe-plan"}
+            and kwargs["step_def"].get("output_artifact") in {"spec", "plan"}
+        ):
+            trusted_hooks.append(self._CONFIRMED_ARTIFACT_SYNC_HOOK)
+        hook_entries = [*trusted_hooks, *defaults, *declared]
         aggregate = HookResult()
 
         for hook_entry in hook_entries:
             result: HookResult
-            if isinstance(hook_entry, str):
+            if hook_entry is self._CONFIRMED_ARTIFACT_SYNC_HOOK:
+                result = self._run_confirmed_artifact_sync_hook(
+                    stage=stage,
+                    step_def=kwargs["step_def"],
+                    skill_name=str(kwargs.get("skill_name", "")),
+                    context=kwargs.get("context"),
+                    response=kwargs.get("response"),
+                    hook_kwargs=kwargs,
+                )
+            elif isinstance(hook_entry, str):
                 hook_cls = self.hook_registry.get(str(hook_entry))
                 if hook_cls is None:
                     raise ValueError(f"Unknown hook '{hook_entry}' in stage '{stage}'")
@@ -545,10 +565,7 @@ class GenericPhase:
         hook_kwargs: Dict[str, Any],
     ) -> HookResult:
         if "capability" in declaration:
-            return self._run_capability_hook(
-                stage=stage, declaration=declaration, step_def=step_def,
-                context=context, response=response, hook_kwargs=hook_kwargs,
-            )
+            raise ValueError("Capability hooks are runtime-owned")
         if stage not in self.SCRIPT_HOOK_STAGES:
             raise ValueError(
                 f"Script hooks are only supported in {sorted(self.SCRIPT_HOOK_STAGES)}"
@@ -657,51 +674,161 @@ class GenericPhase:
             )
         return HookResult(events=[event])
 
-    def _run_capability_hook(
-        self, *, stage: str, declaration: Dict[str, Any], step_def: Dict[str, Any],
-        context: Optional[Dict[str, str]], response: Optional[str], hook_kwargs: Dict[str, Any],
+    def _run_confirmed_artifact_sync_hook(
+        self,
+        *,
+        stage: str,
+        step_def: Dict[str, Any],
+        skill_name: str,
+        context: Optional[Dict[str, str]],
+        response: Optional[str],
+        hook_kwargs: Dict[str, Any],
     ) -> HookResult:
-        allowed = {"capability", "args", "schema", "when_intents", "execution_class"}
-        if set(declaration) - allowed or declaration.get("execution_class", "capability") != "capability":
-            raise ValueError("Capability hook has unsupported fields or execution class")
-        capability = declaration.get("capability")
-        if not isinstance(capability, str) or not capability:
-            raise ValueError("Capability hook requires a registered capability id")
-        when_intents = declaration.get("when_intents") or []
+        if stage != "after_execute":
+            raise ValueError("Confirmed artifact sync is restricted to after_execute")
+        phase_name = "spec" if canonical_skill_name(skill_name) == "cafe-spec" else "plan"
         detected = self._detect_status_code(
-            response=response or "", step_def=step_def, context=context,
+            response=response or "",
+            step_def=step_def,
+            context=context,
             step_name=hook_kwargs.get("step_name"),
         )
-        if when_intents and detected not in when_intents:
-            return HookResult(events=[{"type": "capability_hook", "capability": capability, "status": "skipped", "reason": "intent_mismatch"}])
-        args = self._resolve_script_args(args_template=declaration.get("args") or {}, context=context or {}, hook_kwargs=hook_kwargs)
-        schema = declaration.get("schema")
-        errors = validate_script_args_schema(args=args, schema=schema) if schema else []
-        if errors:
-            return HookResult(continue_pipeline=False, override_status_code=PhaseStatusCode.NEED_PERMISSION, events=[{"type": "capability_hook", "capability": capability, "status": "validation_failed", "validation_errors": errors}])
+        if detected != PhaseStatusCode.CONFIRMED.value:
+            return HookResult(
+                events=[
+                    {
+                        "type": "capability_hook",
+                        "capability": CAPABILITY_ISSUE_COMMENT_ID,
+                        "status": "skipped",
+                        "reason": "intent_mismatch",
+                    }
+                ]
+            )
+
+        phase = hook_kwargs.get("phase")
+        issue_dir = getattr(phase, "issue_dir", None)
+        output_file = hook_kwargs.get("output_file")
+        if not isinstance(issue_dir, Path) or not isinstance(output_file, Path):
+            return HookResult(
+                continue_pipeline=False,
+                override_status_code=PhaseStatusCode.NEED_PERMISSION,
+                events=[
+                    {
+                        "type": "capability_hook",
+                        "capability": CAPABILITY_ISSUE_COMMENT_ID,
+                        "status": "validation_failed",
+                        "reason": "trusted_context_missing",
+                    }
+                ],
+            )
+        try:
+            issue_config = (
+                yaml.safe_load((issue_dir / "issue.yaml").read_text(encoding="utf-8")) or {}
+            )
+            phase_config = issue_config.get(phase_name) or {}
+            issue_id = str((issue_config.get("spec") or {}).get("issue_id") or "").strip()
+        except (OSError, yaml.YAMLError, AttributeError):
+            return HookResult(
+                continue_pipeline=False,
+                override_status_code=PhaseStatusCode.NEED_PERMISSION,
+                events=[
+                    {
+                        "type": "capability_hook",
+                        "capability": CAPABILITY_ISSUE_COMMENT_ID,
+                        "status": "validation_failed",
+                        "reason": "issue_context_invalid",
+                    }
+                ],
+            )
+        if not phase_config.get("sync_github"):
+            return HookResult(
+                events=[
+                    {
+                        "type": "capability_hook",
+                        "capability": CAPABILITY_ISSUE_COMMENT_ID,
+                        "status": "skipped",
+                        "reason": "sync_disabled",
+                    }
+                ]
+            )
+        if not issue_id or not output_file.is_file():
+            return HookResult(
+                continue_pipeline=False,
+                override_status_code=PhaseStatusCode.NEED_PERMISSION,
+                events=[
+                    {
+                        "type": "capability_hook",
+                        "capability": CAPABILITY_ISSUE_COMMENT_ID,
+                        "status": "validation_failed",
+                        "reason": "confirmed_artifact_context_invalid",
+                    }
+                ],
+            )
+
         repo_root = Path.cwd().resolve()
-        output_file = Path(str(args.get("output") or ""))
-        if not output_file.is_absolute():
-            output_file = repo_root / output_file
+        try:
+            output_arg = str(output_file.resolve().relative_to(repo_root))
+        except ValueError:
+            output_arg = str(output_file.resolve())
+        artifact_sha256 = hashlib.sha256(output_file.read_bytes()).hexdigest()
+        issue_write = f"github_issue_comment:{issue_id}"
         registry = load_capability_registry(default_capability_definition_dirs(repo_root))
-        manifest = registry.get(capability)
-        if manifest is None:
-            raise ValueError(f"Unknown capability {capability!r}")
-        request = {
-            "capability": capability, "args": args,
-            "effects": manifest.effects.model_dump(mode="json"),
-            "credentials": list(manifest.credentials),
-            "permissions": {key: list(values) for key, values in manifest.permissions.items()},
+        manifest = registry[CAPABILITY_ISSUE_COMMENT_ID]
+        args = {
+            "phase": phase_name,
+            "output": output_arg,
+            "issue_id": issue_id,
+            "artifact_sha256": artifact_sha256,
         }
-        run = run_capability_request(repo_root=repo_root, registry=registry, capability_request=request, output_file=output_file)
-        event = {"type": "capability_hook", "capability": capability, "status": "success" if run.receipt.get("success") else "denied", "execution_receipt": run.receipt}
-        return HookResult(continue_pipeline=bool(run.receipt.get("success")), override_status_code=None if run.receipt.get("success") else PhaseStatusCode.NEED_PERMISSION, events=[event])
+        request = {
+            "capability": CAPABILITY_ISSUE_COMMENT_ID,
+            "args": args,
+            "effects": {
+                "writes": [issue_write],
+                "network_destinations": list(manifest.effects.network_destinations),
+                "browser_open": [],
+            },
+            "credentials": list(manifest.credentials),
+            "permissions": {
+                "network": list(manifest.permissions["network"]),
+                "writes": [issue_write],
+            },
+        }
+        run = run_capability_request(
+            repo_root=repo_root,
+            registry=registry,
+            capability_request=request,
+            output_file=output_file,
+        )
+        blackboard_state = hook_kwargs.get("blackboard_state")
+        if isinstance(blackboard_state, BlackboardState):
+            BlackboardStore(issue_dir).append_capability_receipt(blackboard_state, run.receipt)
+        event = {
+            "type": "capability_hook",
+            "capability": CAPABILITY_ISSUE_COMMENT_ID,
+            "status": "success" if run.receipt.get("success") else "denied",
+            "correlation_id": run.receipt.get("correlation_id"),
+        }
+        return HookResult(
+            continue_pipeline=bool(run.receipt.get("success")),
+            override_status_code=None
+            if run.receipt.get("success")
+            else PhaseStatusCode.NEED_PERMISSION,
+            events=[event],
+        )
 
     @staticmethod
     def _parse_script_hook_declaration(
         declaration: Dict[str, Any],
     ) -> tuple[str, Dict[str, Any], Optional[Dict[str, Any]], list[str], Optional[float]]:
-        allowed_fields = {"script", "args", "schema", "when_intents", "timeout_seconds", "execution_class"}
+        allowed_fields = {
+            "script",
+            "args",
+            "schema",
+            "when_intents",
+            "timeout_seconds",
+            "execution_class",
+        }
         unknown = sorted(set(declaration.keys()) - allowed_fields)
         if unknown:
             raise ValueError(f"Script hook contains unsupported fields: {unknown}")

@@ -525,6 +525,8 @@ class BlackboardWorkflowRuntime:
             execution_class=current_operation.execution_class,
             trust_source=current_operation.trust_source,
             effective_boundary=current_operation.effective_boundary,
+            correlation_id=current_operation.correlation_id,
+            command_fingerprint=current_operation.command_fingerprint,
         )
         return self.blackboard_store.write_operation_receipt(
             self.blackboard,

@@ -255,6 +255,10 @@ def _resolve_boundary_tokens(
             replacements["issue_dir"] = str(Path(*parts[: issue_index + 2]))
         except (ValueError, IndexError):
             replacements["issue_dir"] = ""
+    elif manifest.id == CAPABILITY_ISSUE_COMMENT_ID:
+        issue_id = str(request.args.get("issue_id") or "").strip()
+        if issue_id:
+            replacements["request_issue_comment"] = f"github_issue_comment:{issue_id}"
 
     def expand(values: Sequence[str]) -> Tuple[str, ...]:
         return tuple(
@@ -1049,15 +1053,21 @@ def _open_current_pr_adapter(
 
 
 def _sync_issue_comment_adapter(
-    *, repo_root: Path, request: ExecutionRequest, manifest: CapabilityManifest,
-    output_file: Path, timeout_sec: float,
+    *,
+    repo_root: Path,
+    request: ExecutionRequest,
+    manifest: CapabilityManifest,
+    output_file: Path,
+    timeout_sec: float,
 ) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
     del manifest, timeout_sec
     phase = str(request.args.get("phase") or "")
     if phase not in {"spec", "plan"}:
         raise CapabilityExecutionError(VALIDATION_ERROR, "phase_not_allowed")
     try:
-        output = resolve_repo_relative_path(repo_root=repo_root, raw_path=str(request.args.get("output") or ""), field_name="output")
+        output = resolve_repo_relative_path(
+            repo_root=repo_root, raw_path=str(request.args.get("output") or ""), field_name="output"
+        )
         output.relative_to(repo_root.resolve())
         if output.resolve() != output_file.resolve():
             raise ValueError("output_mismatch")
@@ -1071,12 +1081,26 @@ def _sync_issue_comment_adapter(
         return {"action": "skipped"}, None
     if not issue_id:
         raise CapabilityExecutionError(VALIDATION_ERROR, "issue_id_missing")
-    header = "### 📋 Requirements Specification (Confirmed)" if phase == "spec" else "### 📝 Implementation Plan (Confirmed)"
+    if str(request.args.get("issue_id") or "") != issue_id:
+        raise CapabilityExecutionError(VALIDATION_ERROR, "issue_destination_mismatch")
+    artifact_bytes = output.read_bytes()
+    artifact_sha256 = hashlib.sha256(artifact_bytes).hexdigest()
+    if str(request.args.get("artifact_sha256") or "") != artifact_sha256:
+        raise CapabilityExecutionError(VALIDATION_ERROR, "artifact_identity_mismatch")
+    header = (
+        "### 📋 Requirements Specification (Confirmed)"
+        if phase == "spec"
+        else "### 📝 Implementation Plan (Confirmed)"
+    )
     try:
-        GitHubOps().add_issue_comment(issue_id, f"{header}\n\n{output.read_text(encoding='utf-8')}")
+        GitHubOps().add_issue_comment(issue_id, f"{header}\n\n{artifact_bytes.decode('utf-8')}")
     except Exception as exc:
         raise CapabilityExecutionError("adapter_error", "issue_comment_failed") from exc
-    return {"action": "commented", "issue_id": issue_id, "phase": phase}, {"type": "issue_comment_synced", "issue_id": issue_id, "phase": phase}
+    return {"action": "commented", "issue_id": issue_id, "phase": phase}, {
+        "type": "issue_comment_synced",
+        "issue_id": issue_id,
+        "phase": phase,
+    }
 
 
 HOST_CAPABILITY_ADAPTERS: Mapping[str, Any] = {

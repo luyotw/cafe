@@ -7,6 +7,7 @@ one command for one phase iteration, one ``operation.json``, one
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
@@ -218,6 +219,13 @@ def run_operation_command(
     cwd_path = Path(cwd) if cwd is not None else Path.cwd()
     read_paths = tuple(Path(root).resolve() for root in (readable_roots or (cwd_path,)))
     write_paths = tuple(Path(root).resolve() for root in (writable_roots or (cwd_path,)))
+    canonical_command = json.dumps(
+        {"command": list(command), "cwd": str(cwd_path.resolve())},
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    command_fingerprint = hashlib.sha256(canonical_command.encode("utf-8")).hexdigest()
 
     store = BlackboardStore(issue_dir)
     claim_fd = _acquire_operation_claim(iteration_dir)
@@ -257,6 +265,7 @@ def run_operation_command(
                         ).environment
                     ),
                 },
+                command_fingerprint=command_fingerprint,
             ),
         )
     finally:
@@ -372,8 +381,14 @@ def get_operation_status(
         )
     recorded_start = handle.get("monitor_start_time")
     current_start = _pid_start_time(monitor_pid)
-    if monitor_pid > 0 and _pid_alive(monitor_pid) and (
-        recorded_start is None or current_start is None or str(recorded_start) == str(current_start)
+    if (
+        monitor_pid > 0
+        and _pid_alive(monitor_pid)
+        and (
+            recorded_start is None
+            or current_start is None
+            or str(recorded_start) == str(current_start)
+        )
     ):
         return operation
 
@@ -412,8 +427,11 @@ def _monitor(request_file: Path) -> int:
         command = sandbox_command(command, boundary=boundary)
     except RuntimeError:
         _record_terminal_receipt(
-            issue_dir=issue_dir, playbook=playbook, step=step,
-            iteration_dir=iteration_dir, operation_id=operation_id,
+            issue_dir=issue_dir,
+            playbook=playbook,
+            step=step,
+            iteration_dir=iteration_dir,
+            operation_id=operation_id,
             state=LongRunningOperationState.FAILED,
             reason="sandbox_backend_unavailable",
         )
@@ -461,9 +479,7 @@ def _monitor(request_file: Path) -> int:
                 _terminate_process_group(process.pid)
 
     terminal_state = (
-        LongRunningOperationState.SUCCEEDED
-        if exit_code == 0
-        else LongRunningOperationState.FAILED
+        LongRunningOperationState.SUCCEEDED if exit_code == 0 else LongRunningOperationState.FAILED
     )
     _record_terminal_receipt(
         issue_dir=issue_dir,
@@ -481,7 +497,10 @@ def _monitor(request_file: Path) -> int:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = list(argv if argv is not None else sys.argv[1:])
     if len(args) != 2 or args[0] != "monitor":
-        print("usage: python -m cafe.core.long_running_operation_helper monitor REQUEST_JSON", file=sys.stderr)
+        print(
+            "usage: python -m cafe.core.long_running_operation_helper monitor REQUEST_JSON",
+            file=sys.stderr,
+        )
         return 2
     try:
         return _monitor(Path(args[1]))

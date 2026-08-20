@@ -47,7 +47,9 @@ def redact(value: Any, *, key: str = "") -> Any:
 
 
 class StrictBoundaryModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, strict=True, arbitrary_types_allowed=True
+    )
 
 
 class EffectiveBoundary(StrictBoundaryModel):
@@ -65,7 +67,11 @@ class EffectiveBoundary(StrictBoundaryModel):
     @field_validator("environment")
     @classmethod
     def sanitize_environment(cls, value: Mapping[str, str]) -> Mapping[str, str]:
-        clean = {str(k): str(v) for k, v in value.items() if k in _ENV_ALLOWLIST and not is_sensitive_name(k)}
+        clean = {
+            str(k): str(v)
+            for k, v in value.items()
+            if k in _ENV_ALLOWLIST and not is_sensitive_name(k)
+        }
         return MappingProxyType(clean)
 
     @field_serializer("environment")
@@ -113,30 +119,43 @@ class ScriptSnapshot:
 
 
 def snapshot_script(script: Path, *, allowed_root: Path) -> ScriptSnapshot:
-    """Copy a regular script through O_NOFOLLOW into a private immutable snapshot."""
-    root = allowed_root.resolve(strict=True)
-    candidate = script.absolute()
+    """Copy a regular script using fd-relative, no-follow traversal."""
+    root = Path(os.path.abspath(allowed_root))
+    candidate = Path(os.path.abspath(script))
     try:
-        candidate.relative_to(root)
+        relative = candidate.relative_to(root)
     except ValueError as exc:
         raise ValueError("script escapes its declared root") from exc
-    relative = candidate.relative_to(root)
-    cursor = root
-    for part in relative.parts:
-        cursor = cursor / part
-        if cursor.is_symlink():
-            raise ValueError("script path contains a symlink")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(candidate, flags)
+    if not relative.parts:
+        raise ValueError("script must name a file below its declared root")
+
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | no_follow
+    directory_fd = os.open(os.sep, directory_flags)
     try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
-            raise ValueError("script must be a regular file")
-        content = b""
-        while chunk := os.read(fd, 65536):
-            content += chunk
+        for part in root.parts[1:]:
+            next_fd = os.open(part, directory_flags, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+        for part in relative.parts[:-1]:
+            next_fd = os.open(part, directory_flags, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+        fd = os.open(relative.parts[-1], os.O_RDONLY | no_follow, dir_fd=directory_fd)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError("script must be a regular file")
+            chunks: list[bytes] = []
+            while chunk := os.read(fd, 65536):
+                chunks.append(chunk)
+            content = b"".join(chunks)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise ValueError("script path contains a symlink or invalid component") from exc
     finally:
-        os.close(fd)
+        os.close(directory_fd)
     temp_dir = Path(tempfile.mkdtemp(prefix="cafe-script-"))
     target = temp_dir / "script"
     target.write_bytes(content)

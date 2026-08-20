@@ -137,6 +137,17 @@ class StepHooks(BaseModel):
     after_execute: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
     publish_output: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
 
+    @field_validator("before_execute", "prepare_input", "after_execute", "publish_output")
+    @classmethod
+    def _reject_playbook_capability_hooks(
+        cls, value: List[Union[str, Dict[str, Any]]]
+    ) -> List[Union[str, Dict[str, Any]]]:
+        if any(isinstance(item, dict) and "capability" in item for item in value):
+            raise ValueError(
+                "capability hooks are runtime-owned and cannot be declared by playbooks"
+            )
+        return value
+
 
 SkillSelector = Union[str, Dict[str, str]]
 
@@ -446,6 +457,17 @@ class StepConfig(BaseModel):
             raise ValueError("assignee_type=hybrid requires hybrid portion declaration")
         if self.assignee_type == "auto" and self.human_tasks:
             raise ValueError("assignee_type=auto cannot declare human_tasks")
+        skill_names = [self.skill] if isinstance(self.skill, str) else list(self.skill.values())
+        confirmed_artifact_skills = {
+            "cafe-spec": "spec",
+            "cafe-plan": "plan",
+        }
+        for skill_name in skill_names:
+            expected_artifact = confirmed_artifact_skills.get(skill_name)
+            if expected_artifact is not None and self.output_artifact != expected_artifact:
+                raise ValueError(
+                    f"{skill_name} requires output_artifact={expected_artifact}"
+                )
         return self
 
     @field_validator("human_tasks")
