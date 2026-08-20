@@ -22,6 +22,68 @@ from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.phase_config import PhaseStepModelResolution
 
 
+def test_pr_publish_generic_journey_preserves_outputs_and_correlates_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import cafe.core.capabilities as cap_mod
+
+    output_file = tmp_path / ".cafe/issues/demo/pr/iteration_001/output.md"
+    output_file.parent.mkdir(parents=True)
+    output_file.write_text("# PR\n", encoding="utf-8")
+
+    class Result:
+        returncode = 0
+        stderr = ""
+        stdout = (
+            '{"action":"created","pr_number":"42",'
+            '"pr_url":"https://github.com/acme/widgets/pull/42"}\n'
+        )
+
+    monkeypatch.setattr(cap_mod.subprocess, "run", lambda *_args, **_kwargs: Result())
+    registry = cap_mod.load_capability_registry([cap_mod._package_capabilities_dir()])
+    run = cap_mod.run_capability_request(
+        repo_root=tmp_path,
+        registry=registry,
+        capability_request={
+            "capability": "cafe.pr.publish",
+            "args": {
+                "output": ".cafe/issues/demo/pr/iteration_001/output.md",
+                "base": "main",
+            },
+            "effects": {
+                "browser_open": [],
+                "network_destinations": ["github.com", "api.github.com"],
+                "writes": [
+                    ".cafe/issues/demo/pr/iteration_001/output.md",
+                    ".git",
+                    ".cafe/issues/demo",
+                ],
+            },
+            "credentials": ["gh"],
+            "permissions": {
+                "network": ["github.com", "api.github.com"],
+                "writes": [
+                    ".cafe/issues/demo/pr/iteration_001/output.md",
+                    ".git",
+                    ".cafe/issues/demo",
+                ],
+            },
+        },
+        output_file=output_file,
+    )
+
+    assert run.receipt["success"] is True
+    assert run.receipt["outputs"] == {
+        "pr_url": "https://github.com/acme/widgets/pull/42",
+        "pr_number": "42",
+        "action": "created",
+    }
+    assert run.receipt["request_fingerprint"]
+    assert run.receipt["manifest"]["id"] == "cafe.pr.publish"
+    assert run.receipt["decision"]["outcome"] == "allow"
+    assert run.receipt["outcome"] == "success"
+
+
 def _load_default_playbook() -> dict:
     return PlaybookLoader().load("default")
 
@@ -192,11 +254,14 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
     assert second.events == []
 
     phase.git_ops.reset_mock()
-    assert _find_external_resume_step(
-        issue_dir=issue_dir,
-        playbook_data=playbook,
-        git_ops=phase.git_ops,
-    ) == "develop"
+    assert (
+        _find_external_resume_step(
+            issue_dir=issue_dir,
+            playbook_data=playbook,
+            git_ops=phase.git_ops,
+        )
+        == "develop"
+    )
     assert len(ledger.pending(target_step="develop")) == 2
     phase.git_ops.get_current_branch.assert_not_called()
 
@@ -249,9 +314,7 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
         )
 
     paused_playbook = json.loads(json.dumps(playbook))
-    paused_playbook["steps"]["develop"]["hooks"] = {
-        "before_execute": ["PauseBeforeAgent"]
-    }
+    paused_playbook["steps"]["develop"]["hooks"] = {"before_execute": ["PauseBeforeAgent"]}
     paused_manager = AgentManager()
     paused_executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,

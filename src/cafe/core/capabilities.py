@@ -2,19 +2,37 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import subprocess
+import sys
 import uuid
-from datetime import datetime
+import webbrowser
 from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from types import MappingProxyType
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
+from urllib.parse import urlparse
 
 import yaml
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from cafe.skills.loader import SkillLoader
+from cafe.utils.github import GitHubOps
 
 CAPABILITY_PR_PUBLISH_ID = "cafe.pr.publish"
+CAPABILITY_BROWSER_OPEN_ID = "cafe.browser.open"
 
 # Failure categories surfaced on capability receipts (distinct from validation_error).
 SCRIPT_EXIT_ERROR = "script_exit_error"
@@ -27,6 +45,266 @@ class CapabilityRegistryError(ValueError):
     """Raised when capability definitions cannot be loaded."""
 
 
+class StrictCapabilityModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+
+class ValueSchema(StrictCapabilityModel):
+    type: Literal["string", "integer", "boolean"]
+    enum: Optional[Tuple[Any, ...]] = None
+
+    @field_validator("enum", mode="before")
+    @classmethod
+    def freeze_enum(cls, value: Any) -> Any:
+        return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def enum_values_match_declared_type(self) -> "ValueSchema":
+        if self.enum is None:
+            return self
+        python_types = {"string": str, "integer": int, "boolean": bool}
+        expected = python_types[self.type]
+        if any(type(value) is not expected for value in self.enum):
+            raise ValueError("enum values must match the declared type")
+        return self
+
+
+class ObjectSchema(StrictCapabilityModel):
+    required: Tuple[str, ...]
+    properties: Mapping[str, ValueSchema]
+
+    @field_validator("required", mode="before")
+    @classmethod
+    def freeze_required(cls, value: Any) -> Any:
+        return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def required_fields_are_declared(self) -> "ObjectSchema":
+        if not set(self.required).issubset(self.properties):
+            raise ValueError("required fields must be declared in properties")
+        object.__setattr__(self, "properties", MappingProxyType(dict(self.properties)))
+        return self
+
+    @field_serializer("properties")
+    def serialize_properties(self, value: Mapping[str, ValueSchema]) -> Dict[str, ValueSchema]:
+        return dict(value)
+
+
+class CapabilityEffects(StrictCapabilityModel):
+    writes: Tuple[str, ...]
+    network_destinations: Tuple[str, ...]
+    browser_open: Tuple[str, ...] = ()
+
+    @field_validator("writes", "network_destinations", "browser_open", mode="before")
+    @classmethod
+    def freeze_effects(cls, value: Any) -> Any:
+        return tuple(value) if isinstance(value, list) else value
+
+
+class CapabilityManifest(StrictCapabilityModel):
+    id: str = Field(min_length=1)
+    version: int = Field(ge=1)
+    implementation: Literal["sync_pr", "open_current_pr"]
+    arguments: ObjectSchema
+    outputs: ObjectSchema
+    effects: CapabilityEffects
+    credentials: Tuple[str, ...]
+    permissions: Mapping[str, Tuple[str, ...]]
+    idempotency: Literal["safe", "update_in_place", "unsafe"]
+    risk: Literal["low", "medium", "high"]
+    approval: Literal["not_required", "required"]
+    policy: Literal["allow", "deny"]
+
+    @field_validator("credentials", mode="before")
+    @classmethod
+    def freeze_credentials(cls, value: Any) -> Any:
+        return tuple(value) if isinstance(value, list) else value
+
+    @field_validator("permissions", mode="before")
+    @classmethod
+    def freeze_permissions(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        return {
+            key: tuple(items) if isinstance(items, list) else items for key, items in value.items()
+        }
+
+    @model_validator(mode="after")
+    def reject_contradictory_policy(self) -> "CapabilityManifest":
+        if self.approval == "required" and self.policy == "deny":
+            raise ValueError("approval-required capability cannot also be policy denied")
+        object.__setattr__(self, "permissions", MappingProxyType(dict(self.permissions)))
+        return self
+
+    @field_serializer("permissions")
+    def serialize_permissions(
+        self, value: Mapping[str, Tuple[str, ...]]
+    ) -> Dict[str, Tuple[str, ...]]:
+        return dict(value)
+
+
+class ExecutionRequest(StrictCapabilityModel):
+    capability: str = Field(min_length=1)
+    args: Mapping[str, Any]
+    effects: CapabilityEffects
+    credentials: Tuple[str, ...]
+    permissions: Mapping[str, Tuple[str, ...]]
+
+    @field_validator("credentials", mode="before")
+    @classmethod
+    def freeze_credentials(cls, value: Any) -> Any:
+        return tuple(value) if isinstance(value, list) else value
+
+    @field_validator("permissions", mode="before")
+    @classmethod
+    def freeze_permissions(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        return {
+            key: tuple(items) if isinstance(items, list) else items for key, items in value.items()
+        }
+
+
+class PolicyDecision(str, Enum):
+    ALLOW = "allow"
+    REQUIRE_APPROVAL = "require_approval"
+    DENY = "deny"
+
+
+@dataclass(frozen=True)
+class CapabilityEvaluation:
+    request: ExecutionRequest
+    manifest: CapabilityManifest
+    fingerprint: str
+    decision: PolicyDecision
+    reason_code: str
+    explanation: str
+    allowed_effects: CapabilityEffects
+
+
+def canonical_request_fingerprint(request: ExecutionRequest) -> str:
+    """Hash the canonical security-relevant request boundary."""
+    payload = request.model_dump(mode="json")
+    effects = payload["effects"]
+    for key in ("writes", "network_destinations", "browser_open"):
+        effects[key] = sorted(effects[key])
+    payload["credentials"] = sorted(payload["credentials"])
+    payload["permissions"] = {
+        key: sorted(values) for key, values in sorted(payload["permissions"].items())
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _validate_request_arguments(
+    request: ExecutionRequest, manifest: CapabilityManifest
+) -> Optional[str]:
+    declared = manifest.arguments.properties
+    if not set(manifest.arguments.required).issubset(request.args):
+        return "missing_argument"
+    if not set(request.args).issubset(declared):
+        return "argument_not_allowed"
+    python_types = {"string": str, "integer": int, "boolean": bool}
+    for key, value in request.args.items():
+        field = declared[key]
+        expected = python_types[field.type]
+        if type(value) is not expected:
+            return "argument_type_invalid"
+        if field.enum is not None and value not in field.enum:
+            return "argument_not_allowed"
+    return None
+
+
+def _matches_effect_boundary(requested: CapabilityEffects, allowed: CapabilityEffects) -> bool:
+    return all(
+        set(getattr(requested, field)) == set(getattr(allowed, field))
+        for field in ("writes", "network_destinations", "browser_open")
+    )
+
+
+def _resolve_boundary_tokens(
+    manifest: CapabilityManifest, request: ExecutionRequest
+) -> tuple[CapabilityEffects, Mapping[str, Tuple[str, ...]]]:
+    replacements: Dict[str, str] = {}
+    if manifest.id == CAPABILITY_PR_PUBLISH_ID:
+        output = str(request.args.get("output") or "")
+        output_path = Path(output)
+        if output_path.is_absolute() or ".." in output_path.parts:
+            return CapabilityEffects(writes=(), network_destinations=(), browser_open=()), {}
+        replacements["request_output"] = output
+        parts = output_path.parts
+        try:
+            issue_index = parts.index("issues")
+            replacements["issue_dir"] = str(Path(*parts[: issue_index + 2]))
+        except (ValueError, IndexError):
+            replacements["issue_dir"] = ""
+
+    def expand(values: Sequence[str]) -> Tuple[str, ...]:
+        return tuple(
+            replacements.get(value, value) for value in values if replacements.get(value, value)
+        )
+
+    effects = CapabilityEffects(
+        writes=expand(manifest.effects.writes),
+        network_destinations=manifest.effects.network_destinations,
+        browser_open=manifest.effects.browser_open,
+    )
+    permissions = {key: expand(values) for key, values in manifest.permissions.items()}
+    return effects, permissions
+
+
+def evaluate_capability_request(
+    registry: Mapping[str, CapabilityManifest], raw_request: Mapping[str, Any]
+) -> CapabilityEvaluation:
+    """Return one explicit, fail-closed policy decision for a parsed request."""
+    request = ExecutionRequest.model_validate(raw_request)
+    manifest = registry.get(request.capability)
+    if not isinstance(manifest, CapabilityManifest):
+        raise CapabilityRegistryError(f"Unknown capability {request.capability!r}")
+    fingerprint = canonical_request_fingerprint(request)
+    allowed_effects, allowed_permissions = _resolve_boundary_tokens(manifest, request)
+
+    reason = _validate_request_arguments(request, manifest)
+    if reason is None and not _matches_effect_boundary(request.effects, allowed_effects):
+        reason = "effect_not_allowed"
+    if reason is None and set(request.credentials) != set(manifest.credentials):
+        reason = "credential_not_allowed"
+    if reason is None:
+        if set(request.permissions) != set(allowed_permissions):
+            reason = "permission_not_allowed"
+        else:
+            for permission, values in request.permissions.items():
+                if set(values) != set(allowed_permissions[permission]):
+                    reason = "permission_not_allowed"
+                    break
+
+    if reason is not None:
+        decision = PolicyDecision.DENY
+        explanation = "The request exceeds its registered capability boundary."
+    elif manifest.policy == "deny":
+        decision = PolicyDecision.DENY
+        reason = "policy_denied"
+        explanation = "The registered policy denies this capability."
+    elif manifest.approval == "required":
+        decision = PolicyDecision.REQUIRE_APPROVAL
+        reason = "approval_required"
+        explanation = "The registered policy requires approval before execution."
+    else:
+        decision = PolicyDecision.ALLOW
+        reason = "policy_allowed"
+        explanation = "The request is within the registered capability boundary."
+
+    return CapabilityEvaluation(
+        request=request,
+        manifest=manifest,
+        fingerprint=fingerprint,
+        decision=decision,
+        reason_code=reason,
+        explanation=explanation,
+        allowed_effects=allowed_effects,
+    )
+
+
 def _package_capabilities_dir() -> Path:
     return Path(__file__).resolve().parents[1] / "data" / "capabilities"
 
@@ -36,12 +314,14 @@ def default_capability_definition_dirs(repo_root: Path) -> List[Path]:
     return [repo_root / "data" / "capabilities", _package_capabilities_dir()]
 
 
-def load_capability_registry(capabilities_dirs: Sequence[Path]) -> Dict[str, Dict[str, Any]]:
+def load_capability_registry(
+    capabilities_dirs: Sequence[Path],
+) -> Mapping[str, CapabilityManifest]:
     """Load all *.yaml / *.yml / *.json capability definitions.
 
     Duplicate ``id`` values across files are rejected with both paths listed.
     """
-    merged: Dict[str, Tuple[Dict[str, Any], Path]] = {}
+    merged: Dict[str, Tuple[CapabilityManifest, Path]] = {}
     for base in capabilities_dirs:
         if not base.is_dir():
             continue
@@ -62,15 +342,17 @@ def load_capability_registry(capabilities_dirs: Sequence[Path]) -> Dict[str, Dic
                 raise CapabilityRegistryError(f"Invalid capability document {path}") from exc
             if not isinstance(data, dict):
                 raise CapabilityRegistryError(f"Capability root must be a mapping: {path}")
-            cap_id = str(data.get("id") or "").strip()
-            if not cap_id:
-                raise CapabilityRegistryError(f"Capability missing id: {path}")
+            try:
+                manifest = CapabilityManifest.model_validate(data)
+            except ValidationError as exc:
+                raise CapabilityRegistryError(f"Invalid capability manifest {path}: {exc}") from exc
+            cap_id = manifest.id
             if cap_id in merged:
                 raise CapabilityRegistryError(
                     f"Duplicate capability id {cap_id!r}: {merged[cap_id][1]} and {path}"
                 )
-            merged[cap_id] = (data, path)
-    return {key: value[0] for key, value in merged.items()}
+            merged[cap_id] = (manifest, path)
+    return MappingProxyType({key: value[0] for key, value in merged.items()})
 
 
 def _schema_required(schema: Mapping[str, Any], *, label: str) -> List[str]:
@@ -447,6 +729,314 @@ def run_pr_publish_capability(
     return PrPublishRun(receipt=receipt, pr_synced_event=pr_synced, error_message=None)
 
 
+class CapabilityExecutionError(RuntimeError):
+    def __init__(self, category: str, code: str, outputs: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(code)
+        self.category = category
+        self.code = code
+        self.outputs = outputs or {}
+
+
+def _normalize_legacy_pr_request(request: Mapping[str, Any]) -> Dict[str, Any]:
+    normalized = dict(request)
+    if str(normalized.get("capability") or "") != CAPABILITY_PR_PUBLISH_ID:
+        return normalized
+    if "effects" not in normalized:
+        args = normalized.get("args") if isinstance(normalized.get("args"), Mapping) else {}
+        output = str(args.get("output") or "")
+        output_parts = Path(output).parts
+        try:
+            issue_index = output_parts.index("issues")
+            issue_dir = str(Path(*output_parts[: issue_index + 2]))
+        except (ValueError, IndexError):
+            issue_dir = ""
+        writes = [value for value in (output, ".git", issue_dir) if value]
+        network = ["github.com", "api.github.com"]
+        normalized["effects"] = {
+            "browser_open": [],
+            "writes": writes,
+            "network_destinations": network,
+        }
+        normalized["credentials"] = ["gh"]
+        normalized["permissions"] = {"network": network, "writes": writes}
+    return normalized
+
+
+def _manifest_digest(manifest: CapabilityManifest) -> str:
+    payload = json.dumps(manifest.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _audited_receipt(
+    *,
+    correlation_id: str,
+    evaluation: CapabilityEvaluation,
+    success: bool,
+    category: Optional[str],
+    code: Optional[str],
+    outputs: Dict[str, Any],
+    outcome: str,
+) -> Dict[str, Any]:
+    receipt = _base_receipt(
+        correlation_id=correlation_id,
+        capability=evaluation.request.capability,
+        success=success,
+        category=category,
+        code=code,
+        inputs=dict(evaluation.request.args),
+        outputs=outputs,
+    )
+    receipt.update(
+        {
+            "request_fingerprint": evaluation.fingerprint,
+            "manifest": {
+                "id": evaluation.manifest.id,
+                "version": evaluation.manifest.version,
+                "digest": _manifest_digest(evaluation.manifest),
+            },
+            "requested_effects": evaluation.request.effects.model_dump(mode="json"),
+            "allowed_effects": evaluation.allowed_effects.model_dump(mode="json"),
+            "decision": {
+                "outcome": evaluation.decision.value,
+                "reason_code": evaluation.reason_code,
+                "explanation": evaluation.explanation,
+            },
+            "outcome": outcome,
+        }
+    )
+    return receipt
+
+
+def validation_rejection_receipt(
+    *,
+    capability: str,
+    code: str,
+    raw_request: Optional[Mapping[str, Any]] = None,
+    rejected_value: Any = None,
+    rejection_source: Optional[Mapping[str, Any]] = None,
+    error_detail: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build a correlated fail-closed receipt when typed evaluation cannot start."""
+    request_boundary: Dict[str, Any] = dict(raw_request) if raw_request is not None else {}
+    fingerprint_payload = {
+        "capability": capability,
+        "request": request_boundary,
+        "rejected_value": rejected_value,
+        "rejection_source": dict(rejection_source) if rejection_source is not None else None,
+    }
+    canonical = json.dumps(
+        fingerprint_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
+    requested_effects = request_boundary.get("effects")
+    receipt = _base_receipt(
+        correlation_id=uuid.uuid4().hex[:20],
+        capability=capability,
+        success=False,
+        category=VALIDATION_ERROR,
+        code=code,
+        inputs=_receipt_inputs(request_boundary.get("args")),
+        outputs={},
+    )
+    receipt.update(
+        {
+            "request_fingerprint": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            "manifest": None,
+            "requested_effects": (
+                dict(requested_effects) if isinstance(requested_effects, Mapping) else {}
+            ),
+            "allowed_effects": {},
+            "decision": {
+                "outcome": PolicyDecision.DENY.value,
+                "reason_code": code,
+                "explanation": "The request could not be authorized.",
+            },
+            "outcome": "validation_rejection",
+            "rejection": {
+                "source": dict(rejection_source) if rejection_source is not None else {},
+                "rejected_value": rejected_value,
+                "error_detail": error_detail or code,
+            },
+        }
+    )
+    return receipt
+
+
+def _non_dispatch_run(
+    *,
+    correlation_id: str,
+    capability: str,
+    fingerprint: str,
+    code: str,
+    decision: PolicyDecision,
+    outcome: str,
+    inputs: Dict[str, Any],
+    evaluation: Optional[CapabilityEvaluation] = None,
+) -> PrPublishRun:
+    if evaluation is not None:
+        receipt = _audited_receipt(
+            correlation_id=correlation_id,
+            evaluation=evaluation,
+            success=False,
+            category=VALIDATION_ERROR,
+            code=code,
+            outputs={},
+            outcome=outcome,
+        )
+    else:
+        receipt = _base_receipt(
+            correlation_id=correlation_id,
+            capability=capability,
+            success=False,
+            category=VALIDATION_ERROR,
+            code=code,
+            inputs=inputs,
+            outputs={},
+        )
+        receipt.update(
+            {
+                "request_fingerprint": fingerprint,
+                "manifest": None,
+                "requested_effects": {},
+                "allowed_effects": {},
+                "decision": {
+                    "outcome": decision.value,
+                    "reason_code": code,
+                    "explanation": "The request could not be authorized.",
+                },
+                "outcome": outcome,
+            }
+        )
+    return PrPublishRun(receipt=receipt, pr_synced_event=None, error_message=code)
+
+
+def _validate_typed_outputs(outputs: Mapping[str, Any], schema: ObjectSchema) -> Optional[str]:
+    if not set(schema.required).issubset(outputs):
+        return "missing_output"
+    if not set(outputs).issubset(schema.properties):
+        return "undeclared_output"
+    python_types = {"string": str, "integer": int, "boolean": bool}
+    for key, value in outputs.items():
+        field = schema.properties[key]
+        if type(value) is not python_types[field.type]:
+            return "output_type_invalid"
+        if field.enum is not None and value not in field.enum:
+            return "output_value_invalid"
+    return None
+
+
+def _sync_pr_adapter(
+    *,
+    repo_root: Path,
+    request: ExecutionRequest,
+    manifest: CapabilityManifest,
+    output_file: Path,
+    timeout_sec: float,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    legacy_definition = {
+        "id": manifest.id,
+        "script_ref": manifest.implementation,
+        "args_schema": manifest.arguments.model_dump(mode="json"),
+        "expected_outputs": manifest.outputs.model_dump(mode="json"),
+    }
+    run = run_pr_publish_capability(
+        repo_root=repo_root,
+        registry={manifest.id: legacy_definition},
+        publish_request={"capability": manifest.id, "args": dict(request.args)},
+        pr_markdown_file=output_file,
+        timeout_sec=timeout_sec,
+    )
+    if not run.receipt.get("success"):
+        raise CapabilityExecutionError(
+            str(run.receipt.get("category") or VALIDATION_ERROR),
+            str(run.receipt.get("code") or "execution_failed"),
+            dict(run.receipt.get("outputs") or {}),
+        )
+    return dict(run.receipt.get("outputs") or {}), run.pr_synced_event
+
+
+def _current_repo_slug(repo_root: Path) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "config", "--get", "remote.origin.url"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise CapabilityExecutionError(VALIDATION_ERROR, "repo_resolution_failed") from exc
+    if result.returncode != 0:
+        raise CapabilityExecutionError(VALIDATION_ERROR, "repo_resolution_failed")
+    remote = str(result.stdout or "").strip()
+    match = re.fullmatch(
+        r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([^/]+/[^/]+?)(?:\.git)?",
+        remote,
+    )
+    if match is None:
+        raise CapabilityExecutionError(VALIDATION_ERROR, "repo_resolution_failed")
+    return match.group(1)
+
+
+def _canonical_current_pr_url(url: str, repo_slug: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.netloc != "github.com":
+        return False
+    expected = repo_slug.split("/")
+    parts = [part for part in parsed.path.split("/") if part]
+    return (
+        len(expected) == 2
+        and len(parts) == 4
+        and parts[:2] == expected
+        and parts[2] == "pull"
+        and parts[3].isdigit()
+        and not parsed.params
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def _open_current_pr_adapter(
+    *,
+    repo_root: Path,
+    request: ExecutionRequest,
+    manifest: CapabilityManifest,
+    output_file: Path,
+    timeout_sec: float,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    del manifest, output_file, timeout_sec
+    if request.args != {"target_ref": "current_pr"}:
+        raise CapabilityExecutionError(VALIDATION_ERROR, "target_not_allowed")
+    try:
+        resolved_url = GitHubOps().get_current_pr_url()
+        repo_slug = _current_repo_slug(repo_root)
+    except Exception as exc:
+        if isinstance(exc, CapabilityExecutionError):
+            raise
+        raise CapabilityExecutionError(VALIDATION_ERROR, "target_resolution_failed") from exc
+    if not _canonical_current_pr_url(resolved_url, repo_slug):
+        raise CapabilityExecutionError(VALIDATION_ERROR, "resolved_target_not_allowed")
+    if not sys.stdin.isatty():
+        return {"opened": False}, None
+    try:
+        webbrowser.open(resolved_url)
+    except Exception as exc:
+        raise CapabilityExecutionError("adapter_error", "browser_open_failed") from exc
+    return {"opened": True, "url": resolved_url}, {
+        "type": "pr_link_opened",
+        "url": resolved_url,
+    }
+
+
+HOST_CAPABILITY_ADAPTERS: Mapping[str, Any] = {
+    "sync_pr": _sync_pr_adapter,
+    "open_current_pr": _open_current_pr_adapter,
+}
+
+
 def run_capability_request(
     *,
     repo_root: Path,
@@ -455,34 +1045,124 @@ def run_capability_request(
     output_file: Path,
     timeout_sec: float = 600.0,
 ) -> PrPublishRun:
-    """Execute one trusted capability request or return a validation receipt.
+    """Evaluate and dispatch one request through the host-owned adapter allow-list."""
+    correlation_id = uuid.uuid4().hex[:20]
+    raw_request = _normalize_legacy_pr_request(capability_request)
+    cap_id = str(raw_request.get("capability") or "").strip()
+    raw_fingerprint = hashlib.sha256(
+        json.dumps(raw_request, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
 
-    The generic entry point intentionally only dispatches allow-listed
-    implementations. Unknown or not-yet-implemented capability ids become
-    validation receipts and never execute host-side scripts.
-    """
-    cap_id = str(capability_request.get("capability") or "").strip()
-    if cap_id == CAPABILITY_PR_PUBLISH_ID:
-        return run_pr_publish_capability(
-            repo_root=repo_root,
-            registry=registry,
-            publish_request=capability_request,
-            pr_markdown_file=output_file,
-            timeout_sec=timeout_sec,
+    raw_manifest = registry.get(cap_id)
+    if raw_manifest is None:
+        return _non_dispatch_run(
+            correlation_id=correlation_id,
+            capability=cap_id or "unknown",
+            fingerprint=raw_fingerprint,
+            code="unknown_capability",
+            decision=PolicyDecision.DENY,
+            outcome="validation_rejection",
+            inputs=_receipt_inputs(raw_request.get("args")),
+        )
+    if not isinstance(raw_manifest, CapabilityManifest):
+        return _non_dispatch_run(
+            correlation_id=correlation_id,
+            capability=cap_id or "unknown",
+            fingerprint=raw_fingerprint,
+            code="unsupported_capability",
+            decision=PolicyDecision.DENY,
+            outcome="validation_rejection",
+            inputs=_receipt_inputs(raw_request.get("args")),
         )
 
-    definition = registry.get(cap_id)
-    code = "unknown_capability" if definition is None else "unsupported_capability"
-    receipt = _base_receipt(
-        correlation_id=uuid.uuid4().hex[:20],
-        capability=cap_id or "unknown",
-        success=False,
-        category=VALIDATION_ERROR,
-        code=code,
-        inputs=_receipt_inputs(capability_request.get("args")),
-        outputs={},
+    try:
+        request = ExecutionRequest.model_validate(raw_request)
+    except ValidationError:
+        return _non_dispatch_run(
+            correlation_id=correlation_id,
+            capability=cap_id or "unknown",
+            fingerprint=raw_fingerprint,
+            code="malformed_request",
+            decision=PolicyDecision.DENY,
+            outcome="validation_rejection",
+            inputs=_receipt_inputs(raw_request.get("args")),
+        )
+
+    manifest = raw_manifest
+
+    evaluation = evaluate_capability_request(registry, raw_request)
+    if evaluation.decision != PolicyDecision.ALLOW:
+        outcome = (
+            "approval_required"
+            if evaluation.decision == PolicyDecision.REQUIRE_APPROVAL
+            else "policy_denied"
+        )
+        return _non_dispatch_run(
+            correlation_id=correlation_id,
+            capability=request.capability,
+            fingerprint=evaluation.fingerprint,
+            code=evaluation.reason_code,
+            decision=evaluation.decision,
+            outcome=outcome,
+            inputs=dict(request.args),
+            evaluation=evaluation,
+        )
+
+    adapter = HOST_CAPABILITY_ADAPTERS.get(manifest.implementation)
+    if adapter is None:
+        return _non_dispatch_run(
+            correlation_id=correlation_id,
+            capability=request.capability,
+            fingerprint=evaluation.fingerprint,
+            code="unsupported_implementation",
+            decision=PolicyDecision.DENY,
+            outcome="validation_rejection",
+            inputs=dict(request.args),
+            evaluation=evaluation,
+        )
+
+    try:
+        outputs, event = adapter(
+            repo_root=repo_root,
+            request=request,
+            manifest=manifest,
+            output_file=output_file,
+            timeout_sec=timeout_sec,
+        )
+    except CapabilityExecutionError as exc:
+        receipt = _audited_receipt(
+            correlation_id=correlation_id,
+            evaluation=evaluation,
+            success=False,
+            category=exc.category,
+            code=exc.code,
+            outputs=exc.outputs,
+            outcome="execution_failure",
+        )
+        return PrPublishRun(receipt=receipt, pr_synced_event=None, error_message=exc.code)
+    output_error = _validate_typed_outputs(outputs, manifest.outputs)
+    if output_error:
+        receipt = _audited_receipt(
+            correlation_id=correlation_id,
+            evaluation=evaluation,
+            success=False,
+            category=OUTPUT_CONTRACT_ERROR,
+            code=output_error,
+            outputs=outputs,
+            outcome="execution_failure",
+        )
+        return PrPublishRun(receipt=receipt, pr_synced_event=None, error_message=output_error)
+
+    receipt = _audited_receipt(
+        correlation_id=correlation_id,
+        evaluation=evaluation,
+        success=True,
+        category=None,
+        code=None,
+        outputs=outputs,
+        outcome="success",
     )
-    return PrPublishRun(receipt=receipt, pr_synced_event=None, error_message=code)
+    return PrPublishRun(receipt=receipt, pr_synced_event=event, error_message=None)
 
 
 def capability_receipt_hook_event(receipt: Mapping[str, Any]) -> Dict[str, Any]:

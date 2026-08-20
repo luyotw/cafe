@@ -1,7 +1,7 @@
 id: cafe.pr.publish
-script_ref: sync_pr
-idempotency_hint: update_in_place
-args_schema:
+version: 1
+implementation: sync_pr
+arguments:
   required:
     - output
   properties:
@@ -9,7 +9,7 @@ args_schema:
       type: string
     base:
       type: string
-expected_outputs:
+outputs:
   required:
     - pr_url
     - pr_number
@@ -20,3 +20,26 @@ expected_outputs:
       type: string
     action:
       type: string
+effects:
+  writes:
+    - request_output
+    - .git
+    - issue_dir
+  network_destinations:
+    - github.com
+    - api.github.com
+  browser_open: []
+credentials:
+  - gh
+permissions:
+  network:
+    - github.com
+    - api.github.com
+  writes:
+    - request_output
+    - .git
+    - issue_dir
+idempotency: update_in_place
+risk: medium
+approval: not_required
+policy: allow

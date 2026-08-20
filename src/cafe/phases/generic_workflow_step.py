@@ -502,6 +502,7 @@ class GenericWorkflowStepExecutor(Phase):
             and self._should_validate_checklist(status_code)
         ):
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
+
             def validate_completion():
                 return self._validate_and_retry_checklist_completion(
                     agent_name=agent_name,
@@ -511,6 +512,7 @@ class GenericWorkflowStepExecutor(Phase):
                     allowed_tools=allowed_tools,
                     max_retries=3,
                 )
+
             response, validated_status, validation_passed = (
                 self._preserve_hybrid_control_files(
                     validate_completion,
@@ -2011,10 +2013,29 @@ class GenericWorkflowStepExecutor(Phase):
         output_file: Path,
         capability_id: str,
     ) -> Dict[str, Any]:
+        if capability_id == "cafe.browser.open":
+            return {
+                "capability": capability_id,
+                "args": {"target_ref": "current_pr"},
+                "effects": {
+                    "browser_open": ["current_pr"],
+                    "writes": [],
+                    "network_destinations": [],
+                },
+                "credentials": [],
+                "permissions": {},
+            }
+
         if capability_id != CAPABILITY_PR_PUBLISH_ID:
             return {
                 "capability": capability_id,
                 "args": {},
+                "effects": {
+                    "browser_open": [],
+                    "writes": [],
+                    "network_destinations": [],
+                },
+                "credentials": [],
                 "permissions": {},
             }
 
@@ -2026,9 +2047,20 @@ class GenericWorkflowStepExecutor(Phase):
                 "output": self._repo_relative_path(output_file),
                 "base": resolved_base,
             },
+            "effects": {
+                "browser_open": [],
+                "network_destinations": ["github.com", "api.github.com"],
+                "writes": [
+                    self._repo_relative_path(output_file),
+                    ".git",
+                    self._repo_relative_path(self.issue_dir),
+                ],
+            },
+            "credentials": ["gh"],
             "permissions": {
                 "network": ["github.com", "api.github.com"],
                 "writes": [
+                    self._repo_relative_path(output_file),
                     ".git",
                     self._repo_relative_path(self.issue_dir),
                 ],

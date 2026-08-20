@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
-import sys
-import uuid
-import webbrowser
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -338,11 +335,15 @@ class UserInputCollector(NoOpHook):
             prev_data = phase._load_previous_iteration_data() or {}
             # Show diff again after returning from chat/edit, but never print full output.
             if delta_displayed:
+
                 def redisplay_callback() -> None:
                     self._display_previous_iteration_delta(phase, previous_output_file)
+
             else:
+
                 def redisplay_callback() -> None:
                     self._display_previous_output(phase, step_name, previous_output_file)
+
             choice = phase._ask_user_for_review_decision(
                 self._resolve_review_item_name(step_name),
                 agent_name=agent_name,
@@ -557,8 +558,7 @@ def _declares_no_changes_task(step_def: Any) -> bool:
     if not isinstance(tasks, (list, tuple)):
         return False
     return any(
-        isinstance(task, dict) and task.get("trigger") == "no_changes_needed"
-        for task in tasks
+        isinstance(task, dict) and task.get("trigger") == "no_changes_needed" for task in tasks
     )
 
 
@@ -639,9 +639,7 @@ class InitialInputProviderResolver(NoOpHook):
             assert output_file is not None
             output_file.parent.mkdir(parents=True, exist_ok=True)
             formatter = kwargs.get("initial_input_output_formatter") or (
-                legacy_adapter._format_initial_requirements
-                if legacy_adapter is not None
-                else None
+                legacy_adapter._format_initial_requirements if legacy_adapter is not None else None
             )
             content = formatter(result.content) if callable(formatter) else result.content
             if legacy_empty_seed:
@@ -650,9 +648,7 @@ class InitialInputProviderResolver(NoOpHook):
                 output_file.write_text(f"{content.rstrip()}\n", encoding="utf-8")
 
         context_updates = (
-            {"user_input": result.content}
-            if binding.get("prompt_context") == "user_input"
-            else {}
+            {"user_input": result.content} if binding.get("prompt_context") == "user_input" else {}
         )
         return HookResult(
             context_updates=context_updates,
@@ -679,11 +675,14 @@ class InitialInputProviderResolver(NoOpHook):
             return False
         if MANUAL_TEXT_PROVIDER not in {str(provider) for provider in providers}:
             return False
-        if self._resolve_prefilled_input(
-            phase=phase,
-            step_name=step_name,
-            context=context,
-        ) is not None:
+        if (
+            self._resolve_prefilled_input(
+                phase=phase,
+                step_name=step_name,
+                context=context,
+            )
+            is not None
+        ):
             return False
         configured_provider, _issue_id = load_initial_input_selection(
             self._load_issue_config(phase)
@@ -1136,12 +1135,12 @@ class GitHubPRCreator(NoOpHook):
             CAPABILITY_PR_PUBLISH_ID,
             SCRIPT_EXIT_ERROR,
             TIMEOUT_ERROR,
-            VALIDATION_ERROR,
             CapabilityRegistryError,
             capability_receipt_hook_event,
             default_capability_definition_dirs,
             load_capability_registry,
             run_capability_request,
+            validation_rejection_receipt,
         )
 
         phase = kwargs.get("phase")
@@ -1160,11 +1159,9 @@ class GitHubPRCreator(NoOpHook):
         output_file = kwargs.get("output_file")
         if phase is None or not isinstance(output_file, Path) or not output_file.exists():
             return HookResult()
-        if (
-            CAPABILITY_PR_PUBLISH_ID
-            in _effective_capability_ids(step_name=step_name, step_def=step_def)
-            and self._is_local_pr_mode(phase)
-        ):
+        if CAPABILITY_PR_PUBLISH_ID in _effective_capability_ids(
+            step_name=step_name, step_def=step_def
+        ) and self._is_local_pr_mode(phase):
             return HookResult()
 
         repo_root = self._resolve_repo_root(phase)
@@ -1181,45 +1178,59 @@ class GitHubPRCreator(NoOpHook):
             if isinstance(blackboard_state, BlackboardState) and isinstance(issue_dir, Path):
                 BlackboardStore(issue_dir).append_capability_receipt(blackboard_state, receipt)
 
+        request_file = (
+            capability_request_file
+            if isinstance(capability_request_file, Path)
+            else publish_request_file if isinstance(publish_request_file, Path) else None
+        )
         try:
             request_payload = self._load_publish_request(
-                publish_request_file=(
-                    capability_request_file
-                    if isinstance(capability_request_file, Path)
-                    else publish_request_file if isinstance(publish_request_file, Path) else None
-                ),
+                publish_request_file=request_file,
                 repo_root=repo_root,
             )
             requests = self._normalize_capability_requests(request_payload)
-        except RuntimeError:
-            receipt = {
-                "capability": fallback_capability,
-                "correlation_id": uuid.uuid4().hex[:20],
-                "success": False,
-                "category": VALIDATION_ERROR,
-                "code": "request_load_error",
-                "inputs": {},
-                "outputs": {},
-                "finished_at": datetime.now().astimezone().isoformat(),
+        except RuntimeError as exc:
+            rejected_value: Any = None
+            rejection_source: dict[str, Any] = {
+                "kind": "request_artifact",
+                "path": str(request_file.resolve()) if isinstance(request_file, Path) else None,
             }
+            if isinstance(request_file, Path):
+                try:
+                    rejected_bytes = request_file.resolve().read_bytes()
+                    rejection_source["content_sha256"] = hashlib.sha256(
+                        rejected_bytes
+                    ).hexdigest()
+                    rejected_value = rejected_bytes.decode("utf-8", errors="replace")
+                except OSError:
+                    pass
+            receipt = validation_rejection_receipt(
+                capability=fallback_capability,
+                code="request_load_error",
+                rejected_value=rejected_value,
+                rejection_source=rejection_source,
+                error_detail=str(exc),
+            )
             persist_receipt(receipt)
             return HookResult(events=[capability_receipt_hook_event(receipt)])
 
+        definition_dirs = default_capability_definition_dirs(repo_root)
         try:
-            registry = load_capability_registry(default_capability_definition_dirs(repo_root))
-        except CapabilityRegistryError:
+            registry = load_capability_registry(definition_dirs)
+        except CapabilityRegistryError as exc:
             events: list[dict[str, Any]] = []
             for request in requests:
-                receipt = {
-                    "capability": str(request.get("capability") or fallback_capability),
-                    "correlation_id": uuid.uuid4().hex[:20],
-                    "success": False,
-                    "category": VALIDATION_ERROR,
-                    "code": "registry_load_error",
-                    "inputs": self._request_inputs_for_receipt(request),
-                    "outputs": {},
-                    "finished_at": datetime.now().astimezone().isoformat(),
-                }
+                receipt = validation_rejection_receipt(
+                    capability=str(request.get("capability") or fallback_capability),
+                    code="registry_load_error",
+                    raw_request=request,
+                    rejected_value=request,
+                    rejection_source={
+                        "kind": "capability_registry",
+                        "paths": [str(path) for path in definition_dirs],
+                    },
+                    error_detail=str(exc),
+                )
                 persist_receipt(receipt)
                 events.append(capability_receipt_hook_event(receipt))
             return HookResult(events=events)
@@ -1329,6 +1340,12 @@ class GitHubPRCreator(NoOpHook):
             raise RuntimeError(f"PR publish request not found: {request_file}")
         try:
             payload = json.loads(request_file.read_text(encoding="utf-8"))
+        except UnicodeError as exc:
+            raise RuntimeError(
+                f"PR publish request is not valid UTF-8: {request_file}"
+            ) from exc
+        except OSError as exc:
+            raise RuntimeError(f"PR publish request cannot be read: {request_file}") from exc
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"PR publish request is invalid JSON: {request_file}") from exc
         if not isinstance(payload, dict):
@@ -1469,18 +1486,41 @@ class PRLinkOpener(NoOpHook):
         ):
             return HookResult()
 
+        from cafe.core.blackboard import BlackboardStore
+        from cafe.core.capabilities import (
+            CAPABILITY_BROWSER_OPEN_ID,
+            CapabilityRegistryError,
+            default_capability_definition_dirs,
+            load_capability_registry,
+            run_capability_request,
+        )
+
+        repo_root = GitHubPRCreator._resolve_repo_root(phase) if phase is not None else Path.cwd()
         try:
-            pr_url = GitHubOps().get_current_pr_url()
-        except GitHubError:
-            return HookResult()
-        except Exception:
+            registry = load_capability_registry(default_capability_definition_dirs(repo_root))
+            run = run_capability_request(
+                repo_root=repo_root,
+                registry=registry,
+                capability_request={
+                    "capability": CAPABILITY_BROWSER_OPEN_ID,
+                    "args": {"target_ref": "current_pr"},
+                    "effects": {
+                        "browser_open": ["current_pr"],
+                        "writes": [],
+                        "network_destinations": [],
+                    },
+                    "credentials": [],
+                    "permissions": {},
+                },
+                output_file=Path(kwargs.get("output_file") or repo_root),
+            )
+        except (CapabilityRegistryError, OSError, ValueError):
             return HookResult()
 
-        if sys.stdin.isatty():
-            try:
-                webbrowser.open(pr_url)
-            except Exception:
-                return HookResult()
-            return HookResult(events=[{"type": "pr_link_opened", "url": pr_url}])
-
+        blackboard_state = kwargs.get("blackboard_state")
+        issue_dir = getattr(phase, "issue_dir", None)
+        if isinstance(blackboard_state, BlackboardState) and isinstance(issue_dir, Path):
+            BlackboardStore(issue_dir).append_capability_receipt(blackboard_state, run.receipt)
+        if run.receipt.get("success") and run.pr_synced_event is not None:
+            return HookResult(events=[run.pr_synced_event])
         return HookResult()

@@ -1,6 +1,8 @@
 """Tests for workflow user-input hooks."""
 
+import hashlib
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -18,7 +20,6 @@ from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.phases.generic_phase import GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
-
 
 PUBLISH_STEP = {
     "capability_requests": ["cafe.pr.publish"],
@@ -551,9 +552,7 @@ def test_github_issue_fetcher_fetches_configured_issue_noninteractively(tmp_path
 
     assert "Restore legacy input" in output_file.read_text(encoding="utf-8")
     assert result.context_updates == {"user_input": "**Issue Title:** Restore legacy input"}
-    assert result.events == [
-        {"type": "user_input_collected", "step": "spec", "source": "github"}
-    ]
+    assert result.events == [{"type": "user_input_collected", "step": "spec", "source": "github"}]
     mock_prompt_method.assert_not_called()
     mock_prompt_manual.assert_not_called()
     mock_fetch_issue.assert_called_once_with(346)
@@ -583,9 +582,7 @@ def test_github_only_provider_prompts_for_issue_id_interactively(tmp_path: Path)
         initial_input_fetch_github_issue=fetch,
     )
 
-    assert output_file.read_text(encoding="utf-8") == (
-        "**Issue Title:** Gather requirements\n"
-    )
+    assert output_file.read_text(encoding="utf-8") == ("**Issue Title:** Gather requirements\n")
     assert result.context_updates == {"user_input": "**Issue Title:** Gather requirements"}
     prompt.assert_called_once_with()
     fetch.assert_called_once_with(346)
@@ -643,9 +640,7 @@ def test_initial_input_provider_delivers_prefilled_manual_text_to_custom_entry_s
         context={"user_input": "Summarize the incoming customer report."},
     )
 
-    assert output_file.read_text(encoding="utf-8") == (
-        "Summarize the incoming customer report.\n"
-    )
+    assert output_file.read_text(encoding="utf-8") == ("Summarize the incoming customer report.\n")
     assert result.context_updates == {"user_input": "Summarize the incoming customer report."}
     assert result.events == [
         {"type": "initial_input_resolved", "step": "intake", "provider": "manual_text"}
@@ -721,9 +716,7 @@ def test_builtin_initial_input_preserves_legacy_requirements_seed(
     assert output_file.read_text(encoding="utf-8") == (
         "# Initial Requirements\n\nPreserve the established workflow kickoff.\n"
     )
-    assert result.context_updates == {
-        "user_input": "Preserve the established workflow kickoff."
-    }
+    assert result.context_updates == {"user_input": "Preserve the established workflow kickoff."}
 
 
 def test_builtin_initial_input_seeds_empty_legacy_requirements_non_interactively(
@@ -911,9 +904,10 @@ def test_pr_link_opener_opens_current_pr_url_when_confirmed() -> None:
     hook = PRLinkOpener()
 
     with (
-        patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
-        patch("cafe.core.hooks.native.webbrowser.open") as mock_open,
-        patch("cafe.core.hooks.native.sys.stdin.isatty", return_value=True),
+        patch("cafe.core.capabilities.GitHubOps") as mock_github_ops,
+        patch("cafe.core.capabilities.webbrowser.open") as mock_open,
+        patch("cafe.core.capabilities.sys.stdin.isatty", return_value=True),
+        patch("cafe.core.capabilities._current_repo_slug", return_value="test/repo"),
     ):
         mock_github_ops.return_value.get_current_pr_url.return_value = (
             "https://github.com/test/repo/pull/123"
@@ -933,9 +927,10 @@ def test_pr_link_opener_skips_browser_in_non_interactive() -> None:
     hook = PRLinkOpener()
 
     with (
-        patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
-        patch("cafe.core.hooks.native.webbrowser.open") as mock_open,
-        patch("cafe.core.hooks.native.sys.stdin.isatty", return_value=False),
+        patch("cafe.core.capabilities.GitHubOps") as mock_github_ops,
+        patch("cafe.core.capabilities.webbrowser.open") as mock_open,
+        patch("cafe.core.capabilities.sys.stdin.isatty", return_value=False),
+        patch("cafe.core.capabilities._current_repo_slug", return_value="test/repo"),
     ):
         mock_github_ops.return_value.get_current_pr_url.return_value = (
             "https://github.com/test/repo/pull/123"
@@ -953,8 +948,9 @@ def test_pr_link_opener_noops_when_pr_url_unavailable() -> None:
     hook = PRLinkOpener()
 
     with (
-        patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
-        patch("cafe.core.hooks.native.webbrowser.open") as mock_open,
+        patch("cafe.core.capabilities.GitHubOps") as mock_github_ops,
+        patch("cafe.core.capabilities.webbrowser.open") as mock_open,
+        patch("cafe.core.capabilities._current_repo_slug", return_value="test/repo"),
     ):
         mock_github_ops.return_value.get_current_pr_url.side_effect = Exception("no pr")
 
@@ -970,11 +966,12 @@ def test_pr_link_opener_noops_when_browser_open_fails() -> None:
     hook = PRLinkOpener()
 
     with (
-        patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
+        patch("cafe.core.capabilities.GitHubOps") as mock_github_ops,
         patch(
-            "cafe.core.hooks.native.webbrowser.open", side_effect=Exception("blocked")
+            "cafe.core.capabilities.webbrowser.open", side_effect=Exception("blocked")
         ) as mock_open,
-        patch("cafe.core.hooks.native.sys.stdin.isatty", return_value=True),
+        patch("cafe.core.capabilities.sys.stdin.isatty", return_value=True),
+        patch("cafe.core.capabilities._current_repo_slug", return_value="test/repo"),
     ):
         mock_github_ops.return_value.get_current_pr_url.return_value = (
             "https://github.com/test/repo/pull/123"
@@ -1105,6 +1102,219 @@ def test_github_pr_creator_publish_output_rejects_unknown_generic_capability_wit
     loaded = store.load_or_create("publish")
     assert loaded.capability_receipts[-1]["capability"] == "demo.unknown"
     assert loaded.capability_receipts[-1]["success"] is False
+
+
+@pytest.mark.parametrize(
+    "failure", ["request_json", "request_encoding", "request_read", "registry"]
+)
+def test_github_pr_creator_load_failures_persist_correlated_rejection_receipts(
+    tmp_path: Path, failure: str
+) -> None:
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.core.capabilities import CapabilityRegistryError, default_capability_definition_dirs
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "publish"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    capability_request_file = phase_dir / "iteration_001" / "capability_request.json"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Publish\n", encoding="utf-8")
+    valid_request = {"capability": "demo.echo", "args": {"target_ref": "current_pr"}}
+    if failure == "request_encoding":
+        capability_request_file.write_bytes(b"{\xff}")
+    else:
+        capability_request_file.write_text(
+            "not-json" if failure == "request_json" else json.dumps(valid_request),
+            encoding="utf-8",
+        )
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+    store = BlackboardStore(issue_dir)
+    blackboard_state = store.load_or_create("publish")
+
+    hook = GitHubPRCreator()
+    registry_patch = patch(
+        "cafe.core.capabilities.load_capability_registry",
+        side_effect=CapabilityRegistryError("invalid registry"),
+    )
+    read_patch = (
+        patch("pathlib.Path.read_text", side_effect=PermissionError("request unreadable"))
+        if failure == "request_read"
+        else nullcontext()
+    )
+    bytes_patch = (
+        patch("pathlib.Path.read_bytes", side_effect=PermissionError("request unreadable"))
+        if failure == "request_read"
+        else nullcontext()
+    )
+    with registry_patch, read_patch, bytes_patch:
+        result = hook.run(
+            stage="publish_output",
+            phase=phase,
+            step_name="publish",
+            step_def={"capability_requests": ["demo.echo"]},
+            output_file=output_file,
+            capability_request_file=capability_request_file,
+            blackboard_state=blackboard_state,
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+
+    receipt = store.load_or_create("publish").capability_receipts[-1]
+    assert result.events[0]["type"] == "capability_receipt"
+    assert receipt["request_fingerprint"]
+    assert receipt["manifest"] is None
+    assert "requested_effects" in receipt
+    assert receipt["allowed_effects"] == {}
+    assert receipt["decision"]["outcome"] == "deny"
+    assert receipt["outcome"] == "validation_rejection"
+    assert receipt["rejection"]["error_detail"]
+    if failure.startswith("request_"):
+        expected_source = {
+            "kind": "request_artifact",
+            "path": str(capability_request_file.resolve()),
+        }
+        if failure != "request_read":
+            expected_source["content_sha256"] = hashlib.sha256(
+                capability_request_file.read_bytes()
+            ).hexdigest()
+        assert receipt["rejection"]["source"] == expected_source
+        if failure == "request_json":
+            assert receipt["rejection"]["rejected_value"] == "not-json"
+        elif failure == "request_encoding":
+            assert receipt["rejection"]["rejected_value"] == "{\ufffd}"
+        else:
+            assert receipt["rejection"]["rejected_value"] is None
+    else:
+        assert receipt["rejection"]["source"] == {
+            "kind": "capability_registry",
+            "paths": [str(path) for path in default_capability_definition_dirs(tmp_path)],
+        }
+        assert receipt["rejection"]["rejected_value"] == {
+            "capability": "demo.echo",
+            "args": {"target_ref": "current_pr"},
+        }
+        assert "invalid registry" in receipt["rejection"]["error_detail"]
+
+
+def test_github_pr_creator_malformed_request_fingerprint_tracks_rejected_artifact(
+    tmp_path: Path,
+) -> None:
+    from cafe.core.blackboard import BlackboardStore
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "publish"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    capability_request_file = phase_dir / "iteration_001" / "capability_request.json"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Publish\n", encoding="utf-8")
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+    store = BlackboardStore(issue_dir)
+    blackboard_state = store.load_or_create("publish")
+    hook = GitHubPRCreator()
+    fingerprints: list[str] = []
+
+    for malformed in ("not-json", "also-not-json"):
+        capability_request_file.write_text(malformed, encoding="utf-8")
+        hook.run(
+            stage="publish_output",
+            phase=phase,
+            step_name="publish",
+            step_def={"capability_requests": ["demo.echo"]},
+            output_file=output_file,
+            capability_request_file=capability_request_file,
+            blackboard_state=blackboard_state,
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+        fingerprints.append(
+            store.load_or_create("publish").capability_receipts[-1]["request_fingerprint"]
+        )
+
+    assert fingerprints[0] != fingerprints[1]
+
+
+def test_github_pr_creator_unreadable_request_fingerprint_tracks_source_path(
+    tmp_path: Path,
+) -> None:
+    from cafe.core.blackboard import BlackboardStore
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "publish"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Publish\n", encoding="utf-8")
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+    store = BlackboardStore(issue_dir)
+    blackboard_state = store.load_or_create("publish")
+    hook = GitHubPRCreator()
+    fingerprints: list[str] = []
+
+    with (
+        patch("pathlib.Path.read_text", side_effect=PermissionError("request unreadable")),
+        patch("pathlib.Path.read_bytes", side_effect=PermissionError("request unreadable")),
+    ):
+        for filename in ("first.json", "second.json"):
+            request_file = output_file.parent / filename
+            request_file.write_text("same request", encoding="utf-8")
+            hook.run(
+                stage="publish_output",
+                phase=phase,
+                step_name="publish",
+                step_def={"capability_requests": ["demo.echo"]},
+                output_file=output_file,
+                capability_request_file=request_file,
+                blackboard_state=blackboard_state,
+                status_code=PhaseStatusCode.CONFIRMED,
+            )
+            fingerprints.append(
+                blackboard_state.capability_receipts[-1]["request_fingerprint"]
+            )
+
+    assert fingerprints[0] != fingerprints[1]
+
+
+def test_github_pr_creator_invalid_utf8_fingerprint_tracks_original_bytes(
+    tmp_path: Path,
+) -> None:
+    from cafe.core.blackboard import BlackboardStore
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "publish"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    capability_request_file = output_file.parent / "capability_request.json"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Publish\n", encoding="utf-8")
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+    store = BlackboardStore(issue_dir)
+    blackboard_state = store.load_or_create("publish")
+    hook = GitHubPRCreator()
+    fingerprints: list[str] = []
+
+    for malformed in (b"{\xff}", b"{\xfe}"):
+        capability_request_file.write_bytes(malformed)
+        hook.run(
+            stage="publish_output",
+            phase=phase,
+            step_name="publish",
+            step_def={"capability_requests": ["demo.echo"]},
+            output_file=output_file,
+            capability_request_file=capability_request_file,
+            blackboard_state=blackboard_state,
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+        fingerprints.append(
+            store.load_or_create("publish").capability_receipts[-1][
+                "request_fingerprint"
+            ]
+        )
+
+    assert fingerprints[0] != fingerprints[1]
 
 
 def test_github_pr_creator_publish_output_records_all_multi_capability_receipts(
@@ -1424,10 +1634,10 @@ def test_github_pr_creator_publish_output_fails_safe_without_explicit_true(
     assert result.events == []
 
 
-def test_github_pr_creator_publish_ignores_untrusted_script_field_in_request(
+def test_github_pr_creator_publish_rejects_untrusted_script_field_before_dispatch(
     tmp_path: Path,
 ) -> None:
-    """Registry-resolved script is used; agent-supplied script path must not change dispatch."""
+    """Agent-supplied executable authority invalidates the request."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     _enable_remote_pr(issue_dir)
     phase_dir = issue_dir / "pr"
@@ -1462,7 +1672,7 @@ def test_github_pr_creator_publish_ignores_untrusted_script_field_in_request(
 
     hook = GitHubPRCreator()
     with patch("cafe.core.capabilities.subprocess.run", return_value=completed) as mock_run:
-        hook.run(
+        result = hook.run(
             stage="publish_output",
             phase=phase,
             step_name="pr",
@@ -1472,8 +1682,10 @@ def test_github_pr_creator_publish_ignores_untrusted_script_field_in_request(
             status_code=PhaseStatusCode.CONFIRMED,
         )
 
-    cmd = mock_run.call_args.args[0]
-    assert cmd[1] == str(hook._resolve_sync_script(tmp_path))
+    mock_run.assert_not_called()
+    assert result.events[-1]["type"] == "capability_receipt"
+    assert result.events[-1]["success"] is False
+    assert result.events[-1]["code"] == "malformed_request"
 
 
 def test_pr_comment_poster_posts_todo_comment_only_when_confirmed_and_complete(
