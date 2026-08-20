@@ -18,7 +18,15 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from cafe.skills.loader import SkillLoader
 from cafe.utils.github import GitHubOps
@@ -38,29 +46,49 @@ class CapabilityRegistryError(ValueError):
 
 
 class StrictCapabilityModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
 class ValueSchema(StrictCapabilityModel):
     type: Literal["string", "integer", "boolean"]
     enum: Optional[Tuple[Any, ...]] = None
 
+    @field_validator("enum", mode="before")
+    @classmethod
+    def freeze_enum(cls, value: Any) -> Any:
+        return tuple(value) if isinstance(value, list) else value
+
 
 class ObjectSchema(StrictCapabilityModel):
     required: Tuple[str, ...]
     properties: Mapping[str, ValueSchema]
 
+    @field_validator("required", mode="before")
+    @classmethod
+    def freeze_required(cls, value: Any) -> Any:
+        return tuple(value) if isinstance(value, list) else value
+
     @model_validator(mode="after")
     def required_fields_are_declared(self) -> "ObjectSchema":
         if not set(self.required).issubset(self.properties):
             raise ValueError("required fields must be declared in properties")
+        object.__setattr__(self, "properties", MappingProxyType(dict(self.properties)))
         return self
+
+    @field_serializer("properties")
+    def serialize_properties(self, value: Mapping[str, ValueSchema]) -> Dict[str, ValueSchema]:
+        return dict(value)
 
 
 class CapabilityEffects(StrictCapabilityModel):
     writes: Tuple[str, ...]
     network_destinations: Tuple[str, ...]
     browser_open: Tuple[str, ...] = ()
+
+    @field_validator("writes", "network_destinations", "browser_open", mode="before")
+    @classmethod
+    def freeze_effects(cls, value: Any) -> Any:
+        return tuple(value) if isinstance(value, list) else value
 
 
 class CapabilityManifest(StrictCapabilityModel):
@@ -77,11 +105,32 @@ class CapabilityManifest(StrictCapabilityModel):
     approval: Literal["not_required", "required"]
     policy: Literal["allow", "deny"]
 
+    @field_validator("credentials", mode="before")
+    @classmethod
+    def freeze_credentials(cls, value: Any) -> Any:
+        return tuple(value) if isinstance(value, list) else value
+
+    @field_validator("permissions", mode="before")
+    @classmethod
+    def freeze_permissions(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        return {
+            key: tuple(items) if isinstance(items, list) else items for key, items in value.items()
+        }
+
     @model_validator(mode="after")
     def reject_contradictory_policy(self) -> "CapabilityManifest":
         if self.approval == "required" and self.policy == "deny":
             raise ValueError("approval-required capability cannot also be policy denied")
+        object.__setattr__(self, "permissions", MappingProxyType(dict(self.permissions)))
         return self
+
+    @field_serializer("permissions")
+    def serialize_permissions(
+        self, value: Mapping[str, Tuple[str, ...]]
+    ) -> Dict[str, Tuple[str, ...]]:
+        return dict(value)
 
 
 class ExecutionRequest(StrictCapabilityModel):
@@ -90,6 +139,20 @@ class ExecutionRequest(StrictCapabilityModel):
     effects: CapabilityEffects
     credentials: Tuple[str, ...]
     permissions: Mapping[str, Tuple[str, ...]]
+
+    @field_validator("credentials", mode="before")
+    @classmethod
+    def freeze_credentials(cls, value: Any) -> Any:
+        return tuple(value) if isinstance(value, list) else value
+
+    @field_validator("permissions", mode="before")
+    @classmethod
+    def freeze_permissions(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        return {
+            key: tuple(items) if isinstance(items, list) else items for key, items in value.items()
+        }
 
 
 class PolicyDecision(str, Enum):
@@ -142,9 +205,9 @@ def _validate_request_arguments(
     return None
 
 
-def _is_effect_subset(requested: CapabilityEffects, allowed: CapabilityEffects) -> bool:
+def _matches_effect_boundary(requested: CapabilityEffects, allowed: CapabilityEffects) -> bool:
     return all(
-        set(getattr(requested, field)).issubset(getattr(allowed, field))
+        set(getattr(requested, field)) == set(getattr(allowed, field))
         for field in ("writes", "network_destinations", "browser_open")
     )
 
@@ -192,16 +255,18 @@ def evaluate_capability_request(
     allowed_effects, allowed_permissions = _resolve_boundary_tokens(manifest, request)
 
     reason = _validate_request_arguments(request, manifest)
-    if reason is None and not _is_effect_subset(request.effects, allowed_effects):
+    if reason is None and not _matches_effect_boundary(request.effects, allowed_effects):
         reason = "effect_not_allowed"
-    if reason is None and not set(request.credentials).issubset(manifest.credentials):
+    if reason is None and set(request.credentials) != set(manifest.credentials):
         reason = "credential_not_allowed"
     if reason is None:
-        for permission, values in request.permissions.items():
-            allowed = allowed_permissions.get(permission)
-            if allowed is None or not set(values).issubset(allowed):
-                reason = "permission_not_allowed"
-                break
+        if set(request.permissions) != set(allowed_permissions):
+            reason = "permission_not_allowed"
+        else:
+            for permission, values in request.permissions.items():
+                if set(values) != set(allowed_permissions[permission]):
+                    reason = "permission_not_allowed"
+                    break
 
     if reason is not None:
         decision = PolicyDecision.DENY
@@ -666,20 +731,24 @@ def _normalize_legacy_pr_request(request: Mapping[str, Any]) -> Dict[str, Any]:
     normalized = dict(request)
     if str(normalized.get("capability") or "") != CAPABILITY_PR_PUBLISH_ID:
         return normalized
-    legacy_permissions = normalized.get("permissions")
-    if not isinstance(legacy_permissions, Mapping):
-        legacy_permissions = {}
-    args = normalized.get("args") if isinstance(normalized.get("args"), Mapping) else {}
-    writes = list(legacy_permissions.get("writes") or [str(args.get("output") or "")])
-    network = list(legacy_permissions.get("network") or ["github.com", "api.github.com"])
-    normalized.setdefault(
-        "effects",
-        {"writes": [value for value in writes if value], "network_destinations": network},
-    )
-    if isinstance(normalized.get("effects"), Mapping):
-        normalized["effects"] = {"browser_open": [], **dict(normalized["effects"])}
-    normalized.setdefault("credentials", ["gh"])
-    normalized["permissions"] = {"network": network, "writes": writes}
+    if "effects" not in normalized:
+        args = normalized.get("args") if isinstance(normalized.get("args"), Mapping) else {}
+        output = str(args.get("output") or "")
+        output_parts = Path(output).parts
+        try:
+            issue_index = output_parts.index("issues")
+            issue_dir = str(Path(*output_parts[: issue_index + 2]))
+        except (ValueError, IndexError):
+            issue_dir = ""
+        writes = [value for value in (output, ".git", issue_dir) if value]
+        network = ["github.com", "api.github.com"]
+        normalized["effects"] = {
+            "browser_open": [],
+            "writes": writes,
+            "network_destinations": network,
+        }
+        normalized["credentials"] = ["gh"]
+        normalized["permissions"] = {"network": network, "writes": writes}
     return normalized
 
 
@@ -723,6 +792,51 @@ def _audited_receipt(
                 "explanation": evaluation.explanation,
             },
             "outcome": outcome,
+        }
+    )
+    return receipt
+
+
+def validation_rejection_receipt(
+    *,
+    capability: str,
+    code: str,
+    raw_request: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build a correlated fail-closed receipt when typed evaluation cannot start."""
+    request_boundary: Dict[str, Any] = dict(raw_request) if raw_request is not None else {}
+    fingerprint_payload = {"capability": capability, "request": request_boundary}
+    canonical = json.dumps(
+        fingerprint_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
+    requested_effects = request_boundary.get("effects")
+    receipt = _base_receipt(
+        correlation_id=uuid.uuid4().hex[:20],
+        capability=capability,
+        success=False,
+        category=VALIDATION_ERROR,
+        code=code,
+        inputs=_receipt_inputs(request_boundary.get("args")),
+        outputs={},
+    )
+    receipt.update(
+        {
+            "request_fingerprint": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            "manifest": None,
+            "requested_effects": (
+                dict(requested_effects) if isinstance(requested_effects, Mapping) else {}
+            ),
+            "allowed_effects": {},
+            "decision": {
+                "outcome": PolicyDecision.DENY.value,
+                "reason_code": code,
+                "explanation": "The request could not be authorized.",
+            },
+            "outcome": "validation_rejection",
         }
     )
     return receipt

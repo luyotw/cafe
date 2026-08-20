@@ -1580,11 +1580,19 @@ def test_generic_workflow_step_writes_pr_publish_request_contract(
         "base": "v02",
     }
     assert publish_request["permissions"]["network"] == ["github.com", "api.github.com"]
-    assert publish_request["permissions"]["writes"] == [".git", ".cafe/issues/issue-pr-contract"]
+    assert publish_request["permissions"]["writes"] == [
+        ".cafe/issues/issue-pr-contract/pr/iteration_001/output.md",
+        ".git",
+        ".cafe/issues/issue-pr-contract",
+    ]
     assert publish_request["effects"] == {
         "browser_open": [],
         "network_destinations": ["github.com", "api.github.com"],
-        "writes": [".git", ".cafe/issues/issue-pr-contract"],
+        "writes": [
+            ".cafe/issues/issue-pr-contract/pr/iteration_001/output.md",
+            ".git",
+            ".cafe/issues/issue-pr-contract",
+        ],
     }
     assert publish_request["credentials"] == ["gh"]
 

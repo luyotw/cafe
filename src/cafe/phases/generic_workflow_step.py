@@ -2051,6 +2051,7 @@ class GenericWorkflowStepExecutor(Phase):
                 "browser_open": [],
                 "network_destinations": ["github.com", "api.github.com"],
                 "writes": [
+                    self._repo_relative_path(output_file),
                     ".git",
                     self._repo_relative_path(self.issue_dir),
                 ],
@@ -2059,6 +2060,7 @@ class GenericWorkflowStepExecutor(Phase):
             "permissions": {
                 "network": ["github.com", "api.github.com"],
                 "writes": [
+                    self._repo_relative_path(output_file),
                     ".git",
                     self._repo_relative_path(self.issue_dir),
                 ],

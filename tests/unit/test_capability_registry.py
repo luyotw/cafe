@@ -60,6 +60,22 @@ def test_load_registry_returns_typed_complete_manifests(tmp_path: Path) -> None:
     with pytest.raises(TypeError):
         registry["new"] = registry["demo.echo"]  # type: ignore[index]
 
+    manifest = registry["demo.echo"]
+    with pytest.raises(TypeError):
+        manifest.arguments.properties["other"] = manifest.arguments.properties["target_ref"]  # type: ignore[index]
+    with pytest.raises(TypeError):
+        manifest.permissions["network"] = ("example.test",)  # type: ignore[index]
+
+
+def test_load_registry_rejects_coerced_manifest_scalars(tmp_path: Path) -> None:
+    cap_dir = tmp_path / "caps"
+    cap_dir.mkdir()
+    malformed = _manifest(version=True)
+    (cap_dir / "demo.yaml").write_text(yaml.safe_dump(malformed), encoding="utf-8")
+
+    with pytest.raises(CapabilityRegistryError):
+        load_capability_registry([cap_dir])
+
 
 @pytest.mark.parametrize(
     "field",
@@ -170,6 +186,40 @@ def test_policy_denies_broadened_request(
     )
     assert evaluation.decision == PolicyDecision.DENY
     assert evaluation.reason_code == reason_code
+
+
+@pytest.mark.parametrize(
+    "request_update",
+    [
+        {
+            "effects": {
+                "writes": [],
+                "network_destinations": [],
+                "browser_open": [],
+            }
+        },
+        {"credentials": []},
+        {"permissions": {}},
+    ],
+)
+def test_policy_denies_requests_that_omit_fixed_adapter_authority(
+    request_update: dict[str, object],
+) -> None:
+    manifest = _typed_manifest(
+        credentials=("browser",),
+        permissions={"browser": ("current_pr",)},
+    )
+    request = _browser_request(
+        **{
+            "credentials": ["browser"],
+            "permissions": {"browser": ["current_pr"]},
+            **request_update,
+        }
+    )
+
+    evaluation = evaluate_capability_request({"demo.echo": manifest}, request)
+
+    assert evaluation.decision == PolicyDecision.DENY
 
 
 def test_policy_decision_is_total_for_allow_approval_and_deny() -> None:

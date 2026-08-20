@@ -1142,6 +1142,7 @@ class GitHubPRCreator(NoOpHook):
             default_capability_definition_dirs,
             load_capability_registry,
             run_capability_request,
+            validation_rejection_receipt,
         )
 
         phase = kwargs.get("phase")
@@ -1190,16 +1191,10 @@ class GitHubPRCreator(NoOpHook):
             )
             requests = self._normalize_capability_requests(request_payload)
         except RuntimeError:
-            receipt = {
-                "capability": fallback_capability,
-                "correlation_id": uuid.uuid4().hex[:20],
-                "success": False,
-                "category": VALIDATION_ERROR,
-                "code": "request_load_error",
-                "inputs": {},
-                "outputs": {},
-                "finished_at": datetime.now().astimezone().isoformat(),
-            }
+            receipt = validation_rejection_receipt(
+                capability=fallback_capability,
+                code="request_load_error",
+            )
             persist_receipt(receipt)
             return HookResult(events=[capability_receipt_hook_event(receipt)])
 
@@ -1208,16 +1203,11 @@ class GitHubPRCreator(NoOpHook):
         except CapabilityRegistryError:
             events: list[dict[str, Any]] = []
             for request in requests:
-                receipt = {
-                    "capability": str(request.get("capability") or fallback_capability),
-                    "correlation_id": uuid.uuid4().hex[:20],
-                    "success": False,
-                    "category": VALIDATION_ERROR,
-                    "code": "registry_load_error",
-                    "inputs": self._request_inputs_for_receipt(request),
-                    "outputs": {},
-                    "finished_at": datetime.now().astimezone().isoformat(),
-                }
+                receipt = validation_rejection_receipt(
+                    capability=str(request.get("capability") or fallback_capability),
+                    code="registry_load_error",
+                    raw_request=request,
+                )
                 persist_receipt(receipt)
                 events.append(capability_receipt_hook_event(receipt))
             return HookResult(events=events)

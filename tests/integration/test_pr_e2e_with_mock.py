@@ -53,12 +53,20 @@ def test_pr_publish_generic_journey_preserves_outputs_and_correlates_receipt(
             "effects": {
                 "browser_open": [],
                 "network_destinations": ["github.com", "api.github.com"],
-                "writes": [".git", ".cafe/issues/demo"],
+                "writes": [
+                    ".cafe/issues/demo/pr/iteration_001/output.md",
+                    ".git",
+                    ".cafe/issues/demo",
+                ],
             },
             "credentials": ["gh"],
             "permissions": {
                 "network": ["github.com", "api.github.com"],
-                "writes": [".git", ".cafe/issues/demo"],
+                "writes": [
+                    ".cafe/issues/demo/pr/iteration_001/output.md",
+                    ".git",
+                    ".cafe/issues/demo",
+                ],
             },
         },
         output_file=output_file,
