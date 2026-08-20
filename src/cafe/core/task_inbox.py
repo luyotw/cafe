@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -159,8 +159,14 @@ class _Record:
 class TaskInboxService:
     """Read canonical per-issue stores as one fail-closed repository inbox."""
 
-    def __init__(self, cafe_dir: Path = Path(".cafe")) -> None:
+    def __init__(
+        self, cafe_dir: Path = Path(".cafe"), *, archive_root: Optional[Path] = None
+    ) -> None:
         self.cafe_dir = Path(cafe_dir)
+        project_key = str(self.cafe_dir.parent.resolve()).lstrip("/").replace("/", "-")
+        self.archive_root = archive_root or (
+            Path.home() / ".cafe" / "projects" / project_key / "archived"
+        )
 
     def list_tasks(
         self,
@@ -238,6 +244,17 @@ class TaskInboxService:
         identifier = str(task_id).strip()
         matches = [record for record in self._scan() if record.task.id == identifier]
         if not matches:
+            archived_issues = self._archived_issues_for(identifier)
+            if archived_issues:
+                raise TaskInboxError(
+                    "archived_workflow",
+                    f"Task {identifier!r} belongs to archived issue(s): "
+                    + ", ".join(archived_issues)
+                    + ".",
+                    recovery="Restore the owning issue explicitly before completing this task.",
+                    task_id=identifier,
+                    issue=archived_issues[0] if len(archived_issues) == 1 else None,
+                )
             raise TaskInboxError(
                 "task_not_found",
                 f"No repository task has identifier {identifier!r}.",
@@ -253,6 +270,25 @@ class TaskInboxService:
                 task_id=identifier,
             )
         return matches[0]
+
+    def _archived_issues_for(self, task_id: str) -> list[str]:
+        """Identify an archived owner without treating archives as live inbox data."""
+        if not self.archive_root.is_dir():
+            return []
+        matches: list[str] = []
+        for issue_dir in sorted(
+            (path for path in self.archive_root.iterdir() if path.is_dir()),
+            key=lambda path: path.name,
+        ):
+            store = HumanTaskRecordStore(issue_dir)
+            if not store.exists:
+                continue
+            try:
+                if any(task.id == task_id for task in store.tasks()):
+                    matches.append(issue_dir.name)
+            except (HumanTaskRecordError, OSError):
+                continue
+        return matches
 
     def _scan(self) -> tuple[_Record, ...]:
         issues_dir = self.cafe_dir / "issues"

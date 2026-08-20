@@ -11,7 +11,6 @@ from cafe.core.blackboard import BlackboardStore
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.ui.cli import app
 
-
 runner = CliRunner()
 
 

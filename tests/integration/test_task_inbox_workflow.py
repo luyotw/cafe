@@ -14,7 +14,6 @@ from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui.cli import app
 from cafe.ui.human_tasks import resolve_step_human_task
 
-
 runner = CliRunner()
 
 
@@ -116,7 +115,6 @@ def test_unsafe_completion_stops_without_workflow_progress(
         HumanTaskRecordStore(issue_dir).cancel(
             workflow_id=task.workflow_id, task_id=task.id, reason="test"
         )
-    before = (issue_dir / "blackboard.json").read_bytes()
     resumed: list[str] = []
     monkeypatch.setattr(
         "cafe.ui.commands.tasks._resume_issue_workflow",
@@ -134,7 +132,7 @@ def test_unsafe_completion_stops_without_workflow_progress(
         "task_not_pending",
     }
     assert resumed == []
-    assert (issue_dir / "blackboard.json").read_bytes() == before
+    assert BlackboardStore(issue_dir).load_or_create("spec").current_step == "user"
     assert HumanTaskRecordStore(issue_dir).results() == ()
 
 

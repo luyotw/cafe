@@ -164,3 +164,19 @@ def test_completion_preflight_rejects_stale_or_mismatched_ownership(tmp_path: Pa
         service.preflight_completion(task.id)
     assert mismatch.value.code == "workflow_mismatch"
     assert HumanTaskRecordStore(issue).results() == ()
+
+
+def test_archived_task_requires_explicit_restore(tmp_path: Path) -> None:
+    """Test List U6/I5: archived ownership is distinct from a missing identifier."""
+    cafe_dir = tmp_path / ".cafe"
+    archive_root = tmp_path / "archives"
+    issue = _issue(cafe_dir, "archived", "workflow-a")
+    task = _task(issue, "workflow-a")
+    archive_root.mkdir()
+    issue.rename(archive_root / "archived")
+
+    with pytest.raises(TaskInboxError) as archived:
+        TaskInboxService(cafe_dir, archive_root=archive_root).preflight_completion(task.id)
+
+    assert archived.value.code == "archived_workflow"
+    assert "restore" in archived.value.recovery.lower()
