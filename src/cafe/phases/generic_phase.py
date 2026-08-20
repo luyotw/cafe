@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from cafe.core.blackboard import HandoffIntent
+from cafe.core.capabilities import default_capability_definition_dirs, load_capability_registry, run_capability_request
 from cafe.core.hooks import BUILTIN_HOOKS, HookResult
 from cafe.core.hooks.script_schema import validate_script_args_schema
 from cafe.core.execution_boundary import ExecutionClass
@@ -535,6 +536,11 @@ class GenericPhase:
         response: Optional[str],
         hook_kwargs: Dict[str, Any],
     ) -> HookResult:
+        if "capability" in declaration:
+            return self._run_capability_hook(
+                stage=stage, declaration=declaration, step_def=step_def,
+                context=context, response=response, hook_kwargs=hook_kwargs,
+            )
         if stage not in self.SCRIPT_HOOK_STAGES:
             raise ValueError(
                 f"Script hooks are only supported in {sorted(self.SCRIPT_HOOK_STAGES)}"
@@ -681,6 +687,46 @@ class GenericPhase:
                 }
             ]
         )
+
+    def _run_capability_hook(
+        self, *, stage: str, declaration: Dict[str, Any], step_def: Dict[str, Any],
+        context: Optional[Dict[str, str]], response: Optional[str], hook_kwargs: Dict[str, Any],
+    ) -> HookResult:
+        allowed = {"capability", "args", "schema", "when_intents", "execution_class"}
+        if set(declaration) - allowed or declaration.get("execution_class", "capability") != "capability":
+            raise ValueError("Capability hook has unsupported fields or execution class")
+        capability = declaration.get("capability")
+        if not isinstance(capability, str) or not capability:
+            raise ValueError("Capability hook requires a registered capability id")
+        when_intents = declaration.get("when_intents") or []
+        detected = self._detect_status_code(
+            response=response or "", step_def=step_def, context=context,
+            step_name=hook_kwargs.get("step_name"),
+        )
+        if when_intents and detected not in when_intents:
+            return HookResult(events=[{"type": "capability_hook", "capability": capability, "status": "skipped", "reason": "intent_mismatch"}])
+        args = self._resolve_script_args(args_template=declaration.get("args") or {}, context=context or {}, hook_kwargs=hook_kwargs)
+        schema = declaration.get("schema")
+        errors = validate_script_args_schema(args=args, schema=schema) if schema else []
+        if errors:
+            return HookResult(continue_pipeline=False, override_status_code=PhaseStatusCode.NEED_PERMISSION, events=[{"type": "capability_hook", "capability": capability, "status": "validation_failed", "validation_errors": errors}])
+        repo_root = Path.cwd().resolve()
+        output_file = Path(str(args.get("output") or ""))
+        if not output_file.is_absolute():
+            output_file = repo_root / output_file
+        registry = load_capability_registry(default_capability_definition_dirs(repo_root))
+        manifest = registry.get(capability)
+        if manifest is None:
+            raise ValueError(f"Unknown capability {capability!r}")
+        request = {
+            "capability": capability, "args": args,
+            "effects": manifest.effects.model_dump(mode="json"),
+            "credentials": list(manifest.credentials),
+            "permissions": {key: list(values) for key, values in manifest.permissions.items()},
+        }
+        run = run_capability_request(repo_root=repo_root, registry=registry, capability_request=request, output_file=output_file)
+        event = {"type": "capability_hook", "capability": capability, "status": "success" if run.receipt.get("success") else "denied", "execution_receipt": run.receipt}
+        return HookResult(continue_pipeline=bool(run.receipt.get("success")), override_status_code=None if run.receipt.get("success") else PhaseStatusCode.NEED_PERMISSION, events=[event])
 
     @staticmethod
     def _parse_script_hook_declaration(

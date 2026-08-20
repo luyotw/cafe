@@ -69,18 +69,19 @@ def test_sync_script_skips_when_sync_disabled_without_gh(
     assert payload["reason"] == "sync_disabled"
 
 
-def test_default_playbook_migrates_plan_sync_to_script_hook() -> None:
+def test_default_playbook_routes_plan_sync_to_registered_capability() -> None:
     project_root = Path(__file__).resolve().parents[2]
     playbook_path = project_root / "src/cafe/data/playbooks/default.yaml"
     data = yaml.safe_load(playbook_path.read_text(encoding="utf-8"))
 
     plan_hooks = data["steps"]["plan"]["hooks"]["after_execute"]
     assert isinstance(plan_hooks, list) and plan_hooks
-    script_hook = plan_hooks[0]
-    assert script_hook["script"] == "sync_github.sh"
-    assert script_hook["args"]["phase"] == "plan"
-    assert script_hook["args"]["output"] == "{output_file}"
-    assert script_hook["when_intents"] == ["confirmed"]
+    capability_hook = plan_hooks[0]
+    assert capability_hook["capability"] == "cafe.github.issue_comment"
+    assert capability_hook["execution_class"] == "capability"
+    assert capability_hook["args"]["phase"] == "plan"
+    assert capability_hook["args"]["output"] == "{output_file}"
+    assert capability_hook["when_intents"] == ["confirmed"]
 
 
 def test_default_playbook_no_changes_needed_routes_to_review() -> None:

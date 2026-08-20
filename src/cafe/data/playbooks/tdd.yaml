@@ -85,7 +85,8 @@ steps:
     hooks:
       prepare_input: [UserInputCollector]
       after_execute:
-        - script: sync_github.sh
+        - capability: cafe.github.issue_comment
+          execution_class: capability
           when_intents: [confirmed]
           args:
             phase: plan

@@ -1,0 +1,25 @@
+id: cafe.github.issue_comment
+version: 1
+implementation: sync_issue_comment
+arguments:
+  required: [phase, output]
+  properties:
+    phase: {type: string, enum: [spec, plan]}
+    output: {type: string}
+outputs:
+  required: [action]
+  properties:
+    action: {type: string, enum: [skipped, commented]}
+    issue_id: {type: string}
+    phase: {type: string, enum: [spec, plan]}
+effects:
+  writes: []
+  network_destinations: [github.com, api.github.com]
+  browser_open: []
+credentials: [gh]
+permissions:
+  network: [github.com, api.github.com]
+idempotency: update_in_place
+risk: medium
+approval: not_required
+policy: allow
