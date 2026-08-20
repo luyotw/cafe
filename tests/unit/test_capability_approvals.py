@@ -266,22 +266,30 @@ def test_concurrent_resumes_cross_one_atomic_attempt_fence(
     manifest = _manifest()
     task = first_service.request_approval(request=_request(), manifest=manifest)
     _approve(first_service, task.id)
-    second_service = _service(tmp_path)
-    original_transition = first_service.store.__class__.transition_capability_approval_if_state
+    original_resume_locked = first_service._resume_locked
+    active = 0
+    active_lock = threading.Lock()
+    overlapped = threading.Event()
+    first_entered = threading.Event()
 
-    def widen_pre_fence_race(self: object, **kwargs: object) -> object:
-        time.sleep(0.05)
-        return original_transition(self, **kwargs)  # type: ignore[arg-type]
+    def track_resume_overlap(task_id: str, **kwargs: object) -> dict[str, object]:
+        nonlocal active
+        with active_lock:
+            active += 1
+            if active > 1:
+                overlapped.set()
+            else:
+                first_entered.set()
+        time.sleep(0.1)
+        try:
+            return original_resume_locked(task_id, **kwargs)  # type: ignore[arg-type]
+        finally:
+            with active_lock:
+                active -= 1
 
-    monkeypatch.setattr(
-        first_service.store.__class__,
-        "transition_capability_approval_if_state",
-        widen_pre_fence_race,
-    )
-    start = threading.Barrier(2)
+    monkeypatch.setattr(first_service, "_resume_locked", track_resume_overlap)
 
     def resume(service: CapabilityApprovalService) -> dict[str, object]:
-        start.wait()
         return service.resume(
             task.id,
             request=_request(),
@@ -291,9 +299,13 @@ def test_concurrent_resumes_cross_one_atomic_attempt_fence(
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(resume, (first_service, second_service)))
+        first = pool.submit(resume, first_service)
+        assert first_entered.wait(timeout=1)
+        second = pool.submit(resume, first_service)
+        results = [first.result(), second.result()]
 
     assert calls == ["called"]
+    assert not overlapped.is_set()
     assert results[0] == results[1]
     assert results[0]["outcome"] == "succeeded"
 

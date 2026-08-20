@@ -290,8 +290,7 @@ class _Envelope:
         if not isinstance(raw_events, list):
             raise HumanTaskRecordSchemaError("lifecycle_events must be a list")
         events = [
-            LifecycleEvent.from_dict(_as_mapping(item, "lifecycle event"))
-            for item in raw_events
+            LifecycleEvent.from_dict(_as_mapping(item, "lifecycle event")) for item in raw_events
         ]
         envelope = cls(workflow_id, tasks, assignments, waits, results, events)
         envelope.validate()
@@ -332,7 +331,7 @@ class HumanTaskRecordStore:
         self.issue_dir = issue_dir
         self.file_path = issue_dir / HUMAN_TASK_RECORD_FILENAME
         self.lock_path = issue_dir / f".{HUMAN_TASK_RECORD_FILENAME}.lock"
-        self._transaction_depth = 0
+        self._transaction_local = threading.local()
 
     @property
     def exists(self) -> bool:
@@ -667,12 +666,13 @@ class HumanTaskRecordStore:
     @contextmanager
     def transaction(self) -> Iterator[None]:
         """Serialize a durable record transition across threads and POSIX processes."""
-        if self._transaction_depth:
-            self._transaction_depth += 1
+        depth = getattr(self._transaction_local, "depth", 0)
+        if depth:
+            self._transaction_local.depth = depth + 1
             try:
                 yield
             finally:
-                self._transaction_depth -= 1
+                self._transaction_local.depth -= 1
             return
 
         with self._thread_lock_for(self.file_path):
@@ -680,11 +680,11 @@ class HumanTaskRecordStore:
             with self.lock_path.open("a+", encoding="utf-8") as lock_file:
                 if fcntl is not None:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-                self._transaction_depth = 1
+                self._transaction_local.depth = 1
                 try:
                     yield
                 finally:
-                    self._transaction_depth = 0
+                    self._transaction_local.depth = 0
                     if fcntl is not None:
                         fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
@@ -775,8 +775,7 @@ def _string_mapping(data: Mapping[str, Any], field_name: str) -> dict[str, str]:
 
 def _string_mapping_value(value: Mapping[str, Any], field_name: str) -> dict[str, str]:
     return {
-        _text(str(key), field_name): _text(str(item), field_name)
-        for key, item in value.items()
+        _text(str(key), field_name): _text(str(item), field_name) for key, item in value.items()
     }
 
 
