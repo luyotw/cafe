@@ -255,14 +255,28 @@ def complete_task(
                 issue=preflight.issue,
                 workflow_id=preflight.workflow_id,
             )
-        if json_output:
-            # The workflow runner is historically stdout-oriented. Capture its
-            # presentation output so the task command retains a one-document
-            # stdout contract; durable workflow files remain the progress log.
-            with redirect_stdout(StringIO()):
+        try:
+            if json_output:
+                # The workflow runner is historically stdout-oriented. Capture its
+                # presentation output so the task command retains a one-document
+                # stdout contract; durable workflow files remain the progress log.
+                with redirect_stdout(StringIO()):
+                    _resume_issue_workflow(preflight.issue, preflight.playbook_id)
+            else:
                 _resume_issue_workflow(preflight.issue, preflight.playbook_id)
-        else:
-            _resume_issue_workflow(preflight.issue, preflight.playbook_id)
+        except (OSError, ValueError, RuntimeError, typer.Exit) as exc:
+            raise TaskInboxError(
+                "workflow_resume_failed",
+                f"Task {task_id} was completed, but its owning workflow could not resume: {exc}",
+                recovery=(
+                    f"Run `cafe workflow --issue {preflight.issue} --playbook "
+                    f"{preflight.playbook_id} --execute` to continue the owning workflow; "
+                    "do not complete the task again."
+                ),
+                task_id=task_id,
+                issue=preflight.issue,
+                workflow_id=preflight.workflow_id,
+            ) from exc
         detail = service.inspect(task_id)
     except TaskInboxError as exc:
         _fail("complete", exc, json_output)

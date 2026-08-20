@@ -166,3 +166,42 @@ def test_completion_json_stdout_is_one_result_document(
     assert envelope["operation"] == "complete"
     assert envelope["data"]["task"]["id"] == task.id
     assert envelope["data"]["workflow"]["issue"] == "json"
+
+
+def test_resume_failure_reports_committed_completion_and_direct_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test List I3/I6: post-commit resume failure is not presented as retryable."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task = _pending_issue(tmp_path / ".cafe", "resume-failure")
+
+    def unavailable_resume(_issue: str, _playbook: str) -> None:
+        raise RuntimeError("runner unavailable")
+
+    monkeypatch.setattr(
+        "cafe.ui.commands.tasks._resume_issue_workflow", unavailable_resume
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "task",
+            "complete",
+            task.id,
+            "--result",
+            '{"decision":"confirm"}',
+            "--json",
+        ],
+    )
+
+    assert result.exit_code != 0
+    envelope = json.loads(result.stdout)
+    assert envelope["error"]["code"] == "workflow_resume_failed"
+    assert envelope["error"]["task_id"] == task.id
+    assert envelope["error"]["issue"] == "resume-failure"
+    assert envelope["error"]["workflow_id"] == task.workflow_id
+    assert "cafe workflow" in envelope["error"]["recovery"]
+    records = HumanTaskRecordStore(issue_dir)
+    assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert len(records.results()) == 1
+    assert BlackboardStore(issue_dir).load_or_create("spec").current_step == "plan"
