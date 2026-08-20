@@ -336,11 +336,15 @@ class UserInputCollector(NoOpHook):
             prev_data = phase._load_previous_iteration_data() or {}
             # Show diff again after returning from chat/edit, but never print full output.
             if delta_displayed:
+
                 def redisplay_callback() -> None:
                     self._display_previous_iteration_delta(phase, previous_output_file)
+
             else:
+
                 def redisplay_callback() -> None:
                     self._display_previous_output(phase, step_name, previous_output_file)
+
             choice = phase._ask_user_for_review_decision(
                 self._resolve_review_item_name(step_name),
                 agent_name=agent_name,
@@ -555,8 +559,7 @@ def _declares_no_changes_task(step_def: Any) -> bool:
     if not isinstance(tasks, (list, tuple)):
         return False
     return any(
-        isinstance(task, dict) and task.get("trigger") == "no_changes_needed"
-        for task in tasks
+        isinstance(task, dict) and task.get("trigger") == "no_changes_needed" for task in tasks
     )
 
 
@@ -637,9 +640,7 @@ class InitialInputProviderResolver(NoOpHook):
             assert output_file is not None
             output_file.parent.mkdir(parents=True, exist_ok=True)
             formatter = kwargs.get("initial_input_output_formatter") or (
-                legacy_adapter._format_initial_requirements
-                if legacy_adapter is not None
-                else None
+                legacy_adapter._format_initial_requirements if legacy_adapter is not None else None
             )
             content = formatter(result.content) if callable(formatter) else result.content
             if legacy_empty_seed:
@@ -648,9 +649,7 @@ class InitialInputProviderResolver(NoOpHook):
                 output_file.write_text(f"{content.rstrip()}\n", encoding="utf-8")
 
         context_updates = (
-            {"user_input": result.content}
-            if binding.get("prompt_context") == "user_input"
-            else {}
+            {"user_input": result.content} if binding.get("prompt_context") == "user_input" else {}
         )
         return HookResult(
             context_updates=context_updates,
@@ -677,11 +676,14 @@ class InitialInputProviderResolver(NoOpHook):
             return False
         if MANUAL_TEXT_PROVIDER not in {str(provider) for provider in providers}:
             return False
-        if self._resolve_prefilled_input(
-            phase=phase,
-            step_name=step_name,
-            context=context,
-        ) is not None:
+        if (
+            self._resolve_prefilled_input(
+                phase=phase,
+                step_name=step_name,
+                context=context,
+            )
+            is not None
+        ):
             return False
         configured_provider, _issue_id = load_initial_input_selection(
             self._load_issue_config(phase)
@@ -1158,11 +1160,9 @@ class GitHubPRCreator(NoOpHook):
         output_file = kwargs.get("output_file")
         if phase is None or not isinstance(output_file, Path) or not output_file.exists():
             return HookResult()
-        if (
-            CAPABILITY_PR_PUBLISH_ID
-            in _effective_capability_ids(step_name=step_name, step_def=step_def)
-            and self._is_local_pr_mode(phase)
-        ):
+        if CAPABILITY_PR_PUBLISH_ID in _effective_capability_ids(
+            step_name=step_name, step_def=step_def
+        ) and self._is_local_pr_mode(phase):
             return HookResult()
 
         repo_root = self._resolve_repo_root(phase)

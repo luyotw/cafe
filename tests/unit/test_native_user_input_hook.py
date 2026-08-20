@@ -551,9 +551,7 @@ def test_github_issue_fetcher_fetches_configured_issue_noninteractively(tmp_path
 
     assert "Restore legacy input" in output_file.read_text(encoding="utf-8")
     assert result.context_updates == {"user_input": "**Issue Title:** Restore legacy input"}
-    assert result.events == [
-        {"type": "user_input_collected", "step": "spec", "source": "github"}
-    ]
+    assert result.events == [{"type": "user_input_collected", "step": "spec", "source": "github"}]
     mock_prompt_method.assert_not_called()
     mock_prompt_manual.assert_not_called()
     mock_fetch_issue.assert_called_once_with(346)
@@ -583,9 +581,7 @@ def test_github_only_provider_prompts_for_issue_id_interactively(tmp_path: Path)
         initial_input_fetch_github_issue=fetch,
     )
 
-    assert output_file.read_text(encoding="utf-8") == (
-        "**Issue Title:** Gather requirements\n"
-    )
+    assert output_file.read_text(encoding="utf-8") == ("**Issue Title:** Gather requirements\n")
     assert result.context_updates == {"user_input": "**Issue Title:** Gather requirements"}
     prompt.assert_called_once_with()
     fetch.assert_called_once_with(346)
@@ -643,9 +639,7 @@ def test_initial_input_provider_delivers_prefilled_manual_text_to_custom_entry_s
         context={"user_input": "Summarize the incoming customer report."},
     )
 
-    assert output_file.read_text(encoding="utf-8") == (
-        "Summarize the incoming customer report.\n"
-    )
+    assert output_file.read_text(encoding="utf-8") == ("Summarize the incoming customer report.\n")
     assert result.context_updates == {"user_input": "Summarize the incoming customer report."}
     assert result.events == [
         {"type": "initial_input_resolved", "step": "intake", "provider": "manual_text"}
@@ -721,9 +715,7 @@ def test_builtin_initial_input_preserves_legacy_requirements_seed(
     assert output_file.read_text(encoding="utf-8") == (
         "# Initial Requirements\n\nPreserve the established workflow kickoff.\n"
     )
-    assert result.context_updates == {
-        "user_input": "Preserve the established workflow kickoff."
-    }
+    assert result.context_updates == {"user_input": "Preserve the established workflow kickoff."}
 
 
 def test_builtin_initial_input_seeds_empty_legacy_requirements_non_interactively(

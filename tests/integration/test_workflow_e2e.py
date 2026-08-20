@@ -77,6 +77,72 @@ def _write_pr_done_baton(issue_dir: Path) -> None:
     )
 
 
+def test_host_capability_journeys_share_fail_closed_dispatch_and_receipts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import cafe.core.capabilities as cap_mod
+
+    registry = cap_mod.load_capability_registry([cap_mod._package_capabilities_dir()])
+    browser = registry[cap_mod.CAPABILITY_BROWSER_OPEN_ID]
+    calls: list[str] = []
+    monkeypatch.setattr(
+        cap_mod,
+        "HOST_CAPABILITY_ADAPTERS",
+        {
+            "open_current_pr": lambda **_kwargs: (
+                calls.append("browser") or {"opened": True, "url": "https://example.test"},
+                None,
+            )
+        },
+    )
+    request = {
+        "capability": cap_mod.CAPABILITY_BROWSER_OPEN_ID,
+        "args": {"target_ref": "current_pr"},
+        "effects": {
+            "browser_open": ["current_pr"],
+            "writes": [],
+            "network_destinations": [],
+        },
+        "credentials": [],
+        "permissions": {},
+    }
+
+    allowed = cap_mod.run_capability_request(
+        repo_root=tmp_path,
+        registry=registry,
+        capability_request=request,
+        output_file=tmp_path / "output.md",
+    )
+    tampered = cap_mod.run_capability_request(
+        repo_root=tmp_path,
+        registry=registry,
+        capability_request={**request, "url": "https://evil.test"},
+        output_file=tmp_path / "output.md",
+    )
+    approval = cap_mod.run_capability_request(
+        repo_root=tmp_path,
+        registry={browser.id: browser.model_copy(update={"approval": "required"})},
+        capability_request=request,
+        output_file=tmp_path / "output.md",
+    )
+    denied = cap_mod.run_capability_request(
+        repo_root=tmp_path,
+        registry={browser.id: browser.model_copy(update={"policy": "deny"})},
+        capability_request=request,
+        output_file=tmp_path / "output.md",
+    )
+
+    assert calls == ["browser"]
+    assert allowed.receipt["outcome"] == "success"
+    assert tampered.receipt["outcome"] == "validation_rejection"
+    assert approval.receipt["outcome"] == "approval_required"
+    assert denied.receipt["outcome"] == "policy_denied"
+    assert {approval.receipt["decision"]["outcome"], denied.receipt["decision"]["outcome"]} == {
+        "require_approval",
+        "deny",
+    }
+
+
 class _BatonWritingAgentManager:
     """Test-double agent boundary that writes the workflow's public baton."""
 

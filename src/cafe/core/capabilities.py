@@ -167,7 +167,9 @@ def _resolve_boundary_tokens(
             replacements["issue_dir"] = ""
 
     def expand(values: Sequence[str]) -> Tuple[str, ...]:
-        return tuple(replacements.get(value, value) for value in values if replacements.get(value, value))
+        return tuple(
+            replacements.get(value, value) for value in values if replacements.get(value, value)
+        )
 
     effects = CapabilityEffects(
         writes=expand(manifest.effects.writes),
@@ -653,9 +655,7 @@ def run_pr_publish_capability(
 
 
 class CapabilityExecutionError(RuntimeError):
-    def __init__(
-        self, category: str, code: str, outputs: Optional[Dict[str, Any]] = None
-    ) -> None:
+    def __init__(self, category: str, code: str, outputs: Optional[Dict[str, Any]] = None) -> None:
         super().__init__(code)
         self.category = category
         self.code = code
@@ -684,9 +684,7 @@ def _normalize_legacy_pr_request(request: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def _manifest_digest(manifest: CapabilityManifest) -> str:
-    payload = json.dumps(
-        manifest.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-    )
+    payload = json.dumps(manifest.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 

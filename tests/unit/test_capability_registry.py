@@ -24,7 +24,9 @@ def _manifest(capability_id: str = "demo.echo", **overrides: object) -> dict[str
     manifest: dict[str, object] = {
         "id": capability_id,
         "version": 1,
-        "implementation": "sync_pr" if capability_id == CAPABILITY_PR_PUBLISH_ID else "open_current_pr",
+        "implementation": (
+            "sync_pr" if capability_id == CAPABILITY_PR_PUBLISH_ID else "open_current_pr"
+        ),
         "arguments": {
             "required": ["target_ref"],
             "properties": {"target_ref": {"type": "string", "enum": ["current_pr"]}},
@@ -171,9 +173,7 @@ def test_policy_denies_broadened_request(
 
 
 def test_policy_decision_is_total_for_allow_approval_and_deny() -> None:
-    allowed = evaluate_capability_request(
-        {"demo.echo": _typed_manifest()}, _browser_request()
-    )
+    allowed = evaluate_capability_request({"demo.echo": _typed_manifest()}, _browser_request())
     approval = evaluate_capability_request(
         {"demo.echo": _typed_manifest(approval="required")}, _browser_request()
     )
@@ -282,9 +282,10 @@ def test_enriched_blackboard_receipt_remains_backward_readable(tmp_path: Path) -
     )
 
     loaded = store.load_or_create("develop")
-    assert loaded.capability_receipts[-2:] == [enriched, {
-        "capability": "legacy", "success": True, "correlation_id": "old"
-    }]
+    assert loaded.capability_receipts[-2:] == [
+        enriched,
+        {"capability": "legacy", "success": True, "correlation_id": "old"},
+    ]
 
 
 def test_current_pr_browser_adapter_opens_only_resolved_repository_pr(

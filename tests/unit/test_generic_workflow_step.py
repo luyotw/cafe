@@ -37,6 +37,7 @@ def LongRunningOperationArtifact(**kwargs):
         **kwargs,
     )
 
+
 from cafe.core.hooks import HookResult
 from cafe.core.downstream_contract import ContractValidationError
 from cafe.core.resume_user_input import CONTINUE_USER_INPUT
@@ -380,9 +381,7 @@ def test_generic_step_forwards_declared_read_only_guard_on_checklist_retry(
         def execute(self, *args, continuation=None, **kwargs):
             result = super().execute(*args, **kwargs)
             checklist.write_text(
-                "[ ] complete task\n"
-                if self.execute_call_count == 1
-                else "[x] complete task\n",
+                "[ ] complete task\n" if self.execute_call_count == 1 else "[x] complete task\n",
                 encoding="utf-8",
             )
             return result
@@ -1318,7 +1317,8 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
         "write(./.cafe/issues/issue-review-skill/review/iteration_001/output.md)" in allowed_tools
     )
     assert (
-        "write(./.cafe/issues/issue-review-skill/review/iteration_001/checklist.md)" in allowed_tools
+        "write(./.cafe/issues/issue-review-skill/review/iteration_001/checklist.md)"
+        in allowed_tools
     )
     assert "edit(./.cafe/issues/issue-review-skill/blackboard.json)" not in allowed_tools
     assert "edit(./.cafe/issues/issue-review-skill/next_step.txt)" in allowed_tools
@@ -3876,9 +3876,7 @@ def test_cold_takeover_reports_absent_when_no_operation_has_started(
     assert untrusted_snapshot["operation"] == {"state": "unknown"}
 
 
-def test_cold_takeover_rejects_untrusted_operation_evidence(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_cold_takeover_rejects_untrusted_operation_evidence(tmp_path: Path, monkeypatch) -> None:
     """UT-011 — takeover state uses the runtime's operation trust boundary."""
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-takeover-trust"
@@ -5131,9 +5129,7 @@ def test_persisted_packet_decision_rejects_missing_effective_inputs(tmp_path: Pa
     """UT-004: an interrupted iteration cannot replace a lost packet decision."""
     iteration_dir = tmp_path / "develop" / "iteration_001"
     iteration_dir.mkdir(parents=True)
-    (iteration_dir / "iteration.json").write_text(
-        json.dumps({"iteration": 1}), encoding="utf-8"
-    )
+    (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
 
     with pytest.raises(ValueError, match="context packet decision"):
         GenericWorkflowStepExecutor._load_persisted_effective_inputs(
@@ -5267,7 +5263,12 @@ Prepare packet inputs.
 
     assert reloaded_context["spec_file"] == reloaded_context["spec_file_path"]
     assert reloaded_context["input_loading_modes"] == "spec_file=packet, spec_file_path=packet"
-    assert json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))["effective_inputs"] == persisted
+    assert (
+        json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))[
+            "effective_inputs"
+        ]
+        == persisted
+    )
 
 
 def test_primary_and_backup_reject_persisted_full_active_packet_binding(
@@ -5371,14 +5372,29 @@ def test_persisted_packet_binding_must_match_declared_authority_and_envelope(
     _write_valid_spec_contract(source)
     other.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     contract = SkillWorkflowContract.model_validate(
-        {"prompt_inputs": [
-            {"artifacts": ["spec"], "placeholder": "spec_file", "load_policy": [{"mode": "packet", "contract_kind": "spec"}]},
-            {"artifacts": ["spec"], "placeholder": "spec_file_path", "load_policy": [{"mode": "packet", "contract_kind": "spec"}]},
-        ]}
+        {
+            "prompt_inputs": [
+                {
+                    "artifacts": ["spec"],
+                    "placeholder": "spec_file",
+                    "load_policy": [{"mode": "packet", "contract_kind": "spec"}],
+                },
+                {
+                    "artifacts": ["spec"],
+                    "placeholder": "spec_file_path",
+                    "load_policy": [{"mode": "packet", "contract_kind": "spec"}],
+                },
+            ]
+        }
     )
     iteration_dir = tmp_path / "develop" / "iteration_001"
     effective = resolve_effective_prompt_inputs(
-        contract, {"spec": source}, step="develop", iteration=1, feedback=False, packet_dir=iteration_dir
+        contract,
+        {"spec": source},
+        step="develop",
+        iteration=1,
+        feedback=False,
+        packet_dir=iteration_dir,
     )
     (iteration_dir / "iteration.json").write_text(
         json.dumps({"effective_inputs": effective}), encoding="utf-8"
@@ -5423,9 +5439,11 @@ def test_persisted_packet_binding_must_match_declared_authority_and_envelope(
 
     tampered_packet = json.loads(original_packet)
     tampered_packet["contract"]["bytes"] = "agent-substituted contract"
-    tampered_packet["contract"]["sha256"] = __import__("hashlib").sha256(
-        tampered_packet["contract"]["bytes"].encode("utf-8")
-    ).hexdigest()
+    tampered_packet["contract"]["sha256"] = (
+        __import__("hashlib")
+        .sha256(tampered_packet["contract"]["bytes"].encode("utf-8"))
+        .hexdigest()
+    )
     packet_path.write_text(json.dumps(tampered_packet), encoding="utf-8")
     (iteration_dir / "iteration.json").write_text(json.dumps(original), encoding="utf-8")
     with pytest.raises(ValueError, match="context packet decision"):
@@ -5470,9 +5488,12 @@ def test_persisted_packet_decision_fails_closed_on_tampered_runtime_fields(
     iteration_dir = tmp_path / "develop" / "iteration_001"
     iteration_dir.mkdir(parents=True)
     binding = {
-        "requested_mode": "packet", "mode": "full_fallback", "path": "spec.md",
+        "requested_mode": "packet",
+        "mode": "full_fallback",
+        "path": "spec.md",
         "source": {"artifact_name": "spec", "artifact_version": 1},
-        "reason": "packet_invalid", "fallback_reason": "packet_invalid",
+        "reason": "packet_invalid",
+        "fallback_reason": "packet_invalid",
         "detail": "context packet validation failed",
     }
     binding[field] = value
