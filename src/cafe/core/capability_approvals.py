@@ -73,7 +73,6 @@ class CapabilityApprovalService:
         *,
         request: ExecutionRequest,
         manifest: CapabilityManifest,
-        expires_at: Optional[str] = None,
         correlation_id: Optional[str] = None,
     ) -> HumanTask:
         evaluation = evaluate_capability_request({manifest.id: manifest}, request.model_dump())
@@ -102,7 +101,7 @@ class CapabilityApprovalService:
             "credentials": list(request.credentials),
             "permissions": _json(request.permissions),
             "expected_outputs": list(manifest.outputs.required),
-            "expires_at": expires_at,
+            "expires_at": request.expires_at,
             "decision": None,
             "revalidation": None,
             "attempt": None,

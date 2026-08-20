@@ -1301,7 +1301,6 @@ class GitHubPRCreator(NoOpHook):
                 task = service.request_approval(
                     request=evaluation.request,
                     manifest=evaluation.manifest,
-                    expires_at=evaluation.request.expires_at,
                     correlation_id=str(run.receipt["correlation_id"]),
                 )
                 approval = service.inspect(task.id)

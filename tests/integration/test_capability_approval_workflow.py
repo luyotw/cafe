@@ -205,11 +205,13 @@ def test_denial_cancellation_and_expiry_are_durable_without_mutation(
         step="develop",
         iteration=1,
     )
-    task = service.request_approval(
-        request=ExecutionRequest.model_validate(_request()),
-        manifest=manifest,
-        expires_at="2000-01-01T00:00:00+00:00" if outcome == "expire" else None,
+    request = ExecutionRequest.model_validate(
+        {
+            **_request(),
+            "expires_at": "2000-01-01T00:00:00+00:00" if outcome == "expire" else None,
+        }
     )
+    task = service.request_approval(request=request, manifest=manifest)
 
     if outcome == "deny":
         approval = service.inspect(task.id)
@@ -236,7 +238,7 @@ def test_denial_cancellation_and_expiry_are_durable_without_mutation(
     receipt = service.resume(
         task.id,
         correlation_id=service.inspect(task.id)["correlation_id"],
-        request=ExecutionRequest.model_validate(_request()),
+        request=request,
         registry={manifest.id: manifest},
         repo_root=tmp_path,
         output_file=tmp_path / "output.md",

@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 import cafe.core.capabilities as capability_module
 from cafe.core.capabilities import (
@@ -135,6 +136,36 @@ def test_same_pending_request_deduplicates_but_changed_request_does_not(tmp_path
     )
 
 
+def test_changed_request_expiry_gets_a_distinct_approval_task(tmp_path: Path) -> None:
+    """Test List unit 2/4: approval lifetime belongs to the exact request."""
+    service = _service(tmp_path)
+    first_expiry = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    second_expiry = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+
+    first = service.request_approval(
+        request=_request().model_copy(update={"expires_at": first_expiry}),
+        manifest=_manifest(),
+    )
+    replacement = service.request_approval(
+        request=_request().model_copy(update={"expires_at": second_expiry}),
+        manifest=_manifest(),
+    )
+
+    assert replacement.id != first.id
+    assert replacement.capability_approval is not None
+    assert replacement.capability_approval["expires_at"] == second_expiry
+
+
+@pytest.mark.parametrize("expires_at", ["not-a-timestamp", "2026-08-20T12:00:00"])
+def test_request_rejects_invalid_or_naive_expiry(expires_at: str) -> None:
+    """Test List unit 4: malformed request-owned expiry fails at validation."""
+    payload = _request().model_dump(mode="json")
+    payload["expires_at"] = expires_at
+
+    with pytest.raises(ValidationError):
+        ExecutionRequest.model_validate(payload)
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -224,9 +255,13 @@ def test_cancel_and_request_declared_expiry_are_terminal(tmp_path: Path) -> None
     assert service.store.get_wait_state(cancelled_task.id).released_at is not None
 
     expired_task = service.request_approval(
-        request=_request().model_copy(update={"args": {"target_ref": "current_pr"}}),
+        request=_request().model_copy(
+            update={
+                "args": {"target_ref": "current_pr"},
+                "expires_at": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+            }
+        ),
         manifest=_manifest(version=2),
-        expires_at=(datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
     )
     expired = service.inspect(expired_task.id)
 

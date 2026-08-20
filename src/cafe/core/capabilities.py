@@ -151,6 +151,21 @@ class ExecutionRequest(StrictCapabilityModel):
     permissions: Mapping[str, Tuple[str, ...]]
     expires_at: Optional[str] = None
 
+    @field_validator("expires_at")
+    @classmethod
+    def validate_expires_at(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("expires_at must be a timezone-aware ISO 8601 timestamp")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("expires_at must be a timezone-aware ISO 8601 timestamp") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("expires_at must include a timezone")
+        return value
+
     @field_validator("credentials", mode="before")
     @classmethod
     def freeze_credentials(cls, value: Any) -> Any:
