@@ -313,20 +313,21 @@ def test_builtin_default_playbook_prepare_parity() -> None:
     assert resolved.fields_ref == "skill://cafe-spec/assets/prepare/default_prepare_fields.yaml"
 
 
-def test_builtin_simple_and_tdd_match_default_prepare() -> None:
+def test_builtin_spec_plan_playbooks_match_default_prepare() -> None:
     loader = PlaybookLoader()
     default_prepare = _legacy_prepare_dump(
         resolve_prepare_config(loader.load_model("default").model)
     )
 
-    for name in ("simple", "tdd"):
+    for name in ("simple", "standard", "standard-qa", "tdd", "tdd-qa"):
         resolved = resolve_prepare_config(loader.load_model(name).model)
         assert _legacy_prepare_dump(resolved) == default_prepare
 
 
-def test_builtin_hotfix_disables_spec_plan_prompts() -> None:
+@pytest.mark.parametrize("name", ["direct", "hotfix"])
+def test_builtin_direct_and_hotfix_disable_spec_plan_prompts(name: str) -> None:
     loader = PlaybookLoader()
-    resolved = resolve_prepare_config(loader.load_model("hotfix").model)
+    resolved = resolve_prepare_config(loader.load_model(name).model)
 
     assert resolved.prompt_for_spec_plan_config is False
     assert resolved.quick_setup.pr.auto_create_on_github_repo is True
@@ -347,7 +348,19 @@ def test_every_builtin_prepare_is_declarative_or_explicitly_promptless() -> None
     """U9 — bundled playbooks cannot reach the legacy interactive adapter."""
     loader = PlaybookLoader()
 
-    for name in ("default", "simple", "tdd", "hotfix", "research", "editorial", "incident"):
+    for name in (
+        "default",
+        "direct",
+        "simple",
+        "standard",
+        "standard-qa",
+        "tdd",
+        "tdd-qa",
+        "hotfix",
+        "research",
+        "editorial",
+        "incident",
+    ):
         model = loader.load_model(name).model
         prepare = model.commands.prepare if model.commands else None
         assert (

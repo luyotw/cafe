@@ -618,7 +618,19 @@ steps:
 
 @pytest.mark.parametrize(
     "playbook_id",
-    ["default", "simple", "tdd", "hotfix", "editorial", "incident", "research"],
+    [
+        "default",
+        "direct",
+        "simple",
+        "standard",
+        "standard-qa",
+        "tdd",
+        "tdd-qa",
+        "hotfix",
+        "editorial",
+        "incident",
+        "research",
+    ],
 )
 def test_bundled_playbooks_preserve_declared_skill_environment_parity(
     tmp_path: Path, playbook_id: str
@@ -1975,7 +1987,19 @@ def test_builtin_user_handoffs_resolve_nonempty_declared_policies() -> None:
     loader = PlaybookLoader()
     triggers = {"confirm_output", "need_clarification", "no_changes_needed"}
 
-    for playbook_id in ("default", "simple", "tdd", "hotfix", "editorial", "incident", "research"):
+    for playbook_id in (
+        "default",
+        "direct",
+        "simple",
+        "standard",
+        "standard-qa",
+        "tdd",
+        "tdd-qa",
+        "hotfix",
+        "editorial",
+        "incident",
+        "research",
+    ):
         playbook = loader.load(playbook_id)
         for step_name, step in playbook["steps"].items():
             for trigger in triggers.intersection(step.get("on", {})):

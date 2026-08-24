@@ -1,5 +1,8 @@
 # Changelog
 
+- Add `direct`, `standard`, `standard-qa`, and `tdd-qa` built-in development
+  playbooks while keeping `default`, `simple`, and `hotfix` behavior stable.
+- Add a shared declarative QA phase for product acceptance before PR publication.
 - Enforce explicit sandbox, user lifecycle, and registered capability boundaries for workflow-managed scripts.
 - Remove the `cafe operation` background-job abstraction; repository checks now
   use verification receipts while hooks, lifecycle scripts, and registered

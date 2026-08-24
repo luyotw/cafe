@@ -100,6 +100,6 @@ def test_run_builtin_tooling_audit_injected_gap_fails(
 def test_builtin_agents_layout_covers_playbook_roles() -> None:
     """Sanity: every role directory used in builtin playbooks exists under data/agents."""
     data = cafe_builtin_data_dir()
-    roles = {"pm", "developer", "reviewer", "researcher", "ops", "editor", "writer"}
+    roles = {"pm", "developer", "reviewer", "qa", "researcher", "ops", "editor", "writer"}
     for role in roles:
         assert (data / "agents" / role).is_dir(), f"missing agents/{role}"

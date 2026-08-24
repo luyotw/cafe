@@ -11,7 +11,16 @@ runner = CliRunner()
 
 
 def test_playbook_validate_succeeds_for_builtin_prepare_playbooks() -> None:
-    for name in ("default", "simple", "tdd", "hotfix"):
+    for name in (
+        "default",
+        "direct",
+        "simple",
+        "standard",
+        "standard-qa",
+        "tdd",
+        "tdd-qa",
+        "hotfix",
+    ):
         result = runner.invoke(app, ["playbook", "validate", name])
         assert result.exit_code == 0, result.stdout
         assert "Valid" in result.stdout

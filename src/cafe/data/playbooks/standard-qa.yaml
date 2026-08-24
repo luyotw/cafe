@@ -1,0 +1,35 @@
+playbook: {id: standard-qa, name: "Standard Development + QA", conversation_locale: en-US}
+behavior: {completion: status_code}
+skills: {workflow: {shared: [cafe-workflow-common, cafe-github_sync]}, chat: {shared: [cafe-common-chat-handoff, cafe-chat-develop-change, cafe-chat-spec-revision, cafe-chat-plan-revision, cafe-chat-alignment-decision]}}
+roles:
+  pm: {description: "Product Manager", default_agent: Roger, default_cli: gemini}
+  developer: {description: Developer, default_agent: David, default_cli: claude}
+  reviewer: {description: "Code Reviewer", default_agent: Richard, default_cli: gemini}
+  qa: {description: "Product Acceptance QA", default_agent: Quinn, default_cli: gemini}
+commands: {prepare: {fields_ref: skill://cafe-spec/assets/prepare/default_prepare_fields.yaml}}
+steps:
+  spec:
+    {type: skill, skill: cafe-spec, role: pm, input_artifacts: [], output_artifact: spec, allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch], hooks: {prepare_input: [InitialInputProviderResolver, UserInputCollector], after_execute: [InteractiveQAHandler]}, initial_input: {providers: [manual_text, github_issue], bind: {artifact: spec, prompt_context: user_input}}, human_tasks: [{trigger: confirm_output, task_id: output-review, outcomes: {confirm: plan, revise: spec}}, {trigger: need_clarification, task_id: clarification-answers, outcomes: {submit: spec}}], "on": {confirm_output: spec, need_clarification: spec, need_permission: spec, await_agent: plan}}
+  plan:
+    {type: skill, skill: cafe-plan, role: developer, input_artifacts: [spec], output_artifact: plan, allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch], hooks: {prepare_input: [UserInputCollector]}, human_tasks: [{trigger: initial, task_id: development-guide}, {trigger: confirm_output, task_id: output-review, outcomes: {confirm: develop, revise: plan}}, {trigger: need_clarification, task_id: clarification-answers, outcomes: {submit: plan}}], "on": {confirm_output: plan, need_clarification: plan, need_permission: plan, await_agent: develop}}
+  develop:
+    {type: skill, skill: cafe-develop, role: developer, input_artifacts: [spec, plan, review_feedback, qa_feedback, pr_result, workflow_feedback], output_artifact: code, allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch], hooks: {prepare_input: [UserInputCollector], after_execute: [NoChangesNeededHandler, PermissionRetryHandler]}, human_tasks: [{trigger: need_clarification, task_id: clarification-feedback, outcomes: {submit: develop}}], "on": {await_agent: review, need_clarification: develop, need_permission: develop, no_changes_needed: review}}
+  review:
+    {type: skill, skill: cafe-review, role: reviewer, input_artifacts: [spec, plan, code, qa_feedback, workflow_feedback], output_artifact: review_feedback, behavior: {runtime_tool_grants: [git_inspection]}, allowed_tools: [Read, Grep, Glob, "Bash(git:*)", "Bash(cafe verification check:*)", "Bash(cafe verification focus:*)"], max_iterations: 5, allowed_goto: [develop], hooks: {prepare_input: [UserInputCollector], before_execute: [NewChangesGate]}, human_tasks: [{trigger: need_clarification, task_id: clarification-feedback, outcomes: {submit: review}}], "on": {await_agent: qa, manual_handoff: develop, need_clarification: review}}
+  qa:
+    type: skill
+    skill: cafe-qa
+    role: qa
+    input_artifacts: [spec, plan, code, review_feedback]
+    output_artifact: qa_feedback
+    allowed_tools: [Read, Grep, Glob, Bash]
+    max_iterations: 5
+    allowed_goto: [develop]
+    hooks:
+      prepare_input: [UserInputCollector]
+    human_tasks:
+      - {trigger: need_clarification, task_id: clarification-feedback, outcomes: {submit: qa}}
+    "on": {await_agent: pr, manual_handoff: develop, need_clarification: qa, need_permission: qa}
+  pr:
+    {type: skill, skill: cafe-pr, role: developer, input_artifacts: [spec, plan, code, review_feedback, qa_feedback, workflow_feedback], output_artifact: pr_result, behavior: {completion: baton, publish_confirmation: true, feedback_target: develop, context_providers: [git_history, local_review]}, capability_requests: [cafe.pr.publish], allowed_tools: [Read, Edit, Write, Grep, Glob], allowed_goto: [develop, review, qa], hooks: {prepare_input: [GitHubPRCreator, GitHubPRFeedbackSource, UserInputCollector], publish_output: [GitHubPRCreator, LocalReviewContextProvider, PRLinkOpener]}, human_tasks: [{trigger: confirm_output, task_id: local-review, outcomes: {approve: _done, request_changes: develop}, feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}}], "on": {confirm_output: pr, await_agent: _done, need_permission: pr, manual_handoff: develop}}
+entry_point: spec

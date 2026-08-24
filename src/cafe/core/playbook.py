@@ -1059,7 +1059,7 @@ def _validate_initial_input_declarations(model: PlaybookDefinition, *, source: s
         if step_name != model.entry_point:
             raise ValueError(f"{field_path} is only allowed on entry_point {model.entry_point!r}")
         if declaration.legacy_presentation and (
-            source != "builtin" or model.playbook.id not in {"default", "simple", "tdd"}
+            source != "builtin" or model.playbook.id not in {"standard", "simple", "tdd"}
         ):
             raise ValueError(
                 f"{field_path}.legacy_presentation is reserved for bundled development playbooks"

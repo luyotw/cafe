@@ -308,7 +308,7 @@ def _resolve_chat_cli(
 
 def _load_chat_workflow_context(issue_dir: Path) -> tuple[str, list[str], str]:
     blackboard = BlackboardStore(issue_dir).load_or_create("spec")
-    playbook_id = getattr(blackboard, "playbook_id", "default") or "default"
+    playbook_id = getattr(blackboard, "playbook_id", "standard") or "standard"
     current_step = blackboard.current_step
 
     try:
@@ -441,7 +441,7 @@ def launch_chat_session(
     """
     issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
 
-    playbook_id = "default"
+    playbook_id = "standard"
     try:
         _current_step, _valid_steps, playbook_id = _load_chat_workflow_context(issue_dir)
         chat_playbook = PlaybookLoader(project_root=Path.cwd()).load(playbook_id)

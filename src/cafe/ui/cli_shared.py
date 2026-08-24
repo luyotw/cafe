@@ -463,14 +463,14 @@ def _resolve_selected_playbook(playbook_name: Optional[str]) -> str:
         except ConfigError:
             config_manager._config = config_manager.get_default_config()
     except ConfigError:
-        return "default"
+        return "standard"
 
     # playbook 設定存在 settings.playbook 之下（cafe config 寫入處），
-    # 舊版讀頂層 "playbook" 永遠取不到、退回 default，使 config 選 playbook 失效。
+    # 舊版讀頂層 "playbook" 永遠取不到、退回 standard，使 config 選 playbook 失效。
     selected = config_manager.get("settings.playbook", None)
     if not selected:
-        selected = config_manager.get("playbook", "default")
-    return str(selected) if selected else "default"
+        selected = config_manager.get("playbook", "standard")
+    return str(selected) if selected else "standard"
 
 
 def _build_workflow_role_agent_map(

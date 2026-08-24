@@ -1,0 +1,132 @@
+playbook:
+  id: direct
+  name: "Direct Development"
+  conversation_locale: en-US
+
+behavior:
+  completion: status_code
+
+skills:
+  workflow:
+    shared: [cafe-workflow-common, cafe-github_sync]
+  chat:
+    shared: [cafe-common-chat-handoff, cafe-chat-develop-change, cafe-chat-spec-revision, cafe-chat-plan-revision, cafe-chat-alignment-decision]
+
+roles:
+  developer:
+    description: "Developer"
+    default_agent: "David"
+    default_cli: "claude"
+  reviewer:
+    description: "Code Reviewer"
+    default_agent: "Richard"
+    default_cli: "gemini"
+
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+    setup_modes:
+      quick:
+        enabled: true
+        label: "Quick setup (use recommended defaults)"
+      custom:
+        enabled: true
+        label: "Custom configuration"
+    quick_setup:
+      spec:
+        rigor: medium
+        template: auto
+      plan:
+        template: auto
+      sync_github:
+        when_issue_id_present: true
+        when_manual_input: false
+      pr:
+        auto_create_on_github_repo: true
+        post_todo_list_when_auto_create: true
+    non_interactive_defaults:
+      rigor: medium
+      spec_template: auto
+      plan_template: default
+    input_method:
+      prompt_on_github_repo: true
+      non_github_default: manual
+    constraints:
+      rigor: [low, medium, high]
+
+steps:
+  develop:
+    type: skill
+    skill: cafe-develop
+    role: developer
+    assignee_type: agent
+    input_artifacts: [review_feedback, pr_result, workflow_feedback]
+    output_artifact: code
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: develop}
+    allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
+    hooks:
+      prepare_input: [UserInputCollector]
+      after_execute: [PermissionRetryHandler]
+    "on":
+      await_agent: review
+      manual_handoff: pr
+      need_clarification: develop
+      need_permission: develop
+
+  review:
+    type: skill
+    skill: cafe-review
+    role: reviewer
+    behavior:
+      runtime_tool_grants: [web_research, git_inspection]
+    assignee_type: agent
+    input_artifacts: [code, workflow_feedback]
+    output_artifact: review_feedback
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: review}
+    allowed_tools: [Read, Grep, Glob, "Bash(git:*)", "Bash(cafe verification check:*)", "Bash(cafe verification focus:*)"]
+    max_iterations: 5
+    allowed_goto: [develop]
+    hooks:
+      prepare_input: [UserInputCollector]
+      before_execute: [NewChangesGate]
+    "on":
+      await_agent: pr
+      manual_handoff: develop
+      need_clarification: review
+
+  pr:
+    type: skill
+    skill: cafe-pr
+    role: developer
+    assignee_type: agent
+    input_artifacts: [code, review_feedback, workflow_feedback]
+    output_artifact: pr_result
+    behavior:
+      completion: baton
+      publish_confirmation: true
+      feedback_target: develop
+      context_providers: [git_history, local_review]
+    capability_requests: [cafe.pr.publish]
+    allowed_tools: [Read, Edit, Write, Grep, Glob]
+    allowed_goto: [develop, review]
+    hooks:
+      prepare_input: [GitHubPRCreator, GitHubPRFeedbackSource, UserInputCollector]
+      publish_output: [GitHubPRCreator, LocalReviewContextProvider, PRLinkOpener]
+    human_tasks:
+      - trigger: confirm_output
+        task_id: local-review
+        outcomes: {approve: _done, request_changes: develop}
+        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
+    "on":
+      confirm_output: pr
+      await_agent: _done
+      need_permission: pr
+      manual_handoff: develop
+
+entry_point: develop
