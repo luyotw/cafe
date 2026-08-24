@@ -249,6 +249,19 @@ def candidate_probe(
     original_directory = Path.cwd()
     try:
         with tempfile.TemporaryDirectory(prefix="cafe-preflight-") as temporary_directory:
+            if agent_cli == AgentCLI.CODEX:
+                try:
+                    subprocess.run(
+                        ["git", "init", "--quiet"],
+                        cwd=temporary_directory,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                except (OSError, subprocess.CalledProcessError) as exc:
+                    raise PreflightCacheError(
+                        "candidate probe could not initialize the disposable Codex repository"
+                    ) from exc
             os.chdir(temporary_directory)
             with redirect_stdout(diagnostics), redirect_stderr(diagnostics):
                 response = executor.execute(PROBE_PROMPT, allowed_tools=[])

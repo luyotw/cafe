@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -437,6 +438,7 @@ def test_preflight_cache_reuses_only_success_for_same_cli_fingerprint(
     executable.write_text(
         "#!/bin/sh\n"
         "if [ \"$1\" = \"--version\" ]; then printf '%s\\n' 'codex 1.0'; exit 0; fi\n"
+        "if [ ! -d .git ]; then printf '%s\\n' 'missing disposable git repository' >&2; exit 1; fi\n"
         "printf '%s\\n' "
         "'{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\","
         "\"text\":\"CAFE_PREFLIGHT_OK\"}}' "
@@ -444,7 +446,7 @@ def test_preflight_cache_reuses_only_success_for_same_cli_fingerprint(
         encoding="utf-8",
     )
     executable.chmod(0o755)
-    monkeypatch.setenv("PATH", str(executable_dir))
+    monkeypatch.setenv("PATH", f"{executable_dir}{os.pathsep}{os.environ['PATH']}")
     cache_file = tmp_path / "cache" / "preflight.json"
 
     miss = _run_preflight_cache(
