@@ -2,7 +2,7 @@
 
 ## Verdict
 
-- Status: `installation recovered manually — supervised CLI kickoff could not launch`
+- Status: `journey completed to PR with retained acceptance failures`
 - Acceptance subject: one disposable child clone and one real fixture issue
 - Passing rule: every required stage must pass with one unchanged continuity key.
 - Evidence rule: active issue #419 workflow artifacts, simulated boundaries, and
@@ -22,10 +22,10 @@ spliced into it.
 | Journey base commit | `d5f25af7cbfd473d29733c08508e1c9ad891851c` (`main`) |
 | Stable release tag and commit used for installation | `v0.3.2` / `d5f25af7cbfd473d29733c08508e1c9ad891851c` |
 | Fixture issue number and URL | `#421` / `https://github.com/luyotw/cafe/issues/421` |
-| Child workflow identifier and issue directory | pending |
-| HumanTask identifier | pending |
-| Child branch | pending |
-| Child PR URL | pending |
+| Child workflow identifier and issue directory | `1f1ced98-dc32-4f55-8124-b36d4ec6f548` / `.cafe/issues/issue421` in the recorded child worktree |
+| HumanTask identifier | `24f49da1-2de8-4dc9-af2e-02af16ae44d9` (plan confirmation; the earlier spec clarification was `14ccce49-d9d6-4051-aea4-25bf581f905e`) |
+| Child branch | `issue421` at `7276e38f877aa097370c7b832b4643529bc72a4f` |
+| Child PR URL | `https://github.com/luyotw/cafe/pull/426` |
 
 ## Preconditions and permission gates
 
@@ -59,19 +59,20 @@ are excluded.
 | Documented install | 2 | 2026-08-24T13:26:11.426338+08:00 | 2026-08-24T13:26:11.818356+08:00 | 0.392s | After driver-authorized recovery for issue #422, retry `python3 scripts/bootstrap-cafe.py --yes` at the same clone and release through a new supervised operation. | Operation `4d0f0debef664679abb54c8d356879a8` retained its handle and terminal receipt, but its sandbox exited 1 before bootstrap started: `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`. | stopped | The supervised sandbox cannot configure loopback in this host boundary; the bootstrap command produced no output and did not run. | user | Choose whether to repair the sandbox and authorize another supervised retry, explicitly authorize a direct documented-command recovery, or stop the failed journey. | Handle durability is fixed, but the documented install remains blocked by the supervisor's platform sandbox. | 1 | none; the failed operation was not relaunched | Iteration 003 operation receipt and bounded stderr; follow-up draft below. | fail |
 | Documented install | 3 | 2026-08-24T15:04:52+08:00 | 2026-08-24T15:05:11+08:00 | 19s | After explicit human authorization, run the exact documented `python3 scripts/bootstrap-cafe.py --yes` directly in the unchanged clone and do not relaunch bootstrap in the resumed develop step. | CAFE `0.3.2` installed from `/tmp/cafe-issue419-rMixBg/cafe`; manifest records the versioned environment and `/home/luyotw/.local/bin/cafe`, and the launcher resolves to that environment. | complete | Explicit manual recovery succeeded while both supervised failures remain retained. | agent | Start the supported CLI agent in the same clone with the exact README request. | Direct execution was required because the supervised sandbox could not launch. | 2 | human-authorized direct execution; verified from the install manifest and package metadata | Iteration 003 recovery authorization plus `~/.local/share/cafe-engine/install.json` and installed package metadata. | pass |
 | Workflow initialization and kickoff | 1 | 2026-08-24T15:10:46.177308+08:00 | 2026-08-24T15:10:46.429042+08:00 | 0.252s | Start Codex in the same clone under the required supervised-operation boundary and submit `Use CAFE to work on GitHub issue #421 in this repository. Keep our conversation in zh-TW and repository content in en-US.` | Operation `c9f174e324dc4740bcf49ee794f70cb0` failed preflight with `sandbox_user_namespace_unavailable`; Codex was not started and the repository remained unchanged. | stopped | This host cannot create the supervisor's user namespace, so the supported CLI never received the request. | user | Authorize a direct execution of this exact Codex request as a recorded manual recovery, repair the sandbox, or stop the failed journey. | The supervisor rejected the operation before command launch. | 0 | none; operation status was checked once and the command was not relaunched | Iteration 004 operation receipt and recovery-required next action. | fail |
-| Spec | 1 | pending | pending | pending | Run the child spec phase through documented status and task surfaces. | pending | pending | pending | pending | Follow the reported next action without repeating completed work. | pending | 0 | none | pending | pending |
-| Plan | 1 | pending | pending | pending | Run the child plan phase through documented status and task surfaces. | pending | pending | pending | pending | Follow the reported next action without repeating completed work. | pending | 0 | none | pending | pending |
-| HumanTask creation | 1 | pending | pending | pending | Let the child workflow materialize a durable confirmation task. | pending | pending | pending | pending | Correlate its stable identifier to the child repository and workflow. | pending | 0 | none | pending | pending |
-| HumanTask notification | 1 | pending | pending | pending | Let the configured runtime hook deliver through its normal trusted boundary. | pending | pending | pending | pending | Named human follows the notified completion path. | pending | 0 | none | pending | pending |
-| HumanTask discovery | 1 | pending | pending | pending | Named human runs `cafe task ls` from the child repository. | pending | pending | pending | pending | Inspect the same stable task identifier. | pending | 0 | none | pending | pending |
-| HumanTask inspection | 1 | pending | pending | pending | Named human runs `cafe task inspect <task-id>` and checks schema and continuation. | pending | pending | pending | pending | Submit one valid declared TaskResult. | pending | 0 | none | pending | pending |
-| HumanTask completion | 1 | pending | pending | pending | Named human runs the declared `cafe task complete` path. | pending | pending | pending | pending | Resume the same child workflow once. | pending | 0 | none | pending | pending |
-| Resume | 1 | pending | pending | pending | Resume the same workflow and verify the wait releases once. | pending | pending | pending | pending | Confirm completed spec/plan phases did not repeat. | pending | 0 | none | pending | pending |
-| Documentation-only develop | 1 | pending | pending | pending | Make only the fixture issue's harmless documentation change and bounded evidence updates. | pending | pending | pending | pending | Commit through the child workflow's normal process. | pending | 0 | none | pending | pending |
-| Verification | 1 | pending | pending | pending | Run repository-defined verification at committed, clean child HEAD and create its receipt. | pending | pending | pending | pending | Continue the unchanged HEAD to review. | pending | 0 | none | pending | pending |
-| Review | 1 | pending | pending | pending | Complete the child default review and retain findings and retries. | pending | pending | pending | pending | Use only the authorized registered PR capability. | pending | 0 | none | pending | pending |
-| Gap filing | 1 | pending | pending | pending | File one narrow authorized follow-up for each demonstrated gap. | pending | pending | pending | pending | Record issue links or the explicit filing-permission failure. | pending | 0 | none | pending | pending |
-| PR readiness | 1 | pending | pending | pending | Publish through `cafe.pr.publish` and verify open ready-for-review state, branch/base, issue reference, limitations, and gap links. | pending | pending | pending | pending | Hand the PR to a human reviewer. | pending | 0 | none | pending | pending |
+| Workflow initialization and kickoff | 2 | 2026-08-24T15:50:28.505801+08:00 | 2026-08-24T15:50:28.505801+08:00 | bounded start receipt only | After human recovery, execute the exact Codex request directly in the unchanged clone. | The child workflow started as `1f1ced98-dc32-4f55-8124-b36d4ec6f548`, created worktree `.cafe/worktrees/issue421`, and retained origin/base/fixture identity. | complete | Manual kickoff bypassed the unavailable supervised sandbox; the earlier failure remains. | agent | Continue the child workflow without restarting it. | Direct CLI execution was an explicit manual recovery. | 1 | human-authorized exact direct kickoff | Iteration 004 recovery receipt plus child `step_started` and issue-directory receipts. | pass |
+| Spec | 1 | 2026-08-24T15:50:28.505801+08:00 | 2026-08-24T15:59:40.998799+08:00 | 9m12s | Run the child spec phase and answer its declared clarification task. | Spec iteration 1 paused for clarification; valid result `73bffec7-c550-4e53-8f81-0c5dcf27b6cc` released the wait, and iteration 2 completed to plan. | complete | Declared clarification cycle completed. | agent | Run plan. | One expected HumanTask pause. | 1 | named human completed the declared result | Child spec artifacts, HumanTask lifecycle, and bounded transition receipts. | pass |
+| Plan | 1 | 2026-08-24T16:01:19.376788+08:00 | 2026-08-24T16:08:08.139302+08:00 | 6m49s | Produce the documentation-only plan and stop for confirmation. | Plan completed with all tasks and two invariant-focused integration checks; confirmation HumanTask was materialized. | complete | Plan artifact and declared handoff were produced. | user | Complete the declared output-review result. | One recorded second visit occurred; no completed upstream phase was repeated after the later task release. | 1 | none | Child plan artifact and bounded step receipts. | pass |
+| HumanTask creation | 1 | 2026-08-24T16:08:08.188556+08:00 | 2026-08-24T16:08:08.190620+08:00 | 0.002s | Materialize the plan confirmation task through the child workflow. | Durable task `24f49da1-2de8-4dc9-af2e-02af16ae44d9` was assigned to the user with workflow, step, result schema, and `develop` continuation. | paused | Genuine durable child HumanTask created. | user | Discover, inspect, and complete the task. | none | 0 | none | Child `human_tasks.json` and bounded materialization/pause events. | pass |
+| HumanTask notification | 1 | 2026-08-24T16:08:08.188556+08:00 | 2026-08-24T16:08:08.190620+08:00 | 0.002s | Let the configured runtime hook deliver through its normal trusted boundary. | No notification hook existed in the unchanged default workflow; no genuine notification or delivery receipt was produced. | failed | Demonstrated default-workflow notification incompatibility. | agent | Retain issue #423 and do not synthesize delivery. | Named human had to use the command path without a notification. | 0 | none | Default configuration, child event types, and issue `https://github.com/luyotw/cafe/issues/423`. | fail |
+| HumanTask discovery | 1 | 2026-08-24T16:08:08.190620+08:00 | 2026-08-24T16:08:38.242884+08:00 | 30s window | Named human should run `cafe task ls` from the child repository. | No durable pre-completion `task ls` receipt was retained. The later task store proves existence but cannot substitute for ordered discovery evidence. | failed | Required discovery proof is missing. | agent | Record the evidence failure; do not reconstruct success. | Human action was not receipted at this boundary. | 0 | none | Child HumanTask lifecycle only. | fail |
+| HumanTask inspection | 1 | 2026-08-24T16:08:08.190620+08:00 | 2026-08-24T16:08:38.242884+08:00 | 30s window | Named human should run `cafe task inspect 24f49da1-2de8-4dc9-af2e-02af16ae44d9`. | No durable pre-completion inspection receipt was retained; the stored expected-result schema is not proof the human inspected it. | failed | Required inspection proof is missing. | agent | Record the evidence failure; do not reconstruct success. | Human action was not receipted at this boundary. | 0 | none | Child HumanTask lifecycle only. | fail |
+| HumanTask completion | 1 | 2026-08-24T16:08:08.188556+08:00 | 2026-08-24T16:08:38.242884+08:00 | 30s | Submit the declared plan confirmation TaskResult. | Result `4693dc52-1e33-4fb4-9d52-c62255bd2968`, source `command`, chose `confirm` and continuation `develop`; task became completed. | complete | Valid declared TaskResult released the wait. | agent | Resume develop once. | No notification receipt accompanied the completion. | 0 | named human completed the task | Child `human_tasks.json` lifecycle and result. | pass |
+| Resume | 1 | 2026-08-24T16:08:38.242884+08:00 | 2026-08-24T16:08:38.251726+08:00 | 0.009s | Resume the same workflow after task completion. | The exact wait released once to `develop` under the same workflow ID; spec and plan were not rerun afterward. | complete | Continuation matched the declared target. | agent | Implement the fixture. | none | 0 | none | Child wait state, task result, and develop `step_started` event. | pass |
+| Documentation-only develop | 1 | 2026-08-24T16:08:38.251726+08:00 | 2026-08-24T16:14:44.970852+08:00 | 6m07s | Add only the harmless fixture and reconcile its checks. | Commit `7276e38f` adds only `docs/acceptance/fixture-issue-419.md`; no runtime, dependency, playbook, hook, or behavior change. | complete | Planned documentation-only deliverable committed. | agent | Verify and review the unchanged HEAD. | Two develop visits are recorded; the second finalized the same committed change and receipt. | 1 | none | Child commit, diff, plan, and develop summary. | pass |
+| Verification | 1 | 2026-08-24T16:11:56.020172+08:00 | 2026-08-24T16:13:41.339124+08:00 | 1m45s | Run repository-defined full verification at clean committed HEAD. | `uv run pytest` passed at unchanged clean `7276e38f`: 2,855 passed, 1 skipped, 1 expected failure; receipt is valid. | complete | Full repository suite passed. | agent | Reuse the receipt in review. | none | 0 | none | Child `develop/iteration_001/verification.json`. | pass |
+| Review | 1 | 2026-08-24T16:14:55.534170+08:00 | 2026-08-24T16:16:24.950225+08:00 | 1m29s | Review the committed child change and reusable verification receipt. | Review found no blocking issue and handed the unchanged HEAD to PR. | complete | Requirements, scope, commit, security, dependencies, and tests passed review. | agent | Produce the PR artifact and publish through the registered capability. | none | 0 | none | Child review output and transition receipt. | pass |
+| Gap filing | 1 | 2026-08-24T11:13:04+08:00 | 2026-08-24T16:22:48.470117+08:00 | 5h10m evidence window | File one narrow authorized follow-up per demonstrated product gap. | Issues #422 and #423 were filed. The namespace-launch gap has a complete draft but no distinct external-creation authorization, recorded below instead of inferred permission. Missing ordered task-command receipts are an acceptance-execution evidence failure, not a demonstrated product defect. | complete with retained failure | One demonstrated product gap remains unfiled for lack of permission. | user | Authorize filing the namespace-launch draft separately if desired. | External issue creation authority was narrower than the observed third gap. | 0 | none | GitHub issues #422/#423 and bounded gap drafts. | fail |
+| PR readiness | 1 | 2026-08-24T16:16:34.572077+08:00 | 2026-08-24T16:20:00+08:00 | 3m25s | Publish through `cafe.pr.publish` and verify the remote object. | PR `https://github.com/luyotw/cafe/pull/426` is open, non-draft, targets `main` from `issue421`, contains commit `7276e38f`, references #421, and reports the documentation-only scope and valid full-suite receipt. | complete | Registered publication produced a human-reviewable PR. | user | Review PR #426. | PR body does not claim the parent journey's failed notification/discovery invariants as passes. | 0 | none | Child publish request plus GitHub PR state verified 2026-08-24. | pass |
 
 ## Stage invariants
 
@@ -90,14 +91,14 @@ are excluded.
 
 | Criterion | Evidence | Result |
 | --- | --- | --- |
-| Clean repository journey succeeds using documented setup only | pending | pending |
-| Every stop exposes status, reason, owner, and exact next action | pending | pending |
-| Genuine HumanTask is created, notified, discovered, inspected, and completed with a valid result | pending | pending |
-| Same workflow resumes without repeating completed work | pending | pending |
-| Review is actionable and PR is ready for human review | pending | pending |
-| Record includes elapsed time, friction, recovery, failures, and retries | pending | pending |
-| Every demonstrated gap has one narrow filed follow-up with minimum sufficient design | pending | pending |
-| No new architecture or trusted-host capability expansion is introduced | pending | pending |
+| Clean repository journey succeeds using documented setup only | Two supervised launches failed and bootstrap/kickoff required explicit direct manual recovery. | fail |
+| Every stop exposes status, reason, owner, and exact next action | Ledger and durable HumanTask/wait receipts identify each recorded stop; the unreceipted discovery/inspection boundary cannot prove this for every human action. | fail |
+| Genuine HumanTask is created, notified, discovered, inspected, and completed with a valid result | Durable creation/completion and valid result exist, but genuine notification and ordered discovery/inspection receipts do not. | fail |
+| Same workflow resumes without repeating completed work | Workflow `1f1ced98-dc32-4f55-8124-b36d4ec6f548` released the plan wait once to develop; spec and plan did not run afterward. | pass |
+| Review is actionable and PR is ready for human review | Review passed; PR #426 is open, non-draft, and targets `main` from `issue421`. | pass |
+| Record includes elapsed time, friction, recovery, failures, and retries | Ordered ledger retains all observed failed attempts, direct recoveries, phase timing, retries, and evidence limits. | pass |
+| Every demonstrated gap has one narrow filed follow-up with minimum sufficient design | #422 and #423 are filed; the namespace-launch gap is drafted but remains unfiled because separate issue-creation permission was not granted. | fail |
+| No new architecture or trusted-host capability expansion is introduced | Child diff is one Markdown fixture; active branch changes only the bounded record. | pass |
 
 ## Demonstrated gaps
 
@@ -170,7 +171,8 @@ must be independently acceptable and non-overlapping.
   namespace is unavailable, a supervised documented command either runs through
   a declared compatible boundary or fails preflight with an actionable reason
   before claiming it started.
-- Filed issue URL or explicit permission failure: pending authorization.
+- Filed issue URL or explicit permission failure: no distinct authorization was
+  granted to create a third external issue; the complete draft above is retained.
 
 <!--
 ### Gap: <title>
@@ -189,8 +191,16 @@ must be independently acceptable and non-overlapping.
 
 ## Final reconciliation
 
-- Child PR: pending
-- Child workflow terminal status: pending
-- Continuity check: pending
-- Failures retained after retry: pending
-- Overall result: `documented installation recovered manually; child kickoff is awaiting a human recovery decision after supervised preflight failure`
+- Child PR: `https://github.com/luyotw/cafe/pull/426` (open, non-draft,
+  `issue421` → `main`)
+- Child workflow terminal status: `done` / `workflow_complete` at
+  2026-08-24T16:17:46.423020+08:00
+- Continuity check: pass for remote, clone, base, fixture issue, workflow,
+  worktree, branch, commit, task lifecycle, and PR; no cross-run stage was used.
+- Failures retained after retry: lost operation handle; sandbox loopback denial;
+  user-namespace kickoff denial; direct install and kickoff recovery; unsupported
+  default notification; missing ordered task discovery/inspection receipts; and
+  unavailable authorization for the third follow-up issue.
+- Overall result: `fail — the unchanged child journey reached a human-reviewable
+  PR, but documented-only setup, genuine notification, ordered task discovery /
+  inspection, and all-gap-filing criteria were not satisfied`
