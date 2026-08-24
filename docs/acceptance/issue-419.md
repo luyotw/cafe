@@ -2,7 +2,7 @@
 
 ## Verdict
 
-- Status: `failed preflight — permission and notification configuration required`
+- Status: `failed setup retry — supervised bootstrap operation lost`
 - Acceptance subject: one disposable child clone and one real fixture issue
 - Passing rule: every required stage must pass with one unchanged continuity key.
 - Evidence rule: active issue #419 workflow artifacts, simulated boundaries, and
@@ -16,12 +16,12 @@ spliced into it.
 
 | Field | Value |
 | --- | --- |
-| Remote URL | pending |
-| Disposable clone root | pending |
-| Initial clone commit | pending |
-| Journey base commit | pending |
-| Stable release tag and commit used for installation | pending |
-| Fixture issue number and URL | pending |
+| Remote URL | `https://github.com/luyotw/cafe.git` |
+| Disposable clone root | `/tmp/cafe-issue419-rMixBg/cafe` |
+| Initial clone commit | `d5f25af7cbfd473d29733c08508e1c9ad891851c` |
+| Journey base commit | `d5f25af7cbfd473d29733c08508e1c9ad891851c` (`main`) |
+| Stable release tag and commit used for installation | `v0.3.2` / `d5f25af7cbfd473d29733c08508e1c9ad891851c` |
+| Fixture issue number and URL | `#421` / `https://github.com/luyotw/cafe/issues/421` |
 | Child workflow identifier and issue directory | pending |
 | HumanTask identifier | pending |
 | Child branch | pending |
@@ -34,9 +34,9 @@ it is never waived or replaced with a local or synthetic boundary.
 
 | Gate | Required evidence | State | Owner | Exact next action |
 | --- | --- | --- | --- | --- |
-| Fixture issue and remote mutation | Issue URL, target remote/base, permitted harmless documentation mutation, human owner | blocked | user | Authorize a dedicated documentation-only fixture issue and its branch/PR, or explicitly decline remote mutation. Reusing active #419 is not assumed safe. |
-| Push access | Read-only confirmation of authenticated push access to the fixture remote | partial | user | GitHub CLI is authenticated as `luyotw` with `repo` scope and SSH is configured; authorize the target before any push-access probe or mutation. |
-| Notification channel and credential | Configured channel, credential presence without secret contents, destination, named human recipient/completer | failed | user | Supply an existing documented notification configuration and name its human recipient/completer. The webhook file exists, but the default playbook has no notification hook. |
+| Fixture issue and remote mutation | Issue URL, target remote/base, permitted harmless documentation mutation, human owner | pass | agent | Dedicated documentation-only fixture issue `#421` was created on `luyotw/cafe`; `luyotw` authorized its branch and CAFE-published PR. |
+| Push access | Read-only confirmation of authenticated push access to the fixture remote | pass | agent | Authenticated `luyotw` access and explicit fixture branch/PR authorization are recorded; defer the push until child develop. |
+| Notification channel and credential | Configured channel, credential presence without secret contents, destination, named human recipient/completer | incompatible | agent | The supported `openfun-dataset.yaml` reference uses `after_execute` `notify-slack.sh` hooks and the credential file has mode 600, but the child default workflow has no script notification hook and cannot consume that project-local reference without an unauthorized playbook/script copy. Retain the incompatibility; never invoke the script directly. |
 | Registered PR capability | Availability and authorization path for `cafe.pr.publish` | pass | agent | Package registration exists with GitHub destinations, `gh` credential, medium risk, and allow/not-required policy; publication remains deferred to the child PR stage. |
 | Host prerequisites | Python, Git, supported CLI agent, and pre-existing `cafe` state | pass | agent | Python 3.12.2, Git 2.43.0, Codex CLI 0.146.0, and a pre-existing `cafe` launcher at `/home/luyotw/anaconda3/bin/cafe` were recorded. The existing installation is not install-stage evidence. |
 
@@ -52,9 +52,10 @@ are excluded.
 | Stage | Attempt | Start | End | Elapsed | Documented action | Redacted result | Status | Reason | Owner | Exact next action | Friction | Retries | Manual recovery | Evidence | Result |
 | --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: | --- | --- | --- |
 | Preflight gates | 1 | 2026-08-24T11:03:24+08:00 | 2026-08-24T11:04:59+08:00 | 1m35s | Verify every gate before creating the clone. | GitHub repository and #419 are readable; `gh` is authenticated; package PR capability and webhook credential file exist; default playbook contains no notification hook; fixture authorization and named human are absent. | stopped | Required real boundaries are not fully authorized/configured. | user | Answer the develop HumanTask with fixture/install authorization and an existing documented notification configuration plus named completer. | Default documented workflow does not configure the available notification script. | 0 | none; clone was not created | Read-only command receipt in active develop iteration and `src/cafe/data/playbooks/default.yaml`; no active-workflow artifact counts as child evidence. | fail |
-| Clone and identity | 1 | pending | pending | pending | Create one bounded temporary root and clone the authorized remote once. | pending | pending | pending | pending | Record origin, clean state, release, base commit, root, and timing. | pending | 0 | none | pending | pending |
-| Documented install dry run | 1 | pending | pending | pending | Inspect `INSTALL.md` and `scripts/bootstrap-cafe.py`; run the documented dry run at the stable release. | pending | pending | pending | pending | Run the authorized bootstrap only if the dry run and prerequisites pass. | pending | 0 | none | pending | pending |
-| Documented install | 1 | pending | pending | pending | Run `python3 scripts/bootstrap-cafe.py --yes` at the recorded stable release. | pending | pending | pending | pending | Record version, launcher, skill sync, mutations, and return to the journey base. | pending | 0 | none | pending | pending |
+| Preflight gates | 2 | 2026-08-24T11:11:04+08:00 | 2026-08-24T11:12:09+08:00 | 1m05s | Apply the completed HumanTask authorization and recheck the real boundaries. | Fixture issue/branch/CAFE PR, documented user bootstrap, named receiver/completer `luyotw`, and the credential boundary are authorized. The supplied hook is project-local to `open-forest-scripts`; default CAFE has no equivalent script hook. | failed | Reference notification configuration is incompatible with the unchanged child default workflow. | agent | Preserve the incompatibility and do not copy or invoke the hook; continue only until the next independent blocker. | The existing supported notification configuration is not portable to the default child playbook. | 1 | none | User input, fixture `#421`, child/default playbook comparison; secret not read. | fail |
+| Clone and identity | 1 | 2026-08-24T11:12:09+08:00 | 2026-08-24T11:12:11+08:00 | 2s | Create one bounded temporary root and clone the authorized remote once. | Clean HTTPS clone at `/tmp/cafe-issue419-rMixBg/cafe`; origin, `main`, initial/base commit, and stable tag all resolve to the recorded continuity values. | complete | Authorized clone and identity established. | agent | Inspect the stable release install files and run the dry run. | none | 0 | none | Git clone and identity command receipt. | pass |
+| Documented install dry run | 1 | 2026-08-24T11:12:11+08:00 | 2026-08-24T11:12:37+08:00 | 26s | Inspect `INSTALL.md` and `scripts/bootstrap-cafe.py`; run the documented dry run at the stable release. | Python 3.12.2, Git 2.43.0, Codex 0.146.0; dry run proposed a versioned environment, `~/.local/bin/cafe`, and global skill sync without system or shell-profile changes. | complete | Documented dry run passed. | agent | Run the authorized non-interactive bootstrap once. | Existing unrelated CAFE launcher was disclosed. | 0 | none | Bounded dry-run receipt. | pass |
+| Documented install | 1 | 2026-08-24T11:12:58+08:00 | 2026-08-24T11:13:04+08:00 | 6s | Run `python3 scripts/bootstrap-cafe.py --yes` at the recorded stable release under the required supervised-operation boundary. | Operation `b735688f2edd4eabb066e8c0618fff07` reported `running`, then the first status check reported `lost` / `operation_handle_missing`; no bootstrap process remained and `~/.local/bin/cafe` was absent. | stopped | The supervised operation lost its handle before producing a terminal command receipt. | user | Start a new develop iteration if a documented retry is desired; this iteration's operation contract prohibits relaunching the same command. | The documented command itself never produced an accountable result because its supervisor lost the operation. | 0 | none; no direct fallback or second launch attempted | Operation receipt and follow-up `https://github.com/luyotw/cafe/issues/422`. | fail |
 | Workflow initialization and kickoff | 1 | pending | pending | pending | Start the supported CLI agent in the same repository, submit the exact README issue request, confirm the kickoff once, and initialize CAFE. | pending | pending | pending | pending | Record generated project files, workflow identity, status, owner, and next action. | pending | 0 | none | pending | pending |
 | Spec | 1 | pending | pending | pending | Run the child spec phase through documented status and task surfaces. | pending | pending | pending | pending | Follow the reported next action without repeating completed work. | pending | 0 | none | pending | pending |
 | Plan | 1 | pending | pending | pending | Run the child plan phase through documented status and task surfaces. | pending | pending | pending | pending | Follow the reported next action without repeating completed work. | pending | 0 | none | pending | pending |
@@ -101,11 +102,44 @@ are excluded.
 Create entries only for observed failures or undocumented recovery. Each entry
 must be independently acceptable and non-overlapping.
 
-No gaps recorded before execution.
+### Gap: Keep supervised operation handles durable through bootstrap launch
 
-The missing documented notification configuration is retained as observed
-preflight friction. It becomes a follow-up issue only after the user confirms
-that no existing supported configuration was omitted from this check.
+- Evidence and failed invariant: operation `b735688f2edd4eabb066e8c0618fff07`
+  changed from `running` to `lost` / `operation_handle_missing` before the
+  bootstrap could be accounted for.
+- User-visible impact: the documented installation could not be completed or
+  safely retried in the same develop iteration.
+- Recovery and whether it was documented: no recovery was attempted; the phase
+  contract explicitly forbids relaunching the same long-running command.
+- Goal: retain a queryable handle through a terminal receipt or report a
+  concrete launch failure before claiming the operation is running.
+- Depends on: the supervised-operation launch and status boundary.
+- Scope boundary: handle durability and actionable launch failure reporting.
+- Non-goals: bootstrap changes, daemons, arbitrary retries, or broader sandbox
+  authority.
+- Minimum sufficient correction: atomically publish and retain the operation
+  handle until a durable terminal receipt exists.
+- Functional Definition of Done: `operation run` followed by `operation status`
+  reaches a terminal receipt or specific launch failure and never loses an
+  already reported running operation.
+- Filed issue URL: https://github.com/luyotw/cafe/issues/422
+
+### Gap: Default workflow cannot use the supplied supported Slack hook in place
+
+- Evidence and failed invariant: the supported reference configures
+  project-local `notify-slack.sh` hooks in `openfun-dataset.yaml`, while the
+  unchanged child `default.yaml` has no script notification hook or matching
+  skill-local implementation.
+- User-visible impact: a default new-user workflow cannot produce the required
+  genuine Slack notification using the supplied existing configuration without
+  copying project configuration or calling the script directly.
+- Recovery and whether it was documented: no recovery was attempted because
+  both copying the hook and direct invocation are explicitly forbidden.
+- Goal: provide one documented supported notification configuration for the
+  default workflow without project-local copying or direct script invocation.
+- Non-goals: direct webhook calls, secret copying, or a generic notification
+  architecture.
+- Filed issue URL: https://github.com/luyotw/cafe/issues/423
 
 <!--
 ### Gap: <title>
@@ -128,4 +162,4 @@ that no existing supported configuration was omitted from this check.
 - Child workflow terminal status: pending
 - Continuity check: pending
 - Failures retained after retry: pending
-- Overall result: `failed preflight; awaiting human decision`
+- Overall result: `failed setup retry; awaiting a fresh develop iteration for an accountable bootstrap retry`
