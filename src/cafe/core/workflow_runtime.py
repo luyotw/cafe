@@ -100,6 +100,20 @@ class RuntimePositionResolution:
     realignment_result: Optional[PlaybookRunResult] = None
 
 
+def registered_artifact_path_matches(
+    *, blackboard_store: BlackboardStore, recorded_path: str, expected_path: Path
+) -> bool:
+    """Match absolute or issue/repository-relative persisted artifact paths."""
+    recorded = Path(recorded_path)
+    expected = expected_path.resolve()
+    if recorded.is_absolute():
+        return recorded.resolve() == expected
+    return any(
+        (base / recorded).resolve() == expected
+        for base in (blackboard_store.issue_dir, *blackboard_store.issue_dir.parents)
+    )
+
+
 def operation_artifact_is_trusted(
     *,
     blackboard_store: BlackboardStore,
@@ -115,7 +129,11 @@ def operation_artifact_is_trusted(
     expected_summary = f"long_running_operation:{artifact.operation_id}:{artifact.state.value}"
     if entry.summary != expected_summary:
         return False
-    return Path(entry.path) == operation_artifact_path(iteration_dir)
+    return registered_artifact_path_matches(
+        blackboard_store=blackboard_store,
+        recorded_path=entry.path,
+        expected_path=operation_artifact_path(iteration_dir),
+    )
 
 
 def operation_receipt_is_trusted(
@@ -140,7 +158,11 @@ def operation_receipt_is_trusted(
     )
     if entry.summary != expected_summary:
         return False
-    return Path(entry.path) == operation_receipt_path(iteration_dir)
+    return registered_artifact_path_matches(
+        blackboard_store=blackboard_store,
+        recorded_path=entry.path,
+        expected_path=operation_receipt_path(iteration_dir),
+    )
 
 
 def operation_recovery_is_trusted(
@@ -184,7 +206,11 @@ def operation_recovery_is_trusted(
     entry = blackboard_store.get_artifact(blackboard, f"{current_step}_operation_recovery")
     if entry is None or entry.summary != authorization.summary:
         return False
-    return Path(entry.path) == operation_recovery_path(iteration_dir)
+    return registered_artifact_path_matches(
+        blackboard_store=blackboard_store,
+        recorded_path=entry.path,
+        expected_path=operation_recovery_path(iteration_dir),
+    )
 
 
 def operation_recovery_event_is_recorded(
@@ -199,7 +225,11 @@ def operation_recovery_event_is_recorded(
     entry = blackboard_store.get_artifact(blackboard, f"{step}_operation_recovery")
     if (
         entry is None
-        or entry.path != str(operation_recovery_path(iteration_dir))
+        or not registered_artifact_path_matches(
+            blackboard_store=blackboard_store,
+            recorded_path=entry.path,
+            expected_path=operation_recovery_path(iteration_dir),
+        )
         or entry.summary != authorization.summary
     ):
         return False

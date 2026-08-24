@@ -473,6 +473,30 @@ def test_recovery_rejects_an_operation_outside_the_active_step(tmp_path: Path) -
         )
 
 
+def test_recovery_accepts_legacy_repository_relative_evidence_paths(tmp_path: Path) -> None:
+    issue_dir, iteration_dir, operation = _terminal_operation(tmp_path)
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    for artifact_name in ("develop_operation", "develop_operation_receipt"):
+        entry = state.artifacts[artifact_name]
+        entry.path = str(Path(entry.path).relative_to(tmp_path))
+    store.save(state)
+
+    result = recover_operation(
+        issue_dir=issue_dir.resolve(),
+        step="develop",
+        iteration_dir=iteration_dir.resolve(),
+        operation_id=operation.operation_id,
+        action=OperationRecoveryAction.RETRY_STEP,
+        authorized_by=OperationRecoveryActor.DRIVER,
+        reason="Recover evidence recorded by the older relative-path runtime",
+        playbook=_PLAYBOOK,
+    )
+
+    assert result.created is True
+    assert result.authorization.operation_id == operation.operation_id
+
+
 def test_recovery_schema_rejects_extra_or_non_string_fields() -> None:
     valid = OperationRecoveryAuthorization(
         operation_id="op-1",

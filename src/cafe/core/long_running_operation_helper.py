@@ -44,6 +44,7 @@ from cafe.core.workflow_runtime import (
     operation_receipt_is_trusted,
     operation_recovery_event_is_recorded,
     operation_recovery_is_trusted,
+    registered_artifact_path_matches,
 )
 
 OPERATION_HANDLE_FILENAME = "operation_handle.json"
@@ -616,7 +617,11 @@ def recover_operation(
             )
             if (
                 recovery_entry is not None
-                and recovery_entry.path == str(operation_recovery_path(iteration_dir))
+                and registered_artifact_path_matches(
+                    blackboard_store=store,
+                    recorded_path=recovery_entry.path,
+                    expected_path=operation_recovery_path(iteration_dir),
+                )
             ) or has_recovery_event:
                 raise ValueError("operation recovery authorization is not trusted")
             if not _recovery_evidence_matches(iteration_dir, existing):
