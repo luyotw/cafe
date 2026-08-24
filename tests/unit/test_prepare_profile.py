@@ -261,9 +261,9 @@ class TestPrepareProfileResolvedFields:
             is not None
         )
 
-    def test_returns_fields_for_default_playbook(self) -> None:
+    def test_returns_fields_for_standard_playbook(self) -> None:
         loader = PlaybookLoader()
-        loaded = loader.load_model("default")
+        loaded = loader.load_model("standard")
         profile = PrepareProfile.from_playbook(loaded.model, is_github_repo=True)
         parsed = profile.resolved_prepare_fields(
             playbook_path=loaded.path,

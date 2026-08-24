@@ -327,12 +327,12 @@ commands:
         assert result.exit_code == 1
         assert "Failed to load playbook" in result.stdout
 
-    @pytest.mark.parametrize("playbook_id", ["default", "hotfix"])
+    @pytest.mark.parametrize("playbook_id", ["standard", "hotfix"])
     def test_builtin_playbooks_non_interactive_defaults(
         self, playbook_id, temp_repo_dir, mock_git_ops
     ):
         """Integration — built-in playbooks keep non-interactive default parity."""
-        if playbook_id != "default":
+        if playbook_id != "standard":
             _write_config_with_playbook(temp_repo_dir, playbook_id)
 
         result = runner.invoke(
@@ -347,6 +347,37 @@ commands:
         assert config_data["spec"]["rigor"] == "medium"
         assert config_data["spec"]["template"] == "auto"
         assert config_data["plan"]["template"] == "default"
+
+    def test_direct_non_interactive_prepare_records_only_entry_input(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        """Direct prepare delivers GitHub input without phantom spec/plan config."""
+        _write_config_with_playbook(temp_repo_dir, "direct")
+
+        result = runner.invoke(
+            app,
+            [
+                "prepare",
+                "direct-issue",
+                "--no-interactive",
+                "--input-method=github",
+                "--issue-id=420",
+            ],
+        )
+
+        assert result.exit_code == 0
+        config_file = temp_repo_dir / ".cafe" / "issues" / "direct-issue" / "issue.yaml"
+        config_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        assert config_data["initial_input"] == {
+            "provider": "github_issue",
+            "issue_id": 420,
+        }
+        assert config_data["develop"] == {
+            "input_method": "github",
+            "issue_id": "420",
+        }
+        assert "spec" not in config_data
+        assert "plan" not in config_data
 
     def test_invalid_rigor_exits_before_polluted_issue_yaml(self, temp_repo_dir, mock_git_ops):
         """Integration — invalid rigor fails before writing polluted issue.yaml."""

@@ -1,5 +1,10 @@
 # Changelog
 
+- Replace the built-in `default` playbook ID with `standard` without an alias
+  or migration, and add `standard-qa` and `tdd-qa` development paths.
+- Add the shared `qa` role, `cafe-qa` acceptance skill, `qa_feedback` contracts,
+  and bounded correction routes that repeat development, review, and QA before PR.
+- Keep the existing `simple`, `hotfix`, and `tdd` workflow behavior unchanged.
 - Enforce explicit sandbox, user lifecycle, and registered capability boundaries for workflow-managed scripts.
 - Remove the `cafe operation` background-job abstraction; repository checks now
   use verification receipts while hooks, lifecycle scripts, and registered
@@ -150,7 +155,7 @@ Major milestone release: deep refactor of CAFE's workflow engine from hardcoded 
 ### Added
 
 **Workflow Engine**
-- Playbook-driven workflows with config-selectable playbooks (built-in `default`, `hotfix`, `simple`, `editorial`, `research`, `incident`) and schema validation
+- Playbook-driven workflows with config-selectable playbooks (built-in `standard`, `hotfix`, `simple`, `editorial`, `research`, `incident`) and schema validation
 - `playbook simulate` command with static graph diagnostics
 - `BlackboardWorkflowRuntime` replaces `PlaybookRunner` with persistent artifacts and events
 - Baton-first handoffs with validated contracts persisted on issue root; reject-and-retry loop with `BatonRejected`

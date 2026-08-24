@@ -45,7 +45,7 @@ from cafe.core.prepare_profile import PrepareIssueConfig
 
 def _profile(*, is_github_repo: bool = True) -> PrepareProfile:
     loader = PlaybookLoader()
-    loaded = loader.load_model("default")
+    loaded = loader.load_model("standard")
     return PrepareProfile.from_playbook(loaded.model, is_github_repo=is_github_repo)
 
 
@@ -68,7 +68,7 @@ def _no_pr_profile(*, is_github_repo: bool = True) -> PrepareProfile:
 
 def _default_fields():
     loader = PlaybookLoader()
-    loaded = loader.load_model("default")
+    loaded = loader.load_model("standard")
     profile = _profile()
     return profile.resolved_prepare_fields(
         playbook_path=loaded.path,

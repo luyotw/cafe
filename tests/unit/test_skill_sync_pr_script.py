@@ -107,8 +107,12 @@ def test_post_pr_todo_list_skips_comment_when_items_unchecked(tmp_path: Path) ->
 def test_builtin_playbooks_publish_pr_through_sync_hook() -> None:
     project_root = Path(__file__).resolve().parents[2]
     for rel_path in [
-        "src/cafe/data/playbooks/default.yaml",
+        "src/cafe/data/playbooks/direct.yaml",
         "src/cafe/data/playbooks/simple.yaml",
+        "src/cafe/data/playbooks/standard.yaml",
+        "src/cafe/data/playbooks/standard-qa.yaml",
+        "src/cafe/data/playbooks/tdd.yaml",
+        "src/cafe/data/playbooks/tdd-qa.yaml",
         "src/cafe/data/playbooks/hotfix.yaml",
     ]:
         content = (project_root / rel_path).read_text(encoding="utf-8")

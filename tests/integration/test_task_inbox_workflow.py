@@ -21,9 +21,9 @@ def _pending_issue(cafe_dir: Path, name: str):
     issue_dir = cafe_dir / "issues" / name
     iteration_dir = issue_dir / "spec" / "iteration_001"
     iteration_dir.mkdir(parents=True)
-    (issue_dir / "issue.yaml").write_text("playbook: default\n", encoding="utf-8")
+    (issue_dir / "issue.yaml").write_text("playbook: standard\n", encoding="utf-8")
     blackboards = BlackboardStore(issue_dir)
-    state = blackboards.load_or_create("spec", playbook_id="default")
+    state = blackboards.load_or_create("spec", playbook_id="standard")
     blackboards.set_current_step(state, "user")
     blackboards.update_handoff_contract(
         state,
@@ -34,7 +34,7 @@ def _pending_issue(cafe_dir: Path, name: str):
         source="test",
     )
     policy, binding = resolve_step_human_task(
-        playbook_data=PlaybookLoader().load("default"),
+        playbook_data=PlaybookLoader().load("standard"),
         step_name="spec",
         trigger="confirm_output",
     )
@@ -79,7 +79,7 @@ def test_noninteractive_completion_resumes_only_bound_workflow(
     assert records.get_task(selected.id).status is HumanTaskStatus.COMPLETED
     assert len(records.results()) == 1
     assert BlackboardStore(selected_dir).load_or_create("spec").current_step == "plan"
-    assert resumed == [("selected", "default")]
+    assert resumed == [("selected", "standard")]
     assert marker.read_bytes() == b"active\n"
     assert (other_dir / "blackboard.json").read_bytes() == other_before
     assert HumanTaskRecordStore(other_dir).get_task(other.id).status is HumanTaskStatus.PENDING

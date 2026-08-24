@@ -27,7 +27,7 @@ def _legacy_workflow_id(data: Dict[str, Any], initial_step: str) -> str:
     """Provide a deterministic in-memory id before the store persists a legacy state."""
     identity = {
         "current_step": str(data.get("current_step", initial_step)),
-        "playbook_id": str(data.get("playbook_id", "default")),
+        "playbook_id": str(data.get("playbook_id", "standard")),
         "updated_at": str(data.get("updated_at", "")),
     }
     return str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(identity, sort_keys=True)))
@@ -348,7 +348,7 @@ class BlackboardState:
     """Shared state across workflow steps."""
 
     current_step: str
-    playbook_id: str = "default"
+    playbook_id: str = "standard"
     workflow_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     schema_version: int = BLACKBOARD_SCHEMA_VERSION
     artifacts: Dict[str, ArtifactEntry] = field(default_factory=dict)
@@ -428,7 +428,7 @@ class BlackboardState:
 
         return cls(
             current_step=str(data.get("current_step", initial_step)),
-            playbook_id=str(data.get("playbook_id", "default")),
+            playbook_id=str(data.get("playbook_id", "standard")),
             workflow_id=str(data.get("workflow_id") or _legacy_workflow_id(data, initial_step)),
             schema_version=BLACKBOARD_SCHEMA_VERSION,
             artifacts=artifacts,
@@ -461,7 +461,7 @@ class BlackboardStore:
     def load_or_create(
         self,
         initial_step: str,
-        playbook_id: str = "default",
+        playbook_id: str = "standard",
         *,
         tolerate_invalid_baton: bool = False,
     ) -> BlackboardState:

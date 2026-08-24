@@ -184,7 +184,7 @@ def test_single_step_alias_updates_workflow_pointer_to_requested_step(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "pr",
                 "artifacts": {},
                 "events": [],
@@ -231,10 +231,10 @@ def test_workflow_command_runs_dry_mode(tmp_path: Path, monkeypatch) -> None:
         git.get_current_branch.return_value = "issue-100"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--dry-run"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--dry-run"])
         assert result.exit_code == 0
         assert "Workflow context" in result.stdout
-        assert "playbook=default step=spec" in result.stdout
+        assert "playbook=standard step=spec" in result.stdout
         assert "Ownership plan (read-only)" in result.stdout
         blackboard_file = tmp_path / ".cafe" / "issues" / "issue-100" / "blackboard.json"
         assert not blackboard_file.exists()
@@ -247,7 +247,7 @@ def test_workflow_rejects_invalid_issue_playbook_override_before_execution(
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-override"
     issue_dir.mkdir(parents=True)
     (issue_dir / "issue.yaml").write_text(
-        "playbook: default\n"
+        "playbook: standard\n"
         "playbook_overrides:\n"
         "  steps:\n"
         "    review:\n"
@@ -260,7 +260,7 @@ def test_workflow_rejects_invalid_issue_playbook_override_before_execution(
         git.get_current_branch.return_value = "issue-override"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--dry-run"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--dry-run"])
 
     assert result.exit_code == 1
     assert "playbook_overrides.steps.review supports only" in result.stdout
@@ -335,10 +335,10 @@ def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None
         git.get_current_branch.return_value = "issue-200"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
         assert result.exit_code == 0
         assert "Workflow context" in result.stdout
-        assert "playbook=default step=spec" in result.stdout
+        assert "playbook=standard step=spec" in result.stdout
         assert "Executing step=spec iteration=001" in result.stdout
         assert "Executing step=plan iteration=001" in result.stdout
         assert "Executing step=develop iteration=001" in result.stdout
@@ -374,8 +374,7 @@ def test_workflow_command_passes_initial_user_input_to_spec_step(
             app,
             [
                 "workflow",
-                "--playbook",
-                "default",
+                "--playbook", "standard",
                 "--execute",
                 "--user-input",
                 "As a user, I want a smoke-test workflow.",
@@ -485,7 +484,7 @@ def test_workflow_command_resume_user_input_targets_handoff_from_step(
         json.dumps({"iteration": 1, "end_time": "done"}), encoding="utf-8"
     )
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -517,8 +516,7 @@ def test_workflow_command_resume_user_input_targets_handoff_from_step(
             app,
             [
                 "workflow",
-                "--playbook",
-                "default",
+                "--playbook", "standard",
                 "--execute",
                 "--single-step",
                 "--user-input",
@@ -530,7 +528,7 @@ def test_workflow_command_resume_user_input_targets_handoff_from_step(
     assert mock_builder.call_args.kwargs["step_user_inputs"] is None
     resume_input = issue_dir / "plan" / "iteration_002" / "user_input.md"
     assert resume_input.read_text(encoding="utf-8") == "scope: include CSV export in scope"
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert (
         "completed human task clarification-answers for plan"
         in (reloaded.handoff_summary or "").lower()
@@ -562,7 +560,7 @@ def test_user_phase_alignment_checkpoint_approve_resumes_step(tmp_path: Path) ->
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -589,7 +587,7 @@ def test_user_phase_alignment_checkpoint_approve_resumes_step(tmp_path: Path) ->
         )
 
     assert result == "develop"
-    reloaded = store.load_or_create("develop", playbook_id="default")
+    reloaded = store.load_or_create("develop", playbook_id="standard")
     assert reloaded.current_step == "develop"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
@@ -637,7 +635,7 @@ def test_user_phase_alignment_checkpoint_chat_decision_uses_host_apply(
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -699,7 +697,7 @@ def test_user_phase_alignment_checkpoint_chat_decision_uses_host_apply(
     assert (request_dir / "user_input.md").read_text(encoding="utf-8") == (
         "Keep this issue limited to capability request UX."
     )
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert reloaded.current_step == "spec"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
@@ -732,7 +730,7 @@ def test_user_phase_alignment_checkpoint_rejects_chat_decision_outside_allowed_c
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -763,7 +761,7 @@ def test_user_phase_alignment_checkpoint_rejects_chat_decision_outside_allowed_c
         )
 
     assert result is None
-    reloaded = store.load_or_create("user", playbook_id="default")
+    reloaded = store.load_or_create("user", playbook_id="standard")
     assert reloaded.current_step == "user"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.ALIGNMENT_CHECKPOINT
@@ -821,7 +819,7 @@ def test_user_phase_alignment_checkpoint_rejects_unconfirmed_chat_strategic_docs
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -857,7 +855,7 @@ def test_user_phase_alignment_checkpoint_rejects_unconfirmed_chat_strategic_docs
         )
 
     assert result is None
-    reloaded = store.load_or_create("user", playbook_id="default")
+    reloaded = store.load_or_create("user", playbook_id="standard")
     assert reloaded.current_step == "user"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.ALIGNMENT_CHECKPOINT
@@ -920,7 +918,7 @@ def test_user_phase_alignment_checkpoint_accepts_confirmed_chat_strategic_docs(
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -958,7 +956,7 @@ def test_user_phase_alignment_checkpoint_accepts_confirmed_chat_strategic_docs(
         )
 
     assert result == "spec"
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert reloaded.current_step == "spec"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
@@ -1015,7 +1013,7 @@ def test_alignment_payload_rejects_unconfirmed_strategic_documents_updated(
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -1035,7 +1033,7 @@ def test_alignment_payload_rejects_unconfirmed_strategic_documents_updated(
     )
 
     assert result is None
-    reloaded = store.load_or_create("user", playbook_id="default")
+    reloaded = store.load_or_create("user", playbook_id="standard")
     assert reloaded.current_step == "user"
     assert any(
         event.event_type == "alignment_decision_blocked"
@@ -1095,7 +1093,7 @@ def test_alignment_payload_accepts_confirmed_strategic_documents_updated(
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -1119,7 +1117,7 @@ def test_alignment_payload_accepts_confirmed_strategic_documents_updated(
     )
 
     assert result == "spec"
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert reloaded.current_step == "spec"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
@@ -1159,7 +1157,7 @@ def test_user_phase_alignment_checkpoint_accepts_updated_strategic_document(tmp_
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -1180,7 +1178,7 @@ def test_user_phase_alignment_checkpoint_accepts_updated_strategic_document(tmp_
         )
 
     assert result == "develop"
-    reloaded = store.load_or_create("develop", playbook_id="default")
+    reloaded = store.load_or_create("develop", playbook_id="standard")
     assert reloaded.current_step == "develop"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
@@ -1237,7 +1235,7 @@ def test_user_phase_alignment_checkpoint_accepts_newly_created_missing_affected_
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -1258,7 +1256,7 @@ def test_user_phase_alignment_checkpoint_accepts_newly_created_missing_affected_
         )
 
     assert result == "spec"
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert reloaded.current_step == "spec"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
@@ -1272,7 +1270,7 @@ def test_workflow_command_does_not_treat_generic_user_input_as_alignment_approva
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-align-resume"
     issue_dir.mkdir(parents=True, exist_ok=True)
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -1293,8 +1291,7 @@ def test_workflow_command_does_not_treat_generic_user_input_as_alignment_approva
             app,
             [
                 "workflow",
-                "--playbook",
-                "default",
+                "--playbook", "standard",
                 "--execute",
                 "--user-input",
                 "looks good",
@@ -1304,7 +1301,7 @@ def test_workflow_command_does_not_treat_generic_user_input_as_alignment_approva
     assert result.exit_code == 0, (result.stdout, result.exception)
     assert "alignment decision payload" in result.stdout
     assert not (issue_dir / "develop" / "iteration_001" / "user_input.md").exists()
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert reloaded.current_step == "user"
 
 
@@ -1315,7 +1312,7 @@ def test_workflow_command_resume_confirm_output_keeps_await_agent_intent(
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-confirm"
     issue_dir.mkdir(parents=True, exist_ok=True)
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -1345,8 +1342,7 @@ def test_workflow_command_resume_confirm_output_keeps_await_agent_intent(
             app,
             [
                 "workflow",
-                "--playbook",
-                "default",
+                "--playbook", "standard",
                 "--execute",
                 "--user-input",
                 '{"task":"output-review","decision":"confirm"}',
@@ -1354,7 +1350,7 @@ def test_workflow_command_resume_confirm_output_keeps_await_agent_intent(
         )
 
     assert result.exit_code == 0
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
 
 
@@ -1435,7 +1431,7 @@ def test_workflow_accepts_add_dir_and_passes_through(tmp_path: Path, monkeypatch
 
         result = runner.invoke(
             app,
-            ["workflow", "--playbook", "default", "--execute", "--single-step", "--add-dir", "src"],
+            ["workflow", "--playbook", "standard", "--execute", "--single-step", "--add-dir", "src"],
         )
 
     assert result.exit_code == 0, result.output
@@ -1480,7 +1476,7 @@ def test_workflow_command_prints_generic_event_display(tmp_path: Path, monkeypat
         git.get_current_branch.return_value = "issue-238"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert "PR synced" in result.stdout
@@ -1531,7 +1527,7 @@ def test_workflow_command_does_not_duplicate_pr_url_without_display(
         git.get_current_branch.return_value = "issue-277"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert result.stdout.count("PR synced") == 1
@@ -1551,7 +1547,7 @@ def test_workflow_command_rejects_plain_text_chat_baton_before_execution(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "pr",
                 "artifacts": {},
                 "events": [],
@@ -1588,7 +1584,7 @@ def test_workflow_command_rejects_plain_text_chat_baton_before_execution(
         git.has_uncommitted_changes.return_value = False
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     # The plain-text baton is rejected as an invalid structured contract, not
     # silently normalized into a step-name handoff.
@@ -1611,7 +1607,7 @@ def test_workflow_command_does_not_consume_chat_baton_with_uncommitted_changes(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "user",
                 "artifacts": {},
                 "events": [],
@@ -1641,7 +1637,7 @@ def test_workflow_command_does_not_consume_chat_baton_with_uncommitted_changes(
         git.has_uncommitted_changes.return_value = True
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     # A plain-text baton is rejected outright (never consumed), independent of
     # the uncommitted-changes guard that only applied to the legacy path. The
@@ -1665,7 +1661,7 @@ def test_workflow_command_rejects_invalid_chat_baton_step(tmp_path: Path, monkey
         git.get_current_branch.return_value = "issue-206"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 1
     assert "Workflow baton file is not a valid handoff contract" in result.stdout
@@ -1684,7 +1680,7 @@ def test_workflow_command_rejects_malformed_baton_json(tmp_path: Path, monkeypat
         git.get_current_branch.return_value = "issue-206b"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 1
     assert "Workflow baton file is not a valid handoff contract" in result.stdout
@@ -1700,7 +1696,7 @@ def test_workflow_command_start_step_rebuilds_stale_text_baton(tmp_path: Path, m
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "spec",
                 "artifacts": {},
                 "events": [],
@@ -1741,8 +1737,7 @@ def test_workflow_command_start_step_rebuilds_stale_text_baton(tmp_path: Path, m
             app,
             [
                 "workflow",
-                "--playbook",
-                "default",
+                "--playbook", "standard",
                 "--execute",
                 "--start-step",
                 "spec",
@@ -1764,7 +1759,7 @@ def test_workflow_command_start_step_rebuilds_stale_text_baton(tmp_path: Path, m
 def test_explicit_start_step_supersedes_stale_handoff_summary(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-stale-summary"
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.set_handoff_summary(blackboard, "Alignment checkpoint required before spec")
     store.update_handoff_contract(
@@ -1782,7 +1777,7 @@ def test_explicit_start_step_supersedes_stale_handoff_summary(tmp_path: Path) ->
         active_step="spec",
     )
 
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert reloaded.current_step == "spec"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
@@ -1834,12 +1829,12 @@ def test_workflow_command_prints_guidance_for_invalid_runtime_baton(
         git.get_current_branch.return_value = "issue-206d"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 1
     assert "Workflow baton file is not a valid handoff contract" in result.stdout
     assert "cafe workflow" in result.stdout
-    assert "--playbook default" in result.stdout
+    assert "--playbook standard" in result.stdout
     assert "--execute" in result.stdout
     assert "--start-step <step>" in result.stdout
     assert "Error: workflow run failed: Invalid baton contract payload" in result.stdout
@@ -1869,7 +1864,7 @@ def test_workflow_command_prints_paused_when_human_input_is_needed(
         git.get_current_branch.return_value = "issue-201"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
         assert result.exit_code == 0
         assert "Workflow is waiting for user input" in result.stdout
 
@@ -1900,7 +1895,7 @@ def test_workflow_command_prints_owner_task_id_for_noninteractive_wait(
         git.get_current_branch.return_value = "issue-201"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert "task-owner-123" in result.stdout
@@ -1916,7 +1911,7 @@ def test_workflow_command_prints_recovery_guidance_for_pr_baton_pause(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "pr",
                 "artifacts": {},
                 "events": [],
@@ -1940,7 +1935,7 @@ def test_workflow_command_prints_recovery_guidance_for_pr_baton_pause(
         git.get_current_branch.return_value = "issue-233"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 1
     assert "wrote invalid baton 3 times" in result.stdout
@@ -1958,7 +1953,7 @@ def test_workflow_command_offers_recovery_menu_for_baton_pause_in_interactive_mo
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "pr",
                 "artifacts": {},
                 "events": [],
@@ -1983,7 +1978,7 @@ def test_workflow_command_offers_recovery_menu_for_baton_pause_in_interactive_mo
         git.get_current_branch.return_value = "issue-233"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 1
     assert not mock_prompt_list.called
@@ -2002,7 +1997,7 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "user",
                 "handoff_summary": "waiting for user decision",
                 "artifacts": {},
@@ -2052,7 +2047,7 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
         git.get_current_branch.return_value = "issue-207"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert "Workflow is waiting for user input" in result.stdout
@@ -2268,7 +2263,7 @@ def test_user_phase_no_changes_needed_resumes_develop_without_generic_menu(
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -2296,7 +2291,7 @@ def test_user_phase_no_changes_needed_resumes_develop_without_generic_menu(
 
     assert result == "review"
     mock_generic.assert_not_called()
-    reloaded = store.load_or_create("develop", playbook_id="default")
+    reloaded = store.load_or_create("develop", playbook_id="standard")
     assert reloaded.current_step == "review"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
@@ -2315,7 +2310,7 @@ def test_workflow_command_user_owner_can_complete_workflow(tmp_path: Path, monke
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "user",
                 "artifacts": {},
                 "events": [],
@@ -2333,7 +2328,7 @@ def test_workflow_command_user_owner_can_complete_workflow(tmp_path: Path, monke
         git.get_current_branch.return_value = "issue-208"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert "Workflow completed by user" in result.stdout
@@ -2354,7 +2349,7 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "user",
                 "artifacts": {},
                 "events": [],
@@ -2413,7 +2408,7 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(
         git.has_uncommitted_changes.return_value = False
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert executed_steps == ["develop", "review", "pr"]
@@ -2433,7 +2428,7 @@ def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "pr",
                 "artifacts": {},
                 "events": [],
@@ -2469,7 +2464,7 @@ def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(
         git.get_current_branch.return_value = "issue-211"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert "Executing step=pr iteration=001" in result.stdout
@@ -2491,7 +2486,7 @@ def test_workflow_command_noninteractive_stops_after_agent_handoff_to_user(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "pr",
                 "artifacts": {},
                 "events": [],
@@ -2527,7 +2522,7 @@ def test_workflow_command_noninteractive_stops_after_agent_handoff_to_user(
         git.get_current_branch.return_value = "issue-211b"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert "Executing step=pr iteration=001" in result.stdout
@@ -2582,7 +2577,7 @@ def test_user_phase_need_clarification_collects_questions_and_resumes_step(
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -2610,7 +2605,7 @@ def test_user_phase_need_clarification_collects_questions_and_resumes_step(
     assert "Completed human task clarification-answers -> spec" in output
     next_input = issue_dir / "spec" / "iteration_002" / "user_input.md"
     assert next_input.read_text(encoding="utf-8") == "1: All roles"
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert reloaded.current_step == "spec"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
@@ -2689,7 +2684,7 @@ def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkey
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "done",
                 "handoff_summary": "workflow completed",
                 "artifacts": {},
@@ -2736,7 +2731,7 @@ def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkey
         git.get_current_branch.return_value = "issue-222"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert "Workflow already completed" in result.stdout
@@ -2759,7 +2754,7 @@ def test_workflow_command_resumes_incomplete_iteration_when_user_handoff_is_lega
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "user",
                 "handoff_summary": "clarification answers confirmed",
                 "artifacts": {},
@@ -2814,7 +2809,7 @@ def test_workflow_command_resumes_incomplete_iteration_when_user_handoff_is_lega
         git.get_current_branch.return_value = "issue-224"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert "Resuming unfinished iteration" in result.stdout
@@ -2846,7 +2841,7 @@ def test_workflow_user_handoff_precedes_incomplete_iteration_resume(
         encoding="utf-8",
     )
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -2886,8 +2881,7 @@ def test_workflow_user_handoff_precedes_incomplete_iteration_resume(
             app,
             [
                 "workflow",
-                "--playbook",
-                "default",
+                "--playbook", "standard",
                 "--execute",
                 "--user-input",
                 '{"task":"output-review","decision":"confirm"}',
@@ -2910,7 +2904,7 @@ def test_nonmeaningful_user_handoff_does_not_hide_incomplete_iteration(
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / f"issue-{source.replace('.', '-')}"
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -2946,7 +2940,7 @@ def test_nonmeaningful_user_handoff_does_not_hide_incomplete_iteration(
 
         result = runner.invoke(
             app,
-            ["workflow", "--playbook", "default", "--execute", "--single-step"],
+            ["workflow", "--playbook", "standard", "--execute", "--single-step"],
         )
 
     assert result.exit_code == 0
@@ -2988,7 +2982,7 @@ def test_workflow_alignment_decision_precedes_incomplete_iteration_resume(
         encoding="utf-8",
     )
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -3024,8 +3018,7 @@ def test_workflow_alignment_decision_precedes_incomplete_iteration_resume(
             app,
             [
                 "workflow",
-                "--playbook",
-                "default",
+                "--playbook", "standard",
                 "--execute",
                 "--single-step",
                 "--user-input",
@@ -3210,7 +3203,7 @@ def test_workflow_command_resumes_pr_when_external_feedback_arrives_while_done(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "done",
                 "handoff_summary": "workflow completed",
                 "artifacts": {},
@@ -3240,7 +3233,7 @@ def test_workflow_command_resumes_pr_when_external_feedback_arrives_while_done(
         git.get_current_branch.return_value = "issue-238"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert "Detected external workflow feedback" in result.stdout
@@ -3527,7 +3520,7 @@ def test_workflow_resume_uses_the_issue_owned_playbook_before_global_config(
     cafe_dir = tmp_path / ".cafe"
     issue_dir = cafe_dir / "issues" / "issue-owned-flow"
     issue_dir.mkdir(parents=True)
-    (cafe_dir / "config.yaml").write_text("playbook: default\n", encoding="utf-8")
+    (cafe_dir / "config.yaml").write_text("playbook: standard\n", encoding="utf-8")
     (issue_dir / "issue.yaml").write_text("playbook: release-flow\n", encoding="utf-8")
     playbook_dir = cafe_dir / "playbooks"
     playbook_dir.mkdir()
@@ -3590,7 +3583,7 @@ def test_workflow_execute_syncs_active_issue_on_healthy_branch(tmp_path: Path, m
         mock_builder.return_value = executor
 
         result = runner.invoke(
-            app, ["workflow", "--playbook", "default", "--execute", "--single-step"]
+            app, ["workflow", "--playbook", "standard", "--execute", "--single-step"]
         )
 
     assert result.exit_code == 0
@@ -3622,7 +3615,7 @@ def test_workflow_execute_recovers_from_unhealthy_git_via_marker(
         mock_builder.return_value = executor
 
         result = runner.invoke(
-            app, ["workflow", "--playbook", "default", "--execute", "--single-step"]
+            app, ["workflow", "--playbook", "standard", "--execute", "--single-step"]
         )
 
     assert result.exit_code == 0
@@ -3640,7 +3633,7 @@ def test_workflow_execute_invalid_marker_exits_with_guidance(tmp_path: Path, mon
         git.get_branch_health.return_value = BranchHealth(is_healthy=False, reason="git_error")
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 1
     assert "missing-issue" in result.stdout

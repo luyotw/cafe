@@ -65,7 +65,7 @@ version: 2.6.0
 - Only include instructions the agent would likely get wrong without this skill.
 
 ## Plan → Execution Convention
-- Follow the default playbook contract: the planning step uses `output_artifact: plan`; the execution step declares `input_artifacts: [plan]` and reads `Implementation Plan: {plan_file}` in `## Context`.
+- Follow the standard playbook contract: the planning step uses `output_artifact: plan`; the execution step declares `input_artifacts: [plan]` and reads `Implementation Plan: {plan_file}` in `## Context`.
 - The plan output itself is the implementation worklist. It must include a Test List and an ordered task breakdown using `- [ ]`; the execution phase marks those same items `- [x]` as work completes.
 - Do not generate a separate plan-derived checklist sidecar. Runtime `checklist.md` is the phase-procedure checklist; plan task checkboxes are the cross-phase implementation checklist. Both may exist and serve different purposes.
 - A domain-specific step or skill name is allowed, but the artifact key must remain exactly `plan` unless runtime placeholder support is deliberately extended.

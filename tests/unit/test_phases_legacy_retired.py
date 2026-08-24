@@ -42,11 +42,11 @@ def test_workflow_start_step_spec_is_supported(tmp_path: Path, monkeypatch) -> N
 
         result = runner.invoke(
             app,
-            ["workflow", "--playbook", "default", "--dry-run", "--start-step", "spec"],
+            ["workflow", "--playbook", "standard", "--dry-run", "--start-step", "spec"],
         )
 
     assert result.exit_code == 0
-    assert "playbook=default step=spec" in result.stdout
+    assert "playbook=standard step=spec" in result.stdout
 
     legacy = runner.invoke(app, ["spec"])
     assert legacy.exit_code != 0

@@ -21,7 +21,7 @@ documents:
     path: docs/positioning.md
     status: missing
 mandate:
-  playbook_id: default
+  playbook_id: standard
   axes:
     product_scope:
       level: escalate

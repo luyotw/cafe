@@ -574,7 +574,7 @@ def test_runtime_rejects_legacy_text_baton_in_core_path(tmp_path: Path) -> None:
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "spec",
                 "artifacts": {},
                 "events": [],
@@ -1314,7 +1314,7 @@ def test_runtime_pauses_after_realigning_stale_current_step_from_handoff_contrac
             {
                 "schema_version": 1,
                 "current_step": "spec",
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "artifacts": {},
                 "events": [],
                 "decisions": [],
@@ -1383,7 +1383,7 @@ def test_runtime_resumes_to_user_wait_from_handoff_contract(tmp_path: Path) -> N
             {
                 "schema_version": 1,
                 "current_step": "develop",
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "artifacts": {},
                 "events": [],
                 "decisions": [],
@@ -1434,7 +1434,7 @@ def test_runtime_resumes_to_done_from_handoff_contract(tmp_path: Path) -> None:
             {
                 "schema_version": 1,
                 "current_step": "pr",
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "artifacts": {},
                 "events": [],
                 "decisions": [],
@@ -1814,7 +1814,7 @@ def test_runtime_materializes_one_declared_task_and_recovers_it_after_restart(
 ) -> None:
     """IT-001: pause/restart preserves the exact durable task and wait state."""
     issue_dir = tmp_path / ".cafe" / "issues" / "durable-restart"
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
         return StepExecutionResult(
@@ -2139,7 +2139,7 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
             {
                 "schema_version": 1,
                 "current_step": "pr",
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "artifacts": {},
                 "events": [],
                 "decisions": [],
@@ -2311,7 +2311,7 @@ def test_runtime_handles_keyboard_interrupt(tmp_path: Path) -> None:
     assert result.final_step == "spec"
 
     # Verify event was recorded
-    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
     interrupted_events = [e for e in bb.events if e.event_type == "step_interrupted"]
     assert len(interrupted_events) == 1
     msg = (
@@ -2353,7 +2353,7 @@ def test_runtime_handles_agent_execution_error(tmp_path: Path) -> None:
     assert "agent_rate_limit" in result.final_status_code
     assert result.final_step == "spec"
 
-    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
     interrupted_events = [e for e in bb.events if e.event_type == "step_interrupted"]
     assert len(interrupted_events) == 1
     msg = (
@@ -2405,7 +2405,7 @@ def test_runtime_reconciles_agent_error_after_valid_handoff(tmp_path: Path) -> N
     assert result.final_step == "spec"
     assert result.final_status_code == "confirmed"
 
-    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
     assert bb.current_step == "plan"
     assert [e.event_type for e in bb.events].count("step_reconciled") == 1
     reconciled_event = next(e for e in bb.events if e.event_type == "step_reconciled")
@@ -2461,7 +2461,7 @@ def test_runtime_preserves_interrupted_when_reconciliation_evidence_incomplete(
     assert result.completed is False
     assert result.final_status_code == "INTERRUPTED:agent_connection_stalled"
 
-    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
     assert bb.current_step == "spec"
     failed_event = next(e for e in bb.events if e.event_type == "step_reconciliation_failed")
     assert "checklist_complete" in failed_event.data["missing_evidence"]
@@ -2489,7 +2489,7 @@ def test_runtime_resume_reconciliation_is_idempotent(tmp_path: Path) -> None:
             {
                 "schema_version": 1,
                 "current_step": "spec",
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "artifacts": {},
                 "events": [
                     {
@@ -2528,7 +2528,7 @@ def test_runtime_resume_reconciliation_is_idempotent(tmp_path: Path) -> None:
 
     assert first is not None
     assert second is None
-    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
     assert bb.current_step == "plan"
     assert [e.event_type for e in bb.events].count("step_reconciled") == 1
 
@@ -2552,7 +2552,7 @@ def test_runtime_reconciles_after_consumed_handoff_start_step(tmp_path: Path) ->
             {
                 "schema_version": 1,
                 "current_step": "plan",
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "artifacts": {},
                 "events": [
                     {
@@ -2591,7 +2591,7 @@ def test_runtime_reconciles_after_consumed_handoff_start_step(tmp_path: Path) ->
 
     assert executed_steps == ["plan"]
     assert result.final_step == "plan"
-    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
     assert [e.event_type for e in bb.events].count("step_reconciled") == 1
     reconciled_event = next(e for e in bb.events if e.event_type == "step_reconciled")
     assert reconciled_event.data["step"] == "spec"
@@ -2655,7 +2655,7 @@ def _simple_playbook(step_name: str = "spec") -> dict:
 def test_bundled_review_iteration_limits_are_defined_by_playbooks() -> None:
     loader = PlaybookLoader()
 
-    assert loader.load("default")["steps"]["review"]["max_iterations"] == 5
+    assert loader.load("standard")["steps"]["review"]["max_iterations"] == 5
     assert loader.load("tdd")["steps"]["review"]["max_iterations"] == 5
 
 

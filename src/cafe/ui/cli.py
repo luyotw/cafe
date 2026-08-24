@@ -77,7 +77,7 @@ def _resolve_runtime_playbook_name() -> str:
     if issue_name:
         issue_playbook = _resolve_issue_playbook_name(issue_name)
         blackboard_path = Path.cwd() / ".cafe" / "issues" / issue_name / "blackboard.json"
-        if issue_playbook != "default" or blackboard_path.exists():
+        if issue_playbook != "standard" or blackboard_path.exists():
             return issue_playbook
     return _resolve_selected_playbook(None)
 
@@ -471,10 +471,10 @@ def _get_valid_playbook_values() -> List[str]:
         playbooks = PlaybookLoader().list_playbooks()
     except Exception:
         playbooks = []
-    # Surface "default" first so it stays the default highlighted choice.
-    if "default" in playbooks:
-        playbooks = ["default"] + [name for name in playbooks if name != "default"]
-    return playbooks or ["default"]
+    # Surface "standard" first so it stays the default highlighted choice.
+    if "standard" in playbooks:
+        playbooks = ["standard"] + [name for name in playbooks if name != "standard"]
+    return playbooks or ["standard"]
 
 
 @app.command()
@@ -551,7 +551,7 @@ def setup(
     playbook: Optional[str] = typer.Option(
         None,
         "--playbook",
-        help="Set the playbook (default, tdd, bugfix).",
+        help="Set the playbook (standard, standard-qa, tdd, tdd-qa, direct, simple, hotfix).",
     ),
     rigor: Optional[str] = typer.Option(
         None,

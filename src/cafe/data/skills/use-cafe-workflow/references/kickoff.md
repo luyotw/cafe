@@ -25,7 +25,7 @@ the workflow conversation language. Also read `model_selection.md` and
   user's messages using the same rules above.
 - [ ] Include the effective value and source in the kickoff, for example:
   `conversation_locale: zh-TW (inferred user preference from current thread)`
-  or `conversation_locale: en-US (from playbook: default)`. Locale is a
+  or `conversation_locale: en-US (from playbook: standard)`. Locale is a
   required kickoff field, not a confirmation gate.
 - [ ] Apply it to kickoff, clarification, permission, alignment, progress,
   error, and completion messages. Preserve commands, paths, playbook and step
@@ -249,7 +249,7 @@ for confirmation rather than asking again.
   first workflow execution:
 
   ```yaml
-  playbook_id: default
+  playbook_id: standard
   confirmation_contract:
     user_required: [spec, plan]
     driver_confirmable: []

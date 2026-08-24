@@ -15,7 +15,7 @@ from cafe.ui.human_tasks import apply_human_task_payload, resolve_step_human_tas
 
 def _paused_default_state(issue_dir: Path, *, from_step: str, intent: HandoffIntent):
     store = BlackboardStore(issue_dir)
-    state = store.load_or_create(from_step, playbook_id="default")
+    state = store.load_or_create(from_step, playbook_id="standard")
     store.set_current_step(state, "user")
     store.update_handoff_contract(
         state,
@@ -36,7 +36,7 @@ def _materialize_default_task(
     trigger: str,
     workflow_id: str | None = None,
 ):
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     policy, binding = resolve_step_human_task(
         playbook_data=playbook, step_name=from_step, trigger=trigger
     )
@@ -55,7 +55,7 @@ def _materialize_default_task(
 
 def test_default_human_tasks_validate_and_route_all_user_handoff_patterns(tmp_path: Path) -> None:
     """Builtin policy responses share one validator and only declared routes advance."""
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
 
     confirm_dir = tmp_path / ".cafe" / "issues" / "confirm"
     confirm_store, confirm_state = _paused_default_state(
@@ -115,7 +115,7 @@ def test_default_human_tasks_validate_and_route_all_user_handoff_patterns(tmp_pa
 def test_invalid_default_human_task_response_keeps_the_user_pause(tmp_path: Path) -> None:
     """Bad command or interactive data cannot mutate the paused handoff."""
     issue_dir = tmp_path / ".cafe" / "issues" / "invalid"
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     store, state = _paused_default_state(
         issue_dir, from_step="develop", intent=HandoffIntent.NO_CHANGES_NEEDED
     )
@@ -142,7 +142,7 @@ def test_matching_durable_completion_records_one_result_and_declared_continuatio
     tmp_path: Path,
 ) -> None:
     """IT-002/IT-003: interactive and command responses share durable completion guards."""
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     for source in ("interactive", "command"):
         issue_dir = tmp_path / ".cafe" / "issues" / source
         store, state = _paused_default_state(
@@ -179,7 +179,7 @@ def test_default_local_review_approval_does_not_create_durable_feedback(tmp_path
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / ".cafe" / "issues" / "local-review-approval"
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     store, state = _paused_default_state(
         issue_dir, from_step="pr", intent=HandoffIntent.CONFIRM_OUTPUT
     )
@@ -209,7 +209,7 @@ def test_durable_local_review_delivers_feedback_and_completes_one_task(tmp_path:
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / ".cafe" / "issues" / "durable-local-review"
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     store, state = _paused_default_state(
         issue_dir, from_step="pr", intent=HandoffIntent.CONFIRM_OUTPUT
     )
@@ -247,7 +247,7 @@ def test_completed_durable_result_recovers_the_declared_continuation_after_a_res
 ) -> None:
     """IT-001/IT-003: a persisted result can finish its interrupted continuation."""
     issue_dir = tmp_path / ".cafe" / "issues" / "restart-after-result"
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     store, state = _paused_default_state(
         issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
     )
@@ -277,7 +277,7 @@ def test_completed_durable_result_recovers_the_declared_continuation_after_a_res
                 source="command",
             )
 
-    restarted = store.load_or_create("spec", playbook_id="default")
+    restarted = store.load_or_create("spec", playbook_id="standard")
     records = HumanTaskRecordStore(issue_dir)
     assert restarted.current_step == "user"
     assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
@@ -300,7 +300,7 @@ def test_completed_durable_result_recovers_the_declared_continuation_after_a_res
 def test_durable_command_requires_the_matching_task_identifier(tmp_path: Path) -> None:
     """IT-004: a command cannot bind an unlabelled response to a later task."""
     issue_dir = tmp_path / ".cafe" / "issues" / "required-command-id"
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     store, state = _paused_default_state(
         issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
     )
@@ -328,7 +328,7 @@ def test_durable_invalid_stale_and_cross_workflow_results_leave_the_pause_intact
     tmp_path: Path,
 ) -> None:
     """IT-004: only the matching active task can create progress exactly once."""
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     issue_dir = tmp_path / ".cafe" / "issues" / "guarded"
     store, state = _paused_default_state(
         issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
@@ -420,7 +420,7 @@ def test_taskless_legacy_handoffs_continue_through_both_existing_transports(
     tmp_path: Path,
 ) -> None:
     """IT-006: old #345 pauses have no fabricated record but remain completable."""
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     for source in ("interactive", "command"):
         issue_dir = tmp_path / ".cafe" / "issues" / f"legacy-{source}"
         store, state = _paused_default_state(
@@ -445,7 +445,7 @@ def test_taskless_legacy_handoffs_continue_through_both_existing_transports(
 def test_taskless_payload_rejects_another_workflows_durable_records(tmp_path: Path) -> None:
     """IT-004: an existing durable envelope cannot become a legacy handoff."""
     issue_dir = tmp_path / ".cafe" / "issues" / "cross-workflow-envelope"
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     store, state = _paused_default_state(
         issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
     )
@@ -487,7 +487,7 @@ def test_plan_confirmation_accepts_structural_packet_source_without_legacy_contr
     output.parent.mkdir(parents=True)
     output.write_text("# Implementation Plan\n\n- [ ] Implement the fix.\n", encoding="utf-8")
     store.set_artifact(state, "plan", str(output))
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
 
     result = apply_human_task_payload(
         issue_dir=issue_dir,

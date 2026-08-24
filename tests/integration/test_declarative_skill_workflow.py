@@ -455,7 +455,7 @@ def test_packaged_workflow_uses_full_then_packet_then_legacy_fallback(
         loader,
         skill_bridge=NativeSkillBridge(loader, project_root=tmp_path, home_dir=tmp_path / "home"),
     )
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     issue_dir = tmp_path / ".cafe" / "issues" / "packaged-packet-journey"
     spec = issue_dir / "spec" / "iteration_001" / "output.md"
     plan = issue_dir / "plan" / "iteration_001" / "output.md"

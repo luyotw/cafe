@@ -73,7 +73,7 @@ def test_no_change_handoff_shows_implementation_output_before_decision(
     output_file.parent.mkdir(parents=True)
     output_file.write_text("Implementation reasoning", encoding="utf-8")
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("develop", playbook_id="default")
+    blackboard = store.load_or_create("develop", playbook_id="standard")
     displayed: list[Path] = []
     monkeypatch.setattr(cli_shared, "_print_output_file", displayed.append)
     monkeypatch.setattr(
@@ -87,7 +87,7 @@ def test_no_change_handoff_shows_implementation_output_before_decision(
         blackboard=blackboard,
         from_step="develop",
         summary="",
-        playbook_data=PlaybookLoader().load("default"),
+        playbook_data=PlaybookLoader().load("standard"),
         trigger="no_changes_needed",
     )
 
@@ -100,9 +100,9 @@ def test_interactive_handoff_forwards_the_active_durable_task_id(
 ) -> None:
     """IT-002: the production interactive caller binds its payload to the active wait."""
     issue_dir = tmp_path / ".cafe" / "issues" / "durable-interactive"
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -166,12 +166,12 @@ def test_interactive_handoff_recovers_a_persisted_same_step_completion_after_int
 ) -> None:
     """IT-001/IT-002: restart resumes a stored same-step response without prompting."""
     issue_dir = tmp_path / ".cafe" / "issues" / f"interrupted-{trigger}"
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     phase_dir = issue_dir / "develop" / "iteration_001"
     phase_dir.mkdir(parents=True)
     (phase_dir / "context.json").write_text('{"end_time": "complete"}', encoding="utf-8")
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("develop", playbook_id="default")
+    blackboard = store.load_or_create("develop", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     policy, binding = resolve_step_human_task(
         playbook_data=playbook, step_name="develop", trigger=trigger
@@ -209,7 +209,7 @@ def test_interactive_handoff_recovers_a_persisted_same_step_completion_after_int
                 trigger=trigger,
             )
 
-    restarted = store.load_or_create("develop", playbook_id="default")
+    restarted = store.load_or_create("develop", playbook_id="standard")
     monkeypatch.setattr(
         "cafe.ui.human_tasks.collect_human_task_payload",
         lambda *_args, **_kwargs: pytest.fail("recovery must not re-prompt the participant"),
@@ -238,7 +238,7 @@ def test_interactive_handoff_recovers_dynamic_answers_from_completed_iteration(
 ) -> None:
     """IT-001/IT-002: dynamic answers resume from their completed task iteration."""
     issue_dir = tmp_path / ".cafe" / "issues" / "interrupted-dynamic-answers"
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     phase_dir = issue_dir / "spec" / "iteration_001"
     phase_dir.mkdir(parents=True)
     (phase_dir / "context.json").write_text('{"end_time": "complete"}', encoding="utf-8")
@@ -252,7 +252,7 @@ def test_interactive_handoff_recovers_dynamic_answers_from_completed_iteration(
         encoding="utf-8",
     )
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     policy, binding = resolve_step_human_task(
         playbook_data=playbook, step_name="spec", trigger="need_clarification"
@@ -298,7 +298,7 @@ def test_interactive_handoff_recovers_dynamic_answers_from_completed_iteration(
     assert persisted_input.read_text(encoding="utf-8") == "scope: Small"
     assert not (persisted_input.parent / "questions.xml").exists()
 
-    restarted = store.load_or_create("spec", playbook_id="default")
+    restarted = store.load_or_create("spec", playbook_id="standard")
     monkeypatch.setattr(
         "cafe.ui.human_tasks.collect_human_task_payload",
         lambda *_args, **_kwargs: pytest.fail("recovery must not re-prompt the participant"),

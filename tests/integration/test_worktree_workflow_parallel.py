@@ -91,7 +91,7 @@ def test_worktree_workflow_spec_pause_resume_reaches_plan(
     worktree_path = tmp_path / "repo" / "worktrees" / "feature-wt"
     git.create_worktree(str(worktree_path), "feature-wt", "main")
 
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     issue_name = "issue-wt-flow"
     spec_calls = 0
 

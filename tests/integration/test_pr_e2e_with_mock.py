@@ -85,7 +85,7 @@ def test_pr_publish_generic_journey_preserves_outputs_and_correlates_receipt(
 
 
 def _load_default_playbook() -> dict:
-    return PlaybookLoader().load("default")
+    return PlaybookLoader().load("standard")
 
 
 def _write_baton(
@@ -205,7 +205,7 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
     issue_dir.mkdir(parents=True)
     playbook = _load_default_playbook()
     store = BlackboardStore(issue_dir)
-    state = store.load_or_create("pr", playbook_id="default")
+    state = store.load_or_create("pr", playbook_id="standard")
 
     class Phase:
         def __init__(self) -> None:

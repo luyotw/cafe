@@ -112,7 +112,7 @@ def test_cafe_workflow_pr_non_interactive_routes_through_runtime(tmp_path: Path,
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "pr",
                 "artifacts": {},
                 "events": [],

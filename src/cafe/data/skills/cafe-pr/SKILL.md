@@ -48,7 +48,7 @@ workflow:
     - artifacts: [code]
       placeholder: develop_file
       required: false
-    - artifacts: [review_feedback]
+    - artifacts: [qa_feedback, review_feedback]
       placeholder: feedback_file
       required: false
     - artifacts: [workflow_feedback]
