@@ -30,6 +30,8 @@ def test_operation_run_cli_loads_playbook_and_delegates(monkeypatch, tmp_path: P
             operation=SimpleNamespace(
                 operation_id="op-test",
                 state=LongRunningOperationState.RUNNING,
+                reason="operation_helper_launch",
+                exit_code=None,
             ),
             started=True,
             handle_path=tmp_path / "issue" / "develop" / "iteration_001" / "operation_handle.json",
@@ -78,6 +80,55 @@ def test_operation_run_cli_loads_playbook_and_delegates(monkeypatch, tmp_path: P
     assert calls[0]["readable_roots"] == [tmp_path]
     assert calls[0]["writable_roots"] == [iteration_dir]
     assert "op-test" in result.stdout
+
+
+def test_operation_run_cli_returns_nonzero_for_monitor_launch_failure(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        operation_command,
+        "run_operation_command",
+        lambda **_kwargs: SimpleNamespace(
+            operation=SimpleNamespace(
+                operation_id="op-failed",
+                state=LongRunningOperationState.FAILED,
+                reason="operation_monitor_launch_failed",
+                exit_code=17,
+            ),
+            started=False,
+            handle_path=tmp_path / "operation_handle.json",
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "operation",
+            "run",
+            "--issue-dir",
+            str(tmp_path / "issue"),
+            "--step",
+            "develop",
+            "--iteration-dir",
+            str(tmp_path / "iteration"),
+            "--risk",
+            "low",
+            "--monitoring",
+            "final-only",
+            "--log-policy",
+            "summary-only",
+            "--stop-condition",
+            "test completes",
+            "--recovery",
+            "inspect the same operation id",
+            "--",
+            "true",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert '"state": "failed"' in result.stdout
+    assert '"reason": "operation_monitor_launch_failed"' in result.stdout
 
 
 def test_operation_run_cli_requires_complete_compatible_risk_decision(

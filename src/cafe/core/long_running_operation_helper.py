@@ -7,10 +7,12 @@ one command for one phase iteration, one ``operation.json``, one
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -34,7 +36,9 @@ from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 
 OPERATION_HANDLE_FILENAME = "operation_handle.json"
 OPERATION_MONITOR_REQUEST_FILENAME = "operation_monitor_request.json"
+OPERATION_MONITOR_STDERR_FILENAME = "operation_monitor.stderr.log"
 OPERATION_CLAIM_LOCK_FILENAME = "operation.claim.lock"
+OPERATION_MONITOR_HANDSHAKE_TIMEOUT_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -116,7 +120,11 @@ def _terminate_process_group(pid: int) -> None:
 
 def _write_json(path: Path, data: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(dict(data), ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary_path.write_text(
+        json.dumps(dict(data), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    os.replace(temporary_path, path)
 
 
 def _read_json(path: Path) -> Dict[str, Any]:
@@ -126,31 +134,60 @@ def _read_json(path: Path) -> Dict[str, Any]:
     return raw
 
 
+def _operation_handle_ready(path: Path, *, operation_id: str) -> bool:
+    """Return whether the monitor has durably registered the command process."""
+    try:
+        handle = _read_json(path)
+        monitor_pid = int(handle.get("monitor_pid") or 0)
+        command_pid = int(handle.get("command_pid") or 0)
+    except (json.JSONDecodeError, OSError, TypeError, ValueError):
+        return False
+    return handle.get("operation_id") == operation_id and monitor_pid > 0 and command_pid > 0
+
+
+def _read_launch_receipt(
+    store: BlackboardStore, iteration_dir: Path
+) -> Optional[LongRunningOperationArtifact]:
+    """Tolerate observing the receipt while the monitor is still persisting it."""
+    try:
+        return store.read_operation_receipt(iteration_dir)
+    except (OSError, ValueError):
+        return None
+
+
 def _acquire_operation_claim(iteration_dir: Path) -> int:
-    """Atomically claim the fixed operation slot for this iteration."""
+    """Claim the fixed operation slot with a process-lifetime advisory lock."""
     lock_path = _claim_lock_path(iteration_dir)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(
+        str(lock_path),
+        os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
     deadline = time.time() + 5
-    while True:
-        try:
-            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            if time.time() >= deadline:
-                raise TimeoutError("timed out waiting for operation claim lock")
-            time.sleep(0.01)
-            continue
-        os.write(fd, f"{os.getpid()}\n".encode("utf-8"))
-        return fd
-
-
-def _release_operation_claim(iteration_dir: Path, fd: int) -> None:
     try:
+        file_info = os.fstat(fd)
+        if not stat.S_ISREG(file_info.st_mode) or file_info.st_nlink != 1:
+            raise ValueError("operation claim lock must be a single-link regular file")
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                if time.time() >= deadline:
+                    raise TimeoutError("timed out waiting for operation claim lock")
+                time.sleep(0.01)
+                continue
+            return fd
+    except BaseException:
         os.close(fd)
+        raise
+
+
+def _release_operation_claim(_iteration_dir: Path, fd: int) -> None:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
-        try:
-            _claim_lock_path(iteration_dir).unlink()
-        except FileNotFoundError:
-            pass
+        os.close(fd)
 
 
 def _unused_executor(*_args: object, **_kwargs: object) -> StepExecutionResult:
@@ -180,6 +217,141 @@ def _record_terminal_receipt(
         state=state,
         reason=reason,
         exit_code=exit_code,
+    )
+
+
+def _launch_operation_monitor(
+    *,
+    store: BlackboardStore,
+    operation: LongRunningOperationArtifact,
+    issue_dir: Path,
+    step: str,
+    iteration_dir: Path,
+    command: Sequence[str],
+    playbook: Dict[str, Any],
+    cwd_path: Path,
+    read_paths: Sequence[Path],
+    write_paths: Sequence[Path],
+) -> OperationLaunchResult:
+    request = {
+        "issue_dir": str(issue_dir),
+        "step": step,
+        "iteration_dir": str(iteration_dir),
+        "operation_id": operation.operation_id,
+        "command": list(command),
+        "cwd": str(cwd_path),
+        "playbook": playbook,
+        "created_at": _now_iso(),
+        "execution_class": "sandbox",
+        "trust_source": "workflow",
+        "readable_roots": [str(root) for root in read_paths],
+        "writable_roots": [str(root) for root in write_paths],
+    }
+    request_file = _request_path(iteration_dir)
+    try:
+        _write_json(request_file, request)
+    except (OSError, TypeError, ValueError) as exc:
+        failed = _record_terminal_receipt(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            step=step,
+            iteration_dir=iteration_dir,
+            operation_id=operation.operation_id,
+            state=LongRunningOperationState.FAILED,
+            reason=f"operation_monitor_request_write_failed:{exc.__class__.__name__}",
+        )
+        return OperationLaunchResult(
+            operation=failed,
+            started=False,
+            handle_path=operation_handle_path(iteration_dir),
+        )
+
+    monitor_stderr_path = iteration_dir / OPERATION_MONITOR_STDERR_FILENAME
+    trusted_import_root = Path(__file__).resolve().parents[2]
+    monitor_environment = {
+        key: value for key, value in os.environ.items() if key not in {"PYTHONHOME", "PYTHONPATH"}
+    }
+    try:
+        with monitor_stderr_path.open("ab") as monitor_stderr:
+            monitor_process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "cafe.core.long_running_operation_helper",
+                    "monitor",
+                    str(request_file),
+                ],
+                cwd=str(trusted_import_root),
+                env=monitor_environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=monitor_stderr,
+                start_new_session=True,
+                close_fds=True,
+            )
+    except OSError as exc:
+        failed = _record_terminal_receipt(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            step=step,
+            iteration_dir=iteration_dir,
+            operation_id=operation.operation_id,
+            state=LongRunningOperationState.FAILED,
+            reason=f"operation_monitor_launch_failed:{exc.__class__.__name__}",
+        )
+        return OperationLaunchResult(
+            operation=failed,
+            started=False,
+            handle_path=operation_handle_path(iteration_dir),
+        )
+
+    handle_path = operation_handle_path(iteration_dir)
+    deadline = time.time() + OPERATION_MONITOR_HANDSHAKE_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        if _operation_handle_ready(handle_path, operation_id=operation.operation_id):
+            return OperationLaunchResult(
+                operation=operation,
+                started=True,
+                handle_path=handle_path,
+            )
+        monitor_exit_code = monitor_process.poll()
+        if monitor_exit_code is not None:
+            receipt = _read_launch_receipt(store, iteration_dir)
+            if receipt is None:
+                receipt = _record_terminal_receipt(
+                    issue_dir=issue_dir,
+                    playbook=playbook,
+                    step=step,
+                    iteration_dir=iteration_dir,
+                    operation_id=operation.operation_id,
+                    state=LongRunningOperationState.FAILED,
+                    reason="operation_monitor_launch_failed",
+                    exit_code=monitor_exit_code,
+                )
+            return OperationLaunchResult(
+                operation=receipt,
+                started=False,
+                handle_path=handle_path,
+            )
+        time.sleep(0.02)
+
+    _terminate_process_group(monitor_process.pid)
+    monitor_process.wait(timeout=3)
+    receipt = _read_launch_receipt(store, iteration_dir)
+    if receipt is None:
+        receipt = _record_terminal_receipt(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            step=step,
+            iteration_dir=iteration_dir,
+            operation_id=operation.operation_id,
+            state=LongRunningOperationState.FAILED,
+            reason="operation_monitor_handshake_timeout",
+        )
+    return OperationLaunchResult(
+        operation=receipt,
+        started=False,
+        handle_path=handle_path,
     )
 
 
@@ -214,9 +386,9 @@ def run_operation_command(
         stop_condition=stop_condition,
         recovery=recovery,
     )
-    issue_dir = Path(issue_dir)
-    iteration_dir = Path(iteration_dir)
-    cwd_path = Path(cwd) if cwd is not None else Path.cwd()
+    issue_dir = Path(issue_dir).resolve()
+    iteration_dir = Path(iteration_dir).resolve()
+    cwd_path = (Path(cwd) if cwd is not None else Path.cwd()).resolve()
     read_paths = tuple(Path(root).resolve() for root in (readable_roots or (cwd_path,)))
     write_paths = tuple(Path(root).resolve() for root in (writable_roots or (cwd_path,)))
     canonical_command = json.dumps(
@@ -233,8 +405,9 @@ def run_operation_command(
         state = store.load_or_create(step)
         existing = store.read_operation_artifact(iteration_dir)
         if existing is not None:
+            receipt = store.read_operation_receipt(iteration_dir)
             return OperationLaunchResult(
-                operation=existing,
+                operation=receipt or existing,
                 started=False,
                 handle_path=operation_handle_path(iteration_dir),
             )
@@ -268,48 +441,20 @@ def run_operation_command(
                 command_fingerprint=command_fingerprint,
             ),
         )
+        return _launch_operation_monitor(
+            store=store,
+            operation=operation,
+            issue_dir=issue_dir,
+            step=step,
+            iteration_dir=iteration_dir,
+            command=command,
+            playbook=playbook,
+            cwd_path=cwd_path,
+            read_paths=read_paths,
+            write_paths=write_paths,
+        )
     finally:
         _release_operation_claim(iteration_dir, claim_fd)
-
-    request = {
-        "issue_dir": str(issue_dir),
-        "step": step,
-        "iteration_dir": str(iteration_dir),
-        "operation_id": operation.operation_id,
-        "command": list(command),
-        "cwd": str(cwd_path),
-        "playbook": playbook,
-        "created_at": _now_iso(),
-        "execution_class": "sandbox",
-        "trust_source": "workflow",
-        "readable_roots": [str(root) for root in read_paths],
-        "writable_roots": [str(root) for root in write_paths],
-    }
-    request_file = _request_path(iteration_dir)
-    _write_json(request_file, request)
-
-    subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "cafe.core.long_running_operation_helper",
-            "monitor",
-            str(request_file),
-        ],
-        cwd=str(cwd_path),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-        close_fds=True,
-    )
-
-    handle_path = operation_handle_path(iteration_dir)
-    deadline = time.time() + 2
-    while not handle_path.exists() and time.time() < deadline:
-        time.sleep(0.02)
-
-    return OperationLaunchResult(operation=operation, started=True, handle_path=handle_path)
 
 
 def get_operation_status(
@@ -333,15 +478,26 @@ def get_operation_status(
 
     handle_path = operation_handle_path(iteration_dir)
     if not handle_path.exists():
-        return _record_terminal_receipt(
-            issue_dir=issue_dir,
-            playbook=playbook,
-            step=step,
-            iteration_dir=iteration_dir,
-            operation_id=operation.operation_id,
-            state=LongRunningOperationState.LOST,
-            reason="operation_handle_missing",
-        )
+        try:
+            claim_fd = _acquire_operation_claim(iteration_dir)
+        except TimeoutError:
+            return operation
+        try:
+            receipt = store.read_operation_receipt(iteration_dir)
+            if receipt is not None:
+                return receipt
+            if not handle_path.exists():
+                return _record_terminal_receipt(
+                    issue_dir=issue_dir,
+                    playbook=playbook,
+                    step=step,
+                    iteration_dir=iteration_dir,
+                    operation_id=operation.operation_id,
+                    state=LongRunningOperationState.LOST,
+                    reason="operation_handle_missing",
+                )
+        finally:
+            _release_operation_claim(iteration_dir, claim_fd)
 
     try:
         handle = _read_json(handle_path)
@@ -423,6 +579,19 @@ def _monitor(request_file: Path) -> int:
         environment=os.environ,
     )
 
+    handle_path = operation_handle_path(iteration_dir)
+    handle = {
+        "operation_id": operation_id,
+        "monitor_pid": os.getpid(),
+        "monitor_start_time": _pid_start_time(os.getpid()),
+        "command_pid": None,
+        "command_start_time": None,
+        "command": command,
+        "cwd": str(cwd),
+        "created_at": _now_iso(),
+    }
+    _write_json(handle_path, handle)
+
     try:
         command = sandbox_command(command, boundary=boundary)
     except RuntimeError:
@@ -439,7 +608,35 @@ def _monitor(request_file: Path) -> int:
 
     stdout_path = iteration_dir / "operation.stdout.log"
     stderr_path = iteration_dir / "operation.stderr.log"
-    with stdout_path.open("ab") as stdout, stderr_path.open("ab") as stderr:
+    stdout = None
+    stderr = None
+    try:
+        stdout = stdout_path.open("ab")
+        stderr = stderr_path.open("ab")
+    except OSError as exc:
+        for stream in (stdout, stderr):
+            if stream is not None:
+                stream.close()
+        _record_terminal_receipt(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            step=step,
+            iteration_dir=iteration_dir,
+            operation_id=operation_id,
+            state=LongRunningOperationState.FAILED,
+            reason=f"operation_command_log_open_failed:{exc.__class__.__name__}",
+        )
+        return 1
+
+    process: Optional[subprocess.Popen[bytes]] = None
+    previous_handlers = {}
+
+    def exit_after_cleanup(signum: int, _frame: object) -> None:
+        raise SystemExit(128 + signum)
+
+    for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        previous_handlers[signum] = signal.signal(signum, exit_after_cleanup)
+    try:
         process = subprocess.Popen(
             command,
             cwd=str(cwd),
@@ -450,33 +647,33 @@ def _monitor(request_file: Path) -> int:
             start_new_session=True,
             close_fds=True,
         )
-        previous_handlers = {}
-
-        def exit_after_cleanup(signum: int, _frame: object) -> None:
-            raise SystemExit(128 + signum)
-
-        for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-            previous_handlers[signum] = signal.signal(signum, exit_after_cleanup)
-        try:
-            _write_json(
-                operation_handle_path(iteration_dir),
-                {
-                    "operation_id": operation_id,
-                    "monitor_pid": os.getpid(),
-                    "monitor_start_time": _pid_start_time(os.getpid()),
-                    "command_pid": process.pid,
-                    "command_start_time": _pid_start_time(process.pid),
-                    "command": command,
-                    "cwd": str(cwd),
-                    "created_at": _now_iso(),
-                },
-            )
-            exit_code = process.wait()
-        finally:
-            for signum, handler in previous_handlers.items():
-                signal.signal(signum, handler)
-            if process.poll() is None:
-                _terminate_process_group(process.pid)
+        handle.update(
+            {
+                "command_pid": process.pid,
+                "command_start_time": _pid_start_time(process.pid),
+                "command": command,
+            }
+        )
+        _write_json(handle_path, handle)
+        exit_code = process.wait()
+    except OSError as exc:
+        _record_terminal_receipt(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            step=step,
+            iteration_dir=iteration_dir,
+            operation_id=operation_id,
+            state=LongRunningOperationState.FAILED,
+            reason=f"operation_command_launch_failed:{exc.__class__.__name__}",
+        )
+        return 1
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+        if process is not None and process.poll() is None:
+            _terminate_process_group(process.pid)
+        stdout.close()
+        stderr.close()
 
     terminal_state = (
         LongRunningOperationState.SUCCEEDED if exit_code == 0 else LongRunningOperationState.FAILED

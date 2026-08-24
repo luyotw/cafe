@@ -10,6 +10,7 @@ import typer
 from rich.console import Console
 
 from cafe.core.blackboard import (
+    LongRunningOperationState,
     OperationLogPolicy,
     OperationMonitoring,
     OperationRisk,
@@ -52,8 +53,12 @@ def run(
     ),
     playbook: str = typer.Option("default", "--playbook", help="Playbook name"),
     cwd: Optional[Path] = typer.Option(None, "--cwd", help="Working directory for the command"),
-    readable_root: Optional[list[Path]] = typer.Option(None, "--readable-root", help="Readable sandbox root; repeat as needed"),
-    writable_root: Optional[list[Path]] = typer.Option(None, "--writable-root", help="Writable sandbox root; repeat as needed"),
+    readable_root: Optional[list[Path]] = typer.Option(
+        None, "--readable-root", help="Readable sandbox root; repeat as needed"
+    ),
+    writable_root: Optional[list[Path]] = typer.Option(
+        None, "--writable-root", help="Writable sandbox root; repeat as needed"
+    ),
     reason: str = typer.Option("operation_helper_launch", "--reason", help="Operation reason"),
     risk: OperationRisk = typer.Option(..., "--risk"),
     monitoring: OperationMonitoring = typer.Option(..., "--monitoring"),
@@ -103,10 +108,17 @@ def run(
         {
             "operation_id": result.operation.operation_id,
             "state": result.operation.state.value,
+            "reason": result.operation.reason,
+            "exit_code": result.operation.exit_code,
             "started": result.started,
             "handle_path": str(result.handle_path),
         }
     )
+    if not result.started and result.operation.state in {
+        LongRunningOperationState.FAILED,
+        LongRunningOperationState.LOST,
+    }:
+        raise typer.Exit(1)
 
 
 @operation_app.command("status")
