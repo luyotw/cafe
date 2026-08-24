@@ -26,12 +26,15 @@ from cafe.core.blackboard import (
     HandoffOwner,
     LongRunningOperationArtifact,
     LongRunningOperationState,
+    OperationRecoveryAuthorization,
     operation_artifact_path,
     operation_receipt_path,
+    operation_recovery_path,
 )
 from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.human_tasks import resolve_step_human_task
+from cafe.core.packet_io import sha256_bytes
 from cafe.core.playbook import resolve_step_behavior
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import (
@@ -138,6 +141,83 @@ def operation_receipt_is_trusted(
     if entry.summary != expected_summary:
         return False
     return Path(entry.path) == operation_receipt_path(iteration_dir)
+
+
+def operation_recovery_is_trusted(
+    *,
+    blackboard_store: BlackboardStore,
+    blackboard: Any,
+    current_step: str,
+    iteration_dir: Path,
+    operation: LongRunningOperationArtifact,
+    receipt: LongRunningOperationArtifact,
+    authorization: OperationRecoveryAuthorization,
+) -> bool:
+    """Trust only an exact recovery authorization written through the store."""
+    if authorization.operation_id != operation.operation_id:
+        return False
+    try:
+        operation_digest = sha256_bytes(operation_artifact_path(iteration_dir).read_bytes())
+        receipt_digest = sha256_bytes(operation_receipt_path(iteration_dir).read_bytes())
+    except OSError:
+        return False
+    if (
+        operation_digest != authorization.operation_sha256
+        or receipt_digest != authorization.receipt_sha256
+    ):
+        return False
+    if not operation_artifact_is_trusted(
+        blackboard_store=blackboard_store,
+        blackboard=blackboard,
+        current_step=current_step,
+        iteration_dir=iteration_dir,
+        artifact=operation,
+    ) or not operation_receipt_is_trusted(
+        blackboard_store=blackboard_store,
+        blackboard=blackboard,
+        current_step=current_step,
+        iteration_dir=iteration_dir,
+        operation=operation,
+        receipt=receipt,
+    ):
+        return False
+    entry = blackboard_store.get_artifact(blackboard, f"{current_step}_operation_recovery")
+    if entry is None or entry.summary != authorization.summary:
+        return False
+    return Path(entry.path) == operation_recovery_path(iteration_dir)
+
+
+def operation_recovery_event_is_recorded(
+    *,
+    blackboard_store: BlackboardStore,
+    blackboard: Any,
+    step: str,
+    iteration_dir: Path,
+    authorization: OperationRecoveryAuthorization,
+) -> bool:
+    """Recognize the exact immutable event for a persisted recovery authorization."""
+    entry = blackboard_store.get_artifact(blackboard, f"{step}_operation_recovery")
+    if (
+        entry is None
+        or entry.path != str(operation_recovery_path(iteration_dir))
+        or entry.summary != authorization.summary
+    ):
+        return False
+    payload = {
+        "step": step,
+        "operation_id": authorization.operation_id,
+        "action": authorization.action.value,
+        "authorized_by": authorization.authorized_by.value,
+        "reason": authorization.reason,
+        "path": str(operation_recovery_path(iteration_dir)),
+        "authorization_summary": authorization.summary,
+    }
+    return any(
+        event.event_type == "operation_recovery_authorized"
+        and event.step == step
+        and event.data == payload
+        for event in blackboard.events
+    )
 
 
 class BlackboardWorkflowRuntime:
@@ -1861,6 +1941,89 @@ class BlackboardWorkflowRuntime:
             receipt=receipt,
         )
 
+    def _operation_recovery_trusted(
+        self,
+        *,
+        current_step: str,
+        iteration_dir: Path,
+        operation: LongRunningOperationArtifact,
+        receipt: LongRunningOperationArtifact,
+        authorization: OperationRecoveryAuthorization,
+    ) -> bool:
+        return operation_recovery_is_trusted(
+            blackboard_store=self.blackboard_store,
+            blackboard=self.blackboard,
+            current_step=current_step,
+            iteration_dir=iteration_dir,
+            operation=operation,
+            receipt=receipt,
+            authorization=authorization,
+        )
+
+    def _trusted_operation_recovery(
+        self,
+        *,
+        current_step: str,
+        iteration_dir: Path,
+        operation: LongRunningOperationArtifact,
+    ) -> Optional[OperationRecoveryAuthorization]:
+        if operation.state not in {
+            LongRunningOperationState.FAILED,
+            LongRunningOperationState.LOST,
+        }:
+            return None
+        try:
+            authorization = self.blackboard_store.read_operation_recovery(iteration_dir)
+            receipt = self.blackboard_store.read_operation_receipt(iteration_dir)
+        except (ValueError, json.JSONDecodeError, OSError):
+            return None
+        if authorization is None or receipt is None or receipt.state != operation.state:
+            return None
+        if not self._operation_recovery_trusted(
+            current_step=current_step,
+            iteration_dir=iteration_dir,
+            operation=operation,
+            receipt=receipt,
+            authorization=authorization,
+        ):
+            return None
+        return authorization
+
+    def _operation_recovery_event_trusted(self, event: Any) -> bool:
+        data = getattr(event, "data", {})
+        if not isinstance(data, dict):
+            return False
+        step = str(data.get("step", getattr(event, "step", "")))
+        if str(getattr(event, "step", "")) != step:
+            return False
+        path = Path(str(data.get("path", "")))
+        if not step or path.name != "operation_recovery.json":
+            return False
+        iteration_dir = path.parent
+        try:
+            iteration_dir.resolve().relative_to((self.issue_dir / step).resolve())
+        except ValueError:
+            return False
+        try:
+            operation = self.blackboard_store.read_operation_artifact(iteration_dir)
+        except (ValueError, json.JSONDecodeError, OSError):
+            return False
+        if operation is None:
+            return False
+        authorization = self._trusted_operation_recovery(
+            current_step=step,
+            iteration_dir=iteration_dir,
+            operation=operation,
+        )
+        return (
+            authorization is not None
+            and data.get("operation_id") == authorization.operation_id
+            and data.get("action") == authorization.action.value
+            and data.get("authorized_by") == authorization.authorized_by.value
+            and data.get("reason") == authorization.reason
+            and data.get("authorization_summary") == authorization.summary
+        )
+
     def _read_trusted_operation_receipt(
         self,
         *,
@@ -2449,12 +2612,19 @@ class BlackboardWorkflowRuntime:
         )
 
     def _latest_unreconciled_interrupted_step(self) -> Optional[tuple[str, str]]:
+        recovered_steps: set[str] = set()
         for event in reversed(self.blackboard.events):
             if event.event_type == "step_reconciled":
                 return None
+            if event.event_type == "operation_recovery_authorized":
+                if self._operation_recovery_event_trusted(event):
+                    recovered_steps.add(event.step)
+                continue
             if event.event_type != "step_interrupted":
                 continue
             step = str(event.data.get("step", event.step))
+            if step in recovered_steps:
+                continue
             reason = str(event.data.get("reason", "interrupted"))
             if reason in {"interrupted", "keyboard_interrupt", "publish_error"}:
                 return None
@@ -3270,6 +3440,7 @@ class BlackboardWorkflowRuntime:
         a downstream review sends the step back for unrelated corrections.
         """
         operation_id: Optional[str] = None
+        recovery_operation_id: Optional[str] = None
         for event in reversed(self.blackboard.events):
             if event.step != current_step:
                 continue
@@ -3279,6 +3450,9 @@ class BlackboardWorkflowRuntime:
                 "step_reconciled",
             }:
                 return None
+            if event.event_type == "operation_recovery_authorized":
+                recovery_operation_id = str(event.data.get("operation_id", "")).strip() or None
+                break
             if event.event_type == "long_running_operation_receipt":
                 operation_id = str(event.data.get("operation_id", "")).strip() or None
                 break
@@ -3299,6 +3473,15 @@ class BlackboardWorkflowRuntime:
             return path.parent
         if operation is None:
             return None
+        if recovery_operation_id is not None:
+            authorization = self._trusted_operation_recovery(
+                current_step=current_step,
+                iteration_dir=path.parent,
+                operation=operation,
+            )
+            if authorization is not None and authorization.operation_id == recovery_operation_id:
+                return None
+            return path.parent
         if operation_id is not None and operation.operation_id != operation_id:
             return None
         return path.parent
