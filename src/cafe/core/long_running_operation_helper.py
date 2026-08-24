@@ -36,7 +36,11 @@ from cafe.core.blackboard import (
     validate_operation_decision,
 )
 from cafe.core.execution_boundary import EffectiveBoundary
-from cafe.core.sandbox_execution import sandbox_command
+from cafe.core.sandbox_execution import (
+    SANDBOX_PREFLIGHT_TIMEOUT_SECONDS,
+    preflight_sandbox,
+    sandbox_command,
+)
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import (
     BlackboardWorkflowRuntime,
@@ -51,7 +55,7 @@ OPERATION_HANDLE_FILENAME = "operation_handle.json"
 OPERATION_MONITOR_REQUEST_FILENAME = "operation_monitor_request.json"
 OPERATION_MONITOR_STDERR_FILENAME = "operation_monitor.stderr.log"
 OPERATION_CLAIM_LOCK_FILENAME = "operation.claim.lock"
-OPERATION_MONITOR_HANDSHAKE_TIMEOUT_SECONDS = 2.0
+OPERATION_MONITOR_HANDSHAKE_TIMEOUT_SECONDS = SANDBOX_PREFLIGHT_TIMEOUT_SECONDS + 2.0
 
 
 @dataclass(frozen=True)
@@ -836,6 +840,27 @@ def _monitor(request_file: Path) -> int:
         network_destinations=(),
         environment=os.environ,
     )
+
+    preflight = preflight_sandbox(boundary)
+    if not preflight.available:
+        stderr_path = iteration_dir / "operation.stderr.log"
+        try:
+            stderr_path.write_text(
+                "\n".join(part for part in (preflight.detail, preflight.guidance) if part) + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+        _record_terminal_receipt(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            step=step,
+            iteration_dir=iteration_dir,
+            operation_id=operation_id,
+            state=LongRunningOperationState.FAILED,
+            reason=preflight.reason,
+        )
+        return 1
 
     handle_path = operation_handle_path(iteration_dir)
     handle = {

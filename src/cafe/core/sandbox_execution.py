@@ -22,6 +22,18 @@ MIGRATION_GUIDANCE = (
     "Keep compatible hooks in sandbox execution, create explicit user lifecycle trust for narrow "
     "prepare/close automation, or request a registered capability for privileged effects."
 )
+SANDBOX_USER_NAMESPACE_FAILURES = (
+    "loopback: Failed RTM_NEWADDR",
+    "loopback: Failed RTM_NEWLINK",
+    "setting up uid map: Permission denied",
+    "No permissions to create a new namespace",
+)
+SANDBOX_USER_NAMESPACE_GUIDANCE = (
+    "Codex's Linux sandbox could not create its required user/network namespace. "
+    "Install and load the distribution bwrap AppArmor profile; do not disable the "
+    "sandbox or relaunch the child command automatically."
+)
+SANDBOX_PREFLIGHT_TIMEOUT_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -30,6 +42,71 @@ class SandboxRunResult:
     stdout: str
     stderr: str
     receipt: ExecutionReceipt
+
+
+@dataclass(frozen=True)
+class SandboxPreflightResult:
+    available: bool
+    reason: str = ""
+    detail: str = ""
+    guidance: str = ""
+
+
+def preflight_sandbox(
+    boundary: EffectiveBoundary,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    timeout_seconds: float = SANDBOX_PREFLIGHT_TIMEOUT_SECONDS,
+) -> SandboxPreflightResult:
+    """Verify the exact managed boundary before claiming a child command started."""
+    try:
+        command = sandbox_command(["/bin/true"], boundary=boundary)
+    except RuntimeError:
+        return SandboxPreflightResult(
+            available=False,
+            reason="sandbox_backend_unavailable",
+            guidance=MIGRATION_GUIDANCE,
+        )
+    try:
+        completed = runner(
+            command,
+            cwd=str(boundary.cwd.resolve()),
+            env=dict(boundary.environment),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        return SandboxPreflightResult(
+            available=False,
+            reason="sandbox_preflight_timeout",
+            guidance="Inspect the Codex sandbox backend before retrying the child command.",
+        )
+    except OSError as exc:
+        return SandboxPreflightResult(
+            available=False,
+            reason="sandbox_backend_unavailable",
+            detail=exc.__class__.__name__,
+            guidance=MIGRATION_GUIDANCE,
+        )
+    if completed.returncode == 0:
+        return SandboxPreflightResult(available=True)
+
+    detail = (completed.stderr or completed.stdout or "").strip()[-4000:]
+    if any(marker in detail for marker in SANDBOX_USER_NAMESPACE_FAILURES):
+        return SandboxPreflightResult(
+            available=False,
+            reason="sandbox_user_namespace_unavailable",
+            detail=detail,
+            guidance=SANDBOX_USER_NAMESPACE_GUIDANCE,
+        )
+    return SandboxPreflightResult(
+        available=False,
+        reason="sandbox_preflight_failed",
+        detail=detail,
+        guidance="Inspect the Codex sandbox preflight result before retrying the child command.",
+    )
 
 
 class SandboxExecutor:

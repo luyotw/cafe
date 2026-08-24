@@ -117,6 +117,16 @@ def test_real_operation_enforces_declared_sandbox_boundary(
         reason="real_sandbox_boundary_probe",
         **_LOW_OPERATION_DECISION,
     )
+    if launched.started is False:
+        assert launched.operation.reason == "sandbox_user_namespace_unavailable"
+        assert not launched.handle_path.exists()
+        stderr = (iteration_dir / "operation.stderr.log").read_text(encoding="utf-8")
+        assert "bwrap: loopback:" in stderr
+        assert "AppArmor profile" in stderr
+        assert not result_file.exists()
+        assert not outside.exists()
+        return
+
     assert launched.started is True
     deadline = time.time() + 10
     while time.time() < deadline:
@@ -144,6 +154,99 @@ def test_real_operation_enforces_declared_sandbox_boundary(
         assert "Operation not permitted" in stderr
         assert not result_file.exists()
         assert not outside.exists()
+
+
+def test_sandbox_preflight_fails_before_handle_or_child_launch(tmp_path: Path) -> None:
+    binary = tmp_path / "bin" / "codex"
+    binary.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' 'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted' >&2\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    marker = tmp_path / "child-started"
+    child = tmp_path / "child.py"
+    child.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('started', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "preflight-denied"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+
+    launched = run_operation_command(
+        issue_dir=issue_dir,
+        step="develop",
+        iteration_dir=iteration_dir,
+        command=[sys.executable, str(child)],
+        cwd=tmp_path,
+        readable_roots=(tmp_path,),
+        writable_roots=(tmp_path,),
+        playbook=_PLAYBOOK,
+        reason="sandbox_preflight_probe",
+        **_LOW_OPERATION_DECISION,
+    )
+
+    assert launched.started is False
+    assert launched.operation.state is LongRunningOperationState.FAILED
+    assert launched.operation.reason == "sandbox_user_namespace_unavailable"
+    assert not launched.handle_path.exists()
+    assert not marker.exists()
+    stderr = (iteration_dir / "operation.stderr.log").read_text(encoding="utf-8")
+    assert "RTM_NEWADDR" in stderr
+    assert "AppArmor profile" in stderr
+
+
+def test_monitor_handshake_waits_for_a_slow_successful_preflight(tmp_path: Path) -> None:
+    binary = tmp_path / "bin" / "codex"
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys, time\n"
+        "args = sys.argv[1:]\n"
+        "if not args or args.pop(0) != 'sandbox': raise SystemExit(2)\n"
+        "state = None; network_denied = False\n"
+        "while args and args[0].startswith('--'):\n"
+        " option = args.pop(0)\n"
+        " if option == '--sandbox-state-json': state = json.loads(args.pop(0))\n"
+        " elif option == '--sandbox-state-readable-root': args.pop(0)\n"
+        " elif option == '--sandbox-state-disable-network': network_denied = True\n"
+        "if state is None or not network_denied or not args: raise SystemExit(3)\n"
+        "if args == ['/bin/true']: time.sleep(2.2)\n"
+        "os.execvp(args[0], args)\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    issue_dir = tmp_path / ".cafe" / "issues" / "slow-preflight"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+
+    launched = run_operation_command(
+        issue_dir=issue_dir,
+        step="develop",
+        iteration_dir=iteration_dir,
+        command=["/bin/true"],
+        cwd=tmp_path,
+        readable_roots=(tmp_path,),
+        writable_roots=(tmp_path,),
+        playbook=_PLAYBOOK,
+        reason="slow_sandbox_preflight_probe",
+        **_LOW_OPERATION_DECISION,
+    )
+
+    assert launched.started is True
+    assert launched.handle_path.exists()
+    assert launched.operation.state is LongRunningOperationState.RUNNING
+    deadline = time.time() + 5
+    status = launched.operation
+    while status.state is LongRunningOperationState.RUNNING and time.time() < deadline:
+        time.sleep(0.05)
+        status = get_operation_status(
+            issue_dir=issue_dir,
+            step="develop",
+            iteration_dir=iteration_dir,
+            playbook=_PLAYBOOK,
+        )
+    assert status.state is LongRunningOperationState.SUCCEEDED
 
 
 def test_relative_workflow_paths_survive_distinct_command_cwd(
