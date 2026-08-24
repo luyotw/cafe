@@ -72,6 +72,10 @@
 [ ] Write the next-step baton to hand off to the next workflow target; the runtime updates blackboard
 [ ] Keep the response brief; workflow transitions are controlled by the baton
 
+## Basic Principles
+
+[ ] 確認 long-running script 不會造成不可接受的系統負荷或資源放大
+
 
 ## PR Todo List Check
 [ ] Read .cafe/issues/test/pr/iteration_001/output.md - this is the todo list from the PR phase

@@ -26,7 +26,7 @@ def test_packaged_develop_skill_has_risk_driven_operation_guidance() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-develop")
 
-    assert "version: 1.7.0" in text
+    assert "version: 1.7.1" in text
     assert "low 使用 `final-only`／`summary-only`" in text
     assert "max_read_only_commands" not in text
     assert "20 次" not in text
@@ -46,7 +46,7 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
     expected_versions = {
         "cafe-spec": "1.4.0",
         "cafe-plan": "1.6.1",
-        "cafe-review": "1.4.1",
+        "cafe-review": "1.4.2",
         "cafe-workflow-common": "1.6.0",
         "use-cafe-workflow": "1.19.3",
     }
@@ -84,3 +84,14 @@ def test_packaged_develop_skill_checks_complete_production_wiring() -> None:
     assert "public caller path" in reference
     assert "移除任一必要 forwarding 時該測試必須失敗" in reference
     assert "只直接測 helper 或手動傳值不足" in reference
+
+
+def test_develop_and_review_check_long_running_resource_amplification() -> None:
+    builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
+    expected = "確認 long-running script 不會造成不可接受的系統負荷或資源放大"
+
+    for skill_name in ("cafe-develop", "cafe-review"):
+        reference = (
+            builtin_root / skill_name / "references" / "basic_principles.md"
+        ).read_text(encoding="utf-8")
+        assert expected in reference

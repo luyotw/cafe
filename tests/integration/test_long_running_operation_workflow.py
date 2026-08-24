@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from cafe.agents.executor import AgentExecutionError
+from cafe.core import long_running_operation_helper as operation_helper
 from cafe.core.blackboard import (
     LongRunningOperationState,
     OperationLogPolicy,
@@ -116,6 +117,16 @@ def test_real_operation_enforces_declared_sandbox_boundary(
         reason="real_sandbox_boundary_probe",
         **_LOW_OPERATION_DECISION,
     )
+    if launched.started is False:
+        assert launched.operation.reason == "sandbox_user_namespace_unavailable"
+        assert not launched.handle_path.exists()
+        stderr = (iteration_dir / "operation.stderr.log").read_text(encoding="utf-8")
+        assert "bwrap: loopback:" in stderr
+        assert "AppArmor profile" in stderr
+        assert not result_file.exists()
+        assert not outside.exists()
+        return
+
     assert launched.started is True
     deadline = time.time() + 10
     while time.time() < deadline:
@@ -143,6 +154,379 @@ def test_real_operation_enforces_declared_sandbox_boundary(
         assert "Operation not permitted" in stderr
         assert not result_file.exists()
         assert not outside.exists()
+
+
+def test_sandbox_preflight_fails_before_handle_or_child_launch(tmp_path: Path) -> None:
+    binary = tmp_path / "bin" / "codex"
+    binary.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' 'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted' >&2\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    marker = tmp_path / "child-started"
+    child = tmp_path / "child.py"
+    child.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('started', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "preflight-denied"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+
+    launched = run_operation_command(
+        issue_dir=issue_dir,
+        step="develop",
+        iteration_dir=iteration_dir,
+        command=[sys.executable, str(child)],
+        cwd=tmp_path,
+        readable_roots=(tmp_path,),
+        writable_roots=(tmp_path,),
+        playbook=_PLAYBOOK,
+        reason="sandbox_preflight_probe",
+        **_LOW_OPERATION_DECISION,
+    )
+
+    assert launched.started is False
+    assert launched.operation.state is LongRunningOperationState.FAILED
+    assert launched.operation.reason == "sandbox_user_namespace_unavailable"
+    assert not launched.handle_path.exists()
+    assert not marker.exists()
+    stderr = (iteration_dir / "operation.stderr.log").read_text(encoding="utf-8")
+    assert "RTM_NEWADDR" in stderr
+    assert "AppArmor profile" in stderr
+
+
+def test_monitor_handshake_waits_for_a_slow_successful_preflight(tmp_path: Path) -> None:
+    binary = tmp_path / "bin" / "codex"
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys, time\n"
+        "args = sys.argv[1:]\n"
+        "if not args or args.pop(0) != 'sandbox': raise SystemExit(2)\n"
+        "state = None; network_denied = False\n"
+        "while args and args[0].startswith('--'):\n"
+        " option = args.pop(0)\n"
+        " if option == '--sandbox-state-json': state = json.loads(args.pop(0))\n"
+        " elif option == '--sandbox-state-readable-root': args.pop(0)\n"
+        " elif option == '--sandbox-state-disable-network': network_denied = True\n"
+        "if state is None or not network_denied or not args: raise SystemExit(3)\n"
+        "if args == ['/bin/true']: time.sleep(2.2)\n"
+        "os.execvp(args[0], args)\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    issue_dir = tmp_path / ".cafe" / "issues" / "slow-preflight"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+
+    launched = run_operation_command(
+        issue_dir=issue_dir,
+        step="develop",
+        iteration_dir=iteration_dir,
+        command=["/bin/true"],
+        cwd=tmp_path,
+        readable_roots=(tmp_path,),
+        writable_roots=(tmp_path,),
+        playbook=_PLAYBOOK,
+        reason="slow_sandbox_preflight_probe",
+        **_LOW_OPERATION_DECISION,
+    )
+
+    assert launched.started is True
+    assert launched.handle_path.exists()
+    assert launched.operation.state is LongRunningOperationState.RUNNING
+    deadline = time.time() + 5
+    status = launched.operation
+    while status.state is LongRunningOperationState.RUNNING and time.time() < deadline:
+        time.sleep(0.05)
+        status = get_operation_status(
+            issue_dir=issue_dir,
+            step="develop",
+            iteration_dir=iteration_dir,
+            playbook=_PLAYBOOK,
+        )
+    assert status.state is LongRunningOperationState.SUCCEEDED
+
+
+def test_relative_workflow_paths_survive_distinct_command_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The monitor must not resolve workflow artifacts from the command cwd."""
+    workflow_root = tmp_path / "workflow"
+    command_root = tmp_path / "disposable-clone"
+    user_root = tmp_path / "user-scope"
+    workflow_root.mkdir()
+    command_root.mkdir()
+    user_root.mkdir()
+    script = command_root / "install_user_file.py"
+    installed_file = user_root / ".local" / "bin" / "cafe"
+    shadow_marker = tmp_path / "untrusted-cafe-imported"
+    shadow_package = command_root / "cafe"
+    shadow_package.mkdir()
+    (shadow_package / "__init__.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(shadow_marker)!r}).write_text('shadowed', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    script.write_text(
+        "from pathlib import Path\n"
+        "import sys\n"
+        "target = Path(sys.argv[1])\n"
+        "target.parent.mkdir(parents=True, exist_ok=True)\n"
+        "target.write_text('installed', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(workflow_root)
+    issue_dir = Path(".cafe/issues/relative-bootstrap")
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+
+    launched = run_operation_command(
+        issue_dir=issue_dir,
+        step="develop",
+        iteration_dir=iteration_dir,
+        command=[sys.executable, str(script), str(installed_file)],
+        cwd=command_root,
+        readable_roots=(command_root, user_root),
+        writable_roots=(user_root,),
+        playbook=_PLAYBOOK,
+        reason="relative_user_scope_bootstrap_probe",
+        **_LOW_OPERATION_DECISION,
+    )
+
+    assert launched.handle_path == (workflow_root / iteration_dir / "operation_handle.json")
+    assert launched.handle_path.exists()
+    request = json.loads(
+        (workflow_root / iteration_dir / "operation_monitor_request.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert request["issue_dir"] == str((workflow_root / issue_dir).resolve())
+    assert request["iteration_dir"] == str((workflow_root / iteration_dir).resolve())
+
+    deadline = time.time() + 5
+    status = get_operation_status(
+        issue_dir=issue_dir,
+        step="develop",
+        iteration_dir=iteration_dir,
+        playbook=_PLAYBOOK,
+    )
+    while status.state == LongRunningOperationState.RUNNING and time.time() < deadline:
+        time.sleep(0.05)
+        status = get_operation_status(
+            issue_dir=issue_dir,
+            step="develop",
+            iteration_dir=iteration_dir,
+            playbook=_PLAYBOOK,
+        )
+
+    assert status.state == LongRunningOperationState.SUCCEEDED
+    assert installed_file.read_text(encoding="utf-8") == "installed"
+    assert not shadow_marker.exists()
+
+
+def test_monitor_exit_before_handle_returns_specific_launch_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class ExitedMonitor:
+        pid = 999_999_999
+
+        @staticmethod
+        def poll() -> int:
+            return 17
+
+    monkeypatch.setattr(
+        operation_helper.subprocess, "Popen", lambda *args, **kwargs: ExitedMonitor()
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "monitor-launch-failure"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+
+    launched = run_operation_command(
+        issue_dir=issue_dir,
+        step="develop",
+        iteration_dir=iteration_dir,
+        command=["true"],
+        cwd=tmp_path,
+        playbook=_PLAYBOOK,
+        reason="monitor_launch_failure_probe",
+        **_LOW_OPERATION_DECISION,
+    )
+
+    assert launched.started is False
+    assert launched.operation.state == LongRunningOperationState.FAILED
+    assert launched.operation.reason == "operation_monitor_launch_failed"
+    assert launched.operation.exit_code == 17
+    assert (
+        get_operation_status(
+            issue_dir=issue_dir,
+            step="develop",
+            iteration_dir=iteration_dir,
+            playbook=_PLAYBOOK,
+        ).reason
+        == "operation_monitor_launch_failed"
+    )
+
+
+def test_monitor_handshake_timeout_terminates_monitor_and_records_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class HungMonitor:
+        pid = 424_242
+        waited = False
+
+        @staticmethod
+        def poll() -> None:
+            return None
+
+        def wait(self, timeout: float) -> int:
+            assert timeout == 3
+            self.waited = True
+            return -int(signal.SIGTERM)
+
+    monitor = HungMonitor()
+    terminated = []
+    monkeypatch.setattr(operation_helper.subprocess, "Popen", lambda *args, **kwargs: monitor)
+    monkeypatch.setattr(operation_helper, "OPERATION_MONITOR_HANDSHAKE_TIMEOUT_SECONDS", 0)
+    monkeypatch.setattr(
+        operation_helper, "_terminate_process_group", lambda pid: terminated.append(pid)
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "monitor-handshake-timeout"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+
+    launched = run_operation_command(
+        issue_dir=issue_dir,
+        step="develop",
+        iteration_dir=iteration_dir,
+        command=["true"],
+        cwd=tmp_path,
+        playbook=_PLAYBOOK,
+        reason="monitor_handshake_timeout_probe",
+        **_LOW_OPERATION_DECISION,
+    )
+
+    assert terminated == [monitor.pid]
+    assert monitor.waited is True
+    assert launched.started is False
+    assert launched.operation.state == LongRunningOperationState.FAILED
+    assert launched.operation.reason == "operation_monitor_handshake_timeout"
+    claim_fd = operation_helper._acquire_operation_claim(iteration_dir)
+    operation_helper._release_operation_claim(iteration_dir, claim_fd)
+
+
+def test_request_write_failure_returns_terminal_launch_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_write_json = operation_helper._write_json
+
+    def fail_request_write(path: Path, data: dict) -> None:
+        if path.name == "operation_monitor_request.json":
+            raise PermissionError("fixture denied request write")
+        original_write_json(path, data)
+
+    monkeypatch.setattr(operation_helper, "_write_json", fail_request_write)
+    issue_dir = tmp_path / ".cafe" / "issues" / "request-write-failure"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+
+    launched = run_operation_command(
+        issue_dir=issue_dir,
+        step="develop",
+        iteration_dir=iteration_dir,
+        command=["true"],
+        cwd=tmp_path,
+        playbook=_PLAYBOOK,
+        reason="request_write_failure_probe",
+        **_LOW_OPERATION_DECISION,
+    )
+
+    assert launched.started is False
+    assert launched.operation.state == LongRunningOperationState.FAILED
+    assert launched.operation.reason == "operation_monitor_request_write_failed:PermissionError"
+    assert not launched.handle_path.exists()
+    claim_fd = operation_helper._acquire_operation_claim(iteration_dir)
+    operation_helper._release_operation_claim(iteration_dir, claim_fd)
+    assert (
+        get_operation_status(
+            issue_dir=issue_dir,
+            step="develop",
+            iteration_dir=iteration_dir,
+            playbook=_PLAYBOOK,
+        ).state
+        == LongRunningOperationState.FAILED
+    )
+
+
+@pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
+def test_operation_claim_rejects_links_without_modifying_target(
+    tmp_path: Path, link_kind: str
+) -> None:
+    iteration_dir = tmp_path / link_kind / "develop" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    victim = tmp_path / f"{link_kind}-victim.txt"
+    victim.write_text("preserve me", encoding="utf-8")
+    claim_path = iteration_dir / "operation.claim.lock"
+    if link_kind == "symlink":
+        claim_path.symlink_to(victim)
+    else:
+        os.link(victim, claim_path)
+
+    with pytest.raises((OSError, ValueError)):
+        operation_helper._acquire_operation_claim(iteration_dir)
+
+    assert victim.read_text(encoding="utf-8") == "preserve me"
+    with victim.open("r+") as stream:
+        operation_helper.fcntl.flock(
+            stream.fileno(), operation_helper.fcntl.LOCK_EX | operation_helper.fcntl.LOCK_NB
+        )
+
+
+def test_launcher_crash_releases_claim_for_status_and_duplicate_run(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "launcher-crash"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    child_pid = os.fork()
+    if child_pid == 0:
+        operation_helper._launch_operation_monitor = lambda **_kwargs: os._exit(23)
+        run_operation_command(
+            issue_dir=issue_dir,
+            step="develop",
+            iteration_dir=iteration_dir,
+            command=["true"],
+            cwd=tmp_path,
+            playbook=_PLAYBOOK,
+            reason="launcher_crash_probe",
+            **_LOW_OPERATION_DECISION,
+        )
+        os._exit(24)
+
+    _, wait_status = os.waitpid(child_pid, 0)
+    assert os.waitstatus_to_exitcode(wait_status) == 23
+    assert (iteration_dir / "operation.claim.lock").exists()
+    assert not (iteration_dir / "operation_handle.json").exists()
+    assert not (iteration_dir / "operation_receipt.json").exists()
+
+    status = get_operation_status(
+        issue_dir=issue_dir,
+        step="develop",
+        iteration_dir=iteration_dir,
+        playbook=_PLAYBOOK,
+    )
+    assert status.state == LongRunningOperationState.LOST
+    assert status.reason == "operation_handle_missing"
+
+    started_at = time.monotonic()
+    duplicate = run_operation_command(
+        issue_dir=issue_dir,
+        step="develop",
+        iteration_dir=iteration_dir,
+        command=["true"],
+        cwd=tmp_path,
+        playbook=_PLAYBOOK,
+        reason="launcher_crash_duplicate_probe",
+        **_LOW_OPERATION_DECISION,
+    )
+    assert time.monotonic() - started_at < 1
+    assert duplicate.started is False
+    assert duplicate.operation.state == LongRunningOperationState.LOST
+    assert duplicate.operation.operation_id == status.operation_id
 
 
 def _write_baton(issue_dir: Path, *, from_step: str, to_step: str) -> None:
@@ -477,6 +861,102 @@ def test_run_operation_command_claims_single_operation_atomically(tmp_path: Path
     assert len(results) == 2
     assert sum(1 for result in results if result.started) == 1
     assert len({result.operation.operation_id for result in results}) == 1
+    assert all(
+        result.handle_path.exists()
+        or result.operation.state is not LongRunningOperationState.RUNNING
+        for result in results
+    )
+
+
+def test_status_waits_for_in_progress_launch_handshake(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "status-launch-race"
+    iteration_dir = issue_dir / "develop" / "iteration_001"
+    release_file = tmp_path / "release-status-race"
+    script = tmp_path / "tracked_status_race_wait.py"
+    script.write_text(
+        "from pathlib import Path\n"
+        "import sys, time\n"
+        "while not Path(sys.argv[1]).exists():\n"
+        "    time.sleep(0.02)\n",
+        encoding="utf-8",
+    )
+    launch_entered = threading.Event()
+    allow_launch = threading.Event()
+    original_launch = operation_helper._launch_operation_monitor
+    launch_results = []
+    status_results = []
+    errors = []
+
+    def delayed_launch(**kwargs: object) -> object:
+        launch_entered.set()
+        assert allow_launch.wait(timeout=5)
+        return original_launch(**kwargs)
+
+    def run_operation() -> None:
+        try:
+            launch_results.append(
+                run_operation_command(
+                    issue_dir=issue_dir,
+                    step="develop",
+                    iteration_dir=iteration_dir,
+                    command=[sys.executable, str(script), str(release_file)],
+                    cwd=tmp_path,
+                    playbook=_PLAYBOOK,
+                    reason="status_launch_race_probe",
+                    **_LOW_OPERATION_DECISION,
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+
+    def inspect_status() -> None:
+        try:
+            status_results.append(
+                get_operation_status(
+                    issue_dir=issue_dir,
+                    step="develop",
+                    iteration_dir=iteration_dir,
+                    playbook=_PLAYBOOK,
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+
+    monkeypatch.setattr(operation_helper, "_launch_operation_monitor", delayed_launch)
+    launch_thread = threading.Thread(target=run_operation)
+    launch_thread.start()
+    assert launch_entered.wait(timeout=5)
+    status_thread = threading.Thread(target=inspect_status)
+    status_thread.start()
+    time.sleep(0.05)
+    assert status_thread.is_alive()
+    allow_launch.set()
+    launch_thread.join(timeout=5)
+    status_thread.join(timeout=5)
+
+    try:
+        assert not launch_thread.is_alive()
+        assert not status_thread.is_alive()
+        assert not errors
+        assert len(launch_results) == 1
+        assert len(status_results) == 1
+        assert status_results[0].state == LongRunningOperationState.RUNNING
+        assert status_results[0].reason != "operation_handle_missing"
+    finally:
+        release_file.write_text("go", encoding="utf-8")
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            terminal = get_operation_status(
+                issue_dir=issue_dir,
+                step="develop",
+                iteration_dir=iteration_dir,
+                playbook=_PLAYBOOK,
+            )
+            if terminal.state is not LongRunningOperationState.RUNNING:
+                break
+            time.sleep(0.05)
 
 
 def test_medium_risk_replayable_journey_preserves_policy_and_single_launch(

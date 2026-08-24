@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -10,6 +11,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from cafe.core.packet_io import atomic_write_bytes
 from cafe.core.workflow_models import BatonRejected
 
 BLACKBOARD_FILENAME = "blackboard.json"
@@ -18,6 +20,7 @@ NEXT_STEP_FILENAME = "next_step.txt"
 HANDOFF_CONTRACT_VERSION = 1
 OPERATION_ARTIFACT_FILENAME = "operation.json"
 OPERATION_RECEIPT_FILENAME = "operation_receipt.json"
+OPERATION_RECOVERY_FILENAME = "operation_recovery.json"
 
 
 def _now_iso() -> str:
@@ -94,6 +97,15 @@ class OperationLogPolicy(str, Enum):
     FILTERED_STREAM = "filtered-stream"
 
 
+class OperationRecoveryAction(str, Enum):
+    RETRY_STEP = "retry-step"
+
+
+class OperationRecoveryActor(str, Enum):
+    HUMAN = "human"
+    DRIVER = "driver"
+
+
 def operation_artifact_path(iteration_dir: Path) -> Path:
     """Fixed one-per-iteration path: ``iteration_dir/operation.json``."""
     return Path(iteration_dir) / OPERATION_ARTIFACT_FILENAME
@@ -102,6 +114,93 @@ def operation_artifact_path(iteration_dir: Path) -> Path:
 def operation_receipt_path(iteration_dir: Path) -> Path:
     """Fixed terminal receipt path for one long-running operation."""
     return Path(iteration_dir) / OPERATION_RECEIPT_FILENAME
+
+
+def operation_recovery_path(iteration_dir: Path) -> Path:
+    """Fixed recovery authorization path for one long-running operation."""
+    return Path(iteration_dir) / OPERATION_RECOVERY_FILENAME
+
+
+@dataclass(frozen=True)
+class OperationRecoveryAuthorization:
+    operation_id: str
+    operation_sha256: str
+    receipt_sha256: str
+    action: OperationRecoveryAction
+    authorized_by: OperationRecoveryActor
+    reason: str
+    created_at: str = field(default_factory=_now_iso)
+
+    def __post_init__(self) -> None:
+        if not self.operation_id.strip():
+            raise ValueError("operation recovery operation_id must be non-empty")
+        for field_name, value in {
+            "operation_sha256": self.operation_sha256,
+            "receipt_sha256": self.receipt_sha256,
+        }.items():
+            if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+                raise ValueError(f"operation recovery {field_name} must be a SHA-256 digest")
+        _required_operation_text(self.reason, "recovery reason")
+        if not self.created_at.strip() or len(self.created_at) > 100:
+            raise ValueError("operation recovery created_at must be bounded text")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "operation_id": self.operation_id,
+            "operation_sha256": self.operation_sha256,
+            "receipt_sha256": self.receipt_sha256,
+            "action": self.action.value,
+            "authorized_by": self.authorized_by.value,
+            "reason": self.reason,
+            "created_at": self.created_at,
+        }
+
+    @property
+    def summary(self) -> str:
+        canonical = json.dumps(
+            self.to_dict(), sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        )
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        return f"long_running_operation_recovery:{self.operation_id}:{self.action.value}:{digest}"
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "OperationRecoveryAuthorization":
+        if not isinstance(data, dict):
+            raise ValueError("operation_recovery.json must be a JSON object")
+        required = {
+            "operation_id",
+            "operation_sha256",
+            "receipt_sha256",
+            "action",
+            "authorized_by",
+            "reason",
+            "created_at",
+        }
+        missing = required - set(data)
+        extra = set(data) - required
+        if missing:
+            raise ValueError(
+                f"operation_recovery.json is missing required fields: {sorted(missing)}"
+            )
+        if extra:
+            raise ValueError(f"operation_recovery.json has unsupported fields: {sorted(extra)}")
+        text_fields = required
+        if any(not isinstance(data[field_name], str) for field_name in text_fields):
+            raise ValueError("operation_recovery.json fields must be strings")
+        try:
+            action = OperationRecoveryAction(data["action"])
+            authorized_by = OperationRecoveryActor(data["authorized_by"])
+        except ValueError as exc:
+            raise ValueError("operation_recovery.json has unsupported enum value") from exc
+        return cls(
+            operation_id=data["operation_id"],
+            operation_sha256=data["operation_sha256"],
+            receipt_sha256=data["receipt_sha256"],
+            action=action,
+            authorized_by=authorized_by,
+            reason=data["reason"],
+            created_at=data["created_at"],
+        )
 
 
 @dataclass
@@ -693,9 +792,9 @@ class BlackboardStore:
     def save(self, state: BlackboardState) -> None:
         self.issue_dir.mkdir(parents=True, exist_ok=True)
         state.updated_at = _now_iso()
-        self.file_path.write_text(
-            json.dumps(state.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        atomic_write_bytes(
+            self.file_path,
+            json.dumps(state.to_dict(), ensure_ascii=False, indent=2).encode("utf-8"),
         )
 
     def ensure_baton(
@@ -1009,6 +1108,76 @@ class BlackboardStore:
             },
         )
         return artifact
+
+    def read_operation_recovery(
+        self, iteration_dir: Path
+    ) -> Optional[OperationRecoveryAuthorization]:
+        path = operation_recovery_path(iteration_dir)
+        if not path.exists():
+            return None
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            return OperationRecoveryAuthorization.from_dict(raw)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise ValueError(f"{path.name} schema invalid: {exc}") from exc
+
+    def write_operation_recovery(
+        self,
+        state: BlackboardState,
+        *,
+        step: str,
+        iteration_dir: Path,
+        authorization: OperationRecoveryAuthorization,
+    ) -> OperationRecoveryAuthorization:
+        path = operation_recovery_path(iteration_dir)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_bytes(
+            path,
+            json.dumps(authorization.to_dict(), ensure_ascii=False, indent=2).encode("utf-8"),
+        )
+
+        artifact_name = f"{step}_operation_recovery"
+        previous = state.artifacts.get(artifact_name)
+        if (
+            previous is None
+            or previous.path != str(path)
+            or previous.summary != authorization.summary
+        ):
+            state.artifacts[artifact_name] = ArtifactEntry(
+                name=artifact_name,
+                kind=ArtifactKind.METADATA,
+                version=previous.version + 1 if previous else 1,
+                updated_by=step,
+                path=str(path),
+                summary=authorization.summary,
+            )
+        payload = {
+            "step": step,
+            "operation_id": authorization.operation_id,
+            "action": authorization.action.value,
+            "authorized_by": authorization.authorized_by.value,
+            "reason": authorization.reason,
+            "path": str(path),
+            "authorization_summary": authorization.summary,
+        }
+        if not any(
+            event.event_type == "operation_recovery_authorized" and event.data == payload
+            for event in state.events
+        ):
+            state.events.append(
+                EventEntry(
+                    timestamp=_now_iso(),
+                    step=step,
+                    event_type="operation_recovery_authorized",
+                    message=json.dumps(payload, ensure_ascii=False),
+                    data=payload,
+                )
+            )
+        # Persist the metadata pointer and lifecycle event together. If a crash
+        # occurs after the recovery file is written, the same authorized command
+        # can safely complete this registration on its next invocation.
+        self.save(state)
+        return authorization
 
     def append_capability_receipt(self, state: BlackboardState, receipt: Dict[str, Any]) -> None:
         """Append one structured host capability receipt and persist the blackboard."""

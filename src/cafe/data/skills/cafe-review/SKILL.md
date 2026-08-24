@@ -1,7 +1,7 @@
 ---
 name: cafe-review
 description: "審查程式碼品質與風險"
-version: 1.4.1
+version: 1.4.2
 workflow:
   execution_profile:
     workload: review
