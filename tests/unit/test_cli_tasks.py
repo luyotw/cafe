@@ -18,8 +18,8 @@ def _task_repo(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-a"
     issue_dir.mkdir(parents=True)
-    state = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
-    (issue_dir / "issue.yaml").write_text("playbook: default\n", encoding="utf-8")
+    state = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
+    (issue_dir / "issue.yaml").write_text("playbook: standard\n", encoding="utf-8")
     task = HumanTaskRecordStore(issue_dir).materialize(
         workflow_id=state.workflow_id,
         step="spec",

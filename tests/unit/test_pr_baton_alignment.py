@@ -14,7 +14,7 @@ def _bootstrap_issue(issue_dir: Path) -> None:
             {
                 "schema_version": 1,
                 "current_step": "pr",
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "artifacts": {},
                 "events": [],
                 "decisions": [],
@@ -49,7 +49,7 @@ def test_align_pr_baton_updates_when_needs_changes_and_stale(tmp_path: Path) -> 
     )
 
     store = BlackboardStore(issue_dir)
-    state = store.load_or_create("pr", playbook_id="default")
+    state = store.load_or_create("pr", playbook_id="standard")
 
     align_pr_baton_after_execution(
         issue_dir=issue_dir,
@@ -59,7 +59,7 @@ def test_align_pr_baton_updates_when_needs_changes_and_stale(tmp_path: Path) -> 
         status_code="needs_changes",
     )
 
-    loaded = BlackboardStore(issue_dir).load_or_create("pr", playbook_id="default")
+    loaded = BlackboardStore(issue_dir).load_or_create("pr", playbook_id="standard")
     contract = loaded.handoff_contract
     assert contract is not None
     assert contract.to_step == "develop"
@@ -90,7 +90,7 @@ def test_align_pr_baton_noop_when_status_not_needs_changes(tmp_path: Path) -> No
     )
 
     store = BlackboardStore(issue_dir)
-    state = store.load_or_create("pr", playbook_id="default")
+    state = store.load_or_create("pr", playbook_id="standard")
 
     align_pr_baton_after_execution(
         issue_dir=issue_dir,
@@ -100,6 +100,6 @@ def test_align_pr_baton_noop_when_status_not_needs_changes(tmp_path: Path) -> No
         status_code="confirmed",
     )
 
-    loaded = BlackboardStore(issue_dir).load_or_create("pr", playbook_id="default")
+    loaded = BlackboardStore(issue_dir).load_or_create("pr", playbook_id="standard")
     assert loaded.handoff_contract is not None
     assert loaded.handoff_contract.to_step == "pr"

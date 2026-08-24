@@ -296,7 +296,7 @@ def test_command_completion_uses_the_same_policy_and_declared_destination(tmp_pa
     """A JSON response advances only through its policy's permitted continuation."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     store.update_handoff_contract(
         blackboard,
         from_step="spec",
@@ -332,7 +332,7 @@ def test_command_completion_uses_the_same_policy_and_declared_destination(tmp_pa
     )
 
     assert result.target == "plan"
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert reloaded.current_step == "plan"
     assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
     assert reloaded.handoff_contract.to_step == "plan"
@@ -342,7 +342,7 @@ def test_command_completion_binds_the_current_durable_task_before_routing(tmp_pa
     """IT-003: command input cannot bypass the active task/wait correlation."""
     issue_dir = tmp_path / ".cafe" / "issues" / "durable-command"
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -406,7 +406,7 @@ def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path
 
     issue_dir = tmp_path / ".cafe" / "issues" / "local-review"
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("pr", playbook_id="default")
+    blackboard = store.load_or_create("pr", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     playbook = {
         "steps": {
@@ -454,7 +454,7 @@ def test_feedback_delivery_approval_does_not_record_optional_feedback(tmp_path: 
 
     issue_dir = tmp_path / ".cafe" / "issues" / "local-review-approval"
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("pr", playbook_id="default")
+    blackboard = store.load_or_create("pr", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     playbook = {
         "steps": {
@@ -497,7 +497,7 @@ def test_cross_step_revision_feedback_is_written_for_the_selected_target(tmp_pat
     """Feedback follows a cross-step revision route instead of staying at the review step."""
     issue_dir = tmp_path / ".cafe" / "issues" / "cross-step-revision"
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -554,7 +554,7 @@ def test_cross_step_revision_feedback_reuses_unfinished_target_iteration(tmp_pat
         json.dumps({"iteration": 1, "step_name": "develop"}), encoding="utf-8"
     )
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -611,7 +611,7 @@ def test_cross_step_revision_feedback_replaces_pending_input_without_state(
     target_iteration.mkdir(parents=True)
     (target_iteration / "user_input.md").write_text("Old feedback", encoding="utf-8")
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     playbook = {
         "steps": {
             "spec": {
@@ -708,7 +708,7 @@ workflow:
     invalid_packet = tmp_path / "invalid-knowledge.md"
     invalid_packet.write_text("# Missing spec packet\n", encoding="utf-8")
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("review", playbook_id="default")
+    blackboard = store.load_or_create("review", playbook_id="standard")
     blackboard.artifacts["knowledge"] = ArtifactEntry(
         name="knowledge",
         kind=ArtifactKind.DOCUMENT,
@@ -819,7 +819,7 @@ workflow:
     invalid_packet.write_text("# Missing packet\n", encoding="utf-8")
     issue_dir = tmp_path / ".cafe" / "issues" / "reasoned-approval"
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("review", playbook_id="default")
+    blackboard = store.load_or_create("review", playbook_id="standard")
     blackboard.artifacts["spec"] = ArtifactEntry(
         name="spec",
         kind=ArtifactKind.DOCUMENT,
@@ -877,7 +877,7 @@ def test_confirmation_does_not_overwrite_unfinished_producer_input(tmp_path: Pat
     original_input = producer_iteration / "user_input.md"
     original_input.write_text("Original requirements", encoding="utf-8")
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     playbook = {
         "steps": {
             "spec": {
@@ -926,7 +926,7 @@ def test_dynamic_xml_questions_reject_incomplete_command_answers(tmp_path: Path)
         encoding="utf-8",
     )
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,

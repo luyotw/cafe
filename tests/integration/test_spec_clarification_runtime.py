@@ -14,7 +14,7 @@ from cafe.playbooks.loader import PlaybookLoader
 
 
 def _load_default_playbook() -> dict:
-    return PlaybookLoader().load("default")
+    return PlaybookLoader().load("standard")
 
 
 def _run_until_settled(

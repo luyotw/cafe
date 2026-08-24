@@ -1,7 +1,7 @@
 ---
 name: cafe-develop
 description: "依計畫進行程式開發與測試"
-version: 1.7.0
+version: 1.8.0
 workflow:
   execution_profile:
     workload: implementation
@@ -53,10 +53,10 @@ workflow:
         - when: {feedback: true}
           mode: packet
           contract_kind: plan
-    - artifacts: [review_feedback, pr_result]
+    - artifacts: [qa_feedback, review_feedback, pr_result]
       placeholder: feedback_file_path
       required: false
-    - artifacts: [review_feedback, pr_result]
+    - artifacts: [qa_feedback, review_feedback, pr_result]
       placeholder: feedback_file
       required: false
     - artifacts: [workflow_feedback]

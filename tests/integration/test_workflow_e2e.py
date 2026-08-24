@@ -429,9 +429,9 @@ def test_default_requested_changes_follow_declared_loop_without_publish_authorit
     from cafe.ui.human_tasks import apply_human_task_payload
 
     issue_dir = tmp_path / ".cafe" / "issues" / "default-correction"
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     store = BlackboardStore(issue_dir)
-    state = store.load_or_create("pr", playbook_id="default")
+    state = store.load_or_create("pr", playbook_id="standard")
     store.set_current_step(state, "user")
     store.update_handoff_contract(
         state,
@@ -506,7 +506,7 @@ def test_default_parity_and_metadata_absent_lifecycle_boundary(tmp_path: Path, m
     """IT-003: default completion, correction, review, and publish remain observable."""
     monkeypatch.chdir(tmp_path)
 
-    default = PlaybookLoader().load("default")
+    default = PlaybookLoader().load("standard")
     assert resolve_step_behavior(default, "pr").publish_confirmation is True
     assert resolve_step_behavior(default, "review").runtime_tool_grants == [
         "web_research",
@@ -569,7 +569,7 @@ def test_default_parity_and_metadata_absent_lifecycle_boundary(tmp_path: Path, m
 
 def _load_default_playbook() -> dict:
     """載入真實 default playbook。"""
-    return PlaybookLoader().load("default")
+    return PlaybookLoader().load("standard")
 
 
 def _run_until_settled(
@@ -1155,7 +1155,7 @@ class TestUserHandoff:
             git.get_current_branch.return_value = "issue-cli-resume"
             mock_git_cls.return_value = git
 
-            result = cli_runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+            result = cli_runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
         assert result.exit_code == 0, result.output
         # spec 應被呼叫兩次（第一次暫停，第二次完成）
@@ -1183,7 +1183,7 @@ class TestNextStepLifecycle:
             json.dumps(
                 {
                     "schema_version": 1,
-                    "playbook_id": "default",
+                    "playbook_id": "standard",
                     "current_step": "spec",
                     "artifacts": {},
                     "events": [],
@@ -1224,7 +1224,7 @@ class TestNextStepLifecycle:
             git.has_uncommitted_changes.return_value = False
             mock_git_cls.return_value = git
 
-            result = cli_runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+            result = cli_runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
         assert result.exit_code == 0, result.output
         assert next_step_path.exists()

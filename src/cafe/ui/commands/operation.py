@@ -50,7 +50,7 @@ def run(
         "--iteration-dir",
         help="Current step iteration directory",
     ),
-    playbook: str = typer.Option("default", "--playbook", help="Playbook name"),
+    playbook: str = typer.Option("standard", "--playbook", help="Playbook name"),
     cwd: Optional[Path] = typer.Option(None, "--cwd", help="Working directory for the command"),
     readable_root: Optional[list[Path]] = typer.Option(None, "--readable-root", help="Readable sandbox root; repeat as needed"),
     writable_root: Optional[list[Path]] = typer.Option(None, "--writable-root", help="Writable sandbox root; repeat as needed"),
@@ -122,7 +122,7 @@ def status(
         "--iteration-dir",
         help="Current step iteration directory",
     ),
-    playbook: str = typer.Option("default", "--playbook", help="Playbook name"),
+    playbook: str = typer.Option("standard", "--playbook", help="Playbook name"),
 ) -> None:
     """Inspect the existing operation without launching phase work again."""
     operation = get_operation_status(

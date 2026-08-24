@@ -206,14 +206,14 @@ class TestLoadHandoffContractBatonRejected:
 def test_blackboard_load_or_create_persists_current_step_and_playbook(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-1"
     store = BlackboardStore(issue_dir)
-    state = store.load_or_create("spec", playbook_id="default")
+    state = store.load_or_create("spec", playbook_id="standard")
     assert state.current_step == "spec"
-    assert state.playbook_id == "default"
+    assert state.playbook_id == "standard"
 
     store.set_current_step(state, "plan")
-    loaded = store.load_or_create("spec", playbook_id="default")
+    loaded = store.load_or_create("spec", playbook_id="standard")
     assert loaded.current_step == "plan"
-    assert loaded.playbook_id == "default"
+    assert loaded.playbook_id == "standard"
 
 
 def test_blackboard_migrates_a_legacy_state_to_a_stable_workflow_id(tmp_path: Path) -> None:
@@ -221,11 +221,11 @@ def test_blackboard_migrates_a_legacy_state_to_a_stable_workflow_id(tmp_path: Pa
     issue_dir = tmp_path / ".cafe" / "issues" / "legacy"
     issue_dir.mkdir(parents=True)
     (issue_dir / "blackboard.json").write_text(
-        json.dumps({"schema_version": 1, "current_step": "user", "playbook_id": "default"}),
+        json.dumps({"schema_version": 1, "current_step": "user", "playbook_id": "standard"}),
         encoding="utf-8",
     )
 
-    state = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    state = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
     persisted = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
 
     assert state.workflow_id
@@ -437,7 +437,7 @@ def test_blackboard_from_dict_ignores_legacy_top_level_owner() -> None:
     base: dict = {
         "schema_version": 1,
         "current_step": "plan",
-        "playbook_id": "default",
+        "playbook_id": "standard",
         "artifacts": {},
         "events": [],
         "decisions": [],
@@ -461,7 +461,7 @@ def test_blackboard_from_dict_ignores_legacy_owner_without_contract() -> None:
     base: dict = {
         "schema_version": 1,
         "current_step": "plan",
-        "playbook_id": "default",
+        "playbook_id": "standard",
         "artifacts": {},
         "events": [],
         "decisions": [],
@@ -480,7 +480,7 @@ def test_blackboard_from_dict_ignores_legacy_owner_without_contract() -> None:
 def test_blackboard_saved_json_has_no_top_level_owner(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-owner-omit"
     store = BlackboardStore(issue_dir)
-    state = store.load_or_create("spec", playbook_id="default")
+    state = store.load_or_create("spec", playbook_id="standard")
     store.set_current_step(state, "plan")
 
     raw = json.loads(store.file_path.read_text(encoding="utf-8"))

@@ -377,7 +377,7 @@ skill 文件內不要假設只有某一條 playbook 會用它。
 
 ## 14. Plan → Execute phase pair 的 artifact contract
 
-當一個 phase 負責確認解法、下一個 phase 負責實作時，預設沿用 default playbook 的 `plan` → `develop` contract。這是 artifact 與 ownership convention，不限軟體開發；影片後製、資料處理、內容生產等 domain 也一樣。
+當一個 phase 負責確認解法、下一個 phase 負責實作時，預設沿用 standard playbook 的 `plan` → `develop` contract。這是 artifact 與 ownership convention，不限軟體開發；影片後製、資料處理、內容生產等 domain 也一樣。
 
 ### Playbook binding
 

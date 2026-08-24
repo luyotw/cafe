@@ -52,7 +52,7 @@ documents:
 
 mandate:
   preset: technical-led
-  playbook_id: default
+  playbook_id: standard
   axes:
     product_scope:
       level: escalate
@@ -71,7 +71,7 @@ mandate:
 # Optional and protected. Include only after an explicit user request.
 # issues:
 #   issue301:
-#     playbook_id: default
+#     playbook_id: standard
 #     axes:
 #       product_scope: {level: escalate}
 #       technical: {level: agent}

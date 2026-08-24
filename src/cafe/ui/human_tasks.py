@@ -359,7 +359,7 @@ def _apply_human_task_payload(
     if durable_result is not None:
         assert durable_task is not None
         blackboard = store.load_or_create(
-            from_step, playbook_id=getattr(blackboard, "playbook_id", "default")
+            from_step, playbook_id=getattr(blackboard, "playbook_id", "standard")
         )
         if blackboard.current_step != "user":
             rejection = HumanTaskRejection(

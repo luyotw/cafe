@@ -327,12 +327,12 @@ commands:
         assert result.exit_code == 1
         assert "Failed to load playbook" in result.stdout
 
-    @pytest.mark.parametrize("playbook_id", ["default", "hotfix"])
+    @pytest.mark.parametrize("playbook_id", ["standard", "hotfix"])
     def test_builtin_playbooks_non_interactive_defaults(
         self, playbook_id, temp_repo_dir, mock_git_ops
     ):
         """Integration — built-in playbooks keep non-interactive default parity."""
-        if playbook_id != "default":
+        if playbook_id != "standard":
             _write_config_with_playbook(temp_repo_dir, playbook_id)
 
         result = runner.invoke(

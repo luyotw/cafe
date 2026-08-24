@@ -16,7 +16,8 @@ def test_playbook_list_includes_builtin_entries(tmp_path: Path, monkeypatch) -> 
     result = runner.invoke(app, ["playbook", "list"])
 
     assert result.exit_code == 0
-    assert "default" in result.stdout
+    assert "standard" in result.stdout
+    assert "default" not in result.stdout
     assert "hotfix" in result.stdout
     assert "simple" in result.stdout
     assert "editorial" in result.stdout
@@ -56,7 +57,7 @@ def test_playbook_confirmation_gates_are_derived_from_confirm_output(
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
-    default_result = runner.invoke(app, ["playbook", "confirmation-gates", "default"])
+    default_result = runner.invoke(app, ["playbook", "confirmation-gates", "standard"])
     research_result = runner.invoke(app, ["playbook", "confirmation-gates", "research"])
 
     assert default_result.exit_code == 0

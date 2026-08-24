@@ -445,7 +445,7 @@ class GenericWorkflowStepExecutor(Phase):
                 # erase the operation's trust record.
                 refreshed = BlackboardStore(self.issue_dir).load_or_create(
                     step_name,
-                    playbook_id=str(self.playbook.get("playbook", {}).get("id", "default")),
+                    playbook_id=str(self.playbook.get("playbook", {}).get("id", "standard")),
                     tolerate_invalid_baton=True,
                 )
                 blackboard_state.__dict__.update(refreshed.__dict__)

@@ -65,7 +65,7 @@ def _setup_interrupted_step(issue_dir: Path, step: str = "develop") -> None:
             {
                 "schema_version": 1,
                 "current_step": step,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "artifacts": {},
                 "events": [
                     {

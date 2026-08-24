@@ -1,5 +1,5 @@
 playbook:
-  id: default
+  id: standard
   name: "Standard Development Workflow"
   conversation_locale: en-US
 

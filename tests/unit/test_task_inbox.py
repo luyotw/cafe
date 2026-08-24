@@ -15,10 +15,10 @@ from cafe.core.task_inbox import TaskInboxError, TaskInboxService
 def _issue(cafe_dir: Path, name: str, workflow_id: str) -> Path:
     issue_dir = cafe_dir / "issues" / name
     issue_dir.mkdir(parents=True)
-    blackboard = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
     blackboard.workflow_id = workflow_id
     BlackboardStore(issue_dir).save(blackboard)
-    (issue_dir / "issue.yaml").write_text("playbook: default\n", encoding="utf-8")
+    (issue_dir / "issue.yaml").write_text("playbook: standard\n", encoding="utf-8")
     return issue_dir
 
 

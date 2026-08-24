@@ -278,7 +278,7 @@ steps:
                 {
                     "schema_version": 1,
                     "current_step": "review",
-                    "playbook_id": "default",
+                    "playbook_id": "standard",
                     "artifacts": {},
                     "events": [],
                     "decisions": [],

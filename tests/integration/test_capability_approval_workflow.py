@@ -69,13 +69,13 @@ def test_approve_restart_and_duplicate_resume_execute_exact_request_once(
     issue_dir = tmp_path / ".cafe" / "issues" / "approval"
     iteration_dir = issue_dir / "develop" / "iteration_001"
     iteration_dir.mkdir(parents=True)
-    (issue_dir / "issue.yaml").write_text("playbook: default\n", encoding="utf-8")
+    (issue_dir / "issue.yaml").write_text("playbook: standard\n", encoding="utf-8")
     output_file = iteration_dir / "output.md"
     output_file.write_text("# Output\n", encoding="utf-8")
     request_file = iteration_dir / "capability_request.json"
     request_file.write_text(json.dumps(_request()), encoding="utf-8")
     blackboards = BlackboardStore(issue_dir)
-    state = blackboards.load_or_create("develop", playbook_id="default")
+    state = blackboards.load_or_create("develop", playbook_id="standard")
     phase = SimpleNamespace(
         issue_dir=issue_dir,
         iteration=1,
@@ -155,8 +155,8 @@ def test_malformed_and_mismatched_cli_decisions_leave_request_blocked(
     issue_dir = tmp_path / ".cafe" / "issues" / "blocked"
     iteration_dir = issue_dir / "develop" / "iteration_001"
     iteration_dir.mkdir(parents=True)
-    (issue_dir / "issue.yaml").write_text("playbook: default\n", encoding="utf-8")
-    state = BlackboardStore(issue_dir).load_or_create("develop", playbook_id="default")
+    (issue_dir / "issue.yaml").write_text("playbook: standard\n", encoding="utf-8")
+    state = BlackboardStore(issue_dir).load_or_create("develop", playbook_id="standard")
     service = CapabilityApprovalService(
         issue_dir=issue_dir,
         workflow_id=state.workflow_id,
@@ -258,7 +258,7 @@ def test_hook_honors_request_declared_approval_expiry(
     issue_dir = tmp_path / ".cafe" / "issues" / "expired-hook"
     iteration_dir = issue_dir / "develop" / "iteration_001"
     iteration_dir.mkdir(parents=True)
-    (issue_dir / "issue.yaml").write_text("playbook: default\n", encoding="utf-8")
+    (issue_dir / "issue.yaml").write_text("playbook: standard\n", encoding="utf-8")
     request_file = iteration_dir / "capability_request.json"
     request_file.write_text(
         json.dumps({**_request(), "expires_at": "2000-01-01T00:00:00+00:00"}),
@@ -266,7 +266,7 @@ def test_hook_honors_request_declared_approval_expiry(
     )
     output_file = iteration_dir / "output.md"
     output_file.write_text("# Output\n", encoding="utf-8")
-    state = BlackboardStore(issue_dir).load_or_create("develop", playbook_id="default")
+    state = BlackboardStore(issue_dir).load_or_create("develop", playbook_id="standard")
     phase = SimpleNamespace(
         issue_dir=issue_dir,
         iteration=1,
@@ -370,12 +370,12 @@ def test_hook_policy_load_failure_terminalizes_approved_exact_request(
     issue_dir = tmp_path / ".cafe" / "issues" / "policy-unavailable"
     iteration_dir = issue_dir / "develop" / "iteration_001"
     iteration_dir.mkdir(parents=True)
-    (issue_dir / "issue.yaml").write_text("playbook: default\n", encoding="utf-8")
+    (issue_dir / "issue.yaml").write_text("playbook: standard\n", encoding="utf-8")
     request_file = iteration_dir / "capability_request.json"
     request_file.write_text(json.dumps(_request()), encoding="utf-8")
     output_file = iteration_dir / "output.md"
     output_file.write_text("# Output\n", encoding="utf-8")
-    state = BlackboardStore(issue_dir).load_or_create("develop", playbook_id="default")
+    state = BlackboardStore(issue_dir).load_or_create("develop", playbook_id="standard")
     phase = SimpleNamespace(
         issue_dir=issue_dir,
         iteration=1,

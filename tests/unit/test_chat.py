@@ -615,7 +615,7 @@ def test_paused_human_task_chat_fails_closed_through_phase_loader(
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue407"
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -683,7 +683,7 @@ def test_prepare_chat_handoff_state_preserves_user_clarification_baton(
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -699,8 +699,8 @@ def test_prepare_chat_handoff_state_preserves_user_clarification_baton(
 
     assert current_step == "user"
     assert "spec" in valid_steps
-    assert playbook_id == "default"
-    reloaded = store.load_or_create("user", playbook_id="default")
+    assert playbook_id == "standard"
+    reloaded = store.load_or_create("user", playbook_id="standard")
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.from_step == "spec"
     assert reloaded.handoff_contract.intent == HandoffIntent.NEED_CLARIFICATION

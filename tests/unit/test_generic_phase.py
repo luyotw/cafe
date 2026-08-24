@@ -598,17 +598,17 @@ def test_build_prompt_renders_complete_operation_helper_commands(tmp_path: Path)
             "issue_dir": str(issue_dir),
             "current_step": "develop",
             "iteration_dir": str(iteration_dir),
-            "playbook_id": "default",
+            "playbook_id": "standard",
         },
     )
 
     assert (
         f"cafe operation run --issue-dir {issue_dir} --step develop "
-        f"--iteration-dir {iteration_dir} --playbook default -- <command>"
+        f"--iteration-dir {iteration_dir} --playbook standard -- <command>"
     ) in prompt
     assert (
         f"cafe operation status --issue-dir {issue_dir} --step develop "
-        f"--iteration-dir {iteration_dir} --playbook default"
+        f"--iteration-dir {iteration_dir} --playbook standard"
     ) in prompt
     assert "cafe operation status`; " not in prompt
     assert "<issue_dir>" not in prompt

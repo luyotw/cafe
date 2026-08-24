@@ -158,17 +158,33 @@ Continue, but require my approval before changing any phase model.
 
 ### Built-in playbooks
 
-CAFE includes software-development, hotfix, TDD, research, editorial, incident,
-and simple workflows. To inspect what is available, ask your agent:
+CAFE includes explicit software-development paths for different levels of
+requirements and delivery rigor:
+
+| Playbook | Path | Use when |
+| --- | --- | --- |
+| `direct` | develop → review → PR | The requested change is already clear and still needs independent review. |
+| `simple` | spec → develop → PR | The outcome needs confirmation, but a low-risk docs, data, or config change does not need a separate plan or agent review. |
+| `standard` | spec → plan → develop → review → PR | The standard development path and built-in default. |
+| `standard-qa` | spec → plan → develop → review → QA → PR | Standard development needs independent product acceptance. |
+| `tdd` | spec → plan → TDD develop → review → PR | The implementation should follow test-driven development. |
+| `tdd-qa` | spec → plan → TDD develop → review → QA → PR | TDD also needs independent product acceptance. |
+
+`standard` replaces the former built-in `default` ID. There is no alias or
+automatic migration. `hotfix` remains available for urgent production fixes,
+and the research, editorial, and incident playbooks retain their domain-specific
+flows.
+
+To inspect what is available, ask your agent:
 
 ```text
 Show me the CAFE playbooks available in this project and explain when to use
 each one.
 ```
 
-The default software playbook separates specification, planning, development,
-review, and PR publication. Other playbooks can use different roles, artifacts,
-steps, and human gates without changing the workflow engine.
+The QA variants share one declarative QA phase. It performs observable
+acceptance checks, records reproducible failures, and returns every correction
+through development and review before QA runs again.
 
 ### Create a custom workflow with skills
 

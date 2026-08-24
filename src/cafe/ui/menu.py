@@ -417,14 +417,14 @@ class InteractiveMenu:
 
     def _get_playbook_role_names(self) -> List[str]:
         issue_name = self._detector.get_current_issue_name()
-        playbook_id = "default"
+        playbook_id = "standard"
         if issue_name:
             blackboard_file = Path(".cafe") / "issues" / issue_name / "blackboard.json"
             try:
                 data = json.loads(blackboard_file.read_text(encoding="utf-8"))
-                playbook_id = str(data.get("playbook_id") or "default")
+                playbook_id = str(data.get("playbook_id") or "standard")
             except Exception:
-                playbook_id = "default"
+                playbook_id = "standard"
 
         try:
             playbook = PlaybookLoader(project_root=Path.cwd()).load(playbook_id)
@@ -438,13 +438,13 @@ class InteractiveMenu:
     def _get_playbook_role_defaults(self, role_names: List[str]) -> Dict[str, str]:
         defaults: Dict[str, str] = {}
         issue_name = self._detector.get_current_issue_name()
-        playbook_id = "default"
+        playbook_id = "standard"
         if issue_name:
             try:
                 data = json.loads((Path(".cafe") / "issues" / issue_name / "blackboard.json").read_text(encoding="utf-8"))
-                playbook_id = str(data.get("playbook_id") or "default")
+                playbook_id = str(data.get("playbook_id") or "standard")
             except Exception:
-                playbook_id = "default"
+                playbook_id = "standard"
         try:
             playbook = PlaybookLoader(project_root=Path.cwd()).load(playbook_id)
             roles = playbook.get("roles", {})

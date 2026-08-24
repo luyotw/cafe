@@ -16,13 +16,13 @@ def test_init_creates_only_project_owned_configuration(tmp_path: Path, monkeypat
     monkeypatch.chdir(tmp_path)
     with (
         patch("cafe.ui.cli.prompt_confirm", return_value=True),
-        patch("cafe.ui.cli.prompt_list", side_effect=["default", "medium"]),
+        patch("cafe.ui.cli.prompt_list", side_effect=["standard", "medium"]),
     ):
         result = runner.invoke(app, ["init"])
 
     assert result.exit_code == 0, result.stdout
     config = yaml.safe_load((tmp_path / ".cafe" / "config.yaml").read_text())
-    assert config["settings"]["playbook"] == "default"
+    assert config["settings"]["playbook"] == "standard"
     assert not (tmp_path / ".cafe" / "phases.yaml").exists()
     assert not (tmp_path / ".cafe" / "crew.yaml").exists()
 

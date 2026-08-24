@@ -50,11 +50,11 @@ class TestSetupNonInteractiveFlags:
         _write_config(cafe_dir, _MINIMAL_CONFIG)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(app, ["setup", "--playbook", "default"])
+        result = runner.invoke(app, ["setup", "--playbook", "standard"])
 
         assert result.exit_code == 0
         cfg = _read_config(cafe_dir)
-        assert cfg["settings"]["playbook"] == "default"
+        assert cfg["settings"]["playbook"] == "standard"
 
     def test_auto_update_false_flag(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -95,11 +95,11 @@ class TestSetupNonInteractiveFlags:
         _write_config(cafe_dir, _MINIMAL_CONFIG)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(app, ["setup", "--playbook", "default", "--rigor", "medium"])
+        result = runner.invoke(app, ["setup", "--playbook", "standard", "--rigor", "medium"])
 
         assert result.exit_code == 0
         cfg = _read_config(cafe_dir)
-        assert cfg["settings"]["playbook"] == "default"
+        assert cfg["settings"]["playbook"] == "standard"
         assert cfg["settings"]["rigor"] == "medium"
 
     def test_flags_do_not_touch_crew_yaml(
@@ -111,7 +111,7 @@ class TestSetupNonInteractiveFlags:
         _write_config(cafe_dir, _MINIMAL_CONFIG)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(app, ["setup", "--playbook", "default"])
+        result = runner.invoke(app, ["setup", "--playbook", "standard"])
 
         assert result.exit_code == 0
         assert not (cafe_dir / "crew.yaml").exists()
@@ -130,7 +130,7 @@ class TestSetupNonInteractiveFlags:
         _write_config(cafe_dir, original)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(app, ["setup", "--playbook", "default"])
+        result = runner.invoke(app, ["setup", "--playbook", "standard"])
 
         assert result.exit_code == 0
         cfg = _read_config(cafe_dir)
@@ -165,7 +165,7 @@ class TestSetupInteractiveFlow:
 
         with (
             patch("cafe.ui.cli.prompt_confirm", return_value=False),  # auto_update -> False
-            patch("cafe.ui.cli.prompt_list", side_effect=["default", "medium"]),  # playbook, rigor
+            patch("cafe.ui.cli.prompt_list", side_effect=["standard", "medium"]),  # playbook, rigor
         ):
             result = runner.invoke(app, ["setup"])
 

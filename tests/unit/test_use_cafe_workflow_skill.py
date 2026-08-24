@@ -186,7 +186,7 @@ def test_kickoff_contract_formatter_lists_all_phases_and_confirmation_owners(
 version: 1
 mandate:
   preset: technical-led
-  playbook_id: default
+  playbook_id: standard
   axes:
     product_scope: {level: escalate, grounds: [roadmap, positioning]}
     technical: {level: agent, grounds: [engineering_guidelines]}
@@ -209,7 +209,7 @@ mandate:
         [
             sys.executable,
             str(script),
-            "default",
+            "standard",
             "--issue-name",
             "issue346",
             "--issue-nature",
@@ -579,7 +579,7 @@ def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
         [
             sys.executable,
             str(script),
-            "default",
+            "standard",
             "--issue-name",
             "issue346",
             "--issue-nature",
@@ -635,7 +635,7 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
             sys.executable,
             "-S",
             str(script),
-            "default",
+            "standard",
             "--issue-name",
             "issue346",
             "--issue-nature",
@@ -865,9 +865,12 @@ def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() 
     actual = {
         playbook_id: confirmation_gate_steps(loader.load_model(playbook_id).model)
         for playbook_id in (
-            "default",
+            "direct",
             "simple",
+            "standard",
+            "standard-qa",
             "tdd",
+            "tdd-qa",
             "editorial",
             "hotfix",
             "incident",
@@ -876,9 +879,12 @@ def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() 
     }
 
     assert actual == {
-        "default": ("spec", "plan"),
+        "direct": (),
         "simple": ("spec",),
+        "standard": ("spec", "plan"),
+        "standard-qa": ("spec", "plan"),
         "tdd": ("spec", "plan"),
+        "tdd-qa": ("spec", "plan"),
         "editorial": ("brief",),
         "hotfix": (),
         "incident": (),
@@ -890,9 +896,12 @@ def test_bundled_playbooks_do_not_delegate_alignment_judgment_to_core() -> None:
     loader = PlaybookLoader(project_root=PROJECT_ROOT)
 
     for playbook_id in (
-        "default",
+        "direct",
         "simple",
+        "standard",
+        "standard-qa",
         "tdd",
+        "tdd-qa",
         "editorial",
         "hotfix",
         "incident",
@@ -967,7 +976,7 @@ def test_use_cafe_workflow_prefers_user_conversation_locale() -> None:
     assert "For `auto`, infer from the user's messages using the same rules above" in normalized
     assert "explicit BCP 47 value as the fallback" in normalized
     assert "conversation_locale: zh-TW (inferred user preference from current thread)" in normalized
-    assert "conversation_locale: en-US (from playbook: default)" in normalized
+    assert "conversation_locale: en-US (from playbook: standard)" in normalized
     assert "required kickoff field, not a confirmation gate" in normalized
     assert "asking why a language was used is not an override" in normalized
     assert "Never claim this skill lacks a locale rule" in normalized

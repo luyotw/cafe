@@ -618,7 +618,18 @@ steps:
 
 @pytest.mark.parametrize(
     "playbook_id",
-    ["default", "simple", "tdd", "hotfix", "editorial", "incident", "research"],
+    [
+        "direct",
+        "simple",
+        "standard",
+        "standard-qa",
+        "tdd",
+        "tdd-qa",
+        "hotfix",
+        "editorial",
+        "incident",
+        "research",
+    ],
 )
 def test_bundled_playbooks_preserve_declared_skill_environment_parity(
     tmp_path: Path, playbook_id: str
@@ -1118,7 +1129,9 @@ steps:
         loader.load_model("intake-flow")
 
 
-@pytest.mark.parametrize("playbook_name", ["default", "simple", "tdd"])
+@pytest.mark.parametrize(
+    "playbook_name", ["standard", "standard-qa", "simple", "tdd", "tdd-qa"]
+)
 def test_builtin_entry_steps_use_declared_initial_input_resolver(
     playbook_name: str, tmp_path: Path
 ) -> None:
@@ -1846,7 +1859,8 @@ def test_builtin_catalog_includes_hotfix_and_simple() -> None:
 
     playbooks = loader.list_playbooks()
 
-    assert "default" in playbooks
+    assert "standard" in playbooks
+    assert "default" not in playbooks
     assert "hotfix" in playbooks
     assert "simple" in playbooks
     assert "editorial" in playbooks
@@ -1858,9 +1872,12 @@ def test_builtin_playbooks_declare_en_us_conversation_locale() -> None:
     loader = PlaybookLoader()
 
     for playbook_id in (
-        "default",
+        "direct",
         "simple",
+        "standard",
+        "standard-qa",
         "tdd",
+        "tdd-qa",
         "hotfix",
         "editorial",
         "incident",
@@ -1975,7 +1992,18 @@ def test_builtin_user_handoffs_resolve_nonempty_declared_policies() -> None:
     loader = PlaybookLoader()
     triggers = {"confirm_output", "need_clarification", "no_changes_needed"}
 
-    for playbook_id in ("default", "simple", "tdd", "hotfix", "editorial", "incident", "research"):
+    for playbook_id in (
+        "direct",
+        "simple",
+        "standard",
+        "standard-qa",
+        "tdd",
+        "tdd-qa",
+        "hotfix",
+        "editorial",
+        "incident",
+        "research",
+    ):
         playbook = loader.load(playbook_id)
         for step_name, step in playbook["steps"].items():
             for trigger in triggers.intersection(step.get("on", {})):
