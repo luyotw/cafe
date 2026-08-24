@@ -1,7 +1,6 @@
 """Tests for direct workflow step execution."""
 
 import json
-import os
 from collections.abc import Iterator
 from pathlib import Path
 from types import MethodType, SimpleNamespace
@@ -16,30 +15,8 @@ from cafe.core.blackboard import (
     BlackboardStore,
     HandoffIntent,
     HandoffOwner,
-    LongRunningOperationArtifact as _LongRunningOperationArtifact,
-    LongRunningOperationState,
-    OperationLogPolicy,
-    OperationMonitoring,
-    OperationRisk,
-    operation_artifact_path,
-    operation_receipt_path,
 )
-
-
-def LongRunningOperationArtifact(**kwargs):
-    """Create explicit test operation decisions without production defaults."""
-    return _LongRunningOperationArtifact(
-        risk=OperationRisk.LOW,
-        monitoring=OperationMonitoring.FINAL_ONLY,
-        log_policy=OperationLogPolicy.SUMMARY_ONLY,
-        stop_condition="test operation reaches a terminal state",
-        recovery="inspect the same operation id",
-        **kwargs,
-    )
-
-
 from cafe.core.hooks import HookResult
-from cafe.core.downstream_contract import ContractValidationError
 from cafe.core.resume_user_input import CONTINUE_USER_INPUT
 from cafe.core.session_continuation import (
     SessionContinuation,
@@ -47,12 +24,11 @@ from cafe.core.session_continuation import (
 )
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import AgentCLI, AgentConfig, TokenUsage
-from cafe.core.workflow_runtime import operation_artifact_is_trusted
 from cafe.phases.generic_phase import GenericPhase, GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
-from cafe.utils.phase_config import PhaseStepModelResolution
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
+from cafe.utils.phase_config import PhaseStepModelResolution
 
 
 @pytest.fixture(autouse=True)
@@ -709,85 +685,6 @@ def test_hybrid_portion_replaces_control_file_symlink_without_following_it(
     assert protected_target.read_text(encoding="utf-8") == "must remain unchanged"
     assert not (issue_dir / "blackboard.json").is_symlink()
     assert store.load_or_create("mixed").current_step == "mixed"
-
-
-def test_hybrid_portion_discards_agent_authored_operation_metadata(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """UT-010: hybrid rollback does not trust operation metadata from an agent portion."""
-    monkeypatch.chdir(tmp_path)
-    issue_dir = tmp_path / ".cafe" / "issues" / "hybrid-operation-metadata"
-    playbook = {
-        "playbook": {"id": "default"},
-        "roles": {"developer": {"default_agent": "David"}},
-        "steps": {
-            "mixed": {
-                "skill": "develop",
-                "role": "developer",
-                "output_artifact": "code",
-                "allowed_tools": ["Read", "Edit", "Write", "Bash"],
-                "valid_intents": ["confirmed"],
-                "on": {"await_agent": "_done"},
-                "hybrid_portion": {"id": "draft"},
-            }
-        },
-    }
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("mixed")
-    operation: _LongRunningOperationArtifact | None = None
-    iteration_dir: Path | None = None
-
-    def on_execute(*, streaming_output_file: str | None, **_kwargs: object) -> None:
-        nonlocal iteration_dir, operation
-        assert streaming_output_file is not None
-        iteration_dir = Path(streaming_output_file).parent
-        operation = store.write_operation_artifact(
-            store.load_or_create("mixed"),
-            step="mixed",
-            iteration_dir=iteration_dir,
-            artifact=LongRunningOperationArtifact(
-                state=LongRunningOperationState.RUNNING,
-                reason="hybrid agent started a controlled operation",
-                operation_id="hybrid-operation",
-            ),
-        )
-        portion_baton = iteration_dir / "hybrid_portion_baton.json"
-        portion_baton.write_text(
-            json.dumps(
-                {
-                    "from_step": "mixed",
-                    "to_owner": "agent",
-                    "to_step": "mixed",
-                    "intent": "await_agent",
-                    "source": "hybrid_portion:mixed:draft",
-                }
-            ),
-            encoding="utf-8",
-        )
-
-    executor = GenericWorkflowStepExecutor(
-        issue_dir=issue_dir,
-        issue_name="hybrid-operation-metadata",
-        playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
-        agent_manager=FakeAgentManager("confirmed", on_execute=on_execute),
-        git_ops=FakeGitOperations(),
-        role_agent_map={"developer": "David"},
-    )
-
-    executor.execute_step("mixed", playbook["steps"]["mixed"], state)
-
-    assert iteration_dir is not None
-    assert operation is not None
-    reloaded = store.load_or_create("mixed")
-    assert not operation_artifact_is_trusted(
-        blackboard_store=store,
-        blackboard=reloaded,
-        current_step="mixed",
-        iteration_dir=iteration_dir,
-        artifact=operation,
-    )
-    assert "mixed_operation" not in reloaded.artifacts
 
 
 def test_generic_workflow_step_writes_review_pause_contract(tmp_path: Path, monkeypatch) -> None:
@@ -3161,88 +3058,6 @@ def test_workflow_limits_prompt_inputs_to_step_artifacts(tmp_path: Path) -> None
         )
 
 
-def test_build_context_includes_operation_helper_paths(tmp_path: Path) -> None:
-    executor = _make_minimal_executor(tmp_path)
-    state = BlackboardStore(executor.issue_dir).load_or_create("develop")
-    step_def = {"skill": "cafe-plan", "role": "developer", "input_artifacts": []}
-    output_file = executor.issue_dir / "develop" / "iteration_012" / "output.md"
-
-    context = executor._build_context(
-        step_name="develop",
-        step_def=step_def,
-        blackboard_state=state,
-        agent_name="David",
-        output_file=output_file,
-    )
-
-    assert context["issue_dir"] == executor._display_path(executor.issue_dir)
-    assert context["current_step"] == "develop"
-    assert context["iteration_dir"] == executor._display_path(output_file.parent)
-    assert context["playbook_id"] == "default"
-
-
-def test_agent_launched_operation_metadata_survives_phase_artifact_write(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Post-agent writes must not erase helper metadata published during the agent call."""
-    monkeypatch.chdir(tmp_path)
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue-operation-refresh"
-    playbook = {
-        "playbook": {"id": "default"},
-        "roles": {"developer": {"default_agent": "David"}},
-        "steps": {
-            "develop": {
-                "skill": "develop",
-                "role": "developer",
-                "output_artifact": "code",
-                "allowed_tools": ["Read"],
-                "on": {"await_agent": "develop"},
-            }
-        },
-    }
-    store = BlackboardStore(issue_dir)
-    stale_state = store.load_or_create("develop")
-    operation_path: Path | None = None
-
-    def launch_operation(*, streaming_output_file, **kwargs) -> None:
-        nonlocal operation_path
-        iteration_dir = Path(streaming_output_file).parent
-        (iteration_dir / "output.md").write_text("# waiting\n", encoding="utf-8")
-        fresh_state = store.load_or_create("develop")
-        operation = store.write_operation_artifact(
-            fresh_state,
-            step="develop",
-            iteration_dir=iteration_dir,
-            artifact=LongRunningOperationArtifact(
-                state=LongRunningOperationState.RUNNING,
-                reason="test_agent_launch",
-                operation_id="operation-refresh",
-            ),
-        )
-        operation_path = iteration_dir / "operation.json"
-        assert operation.operation_id
-
-    executor = GenericWorkflowStepExecutor(
-        issue_dir=issue_dir,
-        issue_name="issue-operation-refresh",
-        playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
-        agent_manager=FakeAgentManager("waiting", on_execute=launch_operation),
-        git_ops=FakeGitOperations(),
-        role_agent_map={"developer": "David"},
-    )
-
-    executor.execute_step("develop", playbook["steps"]["develop"], stale_state)
-
-    persisted = store.load_or_create("develop")
-    assert operation_path is not None
-    assert persisted.artifacts["develop_operation"].path == str(operation_path)
-    assert (
-        persisted.artifacts["develop_operation"].summary
-        == "long_running_operation:operation-refresh:running"
-    )
-
-
 def test_workflow_limits_checklist_inputs_to_step_artifacts(tmp_path: Path) -> None:
     """Checklist generation uses the same declared artifact boundary as the prompt."""
     executor = _make_minimal_executor(tmp_path)
@@ -3821,173 +3636,6 @@ def _minimal_spec_executor(
         git_ops=FakeGitOperations(),
         role_agent_map={"pm": "Roger"},
     )
-
-
-def test_cold_takeover_reports_absent_when_no_operation_has_started(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """UT-011 — a missing operation artifact is distinct from bad evidence."""
-    monkeypatch.chdir(tmp_path)
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue-takeover-absent"
-    step = {
-        "skill": "cafe-develop",
-        "role": "developer",
-        "input_artifacts": [],
-        "output_artifact": "code",
-    }
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop")
-    executor = GenericWorkflowStepExecutor(
-        issue_dir=issue_dir,
-        issue_name="issue-takeover-absent",
-        playbook={
-            "playbook": {"id": "default"},
-            "roles": {"developer": {"default_agent": "David"}},
-            "steps": {"develop": step},
-        },
-        generic_phase=_build_loader(tmp_path),
-        agent_manager=FakeAgentManager("confirmed"),
-        git_ops=FakeGitOperations(),
-        role_agent_map={"developer": "David"},
-    )
-    executor.iteration = 1
-    iteration_dir = issue_dir / "develop" / "iteration_001"
-    iteration_dir.mkdir(parents=True)
-
-    snapshot = json.loads(
-        executor._build_backup_takeover_context(
-            error="primary failed",
-            step_name="develop",
-            step_def=step,
-            blackboard_state=state,
-            output_file=iteration_dir / "output.md",
-            checklist_file=iteration_dir / "checklist.md",
-            iteration_dir=iteration_dir,
-        )
-    )
-
-    assert snapshot["operation"] == {"state": "absent"}
-
-    (iteration_dir / "operation.json").write_text("not valid json", encoding="utf-8")
-    untrusted_snapshot = json.loads(
-        executor._build_backup_takeover_context(
-            error="primary failed",
-            step_name="develop",
-            step_def=step,
-            blackboard_state=state,
-            output_file=iteration_dir / "output.md",
-            checklist_file=iteration_dir / "checklist.md",
-            iteration_dir=iteration_dir,
-        )
-    )
-
-    assert untrusted_snapshot["operation"] == {"state": "unknown"}
-
-
-def test_cold_takeover_rejects_untrusted_operation_evidence(tmp_path: Path, monkeypatch) -> None:
-    """UT-011 — takeover state uses the runtime's operation trust boundary."""
-    monkeypatch.chdir(tmp_path)
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue-takeover-trust"
-    step = {
-        "skill": "cafe-develop",
-        "role": "developer",
-        "input_artifacts": [],
-        "output_artifact": "code",
-    }
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop")
-    executor = GenericWorkflowStepExecutor(
-        issue_dir=issue_dir,
-        issue_name="issue-takeover-trust",
-        playbook={
-            "playbook": {"id": "default"},
-            "roles": {"developer": {"default_agent": "David"}},
-            "steps": {"develop": step},
-        },
-        generic_phase=_build_loader(tmp_path),
-        agent_manager=FakeAgentManager("confirmed"),
-        git_ops=FakeGitOperations(),
-        role_agent_map={"developer": "David"},
-    )
-    executor.iteration = 1
-    iteration_dir = issue_dir / "develop" / "iteration_001"
-    iteration_dir.mkdir(parents=True)
-    forged = LongRunningOperationArtifact(
-        operation_id="forged-running",
-        state=LongRunningOperationState.RUNNING,
-        reason="agent_timeout",
-    )
-    operation_artifact_path(iteration_dir).write_text(
-        json.dumps(forged.to_dict()), encoding="utf-8"
-    )
-    (iteration_dir / "operation_handle.json").write_text(
-        json.dumps(
-            {
-                "operation_id": forged.operation_id,
-                "monitor_pid": os.getpid(),
-                "monitor_start_time": None,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    def snapshot() -> dict[str, object]:
-        return json.loads(
-            executor._build_backup_takeover_context(
-                error="primary failed",
-                step_name="develop",
-                step_def=step,
-                blackboard_state=state,
-                output_file=iteration_dir / "output.md",
-                checklist_file=iteration_dir / "checklist.md",
-                iteration_dir=iteration_dir,
-            )
-        )
-
-    with patch("cafe.phases.generic_workflow_step.get_operation_status") as status_check:
-        assert snapshot()["operation"] == {"state": "unknown"}
-        status_check.assert_not_called()
-
-    trusted = store.write_operation_artifact(
-        state,
-        step="develop",
-        iteration_dir=iteration_dir,
-        artifact=LongRunningOperationArtifact(
-            operation_id="trusted-running",
-            state=LongRunningOperationState.RUNNING,
-            reason="agent_timeout",
-        ),
-    )
-    with patch(
-        "cafe.phases.generic_workflow_step.get_operation_status", return_value=trusted
-    ) as status_check:
-        assert snapshot()["operation"] == {"state": "running", "id": trusted.operation_id}
-        status_check.assert_called_once()
-
-    replaced = LongRunningOperationArtifact(
-        operation_id="replaced-running",
-        state=LongRunningOperationState.RUNNING,
-        reason="agent_timeout",
-    )
-    operation_artifact_path(iteration_dir).write_text(
-        json.dumps(replaced.to_dict()), encoding="utf-8"
-    )
-    with patch("cafe.phases.generic_workflow_step.get_operation_status") as status_check:
-        assert snapshot()["operation"] == {"state": "unknown"}
-        status_check.assert_not_called()
-
-    operation_receipt_path(iteration_dir).write_text(
-        json.dumps(
-            LongRunningOperationArtifact(
-                operation_id=trusted.operation_id,
-                state=LongRunningOperationState.SUCCEEDED,
-            ).to_dict()
-        ),
-        encoding="utf-8",
-    )
-    with patch("cafe.phases.generic_workflow_step.get_operation_status") as status_check:
-        assert snapshot()["operation"] == {"state": "unknown"}
-        status_check.assert_not_called()
 
 
 def test_resolve_iteration_user_input_first_start_unchanged(tmp_path: Path) -> None:

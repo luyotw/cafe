@@ -1,6 +1,9 @@
 # Changelog
 
 - Enforce explicit sandbox, user lifecycle, and registered capability boundaries for workflow-managed scripts.
+- Remove the `cafe operation` background-job abstraction; repository checks now
+  use verification receipts while hooks, lifecycle scripts, and registered
+  capabilities retain their dedicated execution boundaries.
 
 All notable changes to this project will be documented in this file.
 

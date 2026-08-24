@@ -1,8 +1,6 @@
 """Journey tests for durable CLI-attempt diagnostics."""
 
 import json
-import os
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -10,15 +8,6 @@ import pytest
 
 from cafe.agents.executor import AgentExecutionError
 from cafe.agents.manager import AgentManager
-from cafe.core.blackboard import (
-    ArtifactEntry,
-    ArtifactKind,
-    BlackboardStore,
-    OperationLogPolicy,
-    OperationMonitoring,
-    OperationRisk,
-)
-from cafe.core.long_running_operation_helper import get_operation_status, run_operation_command
 from cafe.core.types import (
     AgentCLI,
     AgentConfig,
@@ -181,157 +170,6 @@ def test_fallback_success_preserves_primary_attempts_in_iteration_record(tmp_pat
         ("claude", 2),
     ]
     assert "raw-primary-secret" not in iteration_path.read_text(encoding="utf-8")
-
-
-def test_cold_backup_chain_status_checks_a_running_operation_before_takeover(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """IT-005 — a custom workflow reuses, rather than relaunches, live work."""
-    step_name = "orbit_launch"
-    skill_name = "orbit_operator"
-    input_artifact = "mission_brief"
-    manager = AgentManager()
-    manager.register_agent(
-        AgentConfig(
-            name="David",
-            cli=AgentCLI.CLAUDE,
-            clis=[
-                CliEntry(cli=AgentCLI.CLAUDE),
-                CliEntry(cli=AgentCLI.GEMINI),
-                CliEntry(cli=AgentCLI.CODEX),
-            ],
-        )
-    )
-    executor = _build_executor(
-        tmp_path,
-        manager,
-        step_name=step_name,
-        skill_name=skill_name,
-        input_artifact=input_artifact,
-    )
-    executor.git_ops.run_git.return_value = "test-head"
-    executor.git_ops.get_status.return_value = ""
-    state = BlackboardStore(executor.issue_dir).load_or_create(step_name)
-    brief_file = tmp_path / "mission-brief.md"
-    brief_file.write_text("mission input", encoding="utf-8")
-    state.artifacts[input_artifact] = ArtifactEntry(
-        name=input_artifact,
-        kind=ArtifactKind.DOCUMENT,
-        version=1,
-        updated_by="orbit_intake",
-        path=str(brief_file),
-    )
-    iteration_dir = executor.phase_dir / "iteration_001"
-    output_file = iteration_dir / "output.md"
-    checklist_file = iteration_dir / "checklist.md"
-    release_file = tmp_path / "release-operation"
-    operation_script = tmp_path / "wait-for-release.py"
-    operation_script.write_text(
-        "from pathlib import Path\n"
-        "import sys, time\n"
-        "while not Path(sys.argv[1]).exists():\n"
-        "    time.sleep(0.01)\n",
-        encoding="utf-8",
-    )
-    sandbox_cli = tmp_path / "bin" / "codex"
-    sandbox_cli.parent.mkdir()
-    sandbox_cli.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, os, sys\n"
-        "args = sys.argv[1:]\n"
-        "if not args or args.pop(0) != 'sandbox': raise SystemExit(2)\n"
-        "state = None; network_denied = False\n"
-        "while args and args[0].startswith('--'):\n"
-        " option = args.pop(0)\n"
-        " if option == '--sandbox-state-json': state = json.loads(args.pop(0))\n"
-        " elif option == '--sandbox-state-readable-root': args.pop(0)\n"
-        " elif option == '--sandbox-state-disable-network': network_denied = True\n"
-        "if state is None or not network_denied or not args: raise SystemExit(3)\n"
-        "os.execvp(args[0], args)\n",
-        encoding="utf-8",
-    )
-    sandbox_cli.chmod(0o700)
-    monkeypatch.setenv(
-        "PATH", f"{sandbox_cli.parent}{os.pathsep}{os.environ.get('PATH', '')}"
-    )
-    launched = run_operation_command(
-        issue_dir=executor.issue_dir,
-        step=step_name,
-        iteration_dir=iteration_dir,
-        command=[sys.executable, str(operation_script), str(release_file)],
-        cwd=tmp_path,
-        playbook=executor.playbook,
-        reason="cold_backup_integration",
-        risk=OperationRisk.MEDIUM,
-        monitoring=OperationMonitoring.PERIODIC,
-        log_policy=OperationLogPolicy.INCREMENTAL_TAIL,
-        stop_condition="stop if the cold-backup fixture fails",
-        recovery="inspect the same operation id before retrying",
-    )
-    assert launched.started is True
-    primary_error = AgentExecutionError("primary rate limit", error_type="rate_limit")
-    backup_error = AgentExecutionError("backup rate limit", error_type="rate_limit")
-    prompts: list[str] = []
-
-    def snapshot(error: AgentExecutionError) -> str:
-        return executor._build_backup_takeover_context(
-            error=error,
-            step_name=step_name,
-            step_def=executor.playbook["steps"][step_name],
-            blackboard_state=state,
-            output_file=output_file,
-            checklist_file=checklist_file,
-            iteration_dir=iteration_dir,
-        )
-
-    def side_effect(prompt: str, *_args, **_kwargs):
-        prompts.append(prompt)
-        if len(prompts) == 1:
-            raise primary_error
-        if len(prompts) == 2:
-            iteration_dir.mkdir(parents=True, exist_ok=True)
-            output_file.write_text("partial output", encoding="utf-8")
-            checklist_file.write_text("[x] partial task\n", encoding="utf-8")
-            raise backup_error
-        return _success("replacement output")
-
-    try:
-        with (
-            patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect),
-            patch(
-                "cafe.phases.generic_workflow_step.get_operation_status",
-                wraps=get_operation_status,
-            ) as status_check,
-        ):
-            response, *_ = manager.execute(
-                "David",
-                "perform the workflow step",
-                phase_name=step_name,
-                backup_context_callback=snapshot,
-            )
-
-        assert status_check.call_count == 2
-    finally:
-        release_file.write_text("release", encoding="utf-8")
-
-    first_takeover = json.loads(prompts[1].split("provider-neutral):\n", 1)[1])
-    second_takeover = json.loads(prompts[2].split("provider-neutral):\n", 1)[1])
-    assert response == "replacement output"
-    assert first_takeover["reason"] != second_takeover["reason"]
-    assert first_takeover["target"]["step"] == step_name
-    assert first_takeover["resolved_inputs"][f"{input_artifact}_file"]["mode"] == "full"
-    assert first_takeover["resolved_inputs"][f"{input_artifact}_file"]["path"] == str(
-        brief_file
-    )
-    assert first_takeover["partial"]["output"]["state"] == "missing"
-    assert second_takeover["partial"]["output"]["state"] == "file"
-    assert second_takeover["partial"]["checklist"]["completed"] == 1
-    assert first_takeover["operation"] == {
-        "state": "running",
-        "id": launched.operation.operation_id,
-    }
-    assert second_takeover["operation"] == first_takeover["operation"]
 
 
 def test_all_failed_journey_persists_sanitized_history_without_raw_secrets(tmp_path: Path) -> None:

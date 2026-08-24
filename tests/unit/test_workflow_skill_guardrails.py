@@ -13,7 +13,7 @@ def test_packaged_workflow_common_uses_bounded_digest() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-workflow-common")
 
-    assert "version: 1.6.0" in text
+    assert "version: 1.7.0" in text
     assert "Bounded blackboard digest" in text
     assert "Do **not** read or print the whole file" in text
     assert '"from_step": "<current step name>"' not in text
@@ -22,12 +22,13 @@ def test_packaged_workflow_common_uses_bounded_digest() -> None:
     assert "Do not skip the blackboard read" not in text
 
 
-def test_packaged_develop_skill_has_risk_driven_operation_guidance() -> None:
+def test_packaged_develop_skill_uses_verification_guidance() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-develop")
 
-    assert "version: 1.7.1" in text
-    assert "low 使用 `final-only`／`summary-only`" in text
+    assert "version: 1.8.0" in text
+    assert "repository 定義的 verification 路徑" in text
+    assert "不要另建背景工作或輪詢機制" in text
     assert "max_read_only_commands" not in text
     assert "20 次" not in text
     assert "failing test" not in text
@@ -47,7 +48,7 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
         "cafe-spec": "1.4.0",
         "cafe-plan": "1.6.1",
         "cafe-review": "1.4.2",
-        "cafe-workflow-common": "1.6.0",
+        "cafe-workflow-common": "1.7.0",
         "use-cafe-workflow": "1.19.3",
     }
     for name, version in expected_versions.items():
