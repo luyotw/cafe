@@ -1,6 +1,7 @@
 """Journey tests for durable CLI-attempt diagnostics."""
 
 import json
+import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -184,6 +185,7 @@ def test_fallback_success_preserves_primary_attempts_in_iteration_record(tmp_pat
 
 def test_cold_backup_chain_status_checks_a_running_operation_before_takeover(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """IT-005 — a custom workflow reuses, rather than relaunches, live work."""
     step_name = "orbit_launch"
@@ -231,6 +233,27 @@ def test_cold_backup_chain_status_checks_a_running_operation_before_takeover(
         "while not Path(sys.argv[1]).exists():\n"
         "    time.sleep(0.01)\n",
         encoding="utf-8",
+    )
+    sandbox_cli = tmp_path / "bin" / "codex"
+    sandbox_cli.parent.mkdir()
+    sandbox_cli.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "args = sys.argv[1:]\n"
+        "if not args or args.pop(0) != 'sandbox': raise SystemExit(2)\n"
+        "state = None; network_denied = False\n"
+        "while args and args[0].startswith('--'):\n"
+        " option = args.pop(0)\n"
+        " if option == '--sandbox-state-json': state = json.loads(args.pop(0))\n"
+        " elif option == '--sandbox-state-readable-root': args.pop(0)\n"
+        " elif option == '--sandbox-state-disable-network': network_denied = True\n"
+        "if state is None or not network_denied or not args: raise SystemExit(3)\n"
+        "os.execvp(args[0], args)\n",
+        encoding="utf-8",
+    )
+    sandbox_cli.chmod(0o700)
+    monkeypatch.setenv(
+        "PATH", f"{sandbox_cli.parent}{os.pathsep}{os.environ.get('PATH', '')}"
     )
     launched = run_operation_command(
         issue_dir=executor.issue_dir,
