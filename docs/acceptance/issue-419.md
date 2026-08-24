@@ -2,7 +2,7 @@
 
 ## Verdict
 
-- Status: `not started`
+- Status: `failed preflight — permission and notification configuration required`
 - Acceptance subject: one disposable child clone and one real fixture issue
 - Passing rule: every required stage must pass with one unchanged continuity key.
 - Evidence rule: active issue #419 workflow artifacts, simulated boundaries, and
@@ -34,11 +34,11 @@ it is never waived or replaced with a local or synthetic boundary.
 
 | Gate | Required evidence | State | Owner | Exact next action |
 | --- | --- | --- | --- | --- |
-| Fixture issue and remote mutation | Issue URL, target remote/base, permitted harmless documentation mutation, human owner | pending | pending | Resolve an authorized existing fixture or request permission to create one. |
-| Push access | Read-only confirmation of authenticated push access to the fixture remote | pending | pending | Verify access without changing the remote. |
-| Notification channel and credential | Configured channel, credential presence without secret contents, destination, named human recipient/completer | pending | pending | Verify configuration and identify the human before cloning. |
-| Registered PR capability | Availability and authorization path for `cafe.pr.publish` | pending | pending | Verify without publishing. |
-| Host prerequisites | Python, Git, supported CLI agent, and pre-existing `cafe` state | pending | agent | Record versions and disclose pre-existing installation. |
+| Fixture issue and remote mutation | Issue URL, target remote/base, permitted harmless documentation mutation, human owner | blocked | user | Authorize a dedicated documentation-only fixture issue and its branch/PR, or explicitly decline remote mutation. Reusing active #419 is not assumed safe. |
+| Push access | Read-only confirmation of authenticated push access to the fixture remote | partial | user | GitHub CLI is authenticated as `luyotw` with `repo` scope and SSH is configured; authorize the target before any push-access probe or mutation. |
+| Notification channel and credential | Configured channel, credential presence without secret contents, destination, named human recipient/completer | failed | user | Supply an existing documented notification configuration and name its human recipient/completer. The webhook file exists, but the default playbook has no notification hook. |
+| Registered PR capability | Availability and authorization path for `cafe.pr.publish` | pass | agent | Package registration exists with GitHub destinations, `gh` credential, medium risk, and allow/not-required policy; publication remains deferred to the child PR stage. |
+| Host prerequisites | Python, Git, supported CLI agent, and pre-existing `cafe` state | pass | agent | Python 3.12.2, Git 2.43.0, Codex CLI 0.146.0, and a pre-existing `cafe` launcher at `/home/luyotw/anaconda3/bin/cafe` were recorded. The existing installation is not install-stage evidence. |
 
 ## Ordered journey ledger
 
@@ -51,7 +51,7 @@ are excluded.
 
 | Stage | Attempt | Start | End | Elapsed | Documented action | Redacted result | Status | Reason | Owner | Exact next action | Friction | Retries | Manual recovery | Evidence | Result |
 | --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: | --- | --- | --- |
-| Preflight gates | 1 | pending | pending | pending | Verify every gate before creating the clone. | pending | pending | pending | pending | Resolve all gates, then create exactly one disposable clone. | pending | 0 | none | pending | pending |
+| Preflight gates | 1 | 2026-08-24T11:03:24+08:00 | 2026-08-24T11:04:59+08:00 | 1m35s | Verify every gate before creating the clone. | GitHub repository and #419 are readable; `gh` is authenticated; package PR capability and webhook credential file exist; default playbook contains no notification hook; fixture authorization and named human are absent. | stopped | Required real boundaries are not fully authorized/configured. | user | Answer the develop HumanTask with fixture/install authorization and an existing documented notification configuration plus named completer. | Default documented workflow does not configure the available notification script. | 0 | none; clone was not created | Read-only command receipt in active develop iteration and `src/cafe/data/playbooks/default.yaml`; no active-workflow artifact counts as child evidence. | fail |
 | Clone and identity | 1 | pending | pending | pending | Create one bounded temporary root and clone the authorized remote once. | pending | pending | pending | pending | Record origin, clean state, release, base commit, root, and timing. | pending | 0 | none | pending | pending |
 | Documented install dry run | 1 | pending | pending | pending | Inspect `INSTALL.md` and `scripts/bootstrap-cafe.py`; run the documented dry run at the stable release. | pending | pending | pending | pending | Run the authorized bootstrap only if the dry run and prerequisites pass. | pending | 0 | none | pending | pending |
 | Documented install | 1 | pending | pending | pending | Run `python3 scripts/bootstrap-cafe.py --yes` at the recorded stable release. | pending | pending | pending | pending | Record version, launcher, skill sync, mutations, and return to the journey base. | pending | 0 | none | pending | pending |
@@ -103,6 +103,10 @@ must be independently acceptable and non-overlapping.
 
 No gaps recorded before execution.
 
+The missing documented notification configuration is retained as observed
+preflight friction. It becomes a follow-up issue only after the user confirms
+that no existing supported configuration was omitted from this check.
+
 <!--
 ### Gap: <title>
 
@@ -124,4 +128,4 @@ No gaps recorded before execution.
 - Child workflow terminal status: pending
 - Continuity check: pending
 - Failures retained after retry: pending
-- Overall result: `not started`
+- Overall result: `failed preflight; awaiting human decision`
