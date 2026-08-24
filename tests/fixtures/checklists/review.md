@@ -71,3 +71,7 @@
 [ ] Do NOT provide code solutions, only identify issues
 [ ] Write the next-step baton to hand off to the next workflow target; the runtime updates blackboard
 [ ] Keep the response brief; workflow transitions are controlled by the baton
+
+## Basic Principles
+
+[ ] 確認 long-running script 不會造成不可接受的系統負荷或資源放大
