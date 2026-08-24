@@ -2,7 +2,7 @@
 
 ## Verdict
 
-- Status: `failed setup retry — supervised bootstrap operation lost`
+- Status: `failed setup retry — supervised sandbox could not launch bootstrap`
 - Acceptance subject: one disposable child clone and one real fixture issue
 - Passing rule: every required stage must pass with one unchanged continuity key.
 - Evidence rule: active issue #419 workflow artifacts, simulated boundaries, and
@@ -56,6 +56,7 @@ are excluded.
 | Clone and identity | 1 | 2026-08-24T11:12:09+08:00 | 2026-08-24T11:12:11+08:00 | 2s | Create one bounded temporary root and clone the authorized remote once. | Clean HTTPS clone at `/tmp/cafe-issue419-rMixBg/cafe`; origin, `main`, initial/base commit, and stable tag all resolve to the recorded continuity values. | complete | Authorized clone and identity established. | agent | Inspect the stable release install files and run the dry run. | none | 0 | none | Git clone and identity command receipt. | pass |
 | Documented install dry run | 1 | 2026-08-24T11:12:11+08:00 | 2026-08-24T11:12:37+08:00 | 26s | Inspect `INSTALL.md` and `scripts/bootstrap-cafe.py`; run the documented dry run at the stable release. | Python 3.12.2, Git 2.43.0, Codex 0.146.0; dry run proposed a versioned environment, `~/.local/bin/cafe`, and global skill sync without system or shell-profile changes. | complete | Documented dry run passed. | agent | Run the authorized non-interactive bootstrap once. | Existing unrelated CAFE launcher was disclosed. | 0 | none | Bounded dry-run receipt. | pass |
 | Documented install | 1 | 2026-08-24T11:12:58+08:00 | 2026-08-24T11:13:04+08:00 | 6s | Run `python3 scripts/bootstrap-cafe.py --yes` at the recorded stable release under the required supervised-operation boundary. | Operation `b735688f2edd4eabb066e8c0618fff07` reported `running`, then the first status check reported `lost` / `operation_handle_missing`; no bootstrap process remained and `~/.local/bin/cafe` was absent. | stopped | The supervised operation lost its handle before producing a terminal command receipt. | user | Start a new develop iteration if a documented retry is desired; this iteration's operation contract prohibits relaunching the same command. | The documented command itself never produced an accountable result because its supervisor lost the operation. | 0 | none; no direct fallback or second launch attempted | Operation receipt and follow-up `https://github.com/luyotw/cafe/issues/422`. | fail |
+| Documented install | 2 | 2026-08-24T13:26:11.426338+08:00 | 2026-08-24T13:26:11.818356+08:00 | 0.392s | After driver-authorized recovery for issue #422, retry `python3 scripts/bootstrap-cafe.py --yes` at the same clone and release through a new supervised operation. | Operation `4d0f0debef664679abb54c8d356879a8` retained its handle and terminal receipt, but its sandbox exited 1 before bootstrap started: `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`. | stopped | The supervised sandbox cannot configure loopback in this host boundary; the bootstrap command produced no output and did not run. | user | Choose whether to repair the sandbox and authorize another supervised retry, explicitly authorize a direct documented-command recovery, or stop the failed journey. | Handle durability is fixed, but the documented install remains blocked by the supervisor's platform sandbox. | 1 | none; the failed operation was not relaunched | Iteration 003 operation receipt and bounded stderr; follow-up draft below. | fail |
 | Workflow initialization and kickoff | 1 | pending | pending | pending | Start the supported CLI agent in the same repository, submit the exact README issue request, confirm the kickoff once, and initialize CAFE. | pending | pending | pending | pending | Record generated project files, workflow identity, status, owner, and next action. | pending | 0 | none | pending | pending |
 | Spec | 1 | pending | pending | pending | Run the child spec phase through documented status and task surfaces. | pending | pending | pending | pending | Follow the reported next action without repeating completed work. | pending | 0 | none | pending | pending |
 | Plan | 1 | pending | pending | pending | Run the child plan phase through documented status and task surfaces. | pending | pending | pending | pending | Follow the reported next action without repeating completed work. | pending | 0 | none | pending | pending |
@@ -141,6 +142,33 @@ must be independently acceptable and non-overlapping.
   architecture.
 - Filed issue URL: https://github.com/luyotw/cafe/issues/423
 
+### Gap: Supervised sandbox cannot launch on a host that denies loopback setup
+
+- Evidence and failed invariant: operation `4d0f0debef664679abb54c8d356879a8`
+  retained a durable handle but exited before bootstrap with `bwrap: loopback:
+  Failed RTM_NEWADDR: Operation not permitted`.
+- User-visible impact: the required supervised boundary cannot run the
+  documented bootstrap on this host, even though the bootstrap inputs and
+  writable roots are authorized.
+- Recovery and whether it was documented: no recovery was attempted; this
+  operation's contract prohibits relaunch, and a direct launch requires an
+  explicit human decision and remains a recorded manual recovery.
+- Goal: let a supervised command start with an accountable isolation mode when
+  the host denies bubblewrap loopback configuration.
+- Depends on: supervised-operation sandbox launch and host capability probing.
+- Scope boundary: preflight detection and an explicit supported launch outcome
+  for this one denied loopback capability.
+- Non-goals: weakening arbitrary command isolation, changing bootstrap, adding
+  a daemon, or silently falling back to unsandboxed execution.
+- Minimum sufficient correction: detect the denied operation before reporting
+  the child command as started and return an actionable supported outcome, or
+  select an already-declared compatible isolation mode.
+- Functional Definition of Done: on a host where `RTM_NEWADDR` is denied, a
+  supervised documented command either runs through a declared compatible
+  boundary or fails preflight with an actionable reason before claiming it
+  started.
+- Filed issue URL or explicit permission failure: pending authorization.
+
 <!--
 ### Gap: <title>
 
@@ -162,4 +190,4 @@ must be independently acceptable and non-overlapping.
 - Child workflow terminal status: pending
 - Continuity check: pending
 - Failures retained after retry: pending
-- Overall result: `failed setup retry; awaiting a fresh develop iteration for an accountable bootstrap retry`
+- Overall result: `failed setup retry; awaiting a human recovery decision after the supervised sandbox launch failure`
