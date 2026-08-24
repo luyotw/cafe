@@ -24,6 +24,7 @@ from cafe.skills.loader import SkillLoader
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "checklists"
 DEVELOP_BASIC_PRINCIPLES = load_skill_reference("cafe-develop", "basic_principles.md")
+REVIEW_BASIC_PRINCIPLES = load_skill_reference("cafe-review", "basic_principles.md")
 
 REQUIRED_SKILL_REFERENCES = {
     "spec_first": [
@@ -185,6 +186,7 @@ GOLDEN_RUNNERS = {
         base_branch="develop",
         checklist_file_path=path,
         plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
+        basic_principles=REVIEW_BASIC_PRINCIPLES,
     ),
     "review_pr_todo": lambda path: generate_review_checklist(
         agent_name="Alice",
@@ -194,6 +196,7 @@ GOLDEN_RUNNERS = {
         checklist_file_path=path,
         plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
         pr_todo_list_file_path=".cafe/issues/test/pr/iteration_001/output.md",
+        basic_principles=REVIEW_BASIC_PRINCIPLES,
     ),
     "pr_iter1": lambda path: generate_pr_checklist(
         agent_name="Nick",

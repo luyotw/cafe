@@ -10,14 +10,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from cafe.core.packet_io import atomic_write_bytes
 from cafe.core.workflow_models import BatonRejected
 
 BLACKBOARD_FILENAME = "blackboard.json"
 BLACKBOARD_SCHEMA_VERSION = 3
 NEXT_STEP_FILENAME = "next_step.txt"
 HANDOFF_CONTRACT_VERSION = 1
-OPERATION_ARTIFACT_FILENAME = "operation.json"
-OPERATION_RECEIPT_FILENAME = "operation_receipt.json"
 
 
 def _now_iso() -> str:
@@ -61,205 +60,6 @@ class HandoffIntent(str, Enum):
     NO_CHANGES_NEEDED = "no_changes_needed"
     MANUAL_HANDOFF = "manual_handoff"
     WORKFLOW_COMPLETE = "workflow_complete"
-
-
-class LongRunningOperationState(str, Enum):
-    """Strict four-state model for a long-running phase operation.
-
-    Exactly these four values are accepted. Unknown values are schema
-    errors; there are no aliases or fallback names.
-    """
-
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    LOST = "lost"
-
-
-class OperationRisk(str, Enum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-
-
-class OperationMonitoring(str, Enum):
-    FINAL_ONLY = "final-only"
-    PERIODIC = "periodic"
-    ACTIVE = "active"
-
-
-class OperationLogPolicy(str, Enum):
-    SUMMARY_ONLY = "summary-only"
-    INCREMENTAL_TAIL = "incremental-tail"
-    FILTERED_STREAM = "filtered-stream"
-
-
-def operation_artifact_path(iteration_dir: Path) -> Path:
-    """Fixed one-per-iteration path: ``iteration_dir/operation.json``."""
-    return Path(iteration_dir) / OPERATION_ARTIFACT_FILENAME
-
-
-def operation_receipt_path(iteration_dir: Path) -> Path:
-    """Fixed terminal receipt path for one long-running operation."""
-    return Path(iteration_dir) / OPERATION_RECEIPT_FILENAME
-
-
-@dataclass
-class LongRunningOperationArtifact:
-    """Durable record of one long-running phase operation.
-
-    ``reason`` and ``exit_code`` are explanatory only; they never change
-    which of the four states is in effect.
-    """
-
-    state: LongRunningOperationState
-    risk: OperationRisk
-    monitoring: OperationMonitoring
-    log_policy: OperationLogPolicy
-    stop_condition: str
-    recovery: str
-    execution_class: str = "sandbox"
-    trust_source: str = "workflow"
-    effective_boundary: Dict[str, Any] = field(default_factory=dict)
-    correlation_id: str = field(default_factory=lambda: uuid.uuid4().hex[:20])
-    command_fingerprint: str = ""
-    reason: str = ""
-    exit_code: Optional[int] = None
-    operation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
-    created_at: str = field(default_factory=_now_iso)
-    updated_at: str = field(default_factory=_now_iso)
-
-    def __post_init__(self) -> None:
-        if self.execution_class != "sandbox" or self.trust_source != "workflow":
-            raise ValueError("long-running operations require sandbox workflow trust")
-        validate_operation_decision(
-            risk=self.risk,
-            monitoring=self.monitoring,
-            log_policy=self.log_policy,
-            stop_condition=self.stop_condition,
-            recovery=self.recovery,
-        )
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "operation_id": self.operation_id,
-            "state": self.state.value,
-            "reason": self.reason,
-            "exit_code": self.exit_code,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-            "risk": self.risk.value,
-            "monitoring": self.monitoring.value,
-            "log_policy": self.log_policy.value,
-            "stop_condition": self.stop_condition,
-            "recovery": self.recovery,
-            "execution_class": self.execution_class,
-            "trust_source": self.trust_source,
-            "effective_boundary": self.effective_boundary,
-            "correlation_id": self.correlation_id,
-            "command_fingerprint": self.command_fingerprint,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "LongRunningOperationArtifact":
-        if not isinstance(data, dict):
-            raise ValueError("operation.json must be a JSON object")
-        if "state" not in data:
-            raise ValueError("operation.json is missing required field 'state'")
-        if "operation_id" not in data:
-            raise ValueError("operation.json is missing required field 'operation_id'")
-        operation_id = str(data["operation_id"]).strip()
-        if not operation_id:
-            raise ValueError("operation.json operation_id must be non-empty")
-
-        # Direct enum construction only: no alias map, no migration fallback.
-        try:
-            state = LongRunningOperationState(str(data["state"]))
-        except ValueError as exc:
-            raise ValueError(
-                f"operation.json state has unsupported value {data['state']!r}"
-            ) from exc
-
-        raw_exit_code = data.get("exit_code")
-        exit_code: Optional[int]
-        if raw_exit_code is None:
-            exit_code = None
-        elif isinstance(raw_exit_code, bool):
-            raise ValueError(f"operation.json exit_code must be an integer, got {raw_exit_code!r}")
-        elif isinstance(raw_exit_code, int):
-            exit_code = raw_exit_code
-        else:
-            raise ValueError(f"operation.json exit_code must be an integer, got {raw_exit_code!r}")
-
-        artifact = cls(
-            state=state,
-            reason=str(data.get("reason", "")),
-            exit_code=exit_code,
-            operation_id=operation_id,
-            created_at=str(data.get("created_at", _now_iso())),
-            updated_at=str(data.get("updated_at", _now_iso())),
-            risk=_strict_operation_value(data, "risk", OperationRisk),
-            monitoring=_strict_operation_value(data, "monitoring", OperationMonitoring),
-            log_policy=_strict_operation_value(data, "log_policy", OperationLogPolicy),
-            stop_condition=_required_operation_text(data.get("stop_condition"), "stop_condition"),
-            recovery=_required_operation_text(data.get("recovery"), "recovery"),
-            execution_class=str(data.get("execution_class", "sandbox")),
-            trust_source=str(data.get("trust_source", "workflow")),
-            effective_boundary=dict(data.get("effective_boundary") or {}),
-            correlation_id=str(data.get("correlation_id") or data["operation_id"]),
-            command_fingerprint=str(data.get("command_fingerprint") or ""),
-        )
-        validate_operation_decision(
-            risk=artifact.risk,
-            monitoring=artifact.monitoring,
-            log_policy=artifact.log_policy,
-            stop_condition=artifact.stop_condition,
-            recovery=artifact.recovery,
-        )
-        return artifact
-
-
-def _strict_operation_value(data: Dict[str, Any], field_name: str, enum: Any) -> Any:
-    if field_name not in data:
-        raise ValueError(f"operation.json is missing required field {field_name!r}")
-    value = data[field_name]
-    try:
-        return enum(str(value))
-    except ValueError as exc:
-        raise ValueError(f"operation.json {field_name} has unsupported value {value!r}") from exc
-
-
-def _bounded_operation_text(value: Any, field_name: str) -> str:
-    if not isinstance(value, str) or len(value) > 240:
-        raise ValueError(f"operation.json {field_name} must be bounded text")
-    return value
-
-
-def _required_operation_text(value: Any, field_name: str) -> str:
-    text = _bounded_operation_text(value, field_name)
-    if not text.strip():
-        raise ValueError(f"operation.json {field_name} must be non-empty")
-    return text
-
-
-def validate_operation_decision(
-    *,
-    risk: OperationRisk,
-    monitoring: OperationMonitoring,
-    log_policy: OperationLogPolicy,
-    stop_condition: str,
-    recovery: str,
-) -> None:
-    """Validate an agent-owned risk decision before an operation is claimed."""
-    expected = {
-        OperationRisk.LOW: (OperationMonitoring.FINAL_ONLY, OperationLogPolicy.SUMMARY_ONLY),
-        OperationRisk.MEDIUM: (OperationMonitoring.PERIODIC, OperationLogPolicy.INCREMENTAL_TAIL),
-        OperationRisk.HIGH: (OperationMonitoring.ACTIVE, OperationLogPolicy.FILTERED_STREAM),
-    }[risk]
-    if (monitoring, log_policy) != expected:
-        raise ValueError(f"operation decision monitoring/log_policy must match risk={risk.value}")
-    _required_operation_text(stop_condition, "stop_condition")
-    _required_operation_text(recovery, "recovery")
 
 
 @dataclass
@@ -693,9 +493,9 @@ class BlackboardStore:
     def save(self, state: BlackboardState) -> None:
         self.issue_dir.mkdir(parents=True, exist_ok=True)
         state.updated_at = _now_iso()
-        self.file_path.write_text(
-            json.dumps(state.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        atomic_write_bytes(
+            self.file_path,
+            json.dumps(state.to_dict(), ensure_ascii=False, indent=2).encode("utf-8"),
         )
 
     def ensure_baton(
@@ -883,132 +683,6 @@ class BlackboardStore:
     def put_artifact(self, state: BlackboardState, entry: ArtifactEntry) -> None:
         state.artifacts[entry.name] = entry
         self.save(state)
-
-    def read_operation_artifact(
-        self, iteration_dir: Path
-    ) -> Optional[LongRunningOperationArtifact]:
-        """Read the fixed one-per-iteration operation artifact, if any.
-
-        Raises ``ValueError``/``json.JSONDecodeError`` when the artifact
-        exists but fails schema validation; callers must treat that as a
-        schema error rather than silently defaulting to a state.
-        """
-        path = operation_artifact_path(iteration_dir)
-        if not path.exists():
-            return None
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        return LongRunningOperationArtifact.from_dict(raw)
-
-    def write_operation_artifact(
-        self,
-        state: BlackboardState,
-        *,
-        step: str,
-        iteration_dir: Path,
-        artifact: LongRunningOperationArtifact,
-    ) -> LongRunningOperationArtifact:
-        """Persist the operation artifact and publish it as blackboard metadata.
-
-        Reuses existing metadata-artifact and event helpers; this does not
-        introduce a new ``BlackboardState`` collection or job queue.
-        """
-        path = operation_artifact_path(iteration_dir)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(artifact.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-        artifact_name = f"{step}_operation"
-        previous = state.artifacts.get(artifact_name)
-        version = previous.version + 1 if previous else 1
-        self.put_artifact(
-            state,
-            ArtifactEntry(
-                name=artifact_name,
-                kind=ArtifactKind.METADATA,
-                version=version,
-                updated_by=step,
-                path=str(path),
-                summary=(f"long_running_operation:{artifact.operation_id}:{artifact.state.value}"),
-            ),
-        )
-        self.record_event(
-            state,
-            "long_running_operation",
-            {
-                "step": step,
-                "state": artifact.state.value,
-                "operation_id": artifact.operation_id,
-                "reason": artifact.reason,
-                "exit_code": artifact.exit_code,
-                "path": str(path),
-            },
-        )
-        return artifact
-
-    def read_operation_receipt(self, iteration_dir: Path) -> Optional[LongRunningOperationArtifact]:
-        path = operation_receipt_path(iteration_dir)
-        if not path.exists():
-            return None
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-            return LongRunningOperationArtifact.from_dict(raw)
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise ValueError(f"{path.name} schema invalid: {exc}") from exc
-
-    def write_operation_receipt(
-        self,
-        state: BlackboardState,
-        *,
-        step: str,
-        iteration_dir: Path,
-        operation_id: str,
-        artifact: LongRunningOperationArtifact,
-    ) -> LongRunningOperationArtifact:
-        """Persist a controlled terminal receipt for an existing operation."""
-        if artifact.state == LongRunningOperationState.RUNNING:
-            raise ValueError("operation receipt must be terminal")
-        if artifact.operation_id != operation_id:
-            raise ValueError("operation receipt operation_id mismatch")
-
-        path = operation_receipt_path(iteration_dir)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(artifact.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-        artifact_name = f"{step}_operation_receipt"
-        previous = state.artifacts.get(artifact_name)
-        version = previous.version + 1 if previous else 1
-        self.put_artifact(
-            state,
-            ArtifactEntry(
-                name=artifact_name,
-                kind=ArtifactKind.METADATA,
-                version=version,
-                updated_by=step,
-                path=str(path),
-                summary=(
-                    f"long_running_operation_receipt:{artifact.operation_id}:"
-                    f"{artifact.state.value}"
-                ),
-            ),
-        )
-        self.record_event(
-            state,
-            "long_running_operation_receipt",
-            {
-                "step": step,
-                "state": artifact.state.value,
-                "operation_id": artifact.operation_id,
-                "reason": artifact.reason,
-                "exit_code": artifact.exit_code,
-                "path": str(path),
-            },
-        )
-        return artifact
 
     def append_capability_receipt(self, state: BlackboardState, receipt: Dict[str, Any]) -> None:
         """Append one structured host capability receipt and persist the blackboard."""

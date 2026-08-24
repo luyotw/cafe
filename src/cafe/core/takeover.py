@@ -33,14 +33,9 @@ def build_takeover_snapshot(
     resolved_inputs: Mapping[str, Mapping[str, str]],
     output_file: str | Path,
     checklist_file: str | Path,
-    operation: Mapping[str, Any] | None = None,
     workspace: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create durable metadata only; never read session logs or file bodies."""
-    status = "absent"
-    if operation:
-        candidate = operation.get("state")
-        status = str(candidate) if candidate in {"running", "terminal", "unknown"} else "unknown"
     checklist = file_metadata(checklist_file)
     if checklist.get("state") == "file":
         checklist.update(_checklist_progress(checklist_file))
@@ -51,5 +46,4 @@ def build_takeover_snapshot(
         "resolved_inputs": {key: {"mode": value.get("mode", "full"), "path": value.get("path", "")} for key, value in sorted(resolved_inputs.items())},
         "workspace": dict(workspace or {}),
         "partial": {"output": file_metadata(output_file), "checklist": checklist},
-        "operation": {"state": status, **({"id": str(operation.get("id", ""))} if operation and operation.get("id") else {})},
     }

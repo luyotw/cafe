@@ -530,8 +530,9 @@ def test_prepare_skill_installs_skill_and_returns_cli_invocation(tmp_path: Path)
     assert (project_root / ".codex" / "skills" / "cafe-plan" / "SKILL.md").exists()
 
 
-def test_packaged_develop_instruction_declares_all_monitoring_journeys(tmp_path: Path) -> None:
-    """IT-006: the installed agent instruction owns each monitoring intensity."""
+def test_packaged_develop_instruction_uses_verification_without_background_jobs(
+    tmp_path: Path,
+) -> None:
     project_root = tmp_path / "project"
     project_root.mkdir()
     loader = SkillLoader(
@@ -550,10 +551,8 @@ def test_packaged_develop_instruction_declares_all_monitoring_journeys(tmp_path:
     instruction = (project_root / ".codex/skills/cafe-develop/SKILL.md").read_text(
         encoding="utf-8"
     )
-    assert "low 使用 `final-only`／`summary-only`" in instruction
-    assert "medium 使用 `periodic`／`incremental-tail`" in instruction
-    assert "high 使用 `active`／`filtered-stream`" in instruction
-    assert "同一 operation ID 檢查，不得重新啟動" in instruction
+    assert "repository 定義的 verification 路徑" in instruction
+    assert "不要另建背景工作或輪詢機制" in instruction
 
 
 def test_prepare_skill_renders_iteration_context_without_mutating_source(
@@ -586,7 +585,7 @@ def test_prepare_skill_renders_iteration_context_without_mutating_source(
     assert source_file.read_text(encoding="utf-8") == source_before
 
 
-def test_build_prompt_renders_complete_operation_helper_commands(tmp_path: Path) -> None:
+def test_build_prompt_does_not_advertise_removed_operation_commands(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     issue_dir = tmp_path / ".cafe" / "issues" / "issue386"
     iteration_dir = issue_dir / "develop" / "iteration_012"
@@ -598,21 +597,11 @@ def test_build_prompt_renders_complete_operation_helper_commands(tmp_path: Path)
             "issue_dir": str(issue_dir),
             "current_step": "develop",
             "iteration_dir": str(iteration_dir),
-            "playbook_id": "standard",
+            "playbook_id": "default",
         },
     )
 
-    assert (
-        f"cafe operation run --issue-dir {issue_dir} --step develop "
-        f"--iteration-dir {iteration_dir} --playbook standard -- <command>"
-    ) in prompt
-    assert (
-        f"cafe operation status --issue-dir {issue_dir} --step develop "
-        f"--iteration-dir {iteration_dir} --playbook standard"
-    ) in prompt
-    assert "cafe operation status`; " not in prompt
-    assert "<issue_dir>" not in prompt
-    assert "<iteration_dir>" not in prompt
+    assert "cafe operation" not in prompt
 
 
 def test_prepare_skill_omits_declared_optional_prompt_reference_when_input_is_absent(

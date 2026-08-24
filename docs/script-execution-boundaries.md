@@ -6,7 +6,6 @@ Every workflow-managed script launch is classified before path resolution. Unkno
 | --- | --- | --- | --- | --- | --- | --- |
 | Skill and phase script hooks | sandbox | workflow declaration | constructed allowlist; no credentials | denied unless sandbox policy declares it | workflow cwd; declared roots | execution receipt |
 | Permission retry | sandbox | agent permission boundary | constructed allowlist; no credentials | sandbox policy only | original sandbox roots | execution receipt |
-| Long-running operation child | sandbox | workflow operation request | constructed allowlist; no credentials | sandbox policy only | issue workspace; declared roots | every terminal receipt includes correlation, requested-command fingerprint, and effective boundary |
 | Prepare/close lifecycle script | lifecycle | user-owned canonical declaration | constructed allowlist; no credentials | denied | declared cwd and local write roots | declaration identity and execution receipt |
 | Registered adapter | capability | immutable package registry | manifest grants only | manifest destinations only | manifest cwd/write effects | policy decision and capability receipt |
 | Bundled GitHub helpers | capability | immutable package registry | manifest grants only | GitHub only | declared issue artifacts | policy decision and capability receipt |
@@ -27,12 +26,11 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/core/git.py::initialize_repository` | Internal fixed Git command |
 | `src/cafe/core/git.py::is_repository` | Internal fixed Git query |
 | `src/cafe/core/git.py::run_git` | Internal fixed Git command family |
-| `src/cafe/core/long_running_operation_helper.py::_monitor` | Sandbox operation adapter |
-| `src/cafe/core/long_running_operation_helper.py::run_operation_command` | Internal fixed monitor bootstrap |
 | `src/cafe/core/phase_review_mixin.py::_open_file_with_editor` | Explicit interactive editor |
 | `src/cafe/core/sandbox_execution.py::run` | Sandbox script adapter |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/format_kickoff_contract.py::_reexec_with_cafe_python` | Internal fixed Python re-exec |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::_cli_fingerprint` | Internal version probe |
+| `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::candidate_probe` | User-requested model availability probe |
 | `src/cafe/install/bootstrap.py::_run` | Internal installer command family |
 | `src/cafe/skills/native_bridge.py::_ensure_cli_dir_git_excluded` | Internal fixed Git command |
 | `src/cafe/ui/chat.py::launch_chat_session` | Internal agent CLI transport |

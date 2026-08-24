@@ -1,7 +1,7 @@
 ---
 name: cafe-workflow-common
 description: Use this skill at the start of any CAFE workflow phase to load the bounded workflow digest, identify the current baton state, and ground the phase in shared context before reading phase-specific artifacts.
-version: 1.6.0
+version: 1.7.0
 ---
 
 # Workflow Common
@@ -129,12 +129,6 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 - The review phase validates that evidence with `cafe verification check` and confirms the reported command is the repository-defined full suite required by the plan and test policy. A valid full receipt replaces a duplicate run of the same full suite or coverage command; it does not replace static review or requirement checks. For a concrete review risk, `cafe verification focus` accepts only a direct pytest receipt plus relative test-file or node-id selectors; it rejects shell/script runners and never replaces or edits the full receipt.
 - A missing, failed, stale, wrong-scope, or dirty-worktree receipt is not reusable. Review routes the exact problem back to develop instead of creating or repairing develop evidence itself.
 - Develop may run targeted tests and failing full attempts while changing code. It creates the reusable final full receipt only after all tracked changes are committed. If that run fails, fix and commit before replacing the receipt; after a passing receipt, do not change HEAD or tracked files.
-
-## Risk-driven operation decisions
-
-- Before launching a long-running operation, the agent records `risk`, `monitoring`, `log_policy`, a stop condition, and recovery guidance in the existing operation artifact.
-- Use `low` / `final-only` / `summary-only` for local checks, `medium` / `periodic` / `incremental-tail` for replayable integration work, and `high` / `active` / `filtered-stream` for difficult-to-reverse work.
-- Runtime commands only persist and inspect this decision. They do not schedule polling, choose when to read logs, or relaunch an existing operation.
 
 ## What Not To Do
 - Do not re-explain the shared workflow model in every phase artifact.

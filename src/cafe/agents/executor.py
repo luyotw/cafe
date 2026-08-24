@@ -1253,9 +1253,7 @@ class AgentExecutor:
                     combined_output,
                 )
 
-                # Preserve the executor-local timeout classification for
-                # reporting. A durable operation can only originate from an
-                # explicit, pre-launch operation decision.
+                # Preserve the executor-local timeout classification for reporting.
                 if error_type is None and (idle_timeout_triggered or post_output_timeout_triggered):
                     error_type = "timeout"
                     display_message = (

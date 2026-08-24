@@ -33,7 +33,6 @@ from cafe.core.delta_packet import (
     persist_delta_packet,
 )
 from cafe.core.git import GitOperations
-from cafe.core.long_running_operation_helper import get_operation_status
 from cafe.core.phase import Phase
 from cafe.core.playbook import resolve_playbook_skills, resolve_step_behavior
 from cafe.core.resume_user_input import (
@@ -57,10 +56,6 @@ from cafe.core.status_codes import (
 from cafe.core.takeover import build_takeover_snapshot
 from cafe.core.types import AgentCLI
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
-from cafe.core.workflow_runtime import (
-    operation_artifact_is_trusted,
-    operation_receipt_is_trusted,
-)
 from cafe.phases.generic_phase import GenericPhase
 from cafe.skills.checklist_composer import compose_declared_checklist
 from cafe.skills.contracts import (
@@ -405,50 +400,35 @@ class GenericWorkflowStepExecutor(Phase):
                 if self._is_baton_retry_user_input(resolved_user_input)
                 else allowed_tools
             )
-            try:
-
-                def execute_agent() -> tuple[str, Optional[PhaseStatusCode]]:
-                    return self._execute_agent_iteration(
-                        agent_name=agent_name,
-                        prompt=prompt,
-                        user_input=resolved_user_input,
-                        valid_intents=valid_intents,
-                        require_status_code=False,
-                        persist_status=False,
-                        allowed_tools=attempt_allowed_tools,
-                        phase_specific_data=phase_specific_data,
-                        backup_context_callback=lambda error: self._build_backup_takeover_context(
-                            error=error,
-                            step_name=step_name,
-                            step_def=step_def,
-                            blackboard_state=blackboard_state,
-                            output_file=output_file,
-                            checklist_file=checklist_file,
-                            iteration_dir=iteration_dir,
-                        ),
-                    )
-
-                if is_hybrid_portion:
-                    response, _ = self._preserve_hybrid_control_files(
-                        execute_agent,
+            def execute_agent() -> tuple[str, Optional[PhaseStatusCode]]:
+                return self._execute_agent_iteration(
+                    agent_name=agent_name,
+                    prompt=prompt,
+                    user_input=resolved_user_input,
+                    valid_intents=valid_intents,
+                    require_status_code=False,
+                    persist_status=False,
+                    allowed_tools=attempt_allowed_tools,
+                    phase_specific_data=phase_specific_data,
+                    backup_context_callback=lambda error: self._build_backup_takeover_context(
+                        error=error,
                         step_name=step_name,
+                        step_def=step_def,
+                        blackboard_state=blackboard_state,
+                        output_file=output_file,
+                        checklist_file=checklist_file,
                         iteration_dir=iteration_dir,
-                    )
-                else:
-                    response, _ = execute_agent()
-            finally:
-                # A phase agent can launch a controlled long-running operation,
-                # whose helper publishes runtime-owned metadata while this
-                # executor still holds the blackboard snapshot from before the
-                # agent call. Refresh that shared object before after-execute
-                # hooks or artifact writes can persist the stale snapshot and
-                # erase the operation's trust record.
-                refreshed = BlackboardStore(self.issue_dir).load_or_create(
-                    step_name,
-                    playbook_id=str(self.playbook.get("playbook", {}).get("id", "standard")),
-                    tolerate_invalid_baton=True,
+                    ),
                 )
-                blackboard_state.__dict__.update(refreshed.__dict__)
+
+            if is_hybrid_portion:
+                response, _ = self._preserve_hybrid_control_files(
+                    execute_agent,
+                    step_name=step_name,
+                    iteration_dir=iteration_dir,
+                )
+            else:
+                response, _ = execute_agent()
             return response
 
         execution = self.generic_phase.execute(
@@ -679,46 +659,6 @@ class GenericWorkflowStepExecutor(Phase):
         except Exception:
             workspace["state"] = "unknown"
 
-        operation: dict[str, Any] | None = None
-        operation_store = BlackboardStore(self.issue_dir)
-        try:
-            stored_operation = operation_store.read_operation_artifact(iteration_dir)
-            if stored_operation is not None:
-                current_blackboard = operation_store.load_or_create(step_name)
-                if not operation_artifact_is_trusted(
-                    blackboard_store=operation_store,
-                    blackboard=current_blackboard,
-                    current_step=step_name,
-                    iteration_dir=iteration_dir,
-                    artifact=stored_operation,
-                ):
-                    operation = {"state": "unknown"}
-                else:
-                    receipt = operation_store.read_operation_receipt(iteration_dir)
-                    if receipt is not None and not operation_receipt_is_trusted(
-                        blackboard_store=operation_store,
-                        blackboard=current_blackboard,
-                        current_step=step_name,
-                        iteration_dir=iteration_dir,
-                        operation=stored_operation,
-                        receipt=receipt,
-                    ):
-                        operation = {"state": "unknown"}
-                    else:
-                        current = get_operation_status(
-                            issue_dir=self.issue_dir,
-                            step=step_name,
-                            iteration_dir=iteration_dir,
-                            playbook=self.playbook,
-                        )
-                        operation = {
-                            "state": "running" if current.state.value == "running" else "terminal",
-                            "id": current.operation_id,
-                        }
-        except (OSError, ValueError, json.JSONDecodeError):
-            # Unknown operation evidence is unsafe to treat as absent: a cold
-            # backup must status-check rather than risk relaunching it.
-            operation = {"state": "unknown"}
         snapshot = build_takeover_snapshot(
             reason=error,
             step=step_name,
@@ -726,7 +666,6 @@ class GenericWorkflowStepExecutor(Phase):
             resolved_inputs=resolved_inputs,
             output_file=output_file,
             checklist_file=checklist_file,
-            operation=operation,
             workspace=workspace,
         )
         return json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))

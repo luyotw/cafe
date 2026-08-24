@@ -11,12 +11,10 @@ def test_takeover_is_bounded_and_does_not_preserve_session_secrets(tmp_path: Pat
         resolved_inputs={"source": {"mode": "packet", "path": "context.json"}},
         output_file=tmp_path / "output.md",
         checklist_file=tmp_path / "checklist.md",
-        operation={"state": "running", "id": "operation-1", "session_id": "must-not-leak"},
         workspace={"head": "abc", "changed": ["src/file.py"]},
     )
 
     assert snapshot["reason"] == "api_key=[redacted] provider failed"
-    assert snapshot["operation"] == {"state": "running", "id": "operation-1"}
     assert "session" not in str(snapshot)
 
 
@@ -35,7 +33,6 @@ def test_takeover_reuses_the_standard_diagnostic_redaction_and_reports_progress(
         resolved_inputs={},
         output_file=output,
         checklist_file=checklist,
-        operation={"state": "unknown"},
     )
 
     assert snapshot["reason"] == sanitize_failure_reason(
@@ -43,4 +40,3 @@ def test_takeover_reuses_the_standard_diagnostic_redaction_and_reports_progress(
     )
     assert snapshot["partial"]["checklist"]["completed"] == 1
     assert snapshot["partial"]["checklist"]["pending"] == 1
-    assert snapshot["operation"] == {"state": "unknown"}

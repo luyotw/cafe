@@ -9,7 +9,7 @@ from cafe.core.execution_boundary import (
     ScriptLaunchRequest,
     TrustSource,
 )
-from cafe.core.sandbox_execution import SandboxExecutor, sandbox_command
+from cafe.core.sandbox_execution import SandboxExecutor, preflight_sandbox, sandbox_command
 
 
 def _request(tmp_path: Path) -> ScriptLaunchRequest:
@@ -77,3 +77,33 @@ def test_sandbox_backend_fails_closed_when_unavailable(tmp_path: Path) -> None:
     assert result.receipt.outcome == "denied"
     assert result.receipt.canonical_identity
     assert result.returncode is None
+
+
+def test_sandbox_preflight_classifies_user_namespace_denial(tmp_path: Path) -> None:
+    def run(command, **_kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            "",
+            "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n",
+        )
+
+    result = preflight_sandbox(_request(tmp_path).boundary, runner=run)
+
+    assert result.available is False
+    assert result.reason == "sandbox_user_namespace_unavailable"
+    assert "AppArmor profile" in result.guidance
+
+
+def test_sandbox_preflight_accepts_the_exact_boundary(tmp_path: Path) -> None:
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    result = preflight_sandbox(_request(tmp_path).boundary, runner=run)
+
+    assert result.available is True
+    assert calls[0][0][-1] == "/bin/true"
+    assert calls[0][1]["cwd"] == str(tmp_path.resolve())

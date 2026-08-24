@@ -24,10 +24,6 @@ from cafe.core.blackboard import (
     HandoffContract,
     HandoffIntent,
     HandoffOwner,
-    LongRunningOperationArtifact,
-    LongRunningOperationState,
-    operation_artifact_path,
-    operation_receipt_path,
 )
 from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
 from cafe.core.human_task_records import HumanTaskRecordStore
@@ -86,58 +82,12 @@ class HandoffReconciliationResult:
     iteration_dir: Optional[Path] = None
     missing_evidence: list[str] = field(default_factory=list)
     validated_evidence: list[str] = field(default_factory=list)
-    operation: Optional[LongRunningOperationArtifact] = None
-    operation_schema_invalid: bool = False
-    operation_untrusted: bool = False
 
 
 @dataclass
 class RuntimePositionResolution:
     current_step: str
     realignment_result: Optional[PlaybookRunResult] = None
-
-
-def operation_artifact_is_trusted(
-    *,
-    blackboard_store: BlackboardStore,
-    blackboard: Any,
-    current_step: str,
-    iteration_dir: Path,
-    artifact: LongRunningOperationArtifact,
-) -> bool:
-    """Return whether operation state has matching runtime-owned evidence."""
-    entry = blackboard_store.get_artifact(blackboard, f"{current_step}_operation")
-    if entry is None:
-        return False
-    expected_summary = f"long_running_operation:{artifact.operation_id}:{artifact.state.value}"
-    if entry.summary != expected_summary:
-        return False
-    return Path(entry.path) == operation_artifact_path(iteration_dir)
-
-
-def operation_receipt_is_trusted(
-    *,
-    blackboard_store: BlackboardStore,
-    blackboard: Any,
-    current_step: str,
-    iteration_dir: Path,
-    operation: LongRunningOperationArtifact,
-    receipt: LongRunningOperationArtifact,
-) -> bool:
-    """Return whether terminal receipt state has matching runtime-owned evidence."""
-    if receipt.state == LongRunningOperationState.RUNNING:
-        return False
-    if receipt.operation_id != operation.operation_id:
-        return False
-    entry = blackboard_store.get_artifact(blackboard, f"{current_step}_operation_receipt")
-    if entry is None:
-        return False
-    expected_summary = (
-        f"long_running_operation_receipt:{operation.operation_id}:{receipt.state.value}"
-    )
-    if entry.summary != expected_summary:
-        return False
-    return Path(entry.path) == operation_receipt_path(iteration_dir)
 
 
 class BlackboardWorkflowRuntime:
@@ -168,7 +118,6 @@ class BlackboardWorkflowRuntime:
             playbook_id=self.playbook_id,
             tolerate_invalid_baton=True,
         )
-        self._operation_finalize_extra_prompt: Optional[str] = None
 
     def _validate_automatic_executor_declarations(self) -> None:
         """Reject unavailable automatic authority before recording a workflow visit."""
@@ -480,139 +429,6 @@ class BlackboardWorkflowRuntime:
         if to_step in self.steps or to_step in {"user", "done", "_done"}:
             return str(to_step)
         return None
-
-    def record_long_running_operation_receipt(
-        self,
-        *,
-        step: str,
-        iteration_dir: Path,
-        operation_id: str,
-        state: LongRunningOperationState,
-        reason: Optional[str] = None,
-        exit_code: Optional[int] = None,
-    ) -> LongRunningOperationArtifact:
-        """Record a controlled terminal receipt for a pending long-running operation.
-
-        This is the production runtime surface for controlled helpers that can
-        observe an out-of-band operation outcome after the original agent tool
-        window was interrupted. The receipt remains separate from
-        ``operation.json``; normal resume reconciliation decides whether and
-        when that receipt is trusted enough to promote the operation.
-        """
-        if step not in self.steps:
-            raise ValueError(f"unknown workflow step: {step}")
-        self.blackboard = self.blackboard_store.load_or_create(step)
-        current_operation = self.blackboard_store.read_operation_artifact(iteration_dir)
-        if current_operation is None:
-            raise ValueError("operation artifact is missing")
-        if current_operation.operation_id != operation_id:
-            raise ValueError("operation_id mismatch")
-        if not self._operation_artifact_trusted(
-            current_step=step, iteration_dir=iteration_dir, artifact=current_operation
-        ):
-            raise ValueError("operation artifact is not trusted")
-        receipt = LongRunningOperationArtifact(
-            operation_id=operation_id,
-            state=state,
-            reason=reason or "operation_result",
-            exit_code=exit_code,
-            created_at=current_operation.created_at,
-            risk=current_operation.risk,
-            monitoring=current_operation.monitoring,
-            log_policy=current_operation.log_policy,
-            stop_condition=current_operation.stop_condition,
-            recovery=current_operation.recovery,
-            execution_class=current_operation.execution_class,
-            trust_source=current_operation.trust_source,
-            effective_boundary=current_operation.effective_boundary,
-            correlation_id=current_operation.correlation_id,
-            command_fingerprint=current_operation.command_fingerprint,
-        )
-        return self.blackboard_store.write_operation_receipt(
-            self.blackboard,
-            step=step,
-            iteration_dir=iteration_dir,
-            operation_id=operation_id,
-            artifact=receipt,
-        )
-
-    def _reconcile_running_operation(
-        self,
-        *,
-        current_step: str,
-        iteration_dir: Path,
-        operation: LongRunningOperationArtifact,
-        other_missing: list[str],
-    ) -> tuple[LongRunningOperationArtifact, bool, bool]:
-        """The only production path that promotes ``running`` to a terminal state.
-
-        Promotion never trusts agent-authored content directly:
-
-        - ``failed`` and ``lost`` come only from a controlled terminal
-          receipt for this exact ``operation_id``.
-        - ``succeeded`` also requires that controlled receipt plus the same
-          output/checklist/baton/capability-receipt evidence already required
-          for an ordinary handoff.
-        - No elapsed-time guess promotes ``running`` to any terminal state.
-
-        All three are written through
-        ``BlackboardStore.write_operation_artifact`` -- the same trusted
-        runtime path ``_operation_artifact_trusted`` already requires -- so an
-        agent cannot forge any transition by editing ``operation.json`` or
-        the blackboard directly.
-        """
-        receipt, receipt_schema_invalid, receipt_untrusted = self._read_trusted_operation_receipt(
-            current_step=current_step,
-            iteration_dir=iteration_dir,
-            operation=operation,
-        )
-        if receipt_schema_invalid or receipt_untrusted:
-            return operation, receipt_schema_invalid, receipt_untrusted
-        if receipt is None:
-            try:
-                from cafe.core.long_running_operation_helper import get_operation_status
-
-                refreshed = get_operation_status(
-                    issue_dir=self.issue_dir,
-                    step=current_step,
-                    iteration_dir=iteration_dir,
-                    playbook=self.playbook,
-                )
-            except (ValueError, json.JSONDecodeError, OSError):
-                return operation, False, False
-            if refreshed.state == LongRunningOperationState.RUNNING:
-                return operation, False, False
-            self.blackboard = self.blackboard_store.load_or_create(current_step)
-            receipt, receipt_schema_invalid, receipt_untrusted = (
-                self._read_trusted_operation_receipt(
-                    current_step=current_step,
-                    iteration_dir=iteration_dir,
-                    operation=operation,
-                )
-            )
-            if receipt_schema_invalid or receipt_untrusted:
-                return operation, receipt_schema_invalid, receipt_untrusted
-            if receipt is None:
-                receipt = refreshed
-        promoted = LongRunningOperationArtifact(
-            operation_id=operation.operation_id,
-            state=receipt.state,
-            reason=receipt.reason,
-            exit_code=receipt.exit_code,
-            created_at=operation.created_at,
-            risk=operation.risk,
-            monitoring=operation.monitoring,
-            log_policy=operation.log_policy,
-            stop_condition=operation.stop_condition,
-            recovery=operation.recovery,
-        )
-        self.blackboard_store.write_operation_artifact(
-            self.blackboard,
-            step=current_step,
-            iteration_dir=iteration_dir,
-            artifact=promoted,
-        )
-        return promoted, False, False
 
     def _restore_interrupted_step_handoff(self, *, current_step: str, reason: str) -> None:
         """Keep the baton pinned to the interrupted step when recovery fails."""
@@ -1819,71 +1635,6 @@ class BlackboardWorkflowRuntime:
             or status_code == PhaseStatusCode.NEED_CLARIFICATION.value
         )
 
-    def _operation_artifact_trusted(
-        self, *, current_step: str, iteration_dir: Path, artifact: LongRunningOperationArtifact
-    ) -> bool:
-        """Only trust operation state that is also recorded as runtime-owned evidence.
-
-        ``operation.json`` lives in the iteration directory alongside files a
-        develop step can freely write, so its raw content alone is not
-        sufficient evidence. ``BlackboardStore.write_operation_artifact`` is
-        the only supported writer and always records a matching
-        ``{step}_operation`` metadata artifact on the blackboard in the same
-        call; requiring that record to bind this artifact's operation ID and
-        state, and point at *this* iteration's ``operation.json`` path keeps
-        an agent-authored or hand-edited file, or a stale metadata record left
-        over from an earlier iteration, from being accepted as trusted
-        operation truth.
-        """
-        return operation_artifact_is_trusted(
-            blackboard_store=self.blackboard_store,
-            blackboard=self.blackboard,
-            current_step=current_step,
-            iteration_dir=iteration_dir,
-            artifact=artifact,
-        )
-
-    def _operation_receipt_trusted(
-        self,
-        *,
-        current_step: str,
-        iteration_dir: Path,
-        operation: LongRunningOperationArtifact,
-        receipt: LongRunningOperationArtifact,
-    ) -> bool:
-        """Trust only terminal receipts written through the blackboard store."""
-        return operation_receipt_is_trusted(
-            blackboard_store=self.blackboard_store,
-            blackboard=self.blackboard,
-            current_step=current_step,
-            iteration_dir=iteration_dir,
-            operation=operation,
-            receipt=receipt,
-        )
-
-    def _read_trusted_operation_receipt(
-        self,
-        *,
-        current_step: str,
-        iteration_dir: Path,
-        operation: LongRunningOperationArtifact,
-    ) -> tuple[Optional[LongRunningOperationArtifact], bool, bool]:
-        """Read terminal receipt evidence and classify schema/trust failures."""
-        try:
-            receipt = self.blackboard_store.read_operation_receipt(iteration_dir)
-        except (ValueError, json.JSONDecodeError, OSError):
-            return None, True, False
-        if receipt is None:
-            return None, False, False
-        if not self._operation_receipt_trusted(
-            current_step=current_step,
-            iteration_dir=iteration_dir,
-            operation=operation,
-            receipt=receipt,
-        ):
-            return receipt, False, True
-        return receipt, False, False
-
     def _capability_receipt_recorded(self, capability_id: str) -> bool:
         for receipt in getattr(self.blackboard, "capability_receipts", []):
             if (
@@ -1994,76 +1745,6 @@ class BlackboardWorkflowRuntime:
                 else:
                     missing.append("questions_valid")
 
-        operation: Optional[LongRunningOperationArtifact] = None
-        operation_schema_invalid = False
-        operation_untrusted = False
-        if iteration_dir is not None:
-            try:
-                operation = self.blackboard_store.read_operation_artifact(iteration_dir)
-            except (ValueError, json.JSONDecodeError, OSError):
-                operation_schema_invalid = True
-                missing.append("operation_schema_invalid")
-
-        if operation is not None:
-            assert iteration_dir is not None
-            if not self._operation_artifact_trusted(
-                current_step=current_step, iteration_dir=iteration_dir, artifact=operation
-            ):
-                operation_untrusted = True
-                missing.append("operation_untrusted")
-            elif operation.state == LongRunningOperationState.RUNNING:
-                assert iteration_dir is not None
-                (
-                    operation,
-                    receipt_schema_invalid,
-                    receipt_untrusted,
-                ) = self._reconcile_running_operation(
-                    current_step=current_step,
-                    iteration_dir=iteration_dir,
-                    operation=operation,
-                    other_missing=list(missing),
-                )
-                if receipt_schema_invalid:
-                    operation_schema_invalid = True
-                    missing.append("operation_schema_invalid")
-                elif receipt_untrusted:
-                    operation_untrusted = True
-                    missing.append("operation_untrusted")
-                elif operation.state == LongRunningOperationState.SUCCEEDED:
-                    validated.append("operation_succeeded")
-                elif operation.state == LongRunningOperationState.FAILED:
-                    missing.append("operation_failed")
-                elif operation.state == LongRunningOperationState.LOST:
-                    missing.append("operation_lost")
-                else:
-                    missing.append("operation_running")
-            elif operation.state == LongRunningOperationState.FAILED:
-                missing.append("operation_failed")
-            elif operation.state == LongRunningOperationState.LOST:
-                missing.append("operation_lost")
-            else:
-                assert iteration_dir is not None
-                receipt, receipt_schema_invalid, receipt_untrusted = (
-                    self._read_trusted_operation_receipt(
-                        current_step=current_step,
-                        iteration_dir=iteration_dir,
-                        operation=operation,
-                    )
-                )
-                trusted_succeeded_receipt = (
-                    receipt is not None and receipt.state == LongRunningOperationState.SUCCEEDED
-                )
-                if receipt_schema_invalid:
-                    operation_schema_invalid = True
-                    missing.append("operation_schema_invalid")
-                elif receipt_untrusted:
-                    operation_untrusted = True
-                    missing.append("operation_untrusted")
-                elif trusted_succeeded_receipt:
-                    validated.append("operation_succeeded")
-                else:
-                    missing.append("operation_succeeded_receipt")
-
         return HandoffReconciliationResult(
             reconciled=not missing,
             status_code=status_code,
@@ -2071,9 +1752,6 @@ class BlackboardWorkflowRuntime:
             iteration_dir=iteration_dir,
             missing_evidence=missing,
             validated_evidence=validated,
-            operation=operation,
-            operation_schema_invalid=operation_schema_invalid,
-            operation_untrusted=operation_untrusted,
         )
 
     def _reconciliation_event_exists(
@@ -2202,207 +1880,6 @@ class BlackboardWorkflowRuntime:
             completed=False,
         )
 
-    def _pause_operation_running(
-        self,
-        *,
-        current_step: str,
-        runtime: str,
-        result: HandoffReconciliationResult,
-    ) -> PlaybookRunResult:
-        """Stay recoverable while an operation is still running; no duplicate launch."""
-        self.blackboard_store.record_event(
-            self.blackboard,
-            "operation_running",
-            {
-                "step": current_step,
-                "runtime": runtime,
-            },
-        )
-        self._restore_interrupted_step_handoff(
-            current_step=current_step, reason="operation_running"
-        )
-        return PlaybookRunResult(
-            final_step=current_step,
-            final_status_code="OPERATION_RUNNING",
-            completed=False,
-        )
-
-    def _block_operation_outcome(
-        self,
-        *,
-        current_step: str,
-        runtime: str,
-        result: HandoffReconciliationResult,
-        outcome: str,
-    ) -> PlaybookRunResult:
-        """Stop clearly and actionably for failed/lost/invalid/unverifiable operations.
-
-        Never advances as if the work succeeded and never retries automatically.
-        """
-        if outcome in {"failed", "lost"}:
-            self.blackboard_store.record_event(
-                self.blackboard,
-                f"operation_{outcome}",
-                {
-                    "step": current_step,
-                    "runtime": runtime,
-                    "missing_evidence": list(result.missing_evidence),
-                },
-            )
-        self.blackboard_store.record_event(
-            self.blackboard,
-            "operation_blocked",
-            {
-                "step": current_step,
-                "runtime": runtime,
-                "outcome": outcome,
-                "missing_evidence": list(result.missing_evidence),
-            },
-        )
-        self._restore_interrupted_step_handoff(
-            current_step=current_step,
-            reason=f"operation_{outcome}",
-        )
-        return PlaybookRunResult(
-            final_step=current_step,
-            final_status_code=f"OPERATION_{outcome.upper()}",
-            completed=False,
-        )
-
-    def _handle_operation_gate(
-        self,
-        *,
-        current_step: str,
-        runtime: str,
-        result: HandoffReconciliationResult,
-    ) -> Optional[PlaybookRunResult]:
-        """Resolve running/failed/lost/schema-invalid/unverifiable operation states.
-
-        Returns a definitive ``PlaybookRunResult`` when the workflow must stop
-        here instead of falling through to a duplicate step execution. Returns
-        ``None`` when there is no operation artifact (ordinary short-running
-        step, unaffected) or when the operation is ``succeeded`` and fully
-        verified by existing reconciliation evidence.
-        """
-        if (
-            result.operation is None
-            and not result.operation_schema_invalid
-            and not result.operation_untrusted
-        ):
-            return None
-
-        if result.operation_schema_invalid:
-            return self._block_operation_outcome(
-                current_step=current_step,
-                runtime=runtime,
-                result=result,
-                outcome="schema_invalid",
-            )
-
-        if result.operation_untrusted:
-            return self._block_operation_outcome(
-                current_step=current_step,
-                runtime=runtime,
-                result=result,
-                outcome="untrusted",
-            )
-
-        operation = result.operation
-        assert operation is not None
-        if operation.state == LongRunningOperationState.RUNNING:
-            return self._pause_operation_running(
-                current_step=current_step, runtime=runtime, result=result
-            )
-
-        if operation.state in {
-            LongRunningOperationState.FAILED,
-            LongRunningOperationState.LOST,
-        }:
-            return self._block_operation_outcome(
-                current_step=current_step,
-                runtime=runtime,
-                result=result,
-                outcome=operation.state.value,
-            )
-
-        trusted_succeeded_receipt = False
-        if result.iteration_dir is not None:
-            try:
-                receipt = self.blackboard_store.read_operation_receipt(result.iteration_dir)
-            except (ValueError, json.JSONDecodeError, OSError):
-                receipt = None
-            trusted_succeeded_receipt = (
-                receipt is not None
-                and receipt.state == LongRunningOperationState.SUCCEEDED
-                and self._operation_receipt_trusted(
-                    current_step=current_step,
-                    iteration_dir=result.iteration_dir,
-                    operation=operation,
-                    receipt=receipt,
-                )
-            )
-        if not trusted_succeeded_receipt:
-            return self._block_operation_outcome(
-                current_step=current_step,
-                runtime=runtime,
-                result=result,
-                outcome="succeeded_unverified",
-            )
-
-        # operation.state == SUCCEEDED with a trusted receipt: only execute
-        # again to finalize phase artifacts/baton, never to relaunch command
-        # work.
-        if not result.reconciled:
-            self._operation_finalize_extra_prompt = self._build_operation_finalize_prompt(
-                current_step=current_step,
-                result=result,
-                operation=operation,
-            )
-            self.blackboard_store.record_event(
-                self.blackboard,
-                "operation_finalize_required",
-                {
-                    "step": current_step,
-                    "runtime": runtime,
-                    "missing_evidence": list(result.missing_evidence),
-                },
-            )
-            return None
-        return None
-
-    @staticmethod
-    def _merge_extra_prompts(*parts: Optional[str]) -> Optional[str]:
-        present = [part.strip() for part in parts if part and part.strip()]
-        if not present:
-            return None
-        return "\n\n".join(present)
-
-    def _build_operation_finalize_prompt(
-        self,
-        *,
-        current_step: str,
-        result: HandoffReconciliationResult,
-        operation: LongRunningOperationArtifact,
-    ) -> str:
-        receipt_path: object = "operation_receipt.json"
-        if result.iteration_dir is not None:
-            receipt_path = operation_receipt_path(result.iteration_dir)
-        missing = ", ".join(result.missing_evidence) or "phase finalization"
-        return (
-            "[LONG-RUNNING OPERATION FINALIZE ONLY]\n"
-            f"Step `{current_step}` already has a trusted succeeded receipt for "
-            f"operation `{operation.operation_id}` at `{receipt_path}`.\n"
-            "Finalize the phase from the existing operation/result evidence. "
-            "Do not relaunch the command, do not start a replacement command, "
-            "and do not call `cafe operation run` again.\n"
-            f"Complete only the missing workflow evidence: {missing}."
-        )
-
-    def _consume_operation_finalize_extra_prompt(self) -> Optional[str]:
-        prompt = self._operation_finalize_extra_prompt
-        self._operation_finalize_extra_prompt = None
-        return prompt
-
     def _try_reconcile_interrupted_step(
         self,
         *,
@@ -2414,12 +1891,6 @@ class BlackboardWorkflowRuntime:
             return None
 
         result = self._validate_reconciled_handoff(current_step=current_step)
-
-        gated = self._handle_operation_gate(
-            current_step=current_step, runtime=runtime, result=result
-        )
-        if gated is not None:
-            return gated
 
         if not result.reconciled:
             self._record_reconciliation_failed(
@@ -2433,19 +1904,6 @@ class BlackboardWorkflowRuntime:
             current_step=current_step,
             runtime=runtime,
             result=result,
-        )
-
-    def _try_reconcile_operation_after_executor_return(
-        self,
-        *,
-        current_step: str,
-        runtime: str,
-    ) -> Optional[PlaybookRunResult]:
-        """Re-check operations created by a production helper during this invocation."""
-        self.blackboard = self.blackboard_store.load_or_create(current_step)
-        result = self._validate_reconciled_handoff(current_step=current_step)
-        return self._handle_operation_gate(
-            current_step=current_step, runtime=runtime, result=result
         )
 
     def _latest_unreconciled_interrupted_step(self) -> Optional[tuple[str, str]]:
@@ -2538,10 +1996,7 @@ class BlackboardWorkflowRuntime:
                         runtime=runtime_label,
                         hop_count=hop_count,
                         visit_count=visit_count,
-                        extra_prompt=self._merge_extra_prompts(
-                            self._consume_operation_finalize_extra_prompt(),
-                            _baton_retry_extra_prompt,
-                        ),
+                        extra_prompt=_baton_retry_extra_prompt,
                         same_invocation_retry=_baton_attempt > 0,
                     )
                 except StepInterrupted as si:
@@ -2816,10 +2271,7 @@ class BlackboardWorkflowRuntime:
                         hop_count=hop_count,
                         visit_count=visit_count,
                         validate_assignee_type=True,
-                        extra_prompt=self._merge_extra_prompts(
-                            self._consume_operation_finalize_extra_prompt(),
-                            _baton_retry_extra_prompt,
-                        ),
+                        extra_prompt=_baton_retry_extra_prompt,
                         same_invocation_retry=_baton_attempt > 0,
                     )
                 except StepInterrupted as si:
@@ -2916,12 +2368,6 @@ class BlackboardWorkflowRuntime:
                 post_contract.to_owner == HandoffOwner.AGENT
                 and post_contract.to_step == current_step
             ):
-                operation_result = self._try_reconcile_operation_after_executor_return(
-                    current_step=current_step,
-                    runtime=runtime_label,
-                )
-                if operation_result is not None:
-                    return operation_result
                 status_code = (
                     post_contract.status_code or f"BATON_{post_contract.intent.value.upper()}"
                 )
@@ -3025,12 +2471,6 @@ class BlackboardWorkflowRuntime:
                             status_code = "NO_STATUS_CODE"
                             last_status_code = status_code
                         else:
-                            operation_result = self._try_reconcile_operation_after_executor_return(
-                                current_step=current_step,
-                                runtime=runtime_label,
-                            )
-                            if operation_result is not None:
-                                return operation_result
                             self.blackboard_store.record_event(
                                 self.blackboard,
                                 "status_code_missing",
@@ -3041,10 +2481,7 @@ class BlackboardWorkflowRuntime:
                                 },
                             )
                             # The agent returned with neither a status code
-                            # nor a baton. This is ordinary NO_STATUS_CODE
-                            # behavior, not a long-running operation signal.
-                            # The runtime never fabricates an agent-owned
-                            # operation policy after an interruption.
+                            # nor a baton, so stop at this workflow boundary.
                             return PlaybookRunResult(
                                 final_step=current_step,
                                 final_status_code="NO_STATUS_CODE",
@@ -3206,45 +2643,7 @@ class BlackboardWorkflowRuntime:
         raise RuntimeError(f"Playbook run reached max transition limit ({max_transitions})")
 
     def _try_reconcile_current_step(self, *, current_step: str) -> Optional[PlaybookRunResult]:
-        """Re-check an existing operation for ``current_step`` before (re-)executing it.
-
-        Called from every ``run()`` path -- single-step, multi-transition,
-        and explicit ``start_step`` overrides alike -- immediately after the
-        current step is resolved and before the executor can be invoked
-        again. Without this, an explicit re-run (e.g. ``run(start_step="X")``
-        called again while step "X" still has a ``running`` operation) would
-        skip reconciliation and relaunch the agent instead of learning the
-        operation's real outcome by rechecking it. If the latest
-        unreconciled interruption belongs to this same step, reuse the same
-        reconciliation/operation-gate path the multi-transition runner uses
-        instead of re-invoking the executor unconditionally.
-        """
-        operation_iteration_dir = self._pending_operation_iteration_dir(current_step)
-        if operation_iteration_dir is not None:
-            result = self._validate_reconciled_handoff(
-                current_step=current_step,
-                iteration_dir_override=operation_iteration_dir,
-            )
-            gated = self._handle_operation_gate(
-                current_step=current_step,
-                runtime="single_step_resume",
-                result=result,
-            )
-            if gated is not None:
-                return gated
-            if not result.reconciled:
-                self._record_reconciliation_failed(
-                    current_step=current_step,
-                    runtime="single_step_resume",
-                    missing_evidence=result.missing_evidence,
-                )
-                return None
-            return self._apply_reconciled_handoff(
-                current_step=current_step,
-                runtime="single_step_resume",
-                result=result,
-            )
-
+        """Reconcile an interrupted handoff before re-executing the same step."""
         interrupted = self._latest_unreconciled_interrupted_step()
         if interrupted is None:
             return None
@@ -3256,52 +2655,6 @@ class BlackboardWorkflowRuntime:
             runtime="single_step_resume",
             reason=reason,
         )
-
-    def _pending_operation_iteration_dir(self, current_step: str) -> Optional[Path]:
-        """Return a registered operation still awaiting phase completion.
-
-        The CLI can reserve the next iteration directory before ``run()`` gets
-        a chance to reconcile a helper receipt. In that case, using only the
-        numerically latest directory hides the trusted operation from the
-        previous iteration and the finalize agent may relaunch completed work.
-
-        A later completion/reconciliation event for this step closes the
-        operation lifecycle, so old successful operations are not reused when
-        a downstream review sends the step back for unrelated corrections.
-        """
-        operation_id: Optional[str] = None
-        for event in reversed(self.blackboard.events):
-            if event.step != current_step:
-                continue
-            if event.event_type in {
-                "step_completed",
-                "single_step_completed",
-                "step_reconciled",
-            }:
-                return None
-            if event.event_type == "long_running_operation_receipt":
-                operation_id = str(event.data.get("operation_id", "")).strip() or None
-                break
-            if event.event_type == "operation_running":
-                break
-        else:
-            return None
-
-        entry = self.blackboard_store.get_artifact(self.blackboard, f"{current_step}_operation")
-        if entry is None:
-            return None
-        path = Path(entry.path)
-        if path.name != "operation.json":
-            return None
-        try:
-            operation = self.blackboard_store.read_operation_artifact(path.parent)
-        except (ValueError, json.JSONDecodeError, OSError):
-            return path.parent
-        if operation is None:
-            return None
-        if operation_id is not None and operation.operation_id != operation_id:
-            return None
-        return path.parent
 
     def _run_single_step(self, *, current_step: str) -> PlaybookRunResult:
         owned_result = self._run_non_agent_owner(
@@ -3353,12 +2706,8 @@ class BlackboardWorkflowRuntime:
                 return terminal_result
             if current_step not in self.steps:
                 raise ValueError(f"Unknown playbook step '{current_step}'")
-            # Re-check any existing operation for this step *before* writing
-            # the self-loop override baton below: the override write
-            # replaces next_step.txt, and a backgrounded agent may have
-            # already written its own real completion baton there before
-            # being interrupted. Checking first preserves that evidence for
-            # reconciliation instead of clobbering it unconditionally.
+            # Preserve a completed handoff from an interrupted executor before
+            # an explicit start-step override replaces the baton.
             reconciled = self._try_reconcile_current_step(current_step=current_step)
             if reconciled is not None:
                 return reconciled
@@ -3403,15 +2752,8 @@ class BlackboardWorkflowRuntime:
         if current_step not in self.steps:
             raise ValueError(f"Unknown playbook step '{current_step}'")
 
-        # Re-check any existing operation for the resolved step before
-        # (re-)running it, exactly like the single-step path above. This is
-        # what closes the explicit-override duplicate-launch gap: an
-        # explicit ``start_step`` override never satisfies
-        # ``_should_attempt_resume_reconciliation`` above (it only fires for
-        # ``workflow.consume_handoff``-sourced resumes), so without this
-        # call a second ``run(start_step=...)`` on a step that still has a
-        # ``running`` operation would relaunch the executor instead of
-        # learning the operation's real outcome.
+        # Preserve a completed handoff from an interrupted executor before
+        # an explicit start-step override replaces the baton.
         reconciled = self._try_reconcile_current_step(current_step=current_step)
         if reconciled is not None:
             return reconciled
