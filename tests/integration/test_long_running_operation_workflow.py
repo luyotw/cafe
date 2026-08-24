@@ -139,7 +139,7 @@ def test_real_operation_enforces_declared_sandbox_boundary(
     else:
         assert status.state is LongRunningOperationState.FAILED
         stderr = (iteration_dir / "operation.stderr.log").read_text(encoding="utf-8")
-        assert "bwrap: loopback:" in stderr
+        assert "bwrap: loopback:" in stderr or "sandbox-exec:" in stderr
         assert "Operation not permitted" in stderr
         assert not result_file.exists()
         assert not outside.exists()

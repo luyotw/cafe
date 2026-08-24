@@ -26,7 +26,7 @@ def test_packaged_develop_skill_has_risk_driven_operation_guidance() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-develop")
 
-    assert "version: 1.7.0" in text
+    assert "version: 1.8.0" in text
     assert "low 使用 `final-only`／`summary-only`" in text
     assert "max_read_only_commands" not in text
     assert "20 次" not in text

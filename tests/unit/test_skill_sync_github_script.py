@@ -69,9 +69,9 @@ def test_sync_script_skips_when_sync_disabled_without_gh(
     assert payload["reason"] == "sync_disabled"
 
 
-def test_default_playbook_leaves_confirmed_sync_to_trusted_runtime() -> None:
+def test_standard_playbooks_leave_confirmed_sync_to_trusted_runtime() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    for playbook_name in ("default", "tdd"):
+    for playbook_name in ("standard", "standard-qa", "tdd", "tdd-qa"):
         playbook_path = project_root / f"src/cafe/data/playbooks/{playbook_name}.yaml"
         data = yaml.safe_load(playbook_path.read_text(encoding="utf-8"))
         for phase in ("spec", "plan"):
@@ -83,9 +83,9 @@ def test_default_playbook_leaves_confirmed_sync_to_trusted_runtime() -> None:
             )
 
 
-def test_default_playbook_no_changes_needed_routes_to_review() -> None:
+def test_standard_playbook_no_changes_needed_routes_to_review() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    playbook_path = project_root / "src/cafe/data/playbooks/default.yaml"
+    playbook_path = project_root / "src/cafe/data/playbooks/standard.yaml"
     data = yaml.safe_load(playbook_path.read_text(encoding="utf-8"))
 
     develop_on = data["steps"]["develop"]["on"]

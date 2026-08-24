@@ -15,7 +15,7 @@ runner = CliRunner()
 
 
 def test_operation_load_playbook_uses_supported_loader_api() -> None:
-    playbook = operation_command._load_playbook("default")
+    playbook = operation_command._load_playbook("standard")
 
     assert isinstance(playbook, dict)
     assert "steps" in playbook

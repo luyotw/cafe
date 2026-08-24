@@ -127,7 +127,7 @@ def test_real_sandbox_enforces_environment_network_and_write_roots(tmp_path: Pat
         assert not outside.exists()
     else:
         assert result.receipt.outcome == "failed"
-        assert "bwrap: loopback:" in result.stderr
+        assert "bwrap: loopback:" in result.stderr or "sandbox-exec:" in result.stderr
         assert "Operation not permitted" in result.stderr
         assert not (allowed / "inside.txt").exists()
         assert not outside.exists()

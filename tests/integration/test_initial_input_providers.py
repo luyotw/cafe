@@ -338,7 +338,7 @@ def test_builtin_workflows_prepare_and_seed_their_first_spec_step(
 ) -> None:
     """I3 — the shared built-in contract preserves prepare and first-step seeding."""
     monkeypatch.chdir(tmp_path)
-    playbook_id = "default"
+    playbook_id = "standard"
     executor, manager, issue_dir, step = _prepare_builtin_issue(
         tmp_path, playbook_id=playbook_id
     )

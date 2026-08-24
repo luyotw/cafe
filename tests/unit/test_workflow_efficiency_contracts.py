@@ -54,7 +54,14 @@ def test_develop_and_review_share_machine_checked_full_test_receipt() -> None:
         "Bash(cafe verification check:*)"
     ]
 
-    for playbook_name in ("default", "hotfix", "tdd"):
+    for playbook_name in (
+        "direct",
+        "hotfix",
+        "standard",
+        "standard-qa",
+        "tdd",
+        "tdd-qa",
+    ):
         playbook = yaml.safe_load((PLAYBOOKS / f"{playbook_name}.yaml").read_text())
         assert "Bash(cafe verification check:*)" in playbook["steps"]["review"][
             "allowed_tools"

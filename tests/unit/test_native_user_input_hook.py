@@ -693,7 +693,7 @@ def test_builtin_initial_input_preserves_legacy_requirements_seed(
     """I3 — the shared built-in resolver retains the legacy initial-input experience."""
     import yaml
 
-    playbook_name = "default"
+    playbook_name = "standard"
     playbook_file = (
         Path(__file__).parents[2] / "src" / "cafe" / "data" / "playbooks" / f"{playbook_name}.yaml"
     )
@@ -725,7 +725,7 @@ def test_builtin_initial_input_seeds_empty_legacy_requirements_non_interactively
     """I3 — the shared built-in resolver retains the empty legacy requirements seed."""
     import yaml
 
-    playbook_name = "default"
+    playbook_name = "standard"
     playbook_file = (
         Path(__file__).parents[2] / "src" / "cafe" / "data" / "playbooks" / f"{playbook_name}.yaml"
     )
@@ -757,7 +757,7 @@ def test_builtin_initial_input_reuses_legacy_github_ui_and_formatter(tmp_path: P
     """I3 — generic built-in resolution keeps the established GitHub interaction."""
     import yaml
 
-    playbook_file = Path(__file__).parents[2] / "src/cafe/data/playbooks/default.yaml"
+    playbook_file = Path(__file__).parents[2] / "src/cafe/data/playbooks/standard.yaml"
     step_def = yaml.safe_load(playbook_file.read_text(encoding="utf-8"))["steps"]["spec"]
     phase = _FakePhase(phase_dir=tmp_path / "spec", iteration=1)
     output_file = phase._get_iteration_dir(1) / "output.md"
