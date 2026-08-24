@@ -3,8 +3,13 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from cafe.core.hooks.native import NoChangesNeededHandler, UserInputCollector
+from cafe.core.hooks.native import (
+    InitialInputProviderResolver,
+    NoChangesNeededHandler,
+    UserInputCollector,
+)
 from cafe.core.status_codes import PhaseStatusCode
+from cafe.playbooks.loader import PlaybookLoader
 
 
 def _no_change_step_def() -> dict:
@@ -86,6 +91,38 @@ def test_no_changes_handler_pauses_when_reasoning_present(tmp_path: Path, monkey
     assert result.retry_requested is False
     assert result.continue_pipeline is False
     assert result.override_status_code == PhaseStatusCode.NO_CHANGES_NEEDED
+
+
+def test_direct_initial_input_does_not_count_as_no_change_reasoning(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase = _FakeDevelopStep(issue_dir, iteration=1, interactive=False)
+    output_file = phase._get_iteration_dir(1) / "output.md"
+    step_def = PlaybookLoader().load("direct", strict=True)["steps"]["develop"]
+
+    initial = InitialInputProviderResolver().run(
+        stage="prepare_input",
+        phase=phase,
+        step_name="develop",
+        step_def=step_def,
+        output_file=output_file,
+        context={"user_input": "Implement the reviewed direct workflow."},
+    )
+    no_change = NoChangesNeededHandler().run(
+        stage="after_execute",
+        step_name="develop",
+        step_def=step_def,
+        response="no_changes_needed",
+        context={"output_file": str(output_file)},
+    )
+
+    assert initial.context_updates == {
+        "user_input": "Implement the reviewed direct workflow."
+    }
+    assert not output_file.exists()
+    assert no_change.retry_requested is True
 
 
 @patch("cafe.ui.inquirer_prompts.prompt_list", return_value="agree")
