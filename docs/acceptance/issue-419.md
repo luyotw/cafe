@@ -140,6 +140,8 @@ must be independently acceptable and non-overlapping.
   both copying the hook and direct invocation are explicitly forbidden.
 - Goal: provide one documented supported notification configuration for the
   default workflow without project-local copying or direct script invocation.
+- Depends on: the #419 clean-repository acceptance evidence and the delivered
+  HumanTask, ownership, and task-inbox foundations in #396, #397, and #398.
 - Non-goals: direct webhook calls, secret copying, or a generic notification
   architecture.
 - Filed issue URL: https://github.com/luyotw/cafe/issues/423
