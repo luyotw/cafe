@@ -1494,6 +1494,56 @@ def test_generic_workflow_step_writes_pr_publish_request_contract(
     assert publish_request["credentials"] == ["gh"]
 
 
+def test_remote_pr_git_history_uses_fetched_remote_base(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-remote-history"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "base_branch: develop\npr:\n  auto_create: true\n",
+        encoding="utf-8",
+    )
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "pr": {
+                "skill": "pr",
+                "role": "developer",
+                "behavior": {
+                    "completion": "baton",
+                    "context_providers": ["git_history"],
+                },
+                "output_artifact": "pr",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("pr")
+    git_ops = MagicMock()
+    git_ops.ensure_remote_base_ancestor.return_value = "origin/develop"
+    git_ops.get_commits_between.return_value = "abc123 direct bootstrap"
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-remote-history",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed"),
+        git_ops=git_ops,
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("pr", playbook["steps"]["pr"], state)
+
+    git_ops.ensure_remote_base_ancestor.assert_called_once_with("develop", "HEAD")
+    git_ops.get_commits_between.assert_called_once_with(
+        base="origin/develop",
+        head="HEAD",
+    )
+
+
 def test_generic_workflow_step_writes_exact_current_pr_browser_request(
     tmp_path: Path,
     monkeypatch,

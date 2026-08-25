@@ -802,6 +802,26 @@ def prepare(
         if use_worktree:
             config_data["worktree_path"] = worktree_path
 
+        # Remote PRs are reviewed against the remote base, so do not start from
+        # a local base that is already behind or diverged. A local base that is
+        # merely ahead is safe and its extra commits will be included in the PR.
+        if pr_config.get("auto_create") is True:
+            try:
+                remote_base = git_ops.ensure_remote_base_ancestor(
+                    base_branch,
+                    base_branch,
+                )
+            except Exception as exc:
+                console.print(
+                    f"[red]Error: Cannot safely prepare an automatic PR: {exc}[/red]"
+                )
+                console.print(
+                    "[yellow]Update the local base branch explicitly, then run "
+                    "cafe prepare again.[/yellow]"
+                )
+                raise typer.Exit(1)
+            console.print(f"[dim]Verified PR base against {remote_base}.[/dim]")
+
         # 10. Perform Git operations (before writing config)
         if use_worktree:
             # Worktree mode - check if worktree already exists

@@ -429,6 +429,42 @@ class GitOperations:
         """
         return self.run_git("log", "--oneline", f"{base}..{head}")
 
+    def is_ancestor(self, ancestor: str, descendant: str) -> bool:
+        """Return whether ``ancestor`` is contained in ``descendant`` history."""
+        try:
+            self.run_git("merge-base", "--is-ancestor", ancestor, descendant)
+        except GitError:
+            return False
+        return True
+
+    def ensure_remote_base_ancestor(
+        self,
+        base_branch: str,
+        head_ref: str,
+        *,
+        remote: str = "origin",
+    ) -> str:
+        """Fetch a PR base and require the candidate history to contain it.
+
+        A local base may be ahead of its remote counterpart. A behind or
+        diverged base is unsafe because the eventual PR range would differ
+        from the range CAFE reviewed.
+        """
+        remote_ref = f"{remote}/{base_branch}"
+        self.run_git(
+            "fetch",
+            "--no-tags",
+            remote,
+            f"+refs/heads/{base_branch}:refs/remotes/{remote}/{base_branch}",
+        )
+        if not self.is_ancestor(remote_ref, head_ref):
+            raise GitError(
+                f"Remote base {remote_ref} is not contained in {head_ref}. "
+                f"Merge or rebase {remote_ref} into {head_ref}, resolve any conflicts, "
+                "then retry."
+            )
+        return remote_ref
+
     def get_commits_since(self, timestamp: str) -> List[dict]:
         """Get commits since a given timestamp.
 

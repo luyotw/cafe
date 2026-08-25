@@ -20,6 +20,15 @@ if [[ "$1" == "status" && "$2" == "--porcelain" ]]; then
   fi
   exit 0
 fi
+if [[ "$1" == "fetch" ]]; then
+  exit 0
+fi
+if [[ "$1" == "merge-base" && "$2" == "--is-ancestor" ]]; then
+  if [[ "${FAKE_GIT_REMOTE_DRIFT:-}" == "1" ]]; then
+    exit 1
+  fi
+  exit 0
+fi
 if [[ "$1" == "push" ]]; then
   if [[ "${FAKE_GIT_PUSH_FAIL:-}" == "1" ]]; then
     echo "push failed" >&2
@@ -164,6 +173,32 @@ def test_sync_pr_fails_when_branch_push_fails(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "failed to push branch" in result.stderr
+    assert not log_file.exists()
+
+
+def test_sync_pr_stops_before_push_when_remote_base_advanced(tmp_path: Path) -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    pr_iter = issue_dir / "pr" / "iteration_010"
+    pr_iter.mkdir(parents=True, exist_ok=True)
+    output_file = pr_iter / "output.md"
+    output_file.write_text("# PR title\n\nBody content\n", encoding="utf-8")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_file = tmp_path / "gh.log"
+    _write_fake_git(bin_dir)
+    _write_fake_gh(bin_dir, log_file)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["FAKE_GIT_REMOTE_DRIFT"] = "1"
+
+    result = _run_sync_pr(project_root, output_file, env)
+
+    assert result.returncode == 1
+    assert "does not contain the latest origin/main" in result.stderr
+    assert "Pushing branch" not in result.stderr
     assert not log_file.exists()
 
 

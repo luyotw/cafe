@@ -1101,6 +1101,8 @@ class GitHubPRCreator(NoOpHook):
         phase = kwargs.get("phase")
         if phase is None:
             return HookResult()
+        if self._is_local_pr_mode(phase):
+            return HookResult()
 
         try:
             branch_name = phase.git_ops.get_current_branch()
@@ -1109,24 +1111,41 @@ class GitHubPRCreator(NoOpHook):
         if not branch_name:
             return HookResult()
 
+        base_branch = self._resolve_base_branch(phase)
+        if not base_branch:
+            base_branch = str(phase.git_ops.get_default_base_branch())
+        context = kwargs.get("context") or {}
+        remote_base = str(context.get("pr_comparison_base") or "").strip()
+        if not remote_base:
+            remote_base = phase.git_ops.ensure_remote_base_ancestor(
+                base_branch,
+                "HEAD",
+            )
+        context_updates = {
+            "commits": str(phase.git_ops.get_commits_between(remote_base, "HEAD")),
+            "pr_comparison_base": remote_base,
+        }
+
         try:
             github_ops = GitHubOps()
             existing_pr = github_ops.get_pr_for_branch(branch_name)
         except Exception:
-            return HookResult()
+            return HookResult(context_updates=context_updates)
 
         if not existing_pr:
-            return HookResult()
+            return HookResult(context_updates=context_updates)
 
         try:
             has_unpushed_commits = phase.git_ops.has_unpushed_commits()
         except Exception:
             has_unpushed_commits = False
 
-        context_updates = {
-            "pr_number": str(existing_pr["number"]),
-            "pr_url": str(existing_pr["url"]),
-        }
+        context_updates.update(
+            {
+                "pr_number": str(existing_pr["number"]),
+                "pr_url": str(existing_pr["url"]),
+            }
+        )
         if has_unpushed_commits:
             return HookResult(context_updates=context_updates)
 

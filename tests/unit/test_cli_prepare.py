@@ -46,6 +46,7 @@ def mock_git_ops():
         mock_git.create_branch.return_value = None
         mock_git.checkout_branch.return_value = None
         mock_git.worktree_exists.return_value = False  # Default: worktree doesn't exist
+        mock_git.ensure_remote_base_ancestor.return_value = "origin/main"
 
         # Mock is_github_repo to return True by default (GitHub repo)
         mock_is_github_repo1.return_value = True
@@ -440,6 +441,37 @@ class TestPrepareCommand:
             config_data = yaml.safe_load(f)
             assert config_data["base_branch"] == "main"
             assert config_data["feature_branch"] == "my-feature"
+
+    def test_prepare_auto_pr_verifies_remote_base_before_creating_branch(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        result = runner.invoke(
+            app,
+            ["prepare", "remote-safe", "--auto-create-pr"],
+        )
+
+        assert result.exit_code == 0
+        mock_git_ops.ensure_remote_base_ancestor.assert_called_once_with("main", "main")
+        mock_git_ops.create_branch.assert_called_once_with("remote-safe")
+
+    def test_prepare_auto_pr_stops_when_remote_base_advanced(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        from cafe.core.git import GitError
+
+        mock_git_ops.ensure_remote_base_ancestor.side_effect = GitError(
+            "Remote base origin/main is not contained in main"
+        )
+
+        result = runner.invoke(
+            app,
+            ["prepare", "remote-drift", "--auto-create-pr"],
+        )
+
+        assert result.exit_code == 1
+        assert "Remote base origin/main is not" in result.stdout
+        assert "contained in main" in result.stdout
+        mock_git_ops.create_branch.assert_not_called()
 
 
 class TestPrepareCommandWorktree:

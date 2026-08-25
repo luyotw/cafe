@@ -1304,10 +1304,23 @@ class GenericWorkflowStepExecutor(Phase):
         if "git_history" in behavior.context_providers:
             base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
             resolved_base = str(base_branch or self.git_ops.get_default_base_branch())
+            comparison_base = resolved_base
+            if (
+                self._get_issue_config_value(
+                    self.issue_dir / "issue.yaml",
+                    "pr.auto_create",
+                )
+                is True
+            ):
+                comparison_base = self.git_ops.ensure_remote_base_ancestor(
+                    resolved_base,
+                    "HEAD",
+                )
             context["base_branch"] = resolved_base
+            context["pr_comparison_base"] = comparison_base
             context["commits"] = self._get_current_branch_commits(
                 self.git_ops,
-                resolved_base,
+                comparison_base,
             )
 
         if "local_review" in behavior.context_providers:

@@ -95,6 +95,24 @@ ensure_clean_worktree() {
   fi
 }
 
+ensure_remote_base_is_current() {
+  if [[ -z "$BASE_BRANCH" ]]; then
+    echo "Error: --base is required to verify the remote PR base." >&2
+    exit 1
+  fi
+
+  local remote_ref="refs/remotes/origin/$BASE_BRANCH"
+  if ! git fetch --no-tags origin "+refs/heads/$BASE_BRANCH:$remote_ref" 2>&1 >&2; then
+    echo "Error: failed to fetch PR base 'origin/$BASE_BRANCH'." >&2
+    exit 1
+  fi
+  if ! git merge-base --is-ancestor "origin/$BASE_BRANCH" HEAD; then
+    echo "Error: current branch does not contain the latest origin/$BASE_BRANCH." >&2
+    echo "Merge or rebase origin/$BASE_BRANCH, resolve conflicts, then run cafe make again." >&2
+    exit 1
+  fi
+}
+
 post_todo_comment() {
   local pr_number="$1"
   local issue_dir todo_result todo_action comment_body
@@ -167,6 +185,7 @@ PY
 
 # Push branch
 ensure_clean_worktree
+ensure_remote_base_is_current
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 echo "Pushing branch: $BRANCH" >&2
 if ! git push --set-upstream origin "$BRANCH" 2>&1 >&2; then
