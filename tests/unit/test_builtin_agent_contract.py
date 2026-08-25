@@ -53,3 +53,18 @@ def test_traditional_chinese_builtin_agents_declare_native_language() -> None:
         if any("\u4e00" <= character <= "\u9fff" for character in body):
             description = str(_frontmatter(path).get("description", ""))
             assert "母語為繁體中文" in description, f"{path} must declare its native language"
+
+
+def test_qa_language_counterparts_preserve_the_same_checklist_shape() -> None:
+    english = AGENTS_ROOT / "qa" / "Quinn.md"
+    traditional_chinese = AGENTS_ROOT / "qa" / "湯青彩.md"
+
+    english_checklist = extract_agent_guidelines_checklist(str(english))
+    traditional_chinese_checklist = extract_agent_guidelines_checklist(
+        str(traditional_chinese)
+    )
+
+    assert _frontmatter(traditional_chinese)["name"] == "湯青彩"
+    assert "母語為繁體中文" in str(_frontmatter(traditional_chinese)["description"])
+    assert english_checklist.count("[ ] ") == 4
+    assert traditional_chinese_checklist.count("[ ] ") == 4
