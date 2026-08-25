@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.20.0
+version: 1.21.0
 ---
 
 # Use CAFE Workflow
@@ -22,7 +22,7 @@ Read this file completely, then load only the references required by the current
 
 | Situation | Read before acting |
 | --- | --- |
-| Start or resume workflow execution; answer a locale or kickoff question | `references/project_global_skill_sync.md`, `references/kickoff.md`, `references/model_selection.md`, and `references/strategic_context.md` |
+| Start or resume workflow execution; answer a locale, playbook-selection, or kickoff question | `references/project_global_skill_sync.md`, `references/playbook_selection.md`, `references/kickoff.md`, `references/model_selection.md`, and `references/strategic_context.md` |
 | Run, resume, inspect, retry, or recover ordinary workflow work | `references/running_workflow.md` |
 | Handle `to_owner=user`, confirmation, clarification, permission, or alignment | `references/handoffs_and_alignment.md`; also read `references/strategic_context.md` |
 | Start or resume linked work; confirm a spec or plan with an issue-decomposition assessment | `references/issue_decomposition.md`; also read `references/strategic_context.md` and `references/handoffs_and_alignment.md` |
@@ -34,9 +34,9 @@ If more than one situation applies, read every listed reference before acting; d
 
 ## Core invariants
 
-- The complete kickoff contract is the first blocking gate. Do not run
-  `cafe prepare`, mutate the repository, or execute the first workflow phase
-  before the user confirms it.
+- The complete kickoff contract is the first blocking gate. Do not run `cafe
+  prepare`, mutate the repository, or execute the first workflow phase before the user confirms it.
+- Resolve a playbook from explicit or durable authority; otherwise use `references/playbook_selection.md` to assess candidates and record why the nearest alternative is insufficient. Never silently apply a common example or builtin default.
 - Assess the issue nature, scale, and risk before kickoff. Include one exact
   primary/fallback model chain per phase and model-adjustment authority in the
   contract. Resolve provider-neutral phase execution profiles from the active
@@ -98,9 +98,9 @@ If more than one situation applies, read every listed reference before acting; d
 - [ ] Run the project/global skill check. Ask only for differences; never prompt
   for identical catalogs or when the project has no skill overrides.
 - [ ] Read the kickoff and strategic-context references.
-- [ ] Resolve the active playbook, effective conversation locale, proposed
-  repository content locale, confirmation gates, reactive handoffs, mandate,
-  and worktree behavior.
+- [ ] Resolve or select the active playbook using `references/playbook_selection.md`,
+  recording its rationale and independent-QA decision; then resolve locale,
+  confirmation gates, reactive handoffs, mandate, and worktree behavior.
 - [ ] Assess issue nature, scale, and risk factors; resolve
   every phase skill's execution profile, classify each phase's capability band,
   resolve exact primary and fallback models with a phase-specific rationale,

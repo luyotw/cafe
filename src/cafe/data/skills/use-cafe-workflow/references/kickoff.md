@@ -2,8 +2,8 @@
 
 Read this reference before presenting a kickoff, preparing an issue, resuming an
 issue whose first workflow execution has not run, or answering a question about
-the workflow conversation language. Also read `model_selection.md` and
-`strategic_context.md`.
+the workflow conversation language. Also read `playbook_selection.md`,
+`model_selection.md`, and `strategic_context.md`.
 
 ## Conversation locale checklist
 
@@ -17,7 +17,9 @@ the workflow conversation language. Also read `model_selection.md` and
   from quoted text, pasted artifacts, code, commands, proper nouns, or an
   isolated token. If the evidence is mixed or ambiguous, use the playbook
   locale.
-- [ ] Resolve the active playbook from the user's request or `.cafe/config.yaml`.
+- [ ] Resolve or select the active playbook using `playbook_selection.md`. When
+  no authoritative choice exists, do not apply a builtin default without the
+  required repository/issue assessment and recorded rationale.
 - [ ] Run `cafe playbook confirmation-gates <playbook-id>` and read both the
   `Conversation locale:` line and confirmation-gate candidates.
 - [ ] Treat a configured explicit BCP 47 value as the fallback, not an override
@@ -76,6 +78,8 @@ Before `cafe prepare`, any repository mutation, or the first workflow execution,
 obtain explicit user confirmation of:
 
 - `playbook_id`;
+- `playbook_selection_rationale`, including the independent-QA decision and the
+  closest rejected alternative;
 - `conversation_locale` with source;
 - `repository_content_locale`;
 - every planned confirmation gate, partitioned into `user_required` and
@@ -150,6 +154,7 @@ Use the bundled formatter instead of a prose-only summary:
 ```bash
 python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --issue-name <issue-name> \
+  --playbook-rationale "<source/evidence, QA decision, and rejected alternative>" \
   --issue-nature <nature> --issue-scale <small|medium|large> \
   --model-adjustment-authority <driver_autonomous|user_approval_required> \
   --risk-factor "<risk factor; repeat as needed>" \
@@ -168,6 +173,10 @@ of this kickoff, replace the final `--worktree ...` argument with
 `--current-checkout`. The rendered contract must show the current checkout for
 that first task; do not ask the user to approve a worktree that cannot safely
 contain the starting files.
+
+`--playbook-rationale` is required even when the user or a durable contract
+already selected the playbook; in that case record the authoritative source and
+why the selected graph still satisfies current repository requirements.
 
 Pass `--phase-chain
 <step>=<primary-cli>:<exact-model>,<fallback-cli>:<exact-model>` once for every
