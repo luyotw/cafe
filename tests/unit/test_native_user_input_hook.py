@@ -1076,6 +1076,34 @@ def test_github_pr_creator_prepares_history_from_fetched_remote_base(tmp_path: P
     assert result.context_updates["commits"] == "abc123 local base commit"
 
 
+def test_github_pr_creator_local_mode_keeps_existing_pr_metadata_without_fetch(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "base_branch: develop\npr:\n  auto_create: false\n",
+        encoding="utf-8",
+    )
+    phase = _FakePhase(phase_dir=issue_dir / "pr", iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_current_branch.return_value = "feature/demo"
+
+    with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops:
+        mock_github_ops.return_value.get_pr_for_branch.return_value = {
+            "number": 42,
+            "url": "https://github.com/example/repo/pull/42",
+        }
+        result = GitHubPRCreator().run(stage="prepare_input", phase=phase)
+
+    phase.git_ops.ensure_remote_base_ancestor.assert_not_called()
+    phase.git_ops.get_commits_between.assert_not_called()
+    assert result.context_updates == {
+        "pr_number": "42",
+        "pr_url": "https://github.com/example/repo/pull/42",
+    }
+
+
 def test_github_pr_creator_publish_output_rejects_unknown_generic_capability_without_script(
     tmp_path: Path,
 ) -> None:

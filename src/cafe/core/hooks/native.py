@@ -1101,8 +1101,6 @@ class GitHubPRCreator(NoOpHook):
         phase = kwargs.get("phase")
         if phase is None:
             return HookResult()
-        if self._is_local_pr_mode(phase):
-            return HookResult()
 
         try:
             branch_name = phase.git_ops.get_current_branch()
@@ -1111,20 +1109,24 @@ class GitHubPRCreator(NoOpHook):
         if not branch_name:
             return HookResult()
 
-        base_branch = self._resolve_base_branch(phase)
-        if not base_branch:
-            base_branch = str(phase.git_ops.get_default_base_branch())
-        context = kwargs.get("context") or {}
-        remote_base = str(context.get("pr_comparison_base") or "").strip()
-        if not remote_base:
-            remote_base = phase.git_ops.ensure_remote_base_ancestor(
-                base_branch,
-                "HEAD",
+        context_updates: dict[str, str] = {}
+        if not self._is_local_pr_mode(phase):
+            base_branch = self._resolve_base_branch(phase)
+            if not base_branch:
+                base_branch = str(phase.git_ops.get_default_base_branch())
+            context = kwargs.get("context") or {}
+            remote_base = str(context.get("pr_comparison_base") or "").strip()
+            if not remote_base:
+                remote_base = phase.git_ops.ensure_remote_base_ancestor(
+                    base_branch,
+                    "HEAD",
+                )
+            context_updates.update(
+                {
+                    "commits": str(phase.git_ops.get_commits_between(remote_base, "HEAD")),
+                    "pr_comparison_base": remote_base,
+                }
             )
-        context_updates = {
-            "commits": str(phase.git_ops.get_commits_between(remote_base, "HEAD")),
-            "pr_comparison_base": remote_base,
-        }
 
         try:
             github_ops = GitHubOps()
