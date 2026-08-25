@@ -27,6 +27,12 @@ fi
 if [[ "$1" == "status" && "$2" == "--porcelain" ]]; then
   exit 0
 fi
+if [[ "$1" == "fetch" ]]; then
+  exit 0
+fi
+if [[ "$1" == "merge-base" && "$2" == "--is-ancestor" ]]; then
+  exit 0
+fi
 if [[ "$1" == "push" ]]; then
   exit 0
 fi
