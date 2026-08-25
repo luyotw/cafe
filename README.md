@@ -7,10 +7,8 @@ Describe the outcome you want, and CAFE guides agents through clarification,
 planning, execution, review, and delivery. It pauses when your judgment is
 needed and can resume interrupted work from where it stopped.
 
-To install CAFE, see [INSTALL.md](INSTALL.md), or ask your CLI agent to follow
+To install CAFE, see [INSTALL.md](INSTALL.md), or ask your coding agent to follow
 that file for you.
-
-![CAFE default software workflow](images/cafe-flow.png)
 
 ## 1. What CAFE Is
 
@@ -74,7 +72,7 @@ an arbitrary host-privilege executor, a replacement for human review, or a
 complete project-management platform. Its value starts when the workflow and
 its history matter beyond the current chat.
 
-### Supported CLI agents
+### Supported coding agents
 
 CAFE currently integrates with:
 
@@ -84,7 +82,7 @@ CAFE currently integrates with:
 - [Cursor CLI](https://cursor.com/cli)
 - [Gemini CLI](https://geminicli.com/)
 
-At least one supported CLI agent is required. CAFE itself requires Python 3.10+
+At least one supported coding agent is required. CAFE itself requires Python 3.10+
 and Git. GitHub workflows also require the
 [GitHub CLI](https://cli.github.com/).
 
@@ -92,7 +90,7 @@ and Git. GitHub workflows also require the
 
 ### Install without using a terminal yourself
 
-Send this request to any CLI agent that can inspect files and run local
+Send this request to any coding agent that can inspect files and run local
 commands:
 
 ```text
@@ -111,7 +109,7 @@ upgrade behavior, read [INSTALL.md](INSTALL.md).
 
 ### Start work with `use-cafe-workflow`
 
-Start your CLI agent in the project you want CAFE to manage. Then describe the
+Start your coding agent in the project you want CAFE to manage. Then describe the
 outcome instead of manually operating each CAFE command. For a GitHub issue:
 
 ```text
@@ -348,7 +346,7 @@ CAFE runtime before changing sources.
 
 ### Global helper skills
 
-CAFE synchronizes its three helper skills only for detected CLI agents. An
+CAFE synchronizes its three helper skills only for detected coding agents. An
 agent is detected through its executable on `PATH` or existing vendor state;
 directories containing only old CAFE-managed copies do not count as an
 installation.
@@ -356,7 +354,7 @@ installation.
 Ask your agent to repair a managed copy or preinstall for a specific agent:
 
 ```text
-Repair CAFE's managed helper skills for every detected CLI agent.
+Repair CAFE's managed helper skills for every detected coding agent.
 ```
 
 ```text
