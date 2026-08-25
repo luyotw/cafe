@@ -357,7 +357,7 @@ CAFE runtime before changing sources.
 
 ### Global helper skills
 
-CAFE synchronizes its three helper skills only for detected CLI agents. An
+CAFE synchronizes its bundled helper skills only for detected CLI agents. An
 agent is detected through its executable on `PATH` or existing vendor state;
 directories containing only old CAFE-managed copies do not count as an
 installation.
