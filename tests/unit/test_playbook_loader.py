@@ -1910,8 +1910,9 @@ def test_builtin_hotfix_and_simple_playbooks_load() -> None:
     ]
 
     assert simple.entry_point == "spec"
-    assert list(simple.steps.keys()) == ["spec", "develop", "pr"]
-    assert simple.steps["develop"].on["await_agent"] == "pr"
+    assert list(simple.steps.keys()) == ["spec", "develop", "qa", "pr"]
+    assert simple.steps["develop"].on["await_agent"] == "qa"
+    assert simple.steps["qa"].on["await_agent"] == "pr"
 
 
 def test_legacy_playbook_omits_input_artifact_scope_after_loading(tmp_path: Path) -> None:

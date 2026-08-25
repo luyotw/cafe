@@ -697,6 +697,55 @@ def test_prepare_builtin_pr_skill_omits_unavailable_contexts(tmp_path: Path) -> 
     assert "{plan_file}" not in installed
 
 
+def test_prepare_builtin_qa_skill_omits_optional_plan_and_review_contexts(
+    tmp_path: Path,
+) -> None:
+    """The shipped QA skill supports simple while preserving richer QA context."""
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+    )
+    loader.discover()
+    phase = GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(
+            loader,
+            project_root=project_root,
+            home_dir=tmp_path / "home",
+        ),
+    )
+
+    phase.prepare_skill(
+        skill_name="cafe-qa",
+        agent_cli=AgentCLI.CODEX,
+        context={"spec_file": "spec.md", "develop_file": "code.md"},
+    )
+
+    installed_path = project_root / ".codex" / "skills" / "cafe-qa" / "SKILL.md"
+    installed = installed_path.read_text(encoding="utf-8")
+    assert "Requirements Specification: spec.md" in installed
+    assert "Development Summary: code.md" in installed
+    assert "Implementation Plan:" not in installed
+    assert "Review Result:" not in installed
+
+    phase.prepare_skill(
+        skill_name="cafe-qa",
+        agent_cli=AgentCLI.CODEX,
+        context={
+            "spec_file": "spec.md",
+            "develop_file": "code.md",
+            "plan_file": "plan.md",
+            "review_file": "review.md",
+        },
+    )
+
+    installed = installed_path.read_text(encoding="utf-8")
+    assert "Implementation Plan: plan.md" in installed
+    assert "Review Result: review.md" in installed
+
+
 def test_prepare_skills_installs_shared_and_phase_skills(tmp_path: Path) -> None:
     loader = _setup_loader(tmp_path)
     project_root = tmp_path / "project"

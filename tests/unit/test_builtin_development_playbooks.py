@@ -65,13 +65,28 @@ def test_standard_owns_the_established_full_development_graph() -> None:
     assert playbook.steps["review"].on["await_agent"] == "pr"
 
 
-def test_existing_simple_hotfix_and_tdd_paths_remain_unchanged() -> None:
+def test_simple_owns_the_spec_develop_qa_pr_graph() -> None:
     loader = PlaybookLoader()
 
     simple = loader.load_model("simple", strict=True).model
-    assert list(simple.steps) == ["spec", "develop", "pr"]
+    assert list(simple.steps) == ["spec", "develop", "qa", "pr"]
     assert simple.steps["spec"].on["await_agent"] == "develop"
-    assert simple.steps["develop"].on["await_agent"] == "pr"
+    assert simple.steps["develop"].on["await_agent"] == "qa"
+    assert simple.steps["qa"].on["await_agent"] == "pr"
+    assert simple.steps["qa"].on["manual_handoff"] == "develop"
+    assert "qa_feedback" in simple.steps["develop"].input_artifacts
+    assert "qa_feedback" in simple.steps["pr"].input_artifacts
+    develop = simple.steps["develop"]
+    assert develop.on["no_changes_needed"] == "qa"
+    assert "NoChangesNeededHandler" in develop.hooks.after_execute
+    no_change_task = next(
+        task for task in develop.human_tasks if task.trigger == "no_changes_needed"
+    )
+    assert no_change_task.outcomes == {"agree": "qa", "disagree": "develop"}
+
+
+def test_existing_hotfix_and_tdd_paths_remain_unchanged() -> None:
+    loader = PlaybookLoader()
 
     hotfix = loader.load_model("hotfix", strict=True).model
     assert hotfix.entry_point == "develop"
@@ -131,4 +146,10 @@ def test_qa_feedback_is_exposed_by_every_correction_and_publication_skill() -> N
         for mapping in qa_contract.prompt_inputs
         if mapping.required
     }
-    assert required == {"spec", "plan", "code", "review_feedback"}
+    optional = {
+        mapping.artifacts[0]
+        for mapping in qa_contract.prompt_inputs
+        if not mapping.required
+    }
+    assert required == {"spec", "code"}
+    assert optional == {"plan", "review_feedback"}

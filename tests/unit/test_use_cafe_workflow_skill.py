@@ -1385,7 +1385,10 @@ def test_kickoff_formatter_rejects_unresolved_phase_models(tmp_path: Path) -> No
             "--issue-name",
             "issue-no-models",
             "--playbook-rationale",
-            "The simple graph covers the localized change and no independent QA policy applies.",
+            (
+                "The simple graph covers the localized change with independent QA "
+                "and no separate plan or code review."
+            ),
             "--issue-nature",
             "localized defect",
             "--issue-scale",
@@ -1431,7 +1434,10 @@ def test_kickoff_formatter_rejects_missing_phase_rationale(tmp_path: Path) -> No
             "--issue-name",
             "issue-no-rationale",
             "--playbook-rationale",
-            "The simple graph covers the localized change and no independent QA policy applies.",
+            (
+                "The simple graph covers the localized change with independent QA "
+                "and no separate plan or code review."
+            ),
             "--issue-nature",
             "localized defect",
             "--issue-scale",

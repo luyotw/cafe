@@ -21,6 +21,10 @@ roles:
     description: "Developer"
     default_agent: "David"
     default_cli: "claude"
+  qa:
+    description: "Product Acceptance QA"
+    default_agent: "Quinn"
+    default_cli: "gemini"
 
 commands:
   prepare:
@@ -62,27 +66,53 @@ steps:
     skill: cafe-develop
     role: developer
     assignee_type: agent
-    input_artifacts: [spec, workflow_feedback]
+    input_artifacts: [spec, qa_feedback, workflow_feedback]
     output_artifact: code
     human_tasks:
       - trigger: need_clarification
         task_id: clarification-feedback
         outcomes: {submit: develop}
+      - trigger: no_changes_needed
+        task_id: no-change-decision
+        outcomes: {agree: qa, disagree: develop}
     allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
     hooks:
       prepare_input: [UserInputCollector]
-      after_execute: [PermissionRetryHandler]
+      after_execute: [NoChangesNeededHandler, PermissionRetryHandler]
     "on":
-      await_agent: pr
+      await_agent: qa
       need_clarification: develop
       need_permission: develop
+      no_changes_needed: qa
+
+  qa:
+    type: skill
+    skill: cafe-qa
+    role: qa
+    assignee_type: agent
+    input_artifacts: [spec, code]
+    output_artifact: qa_feedback
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: qa}
+    allowed_tools: [Read, Grep, Glob, Bash]
+    max_iterations: 5
+    allowed_goto: [develop]
+    hooks:
+      prepare_input: [UserInputCollector]
+    "on":
+      await_agent: pr
+      manual_handoff: develop
+      need_clarification: qa
+      need_permission: qa
 
   pr:
     type: skill
     skill: cafe-pr
     role: developer
     assignee_type: agent
-    input_artifacts: [spec, code, workflow_feedback]
+    input_artifacts: [spec, code, qa_feedback, workflow_feedback]
     output_artifact: pr_result
     behavior:
       completion: baton

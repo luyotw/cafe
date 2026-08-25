@@ -408,7 +408,11 @@ def test_production_composer_golden_checklist_matches_fixture(
     [
         ("hotfix", "review", {"code": "code.md"}),
         ("hotfix", "pr", {"code": "code.md", "review_feedback": "review.md"}),
-        ("simple", "pr", {"spec": "spec.md", "code": "code.md"}),
+        (
+            "simple",
+            "pr",
+            {"spec": "spec.md", "code": "code.md", "qa_feedback": "qa.md"},
+        ),
         (
             "tdd",
             "pr",

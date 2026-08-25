@@ -109,3 +109,61 @@ def test_blocked_qa_resumes_in_qa_before_pr(tmp_path: Path) -> None:
 
     assert result.completed is True
     assert calls == ["qa", "qa", "pr"]
+
+
+def test_simple_qa_failure_repeats_develop_and_qa_before_pr(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "simple-correction"
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == "qa" and calls.count("qa") == 1:
+            return StepExecutionResult(
+                response="needs_changes",
+                artifacts={},
+                status_code="needs_changes",
+            )
+        if step_name == "pr":
+            _finish_pr(issue_dir)
+        return StepExecutionResult(response="confirmed", artifacts={}, status_code="confirmed")
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_runtime_playbook("simple"),
+        executor=executor,
+    ).run(start_step="develop")
+
+    assert result.completed is True
+    assert calls == ["develop", "qa", "develop", "qa", "pr"]
+
+
+def test_simple_no_change_correction_returns_to_qa_before_pr(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "simple-no-change-correction"
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == "qa" and calls.count("qa") == 1:
+            return StepExecutionResult(
+                response="needs_changes",
+                artifacts={},
+                status_code="needs_changes",
+            )
+        if step_name == "develop":
+            return StepExecutionResult(
+                response="no_changes_needed",
+                artifacts={},
+                status_code="no_changes_needed",
+            )
+        if step_name == "pr":
+            _finish_pr(issue_dir)
+        return StepExecutionResult(response="confirmed", artifacts={}, status_code="confirmed")
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_runtime_playbook("simple"),
+        executor=executor,
+    ).run(start_step="qa")
+
+    assert result.completed is True
+    assert calls == ["qa", "develop", "qa", "pr"]
