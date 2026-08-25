@@ -56,7 +56,8 @@ The bootstrap:
 - creates a CAFE-managed launcher in `~/.local/bin/`;
 - verifies the installed package before publishing that launcher;
 - runs `cafe skill sync-global`, which copies the bundled
-  `use-cafe-workflow`, `write-cafe-playbook`, and `write-cafe-phase` skills to
+  `use-cafe-workflow`, `write-cafe-agent`, `write-cafe-playbook`, and
+  `write-cafe-phase` skills to
   user directories for detected Claude, Codex, Copilot, Cursor, and Gemini
   installations; and
 - removes only the previous isolated environment recorded in CAFE's own install

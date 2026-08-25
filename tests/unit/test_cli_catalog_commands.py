@@ -89,7 +89,8 @@ def test_skill_sync_global_installs_bundled_helper_skills(
         result = runner.invoke(app, ["skill", "sync-global"])
 
     assert result.exit_code == 0
-    assert "Synced 3 installation(s)" in result.stdout
+    assert "Synced 4 installation(s)" in result.stdout
+    assert (home_dir / ".codex/skills/write-cafe-agent/SKILL.md").is_file()
     assert (home_dir / ".codex/skills/write-cafe-playbook/SKILL.md").is_file()
     assert not (home_dir / ".claude").exists()
 
@@ -108,7 +109,7 @@ def test_skill_sync_global_can_limit_target_clis(tmp_path: Path, monkeypatch) ->
         )
 
     assert result.exit_code == 0
-    assert "Synced 6 installation(s)" in result.stdout
+    assert "Synced 8 installation(s)" in result.stdout
     assert (home_dir / ".codex/skills/use-cafe-workflow/SKILL.md").is_file()
     assert (home_dir / ".cursor/skills/use-cafe-workflow/SKILL.md").is_file()
     assert not (home_dir / ".claude").exists()

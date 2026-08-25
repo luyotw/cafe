@@ -97,7 +97,7 @@ def test_default_sync_skips_undetected_clis_but_explicit_target_creates_one(
 
     detected = sync_global_skills(source_root=source_root, home_dir=home_dir)
 
-    assert detected.installed_count == 3
+    assert detected.installed_count == 4
     assert (home_dir / ".codex/skills/use-cafe-workflow/SKILL.md").is_file()
     assert not (home_dir / ".claude").exists()
 
@@ -107,7 +107,7 @@ def test_default_sync_skips_undetected_clis_but_explicit_target_creates_one(
         cli_names=["cursor"],
     )
 
-    assert explicit.installed_count == 3
+    assert explicit.installed_count == 4
     assert (home_dir / ".cursor/skills/use-cafe-workflow/SKILL.md").is_file()
 
 
@@ -134,7 +134,7 @@ def test_sync_global_skills_installs_updates_and_detects_unchanged(tmp_path: Pat
 
     installed = sync_global_skills(source_root=source_root, home_dir=home_dir)
 
-    assert installed.installed_count == 15
+    assert installed.installed_count == 20
     assert installed.updated_count == 0
     assert installed.unchanged_count == 0
     assert installed.failed_count == 0
@@ -156,14 +156,14 @@ def test_sync_global_skills_installs_updates_and_detects_unchanged(tmp_path: Pat
 
     assert updated.installed_count == 0
     assert updated.updated_count == 5
-    assert updated.unchanged_count == 10
+    assert updated.unchanged_count == 15
     assert not stale_file.exists()
     assert "version 2" in (home_dir / ".cursor/skills/write-cafe-phase/SKILL.md").read_text(
         encoding="utf-8"
     )
 
     unchanged = sync_global_skills(source_root=source_root, home_dir=home_dir)
-    assert unchanged.unchanged_count == 15
+    assert unchanged.unchanged_count == 20
     assert unchanged.changed_count == 0
 
 
@@ -178,13 +178,13 @@ def test_sync_global_skills_ignores_generated_python_bytecode(tmp_path: Path) ->
 
     installed = sync_global_skills(source_root=source_root, home_dir=home_dir)
 
-    assert installed.installed_count == 15
+    assert installed.installed_count == 20
     assert not (home_dir / ".codex/skills/use-cafe-workflow/scripts/__pycache__").exists()
 
     bytecode.write_bytes(b"second generated version")
     unchanged = sync_global_skills(source_root=source_root, home_dir=home_dir)
 
-    assert unchanged.unchanged_count == 15
+    assert unchanged.unchanged_count == 20
     assert unchanged.changed_count == 0
 
 
@@ -210,7 +210,7 @@ def test_sync_global_skills_can_target_selected_clis(tmp_path: Path) -> None:
         cli_names=["codex", "cursor"],
     )
 
-    assert summary.installed_count == 6
+    assert summary.installed_count == 8
     assert {result.cli for result in summary.results} == {"codex", "cursor"}
     assert (home_dir / ".codex/skills/use-cafe-workflow/SKILL.md").is_file()
     assert (home_dir / ".cursor/skills/use-cafe-workflow/SKILL.md").is_file()
@@ -302,7 +302,7 @@ def test_sync_global_skills_rolls_back_the_complete_batch_on_publish_failure(
     ):
         summary = sync_global_skills(source_root=source_root, home_dir=home_dir)
 
-    assert summary.failed_count == 15
+    assert summary.failed_count == 20
     assert summary.changed_count == 0
     for cli_root in EXPECTED_CLI_ROOTS.values():
         for name in DEFAULT_GLOBAL_SKILLS:
@@ -364,7 +364,7 @@ def test_auto_sync_serializes_concurrent_initialization(tmp_path: Path) -> None:
 
     summaries = [result for result in results if result is not None]
     assert len(summaries) == 1
-    assert summaries[0].installed_count == 15
+    assert summaries[0].installed_count == 20
     assert summaries[0].failed_count == 0
 
 
@@ -377,7 +377,7 @@ def test_auto_sync_uses_per_machine_fingerprint_and_detects_source_updates(
 
     installed = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
     assert installed is not None
-    assert installed.installed_count == 15
+    assert installed.installed_count == 20
 
     unchanged = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
     assert unchanged is None
@@ -390,7 +390,7 @@ def test_auto_sync_uses_per_machine_fingerprint_and_detects_source_updates(
 
     assert updated is not None
     assert updated.updated_count == 5
-    assert updated.unchanged_count == 10
+    assert updated.unchanged_count == 15
 
 
 def test_auto_sync_reuses_fingerprint_across_identical_worktree_sources(
@@ -406,7 +406,7 @@ def test_auto_sync_reuses_fingerprint_across_identical_worktree_sources(
     unchanged = auto_sync_global_skills(source_root=source_b, home_dir=home_dir)
 
     assert installed is not None
-    assert installed.installed_count == 15
+    assert installed.installed_count == 20
     assert unchanged is None
     state = json.loads(
         (home_dir / ".cafe/cache/global-skills-sync.json").read_text(encoding="utf-8")
@@ -450,12 +450,12 @@ def test_auto_sync_retries_after_failed_install_instead_of_recording_state(
         failed = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
 
     assert failed is not None
-    assert failed.failed_count == 15
+    assert failed.failed_count == 20
     assert not (home_dir / ".cafe/cache/global-skills-sync.json").exists()
 
     retried = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
     assert retried is not None
-    assert retried.installed_count == 15
+    assert retried.installed_count == 20
 
 
 def test_explicit_default_sync_updates_state_before_returning_to_an_older_source(
