@@ -900,27 +900,19 @@ class TestChatWithAgent:
         assert "developer" in roles
         assert "reviewer" in roles
 
-    def test_chat_dispatches_chat_command(self):
+    def test_chat_dispatches_chat_command(self, tmp_path, monkeypatch):
         """測試選擇 Chat 後執行 cafe chat <role>"""
+        monkeypatch.chdir(tmp_path)
         detector = MagicMock(spec=MenuStateDetector)
         detector.detect_state.return_value = MenuState.ACTIVE_ISSUE
         detector.get_current_issue_name.return_value = "my-issue"
 
         menu = InteractiveMenu(state_detector=detector)
 
-        mock_config = MagicMock()
-        mock_config.get.side_effect = lambda key, default=None: {
-            "agents.pm.name": "Roger",
-            "agents.developer.name": "Nick",
-            "agents.reviewer.name": "Richard",
-        }.get(key, default)
-
         with (
             patch("cafe.ui.menu.prompt_list") as mock_prompt,
             patch("cafe.ui.menu.subprocess.run") as mock_run,
-            patch("cafe.ui.menu.ConfigManager") as mock_config_cls,
         ):
-            mock_config_cls.return_value = mock_config
             mock_run.return_value = MagicMock(returncode=0)
             # Select "chat" from issue menu, then select a role, then exit
             mock_prompt.side_effect = ["chat", "pm", "exit"]

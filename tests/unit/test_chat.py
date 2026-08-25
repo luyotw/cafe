@@ -48,6 +48,11 @@ def mock_phase_config_boundary_for_legacy_chat_fixtures(monkeypatch):
 class TestLaunchChatSession:
     """Tests for launch_chat_session()."""
 
+    @pytest.fixture(autouse=True)
+    def isolate_launcher_workspace(self, tmp_path, monkeypatch):
+        """Keep launcher-created issue state out of the repository workspace."""
+        monkeypatch.chdir(tmp_path)
+
     def _make_agent_config(self, cli: str, session_id=None, model=None):
         """Build a mock AgentConfig."""
         return AgentConfig(
