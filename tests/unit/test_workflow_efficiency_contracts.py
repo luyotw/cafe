@@ -41,6 +41,8 @@ def test_develop_and_review_share_machine_checked_full_test_receipt() -> None:
     ).read_text(encoding="utf-8")
 
     assert "## Develop-to-review verification receipts" in common
+    assert "cafe verification reuse --source-output-file <previous-output>" in common
+    assert "never copy a receipt manually" in common
     assert "Develop-to-review verification receipts" in develop
     assert "cafe verification run --output-file {output_file}" in develop_steps
     assert "Develop-to-review verification receipts" in review

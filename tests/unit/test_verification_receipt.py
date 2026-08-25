@@ -14,6 +14,7 @@ from cafe.ui.cli import app
 from cafe.verification import (
     VerificationReceiptError,
     check_verification_receipt,
+    reuse_verification_receipt,
     run_focused_verification,
     run_verification,
 )
@@ -93,6 +94,59 @@ def test_receipt_becomes_stale_when_head_changes(tmp_path: Path) -> None:
 
     assert checked.valid is False
     assert "current HEAD does not match the verified HEAD" in checked.reasons
+
+
+def test_reuse_materializes_a_valid_receipt_for_the_next_iteration(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    source_output = _output_file(repo)
+    target_output = (
+        repo / ".cafe/issues/issue1/develop/iteration_002/output.md"
+    )
+    run_verification(
+        output_file=source_output,
+        command=[sys.executable, "-c", "pass"],
+        scope="full",
+        cwd=repo,
+    )
+
+    receipt_path, payload = reuse_verification_receipt(
+        source_output_file=source_output,
+        output_file=target_output,
+        required_scope="full",
+        cwd=repo,
+    )
+    checked = check_verification_receipt(output_file=target_output, cwd=repo)
+
+    assert receipt_path == target_output.parent / "verification.json"
+    assert payload["reused_from"] == str(source_output.parent / "verification.json")
+    assert payload["reused_at"]
+    assert checked.valid is True
+    assert checked.receipt == payload
+
+
+def test_reuse_rejects_a_receipt_for_an_older_head(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    source_output = _output_file(repo)
+    target_output = repo / ".cafe/issues/issue1/develop/iteration_002/output.md"
+    run_verification(
+        output_file=source_output,
+        command=[sys.executable, "-c", "pass"],
+        scope="full",
+        cwd=repo,
+    )
+    (repo / "tracked.txt").write_text("changed\n", encoding="utf-8")
+    _git(repo, "add", "tracked.txt")
+    _git(repo, "commit", "-m", "change")
+
+    with pytest.raises(VerificationReceiptError, match="cannot reuse an invalid receipt"):
+        reuse_verification_receipt(
+            source_output_file=source_output,
+            output_file=target_output,
+            required_scope="full",
+            cwd=repo,
+        )
+
+    assert not (target_output.parent / "verification.json").exists()
 
 
 def test_final_verification_refuses_dirty_worktree(tmp_path: Path) -> None:
@@ -261,6 +315,39 @@ def test_verification_cli_runs_and_checks_receipt(tmp_path: Path, monkeypatch) -
     assert check_result.exit_code == 0, check_result.stdout
     assert '"reasons": []' in check_result.stdout
     assert '"command":' in check_result.stdout
+
+
+def test_verification_cli_reuses_receipt_for_new_iteration(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo = _repo(tmp_path)
+    source_output = _output_file(repo)
+    target_output = repo / ".cafe/issues/issue1/develop/iteration_002/output.md"
+    run_verification(
+        output_file=source_output,
+        command=[sys.executable, "-c", "pass"],
+        scope="full",
+        cwd=repo,
+    )
+    monkeypatch.chdir(repo)
+
+    result = runner.invoke(
+        app,
+        [
+            "verification",
+            "reuse",
+            "--source-output-file",
+            str(source_output),
+            "--output-file",
+            str(target_output),
+            "--require-scope",
+            "full",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert '"reused": true' in result.stdout
+    assert check_verification_receipt(output_file=target_output, cwd=repo).valid is True
 
 
 def test_verification_cli_runs_focused_selector(tmp_path: Path, monkeypatch) -> None:

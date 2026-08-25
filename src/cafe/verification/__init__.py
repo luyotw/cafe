@@ -5,6 +5,7 @@ from cafe.verification.receipt import (
     VerificationReceiptError,
     check_verification_receipt,
     receipt_path_for_output,
+    reuse_verification_receipt,
     run_focused_verification,
     run_verification,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "VerificationReceiptError",
     "check_verification_receipt",
     "receipt_path_for_output",
+    "reuse_verification_receipt",
     "run_focused_verification",
     "run_verification",
 ]

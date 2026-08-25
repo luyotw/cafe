@@ -219,6 +219,37 @@ def check_verification_receipt(
     return ReceiptCheck(not reasons, tuple(reasons), receipt_path, loaded)
 
 
+def reuse_verification_receipt(
+    *,
+    source_output_file: Path,
+    output_file: Path,
+    required_scope: str = "full",
+    cwd: Path | None = None,
+) -> tuple[Path, dict[str, Any]]:
+    """Materialize a checked receipt for a new iteration without rerunning tests."""
+    source_receipt_path = receipt_path_for_output(source_output_file)
+    target_receipt_path = receipt_path_for_output(output_file)
+    if source_receipt_path == target_receipt_path:
+        raise VerificationReceiptError(
+            "source and target verification receipts must be in different iterations"
+        )
+
+    checked = check_verification_receipt(
+        output_file=source_output_file,
+        required_scope=required_scope,
+        cwd=cwd,
+    )
+    if not checked.valid or checked.receipt is None:
+        detail = "; ".join(checked.reasons) or "unknown receipt error"
+        raise VerificationReceiptError(f"cannot reuse an invalid receipt: {detail}")
+
+    payload = dict(checked.receipt)
+    payload["reused_from"] = str(source_receipt_path)
+    payload["reused_at"] = datetime.now().astimezone().isoformat()
+    _write_json_atomic(target_receipt_path, payload)
+    return target_receipt_path, payload
+
+
 def _pytest_argument_index(command: Sequence[str]) -> int | None:
     """Return the pytest token index for a deliberately narrow runner grammar."""
     if not command:
