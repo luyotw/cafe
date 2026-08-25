@@ -87,6 +87,7 @@ def _run_preflight_cache(
 def test_use_cafe_workflow_uses_progressive_disclosure() -> None:
     skill = _read_skill_resource("SKILL.md")
     references = (
+        "playbook_selection.md",
         "kickoff.md",
         "strategic_context.md",
         "model_selection.md",
@@ -724,6 +725,7 @@ def test_use_cafe_workflow_uses_structured_human_task_resume_payloads() -> None:
 def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/kickoff.md")
+    selection = _read_skill_resource("references/playbook_selection.md")
     normalized = " ".join(reference.split())
 
     assert "references/kickoff.md" in skill
@@ -747,6 +749,13 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "repository_language:" in reference
     assert ".cafe/issues/<issue-name>/issue.yaml" in reference
     assert "scripts/format_kickoff_contract.py" in reference
+    assert "playbook_selection_rationale" in reference
+    assert "independent-QA decision" in reference
+    assert "cafe playbook list" in selection
+    assert "cafe playbook show <id>" in selection
+    assert "repository instructions require an independent QA" in selection
+    assert "closest plausible alternative" in selection
+    assert "do not infer behavior from a playbook name" in " ".join(selection.split())
     assert "every phase, role, skill, scheduled gate" in normalized
     assert "exact primary/fallback model chain" in normalized
     assert "model-adjustment authority" in normalized
@@ -789,6 +798,8 @@ mandate:
             "standard",
             "--issue-name",
             "issue346",
+            "--playbook-rationale",
+            "Repository policy requires the standard graph; QA is not independently required, so standard-qa is unnecessary.",
             "--issue-nature",
             "feature/integration",
             "--issue-scale",
@@ -824,6 +835,10 @@ mandate:
 
     assert result.returncode == 0, result.stderr
     assert "## Kickoff Contract — issue346" in result.stdout
+    assert (
+        "| playbook_selection_rationale | Repository policy requires the standard graph; "
+        "QA is not independently required, so standard-qa is unnecessary. |" in result.stdout
+    )
     assert "| spec | pm | cafe-spec | 是 | driver（驗證後繼續） | 否 |" in result.stdout
     assert "| plan | developer | cafe-plan | 是 | driver（驗證後繼續） | 否 |" in result.stdout
     assert "| develop | developer | cafe-develop | 否 | — | 否 |" in result.stdout
@@ -1160,6 +1175,8 @@ def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
             "standard",
             "--issue-name",
             "issue346",
+            "--playbook-rationale",
+            "The confirmed issue contract selects standard.",
             "--issue-nature",
             "localized defect",
             "--issue-scale",
@@ -1216,6 +1233,8 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
             "standard",
             "--issue-name",
             "issue346",
+            "--playbook-rationale",
+            "The confirmed issue contract selects standard.",
             "--issue-nature",
             "localized defect",
             "--issue-scale",
@@ -1314,6 +1333,8 @@ entry_point: audit
             str(tmp_path),
             "--issue-name",
             "audit-1",
+            "--playbook-rationale",
+            "The user selected the custom audit graph; no builtin candidate owns this audit responsibility.",
             "--issue-nature",
             "security review",
             "--issue-scale",
@@ -1363,6 +1384,8 @@ def test_kickoff_formatter_rejects_unresolved_phase_models(tmp_path: Path) -> No
             str(tmp_path),
             "--issue-name",
             "issue-no-models",
+            "--playbook-rationale",
+            "The simple graph covers the localized change and no independent QA policy applies.",
             "--issue-nature",
             "localized defect",
             "--issue-scale",
@@ -1407,6 +1430,8 @@ def test_kickoff_formatter_rejects_missing_phase_rationale(tmp_path: Path) -> No
             str(PROJECT_ROOT),
             "--issue-name",
             "issue-no-rationale",
+            "--playbook-rationale",
+            "The simple graph covers the localized change and no independent QA policy applies.",
             "--issue-nature",
             "localized defect",
             "--issue-scale",

@@ -251,6 +251,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("playbook_id")
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--issue-name", required=True)
+    parser.add_argument("--playbook-rationale", required=True)
     parser.add_argument("--issue-nature", required=True)
     parser.add_argument(
         "--issue-scale",
@@ -303,6 +304,9 @@ def _parser() -> argparse.ArgumentParser:
 
 def render(args: argparse.Namespace) -> str:
     project_root = args.project_root.resolve()
+    playbook_rationale = args.playbook_rationale.strip()
+    if not playbook_rationale:
+        raise ValueError("--playbook-rationale must not be empty")
     playbook_loader = PlaybookLoader(project_root=project_root)
     loaded = playbook_loader.load_model(args.playbook_id)
     model = loaded.model
@@ -371,6 +375,7 @@ def render(args: argparse.Namespace) -> str:
         [
             ["playbook_id", args.playbook_id],
             ["playbook_source", f"{loaded.source}: {loaded.path}"],
+            ["playbook_selection_rationale", playbook_rationale],
             ["configured_locale", configured_locale],
             ["effective_locale", f"{effective_locale} ({locale_source})"],
             ["repository_content_locale", args.repository_content_locale],
