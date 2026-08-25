@@ -10,7 +10,7 @@
 | **Phase skill** | 內部 | 綁定 playbook 的一個 workflow step，由 runtime 注入 prompt 執行 | `cafe-spec`、`cafe-plan`、`cafe-develop`、`cafe-review`、`cafe-pr`、`cafe-draft`、`cafe-incident_triage` |
 | **Shared skill** | 內部 | 跨 phase 的共用規則或工具，被 runtime 自動附掛或被其他 skill 引用 | `cafe-workflow-common`、`cafe-github_sync`、`cafe-common-chat-handoff` |
 | **Chat skill** | 內部 | `cafe chat` 內處理特定變更類型，結尾走 common chat handoff | `cafe-chat-develop-change`、`cafe-chat-spec-revision`、`cafe-chat-plan-revision` |
-| **Driver / meta skill** | 外部 | 給終端上的人或外層 agent 用，不注入 workflow phase | `use-cafe-workflow`、`write-cafe-phase`、`write-cafe-playbook` |
+| **Driver / meta skill** | 外部 | 給終端上的人或外層 agent 用，不注入 workflow phase | `use-cafe-workflow`、`write-cafe-agent`、`write-cafe-phase`、`write-cafe-playbook` |
 
 先判定類型，再套用對應章節的模板。一個 skill 只屬於一種類型。
 
@@ -179,7 +179,7 @@ workflow:
   phase skill 用 snake_case（`cafe-brief_first`、`cafe-incident_triage`）、
   shared / chat skill 用 kebab-case（`cafe-chat-develop-change`、`cafe-workflow-common`）。
 - **外部（driver / meta）skill 不加 `cafe-` 前綴**，但會被裝到使用者的通用 skill 目錄
-  （如 `~/.claude/skills/`），名稱必須自帶 CAFE 語境（`use-cafe-workflow`、`write-cafe-phase`、`write-cafe-playbook`），
+  （如 `~/.claude/skills/`），名稱必須自帶 CAFE 語境（`use-cafe-workflow`、`write-cafe-agent`、`write-cafe-phase`、`write-cafe-playbook`），
   不要用泛用動詞片語（`write-skill`、`review` 這類名字幾乎必撞）。
 - `description`：必寫「何時使用」。phase skill 可用中文動詞片語（如「審查程式碼品質與風險」）；
   shared / meta skill 用英文 "Use this skill when ..."。

@@ -102,9 +102,9 @@ Do not use sudo, do not modify system Python, and do not change my shell profile
 ```
 
 The repository bootstrap installs CAFE in an isolated user environment. It
-then installs the `use-cafe-workflow`, `write-cafe-phase`, and
-`write-cafe-playbook` skills for detected supported agents. It does not require
-a vendor-specific plugin.
+then installs the `use-cafe-workflow`, `write-cafe-agent`, `write-cafe-phase`,
+and `write-cafe-playbook` skills for detected supported agents. It does not
+require a vendor-specific plugin.
 
 For the exact mutation boundaries, prerequisites, manual alternatives, and
 upgrade behavior, read [INSTALL.md](INSTALL.md).
@@ -188,16 +188,25 @@ through development and review before QA runs again.
 
 ### Create a custom workflow with skills
 
-Custom workflows have two authoring layers:
+Custom workflows have three authoring layers:
 
 | Need | Use | Project source of truth |
 | --- | --- | --- |
+| Define a role persona and its checklist guidance | `write-cafe-agent` | `.cafe/agents/<role>/<name>.md` |
 | Define how one phase behaves | `write-cafe-phase` | `.cafe/skills/<name>/` |
 | Connect phases and gates | `write-cafe-playbook` | `.cafe/playbooks/<id>.yaml` |
 | Execute or resume the workflow | `use-cafe-workflow` | Runtime state under `.cafe/issues/` |
 
-Define or update the phase skills first, then connect them with a playbook. For
-example:
+Define or update the agents and phase skills first, then connect them with a
+playbook. Agent guideline bullets become checklist items in phases that opt into
+role guidance. For example:
+
+```text
+Use write-cafe-agent to create a Traditional Chinese security reviewer whose
+guidelines apply across every review phase.
+```
+
+Then define the phase behavior:
 
 ```text
 Use write-cafe-phase to create a project skill that turns an approved research

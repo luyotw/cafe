@@ -18,6 +18,7 @@ from cafe.skills.loader import read_skill_frontmatter
 
 DEFAULT_GLOBAL_SKILLS = (
     "use-cafe-workflow",
+    "write-cafe-agent",
     "write-cafe-playbook",
     "write-cafe-phase",
 )
