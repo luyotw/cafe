@@ -1113,6 +1113,7 @@ def close(
 
         # 3. Check for open/draft PRs
         github_ops = None
+        pr = None
         try:
             github_ops = GitHubOps()
             pr = github_ops.get_pr_for_branch(current_branch)
@@ -1137,6 +1138,8 @@ def close(
         except GitHubError:
             # If gh CLI is not installed or not authenticated, skip PR check
             pass
+
+        merged_pr = bool(pr and pr.get("state") == "MERGED")
 
         # 4. Load issue config
         issue_config_file = Path(f".cafe/issues/{current_branch}/issue.yaml").resolve()
@@ -1224,7 +1227,7 @@ def close(
                         issue_config_file=issue_config_file,
                         github_ops=github_ops,
                     )
-                elif pr_auto_create is False:
+                elif pr_auto_create is False and not merged_pr:
                     # Local review mode: merge feature branch into base branch
                     console.print("[dim]Merging feature branch into base branch...[/dim]")
                     git_ops.merge(feature_branch)
@@ -1240,7 +1243,7 @@ def close(
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
                 if squash:
                     console.print(f"  1. git merge --squash {feature_branch} && git commit")
-                elif pr_auto_create is False:
+                elif pr_auto_create is False and not merged_pr:
                     console.print(f"  1. git merge {feature_branch}")
                 else:
                     console.print("  1. git pull")
@@ -1358,7 +1361,7 @@ def close(
                         issue_config_file=issue_config_file,
                         github_ops=github_ops,
                     )
-                elif pr_auto_create is False:
+                elif pr_auto_create is False and not merged_pr:
                     # Local review mode: merge feature branch into base branch
                     console.print("[dim]Merging feature branch into base branch...[/dim]")
                     git_ops.merge(feature_branch)
@@ -1374,7 +1377,7 @@ def close(
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
                 if squash:
                     console.print(f"  1. git merge --squash {feature_branch} && git commit")
-                elif pr_auto_create is False:
+                elif pr_auto_create is False and not merged_pr:
                     console.print(f"  1. git merge {feature_branch}")
                 else:
                     console.print("  1. git pull")
