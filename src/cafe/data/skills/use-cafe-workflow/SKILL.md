@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.19.3
+version: 1.20.0
 ---
 
 # Use CAFE Workflow
@@ -18,12 +18,11 @@ version: 1.19.3
 
 ## Progressive disclosure
 
-Read this file completely, then load only the references required by the current
-situation. Resolve every path relative to this `SKILL.md`.
+Read this file completely, then load only the references required by the current situation. Resolve every path relative to this `SKILL.md`.
 
 | Situation | Read before acting |
 | --- | --- |
-| Start or resume before the first workflow execution; answer a locale or kickoff question | `references/kickoff.md`, `references/model_selection.md`, and `references/strategic_context.md` |
+| Start or resume workflow execution; answer a locale or kickoff question | `references/project_global_skill_sync.md`, `references/kickoff.md`, `references/model_selection.md`, and `references/strategic_context.md` |
 | Run, resume, inspect, retry, or recover ordinary workflow work | `references/running_workflow.md` |
 | Handle `to_owner=user`, confirmation, clarification, permission, or alignment | `references/handoffs_and_alignment.md`; also read `references/strategic_context.md` |
 | Start or resume linked work; confirm a spec or plan with an issue-decomposition assessment | `references/issue_decomposition.md`; also read `references/strategic_context.md` and `references/handoffs_and_alignment.md` |
@@ -96,6 +95,8 @@ If more than one situation applies, read every listed reference before acting; d
 ## Driver checklist
 ### Start or resume
 
+- [ ] Run the project/global skill check. Ask only for differences; never prompt
+  for identical catalogs or when the project has no skill overrides.
 - [ ] Read the kickoff and strategic-context references.
 - [ ] Resolve the active playbook, effective conversation locale, proposed
   repository content locale, confirmation gates, reactive handoffs, mandate,
@@ -136,15 +137,14 @@ If more than one situation applies, read every listed reference before acting; d
 ## Reference index
 
 - `references/kickoff.md` — locale, confirmation contract, formatter, prepare.
+- `references/project_global_skill_sync.md` — silent check and approved updates.
 - `references/strategic_context.md` — documents, mandate, protected overrides.
 - `references/running_workflow.md` — commands, inspection, retries, operating rules.
-- `references/model_selection.md` — issue sizing, provider-neutral phase
-  profiles, configured fallback preflight, reassessment, and adjustment authority.
+- `references/model_selection.md` — phase profiles, model preflight, and reassessment.
 - `references/phases_yaml.md` — confirmed-chain writer contract and
   non-authoritative field guidance.
 - `references/handoffs_and_alignment.md` — user pauses and driver decisions.
 - `references/diagnosis_and_repair.md` — bounded classification and disposition.
 - `references/convergent_pr_review.md` — batched final review, merge, close, teardown.
 - `references/correction_ab_experiment.md` — controlled efficiency experiment.
-- `references/issue_decomposition.md` — assessment validation, authority,
-  delivery gate, and durable project position.
+- `references/issue_decomposition.md` — validation, authority, and project position.

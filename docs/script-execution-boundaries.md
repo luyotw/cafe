@@ -31,6 +31,8 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/data/skills/use-cafe-workflow/scripts/format_kickoff_contract.py::_reexec_with_cafe_python` | Internal fixed Python re-exec |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::_cli_fingerprint` | Internal version probe |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::candidate_probe` | User-requested model availability probe |
+| `src/cafe/data/skills/use-cafe-workflow/scripts/project_global_skill_sync.py::_git_main_worktree` | Internal fixed Git worktree discovery query |
+| `src/cafe/data/skills/use-cafe-workflow/scripts/project_global_skill_sync.py::_git_output` | Internal fixed Git worktree discovery query |
 | `src/cafe/install/bootstrap.py::_run` | Internal installer command family |
 | `src/cafe/skills/native_bridge.py::_ensure_cli_dir_git_excluded` | Internal fixed Git command |
 | `src/cafe/ui/chat.py::launch_chat_session` | Internal agent CLI transport |

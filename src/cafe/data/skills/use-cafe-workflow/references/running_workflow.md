@@ -6,6 +6,11 @@ first execution and after every completed phase.
 
 ## Command checklist
 
+- Before any start or resume invocation, follow
+  `project_global_skill_sync.md`: run the read-only project/global skill check,
+  stay silent when it reports `identical` or `no_project_skills`, and ask the
+  user before applying any reported project-to-global update.
+
 - Resolve the current phase from `cafe status` and the structured baton, then
   start it with the user's requirement:
 

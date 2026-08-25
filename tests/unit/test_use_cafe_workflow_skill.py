@@ -1,11 +1,14 @@
 """Tests for bundled use-cafe-workflow skill guidance."""
 
+import fcntl
 import importlib.util
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from cafe.core.playbook import confirmation_gate_steps
 from cafe.core.status_codes import (
@@ -93,6 +96,7 @@ def test_use_cafe_workflow_uses_progressive_disclosure() -> None:
         "convergent_pr_review.md",
         "correction_ab_experiment.md",
         "issue_decomposition.md",
+        "project_global_skill_sync.md",
     )
 
     assert "## Progressive disclosure" in skill
@@ -104,6 +108,578 @@ def test_use_cafe_workflow_uses_progressive_disclosure() -> None:
     assert "## Conversation Locale" not in skill
     assert "## Driver-Owned Alignment" not in skill
     assert "## Bounded Self-Diagnosis And Declarative Repair" not in skill
+
+
+def test_use_cafe_workflow_checks_project_and_global_skills_before_execution() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    reference = _read_skill_resource("references/project_global_skill_sync.md")
+    normalized = " ".join(reference.split())
+
+    assert "references/project_global_skill_sync.md" in skill
+    assert "project_global_skill_sync.md" in running
+    assert "<skill-dir>/scripts/project_global_skill_sync.py check" in reference
+    assert "continue without mentioning the check or asking the user" in normalized
+    assert "Do not update before the user explicitly agrees" in normalized
+    assert "<skill-dir>/scripts/project_global_skill_sync.py update" in reference
+    assert "--comparison-token <token-from-the-approved-check>" in reference
+    assert "--project-root <canonical-main-worktree> update" in normalized
+    assert "--project-root <canonical-main-worktree> check" in normalized
+    assert "same working directory" in normalized
+    assert "Re-run `check` afterward" in reference
+
+
+def _write_project_sync_skill(root: Path, name: str, version: str, body: str) -> Path:
+    skill = root / name
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: test\nversion: {version}\n---\n\n{body}\n",
+        encoding="utf-8",
+    )
+    return skill
+
+
+def _project_global_sync_module():
+    return _load_script_module(
+        SKILL_ROOT / "scripts" / "project_global_skill_sync.py",
+        "project_global_skill_sync",
+    )
+
+
+def test_project_global_skill_check_is_silent_candidate_when_identical(
+    tmp_path: Path,
+) -> None:
+    module = _project_global_sync_module()
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    project_skill = _write_project_sync_skill(
+        project / ".cafe" / "skills", "cafe-example", "1.0.0", "same"
+    )
+    global_skill = _write_project_sync_skill(
+        global_root, "cafe-example", "1.0.0", "same"
+    )
+    _write_project_sync_skill(global_root, "global-only", "1.0.0", "ignored")
+    (project_skill / "scripts" / "__pycache__").mkdir(parents=True)
+    (project_skill / "scripts" / "__pycache__" / "generated.pyc").write_bytes(b"project")
+    (global_skill / "scripts" / "__pycache__").mkdir(parents=True)
+    (global_skill / "scripts" / "__pycache__" / "generated.pyc").write_bytes(b"global")
+
+    result = module.compare_skills(project_roots=(project,), global_root=global_root)
+
+    assert result["status"] == "identical"
+    assert result["compared_count"] == 1
+    assert result["differences"] == []
+
+
+def test_project_global_skill_check_lists_versions_and_missing_global(
+    tmp_path: Path,
+) -> None:
+    module = _project_global_sync_module()
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    _write_project_sync_skill(
+        project / ".cafe" / "skills", "cafe-changed", "2.0.0", "project"
+    )
+    _write_project_sync_skill(global_root, "cafe-changed", "1.0.0", "global")
+    _write_project_sync_skill(
+        project / ".cafe" / "skills", "cafe-missing", "3.0.0", "project"
+    )
+
+    result = module.compare_skills(project_roots=(project,), global_root=global_root)
+    differences = {item["skill"]: item for item in result["differences"]}
+
+    assert result["status"] == "differences"
+    assert differences["cafe-changed"]["reason"] == "content_mismatch"
+    assert differences["cafe-changed"]["project_version"] == "2.0.0"
+    assert differences["cafe-changed"]["global_version"] == "1.0.0"
+    assert differences["cafe-missing"]["reason"] == "missing_global"
+    assert differences["cafe-missing"]["global_version"] is None
+
+
+def test_project_global_skill_check_binds_invalid_global_state_to_token(
+    tmp_path: Path,
+) -> None:
+    module = _project_global_sync_module()
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    _write_project_sync_skill(
+        project / ".cafe" / "skills", "cafe-invalid", "2.0.0", "project"
+    )
+    invalid = global_root / "cafe-invalid"
+    invalid.mkdir(parents=True)
+    (invalid / "SKILL.md").write_text("invalid one\n", encoding="utf-8")
+
+    first = module.compare_skills(project_roots=(project,), global_root=global_root)
+    (invalid / "SKILL.md").write_text("invalid two\n", encoding="utf-8")
+    second = module.compare_skills(project_roots=(project,), global_root=global_root)
+
+    assert first["differences"][0]["reason"] == "invalid_global"
+    assert first["differences"][0]["global_digest"] is not None
+    assert first["comparison_token"] != second["comparison_token"]
+
+
+def test_project_global_skill_check_binds_dangling_global_symlink(
+    tmp_path: Path,
+) -> None:
+    module = _project_global_sync_module()
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    _write_project_sync_skill(
+        project / ".cafe" / "skills", "cafe-linked", "2.0.0", "project"
+    )
+    global_root.mkdir()
+    link = global_root / "cafe-linked"
+    link.symlink_to("missing-one", target_is_directory=True)
+
+    first = module.compare_skills(project_roots=(project,), global_root=global_root)
+    link.unlink()
+    link.symlink_to("missing-two", target_is_directory=True)
+    second = module.compare_skills(project_roots=(project,), global_root=global_root)
+
+    assert first["differences"][0]["reason"] == "invalid_global"
+    assert first["differences"][0]["global_digest"] is not None
+    assert first["comparison_token"] != second["comparison_token"]
+
+
+def test_project_global_skill_update_changes_only_approved_skills(tmp_path: Path) -> None:
+    module = _project_global_sync_module()
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    for name in ("cafe-approved", "cafe-unapproved"):
+        _write_project_sync_skill(
+            project / ".cafe" / "skills", name, "2.0.0", f"project {name}"
+        )
+        _write_project_sync_skill(global_root, name, "1.0.0", f"global {name}")
+
+    checked = module.compare_skills(project_roots=(project,), global_root=global_root)
+    result = module.update_skills(
+        project_roots=(project,),
+        global_root=global_root,
+        selected=("cafe-approved",),
+        comparison_token=checked["comparison_token"],
+    )
+
+    assert result["status"] == "updated"
+    assert result["updated"] == ["cafe-approved"]
+    remaining = {item["skill"] for item in result["comparison"]["differences"]}
+    assert remaining == {"cafe-unapproved"}
+    assert "project cafe-approved" in (
+        global_root / "cafe-approved" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "global cafe-unapproved" in (
+        global_root / "cafe-unapproved" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_project_global_skill_discovery_reads_main_and_active_worktree_overlays(
+    tmp_path: Path,
+) -> None:
+    module = _project_global_sync_module()
+    main = tmp_path / "main"
+    linked = tmp_path / "linked"
+    main.mkdir()
+    subprocess.run(["git", "init", "-b", "develop"], cwd=main, check=True, capture_output=True)
+    (main / "seed").write_text("seed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "seed"], cwd=main, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "seed",
+        ],
+        cwd=main,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "worktree", "add", "-b", "issue", str(linked)],
+        cwd=main,
+        check=True,
+        capture_output=True,
+    )
+    _write_project_sync_skill(
+        main / ".cafe" / "skills", "cafe-main", "1.0.0", "main"
+    )
+    _write_project_sync_skill(
+        linked / ".cafe" / "skills", "cafe-overlay", "1.0.0", "overlay"
+    )
+
+    roots = module.discover_project_roots(linked)
+    project_skills = module._project_skills(roots)
+
+    assert roots == (main.resolve(), linked.resolve())
+    assert set(project_skills) == {"cafe-main", "cafe-overlay"}
+
+
+def test_project_global_skill_discovery_supports_separate_git_directory(
+    tmp_path: Path,
+) -> None:
+    module = _project_global_sync_module()
+    main = tmp_path / "main"
+    linked = tmp_path / "linked"
+    git_dir = tmp_path / "separate-git-dir"
+    subprocess.run(
+        [
+            "git",
+            "init",
+            "-b",
+            "develop",
+            "--separate-git-dir",
+            str(git_dir),
+            str(main),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    (main / "seed").write_text("seed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "seed"], cwd=main, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "seed",
+        ],
+        cwd=main,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "worktree", "add", "-b", "issue", str(linked)],
+        cwd=main,
+        check=True,
+        capture_output=True,
+    )
+    _write_project_sync_skill(
+        main / ".cafe" / "skills", "cafe-main", "1.0.0", "main"
+    )
+
+    roots = module.discover_project_roots(linked)
+    project_skills = module._project_skills(roots)
+
+    assert roots == (main.resolve(),)
+    assert set(project_skills) == {"cafe-main"}
+
+
+def test_project_global_skill_discovery_fails_closed_for_unmapped_separate_git_directory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _project_global_sync_module()
+    main = tmp_path / "projects" / "a" / "main"
+    linked = tmp_path / "worktrees" / "x" / "linked"
+    git_dir = tmp_path / "metadata" / "y" / "gitstore"
+    main.parent.mkdir(parents=True)
+    linked.parent.mkdir(parents=True)
+    git_dir.parent.mkdir(parents=True)
+    subprocess.run(
+        [
+            "git",
+            "init",
+            "-b",
+            "develop",
+            "--separate-git-dir",
+            str(git_dir),
+            str(main),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    (main / "seed").write_text("seed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "seed"], cwd=main, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "seed",
+        ],
+        cwd=main,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "worktree", "add", "-b", "issue", str(linked)],
+        cwd=main,
+        check=True,
+        capture_output=True,
+    )
+    _write_project_sync_skill(
+        main / ".cafe" / "skills", "cafe-main", "1.0.0", "main"
+    )
+    _write_project_sync_skill(
+        linked / ".cafe" / "skills", "cafe-overlay", "1.0.0", "overlay"
+    )
+
+    with pytest.raises(module.SkillSyncError, match="--project-root"):
+        module.discover_project_roots(linked)
+
+    monkeypatch.chdir(linked)
+    roots = module._resolve_project_roots(main)
+    project_skills = module._project_skills(roots)
+
+    assert roots == (main.resolve(), linked.resolve())
+    assert set(project_skills) == {"cafe-main", "cafe-overlay"}
+
+
+def test_project_global_skill_check_includes_symlinked_project_skills(
+    tmp_path: Path,
+) -> None:
+    module = _project_global_sync_module()
+    project = tmp_path / "project"
+    external = _write_project_sync_skill(
+        tmp_path / "shared", "cafe-linked", "2.0.0", "linked project skill"
+    )
+    project_skills = project / ".cafe" / "skills"
+    project_skills.mkdir(parents=True)
+    (project_skills / "cafe-linked").symlink_to(external, target_is_directory=True)
+
+    result = module.compare_skills(
+        project_roots=(project,), global_root=tmp_path / "global"
+    )
+
+    assert result["compared_count"] == 1
+    assert result["differences"][0]["skill"] == "cafe-linked"
+    assert result["differences"][0]["reason"] == "missing_global"
+
+
+def test_project_global_skill_digest_has_unambiguous_file_boundaries(
+    tmp_path: Path,
+) -> None:
+    module = _project_global_sync_module()
+    single_file = tmp_path / "single"
+    two_files = tmp_path / "two"
+    single_file.mkdir()
+    two_files.mkdir()
+    (single_file / "a").write_bytes(b"X\0F\0b\0" + b"644" + b"\0Y")
+    (two_files / "a").write_bytes(b"X")
+    (two_files / "b").write_bytes(b"Y")
+
+    assert module._tree_digest(single_file) != module._tree_digest(two_files)
+
+
+@pytest.mark.parametrize("changed_side", ["project", "global"])
+def test_project_global_skill_update_rejects_content_changed_after_approval(
+    tmp_path: Path, changed_side: str
+) -> None:
+    module = _project_global_sync_module()
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    project_skill = _write_project_sync_skill(
+        project / ".cafe" / "skills", "cafe-drift", "2.0.0", "project"
+    )
+    global_skill = _write_project_sync_skill(
+        global_root, "cafe-drift", "1.0.0", "global"
+    )
+    checked = module.compare_skills(project_roots=(project,), global_root=global_root)
+    changed = project_skill if changed_side == "project" else global_skill
+    (changed / "SKILL.md").write_text(
+        (changed / "SKILL.md").read_text(encoding="utf-8") + "drift\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(module.SkillSyncError, match="changed after approval"):
+        module.update_skills(
+            project_roots=(project,),
+            global_root=global_root,
+            selected=("cafe-drift",),
+            comparison_token=checked["comparison_token"],
+        )
+
+
+@pytest.mark.parametrize("changed_side", ["project", "global"])
+def test_project_global_skill_update_rejects_drift_during_staging(
+    tmp_path: Path, monkeypatch, changed_side: str
+) -> None:
+    module = _project_global_sync_module()
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    project_skill = _write_project_sync_skill(
+        project / ".cafe" / "skills", "cafe-race", "2.0.0", "project"
+    )
+    global_skill = _write_project_sync_skill(
+        global_root, "cafe-race", "1.0.0", "global"
+    )
+    checked = module.compare_skills(project_roots=(project,), global_root=global_root)
+    real_copytree = module.shutil.copytree
+
+    def copy_then_mutate(source, destination, **kwargs):
+        result = real_copytree(source, destination, **kwargs)
+        changed = project_skill if changed_side == "project" else global_skill
+        (changed / "SKILL.md").write_text(
+            (changed / "SKILL.md").read_text(encoding="utf-8") + "race\n",
+            encoding="utf-8",
+        )
+        return result
+
+    monkeypatch.setattr(module.shutil, "copytree", copy_then_mutate)
+
+    with pytest.raises(module.SkillSyncError, match="changed after approval"):
+        module.update_skills(
+            project_roots=(project,),
+            global_root=global_root,
+            selected=("cafe-race",),
+            comparison_token=checked["comparison_token"],
+        )
+
+    assert "global\n" in (global_skill / "SKILL.md").read_text(encoding="utf-8")
+
+
+def test_project_global_skill_update_rejects_unapproved_staged_content(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _project_global_sync_module()
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    project_skill = _write_project_sync_skill(
+        project / ".cafe" / "skills", "cafe-stage-race", "2.0.0", "project"
+    )
+    global_skill = _write_project_sync_skill(
+        global_root, "cafe-stage-race", "1.0.0", "global"
+    )
+    checked = module.compare_skills(project_roots=(project,), global_root=global_root)
+    real_copytree = module.shutil.copytree
+
+    def mutate_then_copy(source, destination, **kwargs):
+        (project_skill / "SKILL.md").write_text(
+            (project_skill / "SKILL.md").read_text(encoding="utf-8") + "race\n",
+            encoding="utf-8",
+        )
+        return real_copytree(source, destination, **kwargs)
+
+    monkeypatch.setattr(module.shutil, "copytree", mutate_then_copy)
+
+    with pytest.raises(module.SkillSyncError, match="changed after approval while staging"):
+        module.update_skills(
+            project_roots=(project,),
+            global_root=global_root,
+            selected=("cafe-stage-race",),
+            comparison_token=checked["comparison_token"],
+        )
+
+    assert "global\n" in (global_skill / "SKILL.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("second_state", ["existing", "missing"])
+def test_project_global_skill_update_rejects_drift_during_multi_skill_publish(
+    tmp_path: Path, monkeypatch, second_state: str
+) -> None:
+    module = _project_global_sync_module()
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    for name in ("cafe-one", "cafe-two"):
+        _write_project_sync_skill(
+            project / ".cafe" / "skills", name, "2.0.0", f"project {name}"
+        )
+    _write_project_sync_skill(global_root, "cafe-one", "1.0.0", "global cafe-one")
+    if second_state == "existing":
+        _write_project_sync_skill(global_root, "cafe-two", "1.0.0", "global cafe-two")
+    checked = module.compare_skills(project_roots=(project,), global_root=global_root)
+    real_replace = module.os.replace
+
+    def replace_then_mutate(source, target):
+        result = real_replace(source, target)
+        if Path(source) == global_root / "cafe-one" and Path(target).parent.name == "backups":
+            if second_state == "existing":
+                skill_file = global_root / "cafe-two" / "SKILL.md"
+                skill_file.write_text(
+                    skill_file.read_text(encoding="utf-8") + "concurrent\n",
+                    encoding="utf-8",
+                )
+            else:
+                _write_project_sync_skill(
+                    global_root, "cafe-two", "9.0.0", "concurrent"
+                )
+        return result
+
+    monkeypatch.setattr(module.os, "replace", replace_then_mutate)
+
+    with pytest.raises(module.SkillSyncError, match="changed after approval during publish"):
+        module.update_skills(
+            project_roots=(project,),
+            global_root=global_root,
+            selected=("cafe-one", "cafe-two"),
+            comparison_token=checked["comparison_token"],
+        )
+
+    assert "global cafe-one" in (global_root / "cafe-one" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "concurrent" in (global_root / "cafe-two" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert list(global_root.glob(".project-skill-sync-*")) == []
+
+
+def test_project_global_skill_update_times_out_on_contended_lock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _project_global_sync_module()
+    global_root = tmp_path / "global"
+    global_root.mkdir()
+    lock_path = global_root / ".project-skill-sync.lock"
+    monkeypatch.setattr(module, "LOCK_TIMEOUT_SECONDS", 0.0)
+
+    with lock_path.open("a+") as holder:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(module.SkillSyncError, match="timed out waiting"):
+            module.update_skills(
+                project_roots=(),
+                global_root=global_root,
+                selected=("cafe-lock",),
+                comparison_token="0" * 64,
+            )
+
+
+def test_project_global_skill_update_preserves_backup_when_rollback_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _project_global_sync_module()
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    for name in ("cafe-one", "cafe-two"):
+        _write_project_sync_skill(
+            project / ".cafe" / "skills", name, "2.0.0", f"project {name}"
+        )
+        _write_project_sync_skill(global_root, name, "1.0.0", f"global {name}")
+    checked = module.compare_skills(project_roots=(project,), global_root=global_root)
+    real_replace = module.os.replace
+
+    def fail_publish_and_rollback(source, target):
+        source_path = Path(source)
+        if source_path.parent.name == "staged" and source_path.name == "cafe-two":
+            raise OSError("publish blocked")
+        if source_path.parent.name == "backups" and source_path.name == "cafe-one":
+            raise OSError("rollback blocked")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(module.os, "replace", fail_publish_and_rollback)
+
+    with pytest.raises(module.SkillSyncError, match="recover backups from"):
+        module.update_skills(
+            project_roots=(project,),
+            global_root=global_root,
+            selected=("cafe-one", "cafe-two"),
+            comparison_token=checked["comparison_token"],
+        )
+
+    preserved = list(
+        global_root.glob(".project-skill-sync-*/backups/cafe-one/SKILL.md")
+    )
+    assert len(preserved) == 1
+    assert "global cafe-one" in preserved[0].read_text(encoding="utf-8")
 
 
 def test_use_cafe_workflow_skill_makes_driver_own_alignment_decisions() -> None:
