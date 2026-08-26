@@ -575,6 +575,11 @@ def workflow(
         None, "--start-step", help="Start execution from a specific step"
     ),
     single_step: bool = typer.Option(False, "--single-step", help="Run only one playbook step"),
+    mute_agent_output: bool = typer.Option(
+        False,
+        "--mute-agent-output",
+        help="Suppress agent response streaming while preserving workflow events and artifacts",
+    ),
     dry_run: bool = typer.Option(
         True, "--dry-run/--execute", help="Preview the read-only workflow simulation"
     ),
@@ -691,6 +696,7 @@ def workflow(
                 step_user_inputs=initial_step_user_inputs,
                 interactive=_interactive_mode(),
                 extra_allowed_directories=add_dir_values,
+                stream_agent_output=not mute_agent_output,
             )
 
         # Mutable holder so wrapped_executor can swap executors when the active

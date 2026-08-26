@@ -85,13 +85,15 @@ class AgentExecutor:
         AgentCLI.CODEX: {},
     }
 
-    def __init__(self, config: AgentConfig) -> None:
+    def __init__(self, config: AgentConfig, *, stream_output: bool = True) -> None:
         """Initialize agent executor.
 
         Args:
             config: Agent configuration
+            stream_output: Whether to print agent response text while preserving parsing and logs
         """
         self.config = config
+        self.stream_output = stream_output
         self._total_token_usage = TokenUsage()
 
     def _get_cli_strategy(self) -> AbstractCLI:
@@ -886,10 +888,12 @@ class AgentExecutor:
                     err.cli_command_args = cmd[1:]
                     raise err
 
-        # Print header
-        print(f"\n{'=' * 80}")
-        print(f"{cli_name} Response (streaming):")
-        print(f"{'=' * 80}")
+        # Agent narration may be muted for a supervising driver. Parsing, durable
+        # streaming logs, lifecycle events, and error output remain unaffected.
+        if self.stream_output:
+            print(f"\n{'=' * 80}")
+            print(f"{cli_name} Response (streaming):")
+            print(f"{'=' * 80}")
 
         output_lines = []
         response_text = ""
@@ -1104,8 +1108,9 @@ class AgentExecutor:
                             # FIXME: Should implement extractors seperately for each CLI
                             if json_content_extractor:
                                 content = json_content_extractor(data)
-                                if content:
+                                if content and self.stream_output:
                                     print(content, end="\n\n", flush=True)
+                                if content:
                                     streaming_log.append(content)
                                     response_text = content  # Only save the last fragment
                             else:
@@ -1115,14 +1120,16 @@ class AgentExecutor:
                                     for content_block in data["message"]["content"]:
                                         if content_block.get("type") == "text":
                                             text = content_block.get("text", "")
-                                            print(text, end="\n\n", flush=True)
+                                            if self.stream_output:
+                                                print(text, end="\n\n", flush=True)
                                             streaming_log.append(text)
                                             response_text = text  # Only save the last fragment
 
                                 # Old format: direct content field
                                 elif "content" in data:
                                     content = data["content"]
-                                    print(content, end="\n\n", flush=True)
+                                    if self.stream_output:
+                                        print(content, end="\n\n", flush=True)
                                     streaming_log.append(content)
                                     response_text = content  # Only save the last fragment
 
@@ -1151,12 +1158,14 @@ class AgentExecutor:
                                 persist_safe_stream_error(err)
                                 raise err
 
-                            # Non-JSON line, just print it
-                            print(line, end="")
+                            # Preserve non-JSON output even when console narration is muted.
+                            if self.stream_output:
+                                print(line, end="")
                             output_lines.append(line)
                     else:
                         # Simple line-by-line streaming (Copilot style)
-                        print(line, end="")
+                        if self.stream_output:
+                            print(line, end="")
                         output_lines.append(line)
                         streaming_log.append(line)  # Record each line to streaming_log
         except KeyboardInterrupt:
@@ -1173,7 +1182,8 @@ class AgentExecutor:
                 streaming_file_handle.close()
             raise
 
-        print(f"\n{'=' * 80}\n")
+        if self.stream_output:
+            print(f"\n{'=' * 80}\n")
 
         post_output_timeout_triggered = False
 

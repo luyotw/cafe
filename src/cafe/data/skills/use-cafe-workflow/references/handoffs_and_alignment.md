@@ -55,7 +55,7 @@ reassess and configure that phase's model chain, because this invocation may
 execute the continuation. Then submit the response, for example:
 
 ```bash
-cafe workflow --execute \
+cafe workflow --execute --mute-agent-output \
   --user-input '{"task":"output-review","decision":"confirm","human_task_id":"<active-human-task-id>"}'
 ```
 
@@ -131,7 +131,7 @@ accepted artifact records it. Continuous mode proceeds to the next real pause;
 single-step mode returns control after the next step:
 
 ```bash
-cafe workflow --execute \
+cafe workflow --execute --mute-agent-output \
   --user-input '{"task":"clarification-answers","answers":{"<question-id>":"<answer>"},"human_task_id":"<active-human-task-id>"}'
 ```
 
@@ -139,7 +139,7 @@ Use every current question ID required by the active task. If its declared
 input schema is `feedback` rather than `answers`, use:
 
 ```bash
-cafe workflow --execute \
+cafe workflow --execute --mute-agent-output \
   --user-input '{"task":"clarification-feedback","feedback":"<answer>","human_task_id":"<active-human-task-id>"}'
 ```
 
@@ -161,7 +161,7 @@ For an explicit `alignment_checkpoint`:
    approve the checkpoint:
 
    ```bash
-   cafe workflow --execute \
+   cafe workflow --execute --mute-agent-output \
      --user-input '{"decision":"approve","reason":"Within confirmed roadmap and mandate."}'
    ```
 

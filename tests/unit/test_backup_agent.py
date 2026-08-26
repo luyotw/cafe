@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 from io import StringIO
 
-from cafe.agents.executor import AgentExecutionError
+from cafe.agents.executor import AgentExecutionError, AgentExecutor
 from cafe.agents.manager import AgentManager
 from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, CriticalPhaseError, TokenUsage
 
@@ -111,6 +111,61 @@ class TestAgentManagerBackupRetry:
             response, *_ = manager.execute("David", "test prompt", phase_name="develop")
 
         assert response == "backup success"
+
+    def test_muted_output_propagates_to_backup_executor(self) -> None:
+        manager = AgentManager(stream_agent_output=False)
+        manager.register_agent(
+            AgentConfig(
+                name="David",
+                cli=AgentCLI.CLAUDE,
+                backup_clis=[AgentCLI.GEMINI],
+            )
+        )
+        seen_executors = []
+
+        call_count = 0
+
+        def execute_side_effect(executor, *_args, **_kwargs):
+            nonlocal call_count
+            seen_executors.append(executor)
+            call_count += 1
+            if call_count == 1:
+                raise self._make_rate_limit_error()
+            return self._make_success_response("backup success")
+
+        with patch.object(
+            AgentExecutor,
+            "execute",
+            autospec=True,
+            side_effect=execute_side_effect,
+        ):
+            response, *_ = manager.execute("David", "test prompt")
+
+        assert response == "backup success"
+        assert len(seen_executors) == 2
+        assert seen_executors[0].stream_output is False
+        assert seen_executors[1].stream_output is False
+        assert seen_executors[1].config.cli == AgentCLI.GEMINI
+
+    def test_muted_output_propagates_to_rebuilt_executor(self) -> None:
+        manager = AgentManager(stream_agent_output=False)
+        manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CLAUDE))
+        replacement = AgentConfig(name="David", cli=AgentCLI.CODEX)
+
+        with (
+            patch.object(manager, "get_execution_config", return_value=replacement),
+            patch.object(
+                AgentExecutor,
+                "execute",
+                autospec=True,
+                return_value=self._make_success_response(),
+            ),
+        ):
+            manager.execute("David", "test prompt")
+
+        rebuilt = manager.agents["David"]
+        assert rebuilt.config.cli == AgentCLI.CODEX
+        assert rebuilt.stream_output is False
 
     def test_backup_receives_fresh_takeover_context_without_primary_session(self) -> None:
         manager = AgentManager()

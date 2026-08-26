@@ -36,16 +36,21 @@ class AgentManager:
     SUPPORTS_COLD_TAKEOVER = True
 
     def __init__(
-        self, session_manager: Optional[SessionManager] = None, issue_name: Optional[str] = None
+        self,
+        session_manager: Optional[SessionManager] = None,
+        issue_name: Optional[str] = None,
+        stream_agent_output: bool = True,
     ) -> None:
         """Initialize agent manager.
 
         Args:
             session_manager: Session manager for handling agent sessions
             issue_name: Issue name for issue-specific sessions
+            stream_agent_output: Whether executors print agent response narration
         """
         self.session_manager = session_manager or SessionManager()
         self.issue_name = issue_name
+        self.stream_agent_output = stream_agent_output
         self.agents: Dict[str, AgentExecutor] = {}
         self.current_agent_name: Optional[str] = None
         self._total_token_usage = TokenUsage()
@@ -93,6 +98,7 @@ class AgentManager:
 
         # Create executor
         executor = AgentExecutor(config_with_session)
+        executor.stream_output = self.stream_agent_output
         self.agents[config.name] = executor
 
     def _load_active_cli_from_file(
@@ -443,6 +449,7 @@ class AgentManager:
 
         if not self._config_is_equivalent(base_executor.config, execution_config):
             executor = AgentExecutor(execution_config)
+            executor.stream_output = self.stream_agent_output
             effective_continuation = continuation or SessionContinuation.auto()
             if effective_continuation.policy == SessionContinuationPolicy.AUTO:
                 self.agents[agent_name] = executor
@@ -719,6 +726,7 @@ class AgentManager:
                 session_id=fallback_session_id,
             )
             backup_executor = AgentExecutor(backup_config)
+            backup_executor.stream_output = self.stream_agent_output
 
             backup_attempt = 1
             transient_retry_done = False

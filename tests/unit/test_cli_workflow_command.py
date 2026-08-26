@@ -1355,23 +1355,28 @@ def test_workflow_command_resume_confirm_output_keeps_await_agent_intent(
 
 
 def test_workflow_help_describes_user_input_without_spec_only_wording() -> None:
-    result = runner.invoke(app, ["workflow", "--help"])
+    result = runner.invoke(app, ["workflow", "--help"], env={"COLUMNS": "200"})
     assert result.exit_code == 0
     help_text = result.stdout.lower()
+    normalized_help = " ".join(help_text.replace("│", " ").split())
     assert "spec step" not in help_text
-    assert "initial workflow input" in help_text
-    assert "resuming from a user" in help_text
-    assert "handoff" in help_text
+    assert (
+        "initial workflow input, or answer to write when resuming from a user handoff"
+        in normalized_help
+    )
+    assert "--mute-agent-output" in help_text
 
 
 def test_make_help_describes_user_input_without_spec_only_wording() -> None:
-    result = runner.invoke(app, ["make", "--help"])
+    result = runner.invoke(app, ["make", "--help"], env={"COLUMNS": "200"})
     assert result.exit_code == 0
     help_text = result.stdout.lower()
+    normalized_help = " ".join(help_text.replace("│", " ").split())
     assert "spec step" not in help_text
-    assert "initial workflow input" in help_text
-    assert "resuming from a user" in help_text
-    assert "handoff" in help_text
+    assert (
+        "initial workflow input, or answer to write when resuming from a user handoff"
+        in normalized_help
+    )
 
 
 def test_build_workflow_step_executor_passes_allowed_directories(
@@ -3362,11 +3367,13 @@ steps:
                 "--start-step",
                 "plan",
                 "--single-step",
+                "--mute-agent-output",
             ],
         )
         assert result.exit_code == 0
         assert executed_steps == ["plan"]
         assert mock_builder.call_args.kwargs["phase_name"] == "plan"
+        assert mock_builder.call_args.kwargs["stream_agent_output"] is False
 
 
 def test_workflow_command_rebuilds_executor_for_each_active_phase(

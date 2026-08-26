@@ -22,14 +22,14 @@ unexecuted.
   start it with the user's requirement:
 
   ```bash
-  cafe workflow --execute --start-step <step> \
+  cafe workflow --execute --mute-agent-output --start-step <step> \
     --user-input "<requirement or answer>. Strategic context: .cafe/strategic_context.yaml (issue: <issue-name>)"
   ```
 
 - Resume the phase declared by the persisted baton without new input:
 
   ```bash
-  cafe workflow --execute
+  cafe workflow --execute --mute-agent-output
   ```
 
 - Answer an authorized user handoff without overriding its structured baton.
@@ -74,6 +74,12 @@ handoff or `done`, or execution stops on an error. A host may require more
 frequent user-facing heartbeat messages; those messages must not trigger an
 extra CAFE status or artifact poll.
 
+Use `--mute-agent-output` for driver execution so provider narration is parsed
+and persisted without being copied into driver context. This flag does not
+suppress workflow lifecycle events, errors, HumanTasks, final artifacts, or
+`streaming.jsonl`. Remove it only when the user requests a live transcript or
+a bounded diagnosis requires observing the provider response stream.
+
 When CAFE pauses for user input, read `handoffs_and_alignment.md` before
 answering or resuming. Non-interactive resumption is allowed only when the exact
 answer or permission already exists in the current thread, or the confirmed
@@ -90,10 +96,10 @@ response. A terminal `_done` baton has no future chain to adjust.
 
 ## Operating rules
 
-- Do not use `cafe make` for driver execution. Use `cafe workflow --execute` and
-  derive the presence of `--single-step` only from the confirmed execution
-  mode. `continuous` follows persisted workflow state until a user-owned
-  handoff, error, or `done`; `single_step` returns control after every step.
+- Do not use `cafe make` for driver execution. Use
+  `cafe workflow --execute --mute-agent-output` and derive `--single-step` only
+  from the confirmed execution mode. `continuous` follows persisted state until
+  a user-owned handoff, error, or `done`; `single_step` returns after every step.
 - A bounded diagnostic reproduction may temporarily add `--single-step` while
   continuous execution itself is under investigation. Record it as a diagnostic
   override; it does not mutate the confirmed execution contract.
@@ -106,7 +112,7 @@ response. A terminal `_done` baton has no future chain to adjust.
   agent can rewrite the baton:
 
   ```bash
-    cafe workflow --execute --start-step <step>
+    cafe workflow --execute --mute-agent-output --start-step <step>
   ```
 
 - If PR sync fails because the branch has uncommitted changes, commit or stash

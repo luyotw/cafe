@@ -53,10 +53,12 @@ def test_setup_agents_registers_only_the_phase_configured_chain(
         _config_manager(tmp_path),
         issue_name="issue-407",
         phase_name="develop",
+        stream_agent_output=False,
     )
 
     assert list(manager.agents) == ["PhaseDavid"]
     config = manager.agents["PhaseDavid"].config
+    assert manager.agents["PhaseDavid"].stream_output is False
     assert [(entry.cli.value, entry.model) for entry in config.clis] == [
         ("codex", "gpt-5.6-sol"),
         ("claude", "claude-opus-5"),

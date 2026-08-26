@@ -176,6 +176,7 @@ def setup_agents(
     issue_name: Optional[str] = None,
     phase_name: Optional[str] = None,
     cafe_dir: Optional[Path] = None,
+    stream_agent_output: bool = True,
 ) -> AgentManager:
     """Build the active workflow agent from its complete phase chain."""
     if not issue_name or not phase_name:
@@ -204,7 +205,7 @@ def setup_agents(
     )
     chain = [CliEntry(cli=AgentCLI(cli), model=model) for cli, model in resolved.clis]
     primary = chain[0]
-    agent_manager = AgentManager(issue_name=issue_name)
+    agent_manager = AgentManager(issue_name=issue_name, stream_agent_output=stream_agent_output)
     agent_manager.register_agent(
         AgentConfig(
             name=resolved.name,
@@ -502,6 +503,7 @@ def _build_workflow_step_executor(
     step_user_inputs: Optional[Dict[str, str]] = None,
     interactive: bool = False,
     extra_allowed_directories: Optional[List[str]] = None,
+    stream_agent_output: bool = True,
 ) -> GenericWorkflowStepExecutor:
     """Create the GenericPhase-backed executor for workflow steps."""
     role_agent_map = _build_workflow_role_agent_map(config_manager, playbook_data)
@@ -512,7 +514,12 @@ def _build_workflow_step_executor(
         issue_name=issue_name,
         playbook=playbook_data,
         generic_phase=generic_phase,
-        agent_manager=setup_agents(config_manager, issue_name=issue_name, phase_name=phase_name),
+        agent_manager=setup_agents(
+            config_manager,
+            issue_name=issue_name,
+            phase_name=phase_name,
+            stream_agent_output=stream_agent_output,
+        ),
         git_ops=_get_git_operations_cls()(),
         role_agent_map=role_agent_map,
         role_configs={},

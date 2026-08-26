@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.23.0
+version: 1.24.0
 ---
 
 # Use CAFE Workflow
@@ -61,9 +61,9 @@ If more than one situation applies, read every listed reference before acting; d
 - Resolve and persist a confirmed `driver_execution` contract. `mode` is
   `continuous` by default and may be `single_step`; `poll_interval_seconds`
   defaults to `180`. Read `running_workflow.md` for their exact semantics.
-- Drive with `cafe workflow --execute`, deriving `--single-step` only from the
-  confirmed mode. Follow the persisted baton without forcing `--start-step`,
-  and do not use `cafe make` to execute the chain.
+- Drive with `cafe workflow --execute --mute-agent-output`, deriving
+  `--single-step` only from the confirmed mode. Agent narration remains durable
+  but does not enter driver context. Do not use `cafe make` to execute the chain.
 - Configure all phase chains before execution; change them only under `model_selection.md`.
 - Do not manually edit workflow artifacts, blackboard state, or
   `next_step.txt` except when repairing confirmed broken workflow state.

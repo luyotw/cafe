@@ -795,6 +795,73 @@ class TestStreamingExecution:
         assert "Line 2" in captured.out
         assert "Line 3" in captured.out
 
+    def test_execute_with_streaming_can_mute_agent_output_without_losing_data(
+        self, tmp_path, capsys
+    ) -> None:
+        """Mute only console narration while preserving parsed and durable output."""
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config, stream_output=False)
+        streaming_file = tmp_path / "streaming.jsonl"
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = ["Line 1\n", "Line 2\n", ""]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with (
+            patch(
+                "subprocess.run",
+                return_value=MagicMock(stdout='{"session_id": "test-session"}', returncode=0),
+            ),
+            patch("subprocess.Popen", return_value=mock_process),
+            patch("sys.platform", "win32"),
+        ):
+            agent_response = executor._execute_with_streaming(
+                cmd=["test", "cmd"],
+                cli_name="TestCLI",
+                parse_stream_json=False,
+                streaming_output_file=str(streaming_file),
+            )
+
+        assert agent_response.response == "Line 1\nLine 2\n"
+        assert agent_response.streaming_log == ["Line 1\n", "Line 2\n"]
+        assert '"content": "Line 1"' in streaming_file.read_text(encoding="utf-8")
+        assert capsys.readouterr().out == ""
+
+    def test_muted_stream_json_preserves_extracted_response(self, tmp_path, capsys) -> None:
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config, stream_output=False)
+        streaming_file = tmp_path / "streaming.jsonl"
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"content": "Hello"}\n',
+            '{"session_id": "session-123"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with (
+            patch(
+                "subprocess.run",
+                return_value=MagicMock(stdout='{"session_id": "test-session"}', returncode=0),
+            ),
+            patch("subprocess.Popen", return_value=mock_process),
+            patch("sys.platform", "win32"),
+        ):
+            agent_response = executor._execute_with_streaming(
+                cmd=["claude", "--print", "test"],
+                cli_name="Claude",
+                parse_stream_json=True,
+                streaming_output_file=str(streaming_file),
+            )
+
+        assert agent_response.response == "Hello"
+        assert agent_response.streaming_log == ["Hello"]
+        assert '"content": "Hello"' in streaming_file.read_text(encoding="utf-8")
+        assert capsys.readouterr().out == ""
+
     def test_execute_with_streaming_stream_json(self, capsys) -> None:
         """測試 stream-json parsing（Claude 風格）"""
         config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)

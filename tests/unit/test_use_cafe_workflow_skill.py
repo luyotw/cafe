@@ -1788,6 +1788,10 @@ def test_use_cafe_workflow_requires_driver_execution_contract_and_model_authorit
     assert "`driver_execution` contract" in skill
     assert "`continuous` by default" in skill
     assert "may be `single_step`" in skill
+    assert "cafe workflow --execute --mute-agent-output" in skill
+    assert "provider narration is parsed and persisted" in normalized_running
+    assert "does not suppress workflow lifecycle events" in normalized_running
+    assert "Remove it only when the user requests a live transcript" in normalized_running
     assert "persisted baton without forcing `--start-step`" in skill
     assert "Do not use `cafe make` for driver execution" in normalized_running
     assert "required cadence" in normalized_running
