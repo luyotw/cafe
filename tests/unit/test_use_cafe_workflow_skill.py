@@ -1791,7 +1791,18 @@ def test_use_cafe_workflow_requires_driver_execution_contract_and_model_authorit
     assert "cafe workflow --execute --mute-agent-output" in skill
     assert "provider narration is parsed and persisted" in normalized_running
     assert "does not suppress workflow lifecycle events" in normalized_running
-    assert "Remove it only when the user requests a live transcript" in normalized_running
+    assert "Keep `--mute-agent-output` on every driver execution" in normalized_running
+    assert "Never remove the flag" in normalized_running
+    assert "cafe show <step> streaming --iteration <n>" in normalized_running
+    assert ".cafe/issues/<issue>/<step>/iteration_NNN/streaming.jsonl" in normalized_running
+    assert "reads the entire saved file" in normalized_running
+    assert (
+        "Do not use `cafe show <step> streaming` for driver diagnosis"
+        in normalized_running
+    )
+    assert "rg -n -C <context-lines> '<pattern>' <streaming-file>" in normalized_running
+    assert "tail -n <line-count> <streaming-file>" in normalized_running
+    assert "Remove it only when" not in normalized_running
     assert "persisted baton without forcing `--start-step`" in skill
     assert "Do not use `cafe make` for driver execution" in normalized_running
     assert "required cadence" in normalized_running
@@ -1858,6 +1869,19 @@ def test_use_cafe_workflow_requires_driver_execution_contract_and_model_authorit
     assert "In `continuous` mode, do not stop execution" in normalized_models
     assert "In `single_step` mode, reassess after every completed step" in normalized_models
     assert "active worktree's `.cafe/phases.yaml`" in normalized_models
+
+
+def test_use_cafe_workflow_never_shows_unmuted_driver_execution() -> None:
+    offenders = []
+    paths = [SKILL_ROOT / "SKILL.md", *sorted((SKILL_ROOT / "references").glob("*.md"))]
+
+    for path in paths:
+        logical_text = path.read_text(encoding="utf-8").replace("\\\n", " ")
+        for line_number, line in enumerate(logical_text.splitlines(), start=1):
+            if "cafe workflow --execute" in line and "--mute-agent-output" not in line:
+                offenders.append(f"{path.relative_to(SKILL_ROOT)}:{line_number}")
+
+    assert not offenders, f"unmuted driver execution examples: {offenders}"
 
 
 def test_use_cafe_workflow_batches_driver_pr_review_findings() -> None:

@@ -4,7 +4,7 @@ import json
 import pytest
 from pathlib import Path
 from typer.testing import CliRunner
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from cafe.ui.cli import app, _resolve_iteration_number, _get_show_file_path
 
@@ -201,6 +201,114 @@ class TestShowCommand:
             # 驗證輸出
             assert result.exit_code == 0
             assert "context" in result.stdout
+
+    @pytest.mark.parametrize(
+        ("content_type", "file_name"),
+        [
+            ("streaming", "streaming.jsonl"),
+            ("questions", "questions.xml"),
+            ("user_input", "user_input.md"),
+            ("error", "error.json"),
+        ],
+    )
+    def test_show_preserves_rich_markup_like_generated_content(
+        self, tmp_path, content_type, file_name
+    ):
+        """Generated records must be emitted verbatim instead of parsed as Rich markup."""
+        cafe_dir = tmp_path / ".cafe"
+        iteration_dir = cafe_dir / "issues" / "test-issue" / "spec" / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+        (iteration_dir / "iteration.json").write_text("{}", encoding="utf-8")
+        raw_content = f"{content_type}: [x] [image] [REDACTED] [/tmp/output.md]\n"
+        (iteration_dir / file_name).write_text(raw_content, encoding="utf-8")
+
+        with (
+            patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+            patch("cafe.ui.cli.ConfigManager"),
+            patch("cafe.ui.cli.Path.cwd", return_value=tmp_path),
+        ):
+            mock_git_cls.return_value.get_current_branch.return_value = "test-issue"
+
+            result = runner.invoke(app, ["show", "spec", content_type])
+
+        assert result.exit_code == 0
+        assert raw_content.strip() in result.stdout
+
+    def test_show_reports_markup_like_unexpected_errors_without_rich_crash(self, tmp_path):
+        """Unexpected error text may contain agent paths that resemble Rich closing tags."""
+        cafe_dir = tmp_path / ".cafe"
+        iteration_dir = cafe_dir / "issues" / "test-issue" / "spec" / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+        (iteration_dir / "iteration.json").write_text("{}", encoding="utf-8")
+        (iteration_dir / "streaming.jsonl").write_text("{}\n", encoding="utf-8")
+        fake_file = MagicMock()
+        fake_file.exists.return_value = True
+        fake_file.read_text.side_effect = RuntimeError("bad [/tmp/output.md]")
+        fake_file.suffix = ".jsonl"
+
+        with (
+            patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+            patch("cafe.ui.cli.ConfigManager"),
+            patch("cafe.ui.cli.Path.cwd", return_value=tmp_path),
+            patch(
+                "cafe.ui.commands.workflow._get_show_file_path",
+                return_value=fake_file,
+            ),
+        ):
+            mock_git_cls.return_value.get_current_branch.return_value = "test-issue"
+
+            result = runner.invoke(app, ["show", "spec", "streaming"])
+
+        assert result.exit_code == 1
+        assert "Unexpected error: bad [/tmp/output.md]" in result.stdout
+        assert "MarkupError" not in result.stdout
+
+    def test_show_reports_markup_like_value_errors_without_rich_crash(self, tmp_path):
+        cafe_dir = tmp_path / ".cafe"
+        phase_dir = cafe_dir / "issues" / "test-issue" / "spec"
+        phase_dir.mkdir(parents=True)
+
+        with (
+            patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+            patch("cafe.ui.cli.ConfigManager"),
+            patch("cafe.ui.cli.Path.cwd", return_value=tmp_path),
+            patch(
+                "cafe.ui.commands.workflow._resolve_iteration_number",
+                side_effect=ValueError("bad [/tmp/output.md]"),
+            ),
+        ):
+            mock_git_cls.return_value.get_current_branch.return_value = "test-issue"
+
+            result = runner.invoke(app, ["show", "spec", "streaming"])
+
+        assert result.exit_code == 1
+        assert "Error: bad [/tmp/output.md]" in result.stdout
+        assert "MarkupError" not in result.stdout
+
+    def test_show_reports_markup_like_missing_paths_verbatim(self, tmp_path):
+        cafe_dir = tmp_path / ".cafe"
+        iteration_dir = cafe_dir / "issues" / "test-issue" / "spec" / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+        (iteration_dir / "iteration.json").write_text("{}", encoding="utf-8")
+        (iteration_dir / "output.md").write_text("output", encoding="utf-8")
+        missing_path = Path("[/tmp/output.md]")
+
+        with (
+            patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+            patch("cafe.ui.cli.ConfigManager"),
+            patch("cafe.ui.cli.Path.cwd", return_value=tmp_path),
+            patch(
+                "cafe.ui.commands.workflow._get_show_file_path",
+                return_value=missing_path,
+            ),
+        ):
+            mock_git_cls.return_value.get_current_branch.return_value = "test-issue"
+
+            result = runner.invoke(app, ["show", "spec", "output"])
+
+        assert result.exit_code == 1
+        assert "Error: File not found: [/tmp/output.md]" in result.stdout
+        assert "MarkupError" not in result.stdout
 
     def test_show_command_accepts_custom_playbook_step(self, tmp_path):
         """測試 show 命令接受 workflow playbook 中的自訂 step."""

@@ -321,15 +321,15 @@ def show(
         git_ops = _get_GitOperations()()
         issue_name = git_ops.get_current_branch()
     except Exception as e:
-        console.print(f"[red]Error: Failed to get current branch: {e}[/red]")
+        console.print(f"Error: Failed to get current branch: {e}", style="red", markup=False)
         raise typer.Exit(1)
 
     valid_phases = _load_issue_step_names(issue_name)
 
     # Validate phase name
     if phase_name not in valid_phases:
-        console.print(f"[red]Error: Invalid phase '{phase_name}'[/red]")
-        console.print(f"[dim]Valid phases: {', '.join(valid_phases)}[/dim]")
+        console.print(f"Error: Invalid phase '{phase_name}'", style="red", markup=False)
+        console.print(f"Valid phases: {', '.join(valid_phases)}", style="dim", markup=False)
         raise typer.Exit(1)
 
     # Set default content type
@@ -338,8 +338,8 @@ def show(
 
     # Validate content type
     if content_type not in VALID_CONTENT_TYPES:
-        console.print(f"[red]Error: Invalid content type '{content_type}'[/red]")
-        console.print(f"[dim]Valid types: {', '.join(VALID_CONTENT_TYPES)}[/dim]")
+        console.print(f"Error: Invalid content type '{content_type}'", style="red", markup=False)
+        console.print(f"Valid types: {', '.join(VALID_CONTENT_TYPES)}", style="dim", markup=False)
         raise typer.Exit(1)
 
     # Build phase directory path
@@ -348,8 +348,10 @@ def show(
 
     # Check if phase directory exists
     if not phase_dir.exists():
-        console.print(f"[red]Error: Phase directory not found: {phase_dir}[/red]")
-        console.print(f"[dim]The '{phase_name}' phase has not been executed yet[/dim]")
+        console.print(f"Error: Phase directory not found: {phase_dir}", style="red", markup=False)
+        console.print(
+            f"The '{phase_name}' phase has not been executed yet", style="dim", markup=False
+        )
         raise typer.Exit(1)
 
     try:
@@ -378,10 +380,12 @@ def show(
             if content_type == "user_input":
                 console.print("[red]No user input markdown file found for this iteration.[/red]")
             else:
-                console.print(f"[red]Error: File not found: {file_path}[/red]")
+                console.print(f"Error: File not found: {file_path}", style="red", markup=False)
                 if resolved_iteration is not None:
                     console.print(
-                        f"[dim]File '{content_type}' does not exist in iteration {resolved_iteration}[/dim]"
+                        f"File '{content_type}' does not exist in iteration {resolved_iteration}",
+                        style="dim",
+                        markup=False,
                     )
             raise typer.Exit(1)
 
@@ -397,15 +401,12 @@ def show(
                     json_data = json.loads(content)
                     console.print_json(data=json_data)
                 except json.JSONDecodeError:
-                    # If JSON parsing fails, output raw content
-                    console.print(content)
-            elif content_type in ("checklist", "output"):
-                # For checklist and output, output raw content without Rich formatting
-                # Rich treats [x] as special markup and removes it
-                print(content)
+                    # Invalid JSON may still contain valuable agent diagnostics.
+                    print(content)
             else:
-                # Output other files directly
-                console.print(content)
+                # Preserve generated content verbatim. Rich treats bracketed text
+                # such as [x] and [/path] as markup, altering it or raising.
+                print(content)
 
         except UnicodeDecodeError:
             console.print("[red]Error: Failed to read file (not UTF-8 encoded)[/red]")
@@ -416,10 +417,10 @@ def show(
         if content_type == "user_input":
             console.print("[red]No user input markdown file found for this iteration.[/red]")
         else:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(f"Error: {e}", style="red", markup=False)
         raise typer.Exit(1)
     except Exception as e:
-        console.print(f"[red]Unexpected error: {e}[/red]")
+        console.print(f"Unexpected error: {e}", style="red", markup=False)
         raise typer.Exit(1)
 
 

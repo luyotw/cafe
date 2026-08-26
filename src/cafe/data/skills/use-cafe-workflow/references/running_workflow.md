@@ -59,6 +59,13 @@ unexecuted.
 - `cafe show <step> output`: latest phase result.
 - `cafe show <step> questions`: current clarification request.
 - `cafe show <step> checklist`: incomplete phase work.
+- `cafe show <step> streaming --iteration <n>`: display the complete raw
+  provider response for a specific iteration; omit `--iteration` for the latest
+  saved response. This command reads the entire saved file, so offer it for
+  direct human transcript viewing, not as driver diagnosis context. The durable
+  file is
+  `.cafe/issues/<issue>/<step>/iteration_NNN/streaming.jsonl` in the active
+  issue worktree.
 - `.cafe/issues/<issue>/blackboard.json`: use only when command output does not
   explain the handoff.
 
@@ -74,11 +81,16 @@ handoff or `done`, or execution stops on an error. A host may require more
 frequent user-facing heartbeat messages; those messages must not trigger an
 extra CAFE status or artifact poll.
 
-Use `--mute-agent-output` for driver execution so provider narration is parsed
-and persisted without being copied into driver context. This flag does not
-suppress workflow lifecycle events, errors, HumanTasks, final artifacts, or
-`streaming.jsonl`. Remove it only when the user requests a live transcript or
-a bounded diagnosis requires observing the provider response stream.
+Keep `--mute-agent-output` on every driver execution so provider narration is
+parsed and persisted without being copied into driver context. Never remove
+the flag, including for a user-requested live transcript or bounded diagnosis.
+It does not suppress workflow lifecycle events, errors, HumanTasks, final
+artifacts, or `streaming.jsonl`. Direct a user who wants the transcript to
+`cafe show <step> streaming --iteration <n>` or its durable file. During bounded
+diagnosis, resolve the exact durable file and inspect only the minimum relevant
+portion with `rg -n -C <context-lines> '<pattern>' <streaming-file>` or
+`tail -n <line-count> <streaming-file>`. Do not use `cafe show <step> streaming`
+for driver diagnosis, and do not use the raw stream as routine progress context.
 
 When CAFE pauses for user input, read `handoffs_and_alignment.md` before
 answering or resuming. Non-interactive resumption is allowed only when the exact
