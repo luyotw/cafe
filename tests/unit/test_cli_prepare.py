@@ -82,6 +82,7 @@ class TestPrepareCommand:
             config_data = yaml.safe_load(f)
             assert config_data["base_branch"] == "main"
             assert config_data["feature_branch"] == "test-issue"
+            assert config_data["playbook_id"] == "standard"
             assert "auto" not in config_data
 
         # Verify git operations called
@@ -370,7 +371,8 @@ class TestPrepareCommand:
             # Parse YAML
             config_data = yaml.safe_load(content)
             assert isinstance(config_data, dict)
-            assert len(config_data) == 2  # base_branch, feature_branch
+            assert len(config_data) == 3  # base_branch, feature_branch, playbook_id
+            assert config_data["playbook_id"] == "standard"
             assert "auto" not in config_data
 
     def test_prepare_idempotent(self, temp_repo_dir, mock_git_ops):

@@ -272,6 +272,11 @@ def prepare(
         None,
         help="Issue name (will create directory at .cafe/issues/{issue-name}/)",
     ),
+    playbook: Optional[str] = typer.Option(
+        None,
+        "--playbook",
+        help="Playbook for this issue (overrides any legacy repository setting)",
+    ),
     base_branch: Optional[str] = typer.Option(
         None,
         "--base",
@@ -358,6 +363,7 @@ def prepare(
     Examples:
         cafe prepare
         cafe prepare fix-login-bug
+        cafe prepare fix-login-bug --playbook hotfix
         cafe prepare fix-bug --no-interactive --input-method=manual --rigor=medium --plan-template=default
         cafe prepare issue-123 --no-interactive --input-method=github --issue-id=123 --rigor=high --spec-template=detailed
         cafe prepare my-feature --base develop
@@ -394,13 +400,14 @@ def prepare(
         from cafe.ui.cli_shared import _resolve_selected_playbook
         from cafe.utils.git_utils import is_github_repo
 
-        playbook_name = _resolve_selected_playbook(None)
+        playbook_name = _resolve_selected_playbook(playbook)
         try:
             loaded_playbook = PlaybookLoader().load_model(playbook_name)
         except (FileNotFoundError, ValueError) as exc:
             console.print(f"[red]Error: Failed to load playbook '{playbook_name}': {exc}[/red]")
             console.print(
-                "[yellow]Check .cafe/config.yaml playbook setting or add the playbook file.[/yellow]"
+                "[yellow]Check --playbook, the legacy .cafe/config.yaml setting, "
+                "or add the playbook file.[/yellow]"
             )
             raise typer.Exit(1)
 
@@ -777,6 +784,7 @@ def prepare(
         config_data = {
             "base_branch": base_branch,
             "feature_branch": feature_branch,
+            "playbook_id": playbook_name,
         }
 
         # Add spec config if present

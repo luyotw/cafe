@@ -132,8 +132,9 @@ def load_strategic_context(project_root: Path | str = Path.cwd(), issue_name: Op
         version=int(raw.get("version", 1) or 1),
         project_root=root,
         issue_name=issue_name,
-        playbook_id=str(issue_overrides.get("playbook_id") or mandate.get("playbook_id") or "")
-        or None,
+        # Legacy playbook fields in strategic_context.yaml are intentionally
+        # non-authoritative. Playbook selection belongs to the issue contract.
+        playbook_id=None,
         documents=documents,
         axes=axes,
         out_of_mandate=out_of_mandate,

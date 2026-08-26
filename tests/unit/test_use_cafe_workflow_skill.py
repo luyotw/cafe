@@ -842,6 +842,8 @@ def test_use_cafe_workflow_keeps_playbook_selection_issue_owned() -> None:
     )
     assert "`cafe init --no-interactive`" in kickoff
     assert "`.cafe/config.yaml` has no playbook key" in normalized_kickoff
+    assert kickoff.count("--playbook <playbook-id>") == 3
+    assert "Verify that `cafe prepare` persisted the active `playbook_id`" in normalized_kickoff
 
 
 def test_kickoff_contract_formatter_lists_all_phases_and_confirmation_owners(

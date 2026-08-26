@@ -256,7 +256,8 @@ for confirmation rather than asking again.
 - [ ] Prepare non-interactively:
 
   ```bash
-  cafe prepare <issue-name> --no-interactive --input-method=manual \
+  cafe prepare <issue-name> --playbook <playbook-id> --no-interactive \
+    --input-method=manual \
     --rigor=medium --spec-template=auto --plan-template=default \
     --worktree .cafe/worktrees/<issue-name>
   ```
@@ -265,27 +266,28 @@ for confirmation rather than asking again.
   `--worktree` and use:
 
   ```bash
-  cafe prepare <issue-name> --no-interactive --init-git \
-    --input-method=manual --rigor=medium --spec-template=auto \
-    --plan-template=default
+  cafe prepare <issue-name> --playbook <playbook-id> --no-interactive \
+    --init-git --input-method=manual --rigor=medium \
+    --spec-template=auto --plan-template=default
   ```
 
   For a GitHub issue:
 
   ```bash
-  cafe prepare <issue-name> --no-interactive --input-method=github \
-    --issue-id=<number> --rigor=medium --spec-template=auto \
-    --plan-template=default --worktree .cafe/worktrees/<issue-name>
+  cafe prepare <issue-name> --playbook <playbook-id> --no-interactive \
+    --input-method=github --issue-id=<number> --rigor=medium \
+    --spec-template=auto --plan-template=default \
+    --worktree .cafe/worktrees/<issue-name>
   ```
 
 - [ ] If the user declined a worktree, omit `--worktree`. Never silently fall
   back to the main checkout after worktree creation fails.
 - [ ] Enter the reported worktree before running workflow commands.
-- [ ] Persist the active `playbook_id`, confirmation contract, and reactive
-  handoff policy, issue assessment, model-adjustment authority, and driver
-  execution contract in
-  `.cafe/issues/<issue-name>/issue.yaml` in the active checkout before the
-  first workflow execution:
+- [ ] Verify that `cafe prepare` persisted the active `playbook_id`, then add the
+  confirmation contract, reactive handoff policy, issue assessment,
+  model-adjustment authority, and driver execution contract to
+  `.cafe/issues/<issue-name>/issue.yaml` in the active checkout before the first
+  workflow execution:
 
   ```yaml
   playbook_id: standard

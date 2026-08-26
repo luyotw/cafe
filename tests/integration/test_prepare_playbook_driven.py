@@ -137,6 +137,36 @@ class TestPreparePlaybookDriven:
         assert config_data["spec"]["template"] == "auto"
         assert config_data["plan"]["template"] == "default"
 
+    def test_cli_playbook_selection_is_persisted_without_repository_default(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        """A confirmed issue playbook drives prepare without repository config."""
+        result = runner.invoke(
+            app,
+            [
+                "prepare",
+                "issue-owned-hotfix",
+                "--playbook",
+                "hotfix",
+                "--no-interactive",
+                "--input-method=manual",
+            ],
+        )
+
+        assert result.exit_code == 0, result.stdout
+        repository_config = yaml.safe_load(
+            (temp_repo_dir / ".cafe" / "config.yaml").read_text(encoding="utf-8")
+        )
+        assert "playbook" not in repository_config
+
+        issue_dir = temp_repo_dir / ".cafe" / "issues" / "issue-owned-hotfix"
+        issue_config = yaml.safe_load(
+            (issue_dir / "issue.yaml").read_text(encoding="utf-8")
+        )
+        assert issue_config["playbook_id"] == "hotfix"
+        assert (issue_dir / "develop").is_dir()
+        assert not (issue_dir / "spec").exists()
+
     def test_no_pr_playbook_rejects_non_interactive_pr_flags(self, temp_repo_dir, mock_git_ops):
         """A playbook without a pr step must reject legacy PR config flags."""
         prepare_block = """

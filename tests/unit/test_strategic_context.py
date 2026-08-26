@@ -32,6 +32,7 @@ mandate:
     - pricing
 issues:
   issue-1:
+    playbook_id: tdd
     axes:
       product_scope:
         level: agent
@@ -42,6 +43,7 @@ issues:
 
     context = load_strategic_context(tmp_path, issue_name="issue-1")
 
+    assert context.playbook_id is None
     assert context.axes["product_scope"].level == "agent"
     assert context.axes["technical"].level == "agent"
     assert context.out_of_mandate == ("pricing",)
