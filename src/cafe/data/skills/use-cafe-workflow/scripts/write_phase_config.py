@@ -36,8 +36,8 @@ def _candidate_document(chains: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(name, str) or not name.strip():
             raise ValueError(f"step '{step}' must include a non-empty agent name")
         clis = raw_config.get("clis")
-        if not isinstance(clis, list) or len(clis) < 2:
-            raise ValueError(f"step '{step}' must include a primary and fallback CLI")
+        if not isinstance(clis, list) or not clis:
+            raise ValueError(f"step '{step}' must include a primary CLI")
         document[step] = dict(raw_config)
     return document
 

@@ -38,8 +38,8 @@ first execution and after every completed phase.
   retry/diagnosis must deliberately replace the current baton position. Never
   use it merely to resume a user-owned handoff.
 
-- Keep the confirmed primary and fallback chains in the active worktree's
-  `.cafe/phases.yaml`. Install or change them with `write_phase_config.py`, then
+- Keep each confirmed primary and any optional fallback chain in the active
+  worktree's `.cafe/phases.yaml`. Install or change them with `write_phase_config.py`, then
   verify the affected step through the core parser before execution.
 - Use repeated `--add-dir <path>` for existing extra directories. Prefer stable
   configuration in `.cafe/config.yaml` as `allowed_directories`.

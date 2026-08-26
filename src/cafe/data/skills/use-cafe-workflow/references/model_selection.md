@@ -38,7 +38,8 @@ Every phase skill should declare a provider-neutral
 - `workload`: the kind of work performed;
 - `reasoning`: `routine`, `standard`, or `high`;
 - `risk_domains`: stable failure surfaces;
-- `fallback_strength`: `equivalent` or `equivalent_or_stronger`.
+- `fallback_strength`: `equivalent` or `equivalent_or_stronger`; this constrains
+  a fallback when one is configured and does not require a fallback to exist.
 
 Do not infer this profile from a conventional step name. Resolve the skill bound
 by the active playbook. For an iteration selector, kickoff conservatively
@@ -98,8 +99,10 @@ raise the band.
 
 Combine the issue nature, scale, risk factors, each resolved execution profile, configured
 providers, available exact models, and preflight evidence. The proposal must
-name an ordered chain of at least two distinct CLIs with an exact model for each
-entry. No provider or model is built into this skill.
+name an ordered chain with one primary CLI/exact model and zero or more
+fallback CLI/exact model entries. A user may choose a primary-only chain; do not
+add a fallback after that explicit choice. No provider or model is built into
+this skill.
 
 Map the selected band to current provider models using current primary provider
 documentation and task-relevant local evidence. Do not permanently equate a
@@ -111,7 +114,7 @@ chain or choose the stronger candidate rather than guessing.
 Apply these rules:
 
 1. Choose a primary that satisfies the phase capability band, reasoning, and workload.
-2. Choose a fallback that satisfies `fallback_strength`. For
+2. If a fallback is configured, choose one that satisfies `fallback_strength`. For
    `equivalent`, use the same assessed band. For `equivalent_or_stronger`, use
    the same or a stronger assessed band; if equivalence is uncertain, choose
    the stronger fallback.
@@ -121,8 +124,8 @@ Apply these rules:
    required band, workload, reasoning, and risk domains. Never reject a
    fallback solely because its version number is lower, and never assume two
    versions are equivalent solely because they share a model family.
-3. Use a distinct fallback CLI so it can execute independently from the
-   primary.
+3. Every configured fallback uses a distinct CLI so it can execute
+   independently from the primary and other entries.
 4. Raise the required capability when issue-level risk is stronger than the
    phase default. Never lower a declared high-risk phase merely because the
    overall issue is small.
@@ -134,7 +137,9 @@ Apply these rules:
 
 The driver may recommend any configured combination that meets these rules, but
 must record one phase-specific rationale naming the selected band, profile
-evidence, issue-risk overlay, and why the fallback meets its strength contract.
+evidence, issue-risk overlay, and, when configured, why each fallback meets its
+strength contract. For a primary-only chain, record that explicit choice and
+its hard-stop consequence instead.
 
 ## Model and fallback preflight
 
@@ -147,20 +152,24 @@ Before the first phase execution:
    authenticated with an actual minimal non-mutating model prompt. A version
    command proves installation only; it is used for cache invalidation, not as
    model-availability evidence.
-3. For every distinct ordered chain, run the cached CAFE fallback smoke helper.
+3. For every distinct ordered chain that has at least one fallback, run the
+   cached CAFE fallback smoke helper.
    A fresh smoke exercises the configured path by making the primary fail with
    the classified `model_not_found` condition and proves each configured
    fallback entry can execute in order. Do not create a fake failure inside a
    live issue or consume one of its iterations; use the disposable in-process
-   fixture provided by the helper.
+   fixture provided by the helper. A primary-only chain skips fallback smoke
+   because there is no takeover path to test.
 4. Inspect the applicable `.cafe/phases.yaml` and resolved execution preview to
    verify ordering and exact model names. Treat an unavailable model, missing
    authentication, or failed fallback smoke test as a blocking preflight
    failure.
 
-Automatic activation of a confirmed fallback is already authorized by kickoff;
-it is not a driver-authored adjustment. Preserve the execution record showing
-which CLI/model actually ran.
+Automatic activation of a confirmed fallback, when configured, is already
+authorized by kickoff; it is not a driver-authored adjustment. With a
+primary-only chain, a primary failure is a hard stop until the existing model-
+adjustment authority permits a replacement or the user confirms one. Preserve
+the execution record showing which CLI/model actually ran.
 
 ### Reuse successful preflight evidence
 
@@ -188,9 +197,9 @@ python3 <skill-dir>/scripts/preflight_cache.py candidate-probe \
   helper never records a failed, interrupted, rate-limited, unauthenticated, or
   ambiguous probe.
 
-Then smoke each distinct ordered chain; the helper automatically reuses a
-successful result for 30 days only when the exact chain and CAFE runtime source
-fingerprint are unchanged:
+For chains with fallbacks, smoke each distinct ordered chain; the helper
+automatically reuses a successful result for 30 days only when the exact chain
+and CAFE runtime source fingerprint are unchanged:
 
 ```bash
 python3 <skill-dir>/scripts/preflight_cache.py fallback-smoke \
@@ -198,7 +207,8 @@ python3 <skill-dir>/scripts/preflight_cache.py fallback-smoke \
   --entry <fallback-cli>:<exact-model>
 ```
 
-Pass every configured fallback with another `--entry` in execution order. A
+Run this command only when a fallback exists. Pass every configured fallback
+with another `--entry` in execution order. A
 `status=fresh` result performed the disposable smoke; `status=hit` reused it.
 The helper never calls a provider model: actual provider execution is covered by
 the candidate probes, while this smoke proves CAFE's classified takeover path.
@@ -230,9 +240,10 @@ quality_gate:
   clis:
     - cli: <primary-cli>
       model: <exact-primary-model>
-    - cli: <fallback-cli>
-      model: <exact-fallback-model>
 ```
+
+Append further `clis` entries only for confirmed fallbacks. A single entry is
+a valid primary-only chain.
 
 Persist the issue assessment and the explicit adjustment boundary in
 `.cafe/issues/<issue-name>/issue.yaml`:
@@ -251,7 +262,7 @@ model_adjustment:
 With `driver_autonomous`, the driver may change future phase chains using the
 same selection and preflight rules. With `user_approval_required`, every
 driver-authored change requires confirmation. Automatic use of a chain's
-already configured fallback is not a driver-authored change.
+already configured fallback, when present, is not a driver-authored change.
 
 ## Reassess after every completed phase
 

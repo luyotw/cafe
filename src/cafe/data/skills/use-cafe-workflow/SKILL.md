@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.21.0
+version: 1.22.0
 ---
 
 # Use CAFE Workflow
@@ -38,8 +38,8 @@ If more than one situation applies, read every listed reference before acting; d
   prepare`, mutate the repository, or execute the first workflow phase before the user confirms it.
 - Resolve a playbook from explicit or durable authority; otherwise use `references/playbook_selection.md` to assess candidates and record why the nearest alternative is insufficient. Never silently apply a common example or builtin default.
 - Assess the issue nature, scale, and risk before kickoff. Include one exact
-  primary/fallback model chain per phase and model-adjustment authority in the
-  contract. Resolve provider-neutral phase execution profiles from the active
+  primary model with any user-approved fallbacks per phase and model-adjustment
+  authority in the contract. Resolve provider-neutral phase execution profiles from the active
   playbook skills, classify the remaining work into a capability band, and
   record a phase-specific selection rationale; no provider or model is built
   into this driver skill.
@@ -103,9 +103,9 @@ If more than one situation applies, read every listed reference before acting; d
   confirmation gates, reactive handoffs, mandate, and worktree behavior.
 - [ ] Assess issue nature, scale, and risk factors; resolve
   every phase skill's execution profile, classify each phase's capability band,
-  resolve exact primary and fallback models with a phase-specific rationale,
-  reuse valid cached preflight evidence or test candidate availability and the
-  configured fallback path, and propose model-adjustment authority.
+  resolve the exact primary and any fallback models with a phase-specific rationale,
+  reuse valid cached preflight evidence or test candidate availability, smoke
+  any configured fallback path, and propose model-adjustment authority.
 - [ ] Present the deterministic kickoff table and obtain explicit confirmation.
 - [ ] Check Git state, initialize CAFE if needed, prepare the issue, enter the
   recorded worktree, and persist the issue-owned contract.

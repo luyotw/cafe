@@ -170,8 +170,8 @@ def _validate_chain(
     step_name: str,
 ) -> ModelChain:
     chain = list(chain)
-    if len(chain) < 2:
-        raise ValueError(f"phase chain for {step_name} must include a primary and fallback")
+    if not chain:
+        raise ValueError(f"phase chain for {step_name} must include a primary")
     seen: set[str] = set()
     result: ModelChain = []
     for raw_cli, raw_model in chain:
@@ -199,7 +199,7 @@ def _parse_phase_chains(
         step_name, separator, raw_chain = value.partition("=")
         step_name = step_name.strip()
         if not separator or not step_name or not raw_chain.strip():
-            raise ValueError("invalid --phase-chain; expected STEP=CLI:MODEL,CLI:MODEL")
+            raise ValueError("invalid --phase-chain; expected STEP=CLI:MODEL[,CLI:MODEL...]")
         if step_name not in step_names:
             raise ValueError(f"unknown phase-chain step: {step_name}")
         if step_name in parsed:
@@ -269,7 +269,7 @@ def _parser() -> argparse.ArgumentParser:
         "--phase-chain",
         action="append",
         default=[],
-        metavar="STEP=CLI:MODEL,CLI:MODEL",
+        metavar="STEP=CLI:MODEL[,CLI:MODEL...]",
         help="Exact ordered chain for a phase; otherwise resolve phases.yaml.",
     )
     parser.add_argument(
@@ -427,7 +427,7 @@ def render(args: argparse.Namespace) -> str:
                 phase_config=phase_config,
             )
         primary = f"{chain[0][0]}:{chain[0][1]}"
-        fallbacks = " → ".join(f"{cli}:{model_name}" for cli, model_name in chain[1:])
+        fallbacks = " → ".join(f"{cli}:{model_name}" for cli, model_name in chain[1:]) or "—"
         rationale = phase_rationales.get(step_name)
         if rationale is None:
             raise ValueError(f"missing phase rationale for agent-executed step: {step_name}")

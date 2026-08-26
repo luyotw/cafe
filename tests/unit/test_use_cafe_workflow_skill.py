@@ -38,6 +38,14 @@ DEFAULT_PHASE_RATIONALES = {
     "pr": "efficiency: routine publication artifact with independent host validation; equivalent fallback",
 }
 
+PRIMARY_ONLY_PHASE_CHAINS = {
+    "spec": "claude:requirements-main",
+    "plan": "claude:planning-main",
+    "develop": "claude:implementation-main",
+    "review": "claude:review-main",
+    "pr": "claude:publication-main",
+}
+
 
 def _phase_chain_args(chains: dict[str, str] | None = None) -> list[str]:
     result: list[str] = []
@@ -757,7 +765,7 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "closest plausible alternative" in selection
     assert "do not infer behavior from a playbook name" in " ".join(selection.split())
     assert "every phase, role, skill, scheduled gate" in normalized
-    assert "exact primary/fallback model chain" in normalized
+    assert "one primary and zero or more explicitly confirmed fallbacks" in normalized
     assert "model-adjustment authority" in normalized
     assert '--risk-factor "<risk factor; repeat as needed>"' in reference
     assert '--assessment-rationale "<repository evidence for nature and scale>"' in reference
@@ -880,6 +888,57 @@ def test_kickoff_formatter_documents_structural_validation_boundary() -> None:
     assert "driver-assessed" in script
 
 
+def test_kickoff_contract_formatter_accepts_primary_only_chains(tmp_path: Path) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+    rationales = {
+        step: "User explicitly selected a primary-only chain; failures stop for adjustment."
+        for step in PRIMARY_ONLY_PHASE_CHAINS
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SKILL_ROOT / "scripts" / "format_kickoff_contract.py"),
+            "standard",
+            "--issue-name",
+            "issue-primary-only",
+            "--playbook-rationale",
+            "The confirmed repository contract selects standard without independent QA.",
+            "--issue-nature",
+            "localized defect",
+            "--issue-scale",
+            "small",
+            "--model-adjustment-authority",
+            "user_approval_required",
+            "--risk-factor",
+            "none",
+            "--assessment-rationale",
+            "Focused behavior with bounded verification.",
+            *_phase_chain_args(PRIMARY_ONLY_PHASE_CHAINS),
+            *_phase_rationale_args(rationales),
+            "--repository-content-locale",
+            "en-US",
+            "--user-required",
+            "spec",
+            "plan",
+            "--current-checkout",
+            "--strategic-context",
+            str(strategic_context),
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "| develop | claude:implementation-main | — | --phase-chain |" in result.stdout
+
+
 def test_phase_writer_installs_exact_confirmed_chains_atomically(tmp_path: Path) -> None:
     chains = tmp_path / "chains.json"
     target = tmp_path / ".cafe" / "phases.yaml"
@@ -916,6 +975,44 @@ def test_phase_writer_installs_exact_confirmed_chains_atomically(tmp_path: Path)
         ("codex", "gpt-5.6-sol"),
         ("claude", "claude-opus-5"),
     )
+
+
+def test_phase_writer_accepts_primary_only_chain(tmp_path: Path) -> None:
+    chains = tmp_path / "chains.json"
+    target = tmp_path / ".cafe" / "phases.yaml"
+    chains.write_text(
+        json.dumps(
+            {
+                "develop": {
+                    "name": "David",
+                    "role": "developer",
+                    "clis": [{"cli": "claude", "model": "claude-opus-5"}],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SKILL_ROOT / "scripts" / "write_phase_config.py"),
+            "--chains-json",
+            str(chains),
+            "--target",
+            str(target),
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    from cafe.utils.phase_config import load_phase_step_model
+
+    resolution = load_phase_step_model(step_name="develop", local_path=target)
+    assert resolution.clis == (("claude", "claude-opus-5"),)
 
 
 def test_phase_writer_preserves_existing_file_when_candidate_is_invalid(tmp_path: Path) -> None:
@@ -1639,6 +1736,9 @@ def test_use_cafe_workflow_requires_one_step_execution_and_model_authority() -> 
     assert "Treat an existing repository chain as a candidate, not as selection evidence" in normalized_models
     assert "A publication phase may remain `efficiency`" in normalized_models
     assert "Model release order is not capability-band order" in normalized_models
+    assert "A user may choose a primary-only chain" in normalized_models
+    assert "A primary-only chain skips fallback smoke" in normalized_models
+    assert "a primary failure is a hard stop" in normalized_models
     assert "Never reject a fallback solely because its version number is lower" in normalized_models
     assert "never assume two versions are equivalent solely because they share a model family" in normalized_models
     assert "Reduced uncertainty after spec or plan may move" in normalized_models

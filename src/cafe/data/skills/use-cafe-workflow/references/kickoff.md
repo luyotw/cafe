@@ -89,7 +89,8 @@ obtain explicit user confirmation of:
 - issue nature, scale, and risk factors;
 - every resolved phase-skill execution profile, including all possible
   iteration variants at kickoff;
-- the exact ordered primary and fallback CLI/model chain for every phase;
+- the exact ordered CLI/model chain for every phase, containing one primary and
+  zero or more explicitly confirmed fallbacks;
 - `model_adjustment_authority`: either `driver_autonomous` or
   `user_approval_required`;
 - worktree choice and path when using a worktree.
@@ -159,7 +160,7 @@ python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --model-adjustment-authority <driver_autonomous|user_approval_required> \
   --risk-factor "<risk factor; repeat as needed>" \
   --assessment-rationale "<repository evidence for nature and scale>" \
-  --phase-rationale "<step>=<capability band, profile/risk evidence, and fallback justification>" \
+  --phase-rationale "<step>=<capability band, profile/risk evidence, and optional fallback justification>" \
   --effective-locale <locale> \
   --locale-source "<playbook or direct-user-override source>" \
   --repository-content-locale <locale> \
@@ -178,11 +179,13 @@ contain the starting files.
 already selected the playbook; in that case record the authoritative source and
 why the selected graph still satisfies current repository requirements.
 
-Pass `--phase-chain
-<step>=<primary-cli>:<exact-model>,<fallback-cli>:<exact-model>` once for every
+Pass `--phase-chain <step>=<primary-cli>:<exact-model>` once for every
 agent-executed phase that is not already fully resolved by `--phase-config`.
+Append `,<fallback-cli>:<exact-model>` for each fallback the user confirms.
+Fallbacks are optional; a primary-only chain is valid and means a failure stops
+the workflow instead of switching CLIs.
 The formatter has no built-in provider or model defaults. It
-rejects a missing fallback, an unresolved model, and an unsupported CLI. It
+rejects a missing primary, an unresolved model, and an unsupported CLI. It
 validates chain structure only; it does not validate model suitability. Pass one
 `--phase-rationale <step>=<text>` for every agent-executed phase. The formatter
 rejects missing, unknown, or duplicate rationales and displays them beside the
@@ -195,8 +198,8 @@ table `driver-assessed`.
 Pass an option with no step values for an explicit empty list. The formatter
 validates the partition and includes every phase, role, skill, scheduled gate,
 owner, stop behavior, resolved skill execution profile, exact
-primary/fallback model chain and its config source, autonomous adjustment
-authority, reactive policy, mandate boundary, conversation locale source,
+primary model, any configured fallbacks, their config source, autonomous
+adjustment authority, reactive policy, mandate boundary, conversation locale source,
 repository content locale, and worktree choice. It
 re-executes with the Python interpreter that owns `cafe` when the shell
 interpreter lacks CAFE dependencies.
