@@ -813,6 +813,37 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert '--assessment-rationale "<repository evidence for nature and scale>"' in reference
 
 
+def test_use_cafe_workflow_keeps_playbook_selection_issue_owned() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    selection = _read_skill_resource("references/playbook_selection.md")
+    strategic = _read_skill_resource("references/strategic_context.md")
+    kickoff = _read_skill_resource("references/kickoff.md")
+    normalized_skill = " ".join(skill.split())
+    normalized_selection = " ".join(selection.split())
+    normalized_strategic = " ".join(strategic.split())
+    normalized_kickoff = " ".join(kickoff.split())
+
+    assert "Keep playbook selection issue-owned" in normalized_skill
+    assert "Never write or update a playbook default" in normalized_skill
+    assert "are not playbook-selection sources" in normalized_selection
+    assert (
+        "legacy `settings.playbook`, top-level `playbook`, or `playbook_id`"
+        in normalized_selection
+    )
+    assert "persist the selected `playbook_id` only in" in normalized_selection
+    assert "Strategic context is not playbook configuration" in normalized_strategic
+    assert (
+        "Do not add `playbook_id` to `mandate` or `issues.<name>`"
+        in normalized_strategic
+    )
+    assert "playbook_id: standard" not in strategic
+    assert (
+        "Do not write the selected playbook to `.cafe/config.yaml`" in normalized_kickoff
+    )
+    assert "`cafe init --no-interactive`" in kickoff
+    assert "`.cafe/config.yaml` has no playbook key" in normalized_kickoff
+
+
 def test_kickoff_contract_formatter_lists_all_phases_and_confirmation_owners(
     tmp_path: Path,
 ) -> None:
@@ -874,6 +905,7 @@ mandate:
     )
     assert "| need_clarification | user_required | 否 |" in result.stdout
     assert "| product_scope | escalate | roadmap, positioning |" in result.stdout
+    assert result.stdout.count("| playbook_id |") == 1
 
 
 def test_kickoff_contract_formatter_accepts_driver_execution_overrides(

@@ -494,7 +494,6 @@ def render(args: argparse.Namespace) -> str:
         summary_headers,
         [
             ["preset", mandate.get("preset", "—")],
-            ["playbook_id", mandate.get("playbook_id", "—")],
             ["out_of_mandate", out_of_mandate or "[]"],
         ],
     )

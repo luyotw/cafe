@@ -27,6 +27,11 @@ then mark it `exists` or user-approved `draft`.
 - `issues.<name>`: optional, protected overrides created only at the user's
   explicit request.
 
+Strategic context is not playbook configuration. Do not add `playbook_id` to
+`mandate` or `issues.<name>`, and do not store a selected playbook anywhere in
+this file. A legacy playbook field is non-authoritative and must not be copied
+or refreshed; leave cleanup to an explicit user request.
+
 Levels:
 
 - `agent`: decide within confirmed documents and issue artifacts;
@@ -52,7 +57,6 @@ documents:
 
 mandate:
   preset: technical-led
-  playbook_id: standard
   axes:
     product_scope:
       level: escalate
@@ -71,7 +75,6 @@ mandate:
 # Optional and protected. Include only after an explicit user request.
 # issues:
 #   issue301:
-#     playbook_id: standard
 #     axes:
 #       product_scope: {level: escalate}
 #       technical: {level: agent}
@@ -103,6 +106,7 @@ the named documents and latest accepted issue artifacts.
   `exists` or user-approved `draft` documents.
 - Merge, close, and `cafe close` only after all such blockers are resolved.
 
-Write repository-wide `documents` and `mandate` updates during kickoff as
-confirmed. Leave `issues:` untouched unless the user explicitly requested an
-issue-specific strategic override.
+Write repository-wide `documents` and `mandate` updates during kickoff only as
+confirmed, and never include a playbook selection in those updates.
+Leave `issues:` untouched unless the user explicitly requested an issue-specific
+strategic override.

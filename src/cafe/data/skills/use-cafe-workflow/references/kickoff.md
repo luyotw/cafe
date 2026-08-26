@@ -20,6 +20,9 @@ the workflow conversation language. Also read `playbook_selection.md`,
 - [ ] Resolve or select the active playbook using `playbook_selection.md`. When
   no authoritative choice exists, do not apply a builtin default without the
   required repository/issue assessment and recorded rationale.
+- [ ] Keep the choice issue-owned. Do not write the selected playbook to
+  `.cafe/config.yaml` or `.cafe/strategic_context.yaml`; after confirmation it
+  belongs only in `.cafe/issues/<issue-name>/issue.yaml`.
 - [ ] Run `cafe playbook confirmation-gates <playbook-id>` and read both the
   `Conversation locale:` line and confirmation-gate candidates.
 - [ ] Treat a configured explicit BCP 47 value as the fallback, not an override
@@ -242,7 +245,10 @@ for confirmation rather than asking again.
   it in `.cafe/strategic_context.yaml`.
 - [ ] Complete the issue assessment and model preflight from
   `model_selection.md`; do not propose a model that already failed preflight.
-- [ ] If needed, initialize project-owned files with `cafe init`.
+- [ ] If needed, initialize project-owned files with `cafe init --no-interactive`.
+  This creates the project files without turning the active issue's playbook
+  into a repository setting. Verify that `.cafe/config.yaml` has no playbook
+  key before continuing.
 - [ ] For an existing initialized repository, recommend a worktree at
   `.cafe/worktrees/<issue-name>` by default. If the user accepts the recommended
   kickoff unchanged, worktree creation is approved. For an approved first Git

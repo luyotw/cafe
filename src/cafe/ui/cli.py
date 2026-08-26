@@ -478,7 +478,13 @@ def _get_valid_playbook_values() -> List[str]:
 
 
 @app.command()
-def init() -> None:
+def init(
+    non_interactive: bool = typer.Option(
+        False,
+        "--no-interactive",
+        help="Initialize project files without prompting for repository settings.",
+    ),
+) -> None:
     """Initialize CAFE configuration for the project.
 
     Creates project-owned configuration and bundled default content.
@@ -490,6 +496,10 @@ def init() -> None:
         console.print("[yellow]⚠️  Configuration already exists.[/yellow]")
         console.print(f"[dim]Current config: {config_manager.config_file}[/dim]")
         console.print()
+
+        if non_interactive:
+            console.print("[yellow]Skipped: existing configuration was left unchanged.[/yellow]")
+            raise typer.Exit(0)
 
         overwrite = prompt_confirm(
             message="Do you want to overwrite the existing configuration?",
@@ -509,6 +519,13 @@ def init() -> None:
     # Minimal config.yaml with defaults; setup can refine later
     if not config_manager.config_file.exists():
         config_manager.save_config({"settings": {"auto_update": True}})
+
+    if non_interactive:
+        console.print("\n[bold green]Initialization complete![/bold green]")
+        console.print(
+            "[cyan]You can now use `cafe prepare` to start a new development task.[/cyan]"
+        )
+        return
 
     console.print()
     console.print("[bold cyan]Now configure project settings:[/bold cyan]")

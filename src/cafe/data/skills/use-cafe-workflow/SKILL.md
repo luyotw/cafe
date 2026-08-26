@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.25.0
+version: 1.26.0
 ---
 
 # Use CAFE Workflow
@@ -36,7 +36,7 @@ If more than one situation applies, read every listed reference before acting; d
 
 - The complete kickoff contract is the first blocking gate. Do not run `cafe
   prepare`, mutate the repository, or execute the first workflow phase before the user confirms it.
-- Resolve a playbook from explicit or durable authority; otherwise use `references/playbook_selection.md` to assess candidates and record why the nearest alternative is insufficient. Never silently apply a common example or builtin default.
+- Resolve a playbook from explicit or durable authority; otherwise use `references/playbook_selection.md` to assess candidates and record why the nearest alternative is insufficient. Never silently apply a common example or builtin default. Keep playbook selection issue-owned. Never write or update a playbook default in `.cafe/config.yaml` or `.cafe/strategic_context.yaml`; after kickoff confirmation, persist the selected `playbook_id` only in `.cafe/issues/<issue-name>/issue.yaml`.
 - Assess the issue nature, scale, and risk before kickoff. Include one exact
   primary model with any user-approved fallbacks per phase and model-adjustment
   authority in the contract. Resolve provider-neutral phase execution profiles from the active
@@ -100,8 +100,8 @@ If more than one situation applies, read every listed reference before acting; d
   for identical catalogs or when the project has no skill overrides.
 - [ ] Read the kickoff and strategic-context references.
 - [ ] Resolve or select the active playbook using `references/playbook_selection.md`,
-  recording its rationale and independent-QA decision; then resolve locale,
-  confirmation gates, reactive handoffs, mandate, and worktree behavior.
+  recording its rationale and independent-QA decision without creating a repository
+  default; then resolve locale, confirmation gates, reactive handoffs, mandate, and worktree behavior.
 - [ ] Assess issue nature, scale, and risk; resolve every phase's execution profile,
   capability band, exact primary and any fallbacks, rationale, cached or tested
   primary evidence, configured fallback smoke evidence, and adjustment authority.

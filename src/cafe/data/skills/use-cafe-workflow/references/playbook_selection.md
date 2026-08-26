@@ -11,15 +11,17 @@ Use the first applicable durable or explicit source:
 
 1. A direct playbook choice from the user in the current thread.
 2. On resume, the playbook in the issue's confirmed `issue.yaml` contract.
-3. An explicitly authorized issue override in `.cafe/strategic_context.yaml`.
-4. The initialized repository's `.cafe/config.yaml`, checked against the
-   confirmed repository mandate.
-5. The confirmed mandate's repository-wide `playbook_id` when no more specific
-   source applies.
 
 A direct change to a persisted choice is allowed, but it invalidates the old
 kickoff contract and requires full reconfirmation. Conflicting durable sources
 are not a reason to guess; show the conflict and ask one focused question.
+
+`.cafe/config.yaml` and `.cafe/strategic_context.yaml` are not playbook-selection
+sources. Treat any legacy `settings.playbook`, top-level `playbook`, or
+`playbook_id` stored in those repository-level files as non-authoritative; do
+not copy, refresh, or use it as the current issue's selection. Repository
+instructions and strategic documents may constrain the assessment below, but a
+repository-wide playbook ID must not replace that assessment.
 
 ## Select when no authoritative choice exists
 
@@ -83,3 +85,8 @@ complete kickoff confirmation approve it.
 
 Reassess before the first execution if issue facts or repository instructions
 change. Any playbook change requires a freshly rendered and confirmed contract.
+
+After the complete kickoff is confirmed, persist the selected `playbook_id`
+only in `.cafe/issues/<issue-name>/issue.yaml`. Never persist it in
+`.cafe/config.yaml` or `.cafe/strategic_context.yaml`, even when the same
+playbook has been selected for several issues.
