@@ -65,6 +65,48 @@ def _read_skill_resource(path: str) -> str:
     return (SKILL_ROOT / path).read_text(encoding="utf-8")
 
 
+def _kickoff_formatter_command(strategic_context: Path, *extra_args: str) -> list[str]:
+    return [
+        sys.executable,
+        str(SKILL_ROOT / "scripts" / "format_kickoff_contract.py"),
+        "standard",
+        "--issue-name",
+        "issue346",
+        "--playbook-rationale",
+        (
+            "Repository policy requires the standard graph; QA is not independently "
+            "required, so standard-qa is unnecessary."
+        ),
+        "--issue-nature",
+        "feature/integration",
+        "--issue-scale",
+        "medium",
+        "--model-adjustment-authority",
+        "driver_autonomous",
+        *extra_args,
+        "--risk-factor",
+        "public contract",
+        "--assessment-rationale",
+        "Changes a public workflow contract across runtime and CLI.",
+        *_phase_chain_args(),
+        *_phase_rationale_args(),
+        "--effective-locale",
+        "zh-TW",
+        "--locale-source",
+        "user thread override",
+        "--repository-content-locale",
+        "zh-TW",
+        "--user-required",
+        "--driver-confirmable",
+        "spec",
+        "plan",
+        "--worktree",
+        ".cafe/worktrees/issue346",
+        "--strategic-context",
+        str(strategic_context),
+    ]
+
+
 def _load_script_module(path: Path, name: str):
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
@@ -788,53 +830,8 @@ mandate:
 """,
         encoding="utf-8",
     )
-    script = (
-        PROJECT_ROOT
-        / "src"
-        / "cafe"
-        / "data"
-        / "skills"
-        / "use-cafe-workflow"
-        / "scripts"
-        / "format_kickoff_contract.py"
-    )
-
     result = subprocess.run(
-        [
-            sys.executable,
-            str(script),
-            "standard",
-            "--issue-name",
-            "issue346",
-            "--playbook-rationale",
-            "Repository policy requires the standard graph; QA is not independently required, so standard-qa is unnecessary.",
-            "--issue-nature",
-            "feature/integration",
-            "--issue-scale",
-            "medium",
-            "--model-adjustment-authority",
-            "driver_autonomous",
-            "--risk-factor",
-            "public contract",
-            "--assessment-rationale",
-            "Changes a public workflow contract across runtime and CLI.",
-            *_phase_chain_args(),
-            *_phase_rationale_args(),
-            "--effective-locale",
-            "zh-TW",
-            "--locale-source",
-            "user thread override",
-            "--repository-content-locale",
-            "zh-TW",
-            "--user-required",
-            "--driver-confirmable",
-            "spec",
-            "plan",
-            "--worktree",
-            ".cafe/worktrees/issue346",
-            "--strategic-context",
-            str(strategic_context),
-        ],
+        _kickoff_formatter_command(strategic_context),
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -857,6 +854,8 @@ mandate:
     assert "| issue_nature | feature/integration |" in result.stdout
     assert "| issue_scale | medium |" in result.stdout
     assert "| model_adjustment_authority | driver_autonomous |" in result.stdout
+    assert "| driver_execution.mode | continuous |" in result.stdout
+    assert "| driver_execution.poll_interval_seconds | 180 |" in result.stdout
     assert "### Phase model chains — driver-assessed" in result.stdout
     assert (
         "| develop | copilot:implementation-main | "
@@ -875,6 +874,71 @@ mandate:
     )
     assert "| need_clarification | user_required | 否 |" in result.stdout
     assert "| product_scope | escalate | roadmap, positioning |" in result.stdout
+
+
+def test_kickoff_contract_formatter_accepts_driver_execution_overrides(
+    tmp_path: Path,
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        """\
+version: 1
+mandate:
+  preset: technical-led
+  playbook_id: standard
+  axes: {}
+  out_of_mandate: []
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        _kickoff_formatter_command(
+            strategic_context,
+            "--execution-mode",
+            "single_step",
+            "--poll-interval-seconds",
+            "60",
+        ),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "| driver_execution.mode | single_step |" in result.stdout
+    assert "| driver_execution.poll_interval_seconds | 60 |" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("extra_args", "expected_error"),
+    [
+        (("--execution-mode", "invalid"), "invalid choice"),
+        (("--poll-interval-seconds", "0"), "must be greater than zero"),
+        (("--poll-interval-seconds", "-1"), "must be greater than zero"),
+        (
+            ("--poll-interval-seconds", "1.5"),
+            "must be an integer number of seconds",
+        ),
+    ],
+)
+def test_kickoff_contract_formatter_rejects_invalid_driver_execution(
+    tmp_path: Path, extra_args: tuple[str, ...], expected_error: str
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text("version: 1\n", encoding="utf-8")
+
+    result = subprocess.run(
+        _kickoff_formatter_command(strategic_context, *extra_args),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert expected_error in result.stderr
 
 
 def test_kickoff_formatter_documents_structural_validation_boundary() -> None:
@@ -1711,19 +1775,53 @@ def test_use_cafe_workflow_requires_confirmed_repository_content_locale() -> Non
     assert "not in issue-owned workflow state" in normalized
 
 
-def test_use_cafe_workflow_requires_one_step_execution_and_model_authority() -> None:
+def test_use_cafe_workflow_requires_driver_execution_contract_and_model_authority() -> None:
     skill = _read_skill_resource("SKILL.md")
     kickoff = _read_skill_resource("references/kickoff.md")
     running = _read_skill_resource("references/running_workflow.md")
     models = _read_skill_resource("references/model_selection.md")
+    normalized_kickoff = " ".join(kickoff.split())
     normalized_running = " ".join(running.split())
     normalized_models = " ".join(models.split())
 
     assert "references/model_selection.md" in skill
-    assert "cafe workflow --execute --single-step" in skill
+    assert "`driver_execution` contract" in skill
+    assert "`continuous` by default" in skill
+    assert "may be `single_step`" in skill
     assert "persisted baton without forcing `--start-step`" in skill
     assert "Do not use `cafe make` for driver execution" in normalized_running
-    assert "After every invocation that completes a phase" in normalized_running
+    assert "required cadence" in normalized_running
+    assert "Start the timer when the process starts or resumes" in normalized_running
+    assert (
+        "perform one proactive inspection when the interval elapses" in normalized_running
+    )
+    assert "then restart the timer" in normalized_running
+    assert (
+        "if execution remains active after handling the signal, restart the timer"
+        in normalized_running
+    )
+    assert "Stop polling when the command exits" in normalized_running
+    assert "must not trigger an extra CAFE status or artifact poll" in normalized_running
+    assert "If the mapping is missing, return to `kickoff.md`" in normalized_running
+    assert (
+        "Start the timer when a workflow process starts or resumes" in normalized_kickoff
+    )
+    assert (
+        "perform one proactive inspection when the interval elapses, then restart the timer"
+        in normalized_kickoff
+    )
+    assert (
+        "if the process remains active afterward, restart the timer"
+        in normalized_kickoff
+    )
+    assert "Stop the timer when the command exits" in normalized_kickoff
+    assert "must not trigger extra workflow polling" in normalized_kickoff
+    assert (
+        "For an older prepared issue without `driver_execution`, propose `continuous` and "
+        "`180` as defaults and confirm them before the next execution"
+        in normalized_kickoff
+    )
+    assert "do not silently infer that the older driver used either mode" in normalized_kickoff
     assert "`model_adjustment_authority`" in kickoff
     assert "`driver_autonomous`" in kickoff
     assert "`user_approval_required`" in kickoff
@@ -1743,7 +1841,7 @@ def test_use_cafe_workflow_requires_one_step_execution_and_model_authority() -> 
     assert "never assume two versions are equivalent solely because they share a model family" in normalized_models
     assert "Reduced uncertainty after spec or plan may move" in normalized_models
     assert "Resolve the skill bound by the active playbook" in normalized_models
-    assert "actual next iteration" in normalized_models
+    assert "actual remaining iteration" in normalized_models
     assert "making the primary fail with the classified `model_not_found`" in normalized_models
     assert "Do not create a fake failure inside a live issue" in normalized_models
     assert "scripts/preflight_cache.py" in models
@@ -1752,7 +1850,9 @@ def test_use_cafe_workflow_requires_one_step_execution_and_model_authority() -> 
     assert "never records a failed" in normalized_models
     assert "A live workflow failure always overrides cached evidence" in normalized_models
     assert (SKILL_ROOT / "scripts" / "preflight_cache.py").is_file()
-    assert "After each one-step invocation" in normalized_models
+    assert "Reassess at contract-defined boundaries" in normalized_models
+    assert "In `continuous` mode, do not stop execution" in normalized_models
+    assert "In `single_step` mode, reassess after every completed step" in normalized_models
     assert "active worktree's `.cafe/phases.yaml`" in normalized_models
 
 

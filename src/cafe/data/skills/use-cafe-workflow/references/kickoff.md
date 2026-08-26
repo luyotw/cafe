@@ -93,7 +93,22 @@ obtain explicit user confirmation of:
   zero or more explicitly confirmed fallbacks;
 - `model_adjustment_authority`: either `driver_autonomous` or
   `user_approval_required`;
+- `driver_execution.mode`: `continuous` by default or `single_step` when the
+  user wants the driver to regain control after every playbook step;
+- `driver_execution.poll_interval_seconds`: `180` by default, defining the
+  cadence of proactive status inspection while a workflow process is still
+  running;
 - worktree choice and path when using a worktree.
+
+The poll interval applies to proactive `cafe status`, `cafe show`, blackboard,
+artifact, or similar liveness checks. Start the timer when a workflow process
+starts or resumes. If no event-driven signal arrives, perform one proactive
+inspection when the interval elapses, then restart the timer. Handle process
+output, completion, errors, HumanTasks, and other event-driven signals
+immediately; if the process remains active afterward, restart the timer. Stop
+the timer when the command exits, the workflow reaches a user-owned handoff or
+`done`, or execution stops on an error. Host-required user communication may
+occur more often but must not trigger extra workflow polling.
 
 Before proposing the worktree choice, detect whether the target folder is
 already a Git repository. When it is not:
@@ -130,8 +145,10 @@ missing, invalid, or stale.
 
 If the playbook, effective conversation locale, repository content locale, or
 the candidate set changes, reconfirm the contract before the next workflow
-execution. A post-phase model change follows the separately confirmed
-model-adjustment authority in `model_selection.md`.
+execution. A direct user request may update the execution mode or poll interval;
+render the complete updated contract and obtain confirmation before applying
+it. A post-phase model change follows the separately confirmed model-adjustment
+authority in `model_selection.md`.
 
 `need_clarification` and `need_permission` are reactive interruptions, not
 scheduled candidates. `manual_handoff` is routing, not a planned confirmation
@@ -158,6 +175,8 @@ python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --playbook-rationale "<source/evidence, QA decision, and rejected alternative>" \
   --issue-nature <nature> --issue-scale <small|medium|large> \
   --model-adjustment-authority <driver_autonomous|user_approval_required> \
+  --execution-mode <continuous|single_step> \
+  --poll-interval-seconds <positive-integer> \
   --risk-factor "<risk factor; repeat as needed>" \
   --assessment-rationale "<repository evidence for nature and scale>" \
   --phase-rationale "<step>=<capability band, profile/risk evidence, and optional fallback justification>" \
@@ -199,8 +218,9 @@ Pass an option with no step values for an explicit empty list. The formatter
 validates the partition and includes every phase, role, skill, scheduled gate,
 owner, stop behavior, resolved skill execution profile, exact
 primary model, any configured fallbacks, their config source, autonomous
-adjustment authority, reactive policy, mandate boundary, conversation locale source,
-repository content locale, and worktree choice. It
+adjustment authority, driver execution mode, poll interval, reactive policy,
+mandate boundary, conversation locale source, repository content locale, and
+worktree choice. It
 re-executes with the Python interpreter that owns `cafe` when the shell
 interpreter lacks CAFE dependencies.
 
@@ -256,7 +276,8 @@ for confirmation rather than asking again.
   back to the main checkout after worktree creation fails.
 - [ ] Enter the reported worktree before running workflow commands.
 - [ ] Persist the active `playbook_id`, confirmation contract, and reactive
-  handoff policy, issue assessment, and model-adjustment authority in
+  handoff policy, issue assessment, model-adjustment authority, and driver
+  execution contract in
   `.cafe/issues/<issue-name>/issue.yaml` in the active checkout before the
   first workflow execution:
 
@@ -279,7 +300,16 @@ for confirmation rather than asking again.
     authority: driver_autonomous
     confirmed_by: user
     confirmed_at: 2026-08-13
+  driver_execution:
+    mode: continuous
+    poll_interval_seconds: 180
+    confirmed_by: user
+    confirmed_at: 2026-08-26
   ```
+
+  For an older prepared issue without `driver_execution`, propose
+  `continuous` and `180` as defaults and confirm them before the next execution;
+  do not silently infer that the older driver used either mode.
 
 - [ ] Install the confirmed ordered phase chains in the active worktree with
   `scripts/write_phase_config.py`, then verify the effective config as described

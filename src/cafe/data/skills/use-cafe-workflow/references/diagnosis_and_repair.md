@@ -8,7 +8,10 @@ sanitized logs, and installed CAFE version.
 
 ## Classification checklist
 
-- [ ] Reproduce read-only or with a safe focused `--single-step` run.
+- [ ] Reproduce read-only or, only when continuous execution itself is the
+  suspected failure boundary, with one safe focused `--single-step` run. Treat
+  this as a diagnostic override and never persist it as a contract change
+  without user confirmation.
 - [ ] Rule out project configuration, malformed project artifacts, stale
   installed skills, CLI/model mismatch, transient provider/network failures,
   rate limits, and an agent failing an otherwise valid contract.

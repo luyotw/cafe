@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.22.0
+version: 1.23.0
 ---
 
 # Use CAFE Workflow
@@ -58,15 +58,16 @@ If more than one situation applies, read every listed reference before acting; d
 - Validate issue-decomposition assessments before confirming spec or plan;
   coordinate any authorized split through existing authority boundaries and
   reconstruct linked-work position from durable records.
-- Drive every agent phase with `cafe workflow --execute --single-step`; add
-  `--start-step <step>` only for the initial entry or a justified bounded retry.
-  Do not use `cafe make` to execute an unattended multi-phase chain.
-- After each completed phase, reassess the remaining phase model chains. Change
-  them only within the confirmed model-adjustment authority.
+- Resolve and persist a confirmed `driver_execution` contract. `mode` is
+  `continuous` by default and may be `single_step`; `poll_interval_seconds`
+  defaults to `180`. Read `running_workflow.md` for their exact semantics.
+- Drive with `cafe workflow --execute`, deriving `--single-step` only from the
+  confirmed mode. Follow the persisted baton without forcing `--start-step`,
+  and do not use `cafe make` to execute the chain.
+- Configure all phase chains before execution; change them only under `model_selection.md`.
 - Do not manually edit workflow artifacts, blackboard state, or
   `next_step.txt` except when repairing confirmed broken workflow state.
-- Do not bypass CAFE by directly asking an agent to implement an issue that the
-  user asked CAFE to run.
+- Do not bypass CAFE by directly asking an agent to implement the issue.
 - Modify source-of-truth playbooks and phase skills, never generated artifacts
   or installed global copies. Driver and CAFE core defects require escalation
   unless the user explicitly authorizes that source change.
@@ -101,25 +102,24 @@ If more than one situation applies, read every listed reference before acting; d
 - [ ] Resolve or select the active playbook using `references/playbook_selection.md`,
   recording its rationale and independent-QA decision; then resolve locale,
   confirmation gates, reactive handoffs, mandate, and worktree behavior.
-- [ ] Assess issue nature, scale, and risk factors; resolve
-  every phase skill's execution profile, classify each phase's capability band,
-  resolve the exact primary and any fallback models with a phase-specific rationale,
-  reuse valid cached preflight evidence or test candidate availability, smoke
-  any configured fallback path, and propose model-adjustment authority.
+- [ ] Assess issue nature, scale, and risk; resolve every phase's execution profile,
+  capability band, exact primary and any fallbacks, rationale, cached or tested
+  primary evidence, configured fallback smoke evidence, and adjustment authority.
 - [ ] Present the deterministic kickoff table and obtain explicit confirmation.
+- [ ] Persist the confirmed execution mode and poll interval; recommend
+  `continuous` and `180` unless the user overrides them.
 - [ ] Check Git state, initialize CAFE if needed, prepare the issue, enter the
   recorded worktree, and persist the issue-owned contract.
 
 ### Run
 
 - [ ] Read the running-workflow reference.
-- [ ] Execute only the current phase with `--single-step`, including the initial
-  requirement or authorized resume input as needed; otherwise follow the
-  persisted baton without forcing `--start-step`.
-- [ ] While the phase runs normally, monitor process state without duplicating
-  the phase agent's code reading, diff review, or tests.
-- [ ] After the phase, inspect its artifacts and execution evidence, then keep
-  or revise the next model chain under the confirmed authority.
+- [ ] Start or resume with the confirmed execution mode and input, otherwise
+  follow the persisted baton without forcing `--start-step`.
+- [ ] Monitor process state. Poll at the confirmed cadence and handle output,
+  completion, errors, and HumanTasks immediately.
+- [ ] At each contract-defined pause or completion, inspect new phase evidence
+  and revise only remaining model chains within confirmed authority.
 - [ ] Inspect progress through `cafe status` and `cafe show`; consult the
   blackboard only when command output is insufficient, and inspect code only
   when a bounded-diagnosis trigger above applies.

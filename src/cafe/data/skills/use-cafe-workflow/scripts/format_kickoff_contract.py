@@ -9,12 +9,14 @@ import shlex
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable
 
 _MODEL_ADJUSTMENT_AUTHORITIES = {
     "driver_autonomous",
     "user_approval_required",
 }
+_EXECUTION_MODES = {"continuous", "single_step"}
+_DEFAULT_POLL_INTERVAL_SECONDS = 180
 
 
 def _reexec_with_cafe_python() -> None:
@@ -68,6 +70,16 @@ def _items(values: Iterable[str] | None) -> list[str]:
             if token and token not in result:
                 result.append(token)
     return result
+
+
+def _positive_seconds(value: str) -> int:
+    try:
+        seconds = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer number of seconds") from exc
+    if seconds <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return seconds
 
 
 def _cell(value: Any) -> str:
@@ -263,6 +275,16 @@ def _parser() -> argparse.ArgumentParser:
         choices=tuple(sorted(_MODEL_ADJUSTMENT_AUTHORITIES)),
         required=True,
     )
+    parser.add_argument(
+        "--execution-mode",
+        choices=tuple(sorted(_EXECUTION_MODES)),
+        default="continuous",
+    )
+    parser.add_argument(
+        "--poll-interval-seconds",
+        type=_positive_seconds,
+        default=_DEFAULT_POLL_INTERVAL_SECONDS,
+    )
     parser.add_argument("--risk-factor", action="append", required=True)
     parser.add_argument("--assessment-rationale", required=True)
     parser.add_argument(
@@ -384,6 +406,8 @@ def render(args: argparse.Namespace) -> str:
             ["risk_factors", ", ".join(args.risk_factor)],
             ["assessment_rationale", args.assessment_rationale],
             ["model_adjustment_authority", args.model_adjustment_authority],
+            ["driver_execution.mode", args.execution_mode],
+            ["driver_execution.poll_interval_seconds", args.poll_interval_seconds],
             ["user_required", ", ".join(user_required) or "[]"],
             ["driver_confirmable", ", ".join(driver_confirmable) or "[]"],
             ["worktree", worktree],

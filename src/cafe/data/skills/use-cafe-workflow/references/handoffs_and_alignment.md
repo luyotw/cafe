@@ -4,6 +4,10 @@ Read this reference whenever CAFE pauses for a user, the driver considers
 confirming an output, or a proposed delta may affect strategic alignment. Also
 read `strategic_context.md`.
 
+Command examples below show the default `continuous` execution mode. Append
+`--single-step` when and only when the active issue's confirmed
+`driver_execution.mode` is `single_step`.
+
 The kickoff contract says who may approve an output or answer a reactive pause.
 The mandate says what the driver may decide. These are independent controls and
 CAFE runtime does not auto-approve them.
@@ -51,7 +55,7 @@ reassess and configure that phase's model chain, because this invocation may
 execute the continuation. Then submit the response, for example:
 
 ```bash
-cafe workflow --execute --single-step \
+cafe workflow --execute \
   --user-input '{"task":"output-review","decision":"confirm","human_task_id":"<active-human-task-id>"}'
 ```
 
@@ -122,11 +126,12 @@ Keep adjacent concerns separate:
 ### Asking and resuming
 
 Ask one focused question naming the governing axis, proposal delta, recommended
-option, and tradeoff. Pass the answer to the responsible spec or plan step in
-one-step mode so the accepted artifact records it:
+option, and tradeoff. Pass the answer using the confirmed execution mode so the
+accepted artifact records it. Continuous mode proceeds to the next real pause;
+single-step mode returns control after the next step:
 
 ```bash
-cafe workflow --execute --single-step \
+cafe workflow --execute \
   --user-input '{"task":"clarification-answers","answers":{"<question-id>":"<answer>"},"human_task_id":"<active-human-task-id>"}'
 ```
 
@@ -134,7 +139,7 @@ Use every current question ID required by the active task. If its declared
 input schema is `feedback` rather than `answers`, use:
 
 ```bash
-cafe workflow --execute --single-step \
+cafe workflow --execute \
   --user-input '{"task":"clarification-feedback","feedback":"<answer>","human_task_id":"<active-human-task-id>"}'
 ```
 
@@ -156,7 +161,7 @@ For an explicit `alignment_checkpoint`:
    approve the checkpoint:
 
    ```bash
-   cafe workflow --execute --single-step \
+   cafe workflow --execute \
      --user-input '{"decision":"approve","reason":"Within confirmed roadmap and mandate."}'
    ```
 

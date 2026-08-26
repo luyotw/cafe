@@ -1,8 +1,9 @@
 # Issue Assessment And Model Selection
 
 Read this reference before kickoff, before writing phase execution config, and
-after every completed phase. Also read `kickoff.md` before asking for
-confirmation and `running_workflow.md` before execution.
+whenever execution returns control with agent phases still unexecuted. Also read
+`kickoff.md` before asking for confirmation and `running_workflow.md` before
+execution.
 
 ## Assess before proposing models
 
@@ -43,10 +44,12 @@ Every phase skill should declare a provider-neutral
 
 Do not infer this profile from a conventional step name. Resolve the skill bound
 by the active playbook. For an iteration selector, kickoff conservatively
-aggregates all variants and post-phase reassessment resolves the actual next
-iteration. This applies equally to bundled and custom playbooks. A legacy custom
-skill without a declaration receives the neutral default and the formatter marks
-it `defaulted`; do not silently invent stronger or weaker requirements.
+aggregates all variants so every execution mode has a valid initial chain.
+Continuous mode does not pause at phase boundaries. Single-step mode may resolve
+the actual remaining iteration when control returns to the driver. This applies
+equally to bundled and custom playbooks. A legacy custom skill without a
+declaration receives the neutral default and the formatter marks it `defaulted`;
+do not silently invent stronger or weaker requirements.
 
 ## Keep model ownership outside phase agents
 
@@ -264,12 +267,17 @@ same selection and preflight rules. With `user_approval_required`, every
 driver-authored change requires confirmation. Automatic use of a chain's
 already configured fallback, when present, is not a driver-authored change.
 
-## Reassess after every completed phase
+## Reassess at contract-defined boundaries
 
-After each one-step invocation, inspect the phase output, findings, actual
-CLI/model, duration, verification evidence, and next baton. Reassess only the
-unexecuted next phase or required correction; never rewrite historical
-iteration metadata.
+In `continuous` mode, do not stop execution merely to reconsider a successful
+phase's model choice. Reassess when CAFE naturally pauses for a user, an error,
+or a required correction. In `single_step` mode, reassess after every completed
+step before explicitly continuing. Inspect the completed phase output,
+findings, actual CLI/model, duration, verification evidence, and next baton;
+change only the still-unexecuted phase or required correction and never rewrite
+historical iteration metadata. If CAFE reaches `done`, record the actual model
+evidence but do not perform a model-selection pause with no future phase to
+configure.
 
 Keep the chain when scope and risk still match. Change it only with concrete
 evidence, including:

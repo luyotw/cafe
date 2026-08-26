@@ -2,7 +2,8 @@
 
 Read this reference after kickoff and whenever starting, resuming, inspecting,
 or retrying ordinary workflow work. Also read `model_selection.md` before the
-first execution and after every completed phase.
+first execution and whenever execution returns control with agent phases still
+unexecuted.
 
 ## Command checklist
 
@@ -11,18 +12,24 @@ first execution and after every completed phase.
   stay silent when it reports `identical` or `no_project_skills`, and ask the
   user before applying any reported project-to-global update.
 
+- Read the confirmed `driver_execution` mapping from the active issue's
+  `issue.yaml`. Append `--single-step` to every command example in this
+  reference only when `mode: single_step`; omit it for the default
+  `mode: continuous`. If the mapping is missing, return to `kickoff.md` and
+  confirm it before execution.
+
 - Resolve the current phase from `cafe status` and the structured baton, then
   start it with the user's requirement:
 
   ```bash
-  cafe workflow --execute --start-step <step> --single-step \
+  cafe workflow --execute --start-step <step> \
     --user-input "<requirement or answer>. Strategic context: .cafe/strategic_context.yaml (issue: <issue-name>)"
   ```
 
 - Resume the phase declared by the persisted baton without new input:
 
   ```bash
-  cafe workflow --execute --single-step
+  cafe workflow --execute
   ```
 
 - Answer an authorized user handoff without overriding its structured baton.
@@ -30,8 +37,10 @@ first execution and after every completed phase.
   input schema, then use the documented JSON payload with the current
   `human_task_id`. If its declared outcome continues to an agent phase,
   reassess and configure that phase's model chain before submitting the payload,
-  because the same one-step invocation may execute the continuation. Plain text
-  is valid only for a task that explicitly declares the `feedback` schema;
+  because the same invocation continues automatically through subsequent agent
+  phases in `continuous` mode or executes the next single step in `single_step`
+  mode. Plain text is valid only for a task that explicitly declares the
+  `feedback` schema;
   never use it for `decision`, `answers`, or `target`.
 
 - Add `--start-step <step>` only for the initial entry point or when a bounded
@@ -53,25 +62,41 @@ first execution and after every completed phase.
 - `.cafe/issues/<issue>/blackboard.json`: use only when command output does not
   explain the handoff.
 
+Treat `driver_execution.poll_interval_seconds` as the required cadence for
+proactive calls to these inspection surfaces while the current process remains
+active. The default is 180 seconds. Start the timer when the process starts or
+resumes. If nothing wakes the driver first, perform one proactive inspection
+when the interval elapses, then restart the timer. Process output, command
+completion, errors, HumanTasks, and other event-driven signals wake the driver
+immediately; if execution remains active after handling the signal, restart the
+timer. Stop polling when the command exits, the workflow reaches a user-owned
+handoff or `done`, or execution stops on an error. A host may require more
+frequent user-facing heartbeat messages; those messages must not trigger an
+extra CAFE status or artifact poll.
+
 When CAFE pauses for user input, read `handoffs_and_alignment.md` before
 answering or resuming. Non-interactive resumption is allowed only when the exact
 answer or permission already exists in the current thread, or the confirmed
 contract delegates that specific decision to the driver.
 
-After every invocation that completes a phase, inspect the phase result and
-actual CLI/model, duration, verification, and structured baton. Resolve the
-actual skill for the next agent iteration, decide whether to keep or change its
-chain under `model_selection.md`, and update `.cafe/phases.yaml` before that
-phase executes. If a user handoff sits between phases, make this decision before
-submitting the structured response that selects the continuation. A terminal
-`_done` baton has no future chain to adjust.
+Before execution, resolve and configure every phase chain. In `continuous`
+mode, do not interrupt a healthy run at phase boundaries; inspect every newly
+completed phase when the workflow naturally pauses or completes. In
+`single_step` mode, inspect the completed step's result, actual CLI/model,
+duration, verification, and structured baton before explicitly invoking the
+next step. If a user handoff sits before remaining agent work, reassess those
+future chains under `model_selection.md` before submitting the structured
+response. A terminal `_done` baton has no future chain to adjust.
 
 ## Operating rules
 
-- Do not use `cafe make` for driver execution. It can cross multiple phase
-  boundaries before the driver can reassess models. Use the generic
-  `cafe workflow` command with `--single-step` and normally follow persisted
-  workflow state.
+- Do not use `cafe make` for driver execution. Use `cafe workflow --execute` and
+  derive the presence of `--single-step` only from the confirmed execution
+  mode. `continuous` follows persisted workflow state until a user-owned
+  handoff, error, or `done`; `single_step` returns control after every step.
+- A bounded diagnostic reproduction may temporarily add `--single-step` while
+  continuous execution itself is under investigation. Record it as a diagnostic
+  override; it does not mutate the confirmed execution contract.
 - Do not edit workflow artifacts, blackboard, or `next_step.txt` by hand unless
   repairing confirmed broken state.
 - Do not bypass CAFE by directly asking an agent to implement the issue.
@@ -81,10 +106,10 @@ submitting the structured response that selects the continuation. A terminal
   agent can rewrite the baton:
 
   ```bash
-    cafe workflow --execute --start-step <step> --single-step
+    cafe workflow --execute --start-step <step>
   ```
 
 - If PR sync fails because the branch has uncommitted changes, commit or stash
-  them, then rerun the PR phase in one-step mode.
+  them, then rerun the PR phase using the confirmed execution mode.
 - If behavior appears incorrect rather than merely incomplete, stop retries and
   read `diagnosis_and_repair.md`.
