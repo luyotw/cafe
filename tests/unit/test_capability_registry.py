@@ -8,16 +8,22 @@ import yaml
 from cafe.core.capabilities import (
     CAPABILITY_BROWSER_OPEN_ID,
     CAPABILITY_PR_PUBLISH_ID,
+    CAPABILITY_SLACK_HUMAN_TASK_ID,
     CapabilityManifest,
     CapabilityRegistryError,
     ExecutionRequest,
     PolicyDecision,
     canonical_request_fingerprint,
     evaluate_capability_request,
+    default_capability_definition_dirs,
     load_capability_registry,
     run_capability_request,
     run_pr_publish_capability,
 )
+
+
+SLACK_CREDENTIAL = "slack_human_task_webhook"
+SLACK_DESTINATION = "hooks.slack.com"
 
 
 def test_default_registry_and_sync_pr_entrypoint_ignore_project_overrides(tmp_path: Path) -> None:
@@ -188,6 +194,96 @@ def _browser_request(**overrides: object) -> dict[str, object]:
     }
     request.update(overrides)
     return request
+
+
+def _slack_request(**overrides: object) -> dict[str, object]:
+    request: dict[str, object] = {
+        "capability": CAPABILITY_SLACK_HUMAN_TASK_ID,
+        "args": {
+            "repository": "openfunltd/cafe",
+            "workflow_id": "workflow-one",
+            "task_id": "task-one",
+            "reason": "Review the implementation plan.",
+        },
+        "effects": {
+            "writes": [],
+            "network_destinations": [SLACK_DESTINATION],
+            "browser_open": [],
+        },
+        "credentials": [SLACK_CREDENTIAL],
+        "permissions": {"network": [SLACK_DESTINATION]},
+    }
+    request.update(overrides)
+    return request
+
+
+def test_registered_slack_human_task_capability_has_fixed_boundary(tmp_path: Path) -> None:
+    """The package registry owns one narrow non-secret HumanTask request contract."""
+    registry = load_capability_registry(default_capability_definition_dirs(tmp_path))
+
+    manifest = registry[CAPABILITY_SLACK_HUMAN_TASK_ID]
+
+    assert manifest.implementation == "notify_slack_human_task"
+    assert set(manifest.arguments.required) == {
+        "repository",
+        "workflow_id",
+        "task_id",
+        "reason",
+    }
+    assert set(manifest.arguments.properties) == set(manifest.arguments.required)
+    assert manifest.effects.network_destinations == (SLACK_DESTINATION,)
+    assert manifest.effects.writes == ()
+    assert manifest.credentials == (SLACK_CREDENTIAL,)
+    assert manifest.permissions == {"network": (SLACK_DESTINATION,)}
+
+    evaluation = evaluate_capability_request(registry, _slack_request())
+    assert evaluation.decision is PolicyDecision.ALLOW
+
+
+@pytest.mark.parametrize(
+    "redirect_input",
+    ["destination", "channel", "webhook", "credential_path", "adapter"],
+)
+def test_slack_human_task_capability_denies_redirectable_arguments(
+    tmp_path: Path, redirect_input: str
+) -> None:
+    """Project, agent, and task content cannot add destination authority."""
+    registry = load_capability_registry(default_capability_definition_dirs(tmp_path))
+    args = dict(_slack_request()["args"])
+    args[redirect_input] = "https://evil.test/redirect"
+
+    evaluation = evaluate_capability_request(registry, _slack_request(args=args))
+
+    assert evaluation.decision is PolicyDecision.DENY
+    assert evaluation.reason_code == "argument_not_allowed"
+
+
+@pytest.mark.parametrize(
+    ("request_update", "reason_code"),
+    [
+        (
+            {
+                "effects": {
+                    "writes": [],
+                    "network_destinations": ["evil.test"],
+                    "browser_open": [],
+                }
+            },
+            "effect_not_allowed",
+        ),
+        ({"credentials": ["project_webhook"]}, "credential_not_allowed"),
+        ({"permissions": {"network": ["evil.test"]}}, "permission_not_allowed"),
+    ],
+)
+def test_slack_human_task_capability_denies_redirectable_authority(
+    tmp_path: Path, request_update: dict[str, object], reason_code: str
+) -> None:
+    registry = load_capability_registry(default_capability_definition_dirs(tmp_path))
+
+    evaluation = evaluate_capability_request(registry, _slack_request(**request_update))
+
+    assert evaluation.decision is PolicyDecision.DENY
+    assert evaluation.reason_code == reason_code
 
 
 def test_execution_request_is_strict_and_fingerprint_covers_security_boundary() -> None:

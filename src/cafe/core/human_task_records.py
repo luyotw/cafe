@@ -118,6 +118,14 @@ class HumanTask:
 
 
 @dataclass(frozen=True)
+class HumanTaskMaterialization:
+    """The durable task and whether this transaction created it."""
+
+    task: HumanTask
+    created: bool
+
+
+@dataclass(frozen=True)
 class Assignment:
     """The declared human assignee for one task."""
 
@@ -403,6 +411,37 @@ class HumanTaskRecordStore:
         capability_approval: Optional[Mapping[str, Any]] = None,
         handoff_key: Optional[str] = None,
     ) -> HumanTask:
+        return self.materialize_with_status(
+            workflow_id=workflow_id,
+            step=step,
+            iteration=iteration,
+            trigger=trigger,
+            policy_id=policy_id,
+            prompt=prompt,
+            expected_result=expected_result,
+            continuations=continuations,
+            assignee_type=assignee_type,
+            assignee_id=assignee_id,
+            capability_approval=capability_approval,
+            handoff_key=handoff_key,
+        ).task
+
+    def materialize_with_status(
+        self,
+        *,
+        workflow_id: str,
+        step: str,
+        iteration: int,
+        trigger: str,
+        policy_id: str,
+        prompt: str,
+        expected_result: Mapping[str, Any],
+        continuations: Mapping[str, str],
+        assignee_type: str,
+        assignee_id: Optional[str] = None,
+        capability_approval: Optional[Mapping[str, Any]] = None,
+        handoff_key: Optional[str] = None,
+    ) -> HumanTaskMaterialization:
         with self.transaction():
             envelope = self._load_for_workflow(workflow_id, create=True)
             resolved_handoff_key = handoff_key or _handoff_key(
@@ -418,7 +457,7 @@ class HumanTaskRecordStore:
                 None,
             )
             if existing is not None:
-                return existing
+                return HumanTaskMaterialization(task=existing, created=False)
             now = _now_iso()
             task_id = str(uuid4())
             capability_metadata = (
@@ -461,7 +500,7 @@ class HumanTaskRecordStore:
                 context={"handoff_key": resolved_handoff_key},
             )
             self._save(envelope)
-            return task
+            return HumanTaskMaterialization(task=task, created=True)
 
     def update_capability_approval(
         self,
