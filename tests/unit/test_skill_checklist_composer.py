@@ -180,7 +180,7 @@ GOLDEN_RUNNERS = {
         output_file=".cafe/issues/test/develop/iteration_001/output.md",
     ),
     "review": lambda path: generate_review_checklist(
-        agent_name="Alice",
+        agent_name="Richard",
         spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
         review_file_path=".cafe/issues/test/review/iteration_001/output.md",
         base_branch="develop",
@@ -565,7 +565,7 @@ def test_review_and_pr_checklists_include_basic_principles(tmp_path: Path) -> No
     pr_path = tmp_path / "pr_checklist.md"
 
     generate_review_checklist(
-        agent_name="Alice",
+        agent_name="Richard",
         spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
         review_file_path=".cafe/issues/test/review/iteration_001/output.md",
         base_branch="develop",

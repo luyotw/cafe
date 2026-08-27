@@ -173,14 +173,14 @@ Read {evidence_file} and use {template_file}.
         issue_name="synthesis-test",
         playbook={
             "playbook": {"id": "synthesis"},
-            "roles": {"researcher": {"default_agent": "David"}},
+            "roles": {"researcher": {"default_agent": "Morgan"}},
             "skills": {"workflow": {"shared": []}, "chat": {"shared": []}},
             "steps": {"synthesis": step},
         },
         generic_phase=generic_phase,
         agent_manager=manager,
         git_ops=_GitOps(),
-        role_agent_map={"researcher": "David"},
+        role_agent_map={"researcher": "Morgan"},
     )
 
     executor.execute_step("synthesis", step, state)
@@ -195,7 +195,7 @@ Read {evidence_file} and use {template_file}.
         step_name="synthesis",
         step_def=step,
         blackboard_state=state,
-        agent_name="David",
+        agent_name="Morgan",
         output_file=issue_dir / "synthesis" / "iteration_001" / "output.md",
     )
     activated = loader.activate("synthesis", context)
@@ -296,7 +296,7 @@ BODY-ONLY-SENTINEL GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
     }
     playbook = {
         "playbook": {"id": "arbitrary-packet-journey"},
-        "roles": {"researcher": {"default_agent": "David"}},
+        "roles": {"researcher": {"default_agent": "Morgan"}},
         "skills": {"workflow": {"shared": []}, "chat": {"shared": []}},
         "steps": {"assemble": step},
     }
@@ -309,7 +309,7 @@ BODY-ONLY-SENTINEL GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
         generic_phase=phase,
         agent_manager=first_manager,
         git_ops=_GitOps(),
-        role_agent_map={"researcher": "David"},
+        role_agent_map={"researcher": "Morgan"},
     )
     first.execute_step("assemble", step, state)
 
@@ -344,7 +344,7 @@ BODY-ONLY-SENTINEL GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
         generic_phase=phase,
         agent_manager=stale_source_manager,
         git_ops=_GitOps(),
-        role_agent_map={"researcher": "David"},
+        role_agent_map={"researcher": "Morgan"},
     )
     stale_source_executor.execute_step("assemble", step, state)
 
@@ -362,7 +362,7 @@ BODY-ONLY-SENTINEL GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
         generic_phase=phase,
         agent_manager=tampered_packet_manager,
         git_ops=_GitOps(),
-        role_agent_map={"researcher": "David"},
+        role_agent_map={"researcher": "Morgan"},
     )
     tampered_packet_executor.execute_step("assemble", step, state)
 
@@ -378,7 +378,7 @@ BODY-ONLY-SENTINEL GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
         generic_phase=phase,
         agent_manager=second_manager,
         git_ops=_GitOps(),
-        role_agent_map={"researcher": "David"},
+        role_agent_map={"researcher": "Morgan"},
     )
     second.execute_step("assemble", step, state)
     assert "compact_brief=packet" in second_manager.prompts[0]
@@ -423,7 +423,7 @@ GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
         generic_phase=phase,
         agent_manager=empty_table_manager,
         git_ops=_GitOps(),
-        role_agent_map={"researcher": "David"},
+        role_agent_map={"researcher": "Morgan"},
     )
     empty_table_executor.execute_step("assemble", step, state)
     assert "compact_brief=packet" in empty_table_manager.prompts[0]
@@ -650,14 +650,14 @@ def test_interrupted_custom_step_uses_replaced_declared_batch_scope(
         issue_name="resumed-custom-batch",
         playbook={
             "playbook": {"id": "synthesis"},
-            "roles": {"researcher": {"default_agent": "David"}},
+            "roles": {"researcher": {"default_agent": "Morgan"}},
             "skills": {"workflow": {"shared": []}, "chat": {"shared": []}},
             "steps": {"synthesis": step},
         },
         generic_phase=generic_phase,
         agent_manager=manager,
         git_ops=_GitOps(),
-        role_agent_map={"researcher": "David"},
+        role_agent_map={"researcher": "Morgan"},
     )
     executor.step_user_inputs["synthesis"] = "[system] Resume from where you left off."
 
@@ -722,14 +722,14 @@ def test_execution_without_declared_scope_does_not_invent_resume_scope(
             issue_name=issue_name,
             playbook={
                 "playbook": {"id": "synthesis"},
-                "roles": {"researcher": {"default_agent": "David"}},
+                "roles": {"researcher": {"default_agent": "Morgan"}},
                 "skills": {"workflow": {"shared": []}, "chat": {"shared": []}},
                 "steps": {"synthesis": step},
             },
             generic_phase=generic_phase,
             agent_manager=manager,
             git_ops=_GitOps(),
-            role_agent_map={"researcher": "David"},
+            role_agent_map={"researcher": "Morgan"},
         )
         executor.execute_step("synthesis", step, state)
         return manager.prompts[0]
