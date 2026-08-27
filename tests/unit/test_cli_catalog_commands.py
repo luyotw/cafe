@@ -1,5 +1,6 @@
 """Tests for playbook/skill catalog CLI commands."""
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -493,3 +494,183 @@ def test_help_hides_legacy_phase_aliases() -> None:
     commands_section = result.stdout.split("╭─ Commands", 1)[1]
     for command_name in ("spec", "plan", "develop", "dev", "review", "pr"):
         assert f"│ {command_name} " not in commands_section
+
+
+def _write_catalog_entries(project: Path) -> None:
+    playbook = project / ".cafe" / "playbooks" / "standard.yaml"
+    playbook.parent.mkdir(parents=True, exist_ok=True)
+    playbook.write_text("playbook: {id: standard}\nsteps: {}\n", encoding="utf-8")
+    skill = project / ".cafe" / "skills" / "develop" / "SKILL.md"
+    skill.parent.mkdir(parents=True, exist_ok=True)
+    skill.write_text(
+        "---\nname: develop\ndescription: project\n---\n\nDevelop\n",
+        encoding="utf-8",
+    )
+    agent = project / ".cafe" / "agents" / "developer" / "David.md"
+    agent.parent.mkdir(parents=True, exist_ok=True)
+    agent.write_text(
+        "---\nname: David\ndescription: project\n---\n\nDevelop\n",
+        encoding="utf-8",
+    )
+
+
+def test_catalog_check_defaults_to_all_three_kinds_with_complete_json(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    global_root = tmp_path / "global"
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
+    _write_catalog_entries(tmp_path)
+
+    result = runner.invoke(app, ["catalog", "check", "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert {item["entry_id"] for item in payload["entries"]} == {
+        "playbook:standard",
+        "phase:develop",
+        "agent:developer/David",
+    }
+    assert payload["difference_count"] == 3
+
+
+def test_catalog_check_supports_kind_and_entry_filters(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
+    )
+    _write_catalog_entries(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "catalog",
+            "check",
+            "--kind",
+            "playbook",
+            "--entry",
+            "playbook:standard",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert [item["entry_id"] for item in payload["entries"]] == ["playbook:standard"]
+
+
+def test_catalog_sync_global_requires_and_honors_exact_noninteractive_approval(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    global_root = tmp_path / "global"
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
+    _write_catalog_entries(tmp_path)
+    check = runner.invoke(
+        app,
+        [
+            "catalog",
+            "check",
+            "--entry",
+            "playbook:standard",
+            "--json",
+        ],
+    )
+    token = json.loads(check.stdout)["comparison_token"]
+
+    missing_approval = runner.invoke(
+        app, ["catalog", "sync-global", "--token", token, "--json"]
+    )
+    result = runner.invoke(
+        app,
+        [
+            "catalog",
+            "sync-global",
+            "--entry",
+            "playbook:standard",
+            "--token",
+            token,
+            "--approve",
+            "playbook:standard",
+            "--json",
+        ],
+    )
+
+    assert missing_approval.exit_code == 1
+    assert result.exit_code == 0, result.stdout
+    assert json.loads(result.stdout)["updated"] == ["playbook:standard"]
+    assert (global_root / "playbooks" / "standard.yaml").is_file()
+
+
+def test_catalog_sync_global_rejects_stale_cli_token(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    global_root = tmp_path / "global"
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
+    _write_catalog_entries(tmp_path)
+    check = runner.invoke(app, ["catalog", "check", "--json"])
+    token = json.loads(check.stdout)["comparison_token"]
+    agent = tmp_path / ".cafe" / "agents" / "developer" / "David.md"
+    agent.write_text(agent.read_text(encoding="utf-8") + "changed\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "catalog",
+            "sync-global",
+            "--token",
+            token,
+            "--approve",
+            "agent:developer/David",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert not (global_root / "agents" / "developer" / "David.md").exists()
+
+
+def test_catalog_sync_global_interactive_preview_updates_only_selected_entry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    global_root = tmp_path / "global"
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
+    _write_catalog_entries(tmp_path)
+
+    with (
+        patch("cafe.ui.cli.prompt_checkbox", return_value=["phase:develop"]),
+        patch("cafe.ui.cli.prompt_confirm", return_value=True),
+    ):
+        result = runner.invoke(app, ["catalog", "sync-global"])
+
+    assert result.exit_code == 0, result.stdout
+    assert (global_root / "skills" / "develop" / "SKILL.md").is_file()
+    assert not (global_root / "playbooks" / "standard.yaml").exists()
+
+
+def test_catalog_legacy_migration_requires_digest_bound_decisions(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    global_root = tmp_path / "global"
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
+    _write_catalog_entries(tmp_path)
+
+    preview = runner.invoke(app, ["catalog", "migrate-agents", "--json"])
+    assert preview.exit_code == 0, preview.stdout
+    token = json.loads(preview.stdout)["token"]
+    result = runner.invoke(
+        app,
+        [
+            "catalog",
+            "migrate-agents",
+            "--token",
+            token,
+            "--decision",
+            "agent:developer/David=preserve",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert json.loads(result.stdout)["status"] == "completed"
+    assert (tmp_path / ".cafe" / "agents" / "developer" / "David.md").is_file()

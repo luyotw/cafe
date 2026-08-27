@@ -779,6 +779,7 @@ app.add_typer(agent_app, name="agent")
 # Playbook and skill management commands
 app.add_typer(catalog_commands.playbook_app, name="playbook")
 app.add_typer(catalog_commands.skill_app, name="skill")
+app.add_typer(catalog_commands.catalog_app, name="catalog")
 
 # Workflow verification receipts
 app.add_typer(verification_commands.verification_app, name="verification")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -9,6 +10,9 @@ import typer
 import yaml
 from rich.console import Console
 
+from cafe.catalogs.migration import AgentSnapshotMigrator
+from cafe.catalogs.resolver import CatalogKind, CatalogResolver
+from cafe.catalogs.sync import CatalogSyncError, CatalogSyncService
 from cafe.core.playbook import confirmation_gate_steps
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook, format_dot, format_text_report
@@ -38,6 +42,7 @@ def _cli_prompt_checkbox(*a, **kw):
 # ---------------------------------------------------------------------------
 playbook_app = typer.Typer(help="Inspect and validate playbooks")
 skill_app = typer.Typer(help="Inspect and validate skills")
+catalog_app = typer.Typer(help="Compare and publish project CAFE catalogs")
 
 # ---------------------------------------------------------------------------
 # Console and backward-compat runtime bridge
@@ -64,6 +69,210 @@ def _build_playbook_loader() -> PlaybookLoader:
 def _build_skill_loader() -> SkillLoader:
     """Build skill loader with cwd-based project root."""
     return SkillLoader(project_root=Path.cwd())
+
+
+def _build_catalog_service() -> CatalogSyncService:
+    """Build the trusted catalog service for the active project view."""
+    return CatalogSyncService(CatalogResolver(project_root=Path.cwd()))
+
+
+def _parse_catalog_kinds(values: list[str]) -> list[CatalogKind]:
+    if not values:
+        return list(CatalogKind)
+    try:
+        kinds = [CatalogKind(value) for value in values]
+    except ValueError as exc:
+        raise CatalogSyncError(
+            "Catalog kind must be one of: playbook, phase, agent"
+        ) from exc
+    if len(set(kinds)) != len(kinds):
+        raise CatalogSyncError("Duplicate --kind values are not allowed")
+    return kinds
+
+
+def _print_catalog_report(report) -> None:
+    """Print a bounded human report while retaining complete JSON output separately."""
+    differences = report.differences
+    if not differences:
+        return
+    console.print(
+        f"[yellow]{len(differences)} project catalog difference(s)[/yellow] "
+        f"token={report.token}"
+    )
+    detail_limit = 50
+    for item in differences[:detail_limit]:
+        console.print(
+            f"  {item.entry_id}\t{item.reason}\t"
+            f"{item.project_digest[:12]} → {item.global_digest[:12]}"
+        )
+    if len(differences) > detail_limit:
+        console.print(
+            f"  … {len(differences) - detail_limit} more; use --json or --entry to inspect"
+        )
+
+
+@catalog_app.command(name="check")
+def catalog_check(
+    kinds: list[str] = typer.Option(
+        [], "--kind", help="Catalog kind; repeat for playbook, phase, or agent"
+    ),
+    entries: list[str] = typer.Option(
+        [], "--entry", help="Stable entry ID; repeat to limit the comparison"
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit complete machine JSON"),
+) -> None:
+    """Compare intentional project entries with their Global destinations."""
+    try:
+        report = _build_catalog_service().compare(
+            kinds=_parse_catalog_kinds(kinds),
+            entry_ids=entries or None,
+        )
+    except (CatalogSyncError, OSError, ValueError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
+    if json_output:
+        typer.echo(json.dumps(report.as_dict(), ensure_ascii=False, sort_keys=True))
+    else:
+        _print_catalog_report(report)
+
+
+@catalog_app.command(name="sync-global")
+def catalog_sync_global(
+    kinds: list[str] = typer.Option(
+        [], "--kind", help="Catalog kind; repeat for playbook, phase, or agent"
+    ),
+    entries: list[str] = typer.Option(
+        [], "--entry", help="Stable entry ID; repeat to limit the comparison"
+    ),
+    token: Optional[str] = typer.Option(
+        None, "--token", help="Exact token returned by catalog check"
+    ),
+    approved: list[str] = typer.Option(
+        [], "--approve", help="Approved entry ID; repeat for an exact selection"
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit complete machine JSON"),
+) -> None:
+    """Publish an explicitly approved project selection to Global settings."""
+    try:
+        selected_kinds = _parse_catalog_kinds(kinds)
+        service = _build_catalog_service()
+        if token is not None or approved:
+            if token is None or not approved:
+                raise CatalogSyncError(
+                    "Non-interactive publication requires --token and at least one --approve"
+                )
+            selected = approved
+            comparison_token = token
+        else:
+            report = service.compare(
+                kinds=selected_kinds,
+                entry_ids=entries or None,
+            )
+            _print_catalog_report(report)
+            if not report.differences:
+                return
+            selected = _cli_prompt_checkbox(
+                message="Select project catalog entries to publish to Global:",
+                choices=[item.entry_id for item in report.differences],
+            )
+            if not selected:
+                console.print("[dim]Cancelled[/dim]")
+                return
+            if not _cli_prompt_confirm(
+                f"Publish {len(selected)} entry(s) approved by token {report.token[:12]}?",
+                default=False,
+            ):
+                console.print("[dim]Cancelled[/dim]")
+                return
+            comparison_token = report.token
+        result = service.sync(
+            comparison_token,
+            selected,
+            kinds=selected_kinds,
+            entry_ids=entries or None,
+        )
+    except (CatalogSyncError, OSError, ValueError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
+    if json_output:
+        typer.echo(json.dumps(result.as_dict(), ensure_ascii=False, sort_keys=True))
+    else:
+        console.print(f"[green]Published {len(result.updated)} catalog entry(s)[/green]")
+        for entry_id in result.updated:
+            console.print(f"  {entry_id}")
+
+
+@catalog_app.command(name="migrate-agents")
+def catalog_migrate_agents(
+    token: Optional[str] = typer.Option(
+        None, "--token", help="Exact token returned by migration preview"
+    ),
+    decisions: list[str] = typer.Option(
+        [],
+        "--decision",
+        help="Digest-bound ENTRY_ID=preserve|retire decision; repeat for every entry",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit complete machine JSON"),
+) -> None:
+    """Preview or apply conservative legacy project-agent migration decisions."""
+    try:
+        resolver = CatalogResolver(project_root=Path.cwd())
+        migrator = AgentSnapshotMigrator(resolver)
+        if token is None and not decisions:
+            preview = migrator.preview()
+            payload = {
+                "schema_version": 1,
+                "status": "preview",
+                "token": preview.token,
+                "items": [
+                    {
+                        "entry_id": item.entry_id,
+                        "path": str(item.path),
+                        "digest": item.digest,
+                        "fallback_digest": item.fallback_digest,
+                        "classification": item.status,
+                        "effect": item.effect,
+                    }
+                    for item in preview.items
+                ],
+            }
+            if json_output:
+                typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            else:
+                console.print(
+                    f"[yellow]{len(preview.items)} legacy project agent(s)[/yellow] "
+                    f"token={preview.token}"
+                )
+                for item in preview.items:
+                    console.print(f"  {item.entry_id}\t{item.status}\t{item.effect}")
+            return
+        if token is None or not decisions:
+            raise CatalogSyncError(
+                "Migration apply requires --token and one --decision for every preview item"
+            )
+        parsed: dict[str, str] = {}
+        for decision in decisions:
+            if "=" not in decision:
+                raise CatalogSyncError(f"Invalid migration decision: {decision!r}")
+            entry_id, action = decision.rsplit("=", 1)
+            if entry_id in parsed:
+                raise CatalogSyncError(f"Duplicate migration decision: {entry_id}")
+            parsed[entry_id] = action
+        result = migrator.apply(token, parsed)
+        payload = {
+            "schema_version": 1,
+            "status": "completed",
+            "retired": [str(path) for path in result.retired],
+            "preserved": [str(path) for path in result.preserved],
+            "manifest": str(result.manifest),
+        }
+    except (CatalogSyncError, OSError, ValueError, RuntimeError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        console.print(f"[green]Migration completed[/green] manifest={result.manifest}")
 
 
 # ---------------------------------------------------------------------------
