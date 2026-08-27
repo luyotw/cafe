@@ -1117,9 +1117,31 @@ def _notify_slack_human_task_adapter(
     output_file: Path,
     timeout_sec: float,
 ) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
-    """Reserved package adapter completed by the Slack delivery slice."""
-    del repo_root, request, manifest, output_file, timeout_sec
-    raise CapabilityExecutionError(VALIDATION_ERROR, "slack_adapter_unavailable")
+    """Deliver one package-owned HumanTask notification without exposing credentials."""
+    from cafe.core.human_task_notifications import (
+        SlackNotificationError,
+        build_human_task_message,
+        load_slack_webhook_url,
+        post_slack_notification,
+    )
+
+    del repo_root, manifest, output_file
+    message = build_human_task_message(
+        repository=str(request.args["repository"]),
+        workflow_id=str(request.args["workflow_id"]),
+        task_id=str(request.args["task_id"]),
+        reason=str(request.args["reason"]),
+    )
+    try:
+        webhook_url = load_slack_webhook_url()
+        post_slack_notification(webhook_url, message, timeout_sec=timeout_sec)
+    except SlackNotificationError as exc:
+        raise CapabilityExecutionError(exc.category, exc.code) from exc
+    return {
+        "delivered": True,
+        "workflow_id": message.workflow_id,
+        "task_id": message.task_id,
+    }, None
 
 
 HOST_CAPABILITY_ADAPTERS: Mapping[str, Any] = {

@@ -36,7 +36,9 @@ def test_default_registry_and_sync_pr_entrypoint_ignore_project_overrides(tmp_pa
     skill_script.parent.mkdir(parents=True)
     skill_script.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
 
-    assert cap_mod.default_capability_definition_dirs(tmp_path) == [cap_mod._package_capabilities_dir()]
+    assert cap_mod.default_capability_definition_dirs(tmp_path) == [
+        cap_mod._package_capabilities_dir()
+    ]
     resolved = cap_mod.resolve_sync_pr_script(tmp_path)
     assert resolved != skill_script
     assert "src/cafe/data/skills/cafe-pr/scripts/sync_pr.sh" in resolved.as_posix()
@@ -46,9 +48,13 @@ def test_capability_receipt_redacts_secret_named_values() -> None:
     import cafe.core.capabilities as cap_mod
 
     receipt = cap_mod._base_receipt(
-        correlation_id="c", capability="demo", success=False,
-        category="validation", code="denied",
-        inputs={"api_token": "sentinel"}, outputs={"password": "sentinel"},
+        correlation_id="c",
+        capability="demo",
+        success=False,
+        category="validation",
+        code="denied",
+        inputs={"api_token": "sentinel"},
+        outputs={"password": "sentinel"},
     )
     assert "sentinel" not in str(receipt)
 
