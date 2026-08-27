@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from cafe.ui import cli
 
 
-def test_main_auto_syncs_before_update_check_and_command_dispatch(monkeypatch) -> None:
+def test_main_auto_syncs_helpers_without_installing_runtime_updates(monkeypatch) -> None:
     events: list[str] = []
     monkeypatch.setattr(cli, "_check_dependencies", lambda: events.append("dependencies"))
     monkeypatch.setattr(cli, "_check_repo_entrypoint_alignment", lambda: True)
@@ -14,11 +14,10 @@ def test_main_auto_syncs_before_update_check_and_command_dispatch(monkeypatch) -
         "_auto_sync_global_helper_skills",
         lambda: events.append("global-skills"),
     )
-    monkeypatch.setattr(cli, "_check_for_updates", lambda: events.append("updates"))
     monkeypatch.setattr(cli, "app", lambda: events.append("app"))
 
     assert cli.main() is None
-    assert events == ["dependencies", "global-skills", "updates", "app"]
+    assert events == ["dependencies", "global-skills", "app"]
 
 
 def test_startup_auto_sync_skips_explicit_sync_command(monkeypatch) -> None:

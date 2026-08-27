@@ -22,6 +22,7 @@ from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.commands import audit as audit_commands
 from cafe.ui.commands import verification as verification_commands
 from cafe.ui.commands import trust as trust_commands
+from cafe.ui.commands import update as update_commands
 from cafe.ui.cli_shared import (
     CONTENT_TYPE_FILE_MAP as _SHARED_CONTENT_TYPE_FILE_MAP,
     VALID_CONTENT_TYPES as _SHARED_VALID_CONTENT_TYPES,
@@ -780,6 +781,7 @@ app.add_typer(agent_app, name="agent")
 app.add_typer(catalog_commands.playbook_app, name="playbook")
 app.add_typer(catalog_commands.skill_app, name="skill")
 app.add_typer(catalog_commands.catalog_app, name="catalog")
+app.add_typer(update_commands.update_app, name="update")
 
 # Workflow verification receipts
 app.add_typer(verification_commands.verification_app, name="verification")
@@ -1226,8 +1228,6 @@ def main() -> Optional[int]:
     if not _check_repo_entrypoint_alignment():
         return 1
     _auto_sync_global_helper_skills()
-    # Check for updates and auto-upgrade if available
-    _check_for_updates()
     app()
     return None
 
@@ -1281,105 +1281,6 @@ def _check_dependencies() -> None:
     except Exception:
         # If check fails, continue anyway
         pass
-
-
-def _check_for_updates() -> None:
-    """Check for new versions of cafe-engine and auto-update if available.
-
-    This function:
-    1. Checks if auto-update is enabled in .cafe/config.yaml
-    2. Respects CAFE_SKIP_UPDATE_CHECK environment variable
-    3. Rate-limits checks to once per 24 hours
-    4. Queries PyPI for the latest version
-    5. Automatically upgrades if a newer version is available
-    6. Fails silently without blocking the workflow
-    """
-    import os
-    import urllib.request
-    import json
-    import importlib.metadata
-    import subprocess
-
-    # Check if update check is explicitly disabled via environment variable
-    if os.getenv("CAFE_SKIP_UPDATE_CHECK"):
-        return
-
-    # Try to load config to check if auto-update is enabled
-    try:
-        config_manager = ConfigManager()
-        if config_manager.config_file.exists():
-            config = config_manager.load_config()
-            # Check if auto_update is explicitly disabled (default is True)
-            if config.get("settings", {}).get("auto_update") is False:
-                return
-    except Exception:
-        # If config loading fails, proceed with update check
-        pass
-
-    # Import helper functions from config module
-    from cafe.utils.config import should_check_for_updates, update_last_check_timestamp
-
-    # Check if enough time has passed since last update
-    if not should_check_for_updates():
-        return
-
-    try:
-        # Get current installed version
-        try:
-            current_version = importlib.metadata.version("cafe-engine")
-        except importlib.metadata.PackageNotFoundError:
-            # If package not found, skip update check
-            return
-
-        # Query PyPI for latest version
-        pypi_url = "https://pypi.org/pypi/cafe-engine/json"
-        try:
-            with urllib.request.urlopen(pypi_url, timeout=2) as response:
-                pypi_data = json.loads(response.read().decode())
-                latest_version = pypi_data["info"]["version"]
-        except Exception:
-            # If PyPI query fails, just update timestamp and return
-            update_last_check_timestamp()
-            return
-
-        # Update the last check timestamp
-        update_last_check_timestamp()
-
-        # Compare versions (simple string comparison works for semantic versioning)
-        # Parse versions properly for comparison
-        from packaging.version import Version
-
-        current = Version(current_version)
-        latest = Version(latest_version)
-
-        if latest > current:
-            # Newer version available, attempt upgrade
-            try:
-                # Run pip upgrade non-interactively
-                result = subprocess.run(
-                    ["pip", "install", "--upgrade", "cafe-engine"],
-                    capture_output=True,
-                    timeout=30,
-                )
-
-                if result.returncode == 0:
-                    console.print(
-                        f"\n[green]✓ cafe-engine upgraded from {current_version} to {latest_version}[/green]"
-                    )
-                else:
-                    # Upgrade failed, but don't block workflow
-                    pass
-            except Exception:
-                # If upgrade fails, don't block workflow
-                pass
-
-    except Exception:
-        # Catch all exceptions to ensure we never block the main workflow
-        pass
-
-
-
-
 
 
 if __name__ == "__main__":
