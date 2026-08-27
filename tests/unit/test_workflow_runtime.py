@@ -2,14 +2,17 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.core.human_tasks import HumanTaskBinding, HumanTaskDecision, HumanTaskPolicy
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
+
 
 def _write_baton(
     issue_dir: Path,
@@ -1810,11 +1813,29 @@ def test_runtime_pauses_ready_for_review_with_confirm_output_intent(tmp_path: Pa
 
 
 def test_runtime_materializes_one_declared_task_and_recovers_it_after_restart(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """IT-001: pause/restart preserves the exact durable task and wait state."""
+    import cafe.core.workflow_runtime as runtime_mod
+
     issue_dir = tmp_path / ".cafe" / "issues" / "durable-restart"
     playbook = PlaybookLoader().load("standard")
+    capability_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+
+    def _run_capability_request(**kwargs: object) -> SimpleNamespace:
+        capability_calls.append(kwargs)
+        request = kwargs["capability_request"]
+        return SimpleNamespace(
+            receipt={
+                "capability": "cafe.slack.human_task",
+                "success": True,
+                "inputs": dict(request["args"]),
+            }
+        )
+
+    monkeypatch.setattr(runtime_mod, "run_capability_request", _run_capability_request)
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
         return StepExecutionResult(
@@ -1841,6 +1862,122 @@ def test_runtime_materializes_one_declared_task_and_recovers_it_after_restart(
     assert restored.tasks()[0].id == task.id
     assert restored.get_wait_state(task.id) == wait
     assert state.workflow_id == task.workflow_id
+    assert len(capability_calls) == 1
+    request = capability_calls[0]["capability_request"]
+    assert request["args"]["task_id"] == task.id
+    assert request["args"]["workflow_id"] == task.workflow_id
+    assert request["args"]["repository"] == tmp_path.name
+
+
+def test_runtime_notifies_human_owned_creation_but_not_nonstandard_tasks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both creation paths use the registered capability, gated to standard."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    policy = HumanTaskPolicy(
+        id="approval",
+        pattern="no_changes_needed",
+        prompt="Approve this work",
+        input_schema="decision",
+        decisions=(HumanTaskDecision(id="accept", label="Accept"),),
+    )
+    binding = HumanTaskBinding(trigger="initial", task_id="approval", outcomes={"accept": "done"})
+    monkeypatch.setattr(runtime_mod, "resolve_step_human_task", lambda **_kwargs: (policy, binding))
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+    calls: list[dict[str, object]] = []
+
+    def _run_capability_request(**kwargs: object) -> SimpleNamespace:
+        calls.append(kwargs)
+        return SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True})
+
+    monkeypatch.setattr(runtime_mod, "run_capability_request", _run_capability_request)
+
+    def _human_playbook(playbook_id: str) -> dict[str, object]:
+        return {
+            "playbook": {"id": playbook_id},
+            "entry_point": "approval",
+            "steps": {
+                "approval": {
+                    "skill": "phase",
+                    "role": "operator",
+                    "assignee_type": "human",
+                    "human_tasks": [binding.model_dump()],
+                    "on": {},
+                }
+            },
+        }
+
+    standard_dir = tmp_path / ".cafe" / "issues" / "human-standard"
+    standard = BlackboardWorkflowRuntime(
+        issue_dir=standard_dir,
+        playbook=_human_playbook("standard"),
+        executor=lambda *_args: (_ for _ in ()).throw(AssertionError("human step ran agent")),
+    )
+    standard.run(start_step="approval")
+    standard.run(max_transitions=2)
+
+    project_dir = tmp_path / ".cafe" / "issues" / "human-project"
+    BlackboardWorkflowRuntime(
+        issue_dir=project_dir,
+        playbook=_human_playbook("project"),
+        executor=lambda *_args: (_ for _ in ()).throw(AssertionError("human step ran agent")),
+    ).run(start_step="approval")
+
+    assert len(calls) == 1
+    standard_task = HumanTaskRecordStore(standard_dir).tasks()[0]
+    project_task = HumanTaskRecordStore(project_dir).tasks()[0]
+    assert calls[0]["capability_request"]["args"]["task_id"] == standard_task.id
+    assert project_task.id != standard_task.id
+    assert BlackboardStore(project_dir).load_or_create("approval").capability_receipts == []
+
+
+def test_notification_failure_preserves_pending_task_and_user_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed delivery is audited but cannot consume or reroute human work."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "notification-failure"
+    playbook = PlaybookLoader().load("standard")
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **_kwargs: SimpleNamespace(
+            receipt={
+                "capability": "cafe.slack.human_task",
+                "success": False,
+                "code": "slack_transport_error",
+            }
+        ),
+    )
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args: StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        ),
+    ).run(start_step="spec")
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    receipt = state.capability_receipts[0]
+
+    assert result.completed is False
+    assert task.status.value == "pending"
+    assert state.current_step == "user"
+    assert state.handoff_contract.to_owner is HandoffOwner.USER
+    assert state.handoff_contract.from_step == "spec"
+    assert receipt["success"] is False
+    assert receipt["workflow_id"] == task.workflow_id
+    assert receipt["task_id"] == task.id
 
 
 def test_runtime_records_non_actionable_configuration_error_for_bad_task_binding(
