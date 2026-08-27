@@ -71,6 +71,7 @@ source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "inquirerpy" },
+    { name = "packaging" },
     { name = "prompt-toolkit" },
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -97,6 +98,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.1.0" },
     { name = "inquirerpy", specifier = ">=0.3.4" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8.0" },
+    { name = "packaging", specifier = ">=23.0" },
     { name = "prompt-toolkit", specifier = ">=3.0.0" },
     { name = "pydantic", specifier = ">=2.5.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
