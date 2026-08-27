@@ -915,11 +915,18 @@ class AgentExecutor:
         )  # seconds - timeout if no new output
         last_output_time = time.time() if use_idle_timeout else None
         idle_timeout_triggered = False  # Track if we exited due to idle timeout
-        # Track whether the CLI ever emitted a structured "the run is done"
-        # signal (stream-json's terminal `type: "result"` message). This is
-        # what lets us tell "finished, just slow to exit" apart from "still
-        # actively working when we had to kill it" below.
-        received_result_message = False
+        # A workflow-backed structured stream must end in an explicit completion
+        # event. A zero subprocess exit alone is not enough evidence: a provider
+        # can stop while it is mid-turn and leave the workflow with only partial
+        # output. Direct executor consumers without a durable iteration log keep
+        # their existing compatibility behavior.
+        # ``result`` is the completion event used by the stream-json CLIs;
+        # Codex uses ``turn.completed``. Treat both as part of CAFE's generic
+        # stream contract so the phase layer can durably record an interrupted
+        # iteration rather than mistaking partial work for a completed handoff.
+        terminal_stream_event_types = {"result", "turn.completed"}
+        received_terminal_stream_event = False
+        requires_terminal_stream_event = parse_stream_json and streaming_output_file is not None
 
         # Open streaming output file if provided
         streaming_file_handle = None
@@ -1098,10 +1105,12 @@ class AgentExecutor:
                             if "model" in data and data["model"]:
                                 model = data["model"]
 
-                            # Check for result message (indicates completion for Gemini/Claude)
-                            # When type is "result", the CLI has completed and we should stop reading
-                            if data.get("type") == "result":
-                                received_result_message = True
+                            # A terminal event is the only durable confirmation
+                            # that a structured agent stream finished. Do not
+                            # infer completion from an otherwise-successful
+                            # process exit: that loses mid-turn failures.
+                            if data.get("type") in terminal_stream_event_types:
+                                received_terminal_stream_event = True
                                 break
 
                             # Extract content using custom extractor or default Claude extractor
@@ -1209,12 +1218,12 @@ class AgentExecutor:
             # Treat as success only if we can actually tell the run finished:
             # either the CLI has no structured completion signal at all (e.g.
             # Copilot's raw line streaming, where this ambiguity has always
-            # existed), or it does and we saw that signal (`received_result_message`)
+            # existed), or it does and we saw that signal (`received_terminal_stream_event`)
             # before going idle. Otherwise the idle timeout fired while the
             # CLI was still actively working (e.g. stuck on an inner tool
             # call) -- that's a genuine timeout, not a success, and must be
             # left as a non-zero returncode so it can be classified below.
-            if output_lines and (not parse_stream_json or received_result_message):
+            if output_lines and (not parse_stream_json or received_terminal_stream_event):
                 print(f"✓ Got output from {cli_name}, treating as success despite idle timeout")
                 returncode = 0
         else:
@@ -1241,7 +1250,7 @@ class AgentExecutor:
                 # Same reasoning as the idle-timeout branch above: only treat
                 # this as "finished but slow to exit" when we have a way to
                 # know the run actually finished.
-                if output_lines and (not parse_stream_json or received_result_message):
+                if output_lines and (not parse_stream_json or received_terminal_stream_event):
                     print(f"✓ Got output from {cli_name}, treating as success despite timeout")
                     returncode = 0
 
@@ -1279,6 +1288,18 @@ class AgentExecutor:
                 err.cli_command_args = cmd[1:]
                 persist_safe_stream_error(err)
                 raise err
+
+        if requires_terminal_stream_event and not received_terminal_stream_event:
+            err = AgentExecutionError(
+                f"{cli_name} execution ended without a terminal stream event",
+                error_type="incomplete_stream",
+                display_message=(
+                    f"{cli_name} ended before reporting completion; retry the workflow step."
+                ),
+            )
+            err.cli_command_args = cmd[1:]
+            persist_safe_stream_error(err)
+            raise err
 
         # Append stderr to streaming output file (for debugging token usage parsing)
         if streaming_file_handle and stderr_output:

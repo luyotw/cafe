@@ -125,7 +125,11 @@ def _stream_error_process(line: str) -> MagicMock:
 
 def _stream_success_process(text: str) -> MagicMock:
     process = MagicMock()
-    process.stdout.readline.side_effect = [json.dumps({"content": text}) + "\n", ""]
+    process.stdout.readline.side_effect = [
+        json.dumps({"content": text}) + "\n",
+        json.dumps({"type": "result"}) + "\n",
+        "",
+    ]
     process.stderr.read.return_value = ""
     process.wait.return_value = 0
     return process
@@ -266,3 +270,71 @@ def test_real_stream_socket_close_retries_primary_before_fallback(tmp_path: Path
     assert [(item["cli"], item["attempt"]) for item in record["failed_attempts"]] == [
         ("claude", 1),
     ]
+
+
+def test_missing_terminal_event_persists_a_safe_incomplete_stream_error(tmp_path: Path) -> None:
+    """A zero-exit partial stream never leaves a workflow iteration looking active."""
+    manager = AgentManager()
+    manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CODEX))
+    executor = _build_executor(tmp_path, manager)
+    process = MagicMock()
+    process.stdout.readline.side_effect = [
+        '{"type":"thread.started","thread_id":"abc"}\n',
+        '{"type":"item.completed","item":{"type":"agent_message",'
+        '"text":"partial response; token=raw-stream-secret"}}\n',
+        "",
+    ]
+    process.stderr.read.return_value = ""
+    process.wait.return_value = 0
+
+    with patch("subprocess.Popen", return_value=process), patch("sys.platform", "win32"), pytest.raises(
+        AgentExecutionError
+    ) as exc_info:
+        _run_iteration(executor)
+
+    assert exc_info.value.error_type == "incomplete_stream"
+    iteration_dir = executor.phase_dir / "iteration_001"
+    iteration_record = json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))
+    error_record = json.loads((iteration_dir / "error.json").read_text(encoding="utf-8"))
+    stream_record = json.loads((iteration_dir / "streaming.jsonl").read_text(encoding="utf-8"))
+
+    assert iteration_record["response"] is None
+    assert iteration_record["status_code"] is None
+    assert iteration_record["error_type"] == "incomplete_stream"
+    assert error_record["error_type"] == "incomplete_stream"
+    assert stream_record["type"] == "error"
+    assert stream_record["error_type"] == "incomplete_stream"
+    persisted_text = "".join(
+        (iteration_dir / filename).read_text(encoding="utf-8")
+        for filename in ("iteration.json", "error.json", "streaming.jsonl")
+    )
+    assert "raw-stream-secret" not in persisted_text
+
+    completed_process = MagicMock()
+    completed_process.stdout.readline.side_effect = [
+        '{"type":"thread.started","thread_id":"abc"}\n',
+        '{"type":"item.completed","item":{"type":"agent_message",'
+        '"text":"completed response"}}\n',
+        '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n',
+        "",
+    ]
+    completed_process.stderr.read.return_value = ""
+    completed_process.wait.return_value = 0
+
+    with patch("subprocess.Popen", return_value=completed_process), patch("sys.platform", "win32"):
+        response, _ = executor._execute_agent_iteration(
+            agent_name="David",
+            prompt="retry the workflow step",
+            user_input="",
+            valid_intents=[],
+            require_status_code=False,
+            allowed_tools=[],
+            phase_specific_data={"step_name": "develop"},
+        )
+
+    resumed_record = json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))
+    assert response == "completed response"
+    assert resumed_record["response"] == "completed response"
+    assert resumed_record["end_time"]
+    assert "error" not in resumed_record
+    assert "error_type" not in resumed_record
