@@ -1,5 +1,6 @@
 """U6: conservative legacy-agent migration invariants."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -175,3 +176,113 @@ def test_interrupted_retirement_resumes_from_durable_manifest(tmp_path: Path) ->
     assert len(result.retired) == 2
     assert all(path.is_file() for path in result.retired)
     assert repeated == result
+
+
+def test_preserve_decision_is_shared_by_canonical_and_linked_project_views(
+    tmp_path: Path,
+) -> None:
+    canonical = tmp_path / "canonical"
+    linked = tmp_path / "linked"
+    builtin = tmp_path / "builtin"
+    global_root = tmp_path / "global"
+    fallback = _agent(
+        builtin / "agents" / "developer" / "David.md", "David", "same"
+    )
+    canonical_agent = _agent(
+        canonical / ".cafe" / "agents" / "developer" / "David.md",
+        "David",
+        "same",
+    )
+    assert canonical_agent.read_bytes() == fallback.read_bytes()
+    linked_migrator = AgentSnapshotMigrator(
+        CatalogResolver(
+            project_root=linked,
+            canonical_root=canonical,
+            global_root=global_root,
+            builtin_root=builtin,
+        ),
+        is_tracked=lambda _path: False,
+    )
+
+    preview = linked_migrator.preview()
+    assert preview.items[0].path == canonical_agent
+    result = linked_migrator.apply(
+        preview.token, {"agent:developer/David": "preserve"}
+    )
+
+    assert result.manifest.is_relative_to(canonical)
+    assert linked_migrator.preview().items == ()
+    canonical_migrator = AgentSnapshotMigrator(
+        CatalogResolver(
+            project_root=canonical,
+            canonical_root=canonical,
+            global_root=global_root,
+            builtin_root=builtin,
+        ),
+        is_tracked=lambda _path: False,
+    )
+    assert canonical_migrator.preview().items == ()
+    assert canonical_migrator.publication_blocked_entry_ids() == set()
+
+
+@pytest.mark.parametrize("changed_action", ["preserve", "retire"])
+def test_resume_revalidates_completed_checkpoint_state(
+    tmp_path: Path, changed_action: str
+) -> None:
+    interrupted = False
+
+    def interrupt_before_second_checkpoint(
+        boundary: str, entry_id: str | None
+    ) -> None:
+        nonlocal interrupted
+        if (
+            boundary == "before_manifest_write"
+            and entry_id == "agent:reviewer/Richard"
+            and not interrupted
+        ):
+            interrupted = True
+            raise OSError("injected interruption before second checkpoint")
+
+    project = tmp_path / "project"
+    builtin = tmp_path / "builtin"
+    resolver = CatalogResolver(
+        project_root=project,
+        canonical_root=project,
+        global_root=tmp_path / "global",
+        builtin_root=builtin,
+    )
+    migrator = AgentSnapshotMigrator(
+        resolver,
+        is_tracked=lambda _path: False,
+        failure_injector=interrupt_before_second_checkpoint,
+    )
+    for role, name in (("developer", "David"), ("reviewer", "Richard")):
+        _agent(builtin / "agents" / role / f"{name}.md", name, "same")
+        _agent(project / ".cafe" / "agents" / role / f"{name}.md", name, "same")
+    preview = migrator.preview()
+    decisions = {
+        "agent:developer/David": changed_action,
+        "agent:reviewer/Richard": "preserve",
+    }
+
+    with pytest.raises(OSError, match="injected interruption"):
+        migrator.apply(preview.token, decisions)
+
+    manifest = (
+        project
+        / ".cafe"
+        / "migrations"
+        / "agent-snapshots"
+        / preview.token[:16]
+        / "manifest.json"
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    completed = payload["items"][0]
+    assert completed["state"] == "completed"
+    if changed_action == "preserve":
+        Path(completed["path"]).write_text("changed\n", encoding="utf-8")
+    else:
+        Path(completed["retired_path"]).unlink()
+
+    with pytest.raises(StaleMigrationDecision):
+        migrator.apply(preview.token, decisions)

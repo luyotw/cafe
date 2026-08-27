@@ -5,9 +5,12 @@ from threading import Event, Thread
 
 import pytest
 
+from cafe.agents.manager import AgentManager
 from cafe.catalogs.migration import AgentSnapshotMigrator
 from cafe.catalogs.resolver import CatalogKind, CatalogResolver, content_digest
 from cafe.catalogs.sync import CatalogSyncError, CatalogSyncService, StaleComparisonError
+from cafe.playbooks.loader import PlaybookLoader
+from cafe.skills.loader import SkillLoader
 
 
 def _entry(root: Path, kind: CatalogKind, key: str, marker: str) -> Path:
@@ -251,6 +254,135 @@ def test_catalog_readers_do_not_observe_an_in_progress_multi_entry_publish(
     assert any("new-playbook" in content for content in observed)
     assert any("new-phase" in content for content in observed)
     assert all("old-" not in content for content in observed)
+
+
+def test_production_loaders_hold_the_catalog_lock_through_content_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first_published = Event()
+    allow_completion = Event()
+
+    def pause_after_first_publish(boundary: str, entry_id: str | None) -> None:
+        if boundary == "published" and entry_id == "playbook:standard":
+            first_published.set()
+            assert allow_completion.wait(timeout=5)
+
+    service, project, global_root = _service(
+        tmp_path, failure_injector=pause_after_first_publish
+    )
+
+    def write_playbook(root: Path, role: str) -> None:
+        path = root / "playbooks" / "standard.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "playbook: {id: standard}\n"
+            "steps:\n"
+            "  develop:\n"
+            f"    role: {role}\n"
+            "    skill: develop\n"
+            "    on: {await_agent: _done}\n",
+            encoding="utf-8",
+        )
+
+    write_playbook(project / ".cafe", "developer")
+    _entry(project / ".cafe", CatalogKind.PHASE, "develop", "new-phase")
+    _entry(project / ".cafe", CatalogKind.AGENT, "developer/David", "new-agent")
+    write_playbook(global_root, "reviewer")
+    _entry(global_root, CatalogKind.PHASE, "develop", "old-phase")
+    _entry(global_root, CatalogKind.AGENT, "developer/David", "old-agent")
+    report = service.compare()
+    selected = [
+        "playbook:standard",
+        "phase:develop",
+        "agent:developer/David",
+    ]
+    reader_project = tmp_path / "reader-project"
+    cached_skills = SkillLoader(
+        project_root=reader_project,
+        global_root=global_root,
+        builtin_root=tmp_path / "reader-builtin",
+    )
+    cached_skills.discover()
+    monkeypatch.setattr(
+        "cafe.utils.config.get_global_cafe_dir", lambda: global_root
+    )
+    observed: dict[str, object] = {}
+    errors: list[BaseException] = []
+    publish_errors: list[BaseException] = []
+
+    def capture(name: str, reader) -> None:
+        try:
+            observed[name] = reader()
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    def publish() -> None:
+        try:
+            service.sync(report.token, selected)
+        except BaseException as exc:  # pragma: no cover - asserted below
+            publish_errors.append(exc)
+
+    publisher = Thread(target=publish)
+    publisher.start()
+    assert first_published.wait(timeout=5)
+
+    readers = [
+        Thread(target=capture, args=("cached", lambda: cached_skills.activate("develop"))),
+        Thread(
+            target=capture,
+            args=(
+                "fresh",
+                lambda: next(
+                    entry.description
+                    for entry in SkillLoader(
+                        project_root=reader_project,
+                        global_root=global_root,
+                        builtin_root=tmp_path / "reader-builtin",
+                    ).discover()
+                    if entry.name == "develop"
+                ),
+            ),
+        ),
+        Thread(
+            target=capture,
+            args=(
+                "playbook",
+                lambda: PlaybookLoader(
+                    project_root=reader_project,
+                    global_root=global_root,
+                    builtin_root=tmp_path / "reader-builtin",
+                ).load_model("standard").model.steps["develop"].role,
+            ),
+        ),
+        Thread(
+            target=capture,
+            args=(
+                "agent",
+                lambda: AgentManager.read_agent_file(
+                    "David", "developer", str(reader_project / ".cafe")
+                )[1],
+            ),
+        ),
+    ]
+    for reader in readers:
+        reader.start()
+    for reader in readers:
+        reader.join(timeout=0.1)
+        assert reader.is_alive()
+
+    allow_completion.set()
+    publisher.join(timeout=5)
+    for reader in readers:
+        reader.join(timeout=5)
+
+    assert not publisher.is_alive()
+    assert all(not reader.is_alive() for reader in readers)
+    assert publish_errors == []
+    assert errors == []
+    assert "new-phase" in str(observed["cached"])
+    assert observed["fresh"] == "new-phase"
+    assert observed["playbook"] == "developer"
+    assert "new-agent" in str(observed["agent"])
 
 
 def test_late_mixed_catalog_failure_restores_every_global_entry(tmp_path: Path) -> None:

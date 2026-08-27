@@ -8,10 +8,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
-from cafe.catalogs.resolver import CatalogKind, CatalogResolver
+from cafe.catalogs.resolver import CatalogKind, CatalogResolver, global_catalog_lock
 from cafe.core.playbook import LoadedPlaybook, load_playbook_file
 from cafe.skills.loader import SkillLoader
-from cafe.utils.config import get_global_cafe_dir
 
 
 def apply_issue_playbook_overrides(
@@ -118,19 +117,20 @@ class PlaybookLoader:
         return entry.source, entry.path
 
     def load_model(self, name: str, *, strict: bool = False) -> LoadedPlaybook:
-        source, path = self._resolve_path(name)
-        skill_loader = SkillLoader(
-            project_root=self.project_root,
-            global_root=self.global_root,
-            builtin_root=self.builtin_root,
-        )
-        skill_loader.discover(strict=strict)
-        return load_playbook_file(
-            path,
-            source=source,
-            skill_loader=skill_loader,
-            strict=strict,
-        )
+        with global_catalog_lock(self.global_root):
+            source, path = self._resolve_path(name)
+            skill_loader = SkillLoader(
+                project_root=self.project_root,
+                global_root=self.global_root,
+                builtin_root=self.builtin_root,
+            )
+            skill_loader.discover(strict=strict)
+            return load_playbook_file(
+                path,
+                source=source,
+                skill_loader=skill_loader,
+                strict=strict,
+            )
 
     def load(self, name: str, *, strict: bool = False) -> Dict:
         return self.load_model(name, strict=strict).as_dict()

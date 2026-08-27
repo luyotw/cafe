@@ -142,6 +142,7 @@ class AgentSnapshotMigrator:
 
     def _preview(self) -> MigrationPreview:
         items: list[MigrationItem] = []
+        confirmed = self._confirmed_preserved()
         for entry in self.resolver.project_entries([CatalogKind.AGENT]):
             expected_name = entry.key.split("/", 1)[1]
             fallback_digest = self._fallback_digest(entry.key)
@@ -153,6 +154,8 @@ class AgentSnapshotMigrator:
                 status = "generated"
             else:
                 status = "ambiguous"
+            if (entry.entry_id, entry.digest) in confirmed:
+                continue
             items.append(
                 MigrationItem(
                     entry_id=entry.entry_id,
@@ -167,7 +170,7 @@ class AgentSnapshotMigrator:
 
     def _transaction_root(self, token: str) -> Path:
         return (
-            self.resolver.project_root
+            self.resolver.canonical_root
             / ".cafe"
             / "migrations"
             / "agent-snapshots"
@@ -183,41 +186,69 @@ class AgentSnapshotMigrator:
             manifest=manifest,
         )
 
-    def _confirmed_preserved(self) -> set[tuple[str, str, str]]:
-        root = (
-            self.resolver.project_root
-            / ".cafe"
-            / "migrations"
-            / "agent-snapshots"
+    def _confirmed_preserved(self) -> set[tuple[str, str]]:
+        roots = dict.fromkeys(
+            (self.resolver.canonical_root, self.resolver.project_root)
         )
-        confirmed: set[tuple[str, str, str]] = set()
-        for manifest in sorted(root.glob("*/manifest.json")):
-            try:
-                payload = json.loads(manifest.read_text(encoding="utf-8"))
-            except (OSError, UnicodeError, json.JSONDecodeError):
-                continue
-            if payload.get("status") != "completed":
-                continue
-            for record in payload.get("items", []):
-                if isinstance(record, dict) and record.get("action") == "preserve":
-                    confirmed.add(
-                        (
-                            str(record.get("entry_id")),
-                            str(record.get("path")),
-                            str(record.get("digest")),
+        confirmed: set[tuple[str, str]] = set()
+        for project_root in roots:
+            root = project_root / ".cafe" / "migrations" / "agent-snapshots"
+            for manifest in sorted(root.glob("*/manifest.json")):
+                try:
+                    payload = json.loads(manifest.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    continue
+                if payload.get("status") != "completed":
+                    continue
+                for record in payload.get("items", []):
+                    if isinstance(record, dict) and record.get("action") == "preserve":
+                        confirmed.add(
+                            (
+                                str(record.get("entry_id")),
+                                str(record.get("digest")),
+                            )
                         )
-                    )
         return confirmed
 
     def publication_blocked_entry_ids(self) -> set[str]:
         """Return generated snapshots that lack an explicit preserve decision."""
-        confirmed = self._confirmed_preserved()
         return {
             item.entry_id
             for item in self.preview().items
             if item.status == "generated"
-            and (item.entry_id, str(item.path), item.digest) not in confirmed
         }
+
+    @staticmethod
+    def _record_path_exists(path: Path) -> bool:
+        return path.exists() or path.is_symlink()
+
+    def _validate_completed_record(self, record: dict[str, object]) -> None:
+        entry_id = str(record["entry_id"])
+        source = Path(str(record["path"]))
+        digest = str(record["digest"])
+        action = str(record["action"])
+        if action == "preserve":
+            if (
+                not self._record_path_exists(source)
+                or content_digest(source) != digest
+            ):
+                raise StaleMigrationDecision(
+                    f"Preserved agent changed after checkpoint: {entry_id}"
+                )
+            return
+        if action != "retire":
+            raise MigrationDecisionError(
+                f"Migration journal contains an invalid action: {entry_id}"
+            )
+        destination = Path(str(record["retired_path"]))
+        if (
+            self._record_path_exists(source)
+            or not self._record_path_exists(destination)
+            or content_digest(destination) != digest
+        ):
+            raise StaleMigrationDecision(
+                f"Retired agent recovery evidence changed after checkpoint: {entry_id}"
+            )
 
     def _write_manifest(
         self,
@@ -267,6 +298,7 @@ class AgentSnapshotMigrator:
             if not isinstance(record, dict):
                 raise MigrationDecisionError("Migration journal contains an invalid item")
             if record.get("state") == "completed":
+                self._validate_completed_record(record)
                 continue
             entry_id = str(record["entry_id"])
             source = Path(str(record["path"]))
@@ -321,6 +353,26 @@ class AgentSnapshotMigrator:
         if manifest.is_file():
             payload = json.loads(manifest.read_text(encoding="utf-8"))
             if payload.get("status") == "completed":
+                records = payload.get("items")
+                if not isinstance(records, list):
+                    raise MigrationDecisionError(
+                        "Migration journal is missing item records"
+                    )
+                recorded_decisions = {
+                    str(record.get("entry_id")): str(record.get("action"))
+                    for record in records
+                    if isinstance(record, dict)
+                }
+                if recorded_decisions != dict(decisions):
+                    raise MigrationDecisionError(
+                        "Migration decisions do not match the completed journal"
+                    )
+                for record in records:
+                    if not isinstance(record, dict):
+                        raise MigrationDecisionError(
+                            "Migration journal contains an invalid item"
+                        )
+                    self._validate_completed_record(record)
                 return self._result_from_manifest(manifest)
             return self._resume(manifest, payload, decisions)
 

@@ -9,10 +9,9 @@ from typing import Dict, List, Optional
 
 import yaml
 
-from cafe.catalogs.resolver import CatalogKind, CatalogResolver
+from cafe.catalogs.resolver import CatalogKind, CatalogResolver, global_catalog_lock
 from cafe.skills.contracts import SkillWorkflowContract
 from cafe.skills.exceptions import SkillDiscoveryError
-from cafe.utils.config import get_global_cafe_dir
 
 _logger = logging.getLogger(__name__)
 
@@ -133,6 +132,10 @@ class SkillLoader:
 
     def discover(self, *, strict: bool = False) -> List[SkillCatalogEntry]:
         """Discover catalog entries and cache by lookup key (folder name)."""
+        with global_catalog_lock(self.global_root):
+            return self._discover_unlocked(strict=strict)
+
+    def _discover_unlocked(self, *, strict: bool = False) -> List[SkillCatalogEntry]:
         catalog: Dict[str, SkillCatalogEntry] = {}
         for source, root in self._skill_roots():
             if not root.exists():
@@ -184,7 +187,11 @@ class SkillLoader:
 
     def get_skill_entry(self, name: str) -> SkillCatalogEntry:
         """Return the resolved skill and its discovery trust source."""
-        self._ensure_catalog()
+        with global_catalog_lock(self.global_root):
+            self._discover_unlocked()
+            return self._get_skill_entry_unlocked(name)
+
+    def _get_skill_entry_unlocked(self, name: str) -> SkillCatalogEntry:
         if name in self._catalog:
             return self._catalog[name]
         resolved = self._resolve_alias(name)
@@ -207,9 +214,11 @@ class SkillLoader:
 
     def activate(self, name: str, context: Optional[Dict[str, str]] = None) -> str:
         """Load full skill content and replace placeholders."""
-        skill_dir = self.get_skill_dir(name)
-        skill_file = skill_dir / "SKILL.md"
-        text = skill_file.read_text(encoding="utf-8")
+        with global_catalog_lock(self.global_root):
+            self._discover_unlocked()
+            skill_dir = self._get_skill_entry_unlocked(name).directory
+            skill_file = skill_dir / "SKILL.md"
+            text = skill_file.read_text(encoding="utf-8")
 
         # Remove frontmatter; activation stage only needs body instructions.
         if text.startswith("---"):
@@ -224,47 +233,51 @@ class SkillLoader:
 
     def get_workflow_contract(self, name: str) -> SkillWorkflowContract:
         """Load and validate optional workflow metadata from the resolved skill."""
-        skill_dir = self.get_skill_dir(name)
-        metadata = self._read_skill_frontmatter(skill_dir / "SKILL.md")
-        raw_contract = metadata.get("workflow", {})
-        try:
-            contract = SkillWorkflowContract.model_validate(raw_contract)
-        except Exception as exc:
-            raise ValueError(
-                f"Invalid workflow contract for skill {skill_dir.name}: {exc}"
-            ) from exc
-        references = list(contract.prompt_references.values())
-        if contract.checklist is not None:
-            references.extend(contract.checklist.context_references.values())
-            references.extend(
-                section.reference
-                for variant in contract.checklist.variants
-                for section in variant.sections
-                if section.reference is not None
-            )
-        for reference in references:
-            reference_path = skill_dir / "references" / reference
-            if not reference_path.is_file():
+        with global_catalog_lock(self.global_root):
+            self._discover_unlocked()
+            skill_dir = self._get_skill_entry_unlocked(name).directory
+            metadata = self._read_skill_frontmatter(skill_dir / "SKILL.md")
+            raw_contract = metadata.get("workflow", {})
+            try:
+                contract = SkillWorkflowContract.model_validate(raw_contract)
+            except Exception as exc:
                 raise ValueError(
-                    f"Invalid workflow contract for skill {skill_dir.name}: "
-                    f"workflow reference not found: {reference}"
+                    f"Invalid workflow contract for skill {skill_dir.name}: {exc}"
+                ) from exc
+            references = list(contract.prompt_references.values())
+            if contract.checklist is not None:
+                references.extend(contract.checklist.context_references.values())
+                references.extend(
+                    section.reference
+                    for variant in contract.checklist.variants
+                    for section in variant.sections
+                    if section.reference is not None
                 )
-        if contract.output_templates is not None:
-            template_dir = skill_dir / "assets" / "templates"
-            if not template_dir.is_dir():
-                raise ValueError(
-                    f"Invalid workflow contract for skill {skill_dir.name}: "
-                    f"template catalog {contract.output_templates.catalog!r} is unavailable"
-                )
-        return contract
+            for reference in references:
+                reference_path = skill_dir / "references" / reference
+                if not reference_path.is_file():
+                    raise ValueError(
+                        f"Invalid workflow contract for skill {skill_dir.name}: "
+                        f"workflow reference not found: {reference}"
+                    )
+            if contract.output_templates is not None:
+                template_dir = skill_dir / "assets" / "templates"
+                if not template_dir.is_dir():
+                    raise ValueError(
+                        f"Invalid workflow contract for skill {skill_dir.name}: "
+                        f"template catalog {contract.output_templates.catalog!r} is unavailable"
+                    )
+            return contract
 
     def get_reference(self, name: str, ref: str) -> str:
         """Read one reference file under skill references directory."""
-        skill_dir = self.get_skill_dir(name)
-        ref_file = (skill_dir / "references" / ref).resolve()
-        refs_dir = (skill_dir / "references").resolve()
-        if not str(ref_file).startswith(str(refs_dir)):
-            raise ValueError("Reference path must stay inside references directory")
-        if not ref_file.exists():
-            raise FileNotFoundError(f"Reference not found: {ref}")
-        return ref_file.read_text(encoding="utf-8")
+        with global_catalog_lock(self.global_root):
+            self._discover_unlocked()
+            skill_dir = self._get_skill_entry_unlocked(name).directory
+            ref_file = (skill_dir / "references" / ref).resolve()
+            refs_dir = (skill_dir / "references").resolve()
+            if not str(ref_file).startswith(str(refs_dir)):
+                raise ValueError("Reference path must stay inside references directory")
+            if not ref_file.exists():
+                raise FileNotFoundError(f"Reference not found: {ref}")
+            return ref_file.read_text(encoding="utf-8")

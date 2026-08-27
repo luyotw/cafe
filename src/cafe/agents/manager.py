@@ -1005,3 +1005,24 @@ class AgentManager:
         if entry.source == "builtin":
             return str(Path("src/cafe/data/agents") / role / f"{agent_name}.md")
         return str(entry.path)
+
+    @classmethod
+    def read_agent_file(
+        cls, agent_name: str, role: str, cafe_dir: str = None
+    ) -> tuple[str, str]:
+        """Resolve and read an agent definition under one shared catalog lock."""
+        from cafe.catalogs.resolver import CatalogResolver, global_catalog_lock
+
+        project_root = Path(cafe_dir).parent if cafe_dir else None
+        resolver = CatalogResolver(project_root=project_root)
+        with global_catalog_lock(resolver.global_root):
+            path = (
+                cls.get_agent_file_path(agent_name, role, cafe_dir)
+                if cafe_dir is not None
+                else cls.get_agent_file_path(agent_name, role)
+            )
+            try:
+                content = Path(path).read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                content = ""
+            return path, content
