@@ -403,6 +403,41 @@ def test_production_composer_golden_checklist_matches_fixture(
         AgentManager.get_agent_file_path = saved
 
 
+def test_declared_checklist_uses_readable_builtin_agent_path_outside_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A composed checklist points to builtin guidance the phase can open."""
+    working_dir = tmp_path / "working"
+    working_dir.mkdir()
+    monkeypatch.chdir(working_dir)
+    monkeypatch.setattr(
+        Path,
+        "home",
+        classmethod(lambda cls: tmp_path / "empty-home"),
+    )
+    case = PRODUCTION_GOLDEN_CASES["develop_normal"]
+    checklist = tmp_path / "develop.md"
+
+    assert compose_declared_checklist(
+        skill_name=case["skill"],
+        contract=SkillLoader().get_workflow_contract(case["skill"]),
+        agent_name="David",
+        role="developer",
+        checklist_file_path=checklist,
+        iteration=case["iteration"],
+        context=case["context"],
+        artifacts={},
+        feedback=False,
+        template_mode="manual",
+    )
+
+    agent_file, _ = AgentManager.read_agent_file("David", "developer")
+    agent_path = Path(agent_file)
+    assert agent_path.is_absolute()
+    assert agent_path.is_file()
+    assert agent_file in checklist.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize(
     ("playbook_id", "step_name", "available_artifacts"),
     [

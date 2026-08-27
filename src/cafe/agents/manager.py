@@ -982,20 +982,12 @@ class AgentManager:
         except json.JSONDecodeError as e:
             raise RuntimeError(f"Failed to parse Claude CLI response: {e}") from e
 
-    @staticmethod
-    def _agent_file_prompt_path(
-        source: str, resolved_path: Path, agent_name: str, role: str
-    ) -> str:
-        if source == "builtin":
-            return str(Path("src/cafe/data/agents") / role / f"{agent_name}.md")
-        return str(resolved_path)
-
     @classmethod
     def get_agent_file_path(cls, agent_name: str, role: str, cafe_dir: str = None) -> str:
         """Get the path to agent md file (for use in prompts).
 
         Searches in order: local .cafe/agents/ first, then ~/.cafe/agents/,
-        then falls back to src/cafe/data/agents/.
+        then falls back to the builtin agent catalog.
 
         Args:
             agent_name: Agent name (e.g. "Roger", "David", "Richard", "John")
@@ -1010,14 +1002,14 @@ class AgentManager:
         project_root = Path(cafe_dir).parent if cafe_dir else None
         resolver = CatalogResolver(project_root=project_root)
         entry = resolver.resolve(CatalogKind.AGENT, f"{role}/{agent_name}")
-        return cls._agent_file_prompt_path(entry.source, entry.path, agent_name, role)
+        return str(entry.path)
 
     @classmethod
     def read_agent_file(
         cls, agent_name: str, role: str, cafe_dir: str = None
     ) -> tuple[str, str]:
         """Resolve and read an agent definition under one shared catalog lock."""
-        from cafe.catalogs.resolver import CatalogKind, CatalogResolver, global_catalog_lock
+        from cafe.catalogs.resolver import CatalogResolver, global_catalog_lock
 
         project_root = Path(cafe_dir).parent if cafe_dir else None
         resolver = CatalogResolver(project_root=project_root)
@@ -1028,13 +1020,6 @@ class AgentManager:
                 else cls.get_agent_file_path(agent_name, role)
             )
             content_path = Path(path)
-            builtin_prompt_path = Path("src/cafe/data/agents") / role / f"{agent_name}.md"
-            if content_path == builtin_prompt_path:
-                content_path = resolver.candidate_path(
-                    CatalogKind.AGENT,
-                    f"{role}/{agent_name}",
-                    resolver.builtin_root / "agents",
-                )
             try:
                 content = content_path.read_text(encoding="utf-8")
             except (OSError, UnicodeError):
