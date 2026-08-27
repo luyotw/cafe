@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import os
 import stat
 import subprocess
-from dataclasses import dataclass
+import threading
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional
 
 import yaml
+
 
 class CatalogValidationError(ValueError):
     """Raised when the highest-precedence catalog entry is invalid."""
@@ -31,6 +35,7 @@ class ProjectRoots:
 
     active: Path
     canonical: Path
+    git_discovered: bool = field(default=False, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -50,6 +55,45 @@ class CatalogEntry:
 
 
 GitRunner = Callable[[tuple[str, ...], Path], str]
+
+
+_catalog_lock_state = threading.local()
+
+
+@contextmanager
+def global_catalog_lock(global_root: Path, *, exclusive: bool = False) -> Iterator[None]:
+    """Coordinate catalog readers and publishers without mutating the catalog."""
+    lock_root = Path(global_root).resolve().parent
+    if not lock_root.exists():
+        if not exclusive:
+            yield
+            return
+        lock_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    key = str(lock_root)
+    held = getattr(_catalog_lock_state, "held", None)
+    if held is None:
+        held = {}
+        _catalog_lock_state.held = held
+    state = held.get(key)
+    if state is not None:
+        if exclusive and not state["exclusive"]:
+            raise RuntimeError("Cannot upgrade a shared catalog lock")
+        state["depth"] += 1
+        try:
+            yield
+        finally:
+            state["depth"] -= 1
+        return
+
+    descriptor = os.open(lock_root, os.O_RDONLY)
+    fcntl.flock(descriptor, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+    held[key] = {"depth": 1, "exclusive": exclusive, "descriptor": descriptor}
+    try:
+        yield
+    finally:
+        held.pop(key, None)
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 
 def _run_git(args: tuple[str, ...], cwd: Path) -> str:
@@ -88,7 +132,7 @@ def discover_project_roots(
             )
         ).resolve()
         canonical = common_git.parent if common_git.name == ".git" else active
-        return ProjectRoots(active=active, canonical=canonical)
+        return ProjectRoots(active=active, canonical=canonical, git_discovered=True)
     except (OSError, TypeError, ValueError):
         root = _nearest_project_root(start)
         return ProjectRoots(active=root, canonical=root)
@@ -143,11 +187,17 @@ class CatalogResolver:
         builtin_root: Optional[Path] = None,
         git_runner: GitRunner = _run_git,
     ) -> None:
-        roots = discover_project_roots(project_root or Path.cwd(), git_runner=git_runner)
-        self.project_root = Path(project_root).resolve() if project_root else roots.active
-        self.canonical_root = (
-            Path(canonical_root).resolve() if canonical_root else roots.canonical
+        requested_root = Path(project_root).resolve() if project_root else None
+        roots = discover_project_roots(requested_root or Path.cwd(), git_runner=git_runner)
+        self.project_root = (
+            roots.active if roots.git_discovered or requested_root is None else requested_root
         )
+        if canonical_root:
+            self.canonical_root = Path(canonical_root).resolve()
+        elif roots.git_discovered or requested_root is None:
+            self.canonical_root = roots.canonical
+        else:
+            self.canonical_root = requested_root
         if global_root is None:
             from cafe.utils import config
 
@@ -216,7 +266,7 @@ class CatalogResolver:
         if not path.is_file():
             raise CatalogValidationError(f"Invalid agent {key}: markdown file is required")
 
-    def resolve(self, kind: CatalogKind, key: str) -> CatalogEntry:
+    def _resolve_unlocked(self, kind: CatalogKind, key: str) -> CatalogEntry:
         key = self._validate_key(kind, key)
         for source, root, project_layer in reversed(self.catalog_roots(kind)):
             path = self.candidate_path(kind, key, root)
@@ -233,6 +283,10 @@ class CatalogResolver:
             )
         raise FileNotFoundError(f"{kind.value.title()} not found: {key}")
 
+    def resolve(self, kind: CatalogKind, key: str) -> CatalogEntry:
+        with global_catalog_lock(self.global_root):
+            return self._resolve_unlocked(kind, key)
+
     def _keys_at_root(self, kind: CatalogKind, root: Path) -> Iterator[str]:
         if not root.exists():
             return
@@ -247,15 +301,24 @@ class CatalogResolver:
                         f"{role_dir.name}/{item.stem}" for item in role_dir.glob("*.md")
                     )
 
-    def keys(self, kind: CatalogKind) -> list[str]:
+    def _keys_unlocked(self, kind: CatalogKind) -> list[str]:
         keys: set[str] = set()
         for _source, root, _layer in self.catalog_roots(kind):
             keys.update(self._keys_at_root(kind, root))
         return sorted(keys)
 
+    def keys(self, kind: CatalogKind) -> list[str]:
+        with global_catalog_lock(self.global_root):
+            return self._keys_unlocked(kind)
+
     def entries(self, kinds: Optional[Iterable[CatalogKind]] = None) -> list[CatalogEntry]:
         selected = list(kinds or CatalogKind)
-        return [self.resolve(kind, key) for kind in selected for key in self.keys(kind)]
+        with global_catalog_lock(self.global_root):
+            return [
+                self._resolve_unlocked(kind, key)
+                for kind in selected
+                for key in self._keys_unlocked(kind)
+            ]
 
     def project_entries(
         self, kinds: Optional[Iterable[CatalogKind]] = None

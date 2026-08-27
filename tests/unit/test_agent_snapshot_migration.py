@@ -9,7 +9,7 @@ from cafe.catalogs.migration import (
     MigrationDecisionError,
     StaleMigrationDecision,
 )
-from cafe.catalogs.resolver import CatalogKind, CatalogResolver
+from cafe.catalogs.resolver import CatalogResolver
 
 
 def _agent(path: Path, name: str, body: str) -> Path:
@@ -119,3 +119,59 @@ def test_apply_requires_a_decision_for_every_legacy_file(tmp_path: Path) -> None
 
     with pytest.raises(MigrationDecisionError):
         migrator.apply(preview.token, {})
+
+
+def test_intentional_tracked_agent_cannot_be_retired(tmp_path: Path) -> None:
+    migrator, project, _builtin = _migrator(
+        tmp_path, tracked={".cafe/agents/reviewer/Richard.md"}
+    )
+    intentional = _agent(
+        project / ".cafe" / "agents" / "reviewer" / "Richard.md",
+        "Richard",
+        "custom",
+    )
+    preview = migrator.preview()
+
+    with pytest.raises(MigrationDecisionError):
+        migrator.apply(preview.token, {"agent:reviewer/Richard": "retire"})
+
+    assert intentional.is_file()
+
+
+def test_interrupted_retirement_resumes_from_durable_manifest(tmp_path: Path) -> None:
+    failed_once = False
+
+    def interrupt_after_move(boundary: str, entry_id: str | None) -> None:
+        nonlocal failed_once
+        if boundary == "after_retire" and not failed_once:
+            failed_once = True
+            raise OSError("injected interruption after move")
+
+    project = tmp_path / "project"
+    builtin = tmp_path / "builtin"
+    resolver = CatalogResolver(
+        project_root=project,
+        canonical_root=project,
+        global_root=tmp_path / "global",
+        builtin_root=builtin,
+    )
+    migrator = AgentSnapshotMigrator(
+        resolver,
+        is_tracked=lambda _path: False,
+        failure_injector=interrupt_after_move,
+    )
+    for role, name in (("developer", "David"), ("reviewer", "Richard")):
+        _agent(builtin / "agents" / role / f"{name}.md", name, "same")
+        _agent(project / ".cafe" / "agents" / role / f"{name}.md", name, "same")
+    preview = migrator.preview()
+    decisions = {item.entry_id: "retire" for item in preview.items}
+
+    with pytest.raises(OSError, match="injected interruption"):
+        migrator.apply(preview.token, decisions)
+
+    result = migrator.apply(preview.token, decisions)
+    repeated = migrator.apply(preview.token, decisions)
+
+    assert len(result.retired) == 2
+    assert all(path.is_file() for path in result.retired)
+    assert repeated == result

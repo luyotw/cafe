@@ -12,7 +12,12 @@ from typing import Callable, Mapping, Optional
 
 import yaml
 
-from cafe.catalogs.resolver import CatalogKind, CatalogResolver, content_digest
+from cafe.catalogs.resolver import (
+    CatalogKind,
+    CatalogResolver,
+    content_digest,
+    global_catalog_lock,
+)
 
 
 class StaleMigrationDecision(RuntimeError):
@@ -47,6 +52,11 @@ class MigrationResult:
 
 
 TrackedCheck = Callable[[Path], bool]
+FailureInjector = Callable[[str, Optional[str]], None]
+
+
+def _noop_injector(_boundary: str, _entry_id: Optional[str]) -> None:
+    return None
 
 
 def _default_is_tracked(path: Path) -> bool:
@@ -77,9 +87,11 @@ class AgentSnapshotMigrator:
         resolver: CatalogResolver,
         *,
         is_tracked: TrackedCheck = _default_is_tracked,
+        failure_injector: FailureInjector = _noop_injector,
     ) -> None:
         self.resolver = resolver
         self.is_tracked = is_tracked
+        self.failure_injector = failure_injector
 
     @staticmethod
     def _valid_agent(path: Path, expected_name: str) -> bool:
@@ -125,6 +137,10 @@ class AgentSnapshotMigrator:
         return hashlib.sha256(encoded).hexdigest()
 
     def preview(self) -> MigrationPreview:
+        with global_catalog_lock(self.resolver.global_root):
+            return self._preview()
+
+    def _preview(self) -> MigrationPreview:
         items: list[MigrationItem] = []
         for entry in self.resolver.project_entries([CatalogKind.AGENT]):
             expected_name = entry.key.split("/", 1)[1]
@@ -167,12 +183,146 @@ class AgentSnapshotMigrator:
             manifest=manifest,
         )
 
+    def _confirmed_preserved(self) -> set[tuple[str, str, str]]:
+        root = (
+            self.resolver.project_root
+            / ".cafe"
+            / "migrations"
+            / "agent-snapshots"
+        )
+        confirmed: set[tuple[str, str, str]] = set()
+        for manifest in sorted(root.glob("*/manifest.json")):
+            try:
+                payload = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                continue
+            if payload.get("status") != "completed":
+                continue
+            for record in payload.get("items", []):
+                if isinstance(record, dict) and record.get("action") == "preserve":
+                    confirmed.add(
+                        (
+                            str(record.get("entry_id")),
+                            str(record.get("path")),
+                            str(record.get("digest")),
+                        )
+                    )
+        return confirmed
+
+    def publication_blocked_entry_ids(self) -> set[str]:
+        """Return generated snapshots that lack an explicit preserve decision."""
+        confirmed = self._confirmed_preserved()
+        return {
+            item.entry_id
+            for item in self.preview().items
+            if item.status == "generated"
+            and (item.entry_id, str(item.path), item.digest) not in confirmed
+        }
+
+    def _write_manifest(
+        self,
+        manifest: Path,
+        payload: dict[str, object],
+        *,
+        entry_id: Optional[str],
+    ) -> None:
+        self.failure_injector("before_manifest_write", entry_id)
+        temporary = manifest.with_suffix(".tmp")
+        try:
+            with temporary.open("w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, manifest)
+            directory = os.open(manifest.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+
+    def _resume(
+        self,
+        manifest: Path,
+        payload: dict[str, object],
+        decisions: Mapping[str, str],
+    ) -> MigrationResult:
+        records = payload.get("items")
+        if not isinstance(records, list):
+            raise MigrationDecisionError("Migration journal is missing item records")
+        recorded_decisions = {
+            str(record.get("entry_id")): str(record.get("action"))
+            for record in records
+            if isinstance(record, dict)
+        }
+        if recorded_decisions != dict(decisions):
+            raise MigrationDecisionError(
+                "Migration decisions do not match the in-progress journal"
+            )
+
+        for record in records:
+            if not isinstance(record, dict):
+                raise MigrationDecisionError("Migration journal contains an invalid item")
+            if record.get("state") == "completed":
+                continue
+            entry_id = str(record["entry_id"])
+            source = Path(str(record["path"]))
+            digest = str(record["digest"])
+            action = str(record["action"])
+            if action == "preserve":
+                if not source.exists() or content_digest(source) != digest:
+                    raise StaleMigrationDecision(
+                        f"Preserved agent changed during migration: {entry_id}"
+                    )
+            else:
+                destination = Path(str(record["retired_path"]))
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if source.exists() or source.is_symlink():
+                    if content_digest(source) != digest or destination.exists():
+                        raise StaleMigrationDecision(
+                            f"Retired agent changed during migration: {entry_id}"
+                        )
+                    os.replace(source, destination)
+                    self.failure_injector("after_retire", entry_id)
+                elif not destination.exists() or content_digest(destination) != digest:
+                    raise StaleMigrationDecision(
+                        f"Retired agent state is unrecoverable: {entry_id}"
+                    )
+            record["state"] = "completed"
+            self._write_manifest(manifest, payload, entry_id=entry_id)
+
+        retired = [
+            str(record["retired_path"])
+            for record in records
+            if isinstance(record, dict) and record.get("action") == "retire"
+        ]
+        preserved = [
+            str(record["path"])
+            for record in records
+            if isinstance(record, dict) and record.get("action") == "preserve"
+        ]
+        payload.update(
+            {
+                "status": "completed",
+                "retired": retired,
+                "preserved": preserved,
+            }
+        )
+        self._write_manifest(manifest, payload, entry_id=None)
+        return self._result_from_manifest(manifest)
+
     def apply(self, token: str, decisions: Mapping[str, str]) -> MigrationResult:
         """Apply explicit digest-bound decisions without deleting any agent content."""
         transaction_root = self._transaction_root(token)
         manifest = transaction_root / "manifest.json"
         if manifest.is_file():
-            return self._result_from_manifest(manifest)
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            if payload.get("status") == "completed":
+                return self._result_from_manifest(manifest)
+            return self._resume(manifest, payload, decisions)
 
         current = self.preview()
         if current.token != token:
@@ -192,42 +342,45 @@ class AgentSnapshotMigrator:
         )
         if invalid_actions:
             raise MigrationDecisionError(f"Invalid migration action for: {invalid_actions}")
+        unsafe_retirements = sorted(
+            item.entry_id
+            for item in current.items
+            if decisions[item.entry_id] == "retire"
+            and item.status not in {"generated", "ambiguous"}
+        )
+        if unsafe_retirements:
+            raise MigrationDecisionError(
+                "Only generated or explicitly reviewed ambiguous agents can be retired: "
+                + ", ".join(unsafe_retirements)
+            )
 
         retirement_root = transaction_root / "retired"
         retirement_root.mkdir(parents=True, exist_ok=True)
-        retired: list[Path] = []
-        preserved: list[Path] = []
         records = []
         for item in current.items:
             action = decisions[item.entry_id]
             if action == "preserve":
-                preserved.append(item.path)
                 destination: Optional[Path] = None
             else:
                 role, name = item.entry_id.removeprefix("agent:").split("/", 1)
                 destination = retirement_root / role / f"{name}.md"
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(item.path, destination)
-                retired.append(destination)
             records.append(
                 {
                     **asdict(item),
                     "path": str(item.path),
                     "action": action,
                     "retired_path": str(destination) if destination else None,
+                    "state": "pending",
                 }
             )
 
-        payload = {
+        payload: dict[str, object] = {
             "version": 1,
             "token": token,
-            "status": "completed",
+            "status": "in_progress",
             "items": records,
-            "retired": [str(item) for item in retired],
-            "preserved": [str(item) for item in preserved],
+            "retired": [],
+            "preserved": [],
         }
-        manifest.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        return MigrationResult(tuple(retired), tuple(preserved), manifest)
+        self._write_manifest(manifest, payload, entry_id=None)
+        return self._resume(manifest, payload, decisions)

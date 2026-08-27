@@ -1,7 +1,7 @@
 """U1/U2: unified catalog resolution invariants."""
 
-from pathlib import Path
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -126,6 +126,33 @@ def test_git_root_discovery_keeps_active_and_canonical_roots_distinct(tmp_path: 
     assert roots.canonical == canonical
 
 
+def test_resolver_uses_discovered_worktree_root_from_a_subdirectory(
+    tmp_path: Path,
+) -> None:
+    active = tmp_path / "worktree"
+    nested = active / "nested" / "command-directory"
+    canonical = tmp_path / "canonical"
+    nested.mkdir(parents=True)
+
+    def git_runner(args: tuple[str, ...], cwd: Path) -> str:
+        assert cwd == nested
+        if args == ("rev-parse", "--show-toplevel"):
+            return str(active)
+        if args == ("rev-parse", "--path-format=absolute", "--git-common-dir"):
+            return str(canonical / ".git")
+        raise AssertionError(args)
+
+    resolver = CatalogResolver(
+        project_root=nested,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+        git_runner=git_runner,
+    )
+
+    assert resolver.project_root == active
+    assert resolver.canonical_root == canonical
+
+
 def test_git_root_discovery_falls_back_when_runner_returns_non_path(
     tmp_path: Path,
 ) -> None:
@@ -139,3 +166,21 @@ def test_git_root_discovery_falls_back_when_runner_returns_non_path(
 
     assert roots.active == project
     assert roots.canonical == project
+
+
+def test_explicit_non_git_project_root_is_not_replaced_by_an_ancestor(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".cafe").mkdir()
+    project = tmp_path / "nested" / "project"
+    project.mkdir(parents=True)
+
+    resolver = CatalogResolver(
+        project_root=project,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+        git_runner=lambda _args, _cwd: object(),  # type: ignore[return-value]
+    )
+
+    assert resolver.project_root == project
+    assert resolver.canonical_root == project

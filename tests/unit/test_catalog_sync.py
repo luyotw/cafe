@@ -1,9 +1,11 @@
 """U3/U4/U5: content-bound, transactional catalog publication."""
 
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 
+from cafe.catalogs.migration import AgentSnapshotMigrator
 from cafe.catalogs.resolver import CatalogKind, CatalogResolver, content_digest
 from cafe.catalogs.sync import CatalogSyncError, CatalogSyncService, StaleComparisonError
 
@@ -59,6 +61,57 @@ def test_combined_comparison_is_content_bound_and_silent_without_project_entries
     original_token = report.token
     _entry(global_root, CatalogKind.AGENT, "developer/David", "changed")
     assert service.compare().token != original_token
+
+
+def test_effective_digests_cover_global_and_builtin_only_entries(tmp_path: Path) -> None:
+    service, _project, global_root = _service(tmp_path)
+    builtin_root = service.resolver.builtin_root
+    _entry(builtin_root, CatalogKind.PLAYBOOK, "standard", "builtin")
+    _entry(global_root, CatalogKind.PHASE, "develop", "global")
+    _entry(builtin_root, CatalogKind.AGENT, "developer/David", "builtin")
+
+    before = service.compare()
+
+    assert before.status == "no_project_entries"
+    assert set(before.effective_digests) == {"playbook", "phase", "agent"}
+    assert all(len(digest) == 64 for digest in before.effective_digests.values())
+
+    _entry(global_root, CatalogKind.PHASE, "develop", "changed-global")
+    after = service.compare()
+    assert after.effective_digests["phase"] != before.effective_digests["phase"]
+    assert after.token != before.token
+
+
+def test_generated_agent_snapshot_is_not_a_publication_candidate(tmp_path: Path) -> None:
+    service, project, _global_root = _service(tmp_path)
+    builtin = _entry(
+        service.resolver.builtin_root,
+        CatalogKind.AGENT,
+        "developer/David",
+        "fallback",
+    )
+    snapshot = _entry(
+        project / ".cafe",
+        CatalogKind.AGENT,
+        "developer/David",
+        "fallback",
+    )
+    assert content_digest(snapshot) == content_digest(builtin)
+
+    report = service.compare()
+
+    assert report.status == "no_project_entries"
+    assert report.entries == ()
+
+    migrator = AgentSnapshotMigrator(
+        service.resolver, is_tracked=lambda _path: False
+    )
+    preview = migrator.preview()
+    migrator.apply(preview.token, {"agent:developer/David": "preserve"})
+
+    assert [item.entry_id for item in service.compare().entries] == [
+        "agent:developer/David"
+    ]
 
 
 def test_digest_covers_file_mode_and_symlink_target(tmp_path: Path) -> None:
@@ -134,6 +187,70 @@ def test_selected_mixed_catalog_entries_publish_as_one_verified_operation(
     assert content_digest(global_root / "skills" / "develop") == content_digest(phase)
     assert not (global_root / "agents" / "developer" / "David.md").exists()
     assert declined.is_file()
+
+
+def test_catalog_readers_do_not_observe_an_in_progress_multi_entry_publish(
+    tmp_path: Path,
+) -> None:
+    first_published = Event()
+    allow_completion = Event()
+
+    def pause_after_first_publish(boundary: str, entry_id: str | None) -> None:
+        if boundary == "published" and entry_id == "playbook:standard":
+            first_published.set()
+            assert allow_completion.wait(timeout=5)
+
+    service, project, global_root = _service(
+        tmp_path, failure_injector=pause_after_first_publish
+    )
+    _entry(project / ".cafe", CatalogKind.PLAYBOOK, "standard", "new-playbook")
+    _entry(project / ".cafe", CatalogKind.PHASE, "develop", "new-phase")
+    _entry(global_root, CatalogKind.PLAYBOOK, "standard", "old-playbook")
+    _entry(global_root, CatalogKind.PHASE, "develop", "old-phase")
+    report = service.compare()
+    reader = CatalogResolver(
+        project_root=tmp_path / "reader-project",
+        canonical_root=tmp_path / "reader-project",
+        global_root=global_root,
+        builtin_root=tmp_path / "reader-builtin",
+    )
+    publish_errors: list[BaseException] = []
+    observed: list[str] = []
+
+    def publish() -> None:
+        try:
+            service.sync(report.token, ["playbook:standard", "phase:develop"])
+        except BaseException as exc:  # pragma: no cover - asserted below
+            publish_errors.append(exc)
+
+    def read_catalogs() -> None:
+        entries = reader.entries([CatalogKind.PLAYBOOK, CatalogKind.PHASE])
+        observed.extend(
+            (
+                entry.path / "SKILL.md"
+                if entry.kind is CatalogKind.PHASE
+                else entry.path
+            ).read_text(encoding="utf-8")
+            for entry in entries
+        )
+
+    publisher = Thread(target=publish)
+    publisher.start()
+    assert first_published.wait(timeout=5)
+    catalog_reader = Thread(target=read_catalogs)
+    catalog_reader.start()
+    assert catalog_reader.is_alive()
+
+    allow_completion.set()
+    publisher.join(timeout=5)
+    catalog_reader.join(timeout=5)
+
+    assert not publisher.is_alive()
+    assert not catalog_reader.is_alive()
+    assert publish_errors == []
+    assert any("new-playbook" in content for content in observed)
+    assert any("new-phase" in content for content in observed)
+    assert all("old-" not in content for content in observed)
 
 
 def test_late_mixed_catalog_failure_restores_every_global_entry(tmp_path: Path) -> None:

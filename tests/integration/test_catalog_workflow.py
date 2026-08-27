@@ -11,7 +11,6 @@ from cafe.catalogs.resolver import CatalogKind, CatalogResolver
 from cafe.catalogs.sync import CatalogSyncService
 from cafe.ui.cli import app
 
-
 runner = CliRunner()
 
 
@@ -140,7 +139,9 @@ def test_linked_worktree_preview_and_sync_use_the_effective_project_overlay(
     canonical_only.write_text(
         "playbook: {id: canonical-only}\nsteps: {}\n", encoding="utf-8"
     )
-    monkeypatch.chdir(linked)
+    command_directory = linked / "nested" / "command-directory"
+    command_directory.mkdir(parents=True)
+    monkeypatch.chdir(command_directory)
     monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
 
     preview = runner.invoke(app, ["catalog", "check", "--json"])

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
@@ -15,12 +14,14 @@ from typing import Callable, Iterable, Iterator, Optional, Sequence
 
 import yaml
 
+from cafe.catalogs.migration import AgentSnapshotMigrator
 from cafe.catalogs.resolver import (
     CatalogEntry,
     CatalogKind,
     CatalogResolver,
     CatalogValidationError,
     content_digest,
+    global_catalog_lock,
 )
 
 
@@ -65,6 +66,7 @@ class ComparisonReport:
     entries: tuple[ComparisonItem, ...]
     project_roots: tuple[Path, ...]
     global_root: Path
+    effective_digests: dict[str, str]
 
     @property
     def differences(self) -> tuple[ComparisonItem, ...]:
@@ -79,6 +81,7 @@ class ComparisonReport:
             "global_root": str(self.global_root),
             "compared_count": len(self.entries),
             "difference_count": len(self.differences),
+            "effective_digests": self.effective_digests,
             "entries": [item.as_dict() for item in self.entries],
         }
 
@@ -157,14 +160,8 @@ def _remove_path(path: Path) -> None:
 
 @contextmanager
 def _global_lock(global_root: Path) -> Iterator[None]:
-    global_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    descriptor = os.open(global_root / ".catalog-sync.lock", os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
+    with global_catalog_lock(global_root, exclusive=True):
         yield
-    finally:
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
 
 
 class CatalogSyncService:
@@ -203,6 +200,7 @@ class CatalogSyncService:
     @staticmethod
     def _comparison_token(
         entries: Sequence[ComparisonItem],
+        effective_digests: dict[str, str],
         roots: tuple[Path, ...],
         global_root: Path,
         kinds: Sequence[CatalogKind],
@@ -214,12 +212,48 @@ class CatalogSyncService:
             "global_root": str(global_root),
             "kinds": [kind.value for kind in kinds],
             "entry_scope": sorted(scope_ids) if scope_ids is not None else None,
+            "effective_digests": effective_digests,
             "entries": [item.as_dict() for item in entries],
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
 
+    @staticmethod
+    def _effective_digests(
+        entries: Sequence[CatalogEntry], kinds: Sequence[CatalogKind]
+    ) -> dict[str, str]:
+        by_kind: dict[CatalogKind, list[dict[str, str]]] = {
+            kind: [] for kind in kinds
+        }
+        for entry in entries:
+            by_kind[entry.kind].append(
+                {
+                    "entry_id": entry.entry_id,
+                    "source": entry.source,
+                    "digest": entry.digest,
+                }
+            )
+        return {
+            kind.value: hashlib.sha256(
+                json.dumps(
+                    sorted(by_kind[kind], key=lambda item: item["entry_id"]),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+            for kind in kinds
+        }
+
     def compare(
+        self,
+        *,
+        kinds: Optional[Iterable[CatalogKind]] = None,
+        entry_ids: Optional[Sequence[str]] = None,
+    ) -> ComparisonReport:
+        with global_catalog_lock(self.resolver.global_root):
+            return self._compare(kinds=kinds, entry_ids=entry_ids)
+
+    def _compare(
         self,
         *,
         kinds: Optional[Iterable[CatalogKind]] = None,
@@ -235,7 +269,17 @@ class CatalogSyncService:
                 if kind not in selected_kinds:
                     raise CatalogSyncError(f"Entry filter is outside selected kinds: {entry_id}")
 
-        project_entries = self.resolver.project_entries(selected_kinds)
+        effective_digests = self._effective_digests(
+            self.resolver.entries(selected_kinds), selected_kinds
+        )
+        blocked_agents = AgentSnapshotMigrator(
+            self.resolver
+        ).publication_blocked_entry_ids()
+        project_entries = [
+            entry
+            for entry in self.resolver.project_entries(selected_kinds)
+            if entry.entry_id not in blocked_agents
+        ]
         available = {entry.entry_id for entry in project_entries}
         if requested is not None:
             unknown = sorted(requested - available)
@@ -279,6 +323,7 @@ class CatalogSyncService:
         )
         token = self._comparison_token(
             comparison_items,
+            effective_digests,
             roots,
             self.resolver.global_root,
             selected_kinds,
@@ -299,6 +344,7 @@ class CatalogSyncService:
             entries=tuple(comparison_items),
             project_roots=roots,
             global_root=self.resolver.global_root,
+            effective_digests=effective_digests,
         )
 
     def _validate_selection(

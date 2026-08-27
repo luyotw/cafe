@@ -532,6 +532,38 @@ def test_catalog_check_defaults_to_all_three_kinds_with_complete_json(
         "agent:developer/David",
     }
     assert payload["difference_count"] == 3
+    assert set(payload["effective_digests"]) == {"playbook", "phase", "agent"}
+
+
+def test_catalog_check_json_reports_fallback_only_effective_digests(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    global_root = tmp_path / "global"
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
+
+    before = runner.invoke(app, ["catalog", "check", "--json"])
+    global_playbook = global_root / "playbooks" / "global-only.yaml"
+    global_playbook.parent.mkdir(parents=True)
+    global_playbook.write_text(
+        "playbook: {id: global-only}\nsteps: {}\n", encoding="utf-8"
+    )
+    after = runner.invoke(app, ["catalog", "check", "--json"])
+
+    assert before.exit_code == 0, before.stdout
+    assert after.exit_code == 0, after.stdout
+    before_payload = json.loads(before.stdout)
+    after_payload = json.loads(after.stdout)
+    assert set(before_payload["effective_digests"]) == {
+        "playbook",
+        "phase",
+        "agent",
+    }
+    assert before_payload["status"] == "no_project_entries"
+    assert after_payload["effective_digests"]["playbook"] != before_payload[
+        "effective_digests"
+    ]["playbook"]
+    assert after_payload["comparison_token"] != before_payload["comparison_token"]
 
 
 def test_catalog_check_supports_kind_and_entry_filters(tmp_path: Path, monkeypatch) -> None:
