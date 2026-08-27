@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows falls back to the local lock.
+    fcntl = None  # type: ignore[assignment]
 
 from cafe.core.packet_io import atomic_write_bytes
 from cafe.core.workflow_models import BatonRejected
@@ -453,9 +460,13 @@ class BlackboardState:
 class BlackboardStore:
     """Persist blackboard data in issue directory."""
 
+    _thread_locks: Dict[Path, threading.RLock] = {}
+    _thread_locks_guard = threading.Lock()
+
     def __init__(self, issue_dir: Path) -> None:
         self.issue_dir = issue_dir
         self.file_path = issue_dir / BLACKBOARD_FILENAME
+        self.receipt_lock_path = issue_dir / f".{BLACKBOARD_FILENAME}.receipt.lock"
         self.next_step_path = issue_dir / NEXT_STEP_FILENAME
 
     def load_or_create(
@@ -701,6 +712,33 @@ class BlackboardStore:
                 return
         state.capability_receipts.append(dict(receipt))
         self.save(state)
+
+    @contextmanager
+    def capability_receipt_transaction(
+        self, state: BlackboardState
+    ) -> Iterator[BlackboardState]:
+        """Serialize one receipt-backed dispatch across runtimes and processes."""
+        with self._thread_lock_for(self.file_path):
+            self.issue_dir.mkdir(parents=True, exist_ok=True)
+            with self.receipt_lock_path.open("a+", encoding="utf-8") as lock_file:
+                if fcntl is not None:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    if self.file_path.exists():
+                        raw = json.loads(self.file_path.read_text(encoding="utf-8"))
+                        persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
+                        state.__dict__.clear()
+                        state.__dict__.update(persisted.__dict__)
+                    yield state
+                finally:
+                    if fcntl is not None:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    @classmethod
+    def _thread_lock_for(cls, file_path: Path) -> threading.RLock:
+        resolved = file_path.resolve()
+        with cls._thread_locks_guard:
+            return cls._thread_locks.setdefault(resolved, threading.RLock())
 
     def set_current_step(self, state: BlackboardState, step: str) -> None:
         state.current_step = step

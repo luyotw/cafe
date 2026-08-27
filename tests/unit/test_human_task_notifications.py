@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.error import URLError
@@ -161,6 +162,22 @@ def test_credential_resolver_rejects_unsafe_user_files(
         target.write_text(VALID_WEBHOOK, encoding="utf-8")
         target.chmod(0o600)
         credential.symlink_to(target)
+    _set_home(monkeypatch, home)
+
+    with pytest.raises(SlackNotificationError) as exc:
+        load_slack_webhook_url()
+
+    assert exc.value.code == "slack_credentials_unsafe"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO support")
+def test_credential_resolver_rejects_fifo_without_blocking(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Unit Test 5: a non-regular credential cannot block the HumanTask handoff."""
+    home = tmp_path / "home"
+    home.mkdir()
+    os.mkfifo(home / ".slack-webhook", mode=0o600)
     _set_home(monkeypatch, home)
 
     with pytest.raises(SlackNotificationError) as exc:

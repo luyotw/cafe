@@ -1,7 +1,9 @@
 """Tests for the blackboard-first workflow runtime."""
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -2089,6 +2091,67 @@ def test_runtime_audits_interrupted_attempt_without_duplicate_dispatch(
     assert len(state.capability_receipts) == 1
     assert state.capability_receipts[0]["code"] == "slack_notification_interrupted"
     assert state.capability_receipts[0]["task_id"] == task.id
+
+
+def test_concurrent_stale_runtimes_claim_one_notification_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit Tests 7-8: concurrent recovery has one dispatch and one audited attempt."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "concurrent-notification-recovery"
+
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+    dispatches: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: dispatches.append(kwargs)
+        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+    )
+
+    runtimes = [
+        BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=PlaybookLoader().load("standard"),
+            executor=lambda *_args: None,
+        )
+        for _ in range(2)
+    ]
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=runtimes[0].blackboard.workflow_id,
+        step="spec",
+        iteration=1,
+        trigger="output_ready",
+        policy_id="output-review",
+        prompt="Review the requirements specification and choose how to continue.",
+        expected_result={"input_schema": "decision"},
+        continuations={"agree": "plan"},
+        assignee_type="human",
+    )
+    rendezvous = threading.Barrier(2)
+
+    def _notify(runtime: BlackboardWorkflowRuntime) -> None:
+        rendezvous.wait(timeout=5)
+        runtime._notify_new_human_task(task)
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        futures = [workers.submit(_notify, runtime) for runtime in runtimes]
+        for future in futures:
+            future.result(timeout=10)
+
+    for runtime in runtimes:
+        runtime.blackboard_store.save(runtime.blackboard)
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    matching_receipts = [
+        receipt
+        for receipt in state.capability_receipts
+        if receipt.get("capability") == "cafe.slack.human_task"
+        and receipt.get("task_id") == task.id
+    ]
+    assert len(dispatches) == 1
+    assert len(matching_receipts) == 1
 
 
 def test_runtime_records_non_actionable_configuration_error_for_bad_task_binding(

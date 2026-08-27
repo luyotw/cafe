@@ -105,7 +105,11 @@ def _trusted_user_home() -> Path:
 def load_slack_webhook_url() -> str:
     """Read and validate only the fixed user-owned Slack credential file."""
     credential_file = _trusted_user_home() / SLACK_WEBHOOK_FILENAME
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
     try:
         descriptor = os.open(credential_file, flags)
     except FileNotFoundError as exc:
