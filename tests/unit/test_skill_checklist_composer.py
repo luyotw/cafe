@@ -180,7 +180,7 @@ GOLDEN_RUNNERS = {
         output_file=".cafe/issues/test/develop/iteration_001/output.md",
     ),
     "review": lambda path: generate_review_checklist(
-        agent_name="Richard",
+        agent_name="Alice",
         spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
         review_file_path=".cafe/issues/test/review/iteration_001/output.md",
         base_branch="develop",
