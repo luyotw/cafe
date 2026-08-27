@@ -72,14 +72,40 @@ unexecuted.
 Treat `driver_execution.poll_interval_seconds` as the required cadence for
 proactive calls to these inspection surfaces while the current process remains
 active. The default is 180 seconds. Start the timer when the process starts or
-resumes. If nothing wakes the driver first, perform one proactive inspection
-when the interval elapses, then restart the timer. Process output, command
-completion, errors, HumanTasks, and other event-driven signals wake the driver
+resumes, before waiting for its first output. The first proactive inspection is
+due only after that full interval; do not use a shorter startup or warm-up
+cadence. If nothing wakes the driver first, perform one proactive inspection
+when the interval elapses, then restart the timer.
+
+A terminal session id, empty output, host-tool yield, deferred cell id, or a
+generic "still running" result is transport state, not substantive process
+output. It must not trigger a short `write_stdin` poll, `cafe status`, artifact
+reads, a user-facing progress message, or any other sub-interval inspection.
+Continue a single deferred wait for the remaining interval instead; one long
+`write_stdin` wait is acceptable when that is how the host resumes the existing
+session. If the host returns control before that wait finishes, wait on the same
+deferred operation rather than starting a new terminal poll. Do not implement a
+180-second contract as a loop of 30-second `write_stdin` calls.
+
+At each proactive deadline, capture the current system time in the same
+inspection operation and print it before the status result. Use an unambiguous
+local timestamp such as `YYYY-MM-DD HH:MM:SS TZ`, and begin the corresponding
+driver-to-user update with that exact captured time. For example:
+
+```bash
+date '+%Y-%m-%d %H:%M:%S %Z'
+cafe status
+```
+
+Generate the timestamp from the system clock at poll time; do not estimate it
+from conversation context. Substantive lifecycle output, command completion,
+errors, HumanTasks, and other event-driven signals still wake the driver
 immediately; if execution remains active after handling the signal, restart the
-timer. Stop polling when the command exits, the workflow reaches a user-owned
-handoff or `done`, or execution stops on an error. A host may require more
-frequent user-facing heartbeat messages; those messages must not trigger an
-extra CAFE status or artifact poll.
+timer. A transport-only yield does not wake the driver. Stop polling when the
+command exits, the workflow reaches a user-owned handoff or `done`, or execution
+stops on an error. A host may require more frequent user-facing heartbeat
+messages; those messages must not trigger an extra CAFE status or artifact poll,
+and do not emit empty-progress chatter merely because the transport yielded.
 
 Keep `--mute-agent-output` on every driver execution so provider narration is
 parsed and persisted without being copied into driver context. Never remove

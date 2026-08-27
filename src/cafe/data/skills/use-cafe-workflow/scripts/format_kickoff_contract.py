@@ -408,6 +408,14 @@ def render(args: argparse.Namespace) -> str:
             ["model_adjustment_authority", args.model_adjustment_authority],
             ["driver_execution.mode", args.execution_mode],
             ["driver_execution.poll_interval_seconds", args.poll_interval_seconds],
+            [
+                "driver_execution.first_poll",
+                "after the full interval; no startup or transport-level poll",
+            ],
+            [
+                "driver_execution.poll_timestamp",
+                "capture and print current system time with every proactive poll",
+            ],
             ["user_required", ", ".join(user_required) or "[]"],
             ["driver_confirmable", ", ".join(driver_confirmable) or "[]"],
             ["worktree", worktree],

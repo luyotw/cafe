@@ -1937,3 +1937,66 @@ def test_use_cafe_workflow_batches_driver_pr_review_findings() -> None:
     assert "tests do not forge workflow output, trusted state, or receipts" in normalized_reference
     assert "previously observable but missed" in reference
     assert "Do not restart repository-wide discovery for unchanged areas" in reference
+
+
+class TestPollingContract:
+    def test_first_poll_waits_for_the_full_confirmed_interval(self) -> None:
+        skill = " ".join(_read_skill_resource("SKILL.md").split())
+        kickoff = " ".join(_read_skill_resource("references/kickoff.md").split())
+        running = " ".join(
+            _read_skill_resource("references/running_workflow.md").split()
+        )
+
+        assert "From the first wait, honor the full poll cadence" in skill
+        assert "there is no shorter startup or warm-up cadence" in kickoff
+        assert "The first proactive inspection is due only after that full interval" in running
+        assert "Continue a single deferred wait for the remaining interval instead" in running
+        assert "wait on the same deferred operation" in running
+
+    def test_transport_yields_do_not_trigger_workflow_inspection(self) -> None:
+        kickoff = " ".join(_read_skill_resource("references/kickoff.md").split())
+        running = " ".join(
+            _read_skill_resource("references/running_workflow.md").split()
+        )
+
+        assert "is transport state rather than an event-driven signal" in kickoff
+        assert "must not cause a sub-interval status or artifact poll" in kickoff
+        assert "is transport state, not substantive process output" in running
+        assert "It must not trigger a short `write_stdin` poll" in running
+        assert "Substantive lifecycle output" in running
+        assert "still wake the driver immediately" in running
+
+    def test_formatter_exposes_first_poll_and_timestamp_contract(
+        self, tmp_path: Path
+    ) -> None:
+        strategic_context = tmp_path / "strategic_context.yaml"
+        strategic_context.write_text(
+            """\
+version: 1
+mandate:
+  preset: technical-led
+  playbook_id: standard
+  axes:
+    product_scope: {level: escalate, grounds: [roadmap, positioning]}
+    technical: {level: agent, grounds: [engineering_guidelines]}
+  out_of_mandate: [pricing, production deploy approval]
+""",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            _kickoff_formatter_command(strategic_context),
+            cwd=PROJECT_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert (
+            "| driver_execution.first_poll | after the full interval; "
+            "no startup or transport-level poll |" in result.stdout
+        )
+        assert (
+            "| driver_execution.poll_timestamp | capture and print current system time "
+            "with every proactive poll |" in result.stdout
+        )

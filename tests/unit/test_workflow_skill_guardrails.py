@@ -49,7 +49,7 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
         "cafe-plan": "1.6.1",
         "cafe-review": "1.4.2",
         "cafe-workflow-common": "1.7.0",
-        "use-cafe-workflow": "1.26.0",
+        "use-cafe-workflow": "1.27.0",
     }
     for name, version in expected_versions.items():
         assert f"version: {version}" in _skill_text(builtin_root, name)

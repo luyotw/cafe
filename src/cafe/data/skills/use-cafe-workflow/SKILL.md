@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-version: 1.26.0
+metadata: {version: 1.27.0}
 ---
 
 # Use CAFE Workflow
@@ -116,8 +116,8 @@ If more than one situation applies, read every listed reference before acting; d
 - [ ] Read the running-workflow reference.
 - [ ] Start or resume with the confirmed execution mode and input, otherwise
   follow the persisted baton without forcing `--start-step`.
-- [ ] Monitor process state. Poll at the confirmed cadence and handle output,
-  completion, errors, and HumanTasks immediately.
+- [ ] From the first wait, honor the full poll cadence; transport-only yields continue the same deferred wait without inspection.
+- [ ] Timestamp every proactive poll and its user update; handle substantive output, completion, errors, and HumanTasks immediately.
 - [ ] At each contract-defined pause or completion, inspect new phase evidence
   and revise only remaining model chains within confirmed authority.
 - [ ] Inspect progress through `cafe status` and `cafe show`; consult the

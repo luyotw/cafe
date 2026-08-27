@@ -105,13 +105,23 @@ obtain explicit user confirmation of:
 
 The poll interval applies to proactive `cafe status`, `cafe show`, blackboard,
 artifact, or similar liveness checks. Start the timer when a workflow process
-starts or resumes. If no event-driven signal arrives, perform one proactive
-inspection when the interval elapses, then restart the timer. Handle process
-output, completion, errors, HumanTasks, and other event-driven signals
-immediately; if the process remains active afterward, restart the timer. Stop
-the timer when the command exits, the workflow reaches a user-owned handoff or
-`done`, or execution stops on an error. Host-required user communication may
-occur more often but must not trigger extra workflow polling.
+starts or resumes, and apply the full confirmed interval before the very first
+proactive inspection; there is no shorter startup or warm-up cadence. An empty
+early tool yield, session handle, deferred operation id, or generic "still
+running" response is transport state rather than an event-driven signal and
+must not cause a sub-interval status or artifact poll. Continue waiting for the
+remaining interval on the same deferred operation. If no substantive signal
+arrives, perform one proactive inspection when the interval elapses, then
+restart the timer.
+
+Every proactive inspection must capture and print the current system time with
+the result, and the corresponding user update must begin with that same
+timestamp. Handle substantive lifecycle output, completion, errors, HumanTasks,
+and other event-driven signals immediately; if the process remains active
+afterward, restart the timer. Stop the timer when the command exits, the
+workflow reaches a user-owned handoff or `done`, or execution stops on an error.
+Host-required user communication may occur more often but must not trigger
+extra workflow polling.
 
 Before proposing the worktree choice, detect whether the target folder is
 already a Git repository. When it is not:
