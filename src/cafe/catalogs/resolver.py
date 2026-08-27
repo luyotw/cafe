@@ -89,7 +89,7 @@ def discover_project_roots(
         ).resolve()
         canonical = common_git.parent if common_git.name == ".git" else active
         return ProjectRoots(active=active, canonical=canonical)
-    except (OSError, ValueError):
+    except (OSError, TypeError, ValueError):
         root = _nearest_project_root(start)
         return ProjectRoots(active=root, canonical=root)
 

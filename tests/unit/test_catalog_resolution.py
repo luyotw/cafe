@@ -124,3 +124,18 @@ def test_git_root_discovery_keeps_active_and_canonical_roots_distinct(tmp_path: 
     roots = discover_project_roots(active, git_runner=git_runner)
     assert roots.active == active
     assert roots.canonical == canonical
+
+
+def test_git_root_discovery_falls_back_when_runner_returns_non_path(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    (project / ".cafe").mkdir(parents=True)
+
+    roots = discover_project_roots(
+        project,
+        git_runner=lambda _args, _cwd: object(),  # type: ignore[return-value]
+    )
+
+    assert roots.active == project
+    assert roots.canonical == project
