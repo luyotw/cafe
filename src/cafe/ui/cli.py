@@ -51,7 +51,6 @@ from cafe.ui.chat import get_chat_next_step_path as _compat_get_chat_next_step_p
 from cafe.ui.display import Display
 from cafe.ui.init_helpers import (
     check_available_clis,
-    copy_agents_to_local,
     copy_templates_to_local,
     list_available_agents,
 )
@@ -665,30 +664,28 @@ def _get_version() -> str:
 
 
 def _ensure_default_content(cafe_dir: Path) -> None:
-    """Copy agent and template files into local .cafe directory.
+    """Copy template files into the local .cafe directory.
 
-    Copies from global custom (~/.cafe/) and system default (src/cafe/data/)
-    directories. Global custom files take precedence over system defaults.
+    Agents resolve dynamically through the project/Global/builtin catalog and
+    are deliberately not materialized as project snapshots.
 
     Args:
         cafe_dir: Path to .cafe directory
     """
-    # Copy agents and templates to local .cafe
-    agent_results = copy_agents_to_local(cafe_dir)
     template_results = copy_templates_to_local(cafe_dir)
 
-    # Count results
-    agent_success = sum(1 for _, _, success in agent_results if success)
-    agent_failed = sum(1 for _, _, success in agent_results if not success)
     template_success = sum(1 for _, _, success in template_results if success)
     template_failed = sum(1 for _, _, success in template_results if not success)
 
-    # Display summary
-    if agent_success > 0 or template_success > 0:
-        console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s) and {template_success} template(s)")
+    if template_success > 0:
+        console.print(
+            f"  [green]✓[/green] Updated .cafe directory with {template_success} template(s)"
+        )
 
-    if agent_failed > 0 or template_failed > 0:
-        console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed + template_failed} file(s)")
+    if template_failed > 0:
+        console.print(
+            f"  [yellow]⚠[/yellow] Warning: Failed to copy {template_failed} file(s)"
+        )
 
 
 def _sync_lifecycle_runtime() -> None:
@@ -1058,16 +1055,6 @@ def agent_edit() -> None:
             console.print(f"[green]✓[/green] Agent updated successfully: ~/{relative_path}")
         except ValueError:
             console.print(f"[green]✓[/green] Agent updated successfully: {agent_file}")
-
-        # Auto-sync agents to local .cafe directory
-        from cafe.ui.init_helpers import sync_agents
-        cafe_dir = Path(".cafe")
-        if cafe_dir.exists():
-            agent_success, agent_failed = sync_agents(cafe_dir)
-            if agent_success > 0:
-                console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s)")
-            if agent_failed > 0:
-                console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed} agent file(s)")
 
     except subprocess.CalledProcessError:
         console.print("[red]Error: Failed to edit agent[/red]")

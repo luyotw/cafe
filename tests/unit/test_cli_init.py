@@ -23,6 +23,7 @@ def test_init_creates_only_project_owned_configuration(tmp_path: Path, monkeypat
     assert result.exit_code == 0, result.stdout
     config = yaml.safe_load((tmp_path / ".cafe" / "config.yaml").read_text())
     assert config["settings"]["playbook"] == "standard"
+    assert not (tmp_path / ".cafe" / "agents").exists()
     assert not (tmp_path / ".cafe" / "phases.yaml").exists()
     assert not (tmp_path / ".cafe" / "crew.yaml").exists()
 
@@ -38,6 +39,7 @@ def test_init_non_interactive_omits_repository_playbook(tmp_path: Path, monkeypa
     assert result.exit_code == 0, result.stdout
     config = yaml.safe_load((tmp_path / ".cafe" / "config.yaml").read_text())
     assert config == {"settings": {"auto_update": True}}
+    assert not (tmp_path / ".cafe" / "agents").exists()
     prompt_confirm.assert_not_called()
     prompt_list.assert_not_called()
 
