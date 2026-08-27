@@ -689,6 +689,19 @@ class BlackboardStore:
         state.capability_receipts.append(dict(receipt))
         self.save(state)
 
+    def upsert_capability_receipt(self, state: BlackboardState, receipt: Dict[str, Any]) -> None:
+        """Persist one evolving attempt receipt without duplicating its audit identity."""
+        attempt_id = str(receipt.get("notification_attempt_id") or "")
+        if not attempt_id:
+            raise ValueError("notification_attempt_id is required for receipt upsert")
+        for index, existing in enumerate(state.capability_receipts):
+            if str(existing.get("notification_attempt_id") or "") == attempt_id:
+                state.capability_receipts[index] = dict(receipt)
+                self.save(state)
+                return
+        state.capability_receipts.append(dict(receipt))
+        self.save(state)
+
     def set_current_step(self, state: BlackboardState, step: str) -> None:
         state.current_step = step
         self.save(state)

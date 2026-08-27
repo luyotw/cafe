@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.error import URLError
 
 import pytest
@@ -62,7 +63,16 @@ def _slack_request(**overrides: object) -> dict[str, object]:
 
 
 def _set_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
-    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+    import cafe.core.human_task_notifications as notification_mod
+
+    monkeypatch.setattr(notification_mod, "_trusted_user_home", lambda: home)
+
+
+def _write_credential(home: Path, value: str = VALID_WEBHOOK) -> Path:
+    credential = home / ".slack-webhook"
+    credential.write_text(value, encoding="utf-8")
+    credential.chmod(0o600)
+    return credential
 
 
 def test_actionable_message_exposes_task_journey_without_credentials() -> None:
@@ -91,7 +101,7 @@ def test_credential_resolver_reads_only_the_fixed_user_file(
     project = tmp_path / "project"
     home.mkdir()
     project.mkdir()
-    (home / ".slack-webhook").write_text(VALID_WEBHOOK, encoding="utf-8")
+    _write_credential(home)
     (project / ".slack-webhook").write_text(
         "https://hooks.slack.com/services/PROJECT/REDIRECT/value", encoding="utf-8"
     )
@@ -100,6 +110,63 @@ def test_credential_resolver_reads_only_the_fixed_user_file(
     _set_home(monkeypatch, home)
 
     assert load_slack_webhook_url() == VALID_WEBHOOK
+
+
+def test_credential_resolver_ignores_home_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Unit Test 5: HOME cannot select a project-adjacent credential."""
+    trusted_home = tmp_path / "trusted-home"
+    injected_home = tmp_path / "project" / "home"
+    trusted_home.mkdir()
+    injected_home.mkdir(parents=True)
+    _write_credential(trusted_home)
+    _write_credential(
+        injected_home,
+        "https://hooks.slack.com/services/PROJECT/REDIRECT/value",
+    )
+    monkeypatch.setenv("HOME", str(injected_home))
+    _set_home(monkeypatch, trusted_home)
+
+    assert load_slack_webhook_url() == VALID_WEBHOOK
+
+
+@pytest.mark.parametrize("unsafe_kind", ["mode", "owner", "symlink"])
+def test_credential_resolver_rejects_unsafe_user_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, unsafe_kind: str
+) -> None:
+    """Unit Test 5: the fixed credential must be private, regular, and unsymlinked."""
+    home = tmp_path / "home"
+    home.mkdir()
+    credential = home / ".slack-webhook"
+    if unsafe_kind in {"mode", "owner"}:
+        _write_credential(home)
+        if unsafe_kind == "mode":
+            credential.chmod(0o644)
+        else:
+            import cafe.core.human_task_notifications as notification_mod
+
+            metadata = credential.stat()
+            monkeypatch.setattr(
+                notification_mod.os,
+                "fstat",
+                lambda _descriptor: SimpleNamespace(
+                    st_mode=metadata.st_mode,
+                    st_uid=metadata.st_uid + 1,
+                    st_nlink=metadata.st_nlink,
+                ),
+            )
+    else:
+        target = tmp_path / "project-credential"
+        target.write_text(VALID_WEBHOOK, encoding="utf-8")
+        target.chmod(0o600)
+        credential.symlink_to(target)
+    _set_home(monkeypatch, home)
+
+    with pytest.raises(SlackNotificationError) as exc:
+        load_slack_webhook_url()
+
+    assert exc.value.code == "slack_credentials_unsafe"
 
 
 @pytest.mark.parametrize(
@@ -122,7 +189,7 @@ def test_credential_resolver_fails_closed(
     home = tmp_path / "home"
     home.mkdir()
     if credential is not None:
-        (home / ".slack-webhook").write_text(credential, encoding="utf-8")
+        _write_credential(home, credential)
     _set_home(monkeypatch, home)
 
     with pytest.raises(SlackNotificationError) as exc:
@@ -152,13 +219,13 @@ def test_outbound_adapter_classifies_delivery_outcomes(
 
     requests = []
 
-    def _urlopen(request, *, timeout: float):
+    def _open_slack_request(request, *, timeout: float):
         requests.append((request, timeout))
         if raised is not None:
             raise raised
         return response
 
-    monkeypatch.setattr(notification_mod, "urlopen", _urlopen)
+    monkeypatch.setattr(notification_mod, "_open_slack_request", _open_slack_request)
     message = build_human_task_message(
         repository="openfunltd/cafe",
         workflow_id="workflow-one",
@@ -179,6 +246,37 @@ def test_outbound_adapter_classifies_delivery_outcomes(
 
     assert exc.value.code == expected_code
     assert "secret-value" not in str(exc.value)
+
+
+def test_outbound_adapter_installs_a_redirect_rejecting_opener(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unit Test 5: the fixed Slack destination remains fixed after HTTP responses."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    handlers = []
+
+    class _Opener:
+        def open(self, _request, *, timeout: float):
+            assert timeout == 4.0
+            return _SlackResponse()
+
+    def _build_opener(*items):
+        handlers.extend(items)
+        return _Opener()
+
+    monkeypatch.setattr(notification_mod, "build_opener", _build_opener)
+    message = build_human_task_message(
+        repository="openfunltd/cafe",
+        workflow_id="workflow-one",
+        task_id="task-one",
+        reason="Review the implementation plan.",
+    )
+
+    post_slack_notification(VALID_WEBHOOK, message, timeout_sec=4.0)
+
+    assert len(handlers) == 1
+    assert handlers[0].redirect_request(None, None, 302, "Found", {}, "https://evil.test") is None
 
 
 @pytest.mark.parametrize(
@@ -205,16 +303,16 @@ def test_capability_receipts_classify_failures_without_secret_material(
     home = tmp_path / "home"
     home.mkdir()
     if credential is not None:
-        (home / ".slack-webhook").write_text(credential, encoding="utf-8")
+        _write_credential(home, credential)
     _set_home(monkeypatch, home)
 
-    def _urlopen(_request, *, timeout: float):
+    def _open_slack_request(_request, *, timeout: float):
         del timeout
         if raised is not None:
             raise raised
         return response
 
-    monkeypatch.setattr(notification_mod, "urlopen", _urlopen)
+    monkeypatch.setattr(notification_mod, "_open_slack_request", _open_slack_request)
     registry = load_capability_registry(default_capability_definition_dirs(tmp_path))
 
     run = run_capability_request(
@@ -238,9 +336,13 @@ def test_capability_receipt_records_success_and_policy_denial(
 
     home = tmp_path / "home"
     home.mkdir()
-    (home / ".slack-webhook").write_text(VALID_WEBHOOK, encoding="utf-8")
+    _write_credential(home)
     _set_home(monkeypatch, home)
-    monkeypatch.setattr(notification_mod, "urlopen", lambda _request, *, timeout: _SlackResponse())
+    monkeypatch.setattr(
+        notification_mod,
+        "_open_slack_request",
+        lambda _request, *, timeout: _SlackResponse(),
+    )
     registry = load_capability_registry(default_capability_definition_dirs(tmp_path))
 
     successful = run_capability_request(

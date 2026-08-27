@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.error import URLError
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from cafe.core.blackboard import BlackboardStore, HandoffOwner
@@ -40,7 +41,16 @@ class _SlackResponse:
 
 
 def _set_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
-    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+    import cafe.core.human_task_notifications as notification_mod
+
+    monkeypatch.setattr(notification_mod, "_trusted_user_home", lambda: home)
+
+
+def _write_credential(home: Path, value: str = VALID_WEBHOOK) -> Path:
+    credential = home / ".slack-webhook"
+    credential.write_text(value, encoding="utf-8")
+    credential.chmod(0o600)
+    return credential
 
 
 def _pause_for_output_review(issue_dir: Path, *, response: str = "ready_for_review"):
@@ -68,15 +78,15 @@ def test_clean_repository_notification_succeeds(
     issue_dir = repo_root / ".cafe" / "issues" / "success"
     home = tmp_path / "home-success"
     home.mkdir()
-    (home / ".slack-webhook").write_text(VALID_WEBHOOK, encoding="utf-8")
+    _write_credential(home)
     _set_home(monkeypatch, home)
     posts = []
 
-    def _urlopen(request, *, timeout: float):
+    def _open_slack_request(request, *, timeout: float):
         posts.append((request, timeout))
         return _SlackResponse()
 
-    monkeypatch.setattr(notification_mod, "urlopen", _urlopen)
+    monkeypatch.setattr(notification_mod, "_open_slack_request", _open_slack_request)
 
     result = _pause_for_output_review(issue_dir)
 
@@ -90,6 +100,7 @@ def test_clean_repository_notification_succeeds(
     assert state.current_step == "user"
     assert len(posts) == 1
     assert posts[0][0].full_url == VALID_WEBHOOK
+    assert posts[0][1] == 5.0
     assert repo_root.name in payload["text"]
     assert task.workflow_id in payload["text"]
     assert task.id in payload["text"]
@@ -116,12 +127,12 @@ def test_project_content_cannot_redirect_or_gain_notification_authority(
     project_hook.chmod(0o755)
     home = tmp_path / "home-redirect"
     home.mkdir()
-    (home / ".slack-webhook").write_text(VALID_WEBHOOK, encoding="utf-8")
+    _write_credential(home)
     _set_home(monkeypatch, home)
     posts = []
     monkeypatch.setattr(
         notification_mod,
-        "urlopen",
+        "_open_slack_request",
         lambda request, *, timeout: posts.append((request, timeout)) or _SlackResponse(),
     )
 
@@ -144,6 +155,49 @@ def test_project_content_cannot_redirect_or_gain_notification_authority(
     assert "integration-secret" not in payload_text
     assert "integration-secret" not in receipt_text
     assert "integration-secret" not in task_text
+
+
+def test_project_playbook_named_standard_cannot_gain_notification_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Integration 2: loader provenance, not mutable playbook ID, gates authority."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    repo_root = tmp_path / "project-standard"
+    issue_dir = repo_root / ".cafe" / "issues" / "project-standard"
+    project_playbooks = repo_root / ".cafe" / "playbooks"
+    project_playbooks.mkdir(parents=True)
+    loader = PlaybookLoader(project_root=repo_root, global_root=tmp_path / "global")
+    builtin = loader.load("standard")
+    builtin["steps"]["spec"]["initial_input"].pop("legacy_presentation", None)
+    (project_playbooks / "standard.yaml").write_text(
+        yaml.safe_dump(dict(builtin), sort_keys=False),
+        encoding="utf-8",
+    )
+    project_standard = loader.load("standard")
+    posts = []
+    monkeypatch.setattr(
+        notification_mod,
+        "_open_slack_request",
+        lambda request, *, timeout: posts.append((request, timeout)) or _SlackResponse(),
+    )
+
+    BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=project_standard,
+        executor=lambda *_args: StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        ),
+    ).run(start_step="spec")
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    assert task.status is HumanTaskStatus.PENDING
+    assert posts == []
+    assert state.capability_receipts == []
 
 
 @pytest.mark.parametrize(
@@ -171,19 +225,19 @@ def test_notification_failure_is_recoverable_through_normal_task_commands(
     home = tmp_path / f"home-{case}"
     home.mkdir()
     if credential is not None:
-        (home / ".slack-webhook").write_text(credential, encoding="utf-8")
+        _write_credential(home, credential)
     _set_home(monkeypatch, home)
 
     if case == "transport":
         monkeypatch.setattr(
             notification_mod,
-            "urlopen",
+            "_open_slack_request",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(URLError("offline")),
         )
     else:
         monkeypatch.setattr(
             notification_mod,
-            "urlopen",
+            "_open_slack_request",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 AssertionError("denied credentials must not reach HTTPS")
             ),

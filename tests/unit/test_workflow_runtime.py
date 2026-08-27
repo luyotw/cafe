@@ -1869,7 +1869,7 @@ def test_runtime_materializes_one_declared_task_and_recovers_it_after_restart(
     assert request["args"]["repository"] == tmp_path.name
 
 
-def test_runtime_notifies_human_owned_creation_but_not_nonstandard_tasks(
+def test_runtime_notifies_trusted_human_owned_creation_but_not_spoofed_standard_tasks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Both creation paths use the registered capability, gated to standard."""
@@ -1909,19 +1909,22 @@ def test_runtime_notifies_human_owned_creation_but_not_nonstandard_tasks(
             },
         }
 
+    trusted_playbook = PlaybookLoader().load("standard")
+    trusted_playbook.clear()
+    trusted_playbook.update(_human_playbook("standard"))
     standard_dir = tmp_path / ".cafe" / "issues" / "human-standard"
     standard = BlackboardWorkflowRuntime(
         issue_dir=standard_dir,
-        playbook=_human_playbook("standard"),
+        playbook=trusted_playbook,
         executor=lambda *_args: (_ for _ in ()).throw(AssertionError("human step ran agent")),
     )
     standard.run(start_step="approval")
     standard.run(max_transitions=2)
 
-    project_dir = tmp_path / ".cafe" / "issues" / "human-project"
+    project_dir = tmp_path / ".cafe" / "issues" / "spoofed-standard"
     BlackboardWorkflowRuntime(
         issue_dir=project_dir,
-        playbook=_human_playbook("project"),
+        playbook=_human_playbook("standard"),
         executor=lambda *_args: (_ for _ in ()).throw(AssertionError("human step ran agent")),
     ).run(start_step="approval")
 
@@ -1929,6 +1932,7 @@ def test_runtime_notifies_human_owned_creation_but_not_nonstandard_tasks(
     standard_task = HumanTaskRecordStore(standard_dir).tasks()[0]
     project_task = HumanTaskRecordStore(project_dir).tasks()[0]
     assert calls[0]["capability_request"]["args"]["task_id"] == standard_task.id
+    assert calls[0]["timeout_sec"] == 5.0
     assert project_task.id != standard_task.id
     assert BlackboardStore(project_dir).load_or_create("approval").capability_receipts == []
 
@@ -1978,6 +1982,113 @@ def test_notification_failure_preserves_pending_task_and_user_handoff(
     assert receipt["success"] is False
     assert receipt["workflow_id"] == task.workflow_id
     assert receipt["task_id"] == task.id
+
+
+def test_runtime_recovers_notification_when_task_commit_precedes_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit Tests 7-8: recovery repairs a durable task with no begun attempt."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "notification-before-attempt-stop"
+    playbook = PlaybookLoader().load("standard")
+
+    def _executor(*_args: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        )
+
+    interrupted = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=_executor,
+    )
+    monkeypatch.setattr(
+        interrupted,
+        "_notify_new_human_task",
+        lambda _task: (_ for _ in ()).throw(SystemExit("simulated process stop")),
+    )
+    with pytest.raises(SystemExit, match="simulated process stop"):
+        interrupted.run(start_step="spec")
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    assert BlackboardStore(issue_dir).load_or_create("spec").capability_receipts == []
+    calls = []
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: calls.append(kwargs)
+        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+    )
+
+    BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("standard"),
+        executor=_executor,
+    ).run(start_step="spec")
+
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    assert len(calls) == 1
+    assert len(state.capability_receipts) == 1
+    assert state.capability_receipts[0]["task_id"] == task.id
+
+
+def test_runtime_audits_interrupted_attempt_without_duplicate_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit Tests 7-8: a begun attempt is durable before I/O and never duplicated."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "notification-after-dispatch-stop"
+
+    def _executor(*_args: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        )
+
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+
+    def _stop_after_attempt_begins(**_kwargs: object):
+        receipt = BlackboardStore(issue_dir).load_or_create("spec").capability_receipts[0]
+        assert receipt["outcome"] == "attempting"
+        raise SystemExit("simulated process stop")
+
+    monkeypatch.setattr(runtime_mod, "run_capability_request", _stop_after_attempt_begins)
+    with pytest.raises(SystemExit, match="simulated process stop"):
+        BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=PlaybookLoader().load("standard"),
+            executor=_executor,
+        ).run(start_step="spec")
+
+    dispatches = []
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: dispatches.append(kwargs)
+        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+    )
+    BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("standard"),
+        executor=_executor,
+    ).run(start_step="spec")
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    assert dispatches == []
+    assert len(state.capability_receipts) == 1
+    assert state.capability_receipts[0]["code"] == "slack_notification_interrupted"
+    assert state.capability_receipts[0]["task_id"] == task.id
 
 
 def test_runtime_records_non_actionable_configuration_error_for_bad_task_binding(

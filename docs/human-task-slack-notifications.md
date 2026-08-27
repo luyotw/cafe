@@ -25,7 +25,9 @@ project hook, task, agent response, or environment variable.
 3. Put only the channel-bound Incoming Webhook URL in that file, on one line.
    The supported form is `https://hooks.slack.com/services/...`. Never commit
    this file or copy its value into `.cafe/config.yaml`, a playbook, a task, or
-   a script.
+   a script. CAFE resolves the login account's home directory independently of
+   `HOME` and rejects credential files that are symlinks, non-regular files,
+   owned by another user, hard-linked, or accessible by group/other users.
 4. Run the built-in `standard` workflow normally. Do not invoke a notification
    script or synthetic hook. When CAFE durably creates a real pending
    HumanTask, such as an output-review task, it makes one immediate attempt.
@@ -55,7 +57,8 @@ network effect is fixed to `hooks.slack.com`, and its symbolic credential is
 
 The trusted package adapter reads `~/.slack-webhook` only after the capability
 request passes validation and policy. It accepts HTTPS Slack Incoming Webhook
-URLs only. The URL is used as the outbound request destination but is not put in
+URLs only, rejects redirects, and bounds the connection attempt to five
+seconds. The URL is used as the outbound request destination but is not put in
 the message, repository, HumanTask record, project-hook input, log, or receipt.
 Project-authored hooks remain sandboxed and never inherit this capability or
 credential.
@@ -81,9 +84,10 @@ Interpret the stable fields as follows:
 | --- | --- | --- |
 | Successful | `success: true`, `outcome: success` | Slack returned HTTP 200 with `ok`. |
 | Denied | `success: false`, decision outcome `deny` | The exact request failed registered argument, effect, credential, permission, or package policy checks; the adapter did not run. |
-| Missing or unreadable credential | code `slack_credentials_missing`, `slack_credentials_empty`, or `slack_credentials_unreadable` | Repair the fixed user credential file and its permissions. |
+| Missing or unreadable credential | code `slack_credentials_missing`, `slack_credentials_empty`, `slack_credentials_unreadable`, or `slack_credentials_unsafe` | Repair the fixed user credential file, ownership, and permissions. |
 | Invalid credential | code `slack_credentials_invalid` | Replace the file contents with a valid channel-bound Slack HTTPS Incoming Webhook URL. |
 | Slack/transport failure | code `slack_http_error`, `slack_response_not_ok`, `slack_timeout`, or `slack_transport_error` | Slack rejected the post or could not be reached. |
+| Interrupted | code `slack_notification_interrupted` | CAFE durably began an attempt but stopped before its final outcome could be recorded; it does not resend because Slack may already have accepted the post. |
 | Internal fail-closed error | code `slack_notification_internal_error` | The trusted path could not complete evaluation; inspect local installation/runtime health. |
 
 ## Recover safely
@@ -97,9 +101,13 @@ cafe task inspect <task-id>
 cafe task complete <task-id>
 ```
 
-Fix credentials or connectivity before the next HumanTask is created. CAFE
-does not automatically retry an existing task or report a failed attempt as a
-success, so the receipt remains the accurate record of that attempt.
+If a process stops after the task is durable but before an attempt begins, the
+next workflow resume performs the missing attempt. Once the attempt has begun,
+CAFE records that state before outbound I/O; an interrupted attempt is not sent
+again because Slack Incoming Webhooks offer no idempotent resend contract. Fix
+credentials or connectivity before the next HumanTask is created. CAFE does
+not report a failed or interrupted attempt as a success, so the receipt remains
+the accurate record of that attempt.
 
 ## Scope
 

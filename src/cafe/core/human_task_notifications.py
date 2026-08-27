@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 SLACK_WEBHOOK_FILENAME = ".slack-webhook"
 SLACK_WEBHOOK_HOST = "hooks.slack.com"
+MAX_CREDENTIAL_BYTES = 8192
 
 
 class SlackNotificationError(RuntimeError):
@@ -90,18 +93,65 @@ def _validate_slack_webhook_url(raw_url: str) -> str:
     return raw_url
 
 
+def _trusted_user_home() -> Path:
+    """Resolve the login account home without consulting the mutable HOME variable."""
+    if os.name != "posix":  # pragma: no cover - Windows has no pwd database.
+        return Path.home()
+    import pwd
+
+    return Path(pwd.getpwuid(os.getuid()).pw_dir)
+
+
 def load_slack_webhook_url() -> str:
     """Read and validate only the fixed user-owned Slack credential file."""
-    credential_file = Path.home() / SLACK_WEBHOOK_FILENAME
+    credential_file = _trusted_user_home() / SLACK_WEBHOOK_FILENAME
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        webhook_url = credential_file.read_text(encoding="utf-8").strip()
+        descriptor = os.open(credential_file, flags)
     except FileNotFoundError as exc:
         raise SlackNotificationError("validation_error", "slack_credentials_missing") from exc
     except OSError as exc:
+        if credential_file.is_symlink():
+            raise SlackNotificationError("validation_error", "slack_credentials_unsafe") from exc
         raise SlackNotificationError("validation_error", "slack_credentials_unreadable") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        private_mode = stat.S_IMODE(metadata.st_mode) & 0o077 == 0
+        owned_by_user = not hasattr(os, "getuid") or metadata.st_uid == os.getuid()
+        if not (
+            stat.S_ISREG(metadata.st_mode)
+            and private_mode
+            and owned_by_user
+            and metadata.st_nlink == 1
+        ):
+            raise SlackNotificationError("validation_error", "slack_credentials_unsafe")
+        with os.fdopen(descriptor, encoding="utf-8") as credential_stream:
+            descriptor = -1
+            webhook_url = credential_stream.read(MAX_CREDENTIAL_BYTES + 1).strip()
+    except UnicodeError as exc:
+        raise SlackNotificationError("validation_error", "slack_credentials_invalid") from exc
+    except OSError as exc:
+        raise SlackNotificationError("validation_error", "slack_credentials_unreadable") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if len(webhook_url.encode("utf-8")) > MAX_CREDENTIAL_BYTES:
+        raise SlackNotificationError("validation_error", "slack_credentials_invalid")
     if not webhook_url:
         raise SlackNotificationError("validation_error", "slack_credentials_empty")
     return _validate_slack_webhook_url(webhook_url)
+
+
+class _RejectRedirectHandler(HTTPRedirectHandler):
+    """Keep every request on the manifest-declared Slack destination."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        del req, fp, code, msg, headers, newurl
+        return None
+
+
+def _open_slack_request(request: Request, *, timeout: float):
+    return build_opener(_RejectRedirectHandler()).open(request, timeout=timeout)
 
 
 def post_slack_notification(
@@ -119,7 +169,7 @@ def post_slack_notification(
         method="POST",
     )
     try:
-        with urlopen(
+        with _open_slack_request(
             request, timeout=timeout_sec
         ) as response:  # noqa: S310 - URL is fixed/validated.
             status = response.status

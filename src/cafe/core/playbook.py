@@ -720,9 +720,8 @@ class PlaybookDefinition(BaseModel):
             self.entry_point = next(iter(self.steps.keys()))
 
         def declares_workflow_feedback(step: StepConfig) -> bool:
-            return (
-                "input_artifacts" in step.model_fields_set
-                and "workflow_feedback" in (step.input_artifacts or [])
+            return "input_artifacts" in step.model_fields_set and "workflow_feedback" in (
+                step.input_artifacts or []
             )
 
         def github_pr_feedback_source_stages(step: StepConfig) -> list[str]:
@@ -736,10 +735,7 @@ class PlaybookDefinition(BaseModel):
                 )
                 if any(
                     hook == "GitHubPRFeedbackSource"
-                    or (
-                        isinstance(hook, dict)
-                        and hook.get("name") == "GitHubPRFeedbackSource"
-                    )
+                    or (isinstance(hook, dict) and hook.get("name") == "GitHubPRFeedbackSource")
                     for hook in hooks
                 )
             ]
@@ -785,10 +781,7 @@ class PlaybookDefinition(BaseModel):
                             f"steps.{step_name}.human_tasks feedback_delivery target "
                             f"{delivery_target!r} must declare workflow_feedback in input_artifacts"
                         )
-            if (
-                behavior.publish_confirmation
-                and "cafe.pr.publish" not in step.capability_requests
-            ):
+            if behavior.publish_confirmation and "cafe.pr.publish" not in step.capability_requests:
                 raise ValueError(
                     f"steps.{step_name}.behavior.publish_confirmation requires "
                     "the cafe.pr.publish capability request"
@@ -905,7 +898,26 @@ class LoadedPlaybook:
     warnings: List[str]
 
     def as_dict(self) -> Dict:
-        return self.model.model_dump(exclude_none=True)
+        return PlaybookData(
+            self.model.model_dump(exclude_none=True),
+            source=self.source,
+            path=self.path,
+        )
+
+
+class PlaybookData(dict):
+    """Validated playbook data retaining trusted loader provenance out of band."""
+
+    def __init__(
+        self,
+        *args: Any,
+        source: str = "unknown",
+        path: Optional[Path] = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.source = source
+        self.path = path
 
 
 def normalize_playbook_yaml(data: Dict) -> Dict:
@@ -1060,8 +1072,7 @@ def _validate_initial_input_declarations(model: PlaybookDefinition, *, source: s
             raise ValueError(f"{field_path} is only allowed on entry_point {model.entry_point!r}")
         if declaration.legacy_presentation and (
             source != "builtin"
-            or model.playbook.id
-            not in {"standard", "standard-qa", "simple", "tdd", "tdd-qa"}
+            or model.playbook.id not in {"standard", "standard-qa", "simple", "tdd", "tdd-qa"}
         ):
             raise ValueError(
                 f"{field_path}.legacy_presentation is reserved for bundled development playbooks"
@@ -1288,6 +1299,7 @@ def _validate_feedback_target_prompt_inputs(
     skill_loader: SkillLoader,
 ) -> None:
     """Ensure routed feedback is exposed to every possible target skill."""
+
     def receives_workflow_feedback(skill_name: str) -> bool:
         return any(
             mapping.artifacts[0] == "workflow_feedback"
@@ -1311,9 +1323,7 @@ def _validate_feedback_target_prompt_inputs(
         for source, target_name in targets:
             target = model.steps[target_name]
             selectors = (
-                [target.skill]
-                if isinstance(target.skill, str)
-                else list(target.skill.values())
+                [target.skill] if isinstance(target.skill, str) else list(target.skill.values())
             )
             missing = [
                 canonical_skill_name(skill_name)
