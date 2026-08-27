@@ -137,6 +137,20 @@ Do not reuse another issue's contract or a repository proposal silently. For an
 existing issue, honor its confirmed contract and reconfirm only when it is
 missing, invalid, or stale.
 
+### Complete runtime and catalog preflight
+
+Before rendering a new contract, and before resuming one that is stale, follow
+`project_global_skill_sync.md`. Run `cafe update check --json` and
+`cafe catalog check --json`, then record both bounded results. Identical content
+and a catalog with no eligible project entries are silent. An unavailable
+runtime check is visible and recorded but continues with the installed version.
+
+Runtime installation and project-to-Global catalog publication are separate
+approval scopes. Bind each decision to its reported comparison token. After an
+approved change, run both checks again and compare effective workflow digests.
+When effective behavior changed, present a freshly rendered kickoff contract
+and obtain confirmation before preparation or workflow execution.
+
 ### Derive confirmation gates
 
 1. Run:
@@ -188,6 +202,8 @@ python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --playbook-rationale "<source/evidence, QA decision, and rejected alternative>" \
   --issue-nature <nature> --issue-scale <small|medium|large> \
   --model-adjustment-authority <driver_autonomous|user_approval_required> \
+  --update-preflight '<bounded runtime-update JSON>' \
+  --catalog-preflight '<bounded all-catalog JSON>' \
   --execution-mode <continuous|single_step> \
   --poll-interval-seconds <positive-integer> \
   --risk-factor "<risk factor; repeat as needed>" \
@@ -301,6 +317,27 @@ for confirmation rather than asking again.
 
   ```yaml
   playbook_id: standard
+  preflight:
+    runtime_update:
+      checked_at: 2026-08-27T12:00:00Z
+      status: current
+      installed_version: 0.3.2
+      latest_version: 0.3.2
+      comparison_token: <content-bound-token>
+      decision: not_needed
+      post_change_evidence: not_applicable
+    catalogs:
+      checked_at: 2026-08-27T12:00:01Z
+      status: identical
+      comparison_token: <content-bound-token>
+      effective_digests:
+        playbook: <digest>
+        phase: <digest>
+        agent: <digest>
+      decision: not_needed
+      post_change_evidence: not_applicable
+    behavior_changed: false
+    reconfirmed_at: null
   confirmation_contract:
     user_required: [spec, plan]
     driver_confirmable: []

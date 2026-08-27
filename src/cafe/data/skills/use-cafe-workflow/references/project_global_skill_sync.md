@@ -1,77 +1,58 @@
-# Project And Global Skill Consistency
+# Runtime And Catalog Preflight
 
-Read this reference before starting or resuming workflow execution. The check is
-read-only and prevents a linked worktree from silently using a stale
-`~/.cafe/skills` copy when the canonical project has a newer `.cafe/skills`
-override.
-
-If Git uses a separate metadata directory and cannot identify the canonical main
-worktree, the check fails closed. Re-run it as
-`python3 <skill-dir>/scripts/project_global_skill_sync.py --project-root <canonical-main-worktree> check`;
-when invoked from a linked worktree in the same repository, its active
-`.cafe/skills` overlay is still applied. Keep that same working directory and
-explicit canonical root for the approved update and post-update check.
-
-## Check before execution
-
-Run from the repository or issue worktree:
+Read this reference before a new kickoff is rendered and before resuming a
+stale kickoff contract. Run both trusted, read-only checks from the canonical
+repository or active linked worktree:
 
 ```bash
-python3 <skill-dir>/scripts/project_global_skill_sync.py check
+cafe update check --json
+cafe catalog check --json
 ```
 
-The script discovers the canonical main worktree through Git's common directory,
-then overlays any `.cafe/skills` present in the active linked worktree. It compares
-only skills that have a project version; global-only skills are outside this
-check. Generated `__pycache__`, `.pyc`, `.pyo`, and `.DS_Store` entries do not
-affect the digest.
+The catalog command compares intentional project entries across playbooks,
+phase skills, and agents against their Global destinations. It resolves the
+canonical repository plus active worktree overlay and reports content-bound
+digests without copying fallback entries into the project.
 
-Route by the JSON `status`:
+## Route the check results
 
-- `identical`: continue without mentioning the check or asking the user.
-- `no_project_skills`: continue without asking; there is no project/global pair
-  to compare.
-- `differences`: list every item using `skill`, `reason`, `project_version`, and
-  `global_version`, retain the reported `comparison_token`, then ask one focused
-  question: whether to update those global copies from the project versions. Do
-  not update before the user explicitly agrees.
+- An update status of `unavailable` must be recorded and clearly warned about,
+  but it must not be described as current and kickoff continues with the
+  installed version.
+- An empty catalog difference list means identical content or no project
+  entries are eligible. Stay silent and do not ask a catalog question.
+- When catalog differences exist, show one bounded report covering all three
+  catalog kinds and ask one combined catalog decision for the exact selected
+  entry IDs.
+- A runtime update and a catalog publication are separate approval scopes.
+  Never infer either approval from kickoff confirmation, a generic `continue`,
+  or approval of the other scope.
 
-Do not treat a matching version string as equality. The tree digest, including
-scripts, references, assets, symlink targets, and executable modes, is the
-authoritative comparison.
+Persist each check's timestamp, status, installed/latest versions when
+applicable, comparison token, effective catalog digests, decision, and any
+post-change evidence in the active issue's `preflight` mapping. Reuse a prior
+decision only when the complete bound token is unchanged.
 
-## Apply an approved update
+## Apply only an exact approval
 
-After the user approves the exact listed skills, pass each approved name:
+Use the token and selection the user approved:
 
 ```bash
-python3 <skill-dir>/scripts/project_global_skill_sync.py update \
-  --comparison-token <token-from-the-approved-check> \
-  --skill cafe-example-one \
-  --skill cafe-example-two
+cafe update apply --token <token-from-update-check> --json
+cafe catalog sync-global --token <token-from-catalog-check> \
+  --approve playbook:<name> \
+  --approve phase:<name> \
+  --approve agent:<role>/<name> \
+  --json
 ```
 
-When the initial check required the fail-closed fallback, run the approved
-update and verification from the same linked-worktree directory:
+Do not run either apply command when that scope was declined. Catalog
+publication flows only from the effective project view to matching Global
+paths; it does not modify project content or CLI-native helper-skill installs.
+`cafe skill sync-global` remains a separate helper installation command.
 
-```bash
-python3 <skill-dir>/scripts/project_global_skill_sync.py \
-  --project-root <canonical-main-worktree> update \
-  --comparison-token <token-from-the-approved-check> \
-  --skill cafe-example-one
-python3 <skill-dir>/scripts/project_global_skill_sync.py \
-  --project-root <canonical-main-worktree> check
-```
-
-The token binds the update to the exact project/global digests shown to the user;
-any intervening content change fails closed and requires a new check and answer.
-The update is a replacement of only those global skill folders under a bounded
-10-second lock, with rollback backups retained if automatic restoration cannot complete. It does not
-modify the project copy or CLI-native installed skill directories.
-Re-run `check` afterward. Continue only after the approved names no longer appear in
-`differences`; if the user declines an update, preserve the global copies and
-record that explicit choice before workflow execution.
-
-Never infer approval from kickoff confirmation, a generic `continue`, or an old
-sync decision. A newly detected content difference requires a new explicit
-answer.
+After an approved change, re-run both read-only checks and record the fresh
+results. Compare the effective workflow digests with the pre-change evidence.
+If effective behavior changed, re-render and reconfirm the kickoff contract
+before preparation, start, or resume. If it did not change, retain the
+post-change evidence and continue under the already confirmed contract.

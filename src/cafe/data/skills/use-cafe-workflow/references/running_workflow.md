@@ -7,10 +7,10 @@ unexecuted.
 
 ## Command checklist
 
-- Before any start or resume invocation, follow
-  `project_global_skill_sync.md`: run the read-only project/global skill check,
-  stay silent when it reports `identical` or `no_project_skills`, and ask the
-  user before applying any reported project-to-global update.
+- Before every start or resume, follow `project_global_skill_sync.md`: validate
+  the persisted runtime/catalog preflight against fresh read-only checks, stay
+  silent for unchanged or non-actionable catalogs, and stop for a fresh,
+  separately scoped approval when a comparison token changed.
 
 - Read the confirmed `driver_execution` mapping from the active issue's
   `issue.yaml`. Append `--single-step` to every command example in this
