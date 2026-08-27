@@ -192,6 +192,11 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         context_data.setdefault("timestamp", datetime.now().astimezone().isoformat())
         context_data.pop("end_time", None)
         context_data.pop("status_code", None)
+        # An incomplete iteration may be retried in place. Its previous error
+        # record remains available in error.json, but it must not describe the
+        # new attempt or make a later successful handoff look failed.
+        for key in ("error", "display_error", "error_type", "is_critical"):
+            context_data.pop(key, None)
 
         # Add phase-specific initial data
         if phase_specific_data:

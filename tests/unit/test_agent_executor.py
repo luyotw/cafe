@@ -442,6 +442,28 @@ class TestCodexPermissionExtraction:
 
         assert mock_popen.call_args.kwargs["env"]["CODEX_HOME"] == codex_home
 
+    def test_codex_turn_completed_is_a_durable_stream_terminal_event(self, tmp_path: Path) -> None:
+        """Codex's terminal event completes an iteration-backed stream."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+        streaming_file = tmp_path / "streaming.jsonl"
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"thread.started","thread_id":"abc"}\n',
+            '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n',
+            '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process), patch("sys.platform", "win32"):
+            response = executor.execute("Test prompt", streaming_output_file=str(streaming_file))
+
+        assert response.response == "done"
+        assert response.token_usage.input_tokens == 1
+        assert '"type":"turn.completed"' in streaming_file.read_text(encoding="utf-8")
+
 
 class TestTokenUsageTracking:
     """Test token usage tracking functionality."""
@@ -837,6 +859,7 @@ class TestStreamingExecution:
         mock_process.stdout.readline.side_effect = [
             '{"content": "Hello"}\n',
             '{"session_id": "session-123"}\n',
+            '{"type": "result"}\n',
             "",
         ]
         mock_process.stderr.read.return_value = ""
