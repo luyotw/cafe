@@ -997,22 +997,11 @@ class AgentManager:
         Returns:
             str: Agent file path
         """
-        from pathlib import Path
+        from cafe.catalogs.resolver import CatalogKind, CatalogResolver
 
-        agent_filename = f"{agent_name}.md"
-
-        # Search upward from cwd for .cafe/agents/ (works in worktrees and subdirectories)
-        current = Path.cwd().resolve()
-        while current != current.parent:
-            local_path = current / ".cafe" / "agents" / role / agent_filename
-            if local_path.exists():
-                return str(local_path)
-            current = current.parent
-
-        # Fall back to global ~/.cafe/agents/
-        home_path = Path.home() / ".cafe" / "agents" / role / agent_filename
-        if home_path.exists():
-            return str(home_path)
-
-        # Fall back to system default
-        return f"src/cafe/data/agents/{role}/{agent_name}.md"
+        project_root = Path(cafe_dir).parent if cafe_dir else None
+        resolver = CatalogResolver(project_root=project_root)
+        entry = resolver.resolve(CatalogKind.AGENT, f"{role}/{agent_name}")
+        if entry.source == "builtin":
+            return str(Path("src/cafe/data/agents") / role / f"{agent_name}.md")
+        return str(entry.path)

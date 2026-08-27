@@ -71,48 +71,24 @@ def list_available_agents(role: str) -> List[tuple[str, str, Path, str]]:
         Files identical to system originals are marked "system".
         Priority: local > global > system for name collisions.
     """
-    from cafe.utils.config import get_global_cafe_dir
+    from cafe.catalogs.resolver import CatalogKind, CatalogResolver, content_digest
 
-    agents = {}  # name -> (name, description, file_path, source_type)
-    system_contents = {}  # filename -> content (for comparison)
-
-    # First, collect system agents (from package data)
-    package_data_dir = Path(__file__).parent.parent / "data" / "agents" / role
-    if package_data_dir.exists():
-        for agent_file in package_data_dir.glob("*.md"):
-            parsed = parse_agent_file(agent_file)
-            name = parsed["name"]
-            agents[name] = (name, parsed["description"], agent_file, "system")
-            system_contents[agent_file.name] = agent_file.read_text()
-
-    # Then, collect global agents (override system if name collision)
-    global_agents_dir = get_global_cafe_dir() / "agents" / role
-    if global_agents_dir.exists():
-        for agent_file in global_agents_dir.glob("*.md"):
-            parsed = parse_agent_file(agent_file)
-            name = parsed["name"]
-            if agent_file.name in system_contents and agent_file.read_text() == system_contents[agent_file.name]:
-                agents[name] = (name, parsed["description"], agent_file, "system")
-            else:
-                agents[name] = (name, parsed["description"], agent_file, "custom")
-
-    # Finally, collect local agents by searching upward from cwd
-    current = Path.cwd().resolve()
-    while current != current.parent:
-        local_dir = current / ".cafe" / "agents" / role
-        if local_dir.exists():
-            for agent_file in local_dir.glob("*.md"):
-                parsed = parse_agent_file(agent_file)
-                name = parsed["name"]
-                if agent_file.name in system_contents and agent_file.read_text() == system_contents[agent_file.name]:
-                    agents[name] = (name, parsed["description"], agent_file, "system")
-                else:
-                    agents[name] = (name, parsed["description"], agent_file, "custom")
-            break
-        current = current.parent
-
-    # Return sorted list
-    return sorted(agents.values(), key=lambda x: x[0])
+    resolver = CatalogResolver()
+    agents = []
+    prefix = f"{role}/"
+    builtin_root = resolver.builtin_root / "agents"
+    for entry in resolver.entries([CatalogKind.AGENT]):
+        if not entry.key.startswith(prefix):
+            continue
+        parsed = parse_agent_file(entry.path)
+        source_type = "custom"
+        builtin_path = resolver.candidate_path(CatalogKind.AGENT, entry.key, builtin_root)
+        if entry.source == "builtin" or (
+            builtin_path.is_file() and content_digest(builtin_path) == entry.digest
+        ):
+            source_type = "system"
+        agents.append((parsed["name"], parsed["description"], entry.path, source_type))
+    return sorted(agents, key=lambda item: item[0])
 
 
 def copy_data_directory(source: str, destination: str) -> None:

@@ -9,6 +9,7 @@ from typing import Dict, List, Optional
 
 import yaml
 
+from cafe.catalogs.resolver import CatalogKind, CatalogResolver
 from cafe.skills.contracts import SkillWorkflowContract
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.utils.config import get_global_cafe_dir
@@ -101,9 +102,14 @@ class SkillLoader:
         global_root: Optional[Path] = None,
         builtin_root: Optional[Path] = None,
     ) -> None:
-        self.project_root = project_root or self._find_project_root(Path.cwd())
-        self.global_root = global_root or get_global_cafe_dir()
-        self.builtin_root = builtin_root or (Path(__file__).parent.parent / "data")
+        self.resolver = CatalogResolver(
+            project_root=project_root,
+            global_root=global_root,
+            builtin_root=builtin_root,
+        )
+        self.project_root = self.resolver.project_root
+        self.global_root = self.resolver.global_root
+        self.builtin_root = self.resolver.builtin_root
         self._catalog: Dict[str, SkillCatalogEntry] = {}
 
     @staticmethod
@@ -117,9 +123,8 @@ class SkillLoader:
 
     def _skill_roots(self) -> List[tuple[str, Path]]:
         return [
-            ("builtin", self.builtin_root / "skills"),
-            ("global", self.global_root / "skills"),
-            ("project", self.project_root / ".cafe" / "skills"),
+            (source, root)
+            for source, root, _layer in self.resolver.catalog_roots(CatalogKind.PHASE)
         ]
 
     @staticmethod
