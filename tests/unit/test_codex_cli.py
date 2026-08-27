@@ -122,6 +122,20 @@ class TestCodexCLIBuildCommand:
 
         assert env["CODEX_HOME"] == "/custom/codex-home"
 
+    def test_build_environment_removes_inherited_host_session_controls(
+        self, codex_config, monkeypatch
+    ):
+        """Workflow children must not inherit the parent Codex app-server session."""
+        monkeypatch.setenv("CODEX_REMOTE_PAYLOAD", "parent-launch-payload")
+        monkeypatch.setenv("CODEX_SESSION_ID", "parent-session")
+        monkeypatch.setenv("CODEX_THREAD_ID", "parent-thread")
+
+        env = CodexCLI(codex_config).build_environment()
+
+        assert "CODEX_REMOTE_PAYLOAD" not in env
+        assert "CODEX_SESSION_ID" not in env
+        assert "CODEX_THREAD_ID" not in env
+
 
 class TestCodexCLITranslateAllowedTools:
     """Test translate_allowed_tools()."""
