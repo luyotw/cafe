@@ -3,9 +3,11 @@
 import json
 import subprocess
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 
+from cafe.catalogs.resolver import global_catalog_lock
 from cafe.core.hooks import HookResult
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import AgentCLI
@@ -908,6 +910,65 @@ def test_execute_runs_script_hook_with_schema_and_interpolation(tmp_path: Path) 
     assert event["correlation_id"] == event["receipt"]["correlation_id"]
     assert event["effective_boundary"] == event["receipt"]["boundary"]
     assert event["receipt"]["boundary"]["writable_roots"] == [str(Path.cwd().resolve())]
+
+
+def test_script_hook_holds_catalog_lock_until_the_script_is_snapshotted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loader = _setup_loader(tmp_path)
+    _write_skill_script(
+        loader,
+        skill_name="cafe-plan",
+        script_name="stable.sh",
+        body="#!/bin/sh\necho stable\n",
+    )
+    phase = GenericPhase(loader)
+    resolved = Event()
+    allow_snapshot = Event()
+    writer_entered = Event()
+    errors: list[BaseException] = []
+    original_resolve = phase._resolve_script_path
+
+    def pause_after_resolution(*, skill_name: str, script: str) -> Path:
+        path = original_resolve(skill_name=skill_name, script=script)
+        resolved.set()
+        assert allow_snapshot.wait(timeout=5)
+        return path
+
+    def run_hook() -> None:
+        try:
+            phase.execute(
+                skill_name="cafe-plan",
+                skill_invocation="/plan",
+                shared_skill_invocations=["/cafe-workflow-common"],
+                step_def={
+                    "hooks": {"before_execute": [{"script": "stable.sh", "args": {}}]},
+                    "valid_intents": ["confirmed"],
+                },
+                agent_executor=lambda _prompt: "confirmed",
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    def publish() -> None:
+        with global_catalog_lock(loader.global_root, exclusive=True):
+            writer_entered.set()
+
+    monkeypatch.setattr(phase, "_resolve_script_path", pause_after_resolution)
+    reader = Thread(target=run_hook)
+    writer = Thread(target=publish)
+    reader.start()
+    assert resolved.wait(timeout=5)
+    writer.start()
+    try:
+        assert not writer_entered.wait(timeout=0.2)
+    finally:
+        allow_snapshot.set()
+    reader.join(timeout=5)
+    writer.join(timeout=5)
+
+    assert errors == []
+    assert writer_entered.is_set()
 
 
 def test_execute_rejects_script_hook_path_traversal(tmp_path: Path) -> None:

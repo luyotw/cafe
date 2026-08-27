@@ -225,6 +225,95 @@ def test_preserve_decision_is_shared_by_canonical_and_linked_project_views(
     assert canonical_migrator.publication_blocked_entry_ids() == set()
 
 
+def test_retirement_journals_are_bound_to_the_active_project_view(
+    tmp_path: Path,
+) -> None:
+    canonical = tmp_path / "canonical"
+    linked = tmp_path / "linked"
+    builtin = tmp_path / "builtin"
+    global_root = tmp_path / "global"
+    for root in (canonical, linked, builtin):
+        _agent(root / ".cafe" / "agents" / "developer" / "David.md", "David", "same")
+    builtin_agent = builtin / ".cafe" / "agents" / "developer" / "David.md"
+    target = builtin / "agents" / "developer" / "David.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    builtin_agent.replace(target)
+
+    canonical_migrator = AgentSnapshotMigrator(
+        CatalogResolver(
+            project_root=canonical,
+            canonical_root=canonical,
+            global_root=global_root,
+            builtin_root=builtin,
+        ),
+        is_tracked=lambda _path: False,
+    )
+    linked_migrator = AgentSnapshotMigrator(
+        CatalogResolver(
+            project_root=linked,
+            canonical_root=canonical,
+            global_root=global_root,
+            builtin_root=builtin,
+        ),
+        is_tracked=lambda _path: False,
+    )
+    canonical_preview = canonical_migrator.preview()
+    linked_preview = linked_migrator.preview()
+
+    assert canonical_preview.token != linked_preview.token
+    canonical_result = canonical_migrator.apply(
+        canonical_preview.token, {"agent:developer/David": "retire"}
+    )
+    linked_result = linked_migrator.apply(
+        linked_preview.token, {"agent:developer/David": "retire"}
+    )
+
+    assert not (canonical / ".cafe" / "agents" / "developer" / "David.md").exists()
+    assert not (linked / ".cafe" / "agents" / "developer" / "David.md").exists()
+    assert canonical_result.manifest != linked_result.manifest
+
+
+def test_interrupted_relative_symlink_retirement_resumes_from_recovery_entry(
+    tmp_path: Path,
+) -> None:
+    interrupted = False
+
+    def interrupt_after_move(boundary: str, entry_id: str | None) -> None:
+        nonlocal interrupted
+        if boundary == "after_retire" and not interrupted:
+            interrupted = True
+            raise OSError("injected interruption after symlink move")
+
+    project = tmp_path / "project"
+    role_dir = project / ".cafe" / "agents" / "developer"
+    _agent(project / ".cafe" / "agent-assets" / "David.md", "David", "custom")
+    source = role_dir / "David.md"
+    source.parent.mkdir(parents=True)
+    relative_target = Path("../../agent-assets/David.md")
+    source.symlink_to(relative_target)
+    migrator = AgentSnapshotMigrator(
+        CatalogResolver(
+            project_root=project,
+            canonical_root=project,
+            global_root=tmp_path / "global",
+            builtin_root=tmp_path / "builtin",
+        ),
+        is_tracked=lambda _path: False,
+        failure_injector=interrupt_after_move,
+    )
+    preview = migrator.preview()
+    decisions = {"agent:developer/David": "retire"}
+
+    with pytest.raises(OSError, match="symlink move"):
+        migrator.apply(preview.token, decisions)
+
+    result = migrator.apply(preview.token, decisions)
+
+    assert not source.exists()
+    assert result.retired[0].is_symlink()
+    assert result.retired[0].readlink() == relative_target
+
+
 @pytest.mark.parametrize("changed_action", ["preserve", "retire"])
 def test_resume_revalidates_completed_checkpoint_state(
     tmp_path: Path, changed_action: str

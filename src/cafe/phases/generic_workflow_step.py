@@ -1214,8 +1214,11 @@ class GenericWorkflowStepExecutor(Phase):
         }
         valid_baton_intents = effective_step_handoff_intents(step_def)
         behavior = resolve_step_behavior(playbook, step_name)
+        _agent_source, agent_content = AgentManager.read_agent_file(agent_name, role_dir)
+        materialized_agent = output_file.parent / "context_agent_file.md"
+        self._restore_control_file(materialized_agent, agent_content.encode("utf-8"))
         context = {
-            "agent_file": AgentManager.get_agent_file_path(agent_name, role_dir),
+            "agent_file": self._display_path(materialized_agent),
             "handoff_summary": getattr(blackboard_state, "handoff_summary", ""),
             "blackboard_digest": self._build_blackboard_digest(blackboard_state),
             "issue_dir": self._display_path(self.issue_dir),

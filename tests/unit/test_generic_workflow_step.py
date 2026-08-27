@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cafe.agents.executor import AgentExecutionError
+from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import (
     ArtifactEntry,
     ArtifactKind,
@@ -3106,6 +3107,30 @@ def test_workflow_limits_prompt_inputs_to_step_artifacts(tmp_path: Path) -> None
             agent_name="David",
             output_file=tmp_path / "output.md",
         )
+
+
+def test_build_context_materializes_agent_for_later_external_read(tmp_path: Path) -> None:
+    executor = _make_minimal_executor(tmp_path)
+    state = BlackboardStore(executor.issue_dir).load_or_create("plan")
+    source = tmp_path / "global" / "agents" / "developer" / "David.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("---\nname: David\n---\n\nold guidance\n", encoding="utf-8")
+    output_file = executor.issue_dir / "plan" / "iteration_001" / "output.md"
+
+    with patch.object(AgentManager, "get_agent_file_path", return_value=str(source)):
+        context = executor._build_context(
+            step_name="plan",
+            step_def={"skill": "cafe-plan", "role": "developer"},
+            blackboard_state=state,
+            agent_name="David",
+            output_file=output_file,
+        )
+
+    source.write_text("---\nname: David\n---\n\nnew guidance\n", encoding="utf-8")
+
+    materialized = Path(context["agent_file"])
+    assert materialized != source
+    assert "old guidance" in materialized.read_text(encoding="utf-8")
 
 
 def test_workflow_limits_checklist_inputs_to_step_artifacts(tmp_path: Path) -> None:

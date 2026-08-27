@@ -122,17 +122,21 @@ class AgentSnapshotMigrator:
                 return content_digest(path)
         return "missing"
 
-    @staticmethod
-    def _token(items: list[MigrationItem]) -> str:
-        payload = [
-            {
-                "entry_id": item.entry_id,
-                "digest": item.digest,
-                "fallback_digest": item.fallback_digest,
-                "status": item.status,
-            }
-            for item in items
-        ]
+    def _token(self, items: list[MigrationItem]) -> str:
+        payload = {
+            "canonical_root": str(self.resolver.canonical_root),
+            "project_root": str(self.resolver.project_root),
+            "items": [
+                {
+                    "entry_id": item.entry_id,
+                    "path": str(item.path),
+                    "digest": item.digest,
+                    "fallback_digest": item.fallback_digest,
+                    "status": item.status,
+                }
+                for item in items
+            ],
+        }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
 
@@ -305,7 +309,10 @@ class AgentSnapshotMigrator:
             digest = str(record["digest"])
             action = str(record["action"])
             if action == "preserve":
-                if not source.exists() or content_digest(source) != digest:
+                if (
+                    not self._record_path_exists(source)
+                    or content_digest(source) != digest
+                ):
                     raise StaleMigrationDecision(
                         f"Preserved agent changed during migration: {entry_id}"
                     )
@@ -313,13 +320,19 @@ class AgentSnapshotMigrator:
                 destination = Path(str(record["retired_path"]))
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 if source.exists() or source.is_symlink():
-                    if content_digest(source) != digest or destination.exists():
+                    if (
+                        content_digest(source) != digest
+                        or self._record_path_exists(destination)
+                    ):
                         raise StaleMigrationDecision(
                             f"Retired agent changed during migration: {entry_id}"
                         )
                     os.replace(source, destination)
                     self.failure_injector("after_retire", entry_id)
-                elif not destination.exists() or content_digest(destination) != digest:
+                elif (
+                    not self._record_path_exists(destination)
+                    or content_digest(destination) != digest
+                ):
                     raise StaleMigrationDecision(
                         f"Retired agent state is unrecoverable: {entry_id}"
                     )

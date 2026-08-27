@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import yaml
 
+from cafe.catalogs.resolver import global_catalog_lock
 from cafe.core.blackboard import BlackboardState, BlackboardStore, HandoffIntent
 from cafe.core.capabilities import (
     CAPABILITY_ISSUE_COMMENT_ID,
@@ -24,6 +25,7 @@ from cafe.core.execution_boundary import (
     ExecutionClass,
     ScriptLaunchRequest,
     TrustSource,
+    snapshot_script,
 )
 from cafe.core.hooks import BUILTIN_HOOKS, HookResult
 from cafe.core.hooks.script_schema import validate_script_args_schema
@@ -587,53 +589,71 @@ class GenericPhase:
                     ]
                 )
 
-        script_path = self._resolve_script_path(skill_name=skill_name, script=script)
-        resolved_args = self._resolve_script_args(
-            args_template=args_template,
-            context=context or {},
-            hook_kwargs=hook_kwargs,
-        )
+        with global_catalog_lock(self.skill_loader.global_root):
+            script_path = self._resolve_script_path(skill_name=skill_name, script=script)
+            resolved_args = self._resolve_script_args(
+                args_template=args_template,
+                context=context or {},
+                hook_kwargs=hook_kwargs,
+            )
 
-        validation_errors: list[str] = []
-        if schema is not None:
-            validation_errors = validate_script_args_schema(args=resolved_args, schema=schema)
-            if validation_errors:
-                return HookResult(
-                    continue_pipeline=False,
-                    override_status_code=PhaseStatusCode.NEED_PERMISSION,
-                    events=[
-                        {
-                            "type": "script_hook",
-                            "step": str(hook_kwargs.get("step_name") or ""),
-                            "skill": skill_name,
-                            "stage": stage,
-                            "script": script,
-                            "status": "validation_failed",
-                            "exit_code": None,
-                            "stdout": "",
-                            "stderr": "",
-                            "validation_errors": validation_errors,
-                        }
-                    ],
+            validation_errors: list[str] = []
+            if schema is not None:
+                validation_errors = validate_script_args_schema(args=resolved_args, schema=schema)
+                if validation_errors:
+                    return HookResult(
+                        continue_pipeline=False,
+                        override_status_code=PhaseStatusCode.NEED_PERMISSION,
+                        events=[
+                            {
+                                "type": "script_hook",
+                                "step": str(hook_kwargs.get("step_name") or ""),
+                                "skill": skill_name,
+                                "stage": stage,
+                                "script": script,
+                                "status": "validation_failed",
+                                "exit_code": None,
+                                "stdout": "",
+                                "stderr": "",
+                                "validation_errors": validation_errors,
+                            }
+                        ],
+                    )
+
+            cwd = Path.cwd().resolve()
+
+            def request_for(candidate: Path) -> ScriptLaunchRequest:
+                command = self._build_script_command(
+                    script_path=candidate, args=resolved_args
+                )
+                return ScriptLaunchRequest(
+                    execution_class=ExecutionClass.SANDBOX,
+                    trust_source=TrustSource.WORKFLOW,
+                    script=candidate,
+                    args=tuple(command[2:]),
+                    boundary=EffectiveBoundary(
+                        cwd=cwd,
+                        readable_roots=(cwd, candidate.parent),
+                        writable_roots=(cwd,),
+                        network_destinations=(),
+                        environment=os.environ,
+                    ),
+                    timeout_seconds=timeout_seconds or 60.0,
                 )
 
-        cwd = Path.cwd().resolve()
-        command = self._build_script_command(script_path=script_path, args=resolved_args)
-        request = ScriptLaunchRequest(
-            execution_class=ExecutionClass.SANDBOX,
-            trust_source=TrustSource.WORKFLOW,
-            script=script_path,
-            args=tuple(command[2:]),
-            boundary=EffectiveBoundary(
-                cwd=cwd,
-                readable_roots=(cwd, script_path.parent),
-                writable_roots=(cwd,),
-                network_destinations=(),
-                environment=os.environ,
-            ),
-            timeout_seconds=timeout_seconds or 60.0,
-        )
-        result = SandboxExecutor().run(request)
+            try:
+                script_snapshot = snapshot_script(
+                    script_path, allowed_root=script_path.parent
+                )
+            except (OSError, ValueError):
+                script_snapshot = None
+                result = SandboxExecutor().run(request_for(script_path))
+
+        if script_snapshot is not None:
+            try:
+                result = SandboxExecutor().run(request_for(script_snapshot.path))
+            finally:
+                script_snapshot.cleanup()
         receipt = result.receipt.model_dump(mode="json")
         event = {
             "type": "script_hook",
