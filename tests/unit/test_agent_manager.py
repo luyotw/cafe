@@ -523,3 +523,19 @@ class TestGetAgentFilePath:
 
         # Falls back to system default path
         assert result == "src/cafe/data/agents/pm/Roger.md"
+
+    def test_reads_builtin_agent_outside_source_checkout(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Builtin guidance remains readable when CWD is outside the source tree."""
+        from pathlib import Path as RealPath
+
+        working_dir = tmp_path / "working"
+        working_dir.mkdir()
+        monkeypatch.chdir(working_dir)
+
+        with patch.object(RealPath, "home", return_value=tmp_path / "empty-home"):
+            path, content = AgentManager.read_agent_file("David", "developer")
+
+        assert path == "src/cafe/data/agents/developer/David.md"
+        assert content.strip()
