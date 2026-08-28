@@ -314,9 +314,9 @@ def test_owner_replacement_supersedes_only_the_prior_handoff(
         predecessor = HumanTaskRecordStore(issue_dir).get_task(predecessor.id)
     unrelated = records.materialize(
         workflow_id=predecessor.workflow_id,
-        step="unrelated",
+        step=predecessor.step if legacy_handoff else "unrelated",
         iteration=1,
-        trigger="initial",
+        trigger="unrelated",
         policy_id="unrelated-approval",
         prompt="Unrelated approval",
         expected_result={},
@@ -346,6 +346,13 @@ def test_owner_replacement_supersedes_only_the_prior_handoff(
     assert current.status is HumanTaskStatus.PENDING
     assert updated.get_task(unrelated.id).status is HumanTaskStatus.PENDING
     assert updated.get_wait_state(unrelated.id).released_at is None
+    updated.complete(
+        workflow_id=predecessor.workflow_id,
+        task_id=unrelated.id,
+        payload={"accept": "done"},
+        source="test",
+    )
+    assert updated.get_task(unrelated.id).status is HumanTaskStatus.COMPLETED
     assert [call["capability_request"]["args"]["task_id"] for call in notifications] == [
         predecessor.id,
         current.id,
