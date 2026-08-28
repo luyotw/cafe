@@ -71,7 +71,7 @@ def _pause_for_output_review(issue_dir: Path, *, response: str = "ready_for_revi
 def _pause_for_iteration_limit(issue_dir: Path):
     """Hit a declared review cap before the agent is invoked."""
     playbook = PlaybookLoader().load("standard")
-    playbook["steps"]["review"]["max_iterations"] = 1
+    playbook["steps"]["review"]["max_attempts_per_cycle"] = 1
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
@@ -79,7 +79,7 @@ def _pause_for_iteration_limit(issue_dir: Path):
             AssertionError("an iteration-limit pause must not invoke an agent")
         ),
     )
-    runtime.blackboard.step_visit_counts["review"] = 1
+    runtime.blackboard.step_attempt_counts["review"] = 1
     runtime.blackboard_store.save(runtime.blackboard)
     runtime.blackboard_store.set_current_step(runtime.blackboard, "review")
     runtime.blackboard_store.update_handoff_contract(

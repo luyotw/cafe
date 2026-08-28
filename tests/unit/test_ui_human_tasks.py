@@ -412,6 +412,7 @@ def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path
         "steps": {
             "pr": {
                 "skill": "cafe-pr",
+                "max_attempts_per_cycle": 5,
                 "human_tasks": [{
                     "trigger": "confirm_output",
                     "task_id": "local-review",
@@ -425,6 +426,7 @@ def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path
             "develop": {"skill": "cafe-develop"},
         }
     }
+    blackboard.step_attempt_counts["pr"] = 3
 
     result = apply_human_task_payload(
         issue_dir=issue_dir,
@@ -445,6 +447,7 @@ def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path
         "Cover the empty input boundary."
     ]
     assert "workflow_feedback" in blackboard.artifacts
+    assert blackboard.step_attempt_counts == {"pr": 3}
     assert not (issue_dir / "develop" / "iteration_001" / "user_input.md").exists()
 
 

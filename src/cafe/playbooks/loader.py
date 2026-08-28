@@ -53,22 +53,35 @@ def apply_issue_playbook_overrides(
             raise ValueError(f"{field_path} names unknown playbook step '{step_name}'")
         if not isinstance(step_override, dict):
             raise ValueError(f"{field_path} must be a mapping")
-        unsupported = sorted(
-            str(key) for key in set(step_override) - {"max_iterations"}
-        )
+        supported_attempt_limits = {"max_attempts_per_cycle", "max_iterations"}
+        unsupported = sorted(str(key) for key in set(step_override) - supported_attempt_limits)
         if unsupported:
             raise ValueError(
-                f"{field_path} supports only max_iterations; unsupported field(s): "
+                f"{field_path} supports only max_attempts_per_cycle; unsupported field(s): "
                 + ", ".join(unsupported)
             )
-        if "max_iterations" not in step_override:
+        declared_attempt_limits = supported_attempt_limits.intersection(step_override)
+        if len(declared_attempt_limits) > 1:
+            raise ValueError(
+                f"{field_path} cannot declare both max_attempts_per_cycle and "
+                "legacy max_iterations"
+            )
+        if not declared_attempt_limits:
             continue
-        max_iterations = step_override["max_iterations"]
-        if isinstance(max_iterations, bool) or not isinstance(max_iterations, int):
-            raise ValueError(f"{field_path}.max_iterations must be a positive integer")
-        if max_iterations < 1:
-            raise ValueError(f"{field_path}.max_iterations must be a positive integer")
-        playbook_steps[step_name]["max_iterations"] = max_iterations
+        attempt_limit_field = declared_attempt_limits.pop()
+        max_attempts_per_cycle = step_override[attempt_limit_field]
+        if isinstance(max_attempts_per_cycle, bool) or not isinstance(
+            max_attempts_per_cycle, int
+        ):
+            raise ValueError(
+                f"{field_path}.max_attempts_per_cycle must be a positive integer"
+            )
+        if max_attempts_per_cycle < 1:
+            raise ValueError(
+                f"{field_path}.max_attempts_per_cycle must be a positive integer"
+            )
+        playbook_steps[step_name].pop("max_iterations", None)
+        playbook_steps[step_name]["max_attempts_per_cycle"] = max_attempts_per_cycle
     return resolved
 
 

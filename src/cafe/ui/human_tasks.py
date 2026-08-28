@@ -37,6 +37,7 @@ from cafe.core.human_tasks import (
     resolve_step_human_task as _resolve_step_human_task,
 )
 from cafe.core.phase_state_mixin import next_runnable_iteration_number
+from cafe.core.playbook import resolve_step_attempt_limit
 from cafe.core.workflow_feedback import WorkflowFeedbackError, WorkflowFeedbackLedger
 from cafe.skills.loader import SkillLoader
 
@@ -582,6 +583,24 @@ def _apply_human_task_payload(
             text=agent_input,
         )
     is_done = continuation == "_done"
+    playbook_steps = playbook_data.get("steps", {})
+    from_step_def = (
+        playbook_steps.get(from_step, {}) if isinstance(playbook_steps, Mapping) else {}
+    )
+    if (
+        not is_done
+        and continuation != from_step
+        and not (delivery_decision is not None and delivery_decision.correction)
+        and isinstance(from_step_def, Mapping)
+        and resolve_step_attempt_limit(from_step_def) is not None
+    ):
+        store.reset_step_attempt_count(
+            blackboard,
+            step=from_step,
+            next_step=continuation,
+            transition_intent=HandoffIntent.AWAIT_AGENT.value,
+            transition_source=f"human_task.{source}",
+        )
     store.set_current_step(blackboard, "done" if is_done else continuation)
     store.set_handoff_summary(blackboard, f"Completed human task {policy.id} for {from_step}")
     store.update_handoff_contract(

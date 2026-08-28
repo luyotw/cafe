@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from cafe.core.human_tasks import HumanTaskCompletion
-from cafe.core.playbook import PlaybookDefinition, resolve_playbook_skills
+from cafe.core.playbook import PlaybookDefinition, StepConfig, resolve_playbook_skills
 from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 from cafe.skills.loader import SkillLoader
 from cafe.ui.human_tasks import (
@@ -29,32 +29,81 @@ def _write_playbook(root: Path, name: str, content: str) -> None:
     (root / f"{name}.yaml").write_text(content, encoding="utf-8")
 
 
-def test_issue_can_override_only_one_step_iteration_limit(tmp_path: Path) -> None:
+def test_issue_can_override_only_one_step_attempt_limit(tmp_path: Path) -> None:
     issue_yaml = tmp_path / "issue.yaml"
     issue_yaml.write_text(
-        "playbook_overrides:\n  steps:\n    review:\n      max_iterations: 7\n",
+        "playbook_overrides:\n  steps:\n    review:\n      max_attempts_per_cycle: 7\n",
         encoding="utf-8",
     )
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "develop": {"max_iterations": 3},
-            "review": {"max_iterations": 5},
+            "develop": {"max_attempts_per_cycle": 3},
+            "review": {"max_attempts_per_cycle": 5},
         },
     }
 
     resolved = apply_issue_playbook_overrides(playbook, issue_yaml)
 
-    assert resolved["steps"]["review"]["max_iterations"] == 7
-    assert resolved["steps"]["develop"]["max_iterations"] == 3
-    assert playbook["steps"]["review"]["max_iterations"] == 5
+    assert resolved["steps"]["review"]["max_attempts_per_cycle"] == 7
+    assert resolved["steps"]["develop"]["max_attempts_per_cycle"] == 3
+    assert playbook["steps"]["review"]["max_attempts_per_cycle"] == 5
+
+
+def test_legacy_max_iterations_is_migrated_to_attempt_limit(tmp_path: Path) -> None:
+    step = StepConfig.model_validate(
+        {"skill": "phase", "role": "reviewer", "max_iterations": 2, "on": {}}
+    )
+    assert step.max_attempts_per_cycle == 2
+    assert "max_iterations" not in step.model_dump(exclude_none=True)
+
+    issue_yaml = tmp_path / "issue.yaml"
+    issue_yaml.write_text(
+        "playbook_overrides:\n  steps:\n    review:\n      max_iterations: 7\n",
+        encoding="utf-8",
+    )
+    resolved = apply_issue_playbook_overrides(
+        {
+            "playbook": {"id": "default"},
+            "steps": {"review": {"max_attempts_per_cycle": 5}},
+        },
+        issue_yaml,
+    )
+    assert resolved["steps"]["review"]["max_attempts_per_cycle"] == 7
+    assert "max_iterations" not in resolved["steps"]["review"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("max_attempts_per_cycle", 0),
+        ("max_attempts_per_cycle", -1),
+        ("max_attempts_per_cycle", True),
+        ("max_attempts_per_cycle", "many"),
+        ("max_iterations", 0),
+        ("max_iterations", "many"),
+    ],
+)
+def test_step_attempt_limit_rejects_non_positive_integers(field: str, value: object) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        StepConfig.model_validate(
+            {"skill": "phase", "role": "reviewer", field: value, "on": {}}
+        )
+
+
+@pytest.mark.parametrize("field", ["max_attempts_per_cycle", "max_iterations"])
+def test_step_attempt_limit_normalizes_positive_digit_strings(field: str) -> None:
+    step = StepConfig.model_validate(
+        {"skill": "phase", "role": "reviewer", field: "5", "on": {}}
+    )
+    assert step.max_attempts_per_cycle == 5
 
 
 def test_issue_override_preserves_trusted_playbook_source(tmp_path: Path) -> None:
     """Runtime authority survives the supported narrow issue override path."""
     issue_yaml = tmp_path / "issue.yaml"
     issue_yaml.write_text(
-        "playbook_overrides:\n  steps:\n    spec:\n      max_iterations: 7\n",
+        "playbook_overrides:\n  steps:\n    spec:\n      max_attempts_per_cycle: 7\n",
         encoding="utf-8",
     )
     loaded = PlaybookLoader(
@@ -65,15 +114,19 @@ def test_issue_override_preserves_trusted_playbook_source(tmp_path: Path) -> Non
     resolved = apply_issue_playbook_overrides(loaded, issue_yaml)
 
     assert getattr(resolved, "source", None) == "builtin"
-    assert resolved["steps"]["spec"]["max_iterations"] == 7
+    assert resolved["steps"]["spec"]["max_attempts_per_cycle"] == 7
 
 
 @pytest.mark.parametrize(
     ("override", "message"),
     [
-        ("steps:\n  missing:\n    max_iterations: 2", "unknown playbook step"),
-        ("steps:\n  review:\n    max_iterations: many", "positive integer"),
-        ("steps:\n  review:\n    skill: other", "supports only max_iterations"),
+        ("steps:\n  missing:\n    max_attempts_per_cycle: 2", "unknown playbook step"),
+        ("steps:\n  review:\n    max_attempts_per_cycle: many", "positive integer"),
+        (
+            "steps:\n  review:\n    max_attempts_per_cycle: 2\n    max_iterations: 3",
+            "cannot declare both",
+        ),
+        ("steps:\n  review:\n    skill: other", "supports only max_attempts_per_cycle"),
         ("entry_point: review", "supports only 'steps'"),
     ],
 )
@@ -88,7 +141,7 @@ def test_issue_playbook_override_rejects_unsupported_contract(
     )
     playbook = {
         "playbook": {"id": "default"},
-        "steps": {"review": {"max_iterations": 5}},
+        "steps": {"review": {"max_attempts_per_cycle": 5}},
     }
 
     with pytest.raises(ValueError, match=message):
@@ -1911,7 +1964,7 @@ def test_builtin_hotfix_and_simple_playbooks_load() -> None:
 
     assert hotfix.entry_point == "develop"
     assert list(hotfix.steps.keys()) == ["develop", "review", "pr"]
-    assert hotfix.steps["review"].max_iterations == 1
+    assert hotfix.steps["review"].max_attempts_per_cycle == 1
     assert hotfix.steps["develop"].input_artifacts == [
         "review_feedback",
         "pr_result",

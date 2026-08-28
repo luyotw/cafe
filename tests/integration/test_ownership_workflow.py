@@ -60,6 +60,7 @@ def test_agent_human_agent_journey_resumes_across_runtime_instances(
                 "skill": "phase",
                 "role": "operator",
                 "assignee_type": "human",
+                "max_attempts_per_cycle": 1,
                 "human_tasks": [binding.model_dump()],
                 "on": {},
             },
@@ -92,6 +93,7 @@ def test_agent_human_agent_journey_resumes_across_runtime_instances(
 
     assert paused.final_status_code == "HUMAN_TASK_PENDING"
     assert applied.target == "final"
+    assert "approval" not in state.step_attempt_counts
     assert completed.completed is True
     assert agent_steps == ["draft", "final"]
 
@@ -146,13 +148,13 @@ def test_automatic_owner_runs_only_registered_runtime_authority(tmp_path: Path) 
             executor=lambda *_args, **_kwargs: pytest.fail("unknown auto must not call an agent"),
             automatic_registry=registry,
         )
-    assert BlackboardStore(unknown_dir).load_or_create("automatic").step_visit_counts == {}
+    assert BlackboardStore(unknown_dir).load_or_create("automatic").step_attempt_counts == {}
 
 
-def test_hybrid_journey_retains_one_visit_through_its_human_boundary(
+def test_hybrid_journey_retains_one_attempt_through_its_human_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """IT-003/IT-005: a hybrid wait resumes its cursor without consuming another visit."""
+    """IT-003/IT-005: a hybrid wait resumes without consuming another attempt."""
     issue_dir = tmp_path / ".cafe" / "issues" / "hybrid"
     binding = HumanTaskBinding(trigger="approve", task_id="approval", outcomes={"accept": "mixed"})
     monkeypatch.setattr(
@@ -166,7 +168,8 @@ def test_hybrid_journey_retains_one_visit_through_its_human_boundary(
     portions: list[str] = []
 
     def executor(_step_name: str, step_def: dict, *_args: object, **_kwargs: object):
-        portions.append(step_def["hybrid_portion"]["id"])
+        if "hybrid_portion" in step_def:
+            portions.append(step_def["hybrid_portion"]["id"])
         return "confirmed", {}
 
     playbook = {
@@ -176,7 +179,7 @@ def test_hybrid_journey_retains_one_visit_through_its_human_boundary(
                 "skill": "phase",
                 "role": "operator",
                 "assignee_type": "hybrid",
-                "max_iterations": 1,
+                "max_attempts_per_cycle": 1,
                 "human_tasks": [binding.model_dump()],
                 "hybrid": {
                     "entry_portion": "draft",
@@ -194,12 +197,18 @@ def test_hybrid_journey_retains_one_visit_through_its_human_boundary(
                         {
                             "id": "final",
                             "owner": "agent",
-                            "on": {"await_agent": {"step": "_done"}},
+                            "on": {"await_agent": {"step": "next"}},
                         },
                     ],
                 },
                 "on": {},
-            }
+            },
+            "next": {
+                "skill": "phase",
+                "role": "operator",
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            },
         },
     }
 
@@ -217,14 +226,22 @@ def test_hybrid_journey_retains_one_visit_through_its_human_boundary(
         raw_payload={"task": "approval", "decision": "accept", "human_task_id": task.id},
         source="integration",
     )
-    completed = BlackboardWorkflowRuntime(
+    advanced = BlackboardWorkflowRuntime(
         issue_dir=issue_dir, playbook=playbook, executor=executor
     ).run()
 
     assert paused.final_status_code == "HYBRID_HUMAN_TASK_PENDING"
-    assert completed.completed is True
+    assert state.step_attempt_counts == {"mixed": 1}
+    assert advanced.final_status_code == "HYBRID_COMPLETED"
     assert portions == ["draft", "final"]
-    assert BlackboardStore(issue_dir).load_or_create("mixed").step_visit_counts == {"mixed": 1}
+    assert "mixed" not in BlackboardStore(issue_dir).load_or_create(
+        "mixed"
+    ).step_attempt_counts
+
+    completed = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=playbook, executor=executor
+    ).run()
+    assert completed.completed is True
 
 
 def test_ownership_cli_dry_run_is_a_side_effect_free_simulation(
@@ -363,7 +380,7 @@ def test_v2_blackboard_human_resume_completes_across_runtime_instances(
     ).run()
 
     assert paused.final_status_code == "HUMAN_TASK_PENDING"
-    assert state.schema_version == BLACKBOARD_SCHEMA_VERSION == 3
+    assert state.schema_version == BLACKBOARD_SCHEMA_VERSION == 4
     assert applied.target == "final"
     assert completed.completed is True
     assert agent_steps == ["final"]
@@ -392,7 +409,7 @@ def test_v2_blackboard_human_resume_completes_across_runtime_instances(
     ).run()
 
     assert agent_result.completed is True
-    assert BlackboardStore(agent_issue_dir).load_or_create("agent").schema_version == 3
+    assert BlackboardStore(agent_issue_dir).load_or_create("agent").schema_version == 4
     assert agent_steps == ["final", "agent"]
 
 
@@ -400,14 +417,14 @@ def test_v2_blackboard_human_resume_completes_across_runtime_instances(
 def test_loop_limit_persists_for_each_owner_before_a_second_visit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owner: str
 ) -> None:
-    """IT-005: owner dispatch cannot reset or bypass a persisted visit limit."""
+    """IT-005: owner dispatch cannot reset or bypass a persisted attempt limit."""
     issue_dir = tmp_path / ".cafe" / "issues" / f"loop-{owner}"
     calls: list[str] = []
     step: dict[str, object] = {
         "skill": "phase",
         "role": "operator",
         "assignee_type": owner,
-        "max_iterations": 1,
+        "max_attempts_per_cycle": 1,
         "on": {"await_agent": "loop"},
     }
     registry = None
@@ -498,7 +515,7 @@ def test_loop_limit_persists_for_each_owner_before_a_second_visit(
             executor=executor,
         ).run(start_step="loop", single_step=True)
 
-    with pytest.raises(RuntimeError, match="max_iterations=1"):
+    with pytest.raises(RuntimeError, match="max_attempts_per_cycle=1"):
         BlackboardWorkflowRuntime(
             issue_dir=issue_dir,
             playbook=playbook,
@@ -506,7 +523,7 @@ def test_loop_limit_persists_for_each_owner_before_a_second_visit(
             automatic_registry=registry,
         ).run(start_step="loop", single_step=True)
 
-    assert BlackboardStore(issue_dir).load_or_create("loop").step_visit_counts == {"loop": 1}
+    assert BlackboardStore(issue_dir).load_or_create("loop").step_attempt_counts == {"loop": 1}
     assert calls == (
         ["automatic"]
         if owner == "auto"

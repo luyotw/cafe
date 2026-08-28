@@ -136,7 +136,7 @@ steps:
         task_id: iteration-limit
         outcomes: {resume: review}
     allowed_tools: [Read, Grep, Glob, "Bash(git:*)", "Bash(cafe verification check:*)", "Bash(cafe verification focus:*)"]
-    max_iterations: 5
+    max_attempts_per_cycle: 5
     allowed_goto: [spec, develop, plan]
     hooks:
       prepare_input: [UserInputCollector]

@@ -100,7 +100,7 @@ steps:
         task_id: iteration-limit
         outcomes: {resume: qa}
     allowed_tools: [Read, Grep, Glob, Bash]
-    max_iterations: 5
+    max_attempts_per_cycle: 5
     allowed_goto: [develop]
     hooks:
       prepare_input: [UserInputCollector]

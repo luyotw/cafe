@@ -35,7 +35,7 @@ from cafe.core.capabilities import (
 )
 from cafe.core.human_task_records import HumanTask, HumanTaskRecordStore
 from cafe.core.human_tasks import resolve_step_human_task
-from cafe.core.playbook import resolve_step_behavior
+from cafe.core.playbook import resolve_step_attempt_limit, resolve_step_behavior
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import (
     PhaseStatusCode,
@@ -98,7 +98,7 @@ class RuntimePositionResolution:
     realignment_result: Optional[PlaybookRunResult] = None
 
 
-class IterationLimitReached(RuntimeError):
+class IterationLimitReachedError(RuntimeError):
     """Stop execution after a declared iteration-limit HumanTask is materialized."""
 
     def __init__(self, message: str, result: PlaybookRunResult) -> None:
@@ -633,17 +633,6 @@ class BlackboardWorkflowRuntime:
         return contract
 
     @staticmethod
-    def _resolve_step_iteration_limit(step_def: Dict) -> Optional[int]:
-        raw_limit = step_def.get("max_iterations")
-        if raw_limit is None:
-            return None
-        if isinstance(raw_limit, int):
-            return raw_limit
-        if isinstance(raw_limit, str) and raw_limit.isdigit():
-            return int(raw_limit)
-        return None
-
-    @staticmethod
     def _extract_status_like_tokens(
         *, response: str, explicit_status_code: Optional[str]
     ) -> set[str]:
@@ -737,25 +726,31 @@ class BlackboardWorkflowRuntime:
             raise RuntimeError(f"Step has unsupported assignee_type={owner!r}")
         return owner
 
-    def _ensure_step_visit_within_limit(
+    def _ensure_step_attempt_within_limit(
         self, *, current_step: str, step_def: Dict, runtime: str
     ) -> int:
-        """Return the next visit number or fail before an owner performs work."""
-        visits = self.blackboard.step_visit_counts
-        visit_count = visits.get(current_step, 0) + 1
-        max_iterations = self._resolve_step_iteration_limit(step_def)
-        if max_iterations is not None and visit_count > max_iterations:
+        """Return the next cycle attempt or fail before an owner performs work."""
+        attempts = self.blackboard.step_attempt_counts
+        attempt_count = attempts.get(current_step, 0) + 1
+        max_attempts_per_cycle = resolve_step_attempt_limit(step_def)
+        if (
+            max_attempts_per_cycle is not None
+            and attempt_count > max_attempts_per_cycle
+        ):
             self.blackboard_store.record_event(
                 self.blackboard,
                 "loop_detected",
                 {
                     "step": current_step,
-                    "visits": visit_count,
-                    "max_iterations": max_iterations,
+                    "attempts": attempt_count,
+                    "max_attempts_per_cycle": max_attempts_per_cycle,
                     "runtime": runtime,
                 },
             )
-            message = f"Step '{current_step}' exceeded max_iterations={max_iterations}"
+            message = (
+                f"Step '{current_step}' exceeded "
+                f"max_attempts_per_cycle={max_attempts_per_cycle}"
+            )
             if self._declares_iteration_limit_task(step_def):
                 result = self._emit_pause(
                     current_step=current_step,
@@ -765,9 +760,9 @@ class BlackboardWorkflowRuntime:
                     pause_intent=HandoffIntent.MANUAL_HANDOFF,
                     contract_source="workflow.iteration_limit",
                 )
-                raise IterationLimitReached(message, result)
+                raise IterationLimitReachedError(message, result)
             raise RuntimeError(message)
-        return visit_count
+        return attempt_count
 
     @staticmethod
     def _declares_iteration_limit_task(step_def: Dict) -> bool:
@@ -782,30 +777,32 @@ class BlackboardWorkflowRuntime:
             for binding in raw_bindings
         )
 
-    def _record_step_visit(self, *, current_step: str, step_def: Dict, runtime: str) -> int:
-        """Persist the top-level visit before any owner-specific side effect."""
-        visit_count = self._ensure_step_visit_within_limit(
+    def _record_step_attempt(
+        self, *, current_step: str, step_def: Dict, runtime: str
+    ) -> int:
+        """Persist the cycle attempt before any owner-specific side effect."""
+        attempt_count = self._ensure_step_attempt_within_limit(
             current_step=current_step,
             step_def=step_def,
             runtime=runtime,
         )
-        visits = self.blackboard.step_visit_counts
-        visits[current_step] = visit_count
+        attempts = self.blackboard.step_attempt_counts
+        attempts[current_step] = attempt_count
         self.blackboard_store.save(self.blackboard)
-        return visit_count
+        return attempt_count
 
-    def _rollback_step_visit(self, *, current_step: str, visit_count: int) -> None:
-        """Undo a provisional agent visit when execution never yields a result."""
-        visits = self.blackboard.step_visit_counts
-        if visits.get(current_step) != visit_count:
+    def _rollback_step_attempt(self, *, current_step: str, attempt_count: int) -> None:
+        """Undo a provisional attempt when execution never yields a result."""
+        attempts = self.blackboard.step_attempt_counts
+        if attempts.get(current_step) != attempt_count:
             return
-        if visit_count > 1:
-            visits[current_step] = visit_count - 1
+        if attempt_count > 1:
+            attempts[current_step] = attempt_count - 1
         else:
-            visits.pop(current_step, None)
+            attempts.pop(current_step, None)
         self.blackboard_store.save(self.blackboard)
 
-    def _reset_step_visits_after_successful_advance(
+    def _reset_step_attempts_after_successful_advance(
         self,
         *,
         current_step: str,
@@ -817,7 +814,7 @@ class BlackboardWorkflowRuntime:
         """Start a fresh bounded-iteration cycle after a successful advance."""
         if current_step == next_step:
             return
-        if self._resolve_step_iteration_limit(self.steps.get(current_step, {})) is None:
+        if resolve_step_attempt_limit(self.steps.get(current_step, {})) is None:
             return
         if transition_intent is None and transition_source == "goto":
             return
@@ -838,19 +835,12 @@ class BlackboardWorkflowRuntime:
         }:
             return
 
-        completed_visits = self.blackboard.step_visit_counts.pop(current_step, None)
-        if completed_visits is None:
-            return
-        self.blackboard_store.record_event(
+        self.blackboard_store.reset_step_attempt_count(
             self.blackboard,
-            "step_visit_count_reset",
-            {
-                "step": current_step,
-                "next_step": next_step,
-                "completed_visits": completed_visits,
-                "transition_intent": raw_intent,
-                "transition_source": transition_source,
-            },
+            step=current_step,
+            next_step=next_step,
+            transition_intent=raw_intent,
+            transition_source=transition_source,
         )
 
     def _materialize_owned_human_task(
@@ -942,7 +932,7 @@ class BlackboardWorkflowRuntime:
         )
 
     def _run_human_owned_step(
-        self, *, current_step: str, step_def: Dict, visit_count: int, runtime: str
+        self, *, current_step: str, step_def: Dict, attempt_count: int, runtime: str
     ) -> PlaybookRunResult:
         return self._materialize_owned_human_task(
             current_step=current_step,
@@ -1045,7 +1035,7 @@ class BlackboardWorkflowRuntime:
         *,
         current_step: str,
         step_def: Dict,
-        visit_count: int,
+        attempt_count: int,
         runtime: str,
         result: AutomaticExecutionResult,
     ) -> PlaybookRunResult:
@@ -1115,7 +1105,7 @@ class BlackboardWorkflowRuntime:
         *,
         current_step: str,
         step_def: Dict,
-        visit_count: int,
+        attempt_count: int,
         runtime: str,
         portions_remaining: int = 30,
     ) -> PlaybookRunResult:
@@ -1138,12 +1128,12 @@ class BlackboardWorkflowRuntime:
                 "step": current_step,
                 "portion": declaration.get("entry_portion"),
                 "human_boundary_crossed": False,
-                "visit_count": visit_count,
+                "attempt_count": attempt_count,
             }
             self.blackboard.ownership_cursor = cursor
             self.blackboard_store.save(self.blackboard)
-        elif not isinstance(cursor.get("visit_count"), int):
-            cursor["visit_count"] = visit_count
+        elif not isinstance(cursor.get("attempt_count"), int):
+            cursor["attempt_count"] = attempt_count
             self.blackboard.ownership_cursor = cursor
             self.blackboard_store.save(self.blackboard)
         portion_id = cursor.get("portion")
@@ -1190,7 +1180,7 @@ class BlackboardWorkflowRuntime:
                         return self._run_hybrid_owned_step(
                             current_step=current_step,
                             step_def=step_def,
-                            visit_count=visit_count,
+                            attempt_count=attempt_count,
                             runtime=runtime,
                             portions_remaining=portions_remaining - 1,
                         )
@@ -1224,7 +1214,7 @@ class BlackboardWorkflowRuntime:
             step_def=framed_step,
             runtime="hybrid_portion",
             hop_count=1,
-            visit_count=visit_count,
+            attempt_count=attempt_count,
             extra_prompt=(
                 f"[HYBRID PORTION] Execute only declared portion {portion_id!r}. "
                 "Return only a declared completion status; do not route the top-level workflow. "
@@ -1315,7 +1305,7 @@ class BlackboardWorkflowRuntime:
             return self._run_hybrid_owned_step(
                 current_step=current_step,
                 step_def=step_def,
-                visit_count=visit_count,
+                attempt_count=attempt_count,
                 runtime=runtime,
                 portions_remaining=portions_remaining - 1,
             )
@@ -1355,6 +1345,7 @@ class BlackboardWorkflowRuntime:
             runtime=runtime,
             update_contract=True,
             contract_source="workflow.hybrid_transition",
+            transition_intent=HandoffIntent.AWAIT_AGENT,
         )
         return PlaybookRunResult(
             final_step=current_step, final_status_code="HYBRID_COMPLETED", completed=False
@@ -1369,12 +1360,12 @@ class BlackboardWorkflowRuntime:
         automatic_result: AutomaticExecutionResult | None = None
         if owner == "auto":
             try:
-                self._ensure_step_visit_within_limit(
+                self._ensure_step_attempt_within_limit(
                     current_step=current_step,
                     step_def=step_def,
                     runtime=runtime,
                 )
-            except IterationLimitReached as exc:
+            except IterationLimitReachedError as exc:
                 return exc.result
             prepared = self._prepare_auto_owned_step(
                 current_step=current_step,
@@ -1388,21 +1379,21 @@ class BlackboardWorkflowRuntime:
             owner == "hybrid"
             and isinstance(cursor, dict)
             and cursor.get("step") == current_step
-            and isinstance(cursor.get("visit_count"), int)
+            and isinstance(cursor.get("attempt_count"), int)
         ):
-            visit_count = cursor["visit_count"]
+            attempt_count = cursor["attempt_count"]
         else:
             try:
-                visit_count = self._record_step_visit(
+                attempt_count = self._record_step_attempt(
                     current_step=current_step, step_def=step_def, runtime=runtime
                 )
-            except IterationLimitReached as exc:
+            except IterationLimitReachedError as exc:
                 return exc.result
         if owner == "human":
             return self._run_human_owned_step(
                 current_step=current_step,
                 step_def=step_def,
-                visit_count=visit_count,
+                attempt_count=attempt_count,
                 runtime=runtime,
             )
         if owner == "auto":
@@ -1410,12 +1401,15 @@ class BlackboardWorkflowRuntime:
             return self._run_auto_owned_step(
                 current_step=current_step,
                 step_def=step_def,
-                visit_count=visit_count,
+                attempt_count=attempt_count,
                 runtime=runtime,
                 result=automatic_result,
             )
         return self._run_hybrid_owned_step(
-            current_step=current_step, step_def=step_def, visit_count=visit_count, runtime=runtime
+            current_step=current_step,
+            step_def=step_def,
+            attempt_count=attempt_count,
+            runtime=runtime,
         )
 
     def _execute_one_iteration(
@@ -1425,7 +1419,7 @@ class BlackboardWorkflowRuntime:
         step_def: Dict,
         runtime: str,
         hop_count: int,
-        visit_count: int,
+        attempt_count: int,
         validate_assignee_type: bool = False,
         extra_prompt: Optional[str] = None,
         same_invocation_retry: bool = False,
@@ -1435,7 +1429,7 @@ class BlackboardWorkflowRuntime:
             "step_started",
             {
                 "step": current_step,
-                "visit": visit_count,
+                "attempt": attempt_count,
                 "hop": hop_count,
                 "runtime": runtime,
             },
@@ -1484,7 +1478,7 @@ class BlackboardWorkflowRuntime:
                 "step_interrupted",
                 {
                     "step": current_step,
-                    "visit": visit_count,
+                    "attempt": attempt_count,
                     "hop": hop_count,
                     "runtime": runtime,
                     "reason": "keyboard_interrupt",
@@ -1517,7 +1511,7 @@ class BlackboardWorkflowRuntime:
                 "step_interrupted",
                 {
                     "step": current_step,
-                    "visit": visit_count,
+                    "attempt": attempt_count,
                     "hop": hop_count,
                     "runtime": runtime,
                     "reason": reason,
@@ -1550,7 +1544,7 @@ class BlackboardWorkflowRuntime:
         current_step: str,
         status_code: str,
         runtime: str,
-        visit_count: Optional[int] = None,
+        attempt_count: Optional[int] = None,
         hop_count: Optional[int] = None,
     ) -> None:
         payload: Dict[str, Any] = {
@@ -1558,8 +1552,8 @@ class BlackboardWorkflowRuntime:
             "status_code": status_code,
             "runtime": runtime,
         }
-        if visit_count is not None:
-            payload["visit"] = visit_count
+        if attempt_count is not None:
+            payload["attempt"] = attempt_count
         if hop_count is not None:
             payload["hop"] = hop_count
         self.blackboard_store.record_event(
@@ -1747,7 +1741,7 @@ class BlackboardWorkflowRuntime:
                 "runtime": runtime,
             },
         )
-        self._reset_step_visits_after_successful_advance(
+        self._reset_step_attempts_after_successful_advance(
             current_step=current_step,
             next_step=next_step,
             status_code=status_code,
@@ -2189,10 +2183,10 @@ class BlackboardWorkflowRuntime:
                 )
                 _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
             try:
-                visit_count = self._record_step_visit(
+                attempt_count = self._record_step_attempt(
                     current_step=current_step, step_def=step_def, runtime=runtime_label
                 )
-            except IterationLimitReached as exc:
+            except IterationLimitReachedError as exc:
                 return exc.result
             for _baton_attempt in range(3):
                 try:
@@ -2201,7 +2195,7 @@ class BlackboardWorkflowRuntime:
                         step_def=step_def,
                         runtime=runtime_label,
                         hop_count=hop_count,
-                        visit_count=visit_count,
+                        attempt_count=attempt_count,
                         extra_prompt=_baton_retry_extra_prompt,
                         same_invocation_retry=_baton_attempt > 0,
                     )
@@ -2213,9 +2207,9 @@ class BlackboardWorkflowRuntime:
                     )
                     if reconciled is not None:
                         return reconciled
-                    self._rollback_step_visit(
+                    self._rollback_step_attempt(
                         current_step=current_step,
-                        visit_count=visit_count,
+                        attempt_count=attempt_count,
                     )
                     self._restore_interrupted_step_handoff(
                         current_step=current_step,
@@ -2279,7 +2273,7 @@ class BlackboardWorkflowRuntime:
                 current_step=current_step,
                 status_code=status_code,
                 runtime=runtime_label,
-                visit_count=visit_count,
+                attempt_count=attempt_count,
                 hop_count=hop_count,
             )
             next_step = contract.to_step
@@ -2466,10 +2460,10 @@ class BlackboardWorkflowRuntime:
                 )
                 _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
             try:
-                visit_count = self._record_step_visit(
+                attempt_count = self._record_step_attempt(
                     current_step=current_step, step_def=step_def, runtime=runtime_label
                 )
-            except IterationLimitReached as exc:
+            except IterationLimitReachedError as exc:
                 return exc.result
 
             for _baton_attempt in range(3):
@@ -2479,7 +2473,7 @@ class BlackboardWorkflowRuntime:
                         step_def=step_def,
                         runtime=runtime_label,
                         hop_count=hop_count,
-                        visit_count=visit_count,
+                        attempt_count=attempt_count,
                         validate_assignee_type=True,
                         extra_prompt=_baton_retry_extra_prompt,
                         same_invocation_retry=_baton_attempt > 0,
@@ -2492,9 +2486,9 @@ class BlackboardWorkflowRuntime:
                     )
                     if reconciled is not None:
                         return reconciled
-                    self._rollback_step_visit(
+                    self._rollback_step_attempt(
                         current_step=current_step,
-                        visit_count=visit_count,
+                        attempt_count=attempt_count,
                     )
                     self._restore_interrupted_step_handoff(
                         current_step=current_step,
@@ -2587,7 +2581,7 @@ class BlackboardWorkflowRuntime:
                     current_step=current_step,
                     status_code=status_code,
                     runtime=runtime_label,
-                    visit_count=visit_count,
+                    attempt_count=attempt_count,
                     hop_count=hop_count,
                 )
                 post_contract_result = self._handle_post_contract(
@@ -2708,7 +2702,7 @@ class BlackboardWorkflowRuntime:
                 current_step=current_step,
                 status_code=status_code,
                 runtime=runtime_label,
-                visit_count=visit_count,
+                attempt_count=attempt_count,
                 hop_count=hop_count,
             )
 

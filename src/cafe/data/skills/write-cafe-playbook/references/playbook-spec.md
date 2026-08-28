@@ -329,22 +329,27 @@ Prefer an explicit forward skip:
   skill to declare `workflow.output_templates`; other workflow-owned settings need
   no development-stage or PR metadata.
 
-### Per-issue iteration override
+### Per-issue attempt-limit override
 
-An issue may adjust one step's visit cap without copying the full playbook. The
-override surface is intentionally limited to `steps.<name>.max_iterations`:
+An issue may adjust one step's per-cycle attempt cap without copying the full playbook. The
+override surface is intentionally limited to
+`steps.<name>.max_attempts_per_cycle`:
 
 ```yaml
 playbook_overrides:
   steps:
     review:
-      max_iterations: 7
+      max_attempts_per_cycle: 7
 ```
 
 The step must exist in the selected playbook and the value must be a positive
 integer. Unknown steps, fields, or non-integer values fail before workflow
-execution. Other graph, skill, hook, and presentation changes still require a
-project playbook under `.cafe/playbooks/`.
+execution. The count covers attempts in the current correction cycle and resets
+only when the step successfully advances through `await_agent` or
+`no_changes_needed`; backward correction routes remain in the same cycle. Other
+graph, skill, hook, and presentation changes still require a project playbook
+under `.cafe/playbooks/`. Legacy `max_iterations` declarations remain readable
+for migration, but new and updated playbooks must use `max_attempts_per_cycle`.
 
 ### Initial input for a custom entry step
 
