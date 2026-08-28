@@ -846,6 +846,74 @@ class TestSelfLoop:
         assert state.current_step == "user"
         assert state.handoff_contract.intent is HandoffIntent.MANUAL_HANDOFF
 
+    def test_review_limit_restarts_after_review_advances_to_pr(self, tmp_path: Path) -> None:
+        """PR 打回 develop 後，新的 review cycle 應從 visit 1 開始。"""
+        issue_dir = tmp_path / ".cafe" / "issues" / "issue-review-cycle-reset"
+        playbook = {
+            "playbook": {"id": "review-cycle-reset"},
+            "steps": {
+                "review": {
+                    "skill": "phase",
+                    "role": "reviewer",
+                    "max_iterations": 1,
+                    "on": {"await_agent": "pr", "manual_handoff": "develop"},
+                },
+                "pr": {
+                    "skill": "phase",
+                    "role": "developer",
+                    "on": {"await_agent": "_done", "manual_handoff": "develop"},
+                },
+                "develop": {
+                    "skill": "phase",
+                    "role": "developer",
+                    "on": {"await_agent": "review"},
+                },
+            },
+            "entry_point": "review",
+        }
+        calls: list[str] = []
+        pr_visits = 0
+
+        def executor(step_name: str, step_def: dict, state: BlackboardState) -> StepExecutionResult:
+            nonlocal pr_visits
+            calls.append(step_name)
+            if step_name == "pr":
+                pr_visits += 1
+                if pr_visits == 1:
+                    return StepExecutionResult(
+                        response="needs_changes",
+                        artifacts={},
+                        status_code="needs_changes",
+                        auto_continue=True,
+                    )
+            return StepExecutionResult(
+                response="confirmed",
+                artifacts={},
+                status_code="confirmed",
+            )
+
+        result = BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            executor=executor,
+        ).run(max_transitions=10)
+
+        assert result.completed is True
+        assert calls == ["review", "pr", "develop", "review", "pr"]
+        blackboard = BlackboardStore(issue_dir).load_or_create("review")
+        review_visits = [
+            event.data["visit"]
+            for event in blackboard.events
+            if event.event_type == "step_started" and event.data.get("step") == "review"
+        ]
+        assert review_visits == [1, 1]
+        review_resets = [
+            event
+            for event in blackboard.events
+            if event.event_type == "step_visit_count_reset" and event.data.get("step") == "review"
+        ]
+        assert [event.data["completed_visits"] for event in review_resets] == [1, 1]
+
     def test_iteration_counters_recorded_in_blackboard(self, tmp_path: Path) -> None:
         """self-loop 期間 blackboard events 應包含正確的 visit 計數。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-loop-events"

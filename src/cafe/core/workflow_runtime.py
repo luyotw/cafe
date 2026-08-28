@@ -805,6 +805,54 @@ class BlackboardWorkflowRuntime:
             visits.pop(current_step, None)
         self.blackboard_store.save(self.blackboard)
 
+    def _reset_step_visits_after_successful_advance(
+        self,
+        *,
+        current_step: str,
+        next_step: str,
+        status_code: str,
+        transition_intent: HandoffIntent | str | None,
+        transition_source: str,
+    ) -> None:
+        """Start a fresh bounded-iteration cycle after a successful advance."""
+        if current_step == next_step:
+            return
+        if self._resolve_step_iteration_limit(self.steps.get(current_step, {})) is None:
+            return
+        if transition_intent is None and transition_source == "goto":
+            return
+
+        raw_intent = (
+            transition_intent.value
+            if isinstance(transition_intent, HandoffIntent)
+            else transition_intent
+        )
+        if raw_intent is None:
+            try:
+                raw_intent = transition_map_key(PhaseStatusCode(status_code))
+            except ValueError:
+                raw_intent = status_code
+        if raw_intent not in {
+            HandoffIntent.AWAIT_AGENT.value,
+            HandoffIntent.NO_CHANGES_NEEDED.value,
+        }:
+            return
+
+        completed_visits = self.blackboard.step_visit_counts.pop(current_step, None)
+        if completed_visits is None:
+            return
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "step_visit_count_reset",
+            {
+                "step": current_step,
+                "next_step": next_step,
+                "completed_visits": completed_visits,
+                "transition_intent": raw_intent,
+                "transition_source": transition_source,
+            },
+        )
+
     def _materialize_owned_human_task(
         self,
         *,
@@ -1682,6 +1730,7 @@ class BlackboardWorkflowRuntime:
         runtime: str,
         update_contract: bool = True,
         contract_source: str = "workflow.transition",
+        transition_intent: HandoffIntent | str | None = None,
     ) -> None:
         self.blackboard_store.record_decision(
             self.blackboard,
@@ -1697,6 +1746,13 @@ class BlackboardWorkflowRuntime:
                 "source": source,
                 "runtime": runtime,
             },
+        )
+        self._reset_step_visits_after_successful_advance(
+            current_step=current_step,
+            next_step=next_step,
+            status_code=status_code,
+            transition_intent=transition_intent,
+            transition_source=source,
         )
         self.blackboard_store.set_current_step(self.blackboard, next_step)
         if update_contract:
@@ -1758,6 +1814,7 @@ class BlackboardWorkflowRuntime:
             source="baton",
             runtime=runtime,
             update_contract=update_contract_on_transition,
+            transition_intent=post_contract.intent,
         )
         return PostContractResult(status_code=resolved_status_code, next_step=next_step)
 
@@ -2018,6 +2075,7 @@ class BlackboardWorkflowRuntime:
             source="reconciled_baton",
             runtime=runtime,
             update_contract=False,
+            transition_intent=contract.intent,
         )
         return PlaybookRunResult(
             final_step=current_step,
@@ -2343,6 +2401,7 @@ class BlackboardWorkflowRuntime:
                 runtime=effective_transition_runtime,
                 update_contract=True,
                 contract_source=transition_contract_source,
+                transition_intent=contract.intent,
             )
             if single_step_mode:
                 return PlaybookRunResult(
