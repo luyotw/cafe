@@ -320,7 +320,7 @@ class UserInputCollector(NoOpHook):
         if not getattr(phase, "interactive", False):
             return HookResult()
 
-        prompt_role = {"pm": "pm", "reviewer": "reviewer"}.get(role, "developer")
+        prompt_role = role
         previous_output_file = self._get_previous_output_file(phase, step_name)
         # Steps that declare confirm_output use delta view on READY_FOR_REVIEW (less noisy).
         if not (

@@ -152,6 +152,7 @@ def test_user_input_collector_brief_ready_for_review_uses_delta_when_confirm_out
 
     mock_display_output.assert_not_called()
     mock_display_delta.assert_called_once()
+    assert phase._ask_user_for_review_decision.call_args.kwargs["role"] == "editor"
 
 
 def test_user_input_collector_plan_ready_for_review_skips_full_output_display_when_delta_available(
@@ -249,11 +250,11 @@ def test_user_input_collector_uses_resolved_publish_contract_from_context(tmp_pa
 
 
 def test_user_input_collector_loads_interactive_qa_for_need_clarification(tmp_path: Path) -> None:
-    phase_dir = tmp_path / "spec"
+    phase_dir = tmp_path / "qa"
     prev_iter_dir = phase_dir / "iteration_001"
     prev_iter_dir.mkdir(parents=True, exist_ok=True)
     (prev_iter_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
-    _record_previous_step_status(tmp_path, "spec", "need_clarification")
+    _record_previous_step_status(tmp_path, "qa", "need_clarification")
     (prev_iter_dir / "questions.xml").write_text(
         """<?xml version="1.0" encoding="UTF-8"?>
 <questions>
@@ -278,18 +279,19 @@ def test_user_input_collector_loads_interactive_qa_for_need_clarification(tmp_pa
         result = hook.run(
             stage="prepare_input",
             phase=phase,
-            step_name="spec",
-            step_def={"role": "pm"},
-            agent_name="Roger",
+            step_name="qa",
+            step_def={"role": "qa"},
+            agent_name="Quinn",
         )
 
     assert result.context_updates["user_input"] == "Q1: Question?\nA1: Answer"
     assert result.events == [
-        {"type": "user_input_collected", "step": "spec", "source": "questions_xml"}
+        {"type": "user_input_collected", "step": "qa", "source": "questions_xml"}
     ]
-    assert phase.step_user_inputs["spec"] == "Q1: Question?\nA1: Answer"
+    assert phase.step_user_inputs["qa"] == "Q1: Question?\nA1: Answer"
     mock_display_output.assert_called_once()
     mock_qa.assert_called_once()
+    assert mock_qa.call_args.kwargs["role"] == "qa"
 
 
 def test_user_input_collector_falls_back_to_prompt_when_no_questions_xml(tmp_path: Path) -> None:

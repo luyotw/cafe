@@ -435,7 +435,7 @@ def launch_chat_session(
     caller's prompt loop can continue.
 
     Args:
-        role: Agent role ("pm", "developer", or "reviewer")
+        role: Agent role declared by the active workflow step.
         issue_name: Current issue name (used to load issue-specific session)
         initial_prompt: Optional first message to send when the interactive CLI supports it.
     """
