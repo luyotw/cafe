@@ -256,10 +256,20 @@ def test_owner_replacement_supersedes_only_the_prior_handoff(
         "need_clarification" if owner == "agent" else "initial" if owner == "human" else "approve"
     )
     binding = HumanTaskBinding(trigger=trigger, task_id="approval", outcomes={"accept": "done"})
+    replacement_binding = HumanTaskBinding(
+        trigger=trigger,
+        task_id="replacement-approval",
+        outcomes={"accept": "done"},
+    )
+    replacement_policy = _approval_policy().model_copy(update={"id": "replacement-approval"})
     monkeypatch.setattr(
         runtime_mod,
         "resolve_step_human_task",
-        lambda **_kwargs: (_approval_policy(), binding),
+        lambda **kwargs: (
+            (replacement_policy, replacement_binding)
+            if kwargs["step_name"] == "replacement"
+            else (_approval_policy(), binding)
+        ),
     )
     monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
     monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
@@ -288,7 +298,7 @@ def test_owner_replacement_supersedes_only_the_prior_handoff(
             "portions": [{"id": "approve", "owner": "human", "on": {"accept": {"step": "_done"}}}],
         }
     replacement_definition = dict(step)
-    replacement_definition["human_tasks"] = [binding.model_dump()]
+    replacement_definition["human_tasks"] = [replacement_binding.model_dump()]
     playbook = {
         "playbook": {"id": "owner-replacement"},
         "steps": {"approval": step, "replacement": replacement_definition},
@@ -344,6 +354,8 @@ def test_owner_replacement_supersedes_only_the_prior_handoff(
     assert updated.get_task(predecessor.id).superseded_by_task_id == current.id
     assert updated.get_wait_state(predecessor.id).released_at is not None
     assert current.status is HumanTaskStatus.PENDING
+    if replacement_step == "replacement":
+        assert current.policy_id == "replacement-approval"
     assert updated.get_task(unrelated.id).status is HumanTaskStatus.PENDING
     assert updated.get_wait_state(unrelated.id).released_at is None
     updated.complete(

@@ -1764,23 +1764,52 @@ class BlackboardWorkflowRuntime:
         ]
         if replaced_handoff is not None:
             replaced_handoff_key = self._human_task_handoff_key(replaced_handoff)
-            legacy_handoff_key = "\x1f".join(
-                (
-                    self.blackboard.workflow_id,
-                    replaced_handoff.from_step,
-                    str(iteration),
-                    trigger,
-                    policy_id,
-                )
-            )
+            legacy_predecessor_id = self._legacy_handoff_predecessor_id(records, replaced_handoff)
             superseded_task_ids.extend(
                 task.id
                 for task in records.tasks()
                 if task.workflow_id == self.blackboard.workflow_id
                 and task.status is HumanTaskStatus.PENDING
-                and task.handoff_key in {replaced_handoff_key, legacy_handoff_key}
+                and (task.handoff_key == replaced_handoff_key or task.id == legacy_predecessor_id)
             )
         return tuple(dict.fromkeys(superseded_task_ids))
+
+    def _legacy_handoff_predecessor_id(
+        self, records: HumanTaskRecordStore, handoff: HandoffContract
+    ) -> str | None:
+        """Recover one predecessor from pre-handoff-key task records.
+
+        Legacy keys describe a task binding, not a handoff instance. The
+        materialization event therefore supplies the exact task identity and
+        prevents an unrelated task on the same step from being superseded.
+        """
+        legacy_task_ids = {
+            task.id
+            for task in records.tasks()
+            if task.workflow_id == self.blackboard.workflow_id
+            and task.status is HumanTaskStatus.PENDING
+            and task.step == handoff.from_step
+            and task.handoff_key
+            == "\x1f".join(
+                (
+                    task.workflow_id,
+                    task.step,
+                    str(task.iteration),
+                    task.trigger,
+                    task.policy_id,
+                )
+            )
+        }
+        for event in self.blackboard.events:
+            if (
+                event.event_type == "human_task_materialized"
+                and event.timestamp >= handoff.created_at
+                and event.step == handoff.from_step
+            ):
+                task_id = event.data.get("task_id")
+                if isinstance(task_id, str) and task_id in legacy_task_ids:
+                    return task_id
+        return None
 
     def _human_task_handoff_key(self, contract: HandoffContract) -> str:
         """Return the stable identity of one user-facing handoff instance."""
