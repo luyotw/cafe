@@ -535,6 +535,9 @@ def test_workflow_replace_removes_stale_native_skills(tmp_path: Path, monkeypatc
     builtin_root = tmp_path / "builtin"
     for name in ("phase", "stale-support", "replacement-support"):
         _write_skill(builtin_root / "skills", name)
+    agent_file = tmp_path / ".cafe" / "agents" / "operator" / "David.md"
+    agent_file.parent.mkdir(parents=True)
+    agent_file.write_text("---\nname: David\n---\n\nOperate the workflow.\n", encoding="utf-8")
 
     loader = SkillLoader(
         project_root=tmp_path,
