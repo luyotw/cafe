@@ -138,6 +138,81 @@ def test_tree_snapshot_rejects_runtime_directory_replacement(
     assert swapped is True
 
 
+def test_tree_snapshot_contains_only_declared_entries_and_hashes_the_runtime_closure(
+    tmp_path: Path,
+) -> None:
+    catalog = tmp_path / "catalog"
+    phase = catalog / "phase"
+    shared = tmp_path / "global" / "shared"
+    undeclared = catalog / "undeclared"
+    (phase / "scripts").mkdir(parents=True)
+    (shared / "scripts").mkdir(parents=True)
+    (undeclared / "scripts").mkdir(parents=True)
+    script = phase / "scripts" / "hook.sh"
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+    shared_resource = shared / "scripts" / "message.txt"
+    shared_resource.write_text("first\n", encoding="utf-8")
+    (undeclared / "scripts" / "secret.txt").write_text("secret\n", encoding="utf-8")
+
+    first = snapshot_script_tree(
+        script,
+        allowed_root=catalog,
+        runtime_entries={"phase": phase, "shared": shared},
+    )
+    try:
+        assert (first.root / "phase" / "scripts" / "hook.sh").is_file()
+        assert (first.root / "shared" / "scripts" / "message.txt").is_file()
+        assert not (first.root / "undeclared").exists()
+        first_digest = first.digest
+    finally:
+        first.cleanup()
+
+    shared_resource.write_text("second\n", encoding="utf-8")
+    second = snapshot_script_tree(
+        script,
+        allowed_root=catalog,
+        runtime_entries={"phase": phase, "shared": shared},
+    )
+    try:
+        assert second.digest != first_digest
+    finally:
+        second.cleanup()
+
+
+@pytest.mark.parametrize(
+    ("tree_builder", "limits"),
+    [
+        (
+            lambda root: [
+                (root / "extra-a").write_text("a", encoding="utf-8"),
+                (root / "extra-b").write_text("b", encoding="utf-8"),
+            ],
+            {"max_files": 2},
+        ),
+        (
+            lambda root: (root / "large.txt").write_text("oversized", encoding="utf-8"),
+            {"max_bytes": 8},
+        ),
+        (
+            lambda root: (root / "one" / "two" / "three").mkdir(parents=True),
+            {"max_depth": 2},
+        ),
+    ],
+)
+def test_tree_snapshot_rejects_runtime_closure_over_resource_limits(
+    tmp_path: Path, tree_builder, limits: dict[str, int]
+) -> None:
+    catalog = tmp_path / "catalog"
+    skill = catalog / "phase"
+    skill.mkdir(parents=True)
+    script = skill / "hook.sh"
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+    tree_builder(skill)
+
+    with pytest.raises(ValueError, match="limit"):
+        snapshot_script_tree(script, allowed_root=catalog, **limits)
+
+
 def test_script_launcher_inventory_covers_workflow_process_calls() -> None:
     root = Path(__file__).resolve().parents[2]
     inventory = (root / "docs" / "script-execution-boundaries.md").read_text(encoding="utf-8")

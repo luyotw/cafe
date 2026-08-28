@@ -204,6 +204,15 @@ class SandboxExecutor:
             if owns_snapshot:
                 snapshot.cleanup()
 
+    def deny(
+        self,
+        request: ScriptLaunchRequest,
+        reason: str,
+        detail: str = "",
+    ) -> SandboxRunResult:
+        """Create a typed denial receipt without launching a process."""
+        return self._denied(request, uuid.uuid4().hex, reason, detail)
+
     @staticmethod
     def _denied(
         request: ScriptLaunchRequest,

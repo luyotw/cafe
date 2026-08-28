@@ -334,6 +334,7 @@ class GenericPhase:
         events: List[Dict[str, Any]] = []
         artifact_ready = True
         hook_kwargs = dict(hook_context or {})
+        hook_kwargs["shared_skill_invocations"] = list(shared_skill_invocations or [])
 
         before = self._run_hook_stage(
             "before_execute",
@@ -622,10 +623,13 @@ class GenericPhase:
 
             cwd = Path.cwd().resolve()
 
-            def request_for(candidate: Path) -> ScriptLaunchRequest:
+            def request_for(
+                candidate: Path, *, runtime_root: Optional[Path] = None
+            ) -> ScriptLaunchRequest:
                 command = self._build_script_command(
                     script_path=candidate, args=resolved_args
                 )
+                readable_roots = (cwd, runtime_root) if runtime_root is not None else (cwd,)
                 return ScriptLaunchRequest(
                     execution_class=ExecutionClass.SANDBOX,
                     trust_source=TrustSource.WORKFLOW,
@@ -633,7 +637,7 @@ class GenericPhase:
                     args=tuple(command[2:]),
                     boundary=EffectiveBoundary(
                         cwd=cwd,
-                        readable_roots=(cwd, candidate.parent),
+                        readable_roots=readable_roots,
                         writable_roots=(cwd,),
                         network_destinations=(),
                         environment=os.environ,
@@ -642,16 +646,27 @@ class GenericPhase:
                 )
 
             try:
-                skill_catalog_root = self.skill_loader.get_skill_dir(skill_name).parent
-                script_snapshot = snapshot_script_tree(script_path, allowed_root=skill_catalog_root)
-            except (OSError, ValueError):
+                phase_skill_dir = self.skill_loader.get_skill_dir(skill_name)
+                runtime_entries = {phase_skill_dir.name: phase_skill_dir}
+                for invocation in hook_kwargs.get("shared_skill_invocations", []):
+                    declared_name = str(invocation).removeprefix("$").removeprefix("/")
+                    shared_skill_dir = self.skill_loader.get_skill_dir(declared_name)
+                    runtime_entries[shared_skill_dir.name] = shared_skill_dir
+                script_snapshot = snapshot_script_tree(
+                    script_path,
+                    allowed_root=phase_skill_dir.parent,
+                    runtime_entries=runtime_entries,
+                )
+            except (LookupError, OSError, ValueError) as exc:
                 script_snapshot = None
-                result = SandboxExecutor().run(request_for(script_path))
+                result = SandboxExecutor().deny(
+                    request_for(script_path), "script_identity_invalid", str(exc)
+                )
 
         if script_snapshot is not None:
             try:
                 result = SandboxExecutor().run(
-                    request_for(script_snapshot.path),
+                    request_for(script_snapshot.path, runtime_root=script_snapshot.root),
                     prepared_snapshot=script_snapshot,
                 )
             finally:

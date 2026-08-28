@@ -924,14 +924,43 @@ def test_execute_script_hook_preserves_declared_skill_script_layout(
     tmp_path: Path,
 ) -> None:
     loader = _setup_loader(tmp_path)
-    skill_scripts = loader.get_skill_dir("cafe-plan") / "scripts"
+    project_skill = loader.project_root / ".cafe" / "skills" / "cafe-plan"
+    project_skill.mkdir(parents=True)
+    (project_skill / "SKILL.md").write_text(
+        "---\nname: cafe-plan\ndescription: project plan\n---\n",
+        encoding="utf-8",
+    )
+    skill_scripts = project_skill / "scripts"
     skill_scripts.mkdir(parents=True, exist_ok=True)
     (skill_scripts / "message.txt").write_text("sibling resource\n", encoding="utf-8")
-    shared_scripts = loader.get_skill_dir("cafe-workflow-common") / "scripts"
+
+    builtin_shared_scripts = (
+        loader.builtin_root / "skills" / "cafe-workflow-common" / "scripts"
+    )
+    builtin_shared_scripts.mkdir(parents=True)
+    (builtin_shared_scripts / "shared.sh").write_text(
+        "#!/usr/bin/env bash\necho shadowed builtin script\n", encoding="utf-8"
+    )
+    global_shared = loader.global_root / "skills" / "cafe-workflow-common"
+    global_shared.mkdir(parents=True)
+    (global_shared / "SKILL.md").write_text(
+        "---\nname: cafe-workflow-common\ndescription: global common\n---\n",
+        encoding="utf-8",
+    )
+    shared_scripts = global_shared / "scripts"
     shared_scripts.mkdir(parents=True, exist_ok=True)
     (shared_scripts / "shared.sh").write_text(
-        "#!/usr/bin/env bash\necho shared script\n", encoding="utf-8"
+        "#!/usr/bin/env bash\necho effective global script\n", encoding="utf-8"
     )
+
+    undeclared = loader.global_root / "skills" / "undeclared" / "scripts"
+    undeclared.mkdir(parents=True)
+    (undeclared.parent / "SKILL.md").write_text(
+        "---\nname: undeclared\ndescription: secret sibling\n---\n", encoding="utf-8"
+    )
+    (undeclared / "secret.txt").write_text("must stay unreadable\n", encoding="utf-8")
+    loader.discover()
+
     _write_skill_script(
         loader,
         skill_name="cafe-plan",
@@ -942,6 +971,7 @@ def test_execute_script_hook_preserves_declared_skill_script_layout(
             'SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"\n'
             'cat "$SCRIPT_DIR/message.txt"\n'
             '/bin/bash "$SCRIPT_DIR/../../cafe-workflow-common/scripts/shared.sh"\n'
+            'test ! -e "$SCRIPT_DIR/../../undeclared/scripts/secret.txt"\n'
         ),
     )
 
@@ -958,7 +988,69 @@ def test_execute_script_hook_preserves_declared_skill_script_layout(
 
     event = next(item for item in result.events if item.get("type") == "script_hook")
     assert event["status"] == "success"
-    assert event["stdout"].splitlines() == ["sibling resource", "shared script"]
+    assert event["stdout"].splitlines() == [
+        "sibling resource",
+        "effective global script",
+    ]
+    assert len(event["effective_boundary"]["readable_roots"]) == 2
+    first_identity = event["canonical_identity"]
+
+    (shared_scripts / "shared.sh").write_text(
+        "#!/usr/bin/env bash\necho updated global script\n", encoding="utf-8"
+    )
+    updated = GenericPhase(loader).execute(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/cafe-workflow-common"],
+        step_def={
+            "hooks": {"before_execute": [{"script": "read_relative_files.sh", "args": {}}]},
+            "valid_intents": ["confirmed"],
+        },
+        agent_executor=lambda _prompt: "confirmed",
+    )
+    updated_event = next(
+        item for item in updated.events if item.get("type") == "script_hook"
+    )
+    assert updated_event["stdout"].splitlines() == [
+        "sibling resource",
+        "updated global script",
+    ]
+    assert updated_event["canonical_identity"] != first_identity
+
+
+def test_execute_script_hook_denies_when_runtime_snapshot_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loader = _setup_loader(tmp_path)
+    _write_skill_script(
+        loader,
+        skill_name="cafe-plan",
+        script_name="must_not_run.sh",
+        body="#!/bin/sh\necho should-not-run\n",
+    )
+
+    def reject_snapshot(*_args, **_kwargs):
+        raise ValueError("runtime file-count limit exceeded")
+
+    monkeypatch.setattr(
+        "cafe.phases.generic_phase.snapshot_script_tree", reject_snapshot
+    )
+    result = GenericPhase(loader).execute(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/cafe-workflow-common"],
+        step_def={
+            "hooks": {"before_execute": [{"script": "must_not_run.sh", "args": {}}]},
+            "valid_intents": ["confirmed", "need_permission"],
+        },
+        agent_executor=lambda _prompt: "confirmed",
+    )
+
+    event = next(item for item in result.events if item.get("type") == "script_hook")
+    assert result.status_code == PhaseStatusCode.NEED_PERMISSION
+    assert event["status"] == "denied"
+    assert event["stdout"] == ""
+    assert event["receipt"]["details"]["reason"] == "script_identity_invalid"
 
 
 def test_script_hook_holds_catalog_lock_until_the_script_is_snapshotted(
