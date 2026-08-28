@@ -11,6 +11,7 @@ import pytest
 
 from cafe.core.human_task_records import (
     HumanTaskCorrelationError,
+    HumanTaskMaterialization,
     HumanTaskRecordSchemaError,
     HumanTaskRecordStore,
     HumanTaskStatus,
@@ -38,6 +39,26 @@ def _materialize_in_process(issue_dir: str, barrier, results) -> None:
         results.put(("ok", _materialize(HumanTaskRecordStore(Path(issue_dir))).id))
     except BaseException as exc:
         results.put(("error", repr(exc)))
+
+
+def _materialize_with_status_in_process(issue_dir: str, barrier, results) -> None:
+    """Exercise the atomic creation signal across separate processes."""
+    try:
+        barrier.wait(timeout=5)
+        result = HumanTaskRecordStore(Path(issue_dir)).materialize_with_status(
+            workflow_id="workflow-one",
+            step="develop",
+            iteration=1,
+            trigger="need_clarification",
+            policy_id="clarification-feedback",
+            prompt="Describe the compatibility requirement.",
+            expected_result={"input_schema": "feedback", "required": True},
+            continuations={"submit": "develop"},
+            assignee_type="user",
+        )
+        results.put(("ok", result.task.id, result.created))
+    except BaseException as exc:
+        results.put(("error", repr(exc), False))
 
 
 def _complete_in_process(issue_dir: str, task_id: str, barrier, results) -> None:
@@ -97,6 +118,67 @@ def test_materialization_is_idempotent_per_handoff_key(tmp_path: Path) -> None:
     assert store.active_wait_state("workflow-one").task_id == first.id
     assert next_iteration.id != first.id
     assert len(store.tasks()) == 2
+
+
+def test_materialization_reports_creation_atomically_across_restart(tmp_path: Path) -> None:
+    """The durable store distinguishes a new task from recovery without a second read."""
+    issue_dir = tmp_path / "issue"
+
+    first = HumanTaskRecordStore(issue_dir).materialize_with_status(
+        workflow_id="workflow-one",
+        step="develop",
+        iteration=1,
+        trigger="need_clarification",
+        policy_id="clarification-feedback",
+        prompt="Describe the compatibility requirement.",
+        expected_result={"input_schema": "feedback", "required": True},
+        continuations={"submit": "develop"},
+        assignee_type="user",
+    )
+    recovered = HumanTaskRecordStore(issue_dir).materialize_with_status(
+        workflow_id="workflow-one",
+        step="develop",
+        iteration=1,
+        trigger="need_clarification",
+        policy_id="clarification-feedback",
+        prompt="Describe the compatibility requirement.",
+        expected_result={"input_schema": "feedback", "required": True},
+        continuations={"submit": "develop"},
+        assignee_type="user",
+    )
+
+    assert isinstance(first, HumanTaskMaterialization)
+    assert first.created is True
+    assert recovered.created is False
+    assert recovered.task == first.task
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the durable record lock is POSIX file based")
+def test_only_one_concurrent_materialization_reports_creation(tmp_path: Path) -> None:
+    """Only the process that durably creates the shared task reports creation."""
+    context = multiprocessing.get_context("fork")
+    issue_dir = tmp_path / "issue"
+    worker_count = 8
+    barrier = context.Barrier(worker_count)
+    results = context.Queue()
+    workers = [
+        context.Process(
+            target=_materialize_with_status_in_process,
+            args=(str(issue_dir), barrier, results),
+        )
+        for _ in range(worker_count)
+    ]
+
+    for process in workers:
+        process.start()
+    materializations = [results.get(timeout=10) for _ in workers]
+    for process in workers:
+        process.join(timeout=10)
+
+    assert all(process.exitcode == 0 for process in workers)
+    assert all(status == "ok" for status, _task_id, _created in materializations)
+    assert len({task_id for _status, task_id, _created in materializations}) == 1
+    assert sum(created for _status, _task_id, created in materializations) == 1
 
 
 @pytest.mark.skipif(os.name == "nt", reason="the durable record lock is POSIX file based")

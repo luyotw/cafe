@@ -321,6 +321,14 @@ known and includes a recovery action. Repair or explicitly restore the named
 workflow, then retry the same stable identifier; the inbox never switches the
 active issue or chooses an ambiguous record automatically.
 
+To make new HumanTasks in the built-in `standard` workflow discoverable in a
+fixed Slack channel, follow the supported
+[Slack HumanTask notification guide](docs/human-task-slack-notifications.md).
+The channel-bound credential stays in `~/.slack-webhook`; project playbooks,
+hooks, tasks, and agents cannot choose another destination or receive the
+credential. Slack delivery never replaces `cafe task inspect` or
+`cafe task complete`.
+
 ### Inspect and recover
 
 Ask the driver for the information or recovery outcome you need:

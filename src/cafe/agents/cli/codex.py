@@ -9,12 +9,30 @@ from cafe.core.types import PermissionDenial, TokenUsage
 from cafe.utils.git_utils import get_git_dir
 
 
+_HOST_SESSION_ENVIRONMENT_KEYS = (
+    "CODEX_REMOTE_PAYLOAD",
+    "CODEX_SESSION_ID",
+    "CODEX_THREAD_ID",
+)
+
+
 class CodexCLI(AbstractCLI):
     """Concrete implementation of Codex CLI tool."""
 
     def build_environment(self) -> dict[str, str]:
-        """Build the child environment without changing provider configuration."""
-        return super().build_environment()
+        """Build an isolated child environment while preserving provider configuration.
+
+        CAFE can itself run inside a Codex app-server session.  Its thread and
+        remote-launch controls belong to that parent session; forwarding them to
+        a separate ``codex exec`` can bind or stall the workflow agent on the
+        parent's transport.  Keep durable provider configuration such as
+        ``CODEX_HOME``, but always start the workflow child with fresh session
+        controls.
+        """
+        environment = super().build_environment()
+        for key in _HOST_SESSION_ENVIRONMENT_KEYS:
+            environment.pop(key, None)
+        return environment
 
     @staticmethod
     def extract_turn_usages(output_lines: List[str]) -> List[Dict[str, Any]]:

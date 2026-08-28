@@ -32,6 +32,31 @@ def test_development_playbooks_are_discoverable_and_strictly_valid() -> None:
         assert simulation.missing_intent_handlers == ()
 
 
+@pytest.mark.parametrize(
+    ("playbook_id", "step_name"),
+    [
+        ("direct", "review"),
+        ("simple", "qa"),
+        ("standard", "review"),
+        ("standard-qa", "review"),
+        ("standard-qa", "qa"),
+        ("tdd", "review"),
+        ("tdd-qa", "review"),
+        ("tdd-qa", "qa"),
+        ("hotfix", "review"),
+    ],
+)
+def test_bounded_builtin_steps_declare_a_resumable_iteration_limit_task(
+    playbook_id: str, step_name: str
+) -> None:
+    step = PlaybookLoader().load_model(playbook_id, strict=True).model.steps[step_name]
+
+    task = next(task for task in step.human_tasks if task.task_id == "iteration-limit")
+
+    assert task.trigger == "manual_handoff"
+    assert task.outcomes == {"resume": step_name}
+
+
 def test_standard_replaces_default_without_alias_or_migration() -> None:
     loader = PlaybookLoader()
 

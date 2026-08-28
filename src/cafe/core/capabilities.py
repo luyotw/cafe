@@ -34,6 +34,7 @@ from cafe.utils.github import GitHubOps
 CAPABILITY_PR_PUBLISH_ID = "cafe.pr.publish"
 CAPABILITY_BROWSER_OPEN_ID = "cafe.browser.open"
 CAPABILITY_ISSUE_COMMENT_ID = "cafe.github.issue_comment"
+CAPABILITY_SLACK_HUMAN_TASK_ID = "cafe.slack.human_task"
 
 # Failure categories surfaced on capability receipts (distinct from validation_error).
 SCRIPT_EXIT_ERROR = "script_exit_error"
@@ -105,7 +106,12 @@ class CapabilityEffects(StrictCapabilityModel):
 class CapabilityManifest(StrictCapabilityModel):
     id: str = Field(min_length=1)
     version: int = Field(ge=1)
-    implementation: Literal["sync_pr", "open_current_pr", "sync_issue_comment"]
+    implementation: Literal[
+        "sync_pr",
+        "open_current_pr",
+        "sync_issue_comment",
+        "notify_slack_human_task",
+    ]
     arguments: ObjectSchema
     outputs: ObjectSchema
     effects: CapabilityEffects
@@ -1103,10 +1109,46 @@ def _sync_issue_comment_adapter(
     }
 
 
+def _notify_slack_human_task_adapter(
+    *,
+    repo_root: Path,
+    request: ExecutionRequest,
+    manifest: CapabilityManifest,
+    output_file: Path,
+    timeout_sec: float,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    """Deliver one package-owned HumanTask notification without exposing credentials."""
+    from cafe.core.human_task_notifications import (
+        SlackNotificationError,
+        build_human_task_message,
+        load_slack_webhook_url,
+        post_slack_notification,
+    )
+
+    del repo_root, manifest, output_file
+    message = build_human_task_message(
+        repository=str(request.args["repository"]),
+        workflow_id=str(request.args["workflow_id"]),
+        task_id=str(request.args["task_id"]),
+        reason=str(request.args["reason"]),
+    )
+    try:
+        webhook_url = load_slack_webhook_url()
+        post_slack_notification(webhook_url, message, timeout_sec=timeout_sec)
+    except SlackNotificationError as exc:
+        raise CapabilityExecutionError(exc.category, exc.code) from exc
+    return {
+        "delivered": True,
+        "workflow_id": message.workflow_id,
+        "task_id": message.task_id,
+    }, None
+
+
 HOST_CAPABILITY_ADAPTERS: Mapping[str, Any] = {
     "sync_pr": _sync_pr_adapter,
     "open_current_pr": _open_current_pr_adapter,
     "sync_issue_comment": _sync_issue_comment_adapter,
+    "notify_slack_human_task": _notify_slack_human_task_adapter,
 }
 
 

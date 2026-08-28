@@ -50,6 +50,24 @@ def test_issue_can_override_only_one_step_iteration_limit(tmp_path: Path) -> Non
     assert playbook["steps"]["review"]["max_iterations"] == 5
 
 
+def test_issue_override_preserves_trusted_playbook_source(tmp_path: Path) -> None:
+    """Runtime authority survives the supported narrow issue override path."""
+    issue_yaml = tmp_path / "issue.yaml"
+    issue_yaml.write_text(
+        "playbook_overrides:\n  steps:\n    spec:\n      max_iterations: 7\n",
+        encoding="utf-8",
+    )
+    loaded = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+    ).load("standard")
+
+    resolved = apply_issue_playbook_overrides(loaded, issue_yaml)
+
+    assert getattr(resolved, "source", None) == "builtin"
+    assert resolved["steps"]["spec"]["max_iterations"] == 7
+
+
 @pytest.mark.parametrize(
     ("override", "message"),
     [
@@ -1129,9 +1147,7 @@ steps:
         loader.load_model("intake-flow")
 
 
-@pytest.mark.parametrize(
-    "playbook_name", ["standard", "standard-qa", "simple", "tdd", "tdd-qa"]
-)
+@pytest.mark.parametrize("playbook_name", ["standard", "standard-qa", "simple", "tdd", "tdd-qa"])
 def test_builtin_entry_steps_use_declared_initial_input_resolver(
     playbook_name: str, tmp_path: Path
 ) -> None:

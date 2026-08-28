@@ -96,6 +96,9 @@ steps:
       - trigger: need_clarification
         task_id: clarification-feedback
         outcomes: {submit: qa}
+      - trigger: manual_handoff
+        task_id: iteration-limit
+        outcomes: {resume: qa}
     allowed_tools: [Read, Grep, Glob, Bash]
     max_iterations: 5
     allowed_goto: [develop]
