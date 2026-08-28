@@ -1,15 +1,59 @@
 """Tests for the blackboard-first workflow runtime."""
 
+from concurrent.futures import ThreadPoolExecutor
 import json
+import multiprocessing
 from pathlib import Path
+import threading
+import time
+from types import SimpleNamespace
 
 import pytest
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.core.human_tasks import HumanTaskBinding, HumanTaskDecision, HumanTaskPolicy
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
+
+
+def _notify_human_task_in_process(
+    issue_dir_value: str,
+    rendezvous: object,
+    result_queue: object,
+) -> None:
+    """Run one stale notification claimant in an independent process."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    dispatched = False
+
+    def _dispatch(**_kwargs: object) -> SimpleNamespace:
+        nonlocal dispatched
+        dispatched = True
+        time.sleep(0.25)
+        return SimpleNamespace(
+            receipt={"capability": "cafe.slack.human_task", "success": True}
+        )
+
+    try:
+        issue_dir = Path(issue_dir_value)
+        runtime_mod.load_capability_registry = lambda _dirs: {}
+        runtime_mod.default_capability_definition_dirs = lambda _root: []
+        runtime_mod.run_capability_request = _dispatch
+        runtime = BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=PlaybookLoader().load("standard"),
+            executor=lambda *_args: None,
+        )
+        task = HumanTaskRecordStore(issue_dir).tasks()[0]
+        rendezvous.wait(timeout=10)
+        runtime._notify_new_human_task(task)
+    except BaseException as exc:
+        result_queue.put(("error", repr(exc)))
+        return
+    result_queue.put(("ok", dispatched))
+
 
 def _write_baton(
     issue_dir: Path,
@@ -1810,11 +1854,29 @@ def test_runtime_pauses_ready_for_review_with_confirm_output_intent(tmp_path: Pa
 
 
 def test_runtime_materializes_one_declared_task_and_recovers_it_after_restart(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """IT-001: pause/restart preserves the exact durable task and wait state."""
+    import cafe.core.workflow_runtime as runtime_mod
+
     issue_dir = tmp_path / ".cafe" / "issues" / "durable-restart"
     playbook = PlaybookLoader().load("standard")
+    capability_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+
+    def _run_capability_request(**kwargs: object) -> SimpleNamespace:
+        capability_calls.append(kwargs)
+        request = kwargs["capability_request"]
+        return SimpleNamespace(
+            receipt={
+                "capability": "cafe.slack.human_task",
+                "success": True,
+                "inputs": dict(request["args"]),
+            }
+        )
+
+    monkeypatch.setattr(runtime_mod, "run_capability_request", _run_capability_request)
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
         return StepExecutionResult(
@@ -1841,6 +1903,486 @@ def test_runtime_materializes_one_declared_task_and_recovers_it_after_restart(
     assert restored.tasks()[0].id == task.id
     assert restored.get_wait_state(task.id) == wait
     assert state.workflow_id == task.workflow_id
+    assert len(capability_calls) == 1
+    request = capability_calls[0]["capability_request"]
+    assert request["args"]["task_id"] == task.id
+    assert request["args"]["workflow_id"] == task.workflow_id
+    assert request["args"]["repository"] == tmp_path.name
+
+
+def test_runtime_notifies_trusted_human_owned_creation_but_not_spoofed_standard_tasks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both creation paths use the registered capability, gated to standard."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    policy = HumanTaskPolicy(
+        id="approval",
+        pattern="no_changes_needed",
+        prompt="Approve this work",
+        input_schema="decision",
+        decisions=(HumanTaskDecision(id="accept", label="Accept"),),
+    )
+    binding = HumanTaskBinding(trigger="initial", task_id="approval", outcomes={"accept": "done"})
+    monkeypatch.setattr(runtime_mod, "resolve_step_human_task", lambda **_kwargs: (policy, binding))
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+    calls: list[dict[str, object]] = []
+
+    def _run_capability_request(**kwargs: object) -> SimpleNamespace:
+        calls.append(kwargs)
+        return SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True})
+
+    monkeypatch.setattr(runtime_mod, "run_capability_request", _run_capability_request)
+
+    def _human_playbook(playbook_id: str) -> dict[str, object]:
+        return {
+            "playbook": {"id": playbook_id},
+            "entry_point": "approval",
+            "steps": {
+                "approval": {
+                    "skill": "phase",
+                    "role": "operator",
+                    "assignee_type": "human",
+                    "human_tasks": [binding.model_dump()],
+                    "on": {},
+                }
+            },
+        }
+
+    trusted_playbook = PlaybookLoader().load("standard")
+    trusted_playbook.clear()
+    trusted_playbook.update(_human_playbook("standard"))
+    standard_dir = tmp_path / ".cafe" / "issues" / "human-standard"
+    standard = BlackboardWorkflowRuntime(
+        issue_dir=standard_dir,
+        playbook=trusted_playbook,
+        executor=lambda *_args: (_ for _ in ()).throw(AssertionError("human step ran agent")),
+    )
+    standard.run(start_step="approval")
+    standard.run(max_transitions=2)
+
+    project_dir = tmp_path / ".cafe" / "issues" / "spoofed-standard"
+    BlackboardWorkflowRuntime(
+        issue_dir=project_dir,
+        playbook=_human_playbook("standard"),
+        executor=lambda *_args: (_ for _ in ()).throw(AssertionError("human step ran agent")),
+    ).run(start_step="approval")
+
+    assert len(calls) == 1
+    standard_task = HumanTaskRecordStore(standard_dir).tasks()[0]
+    project_task = HumanTaskRecordStore(project_dir).tasks()[0]
+    assert calls[0]["capability_request"]["args"]["task_id"] == standard_task.id
+    assert calls[0]["timeout_sec"] == 5.0
+    assert project_task.id != standard_task.id
+    assert BlackboardStore(project_dir).load_or_create("approval").capability_receipts == []
+
+
+def test_notification_failure_preserves_pending_task_and_user_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed delivery is audited but cannot consume or reroute human work."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "notification-failure"
+    playbook = PlaybookLoader().load("standard")
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **_kwargs: SimpleNamespace(
+            receipt={
+                "capability": "cafe.slack.human_task",
+                "success": False,
+                "code": "slack_transport_error",
+            }
+        ),
+    )
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args: StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        ),
+    ).run(start_step="spec")
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    receipt = state.capability_receipts[0]
+
+    assert result.completed is False
+    assert task.status.value == "pending"
+    assert state.current_step == "user"
+    assert state.handoff_contract.to_owner is HandoffOwner.USER
+    assert state.handoff_contract.from_step == "spec"
+    assert receipt["success"] is False
+    assert receipt["workflow_id"] == task.workflow_id
+    assert receipt["task_id"] == task.id
+
+
+def test_runtime_recovers_notification_when_task_commit_precedes_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit Tests 7-8: recovery repairs a durable task with no begun attempt."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "notification-before-attempt-stop"
+    playbook = PlaybookLoader().load("standard")
+
+    def _executor(*_args: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        )
+
+    interrupted = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=_executor,
+    )
+    monkeypatch.setattr(
+        interrupted,
+        "_notify_new_human_task",
+        lambda _task: (_ for _ in ()).throw(SystemExit("simulated process stop")),
+    )
+    with pytest.raises(SystemExit, match="simulated process stop"):
+        interrupted.run(start_step="spec")
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    assert BlackboardStore(issue_dir).load_or_create("spec").capability_receipts == []
+    calls = []
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: calls.append(kwargs)
+        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+    )
+
+    BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("standard"),
+        executor=_executor,
+    ).run(start_step="spec")
+
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    assert len(calls) == 1
+    assert len(state.capability_receipts) == 1
+    assert state.capability_receipts[0]["task_id"] == task.id
+
+
+def test_runtime_audits_interrupted_attempt_without_duplicate_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit Tests 7-8: a begun attempt is durable before I/O and never duplicated."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "notification-after-dispatch-stop"
+
+    def _executor(*_args: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        )
+
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+
+    def _stop_after_attempt_begins(**_kwargs: object):
+        receipt = BlackboardStore(issue_dir).load_or_create("spec").capability_receipts[0]
+        assert receipt["outcome"] == "attempting"
+        raise SystemExit("simulated process stop")
+
+    monkeypatch.setattr(runtime_mod, "run_capability_request", _stop_after_attempt_begins)
+    with pytest.raises(SystemExit, match="simulated process stop"):
+        BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=PlaybookLoader().load("standard"),
+            executor=_executor,
+        ).run(start_step="spec")
+
+    dispatches = []
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: dispatches.append(kwargs)
+        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+    )
+    BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("standard"),
+        executor=_executor,
+    ).run(start_step="spec")
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    assert dispatches == []
+    assert len(state.capability_receipts) == 1
+    assert state.capability_receipts[0]["code"] == "slack_notification_interrupted"
+    assert state.capability_receipts[0]["task_id"] == task.id
+
+
+def test_concurrent_stale_runtimes_claim_one_notification_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit Tests 7-8: concurrent recovery has one dispatch and one audited attempt."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "concurrent-notification-recovery"
+
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+    dispatches: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: dispatches.append(kwargs)
+        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+    )
+
+    runtimes = [
+        BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=PlaybookLoader().load("standard"),
+            executor=lambda *_args: None,
+        )
+        for _ in range(2)
+    ]
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=runtimes[0].blackboard.workflow_id,
+        step="spec",
+        iteration=1,
+        trigger="output_ready",
+        policy_id="output-review",
+        prompt="Review the requirements specification and choose how to continue.",
+        expected_result={"input_schema": "decision"},
+        continuations={"agree": "plan"},
+        assignee_type="human",
+    )
+    rendezvous = threading.Barrier(2)
+
+    def _notify(runtime: BlackboardWorkflowRuntime) -> None:
+        rendezvous.wait(timeout=5)
+        runtime._notify_new_human_task(task)
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        futures = [workers.submit(_notify, runtime) for runtime in runtimes]
+        for future in futures:
+            future.result(timeout=10)
+
+    for runtime in runtimes:
+        runtime.blackboard_store.save(runtime.blackboard)
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    matching_receipts = [
+        receipt
+        for receipt in state.capability_receipts
+        if receipt.get("capability") == "cafe.slack.human_task"
+        and receipt.get("task_id") == task.id
+    ]
+    assert len(dispatches) == 1
+    assert len(matching_receipts) == 1
+
+
+def test_independent_runtimes_claim_one_notification_attempt_across_processes(
+    tmp_path: Path,
+) -> None:
+    """Unit Tests 7-8: process-level claim serialization permits one dispatch."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "process-notification-recovery"
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("standard"),
+        executor=lambda *_args: None,
+    )
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=runtime.blackboard.workflow_id,
+        step="spec",
+        iteration=1,
+        trigger="output_ready",
+        policy_id="output-review",
+        prompt="Review the requirements specification and choose how to continue.",
+        expected_result={"input_schema": "decision"},
+        continuations={"agree": "plan"},
+        assignee_type="human",
+    )
+    context = multiprocessing.get_context("spawn")
+    rendezvous = context.Barrier(2)
+    result_queue = context.Queue()
+    workers = [
+        context.Process(
+            target=_notify_human_task_in_process,
+            args=(str(issue_dir), rendezvous, result_queue),
+        )
+        for _ in range(2)
+    ]
+
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=15)
+
+    assert [worker.exitcode for worker in workers] == [0, 0]
+    results = [result_queue.get(timeout=5) for _ in workers]
+    assert [result[0] for result in results] == ["ok", "ok"]
+    assert sum(bool(result[1]) for result in results) == 1
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    matching_receipts = [
+        receipt
+        for receipt in state.capability_receipts
+        if receipt.get("capability") == "cafe.slack.human_task"
+        and receipt.get("task_id") == task.id
+    ]
+    assert len(matching_receipts) == 1
+
+
+def test_receipt_transaction_uses_windows_process_lock_without_fcntl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit Test 7: the Windows fallback remains a cross-process file lock."""
+    import cafe.core.blackboard as blackboard_mod
+
+    lock_calls: list[tuple[int, int, int]] = []
+    windows_lock = SimpleNamespace(
+        LK_LOCK=1,
+        LK_UNLCK=2,
+        locking=lambda descriptor, mode, count: lock_calls.append(
+            (descriptor, mode, count)
+        ),
+    )
+    monkeypatch.setattr(blackboard_mod, "fcntl", None)
+    monkeypatch.setattr(blackboard_mod, "msvcrt", windows_lock)
+    store = BlackboardStore(tmp_path / "issue")
+    state = store.load_or_create("spec")
+
+    with store.capability_receipt_transaction(state):
+        assert [(mode, count) for _, mode, count in lock_calls] == [(1, 1)]
+
+    assert [(mode, count) for _, mode, count in lock_calls] == [(1, 1), (2, 1)]
+    assert lock_calls[0][0] == lock_calls[1][0]
+
+    monkeypatch.setattr(blackboard_mod, "msvcrt", None)
+    unavailable_store = BlackboardStore(tmp_path / "unavailable")
+    unavailable_state = unavailable_store.load_or_create("spec")
+    with pytest.raises(RuntimeError, match="cross-process file locking is unavailable"):
+        with unavailable_store.capability_receipt_transaction(unavailable_state):
+            pytest.fail("a process-local fallback must not enter the transaction")
+
+
+def test_unavailable_process_lock_preserves_user_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit Tests 7-8: no lock backend cannot block a durable user handoff."""
+    import cafe.core.blackboard as blackboard_mod
+    import cafe.core.workflow_runtime as runtime_mod
+
+    monkeypatch.setattr(blackboard_mod, "fcntl", None)
+    monkeypatch.setattr(blackboard_mod, "msvcrt", None)
+    dispatches: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: dispatches.append(kwargs)
+        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "lock-unavailable-user-handoff"
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("standard"),
+        executor=lambda *_args: StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        ),
+    ).run(start_step="spec")
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    assert result.completed is False
+    assert task.status.value == "pending"
+    assert state.current_step == "user"
+    assert state.handoff_contract.to_owner is HandoffOwner.USER
+    assert dispatches == []
+
+
+def test_windows_process_lock_failure_preserves_human_owned_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit Tests 7-8: Windows lock failure cannot block human-owned work."""
+    import cafe.core.blackboard as blackboard_mod
+    import cafe.core.workflow_runtime as runtime_mod
+
+    lock_calls: list[tuple[int, int, int]] = []
+
+    def _fail_lock(descriptor: int, mode: int, count: int) -> None:
+        lock_calls.append((descriptor, mode, count))
+        raise OSError("simulated Windows process lock failure")
+
+    monkeypatch.setattr(blackboard_mod, "fcntl", None)
+    monkeypatch.setattr(
+        blackboard_mod,
+        "msvcrt",
+        SimpleNamespace(LK_LOCK=1, LK_UNLCK=2, locking=_fail_lock),
+    )
+    dispatches: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: dispatches.append(kwargs)
+        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+    )
+    policy = HumanTaskPolicy(
+        id="approval",
+        pattern="no_changes_needed",
+        prompt="Approve this work",
+        input_schema="decision",
+        decisions=(HumanTaskDecision(id="accept", label="Accept"),),
+    )
+    binding = HumanTaskBinding(trigger="initial", task_id="approval", outcomes={"accept": "done"})
+    monkeypatch.setattr(runtime_mod, "resolve_step_human_task", lambda **_kwargs: (policy, binding))
+    playbook = PlaybookLoader().load("standard")
+    playbook.clear()
+    playbook.update(
+        {
+            "playbook": {"id": "standard"},
+            "entry_point": "approval",
+            "steps": {
+                "approval": {
+                    "skill": "phase",
+                    "role": "operator",
+                    "assignee_type": "human",
+                    "human_tasks": [binding.model_dump()],
+                    "on": {},
+                }
+            },
+        }
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "lock-failure-human-owned"
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args: (_ for _ in ()).throw(AssertionError("human step ran agent")),
+    ).run(start_step="approval")
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    state = BlackboardStore(issue_dir).load_or_create("approval")
+    assert result.completed is False
+    assert task.status.value == "pending"
+    assert state.current_step == "user"
+    assert state.handoff_contract.to_owner is HandoffOwner.USER
+    assert [(mode, count) for _, mode, count in lock_calls] == [(1, 1)]
+    assert dispatches == []
 
 
 def test_runtime_records_non_actionable_configuration_error_for_bad_task_binding(

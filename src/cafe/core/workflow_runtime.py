@@ -25,8 +25,15 @@ from cafe.core.blackboard import (
     HandoffIntent,
     HandoffOwner,
 )
-from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
-from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.core.capabilities import (
+    CAPABILITY_PR_PUBLISH_ID,
+    CAPABILITY_SLACK_HUMAN_TASK_ID,
+    default_capability_definition_dirs,
+    load_capability_registry,
+    run_capability_request,
+    validation_rejection_receipt,
+)
+from cafe.core.human_task_records import HumanTask, HumanTaskRecordStore
 from cafe.core.human_tasks import resolve_step_human_task
 from cafe.core.playbook import resolve_step_behavior
 from cafe.core.questions_schema import validate_questions_xml
@@ -56,6 +63,7 @@ PAUSE_STATUS_CODES = {
     PhaseStatusCode.NEED_CLARIFICATION.value,
     PhaseStatusCode.NEED_PERMISSION.value,
 }
+SLACK_HUMAN_TASK_TIMEOUT_SEC = 5.0
 
 
 @dataclass
@@ -108,6 +116,7 @@ class BlackboardWorkflowRuntime:
 
         playbook_meta = playbook["playbook"]
         self.playbook_id = str(playbook_meta["id"])
+        self.playbook_source = str(getattr(playbook, "source", "unknown"))
         self.steps: Dict = playbook["steps"]
         self.start_step = str(playbook.get("entry_point") or next(iter(self.steps.keys())))
         self._validate_automatic_executor_declarations()
@@ -138,6 +147,112 @@ class BlackboardWorkflowRuntime:
                     f"Step '{step_name}' has an invalid automatic executor declaration"
                 )
             self.automatic_registry.validate_inputs(executor_id, inputs)
+
+    def _repository_root(self) -> Path:
+        if self.issue_dir.parent.name == "issues" and self.issue_dir.parent.parent.name == ".cafe":
+            return self.issue_dir.parent.parent.parent
+        return self.issue_dir.parent
+
+    def _notify_new_human_task(self, task: HumanTask) -> None:
+        """Audit one fixed-boundary Slack attempt for a new standard task."""
+        if self.playbook_id != "standard" or self.playbook_source != "builtin":
+            return
+        attempt_id = f"slack-human-task:{task.id}"
+        try:
+            with self.blackboard_store.capability_receipt_transaction(self.blackboard):
+                self._dispatch_human_task_notification(task, attempt_id=attempt_id)
+        except Exception:
+            # Lock and persistence failures must not make Slack authoritative over human work.
+            return
+
+    def _dispatch_human_task_notification(self, task: HumanTask, *, attempt_id: str) -> None:
+        existing_receipt = next(
+            (
+                receipt
+                for receipt in self.blackboard.capability_receipts
+                if receipt.get("capability") == CAPABILITY_SLACK_HUMAN_TASK_ID
+                and receipt.get("workflow_id") == task.workflow_id
+                and receipt.get("task_id") == task.id
+            ),
+            None,
+        )
+        if existing_receipt is not None:
+            if existing_receipt.get("code") == "slack_notification_attempting":
+                interrupted_receipt = dict(existing_receipt)
+                interrupted_receipt.update(
+                    {
+                        "success": False,
+                        "category": "adapter_error",
+                        "code": "slack_notification_interrupted",
+                        "decision": "allow",
+                        "outcome": "execution_interrupted",
+                    }
+                )
+                self.blackboard_store.upsert_capability_receipt(
+                    self.blackboard, interrupted_receipt
+                )
+            return
+        repo_root = self._repository_root()
+        capability_request = {
+            "capability": CAPABILITY_SLACK_HUMAN_TASK_ID,
+            "args": {
+                "repository": repo_root.name,
+                "workflow_id": task.workflow_id,
+                "task_id": task.id,
+                "reason": task.prompt,
+            },
+            "effects": {
+                "writes": [],
+                "network_destinations": ["hooks.slack.com"],
+                "browser_open": [],
+            },
+            "credentials": ["slack_human_task_webhook"],
+            "permissions": {"network": ["hooks.slack.com"]},
+        }
+        attempting_receipt = {
+            "notification_attempt_id": attempt_id,
+            "correlation_id": attempt_id,
+            "capability": CAPABILITY_SLACK_HUMAN_TASK_ID,
+            "success": False,
+            "category": "pending",
+            "code": "slack_notification_attempting",
+            "decision": "pending",
+            "outcome": "attempting",
+            "inputs": {
+                "repository": repo_root.name,
+                "workflow_id": task.workflow_id,
+                "task_id": task.id,
+            },
+            "outputs": {},
+            "workflow_id": task.workflow_id,
+            "task_id": task.id,
+        }
+        self.blackboard_store.upsert_capability_receipt(self.blackboard, attempting_receipt)
+        try:
+            registry = load_capability_registry(default_capability_definition_dirs(repo_root))
+            run = run_capability_request(
+                repo_root=repo_root,
+                registry=registry,
+                capability_request=capability_request,
+                output_file=self.issue_dir / "blackboard.json",
+                timeout_sec=SLACK_HUMAN_TASK_TIMEOUT_SEC,
+            )
+            receipt = dict(run.receipt)
+        except Exception:  # The durable HumanTask remains authoritative on host failure.
+            receipt = validation_rejection_receipt(
+                capability=CAPABILITY_SLACK_HUMAN_TASK_ID,
+                code="slack_notification_internal_error",
+                raw_request=capability_request,
+                error_detail="slack_notification_internal_error",
+            )
+        receipt.update(
+            {
+                "notification_attempt_id": attempt_id,
+                "workflow_id": task.workflow_id,
+                "task_id": task.id,
+            }
+        )
+        self.blackboard_store.upsert_capability_receipt(self.blackboard, receipt)
 
     @staticmethod
     def _extract_goto_target(response: str) -> Optional[str]:
@@ -696,13 +811,7 @@ class BlackboardWorkflowRuntime:
                 completed=False,
             )
 
-        existing_wait = records.active_wait_state(
-            self.blackboard.workflow_id,
-            step=current_step,
-            trigger=trigger,
-            policy_id=policy.id,
-        )
-        task = records.materialize(
+        materialization = records.materialize_with_status(
             workflow_id=self.blackboard.workflow_id,
             step=current_step,
             iteration=iteration,
@@ -713,6 +822,8 @@ class BlackboardWorkflowRuntime:
             continuations=binding.outcomes,
             assignee_type="human",
         )
+        task = materialization.task
+        self._notify_new_human_task(task)
         if cursor is not None:
             cursor["task_id"] = task.id
             self.blackboard.ownership_cursor = cursor
@@ -727,7 +838,7 @@ class BlackboardWorkflowRuntime:
             source="workflow.owner_human",
         )
         self.blackboard_store.set_current_step(self.blackboard, "user")
-        if existing_wait is None:
+        if materialization.created:
             self.blackboard_store.record_event(
                 self.blackboard,
                 "human_task_materialized",
@@ -1453,13 +1564,7 @@ class BlackboardWorkflowRuntime:
             )
             return
 
-        existing_wait = records.active_wait_state(
-            self.blackboard.workflow_id,
-            step=current_step,
-            trigger=trigger,
-            policy_id=policy.id,
-        )
-        task = records.materialize(
+        materialization = records.materialize_with_status(
             workflow_id=self.blackboard.workflow_id,
             step=current_step,
             iteration=iteration,
@@ -1470,7 +1575,9 @@ class BlackboardWorkflowRuntime:
             continuations=binding.outcomes,
             assignee_type="user",
         )
-        if existing_wait is None:
+        task = materialization.task
+        self._notify_new_human_task(task)
+        if materialization.created:
             self.blackboard_store.record_event(
                 self.blackboard,
                 "human_task_materialized",

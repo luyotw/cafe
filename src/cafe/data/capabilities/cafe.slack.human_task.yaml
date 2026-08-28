@@ -1,0 +1,27 @@
+id: cafe.slack.human_task
+version: 1
+implementation: notify_slack_human_task
+arguments:
+  required: [repository, workflow_id, task_id, reason]
+  properties:
+    repository: {type: string}
+    workflow_id: {type: string}
+    task_id: {type: string}
+    reason: {type: string}
+outputs:
+  required: [delivered, workflow_id, task_id]
+  properties:
+    delivered: {type: boolean}
+    workflow_id: {type: string}
+    task_id: {type: string}
+effects:
+  writes: []
+  network_destinations: [hooks.slack.com]
+  browser_open: []
+credentials: [slack_human_task_webhook]
+permissions:
+  network: [hooks.slack.com]
+idempotency: unsafe
+risk: medium
+approval: not_required
+policy: allow
