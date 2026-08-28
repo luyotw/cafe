@@ -1764,15 +1764,27 @@ class BlackboardWorkflowRuntime:
         ]
         if replaced_handoff is not None:
             replaced_handoff_key = self._human_task_handoff_key(replaced_handoff)
-            legacy_handoff_key = "\x1f".join(
-                (self.blackboard.workflow_id, step, str(iteration), trigger, policy_id)
-            )
             superseded_task_ids.extend(
                 task.id
                 for task in records.tasks()
                 if task.workflow_id == self.blackboard.workflow_id
                 and task.status is HumanTaskStatus.PENDING
-                and task.handoff_key in {replaced_handoff_key, legacy_handoff_key}
+                and (
+                    task.handoff_key == replaced_handoff_key
+                    or (
+                        task.step == replaced_handoff.from_step
+                        and task.handoff_key
+                        == "\x1f".join(
+                            (
+                                task.workflow_id,
+                                task.step,
+                                str(task.iteration),
+                                task.trigger,
+                                task.policy_id,
+                            )
+                        )
+                    )
+                )
             )
         return tuple(dict.fromkeys(superseded_task_ids))
 

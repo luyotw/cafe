@@ -230,17 +230,31 @@ def test_hybrid_journey_retains_one_visit_through_its_human_boundary(
 
 
 @pytest.mark.parametrize(
-    ("owner", "legacy_handoff"),
-    (("human", False), ("hybrid", False), ("human", True), ("hybrid", True)),
+    ("owner", "legacy_handoff", "replacement_step"),
+    (
+        ("human", False, "approval"),
+        ("hybrid", False, "approval"),
+        ("human", True, "approval"),
+        ("hybrid", True, "approval"),
+        ("agent", True, "replacement"),
+        ("human", True, "replacement"),
+        ("hybrid", True, "replacement"),
+    ),
 )
 def test_owner_replacement_supersedes_only_the_prior_handoff(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owner: str, legacy_handoff: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    owner: str,
+    legacy_handoff: bool,
+    replacement_step: str,
 ) -> None:
-    """Test List 4: direct and hybrid handoffs replace current and legacy predecessors."""
+    """Test List 4: direct and hybrid handoffs replace named predecessors."""
     import cafe.core.workflow_runtime as runtime_mod
 
     issue_dir = tmp_path / ".cafe" / "issues" / f"{owner}-replacement"
-    trigger = "initial" if owner == "human" else "approve"
+    trigger = (
+        "need_clarification" if owner == "agent" else "initial" if owner == "human" else "approve"
+    )
     binding = HumanTaskBinding(trigger=trigger, task_id="approval", outcomes={"accept": "done"})
     monkeypatch.setattr(
         runtime_mod,
@@ -260,21 +274,34 @@ def test_owner_replacement_supersedes_only_the_prior_handoff(
     step: dict[str, object] = {
         "skill": "phase",
         "role": "operator",
-        "assignee_type": owner,
         "human_tasks": [binding.model_dump()],
         "on": {},
     }
+    if owner == "agent":
+        step["valid_intents"] = [trigger]
+        step["on"] = {trigger: "user"}
+    else:
+        step["assignee_type"] = owner
     if owner == "hybrid":
         step["hybrid"] = {
             "entry_portion": "approve",
             "portions": [{"id": "approve", "owner": "human", "on": {"accept": {"step": "_done"}}}],
         }
-    playbook = {"playbook": {"id": "owner-replacement"}, "steps": {"approval": step}}
+    replacement_definition = dict(step)
+    replacement_definition["human_tasks"] = [binding.model_dump()]
+    playbook = {
+        "playbook": {"id": "owner-replacement"},
+        "steps": {"approval": step, "replacement": replacement_definition},
+    }
 
     first = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
-        executor=lambda *_args, **_kwargs: pytest.fail("human boundary ran an agent"),
+        executor=(
+            (lambda *_args, **_kwargs: (trigger, {}))
+            if owner == "agent"
+            else lambda *_args, **_kwargs: pytest.fail("human boundary ran an agent")
+        ),
     ).run(start_step="approval")
     records = HumanTaskRecordStore(issue_dir)
     predecessor = records.tasks()[0]
@@ -300,8 +327,12 @@ def test_owner_replacement_supersedes_only_the_prior_handoff(
     replacement = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
-        executor=lambda *_args, **_kwargs: pytest.fail("human boundary ran an agent"),
-    ).run(start_step="approval")
+        executor=(
+            (lambda *_args, **_kwargs: (trigger, {}))
+            if owner == "agent"
+            else lambda *_args, **_kwargs: pytest.fail("human boundary ran an agent")
+        ),
+    ).run(start_step=replacement_step)
     updated = HumanTaskRecordStore(issue_dir)
     current = next(
         task for task in updated.tasks() if task.id not in {predecessor.id, unrelated.id}
