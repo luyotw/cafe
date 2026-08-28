@@ -89,6 +89,9 @@ steps:
       - trigger: need_clarification
         task_id: clarification-feedback
         outcomes: {submit: review}
+      - trigger: manual_handoff
+        task_id: iteration-limit
+        outcomes: {resume: review}
     allowed_tools: [Read, Grep, Glob, "Bash(git:*)", "Bash(cafe verification check:*)", "Bash(cafe verification focus:*)"]
     max_iterations: 1
     allowed_goto: [develop]

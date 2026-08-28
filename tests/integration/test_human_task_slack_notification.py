@@ -10,7 +10,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from cafe.core.blackboard import BlackboardStore, HandoffOwner
+from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.capabilities import (
     CAPABILITY_SLACK_HUMAN_TASK_ID,
     default_capability_definition_dirs,
@@ -68,6 +68,31 @@ def _pause_for_output_review(issue_dir: Path, *, response: str = "ready_for_revi
     return runtime.run(start_step="spec")
 
 
+def _pause_for_iteration_limit(issue_dir: Path):
+    """Hit a declared review cap before the agent is invoked."""
+    playbook = PlaybookLoader().load("standard")
+    playbook["steps"]["review"]["max_iterations"] = 1
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("an iteration-limit pause must not invoke an agent")
+        ),
+    )
+    runtime.blackboard.step_visit_counts["review"] = 1
+    runtime.blackboard_store.save(runtime.blackboard)
+    runtime.blackboard_store.set_current_step(runtime.blackboard, "review")
+    runtime.blackboard_store.update_handoff_contract(
+        runtime.blackboard,
+        from_step="review",
+        to_owner=HandoffOwner.AGENT,
+        to_step="review",
+        intent=HandoffIntent.AWAIT_AGENT,
+        source="test",
+    )
+    return runtime.run(start_step="review", single_step=True)
+
+
 def test_clean_repository_notification_succeeds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -109,6 +134,45 @@ def test_clean_repository_notification_succeeds(
     assert receipt["success"] is True
     assert receipt["workflow_id"] == task.workflow_id
     assert receipt["task_id"] == task.id
+
+
+def test_iteration_limit_materializes_and_notifies_a_resumable_human_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A declared cap produces the same durable Slack journey as other HumanTasks."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    repo_root = tmp_path / "iteration-limit-repository"
+    issue_dir = repo_root / ".cafe" / "issues" / "iteration-limit"
+    home = tmp_path / "home-iteration-limit"
+    home.mkdir()
+    _write_credential(home)
+    _set_home(monkeypatch, home)
+    posts = []
+    monkeypatch.setattr(
+        notification_mod,
+        "_open_slack_request",
+        lambda request, *, timeout: posts.append((request, timeout)) or _SlackResponse(),
+    )
+
+    result = _pause_for_iteration_limit(issue_dir)
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    payload = json.loads(posts[0][0].data)
+
+    assert result.completed is False
+    assert result.final_status_code == "ITERATION_LIMIT_REACHED"
+    assert task.status is HumanTaskStatus.PENDING
+    assert task.policy_id == "iteration-limit"
+    assert task.trigger == "manual_handoff"
+    assert task.continuations == {"resume": "review"}
+    assert state.current_step == "user"
+    assert state.handoff_contract.to_owner is HandoffOwner.USER
+    assert state.handoff_contract.intent is HandoffIntent.MANUAL_HANDOFF
+    assert len(posts) == 1
+    assert task.id in payload["text"]
+    assert f"cafe task complete {task.id}" in payload["text"]
 
 
 def test_project_content_cannot_redirect_or_gain_notification_authority(

@@ -24,6 +24,7 @@ from cafe.core.blackboard import (
     HandoffIntent,
     HandoffOwner,
 )
+from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.core.types import AgentCLI, TokenUsage
@@ -804,8 +805,8 @@ class TestSelfLoop:
         assert subsequent.get("pr", 0) >= 1
         assert result.completed is True
 
-    def test_review_exceeds_max_iterations_raises(self, tmp_path: Path) -> None:
-        """review 超過 max_iterations=3 應拋出 RuntimeError。"""
+    def test_review_exceeds_max_iterations_materializes_a_human_task(self, tmp_path: Path) -> None:
+        """review 超過 max_iterations=3 時應暫停給可恢復的 HumanTask。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-loop-overflow"
         playbook = _load_default_playbook()
         call_counts: dict = {}
@@ -831,11 +832,19 @@ class TestSelfLoop:
             playbook=playbook,
             executor=executor,
         )
-        with pytest.raises(RuntimeError, match="exceeded max_iterations"):
-            runner.run(max_transitions=30)
+        result = runner.run(max_transitions=30)
 
-        # review 應被呼叫恰好 max_iterations（3）次後拋出（第 4 次在執行前被攔截）
+        # review 應被呼叫恰好 max_iterations（3）次後，在第 4 次前建立任務。
         assert call_counts.get("review", 0) >= 3
+        assert result.completed is False
+        assert result.final_status_code == "ITERATION_LIMIT_REACHED"
+        task = HumanTaskRecordStore(issue_dir).tasks()[-1]
+        assert task.status is HumanTaskStatus.PENDING
+        assert task.policy_id == "iteration-limit"
+        assert task.continuations == {"resume": "review"}
+        state = BlackboardStore(issue_dir).load_or_create("spec")
+        assert state.current_step == "user"
+        assert state.handoff_contract.intent is HandoffIntent.MANUAL_HANDOFF
 
     def test_iteration_counters_recorded_in_blackboard(self, tmp_path: Path) -> None:
         """self-loop 期間 blackboard events 應包含正確的 visit 計數。"""
