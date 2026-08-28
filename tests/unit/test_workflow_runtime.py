@@ -2,8 +2,10 @@
 
 from concurrent.futures import ThreadPoolExecutor
 import json
+import multiprocessing
 from pathlib import Path
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +16,43 @@ from cafe.core.human_tasks import HumanTaskBinding, HumanTaskDecision, HumanTask
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
+
+
+def _notify_human_task_in_process(
+    issue_dir_value: str,
+    rendezvous: object,
+    result_queue: object,
+) -> None:
+    """Run one stale notification claimant in an independent process."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    dispatched = False
+
+    def _dispatch(**_kwargs: object) -> SimpleNamespace:
+        nonlocal dispatched
+        dispatched = True
+        time.sleep(0.25)
+        return SimpleNamespace(
+            receipt={"capability": "cafe.slack.human_task", "success": True}
+        )
+
+    try:
+        issue_dir = Path(issue_dir_value)
+        runtime_mod.load_capability_registry = lambda _dirs: {}
+        runtime_mod.default_capability_definition_dirs = lambda _root: []
+        runtime_mod.run_capability_request = _dispatch
+        runtime = BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=PlaybookLoader().load("standard"),
+            executor=lambda *_args: None,
+        )
+        task = HumanTaskRecordStore(issue_dir).tasks()[0]
+        rendezvous.wait(timeout=10)
+        runtime._notify_new_human_task(task)
+    except BaseException as exc:
+        result_queue.put(("error", repr(exc)))
+        return
+    result_queue.put(("ok", dispatched))
 
 
 def _write_baton(
@@ -2152,6 +2191,90 @@ def test_concurrent_stale_runtimes_claim_one_notification_attempt(
     ]
     assert len(dispatches) == 1
     assert len(matching_receipts) == 1
+
+
+def test_independent_runtimes_claim_one_notification_attempt_across_processes(
+    tmp_path: Path,
+) -> None:
+    """Unit Tests 7-8: process-level claim serialization permits one dispatch."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "process-notification-recovery"
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("standard"),
+        executor=lambda *_args: None,
+    )
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=runtime.blackboard.workflow_id,
+        step="spec",
+        iteration=1,
+        trigger="output_ready",
+        policy_id="output-review",
+        prompt="Review the requirements specification and choose how to continue.",
+        expected_result={"input_schema": "decision"},
+        continuations={"agree": "plan"},
+        assignee_type="human",
+    )
+    context = multiprocessing.get_context("spawn")
+    rendezvous = context.Barrier(2)
+    result_queue = context.Queue()
+    workers = [
+        context.Process(
+            target=_notify_human_task_in_process,
+            args=(str(issue_dir), rendezvous, result_queue),
+        )
+        for _ in range(2)
+    ]
+
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=15)
+
+    assert [worker.exitcode for worker in workers] == [0, 0]
+    results = [result_queue.get(timeout=5) for _ in workers]
+    assert [result[0] for result in results] == ["ok", "ok"]
+    assert sum(bool(result[1]) for result in results) == 1
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    matching_receipts = [
+        receipt
+        for receipt in state.capability_receipts
+        if receipt.get("capability") == "cafe.slack.human_task"
+        and receipt.get("task_id") == task.id
+    ]
+    assert len(matching_receipts) == 1
+
+
+def test_receipt_transaction_uses_windows_process_lock_without_fcntl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit Test 7: the Windows fallback remains a cross-process file lock."""
+    import cafe.core.blackboard as blackboard_mod
+
+    lock_calls: list[tuple[int, int, int]] = []
+    windows_lock = SimpleNamespace(
+        LK_LOCK=1,
+        LK_UNLCK=2,
+        locking=lambda descriptor, mode, count: lock_calls.append(
+            (descriptor, mode, count)
+        ),
+    )
+    monkeypatch.setattr(blackboard_mod, "fcntl", None)
+    monkeypatch.setattr(blackboard_mod, "msvcrt", windows_lock)
+    store = BlackboardStore(tmp_path / "issue")
+    state = store.load_or_create("spec")
+
+    with store.capability_receipt_transaction(state):
+        assert [(mode, count) for _, mode, count in lock_calls] == [(1, 1)]
+
+    assert [(mode, count) for _, mode, count in lock_calls] == [(1, 1), (2, 1)]
+    assert lock_calls[0][0] == lock_calls[1][0]
+
+    monkeypatch.setattr(blackboard_mod, "msvcrt", None)
+    unavailable_store = BlackboardStore(tmp_path / "unavailable")
+    unavailable_state = unavailable_store.load_or_create("spec")
+    with pytest.raises(RuntimeError, match="cross-process file locking is unavailable"):
+        with unavailable_store.capability_receipt_transaction(unavailable_state):
+            pytest.fail("a process-local fallback must not enter the transaction")
 
 
 def test_runtime_records_non_actionable_configuration_error_for_bad_task_binding(

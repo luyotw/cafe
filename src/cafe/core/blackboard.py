@@ -10,12 +10,17 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import IO, Any, Dict, Iterator, List, Optional
 
 try:
     import fcntl
-except ImportError:  # pragma: no cover - Windows falls back to the local lock.
+except ImportError:  # pragma: no cover - unavailable on Windows.
     fcntl = None  # type: ignore[assignment]
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - available only on Windows.
+    msvcrt = None  # type: ignore[assignment]
 
 from cafe.core.packet_io import atomic_write_bytes
 from cafe.core.workflow_models import BatonRejected
@@ -38,6 +43,27 @@ def _legacy_workflow_id(data: Dict[str, Any], initial_step: str) -> str:
         "updated_at": str(data.get("updated_at", "")),
     }
     return str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(identity, sort_keys=True)))
+
+
+@contextmanager
+def _process_file_lock(lock_file: IO[str]) -> Iterator[None]:
+    """Hold an exclusive kernel file lock for the current process."""
+    if fcntl is not None:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        return
+    if msvcrt is None:
+        raise RuntimeError("cross-process file locking is unavailable")
+    lock_file.seek(0)
+    msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+    try:
+        yield
+    finally:
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 class ArtifactKind(str, Enum):
@@ -721,18 +747,13 @@ class BlackboardStore:
         with self._thread_lock_for(self.file_path):
             self.issue_dir.mkdir(parents=True, exist_ok=True)
             with self.receipt_lock_path.open("a+", encoding="utf-8") as lock_file:
-                if fcntl is not None:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-                try:
+                with _process_file_lock(lock_file):
                     if self.file_path.exists():
                         raw = json.loads(self.file_path.read_text(encoding="utf-8"))
                         persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
                         state.__dict__.clear()
                         state.__dict__.update(persisted.__dict__)
                     yield state
-                finally:
-                    if fcntl is not None:
-                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     @classmethod
     def _thread_lock_for(cls, file_path: Path) -> threading.RLock:
