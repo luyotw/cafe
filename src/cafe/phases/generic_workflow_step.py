@@ -1194,14 +1194,6 @@ class GenericWorkflowStepExecutor(Phase):
         baton_path: Optional[Path] = None,
     ) -> Dict[str, str]:
         role = str(step_def.get("role", "developer"))
-        role_dir = {
-            "pm": "pm",
-            "reviewer": "reviewer",
-            "writer": "writer",
-            "editor": "editor",
-            "researcher": "researcher",
-            "ops": "ops",
-        }.get(role, "developer")
         # 這條 playbook 實際可用的 to_step（= 所有 step 名 + 內建 user/done），
         # 與 baton 驗證器一致。注入 prompt 讓 agent 不會憑共用 skill 的範例（如 pr）
         # 猜出本 playbook 不存在的 step。
@@ -1214,7 +1206,7 @@ class GenericWorkflowStepExecutor(Phase):
         }
         valid_baton_intents = effective_step_handoff_intents(step_def)
         behavior = resolve_step_behavior(playbook, step_name)
-        _agent_source, agent_content = AgentManager.read_agent_file(agent_name, role_dir)
+        _agent_source, agent_content = AgentManager.read_agent_file(agent_name, role)
         materialized_agent = output_file.parent / "context_agent_file.md"
         self._restore_control_file(materialized_agent, agent_content.encode("utf-8"))
         context = {

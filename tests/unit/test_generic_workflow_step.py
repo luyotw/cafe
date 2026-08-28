@@ -3133,6 +3133,73 @@ def test_build_context_materializes_agent_for_later_external_read(tmp_path: Path
     assert "old guidance" in materialized.read_text(encoding="utf-8")
 
 
+def test_build_context_resolves_builtin_agent_from_declared_qa_role(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    working_dir = tmp_path / "working"
+    working_dir.mkdir()
+    monkeypatch.chdir(working_dir)
+    issue_dir = tmp_path / ".cafe" / "issues" / "qa-fallback"
+    playbook = {
+        "playbook": {"id": "qa-fallback"},
+        "roles": {"qa": {"default_agent": "Quinn"}},
+        "steps": {
+            "qa": {
+                "skill": "cafe-plan",
+                "role": "qa",
+                "output_artifact": "qa_feedback",
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="qa-fallback",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={},
+    )
+    state = BlackboardStore(executor.issue_dir).load_or_create("qa")
+
+    with patch.object(Path, "home", return_value=tmp_path / "empty-home"):
+        _source, expected_guidance = AgentManager.read_agent_file("Quinn", "qa")
+        result = executor.execute_step("qa", playbook["steps"]["qa"], state)
+
+    assert result.status_code == "confirmed"
+    materialized = issue_dir / "qa" / "iteration_001" / "context_agent_file.md"
+    assert materialized.read_text(encoding="utf-8") == expected_guidance
+
+
+def test_build_context_resolves_global_agent_from_custom_declared_role(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    working_dir = tmp_path / "working"
+    working_dir.mkdir()
+    monkeypatch.chdir(working_dir)
+    global_home = tmp_path / "global-home"
+    global_agent = global_home / ".cafe" / "agents" / "security" / "Avery.md"
+    global_agent.parent.mkdir(parents=True)
+    expected_guidance = "---\nname: Avery\n---\n\nReview security boundaries.\n"
+    global_agent.write_text(expected_guidance, encoding="utf-8")
+    executor = _make_minimal_executor(tmp_path)
+    state = BlackboardStore(executor.issue_dir).load_or_create("audit")
+    output_file = executor.issue_dir / "audit" / "iteration_001" / "output.md"
+
+    with patch.object(Path, "home", return_value=global_home):
+        context = executor._build_context(
+            step_name="audit",
+            step_def={"skill": "cafe-plan", "role": "security"},
+            blackboard_state=state,
+            agent_name="Avery",
+            output_file=output_file,
+        )
+
+    assert Path(context["agent_file"]).read_text(encoding="utf-8") == expected_guidance
+
+
 def test_workflow_limits_checklist_inputs_to_step_artifacts(tmp_path: Path) -> None:
     """Checklist generation uses the same declared artifact boundary as the prompt."""
     executor = _make_minimal_executor(tmp_path)
