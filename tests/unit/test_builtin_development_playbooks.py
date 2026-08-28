@@ -65,6 +65,24 @@ def test_standard_owns_the_established_full_development_graph() -> None:
     assert playbook.steps["review"].on["await_agent"] == "pr"
 
 
+def test_every_builtin_develop_step_binds_the_generic_permission_task() -> None:
+    """Test List 5: permission requests reuse one policy and always resume develop."""
+    policy = next(
+        task
+        for task in SkillLoader().get_workflow_contract("cafe-develop").human_tasks
+        if task.id == "permission-answers"
+    )
+    assert policy.pattern == "revision_feedback"
+    assert policy.input_schema == "feedback"
+
+    loader = PlaybookLoader()
+    for playbook_id in DEVELOPMENT_PLAYBOOKS:
+        develop = loader.load_model(playbook_id, strict=True).model.steps["develop"]
+        binding = next(task for task in develop.human_tasks if task.trigger == "need_permission")
+        assert binding.task_id == "permission-answers"
+        assert binding.outcomes == {"submit": "develop"}
+
+
 def test_simple_owns_the_spec_develop_qa_pr_graph() -> None:
     loader = PlaybookLoader()
 

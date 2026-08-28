@@ -112,6 +112,32 @@ def test_default_human_tasks_validate_and_route_all_user_handoff_patterns(tmp_pa
     assert no_change_store.load_or_create("develop").current_step == "pr"
 
 
+def test_builtin_develop_permission_task_completes_and_resumes_develop(tmp_path: Path) -> None:
+    """Test List 3: built-in permission feedback resumes without consumer workflow glue."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "permission-resume"
+    playbook = PlaybookLoader().load("standard")
+    store, state = _paused_default_state(
+        issue_dir, from_step="develop", intent=HandoffIntent.NEED_PERMISSION
+    )
+    task = _materialize_default_task(
+        issue_dir, state, from_step="develop", trigger="need_permission"
+    )
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="develop",
+        trigger="need_permission",
+        raw_payload={"human_task_id": task.id, "feedback": "Permission granted."},
+        source="integration",
+    )
+
+    assert result.target == "develop"
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert store.load_or_create("develop").current_step == "develop"
+
+
 def test_invalid_default_human_task_response_keeps_the_user_pause(tmp_path: Path) -> None:
     """Bad command or interactive data cannot mutate the paused handoff."""
     issue_dir = tmp_path / ".cafe" / "issues" / "invalid"

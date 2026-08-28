@@ -157,10 +157,10 @@ def test_project_content_cannot_redirect_or_gain_notification_authority(
     assert "integration-secret" not in task_text
 
 
-def test_project_playbook_named_standard_cannot_gain_notification_authority(
+def test_project_playbook_named_standard_receives_machine_controlled_notification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Integration 2: loader provenance, not mutable playbook ID, gates authority."""
+    """Test List 1: project provenance does not suppress core task notification."""
     import cafe.core.human_task_notifications as notification_mod
 
     repo_root = tmp_path / "project-standard"
@@ -175,6 +175,10 @@ def test_project_playbook_named_standard_cannot_gain_notification_authority(
         encoding="utf-8",
     )
     project_standard = loader.load("standard")
+    home = tmp_path / "home-project-standard"
+    home.mkdir()
+    _write_credential(home)
+    _set_home(monkeypatch, home)
     posts = []
     monkeypatch.setattr(
         notification_mod,
@@ -196,8 +200,40 @@ def test_project_playbook_named_standard_cannot_gain_notification_authority(
     task = HumanTaskRecordStore(issue_dir).tasks()[0]
     state = BlackboardStore(issue_dir).load_or_create("spec")
     assert task.status is HumanTaskStatus.PENDING
-    assert posts == []
-    assert state.capability_receipts == []
+    assert len(posts) == 1
+    assert state.capability_receipts[0]["task_id"] == task.id
+
+
+def test_disabled_machine_notification_leaves_a_durable_nonblocking_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test List 2: an explicitly disabled transport does not block the pending task."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    repo_root = tmp_path / "disabled-repository"
+    issue_dir = repo_root / ".cafe" / "issues" / "disabled"
+    home = tmp_path / "home-disabled"
+    (home / ".cafe").mkdir(parents=True)
+    (home / ".cafe" / "config.yaml").write_text(
+        "human_task_notifications:\n  enabled: false\n  transport: slack\n",
+        encoding="utf-8",
+    )
+    _set_home(monkeypatch, home)
+    monkeypatch.setattr(
+        notification_mod,
+        "_open_slack_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("disabled must not post")),
+    )
+
+    _pause_for_output_review(issue_dir)
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    receipt = state.capability_receipts[0]
+    assert task.status is HumanTaskStatus.PENDING
+    assert state.current_step == "user"
+    assert receipt["code"] == "human_task_notification_disabled"
+    assert receipt["outcome"] == "disabled"
 
 
 @pytest.mark.parametrize(
