@@ -1176,25 +1176,20 @@ def agent_sync() -> None:
 @app.command(name="chat", context_settings={"allow_extra_args": False, "ignore_unknown_options": False})
 def chat_with_agent(
     ctx: typer.Context,
-    role: str = typer.Argument(..., help="Role: pm, developer, or reviewer"),
+    role: str = typer.Argument(..., help="Playbook-declared role"),
 ) -> None:
-    """Open interactive chat with specified role Agent
+    """Open interactive chat with a playbook-declared role Agent
 
     This command allows you to quickly interact with an Agent of specified role,
     without manually looking up and entering session id.
     The system automatically infers the issue from current branch and loads corresponding session.
-
-    \b
-    Supported roles:
-    - pm: Product Manager Agent
-    - developer: Developer Agent
-    - reviewer: Reviewer Agent
+    Valid roles come from the active issue's playbook, including custom roles.
 
     \b
     Examples:
-        cafe chat pm
         cafe chat developer
-        cafe chat reviewer
+        cafe chat qa
+        cafe chat researcher
     """
     # 1. Validate role parameter
     issue_name = _get_and_validate_branch(ctx, "chat")
