@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -228,11 +229,14 @@ def test_hybrid_journey_retains_one_visit_through_its_human_boundary(
     assert BlackboardStore(issue_dir).load_or_create("mixed").step_visit_counts == {"mixed": 1}
 
 
-@pytest.mark.parametrize("owner", ("human", "hybrid"))
+@pytest.mark.parametrize(
+    ("owner", "legacy_handoff"),
+    (("human", False), ("hybrid", False), ("human", True), ("hybrid", True)),
+)
 def test_owner_replacement_supersedes_only_the_prior_handoff(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owner: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owner: str, legacy_handoff: bool
 ) -> None:
-    """Test List 4: direct and hybrid user handoffs replace only their predecessor."""
+    """Test List 4: direct and hybrid handoffs replace current and legacy predecessors."""
     import cafe.core.workflow_runtime as runtime_mod
 
     issue_dir = tmp_path / ".cafe" / "issues" / f"{owner}-replacement"
@@ -274,6 +278,13 @@ def test_owner_replacement_supersedes_only_the_prior_handoff(
     ).run(start_step="approval")
     records = HumanTaskRecordStore(issue_dir)
     predecessor = records.tasks()[0]
+    if legacy_handoff:
+        persisted = json.loads(records.file_path.read_text(encoding="utf-8"))
+        persisted["tasks"][0]["handoff_key"] = "\u001f".join(
+            (predecessor.workflow_id, predecessor.step, "1", trigger, predecessor.policy_id)
+        )
+        records.file_path.write_text(json.dumps(persisted), encoding="utf-8")
+        predecessor = HumanTaskRecordStore(issue_dir).get_task(predecessor.id)
     unrelated = records.materialize(
         workflow_id=predecessor.workflow_id,
         step="unrelated",

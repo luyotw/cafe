@@ -21,7 +21,6 @@ from cafe.core.capabilities import (
     run_pr_publish_capability,
 )
 
-
 SLACK_CREDENTIAL = "slack_human_task_webhook"
 SLACK_DESTINATION = "hooks.slack.com"
 
@@ -279,6 +278,23 @@ def test_slack_human_task_capability_requires_workflow_owned_dispatch(
     assert rejected.receipt["code"] == "human_task_notification_not_workflow_owned"
     assert rejected.receipt["inputs"] == {}
     assert "project-supplied-secret-bearing-value" not in str(rejected.receipt)
+    assert adapter_calls == []
+
+    malformed = {
+        **request,
+        "unexpected": "malformed-secret-bearing-value",
+    }
+    malformed_rejected = run_capability_request(
+        repo_root=tmp_path,
+        registry=registry,
+        capability_request=malformed,
+        output_file=tmp_path / "receipt.md",
+    )
+
+    assert malformed_rejected.receipt["success"] is False
+    assert malformed_rejected.receipt["code"] == "human_task_notification_not_workflow_owned"
+    assert malformed_rejected.receipt["inputs"] == {}
+    assert "malformed-secret-bearing-value" not in str(malformed_rejected.receipt)
     assert adapter_calls == []
 
     authorized = run_capability_request(

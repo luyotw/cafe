@@ -1174,6 +1174,17 @@ def run_capability_request(
         json.dumps(raw_request, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()
 
+    if cap_id == CAPABILITY_SLACK_HUMAN_TASK_ID and not trusted_human_task_notification:
+        return _non_dispatch_run(
+            correlation_id=correlation_id,
+            capability=cap_id,
+            fingerprint=raw_fingerprint,
+            code="human_task_notification_not_workflow_owned",
+            decision=PolicyDecision.DENY,
+            outcome="policy_denied",
+            inputs={},
+        )
+
     raw_manifest = registry.get(cap_id)
     if raw_manifest is None:
         return _non_dispatch_run(
@@ -1207,20 +1218,6 @@ def run_capability_request(
             decision=PolicyDecision.DENY,
             outcome="validation_rejection",
             inputs=_receipt_inputs(raw_request.get("args")),
-        )
-
-    if (
-        request.capability == CAPABILITY_SLACK_HUMAN_TASK_ID
-        and not trusted_human_task_notification
-    ):
-        return _non_dispatch_run(
-            correlation_id=correlation_id,
-            capability=request.capability,
-            fingerprint=canonical_request_fingerprint(request),
-            code="human_task_notification_not_workflow_owned",
-            decision=PolicyDecision.DENY,
-            outcome="policy_denied",
-            inputs={},
         )
 
     evaluation = evaluate_capability_request(registry, raw_request)
