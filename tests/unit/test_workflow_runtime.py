@@ -2277,6 +2277,114 @@ def test_receipt_transaction_uses_windows_process_lock_without_fcntl(
             pytest.fail("a process-local fallback must not enter the transaction")
 
 
+def test_unavailable_process_lock_preserves_user_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit Tests 7-8: no lock backend cannot block a durable user handoff."""
+    import cafe.core.blackboard as blackboard_mod
+    import cafe.core.workflow_runtime as runtime_mod
+
+    monkeypatch.setattr(blackboard_mod, "fcntl", None)
+    monkeypatch.setattr(blackboard_mod, "msvcrt", None)
+    dispatches: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: dispatches.append(kwargs)
+        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "lock-unavailable-user-handoff"
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("standard"),
+        executor=lambda *_args: StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        ),
+    ).run(start_step="spec")
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    assert result.completed is False
+    assert task.status.value == "pending"
+    assert state.current_step == "user"
+    assert state.handoff_contract.to_owner is HandoffOwner.USER
+    assert dispatches == []
+
+
+def test_windows_process_lock_failure_preserves_human_owned_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit Tests 7-8: Windows lock failure cannot block human-owned work."""
+    import cafe.core.blackboard as blackboard_mod
+    import cafe.core.workflow_runtime as runtime_mod
+
+    lock_calls: list[tuple[int, int, int]] = []
+
+    def _fail_lock(descriptor: int, mode: int, count: int) -> None:
+        lock_calls.append((descriptor, mode, count))
+        raise OSError("simulated Windows process lock failure")
+
+    monkeypatch.setattr(blackboard_mod, "fcntl", None)
+    monkeypatch.setattr(
+        blackboard_mod,
+        "msvcrt",
+        SimpleNamespace(LK_LOCK=1, LK_UNLCK=2, locking=_fail_lock),
+    )
+    dispatches: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: dispatches.append(kwargs)
+        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+    )
+    policy = HumanTaskPolicy(
+        id="approval",
+        pattern="no_changes_needed",
+        prompt="Approve this work",
+        input_schema="decision",
+        decisions=(HumanTaskDecision(id="accept", label="Accept"),),
+    )
+    binding = HumanTaskBinding(trigger="initial", task_id="approval", outcomes={"accept": "done"})
+    monkeypatch.setattr(runtime_mod, "resolve_step_human_task", lambda **_kwargs: (policy, binding))
+    playbook = PlaybookLoader().load("standard")
+    playbook.clear()
+    playbook.update(
+        {
+            "playbook": {"id": "standard"},
+            "entry_point": "approval",
+            "steps": {
+                "approval": {
+                    "skill": "phase",
+                    "role": "operator",
+                    "assignee_type": "human",
+                    "human_tasks": [binding.model_dump()],
+                    "on": {},
+                }
+            },
+        }
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "lock-failure-human-owned"
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args: (_ for _ in ()).throw(AssertionError("human step ran agent")),
+    ).run(start_step="approval")
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    state = BlackboardStore(issue_dir).load_or_create("approval")
+    assert result.completed is False
+    assert task.status.value == "pending"
+    assert state.current_step == "user"
+    assert state.handoff_contract.to_owner is HandoffOwner.USER
+    assert [(mode, count) for _, mode, count in lock_calls] == [(1, 1)]
+    assert dispatches == []
+
+
 def test_runtime_records_non_actionable_configuration_error_for_bad_task_binding(
     tmp_path: Path,
 ) -> None:
