@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -20,6 +21,8 @@ SLACK_WEBHOOK_HOST = "hooks.slack.com"
 MAX_CREDENTIAL_BYTES = 8192
 MACHINE_CONFIG_DIRECTORY = ".cafe"
 MACHINE_CONFIG_FILENAME = "config.yaml"
+MAX_NOTIFICATION_METADATA_LENGTH = 128
+SAFE_NOTIFICATION_METADATA = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
 
 
 class SlackNotificationError(RuntimeError):
@@ -63,6 +66,11 @@ def build_human_task_message(
     *, repository: str, workflow_id: str, task_id: str, step: str, task_type: str
 ) -> HumanTaskSlackMessage:
     """Build the supported task inspection and completion journey."""
+    repository = sanitize_human_task_metadata(repository)
+    workflow_id = sanitize_human_task_metadata(workflow_id)
+    task_id = sanitize_human_task_metadata(task_id)
+    step = sanitize_human_task_metadata(step)
+    task_type = sanitize_human_task_metadata(task_type)
     return HumanTaskSlackMessage(
         repository=repository,
         workflow_id=workflow_id,
@@ -72,6 +80,17 @@ def build_human_task_message(
         inspect_command=f"cafe task inspect {task_id}",
         complete_command=f"cafe task complete {task_id}",
     )
+
+
+def sanitize_human_task_metadata(value: str) -> str:
+    """Keep task metadata identifiable without making it Slack-authored content."""
+    if (
+        len(value) <= MAX_NOTIFICATION_METADATA_LENGTH
+        and SAFE_NOTIFICATION_METADATA.fullmatch(value) is not None
+    ):
+        return value
+    digest = hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()[:12]
+    return f"invalid-{digest}"
 
 
 @dataclass(frozen=True)
@@ -117,7 +136,17 @@ def load_human_task_notification_settings() -> HumanTaskNotificationSettings:
             outcome="skipped",
             code="human_task_notification_config_invalid",
         )
-    declaration = raw_config.get("human_task_notifications", {})
+    notifications = raw_config.get("notifications", {})
+    if notifications is None:
+        notifications = {}
+    if not isinstance(notifications, dict):
+        return HumanTaskNotificationSettings(
+            enabled=False,
+            transport="",
+            outcome="skipped",
+            code="human_task_notification_config_invalid",
+        )
+    declaration = notifications.get("human_tasks", {})
     if declaration is None:
         declaration = {}
     if not isinstance(declaration, dict):

@@ -21,9 +21,10 @@ project hook, task, agent response, or environment variable.
    an outbound request:
 
    ```yaml
-   human_task_notifications:
-     enabled: true
-     transport: slack
+   notifications:
+     human_tasks:
+       enabled: true
+       transport: slack
    ```
 
 3. Create the fixed user-owned credential file and restrict it to your account:

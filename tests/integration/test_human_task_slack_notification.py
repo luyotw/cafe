@@ -264,7 +264,7 @@ def test_disabled_machine_notification_leaves_a_durable_nonblocking_receipt(
     home = tmp_path / "home-disabled"
     (home / ".cafe").mkdir(parents=True)
     (home / ".cafe" / "config.yaml").write_text(
-        "human_task_notifications:\n  enabled: false\n  transport: slack\n",
+        "notifications:\n  human_tasks:\n    enabled: false\n    transport: slack\n",
         encoding="utf-8",
     )
     _set_home(monkeypatch, home)
@@ -296,7 +296,7 @@ def test_unsupported_machine_notification_leaves_a_durable_skipped_receipt(
     home = tmp_path / "home-unsupported"
     (home / ".cafe").mkdir(parents=True)
     (home / ".cafe" / "config.yaml").write_text(
-        "human_task_notifications:\n  enabled: true\n  transport: email\n",
+        "notifications:\n  human_tasks:\n    enabled: true\n    transport: email\n",
         encoding="utf-8",
     )
     _set_home(monkeypatch, home)

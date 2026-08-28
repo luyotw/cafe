@@ -33,7 +33,10 @@ from cafe.core.capabilities import (
     run_capability_request,
     validation_rejection_receipt,
 )
-from cafe.core.human_task_notifications import load_human_task_notification_settings
+from cafe.core.human_task_notifications import (
+    load_human_task_notification_settings,
+    sanitize_human_task_metadata,
+)
 from cafe.core.human_task_records import HumanTask, HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.human_tasks import resolve_step_human_task
 from cafe.core.playbook import resolve_step_behavior
@@ -128,6 +131,7 @@ class BlackboardWorkflowRuntime:
             playbook_id=self.playbook_id,
             tolerate_invalid_baton=True,
         )
+        self._replaced_user_handoff: HandoffContract | None = None
 
     def _validate_automatic_executor_declarations(self) -> None:
         """Reject unavailable automatic authority before recording a workflow visit."""
@@ -179,11 +183,11 @@ class BlackboardWorkflowRuntime:
     def _notification_inputs(self, task: HumanTask) -> dict[str, str]:
         """Return the closed safe payload shared by receipts and capability requests."""
         return {
-            "repository": self._repository_root().name,
-            "workflow_id": task.workflow_id,
-            "task_id": task.id,
-            "step": task.step,
-            "task_type": task.policy_id,
+            "repository": sanitize_human_task_metadata(self._repository_root().name),
+            "workflow_id": sanitize_human_task_metadata(task.workflow_id),
+            "task_id": sanitize_human_task_metadata(task.id),
+            "step": sanitize_human_task_metadata(task.step),
+            "task_type": sanitize_human_task_metadata(task.policy_id),
         }
 
     def _record_notification_outcome(
@@ -1560,6 +1564,16 @@ class BlackboardWorkflowRuntime:
         contract_source: str = "workflow.pause",
         record_event: bool = True,
     ) -> PlaybookRunResult:
+        replaced_handoff = self._replaced_user_handoff
+        if (
+            replaced_handoff is None
+            and update_contract
+            and self.blackboard.current_step == "user"
+            and self.blackboard.handoff_contract is not None
+            and self.blackboard.handoff_contract.to_owner is HandoffOwner.USER
+            and self.blackboard.handoff_contract.to_step == "user"
+        ):
+            replaced_handoff = self.blackboard.handoff_contract
         if update_contract:
             self.blackboard_store.update_handoff_contract(
                 self.blackboard,
@@ -1570,7 +1584,11 @@ class BlackboardWorkflowRuntime:
                 status_code=status_code,
                 source=contract_source,
             )
-        self._materialize_user_handoff_task(current_step=current_step)
+        self._materialize_user_handoff_task(
+            current_step=current_step,
+            replaced_handoff=replaced_handoff,
+        )
+        self._replaced_user_handoff = None
         if record_event:
             self.blackboard_store.record_event(
                 self.blackboard,
@@ -1589,7 +1607,12 @@ class BlackboardWorkflowRuntime:
             completed=False,
         )
 
-    def _materialize_user_handoff_task(self, *, current_step: str) -> None:
+    def _materialize_user_handoff_task(
+        self,
+        *,
+        current_step: str,
+        replaced_handoff: HandoffContract | None = None,
+    ) -> None:
         """Create or recover a declared task before exposing the user pause."""
         step_def = self.steps.get(current_step)
         if not isinstance(step_def, dict):
@@ -1608,6 +1631,7 @@ class BlackboardWorkflowRuntime:
         trigger = contract.intent.value
         iteration = self._human_task_iteration(current_step)
         records = HumanTaskRecordStore(self.issue_dir)
+        handoff_key = self._human_task_handoff_key(contract)
         try:
             policy, binding = resolve_step_human_task(
                 playbook_data=self.playbook,
@@ -1630,6 +1654,23 @@ class BlackboardWorkflowRuntime:
             )
             return
 
+        if replaced_handoff is None:
+            existing_task = next(
+                (
+                    task
+                    for task in records.tasks()
+                    if task.workflow_id == self.blackboard.workflow_id
+                    and task.status is HumanTaskStatus.PENDING
+                    and task.step == current_step
+                    and task.iteration == iteration
+                    and task.trigger == trigger
+                    and task.policy_id == policy.id
+                ),
+                None,
+            )
+            if existing_task is not None:
+                handoff_key = existing_task.handoff_key
+
         materialization = records.materialize_with_status(
             workflow_id=self.blackboard.workflow_id,
             step=current_step,
@@ -1640,12 +1681,14 @@ class BlackboardWorkflowRuntime:
             expected_result=policy.model_dump(mode="json"),
             continuations=binding.outcomes,
             assignee_type="user",
+            handoff_key=handoff_key,
             superseded_task_ids=self._superseded_human_task_ids(
                 records,
                 step=current_step,
                 iteration=iteration,
                 trigger=trigger,
                 policy_id=policy.id,
+                replaced_handoff=replaced_handoff,
             ),
         )
         task = materialization.task
@@ -1674,16 +1717,16 @@ class BlackboardWorkflowRuntime:
         iteration: int,
         trigger: str,
         policy_id: str,
+        replaced_handoff: HandoffContract | None = None,
     ) -> tuple[str, ...]:
-        """Identify only same-lineage pending tasks replaced by a newer iteration.
+        """Identify only named pending tasks replaced by this handoff.
 
         A different handoff key or another pending task is never enough to
-        trigger cancellation. The replacement is explicit because the active
-        workflow iteration advanced for the same step/trigger/policy lineage.
+        trigger cancellation. A newer iteration replaces its matching lineage;
+        an in-iteration replacement names its predecessor through the prior
+        durable user handoff identity.
         """
-        if iteration <= 1:
-            return ()
-        return tuple(
+        superseded_task_ids = [
             task.id
             for task in records.tasks()
             if task.workflow_id == self.blackboard.workflow_id
@@ -1692,7 +1735,40 @@ class BlackboardWorkflowRuntime:
             and task.trigger == trigger
             and task.policy_id == policy_id
             and task.iteration < iteration
+        ]
+        if replaced_handoff is not None:
+            replaced_handoff_key = self._human_task_handoff_key(replaced_handoff)
+            superseded_task_ids.extend(
+                task.id
+                for task in records.tasks()
+                if task.workflow_id == self.blackboard.workflow_id
+                and task.status is HumanTaskStatus.PENDING
+                and task.handoff_key == replaced_handoff_key
+            )
+        return tuple(dict.fromkeys(superseded_task_ids))
+
+    def _human_task_handoff_key(self, contract: HandoffContract) -> str:
+        """Return the stable identity of one user-facing handoff instance."""
+        return ":".join(
+            (
+                "user-handoff",
+                self.blackboard.workflow_id,
+                contract.from_step,
+                contract.intent.value,
+                contract.created_at,
+            )
         )
+
+    def _remember_replaced_user_handoff(self) -> None:
+        """Retain the exact pending task identity across a start-step replacement."""
+        contract = self.blackboard.handoff_contract
+        if (
+            self.blackboard.current_step == "user"
+            and contract is not None
+            and contract.to_owner is HandoffOwner.USER
+            and contract.to_step == "user"
+        ):
+            self._replaced_user_handoff = contract
 
     def _emit_complete(
         self,
@@ -2920,6 +2996,7 @@ class BlackboardWorkflowRuntime:
             if reconciled is not None:
                 return reconciled
             if start_step is not None:
+                self._remember_replaced_user_handoff()
                 self.blackboard_store.set_current_step(self.blackboard, current_step)
                 self.blackboard_store.update_handoff_contract(
                     self.blackboard,
@@ -2967,6 +3044,7 @@ class BlackboardWorkflowRuntime:
             return reconciled
 
         if start_step is not None:
+            self._remember_replaced_user_handoff()
             self.blackboard_store.set_current_step(self.blackboard, current_step)
             self.blackboard_store.update_handoff_contract(
                 self.blackboard,

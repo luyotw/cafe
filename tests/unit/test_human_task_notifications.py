@@ -99,6 +99,26 @@ def test_actionable_message_exposes_allowlisted_task_journey_without_prompt_or_c
     assert "secret-value" not in payload
 
 
+def test_actionable_message_bounds_project_controlled_metadata_to_one_safe_line_per_field() -> None:
+    """Test List 2: metadata cannot add Slack markup or notification lines."""
+    message = build_human_task_message(
+        repository="repository\n<!channel> *urgent*",
+        workflow_id="workflow\n@here",
+        task_id="task\n<https://attacker.invalid>",
+        step="develop\n<!subteam^S123>",
+        task_type="permission-answers\n@channel",
+    )
+
+    payload = message.to_slack_payload()["text"]
+
+    assert payload.count("\n") == 7
+    assert "<!channel>" not in payload
+    assert "<!subteam" not in payload
+    assert "@here" not in payload
+    assert "@channel" not in payload
+    assert "https://attacker.invalid" not in payload
+
+
 def test_machine_notification_settings_ignore_project_and_environment_injection(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -110,7 +130,7 @@ def test_machine_notification_settings_ignore_project_and_environment_injection(
     (home / ".cafe").mkdir(parents=True)
     project.mkdir()
     (home / ".cafe" / "config.yaml").write_text(
-        "human_task_notifications:\n  enabled: false\n  transport: slack\n",
+        "notifications:\n  human_tasks:\n    enabled: false\n    transport: slack\n",
         encoding="utf-8",
     )
     (project / "config.yaml").write_text(
@@ -130,8 +150,14 @@ def test_machine_notification_settings_ignore_project_and_environment_injection(
 @pytest.mark.parametrize(
     ("config", "expected_code"),
     [
-        ("human_task_notifications:\n  enabled: sometimes\n  transport: slack\n", "human_task_notification_config_invalid"),
-        ("human_task_notifications:\n  enabled: true\n  transport: email\n", "human_task_notification_transport_unsupported"),
+        (
+            "notifications:\n  human_tasks:\n    enabled: sometimes\n    transport: slack\n",
+            "human_task_notification_config_invalid",
+        ),
+        (
+            "notifications:\n  human_tasks:\n    enabled: true\n    transport: email\n",
+            "human_task_notification_transport_unsupported",
+        ),
     ],
 )
 def test_machine_notification_settings_skip_invalid_or_unsupported_transport(
