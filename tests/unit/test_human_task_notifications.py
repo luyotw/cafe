@@ -127,6 +127,31 @@ def test_machine_notification_settings_ignore_project_and_environment_injection(
     assert settings.transport == "slack"
 
 
+@pytest.mark.parametrize(
+    ("config", "expected_code"),
+    [
+        ("human_task_notifications:\n  enabled: sometimes\n  transport: slack\n", "human_task_notification_config_invalid"),
+        ("human_task_notifications:\n  enabled: true\n  transport: email\n", "human_task_notification_transport_unsupported"),
+    ],
+)
+def test_machine_notification_settings_skip_invalid_or_unsupported_transport(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, config: str, expected_code: str
+) -> None:
+    """Test List 1: unusable machine declarations never select an outbound adapter."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    home = tmp_path / "home"
+    (home / ".cafe").mkdir(parents=True)
+    (home / ".cafe" / "config.yaml").write_text(config, encoding="utf-8")
+    _set_home(monkeypatch, home)
+
+    settings = notification_mod.load_human_task_notification_settings()
+
+    assert settings.enabled is False
+    assert settings.outcome == "skipped"
+    assert settings.code == expected_code
+
+
 def test_credential_resolver_reads_only_the_fixed_user_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

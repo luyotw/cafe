@@ -285,6 +285,38 @@ def test_disabled_machine_notification_leaves_a_durable_nonblocking_receipt(
     assert receipt["outcome"] == "disabled"
 
 
+def test_unsupported_machine_notification_leaves_a_durable_skipped_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test List 2: unsupported machine transport is inspectable without a post."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    repo_root = tmp_path / "unsupported-repository"
+    issue_dir = repo_root / ".cafe" / "issues" / "unsupported"
+    home = tmp_path / "home-unsupported"
+    (home / ".cafe").mkdir(parents=True)
+    (home / ".cafe" / "config.yaml").write_text(
+        "human_task_notifications:\n  enabled: true\n  transport: email\n",
+        encoding="utf-8",
+    )
+    _set_home(monkeypatch, home)
+    monkeypatch.setattr(
+        notification_mod,
+        "_open_slack_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("skipped must not post")),
+    )
+
+    _pause_for_output_review(issue_dir)
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    receipt = state.capability_receipts[0]
+    assert task.status is HumanTaskStatus.PENDING
+    assert state.current_step == "user"
+    assert receipt["code"] == "human_task_notification_transport_unsupported"
+    assert receipt["outcome"] == "skipped"
+
+
 @pytest.mark.parametrize(
     ("case", "credential", "expected_code"),
     [
