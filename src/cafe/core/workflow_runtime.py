@@ -33,7 +33,8 @@ from cafe.core.capabilities import (
     run_capability_request,
     validation_rejection_receipt,
 )
-from cafe.core.human_task_records import HumanTask, HumanTaskRecordStore
+from cafe.core.human_task_notifications import load_human_task_notification_settings
+from cafe.core.human_task_records import HumanTask, HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.human_tasks import resolve_step_human_task
 from cafe.core.playbook import resolve_step_behavior
 from cafe.core.questions_schema import validate_questions_xml
@@ -154,25 +155,70 @@ class BlackboardWorkflowRuntime:
         return self.issue_dir.parent
 
     def _notify_new_human_task(self, task: HumanTask) -> None:
-        """Audit one fixed-boundary Slack attempt for a new standard task."""
-        if self.playbook_id != "standard" or self.playbook_source != "builtin":
-            return
+        """Record one source-independent, machine-controlled delivery decision."""
         attempt_id = f"slack-human-task:{task.id}"
         try:
             with self.blackboard_store.capability_receipt_transaction(self.blackboard):
+                try:
+                    current_task = HumanTaskRecordStore(self.issue_dir).get_task(task.id)
+                except Exception:
+                    return
+                if current_task.status is not HumanTaskStatus.PENDING:
+                    self._record_notification_outcome(
+                        current_task,
+                        attempt_id=attempt_id,
+                        code="human_task_notification_not_actionable",
+                        outcome="skipped",
+                    )
+                    return
                 self._dispatch_human_task_notification(task, attempt_id=attempt_id)
         except Exception:
             # Lock and persistence failures must not make Slack authoritative over human work.
             return
+
+    def _notification_inputs(self, task: HumanTask) -> dict[str, str]:
+        """Return the closed safe payload shared by receipts and capability requests."""
+        return {
+            "repository": self._repository_root().name,
+            "workflow_id": task.workflow_id,
+            "task_id": task.id,
+            "step": task.step,
+            "task_type": task.policy_id,
+        }
+
+    def _record_notification_outcome(
+        self,
+        task: HumanTask,
+        *,
+        attempt_id: str,
+        code: str,
+        outcome: str,
+    ) -> None:
+        """Persist a non-dispatch notification decision without task prompt data."""
+        self.blackboard_store.upsert_capability_receipt(
+            self.blackboard,
+            {
+                "notification_attempt_id": attempt_id,
+                "correlation_id": attempt_id,
+                "capability": CAPABILITY_SLACK_HUMAN_TASK_ID,
+                "success": False,
+                "category": "notification_policy",
+                "code": code,
+                "decision": "skip",
+                "outcome": outcome,
+                "inputs": self._notification_inputs(task),
+                "outputs": {},
+                "workflow_id": task.workflow_id,
+                "task_id": task.id,
+            },
+        )
 
     def _dispatch_human_task_notification(self, task: HumanTask, *, attempt_id: str) -> None:
         existing_receipt = next(
             (
                 receipt
                 for receipt in self.blackboard.capability_receipts
-                if receipt.get("capability") == CAPABILITY_SLACK_HUMAN_TASK_ID
-                and receipt.get("workflow_id") == task.workflow_id
-                and receipt.get("task_id") == task.id
+                if receipt.get("notification_attempt_id") == attempt_id
             ),
             None,
         )
@@ -191,16 +237,33 @@ class BlackboardWorkflowRuntime:
                 self.blackboard_store.upsert_capability_receipt(
                     self.blackboard, interrupted_receipt
                 )
+            else:
+                dedup_attempt_id = f"{attempt_id}:deduplicated"
+                if not any(
+                    receipt.get("notification_attempt_id") == dedup_attempt_id
+                    for receipt in self.blackboard.capability_receipts
+                ):
+                    self._record_notification_outcome(
+                        task,
+                        attempt_id=dedup_attempt_id,
+                        code="human_task_notification_deduplicated",
+                        outcome="deduplicated",
+                    )
+            return
+        settings = load_human_task_notification_settings()
+        if not settings.enabled:
+            self._record_notification_outcome(
+                task,
+                attempt_id=attempt_id,
+                code=settings.code,
+                outcome=settings.outcome,
+            )
             return
         repo_root = self._repository_root()
+        notification_inputs = self._notification_inputs(task)
         capability_request = {
             "capability": CAPABILITY_SLACK_HUMAN_TASK_ID,
-            "args": {
-                "repository": repo_root.name,
-                "workflow_id": task.workflow_id,
-                "task_id": task.id,
-                "reason": task.prompt,
-            },
+            "args": notification_inputs,
             "effects": {
                 "writes": [],
                 "network_destinations": ["hooks.slack.com"],
@@ -218,11 +281,7 @@ class BlackboardWorkflowRuntime:
             "code": "slack_notification_attempting",
             "decision": "pending",
             "outcome": "attempting",
-            "inputs": {
-                "repository": repo_root.name,
-                "workflow_id": task.workflow_id,
-                "task_id": task.id,
-            },
+            "inputs": notification_inputs,
             "outputs": {},
             "workflow_id": task.workflow_id,
             "task_id": task.id,
@@ -821,6 +880,13 @@ class BlackboardWorkflowRuntime:
             expected_result=policy.model_dump(mode="json"),
             continuations=binding.outcomes,
             assignee_type="human",
+            superseded_task_ids=self._superseded_human_task_ids(
+                records,
+                step=current_step,
+                iteration=iteration,
+                trigger=trigger,
+                policy_id=policy.id,
+            ),
         )
         task = materialization.task
         self._notify_new_human_task(task)
@@ -1574,6 +1640,13 @@ class BlackboardWorkflowRuntime:
             expected_result=policy.model_dump(mode="json"),
             continuations=binding.outcomes,
             assignee_type="user",
+            superseded_task_ids=self._superseded_human_task_ids(
+                records,
+                step=current_step,
+                iteration=iteration,
+                trigger=trigger,
+                policy_id=policy.id,
+            ),
         )
         task = materialization.task
         self._notify_new_human_task(task)
@@ -1592,6 +1665,34 @@ class BlackboardWorkflowRuntime:
             return int(iteration_dir.name.removeprefix("iteration_"))
         except ValueError:
             return 1
+
+    def _superseded_human_task_ids(
+        self,
+        records: HumanTaskRecordStore,
+        *,
+        step: str,
+        iteration: int,
+        trigger: str,
+        policy_id: str,
+    ) -> tuple[str, ...]:
+        """Identify only same-lineage pending tasks replaced by a newer iteration.
+
+        A different handoff key or another pending task is never enough to
+        trigger cancellation. The replacement is explicit because the active
+        workflow iteration advanced for the same step/trigger/policy lineage.
+        """
+        if iteration <= 1:
+            return ()
+        return tuple(
+            task.id
+            for task in records.tasks()
+            if task.workflow_id == self.blackboard.workflow_id
+            and task.status is HumanTaskStatus.PENDING
+            and task.step == step
+            and task.trigger == trigger
+            and task.policy_id == policy_id
+            and task.iteration < iteration
+        )
 
     def _emit_complete(
         self,

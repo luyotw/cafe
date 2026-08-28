@@ -209,7 +209,8 @@ def _slack_request(**overrides: object) -> dict[str, object]:
             "repository": "openfunltd/cafe",
             "workflow_id": "workflow-one",
             "task_id": "task-one",
-            "reason": "Review the implementation plan.",
+            "step": "develop",
+            "task_type": "permission-answers",
         },
         "effects": {
             "writes": [],
@@ -234,7 +235,8 @@ def test_registered_slack_human_task_capability_has_fixed_boundary(tmp_path: Pat
         "repository",
         "workflow_id",
         "task_id",
-        "reason",
+        "step",
+        "task_type",
     }
     assert set(manifest.arguments.properties) == set(manifest.arguments.required)
     assert manifest.effects.network_destinations == (SLACK_DESTINATION,)

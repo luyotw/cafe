@@ -1130,7 +1130,8 @@ def _notify_slack_human_task_adapter(
         repository=str(request.args["repository"]),
         workflow_id=str(request.args["workflow_id"]),
         task_id=str(request.args["task_id"]),
-        reason=str(request.args["reason"]),
+        step=str(request.args["step"]),
+        task_type=str(request.args["task_type"]),
     )
     try:
         webhook_url = load_slack_webhook_url()

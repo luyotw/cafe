@@ -138,6 +138,75 @@ def test_builtin_develop_permission_task_completes_and_resumes_develop(tmp_path:
     assert store.load_or_create("develop").current_step == "develop"
 
 
+def test_replacement_task_rejects_stale_completion_and_preserves_unrelated_wait(
+    tmp_path: Path,
+) -> None:
+    """Test List 4: only an explicit replacement deactivates its named predecessor."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "replacement"
+    playbook = PlaybookLoader().load("standard")
+    store, state = _paused_default_state(
+        issue_dir, from_step="develop", intent=HandoffIntent.NEED_PERMISSION
+    )
+    original = _materialize_default_task(
+        issue_dir, state, from_step="develop", trigger="need_permission"
+    )
+    records = HumanTaskRecordStore(issue_dir)
+    unrelated = records.materialize(
+        workflow_id=state.workflow_id,
+        step="review",
+        iteration=1,
+        trigger="need_clarification",
+        policy_id="clarification-feedback",
+        prompt="Clarify the review.",
+        expected_result={"input_schema": "feedback"},
+        continuations={"submit": "review"},
+        assignee_type="user",
+    )
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook, step_name="develop", trigger="need_permission", iteration=2
+    )
+    replacement = records.materialize(
+        workflow_id=state.workflow_id,
+        step="develop",
+        iteration=2,
+        trigger="need_permission",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+        superseded_task_ids=(original.id,),
+    )
+
+    stale = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="develop",
+        trigger="need_permission",
+        raw_payload={"human_task_id": original.id, "feedback": "Use stale permission."},
+        source="command",
+    )
+    completed = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="develop",
+        trigger="need_permission",
+        raw_payload={"human_task_id": replacement.id, "feedback": "Permission granted."},
+        source="command",
+    )
+
+    assert stale.target is None
+    assert stale.rejection is not None
+    assert records.get_task(original.id).status is HumanTaskStatus.CANCELLED
+    assert records.get_task(original.id).superseded_by_task_id == replacement.id
+    assert records.get_task(unrelated.id).status is HumanTaskStatus.PENDING
+    assert records.get_wait_state(unrelated.id).released_at is None
+    assert completed.target == "develop"
+    assert records.get_task(replacement.id).status is HumanTaskStatus.COMPLETED
+
+
 def test_invalid_default_human_task_response_keeps_the_user_pause(tmp_path: Path) -> None:
     """Bad command or interactive data cannot mutate the paused handoff."""
     issue_dir = tmp_path / ".cafe" / "issues" / "invalid"

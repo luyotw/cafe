@@ -63,6 +63,9 @@ steps:
       - trigger: need_clarification
         task_id: clarification-feedback
         outcomes: {submit: develop}
+      - trigger: need_permission
+        task_id: permission-answers
+        outcomes: {submit: develop}
       - trigger: no_changes_needed
         task_id: no-change-decision
         outcomes: {agree: review, disagree: develop}

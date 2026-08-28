@@ -1910,10 +1910,10 @@ def test_runtime_materializes_one_declared_task_and_recovers_it_after_restart(
     assert request["args"]["repository"] == tmp_path.name
 
 
-def test_runtime_notifies_trusted_human_owned_creation_but_not_spoofed_standard_tasks(
+def test_runtime_notifies_human_owned_creation_for_builtin_and_project_playbooks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Both creation paths use the registered capability, gated to standard."""
+    """Both builtin and project playbooks use the same registered capability."""
     import cafe.core.workflow_runtime as runtime_mod
 
     policy = HumanTaskPolicy(
@@ -1969,13 +1969,15 @@ def test_runtime_notifies_trusted_human_owned_creation_but_not_spoofed_standard_
         executor=lambda *_args: (_ for _ in ()).throw(AssertionError("human step ran agent")),
     ).run(start_step="approval")
 
-    assert len(calls) == 1
+    assert len(calls) == 2
     standard_task = HumanTaskRecordStore(standard_dir).tasks()[0]
     project_task = HumanTaskRecordStore(project_dir).tasks()[0]
     assert calls[0]["capability_request"]["args"]["task_id"] == standard_task.id
+    assert calls[1]["capability_request"]["args"]["task_id"] == project_task.id
     assert calls[0]["timeout_sec"] == 5.0
     assert project_task.id != standard_task.id
-    assert BlackboardStore(project_dir).load_or_create("approval").capability_receipts == []
+    project_receipts = BlackboardStore(project_dir).load_or_create("approval").capability_receipts
+    assert project_receipts[0]["task_id"] == project_task.id
 
 
 def test_notification_failure_preserves_pending_task_and_user_handoff(
@@ -2180,8 +2182,6 @@ def test_concurrent_stale_runtimes_claim_one_notification_attempt(
         for future in futures:
             future.result(timeout=10)
 
-    for runtime in runtimes:
-        runtime.blackboard_store.save(runtime.blackboard)
     state = BlackboardStore(issue_dir).load_or_create("spec")
     matching_receipts = [
         receipt
@@ -2190,7 +2190,12 @@ def test_concurrent_stale_runtimes_claim_one_notification_attempt(
         and receipt.get("task_id") == task.id
     ]
     assert len(dispatches) == 1
-    assert len(matching_receipts) == 1
+    assert len(matching_receipts) == 2
+    assert any(receipt.get("success") is True for receipt in matching_receipts)
+    assert any(
+        receipt.get("code") == "human_task_notification_deduplicated"
+        for receipt in matching_receipts
+    )
 
 
 def test_independent_runtimes_claim_one_notification_attempt_across_processes(
@@ -2241,7 +2246,12 @@ def test_independent_runtimes_claim_one_notification_attempt_across_processes(
         if receipt.get("capability") == "cafe.slack.human_task"
         and receipt.get("task_id") == task.id
     ]
-    assert len(matching_receipts) == 1
+    assert len(matching_receipts) == 2
+    assert any(receipt.get("success") is True for receipt in matching_receipts)
+    assert any(
+        receipt.get("code") == "human_task_notification_deduplicated"
+        for receipt in matching_receipts
+    )
 
 
 def test_receipt_transaction_uses_windows_process_lock_without_fcntl(

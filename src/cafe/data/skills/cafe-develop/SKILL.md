@@ -24,6 +24,10 @@ workflow:
       pattern: revision_feedback
       prompt: Provide the clarification or implementation feedback needed to continue.
       input_schema: feedback
+    - id: permission-answers
+      pattern: revision_feedback
+      prompt: Provide the permission decision or access details needed to continue development.
+      input_schema: feedback
   prompt_inputs:
     - artifacts: [spec]
       placeholder: spec_file

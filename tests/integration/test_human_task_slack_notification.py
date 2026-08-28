@@ -204,6 +204,55 @@ def test_project_playbook_named_standard_receives_machine_controlled_notificatio
     assert state.capability_receipts[0]["task_id"] == task.id
 
 
+def test_global_playbook_receives_machine_controlled_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test List 1: global provenance does not suppress core task notification."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    repo_root = tmp_path / "global-standard"
+    issue_dir = repo_root / ".cafe" / "issues" / "global-standard"
+    global_root = tmp_path / "global"
+    global_playbooks = global_root / "playbooks"
+    global_playbooks.mkdir(parents=True)
+    builtin = PlaybookLoader().load("standard")
+    builtin["steps"]["spec"]["initial_input"].pop("legacy_presentation", None)
+    (global_playbooks / "standard.yaml").write_text(
+        yaml.safe_dump(dict(builtin), sort_keys=False),
+        encoding="utf-8",
+    )
+    global_standard = PlaybookLoader(project_root=repo_root, global_root=global_root).load(
+        "standard"
+    )
+    home = tmp_path / "home-global-standard"
+    home.mkdir()
+    _write_credential(home)
+    _set_home(monkeypatch, home)
+    posts = []
+    monkeypatch.setattr(
+        notification_mod,
+        "_open_slack_request",
+        lambda request, *, timeout: posts.append((request, timeout)) or _SlackResponse(),
+    )
+
+    BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=global_standard,
+        executor=lambda *_args: StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        ),
+    ).run(start_step="spec")
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    assert task.status is HumanTaskStatus.PENDING
+    assert len(posts) == 1
+    assert state.capability_receipts[0]["task_id"] == task.id
+
+
 def test_disabled_machine_notification_leaves_a_durable_nonblocking_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
