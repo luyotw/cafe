@@ -98,6 +98,14 @@ class RuntimePositionResolution:
     realignment_result: Optional[PlaybookRunResult] = None
 
 
+class IterationLimitReached(RuntimeError):
+    """Stop execution after a declared iteration-limit HumanTask is materialized."""
+
+    def __init__(self, message: str, result: PlaybookRunResult) -> None:
+        super().__init__(message)
+        self.result = result
+
+
 class BlackboardWorkflowRuntime:
     """Workflow runtime that prefers blackboard/baton-driven transitions."""
 
@@ -747,8 +755,32 @@ class BlackboardWorkflowRuntime:
                     "runtime": runtime,
                 },
             )
-            raise RuntimeError(f"Step '{current_step}' exceeded max_iterations={max_iterations}")
+            message = f"Step '{current_step}' exceeded max_iterations={max_iterations}"
+            if self._declares_iteration_limit_task(step_def):
+                result = self._emit_pause(
+                    current_step=current_step,
+                    status_code="ITERATION_LIMIT_REACHED",
+                    runtime=runtime,
+                    reason="iteration_limit_reached",
+                    pause_intent=HandoffIntent.MANUAL_HANDOFF,
+                    contract_source="workflow.iteration_limit",
+                )
+                raise IterationLimitReached(message, result)
+            raise RuntimeError(message)
         return visit_count
+
+    @staticmethod
+    def _declares_iteration_limit_task(step_def: Dict) -> bool:
+        """Whether a step opted into the policy-backed iteration-limit pause."""
+        raw_bindings = step_def.get("human_tasks")
+        if not isinstance(raw_bindings, (list, tuple)):
+            return False
+        return any(
+            isinstance(binding, dict)
+            and binding.get("trigger") == HandoffIntent.MANUAL_HANDOFF.value
+            and binding.get("task_id") == "iteration-limit"
+            for binding in raw_bindings
+        )
 
     def _record_step_visit(self, *, current_step: str, step_def: Dict, runtime: str) -> int:
         """Persist the top-level visit before any owner-specific side effect."""
@@ -1288,11 +1320,14 @@ class BlackboardWorkflowRuntime:
             return None
         automatic_result: AutomaticExecutionResult | None = None
         if owner == "auto":
-            self._ensure_step_visit_within_limit(
-                current_step=current_step,
-                step_def=step_def,
-                runtime=runtime,
-            )
+            try:
+                self._ensure_step_visit_within_limit(
+                    current_step=current_step,
+                    step_def=step_def,
+                    runtime=runtime,
+                )
+            except IterationLimitReached as exc:
+                return exc.result
             prepared = self._prepare_auto_owned_step(
                 current_step=current_step,
                 step_def=step_def,
@@ -1309,9 +1344,12 @@ class BlackboardWorkflowRuntime:
         ):
             visit_count = cursor["visit_count"]
         else:
-            visit_count = self._record_step_visit(
-                current_step=current_step, step_def=step_def, runtime=runtime
-            )
+            try:
+                visit_count = self._record_step_visit(
+                    current_step=current_step, step_def=step_def, runtime=runtime
+                )
+            except IterationLimitReached as exc:
+                return exc.result
         if owner == "human":
             return self._run_human_owned_step(
                 current_step=current_step,
@@ -2092,9 +2130,12 @@ class BlackboardWorkflowRuntime:
                     },
                 )
                 _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
-            visit_count = self._record_step_visit(
-                current_step=current_step, step_def=step_def, runtime=runtime_label
-            )
+            try:
+                visit_count = self._record_step_visit(
+                    current_step=current_step, step_def=step_def, runtime=runtime_label
+                )
+            except IterationLimitReached as exc:
+                return exc.result
             for _baton_attempt in range(3):
                 try:
                     frame = self._execute_one_iteration(
@@ -2365,9 +2406,12 @@ class BlackboardWorkflowRuntime:
                     },
                 )
                 _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
-            visit_count = self._record_step_visit(
-                current_step=current_step, step_def=step_def, runtime=runtime_label
-            )
+            try:
+                visit_count = self._record_step_visit(
+                    current_step=current_step, step_def=step_def, runtime=runtime_label
+                )
+            except IterationLimitReached as exc:
+                return exc.result
 
             for _baton_attempt in range(3):
                 try:

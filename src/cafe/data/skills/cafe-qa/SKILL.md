@@ -15,6 +15,13 @@ workflow:
       pattern: revision_feedback
       prompt: Provide the information or permission needed to complete the blocked acceptance check.
       input_schema: feedback
+    - id: iteration-limit
+      pattern: confirm_output
+      prompt: The workflow reached its configured iteration limit. Increase the issue's limit if another acceptance check is authorized, then resume this phase.
+      input_schema: decision
+      decisions:
+        - id: resume
+          label: Resume after increasing the iteration limit
   prompt_inputs:
     - artifacts: [spec]
       placeholder: spec_file
