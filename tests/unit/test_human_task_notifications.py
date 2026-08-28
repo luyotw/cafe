@@ -424,6 +424,7 @@ def test_capability_receipts_classify_failures_without_secret_material(
         capability_request=_slack_request(),
         output_file=tmp_path / "output.md",
         timeout_sec=4.0,
+        trusted_human_task_notification=True,
     )
 
     assert run.receipt["success"] is False
@@ -453,6 +454,7 @@ def test_capability_receipt_records_success_and_policy_denial(
         registry=registry,
         capability_request=_slack_request(),
         output_file=tmp_path / "output.md",
+        trusted_human_task_notification=True,
     )
     denied = run_capability_request(
         repo_root=tmp_path,
@@ -465,6 +467,7 @@ def test_capability_receipt_records_success_and_policy_denial(
             }
         ),
         output_file=tmp_path / "output.md",
+        trusted_human_task_notification=True,
     )
 
     assert successful.receipt["success"] is True

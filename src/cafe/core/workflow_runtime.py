@@ -299,6 +299,7 @@ class BlackboardWorkflowRuntime:
                 capability_request=capability_request,
                 output_file=self.issue_dir / "blackboard.json",
                 timeout_sec=SLACK_HUMAN_TASK_TIMEOUT_SEC,
+                trusted_human_task_notification=True,
             )
             receipt = dict(run.receipt)
         except Exception:  # The durable HumanTask remains authoritative on host failure.
@@ -874,6 +875,37 @@ class BlackboardWorkflowRuntime:
                 completed=False,
             )
 
+        replaced_handoff = self._replaced_user_handoff
+        self.blackboard_store.update_handoff_contract(
+            self.blackboard,
+            from_step=current_step,
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.MANUAL_HANDOFF,
+            status_code=status_code,
+            source="workflow.owner_human",
+        )
+        contract = self.blackboard.handoff_contract
+        if contract is None:
+            raise RuntimeError("human-owned task did not create a handoff contract")
+        handoff_key = self._human_task_handoff_key(contract)
+        if replaced_handoff is None:
+            existing_task = next(
+                (
+                    task
+                    for task in records.tasks()
+                    if task.workflow_id == self.blackboard.workflow_id
+                    and task.status is HumanTaskStatus.PENDING
+                    and task.step == current_step
+                    and task.iteration == iteration
+                    and task.trigger == trigger
+                    and task.policy_id == policy.id
+                ),
+                None,
+            )
+            if existing_task is not None:
+                handoff_key = existing_task.handoff_key
+
         materialization = records.materialize_with_status(
             workflow_id=self.blackboard.workflow_id,
             step=current_step,
@@ -884,29 +916,23 @@ class BlackboardWorkflowRuntime:
             expected_result=policy.model_dump(mode="json"),
             continuations=binding.outcomes,
             assignee_type="human",
+            handoff_key=handoff_key,
             superseded_task_ids=self._superseded_human_task_ids(
                 records,
                 step=current_step,
                 iteration=iteration,
                 trigger=trigger,
                 policy_id=policy.id,
+                replaced_handoff=replaced_handoff,
             ),
         )
         task = materialization.task
         self._notify_new_human_task(task)
+        self._replaced_user_handoff = None
         if cursor is not None:
             cursor["task_id"] = task.id
             self.blackboard.ownership_cursor = cursor
             self.blackboard_store.save(self.blackboard)
-        self.blackboard_store.update_handoff_contract(
-            self.blackboard,
-            from_step=current_step,
-            to_owner=HandoffOwner.USER,
-            to_step="user",
-            intent=HandoffIntent.MANUAL_HANDOFF,
-            status_code=status_code,
-            source="workflow.owner_human",
-        )
         self.blackboard_store.set_current_step(self.blackboard, "user")
         if materialization.created:
             self.blackboard_store.record_event(

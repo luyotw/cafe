@@ -1160,8 +1160,13 @@ def run_capability_request(
     capability_request: Mapping[str, Any],
     output_file: Path,
     timeout_sec: float = 600.0,
+    trusted_human_task_notification: bool = False,
 ) -> PrPublishRun:
-    """Evaluate and dispatch one request through the host-owned adapter allow-list."""
+    """Evaluate and dispatch one request through the host-owned adapter allow-list.
+
+    Slack HumanTask delivery is an internal consequence of durable task
+    materialization, rather than a generic project-declared capability.
+    """
     correlation_id = uuid.uuid4().hex[:20]
     raw_request = _normalize_legacy_pr_request(capability_request)
     cap_id = str(raw_request.get("capability") or "").strip()
@@ -1202,6 +1207,20 @@ def run_capability_request(
             decision=PolicyDecision.DENY,
             outcome="validation_rejection",
             inputs=_receipt_inputs(raw_request.get("args")),
+        )
+
+    if (
+        request.capability == CAPABILITY_SLACK_HUMAN_TASK_ID
+        and not trusted_human_task_notification
+    ):
+        return _non_dispatch_run(
+            correlation_id=correlation_id,
+            capability=request.capability,
+            fingerprint=canonical_request_fingerprint(request),
+            code="human_task_notification_not_workflow_owned",
+            decision=PolicyDecision.DENY,
+            outcome="policy_denied",
+            inputs={},
         )
 
     evaluation = evaluate_capability_request(registry, raw_request)
