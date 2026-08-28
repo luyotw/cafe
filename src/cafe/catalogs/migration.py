@@ -215,11 +215,11 @@ class AgentSnapshotMigrator:
         return confirmed
 
     def publication_blocked_entry_ids(self) -> set[str]:
-        """Return generated snapshots that lack an explicit preserve decision."""
+        """Return unresolved snapshots that cannot safely be published."""
         return {
             item.entry_id
             for item in self.preview().items
-            if item.status == "generated"
+            if item.status in {"generated", "ambiguous"}
         }
 
     @staticmethod

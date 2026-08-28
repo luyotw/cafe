@@ -18,20 +18,28 @@ from cafe.skills.native_bridge import NativeSkillBridge
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _sandbox_script_index(command: list[str]) -> int:
+    index = command.index("--sandbox-state-disable-network") + 1
+    while command[index] == "--sandbox-state-readable-root":
+        index += 2
+    return index
+
+
 @pytest.fixture(autouse=True)
 def _sandbox_cli_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
     """Mock the external Codex process while retaining the typed sandbox request."""
     native_run = subprocess.run
 
     def run(command, **kwargs):
-        script_index = next(
-            index for index, part in enumerate(command)
-            if index > 1 and Path(part).name == "script"
-        )
+        script_index = _sandbox_script_index(command)
         return native_run(
             ["/bin/bash", *command[script_index:]],
-            cwd=kwargs["cwd"], env=kwargs["env"], capture_output=True,
-            text=True, check=False, timeout=kwargs["timeout"],
+            cwd=kwargs["cwd"],
+            env=kwargs["env"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=kwargs["timeout"],
         )
 
     from cafe.core.sandbox_execution import SandboxExecutor
@@ -912,6 +920,47 @@ def test_execute_runs_script_hook_with_schema_and_interpolation(tmp_path: Path) 
     assert event["receipt"]["boundary"]["writable_roots"] == [str(Path.cwd().resolve())]
 
 
+def test_execute_script_hook_preserves_declared_skill_script_layout(
+    tmp_path: Path,
+) -> None:
+    loader = _setup_loader(tmp_path)
+    skill_scripts = loader.get_skill_dir("cafe-plan") / "scripts"
+    skill_scripts.mkdir(parents=True, exist_ok=True)
+    (skill_scripts / "message.txt").write_text("sibling resource\n", encoding="utf-8")
+    shared_scripts = loader.get_skill_dir("cafe-workflow-common") / "scripts"
+    shared_scripts.mkdir(parents=True, exist_ok=True)
+    (shared_scripts / "shared.sh").write_text(
+        "#!/usr/bin/env bash\necho shared script\n", encoding="utf-8"
+    )
+    _write_skill_script(
+        loader,
+        skill_name="cafe-plan",
+        script_name="read_relative_files.sh",
+        body=(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            'SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"\n'
+            'cat "$SCRIPT_DIR/message.txt"\n'
+            '/bin/bash "$SCRIPT_DIR/../../cafe-workflow-common/scripts/shared.sh"\n'
+        ),
+    )
+
+    result = GenericPhase(loader).execute(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/cafe-workflow-common"],
+        step_def={
+            "hooks": {"before_execute": [{"script": "read_relative_files.sh", "args": {}}]},
+            "valid_intents": ["confirmed"],
+        },
+        agent_executor=lambda _prompt: "confirmed",
+    )
+
+    event = next(item for item in result.events if item.get("type") == "script_hook")
+    assert event["status"] == "success"
+    assert event["stdout"].splitlines() == ["sibling resource", "shared script"]
+
+
 def test_script_hook_holds_catalog_lock_until_the_script_is_snapshotted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1028,32 +1077,46 @@ def test_execute_rejects_script_hook_symlink_outside_scripts_dir(tmp_path: Path)
     assert event["correlation_id"]
 
 
-def test_execute_script_hook_uses_snapshot_if_target_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_execute_script_hook_uses_snapshot_if_target_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     loader = _setup_loader(tmp_path)
     script = _write_skill_script(
-        loader, skill_name="cafe-plan", script_name="stable.sh",
+        loader,
+        skill_name="cafe-plan",
+        script_name="stable.sh",
         body="#!/bin/sh\necho safe\n",
     )
     native_run = subprocess.run
 
     def replace_then_run(command, **kwargs):
         script.write_text("#!/bin/sh\necho attacker\n", encoding="utf-8")
-        snapshot = next(part for part in command if Path(part).name == "script")
+        snapshot = command[_sandbox_script_index(command)]
         return native_run(
-            ["/bin/sh", snapshot], cwd=kwargs["cwd"], env=kwargs["env"],
-            capture_output=True, text=True, check=False, timeout=kwargs["timeout"],
+            ["/bin/sh", snapshot],
+            cwd=kwargs["cwd"],
+            env=kwargs["env"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=kwargs["timeout"],
         )
 
     from cafe.core.sandbox_execution import SandboxExecutor
+
     monkeypatch.setattr(
         "cafe.phases.generic_phase.SandboxExecutor",
         lambda: SandboxExecutor(codex_path="/usr/bin/codex", runner=replace_then_run),
     )
 
     result = GenericPhase(loader).execute(
-        skill_name="cafe-plan", skill_invocation="/plan",
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
         shared_skill_invocations=["/cafe-workflow-common"],
-        step_def={"hooks": {"before_execute": [{"script": "stable.sh", "args": {}}]}, "valid_intents": ["confirmed"]},
+        step_def={
+            "hooks": {"before_execute": [{"script": "stable.sh", "args": {}}]},
+            "valid_intents": ["confirmed"],
+        },
         agent_executor=lambda _prompt: "confirmed",
     )
 
@@ -1069,11 +1132,7 @@ def test_execute_script_hook_validation_failure_stops_pipeline(tmp_path: Path) -
         loader,
         skill_name="cafe-plan",
         script_name="touch_marker.sh",
-        body=(
-            "#!/usr/bin/env bash\n"
-            "set -euo pipefail\n"
-            "echo touched > \"" + str(marker) + "\"\n"
-        ),
+        body=('#!/usr/bin/env bash\nset -euo pipefail\necho touched > "' + str(marker) + '"\n'),
     )
     phase = GenericPhase(loader)
 

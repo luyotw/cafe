@@ -514,6 +514,29 @@ def _write_catalog_entries(project: Path) -> None:
     )
 
 
+def _preserve_catalog_agents() -> None:
+    preview_result = runner.invoke(app, ["catalog", "migrate-agents", "--json"])
+    assert preview_result.exit_code == 0, preview_result.stdout
+    preview = json.loads(preview_result.stdout)
+    decisions = [
+        value
+        for item in preview["items"]
+        for value in ("--decision", f"{item['entry_id']}=preserve")
+    ]
+    result = runner.invoke(
+        app,
+        [
+            "catalog",
+            "migrate-agents",
+            "--token",
+            preview["token"],
+            *decisions,
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+
 def test_catalog_check_defaults_to_all_three_kinds_with_complete_json(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -521,6 +544,7 @@ def test_catalog_check_defaults_to_all_three_kinds_with_complete_json(
     global_root = tmp_path / "global"
     monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
     _write_catalog_entries(tmp_path)
+    _preserve_catalog_agents()
 
     result = runner.invoke(app, ["catalog", "check", "--json"])
 

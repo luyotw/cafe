@@ -384,6 +384,13 @@ class CatalogSyncService:
 
         selected_kinds = self._normalize_kinds(kinds)
         with _global_lock(self.resolver.global_root):
+            blocked = AgentSnapshotMigrator(self.resolver).publication_blocked_entry_ids()
+            blocked_selection = sorted(set(selected) & blocked)
+            if blocked_selection:
+                raise CatalogSyncError(
+                    "Agent migration decision required before publication: "
+                    + ", ".join(blocked_selection)
+                )
             current = self.compare(kinds=selected_kinds, entry_ids=entry_ids)
             if current.token != comparison_token:
                 raise StaleComparisonError(

@@ -41,6 +41,15 @@ def _service(tmp_path: Path, **kwargs) -> tuple[CatalogSyncService, Path, Path]:
     return CatalogSyncService(resolver, **kwargs), project, global_root
 
 
+def _preserve_legacy_agents(service: CatalogSyncService) -> None:
+    migrator = AgentSnapshotMigrator(service.resolver, is_tracked=lambda _path: False)
+    preview = migrator.preview()
+    migrator.apply(
+        preview.token,
+        {item.entry_id: "preserve" for item in preview.items},
+    )
+
+
 def test_combined_comparison_is_content_bound_and_silent_without_project_entries(
     tmp_path: Path,
 ) -> None:
@@ -51,6 +60,7 @@ def test_combined_comparison_is_content_bound_and_silent_without_project_entries
     _entry(project / ".cafe", CatalogKind.PHASE, "develop", "project")
     _entry(project / ".cafe", CatalogKind.AGENT, "developer/David", "project")
     _entry(global_root, CatalogKind.PLAYBOOK, "standard", "global")
+    _preserve_legacy_agents(service)
 
     report = service.compare()
     assert report.status == "differences"
@@ -106,15 +116,51 @@ def test_generated_agent_snapshot_is_not_a_publication_candidate(tmp_path: Path)
     assert report.status == "no_project_entries"
     assert report.entries == ()
 
-    migrator = AgentSnapshotMigrator(
-        service.resolver, is_tracked=lambda _path: False
-    )
+    migrator = AgentSnapshotMigrator(service.resolver, is_tracked=lambda _path: False)
     preview = migrator.preview()
     migrator.apply(preview.token, {"agent:developer/David": "preserve"})
 
-    assert [item.entry_id for item in service.compare().entries] == [
-        "agent:developer/David"
+    assert [item.entry_id for item in service.compare().entries] == ["agent:developer/David"]
+
+
+def test_ambiguous_agent_requires_migration_decision_before_publication(
+    tmp_path: Path,
+) -> None:
+    service, project, global_root = _service(tmp_path)
+    _entry(
+        service.resolver.builtin_root,
+        CatalogKind.AGENT,
+        "developer/David",
+        "fallback",
+    )
+    project_agent = _entry(
+        project / ".cafe",
+        CatalogKind.AGENT,
+        "developer/David",
+        "ambiguous project",
+    )
+    migrator = AgentSnapshotMigrator(service.resolver, is_tracked=lambda _path: False)
+
+    preview = migrator.preview()
+    assert [(item.entry_id, item.status) for item in preview.items] == [
+        ("agent:developer/David", "ambiguous")
     ]
+    assert migrator.publication_blocked_entry_ids() == {"agent:developer/David"}
+
+    blocked_report = service.compare()
+    with pytest.raises(CatalogSyncError):
+        service.sync(blocked_report.token, ["agent:developer/David"])
+    assert not (global_root / "agents" / "developer" / "David.md").exists()
+
+    migrator.apply(preview.token, {"agent:developer/David": "preserve"})
+    approved_report = service.compare()
+    result = service.sync(approved_report.token, ["agent:developer/David"])
+
+    assert result.updated == ("agent:developer/David",)
+    assert content_digest(global_root / "agents" / "developer" / "David.md") == content_digest(
+        project_agent
+    )
+    assert migrator.preview().items == ()
 
 
 def test_digest_covers_file_mode_and_symlink_target(tmp_path: Path) -> None:
@@ -290,6 +336,7 @@ def test_production_loaders_hold_the_catalog_lock_through_content_reads(
     write_playbook(global_root, "reviewer")
     _entry(global_root, CatalogKind.PHASE, "develop", "old-phase")
     _entry(global_root, CatalogKind.AGENT, "developer/David", "old-agent")
+    _preserve_legacy_agents(service)
     report = service.compare()
     selected = [
         "playbook:standard",

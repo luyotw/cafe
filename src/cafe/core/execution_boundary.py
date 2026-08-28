@@ -114,6 +114,10 @@ class ScriptSnapshot:
         self.digest = digest
         self._temp_dir = temp_dir
 
+    @property
+    def root(self) -> Path:
+        return self._temp_dir
+
     def cleanup(self) -> None:
         shutil.rmtree(self._temp_dir, ignore_errors=True)
 
@@ -161,3 +165,104 @@ def snapshot_script(script: Path, *, allowed_root: Path) -> ScriptSnapshot:
     target.write_bytes(content)
     target.chmod(0o500)
     return ScriptSnapshot(target, hashlib.sha256(content).hexdigest(), temp_dir)
+
+
+def snapshot_script_tree(script: Path, *, allowed_root: Path) -> ScriptSnapshot:
+    """Copy a script and its declared runtime tree without following symlinks."""
+    root = Path(os.path.abspath(allowed_root))
+    candidate = Path(os.path.abspath(script))
+    try:
+        relative_script = candidate.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("script escapes its declared root") from exc
+    if not relative_script.parts:
+        raise ValueError("script must name a file below its declared root")
+    if root == Path(root.anchor):
+        raise ValueError("script runtime root must not be a filesystem root")
+
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | no_follow
+    root_fd = os.open(os.sep, directory_flags)
+    try:
+        for part in root.parts[1:]:
+            next_fd = os.open(part, directory_flags, dir_fd=root_fd)
+            os.close(root_fd)
+            root_fd = next_fd
+    except OSError as exc:
+        os.close(root_fd)
+        raise ValueError("script runtime root contains a symlink or invalid component") from exc
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="cafe-script-tree-"))
+    script_content: bytes | None = None
+
+    def copy_directory(source_fd: int, destination: Path, relative: Path) -> None:
+        nonlocal script_content
+        destination.mkdir(mode=0o700, exist_ok=True)
+        for name in sorted(os.listdir(source_fd)):
+            source_stat = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+            item_relative = relative / name
+            target = destination / name
+            if stat.S_ISDIR(source_stat.st_mode):
+                child_fd = os.open(name, directory_flags, dir_fd=source_fd)
+                try:
+                    opened_stat = os.fstat(child_fd)
+                    if (
+                        opened_stat.st_dev != source_stat.st_dev
+                        or opened_stat.st_ino != source_stat.st_ino
+                    ):
+                        raise ValueError("script runtime directory changed during snapshot")
+                    copy_directory(child_fd, target, item_relative)
+                finally:
+                    os.close(child_fd)
+                continue
+            if stat.S_ISLNK(source_stat.st_mode):
+                link_target = os.readlink(name, dir_fd=source_fd)
+                if Path(link_target).is_absolute() or ".." in Path(link_target).parts:
+                    raise ValueError("script runtime tree contains an escaping symlink")
+                target.symlink_to(link_target)
+                continue
+            if not stat.S_ISREG(source_stat.st_mode):
+                raise ValueError("script runtime tree contains a non-regular entry")
+            file_fd = os.open(name, os.O_RDONLY | no_follow, dir_fd=source_fd)
+            try:
+                opened_stat = os.fstat(file_fd)
+                if (
+                    opened_stat.st_dev != source_stat.st_dev
+                    or opened_stat.st_ino != source_stat.st_ino
+                    or not stat.S_ISREG(opened_stat.st_mode)
+                ):
+                    raise ValueError("script runtime entry changed during snapshot")
+                chunks: list[bytes] = []
+                while chunk := os.read(file_fd, 65536):
+                    chunks.append(chunk)
+                content = b"".join(chunks)
+                final_stat = os.fstat(file_fd)
+                if (
+                    final_stat.st_size != opened_stat.st_size
+                    or final_stat.st_mtime_ns != opened_stat.st_mtime_ns
+                    or final_stat.st_ctime_ns != opened_stat.st_ctime_ns
+                ):
+                    raise ValueError("script runtime entry changed during snapshot")
+            finally:
+                os.close(file_fd)
+            target.write_bytes(content)
+            target.chmod(stat.S_IMODE(source_stat.st_mode))
+            if item_relative == relative_script:
+                script_content = content
+
+    try:
+        copy_directory(root_fd, temp_dir, Path())
+        target = temp_dir / relative_script
+        if script_content is None or not target.is_file():
+            raise ValueError("script must be a regular file")
+        target.chmod(stat.S_IMODE(target.stat().st_mode) | 0o500)
+        return ScriptSnapshot(
+            target,
+            hashlib.sha256(script_content).hexdigest(),
+            temp_dir,
+        )
+    except BaseException:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+    finally:
+        os.close(root_fd)

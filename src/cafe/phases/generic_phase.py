@@ -25,7 +25,7 @@ from cafe.core.execution_boundary import (
     ExecutionClass,
     ScriptLaunchRequest,
     TrustSource,
-    snapshot_script,
+    snapshot_script_tree,
 )
 from cafe.core.hooks import BUILTIN_HOOKS, HookResult
 from cafe.core.hooks.script_schema import validate_script_args_schema
@@ -642,16 +642,18 @@ class GenericPhase:
                 )
 
             try:
-                script_snapshot = snapshot_script(
-                    script_path, allowed_root=script_path.parent
-                )
+                skill_catalog_root = self.skill_loader.get_skill_dir(skill_name).parent
+                script_snapshot = snapshot_script_tree(script_path, allowed_root=skill_catalog_root)
             except (OSError, ValueError):
                 script_snapshot = None
                 result = SandboxExecutor().run(request_for(script_path))
 
         if script_snapshot is not None:
             try:
-                result = SandboxExecutor().run(request_for(script_snapshot.path))
+                result = SandboxExecutor().run(
+                    request_for(script_snapshot.path),
+                    prepared_snapshot=script_snapshot,
+                )
             finally:
                 script_snapshot.cleanup()
         receipt = result.receipt.model_dump(mode="json")

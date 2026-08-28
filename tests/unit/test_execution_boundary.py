@@ -13,6 +13,7 @@ from cafe.core.execution_boundary import (
     ScriptLaunchRequest,
     TrustSource,
     snapshot_script,
+    snapshot_script_tree,
 )
 
 
@@ -101,6 +102,39 @@ def test_snapshot_rejects_ancestor_swap_during_open(
 
     with pytest.raises((OSError, ValueError)):
         snapshot_script(script, allowed_root=root)
+    assert swapped is True
+
+
+def test_tree_snapshot_rejects_runtime_directory_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "skills"
+    skill = root / "cafe-plan"
+    scripts = skill / "scripts"
+    scripts.mkdir(parents=True)
+    script = scripts / "hook.sh"
+    script.write_text("#!/bin/sh\necho safe\n", encoding="utf-8")
+    attacker = tmp_path / "attacker"
+    (attacker / "scripts").mkdir(parents=True)
+    (attacker / "scripts" / "hook.sh").write_text(
+        "#!/bin/sh\necho attacker\n", encoding="utf-8"
+    )
+    displaced = root / "displaced"
+    native_open = os.open
+    swapped = False
+
+    def replace_skill_directory(path, flags, *args, **kwargs):
+        nonlocal swapped
+        if not swapped and path == "cafe-plan":
+            swapped = True
+            skill.rename(displaced)
+            attacker.rename(skill)
+        return native_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", replace_skill_directory)
+
+    with pytest.raises(ValueError):
+        snapshot_script_tree(script, allowed_root=root)
     assert swapped is True
 
 
