@@ -48,7 +48,10 @@ def test_build_context_materializes_playbook_role_agent(
     recorded: list[tuple[str, str]] = []
     source = tmp_path / "agents" / "writer" / "David.md"
     source.parent.mkdir(parents=True)
-    source.write_text("writer guidance\n", encoding="utf-8")
+    source_content = (
+        "---\nname: David\ndescription: writer\n---\n\nwriter guidance\n"
+    )
+    source.write_text(source_content, encoding="utf-8")
 
     @classmethod
     def fake_get(
@@ -77,7 +80,7 @@ def test_build_context_materializes_playbook_role_agent(
     )
     materialized = Path(ctx["agent_file"])
     assert materialized == output_file.parent / "context_agent_file.md"
-    assert materialized.read_text(encoding="utf-8") == "writer guidance\n"
+    assert materialized.read_text(encoding="utf-8") == source_content
     assert recorded == [("David", "writer")]
 
 

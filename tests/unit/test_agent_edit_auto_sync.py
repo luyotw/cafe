@@ -38,7 +38,10 @@ class TestAgentEditAutoSync:
         agents_dir = global_cafe_dir / "agents" / "developer"
         agents_dir.mkdir(parents=True)
         agent_file = agents_dir / "Nick.md"
-        agent_file.write_text("test content")
+        agent_file.write_text(
+            "---\nname: Nick\ndescription: test\n---\n\ntest content\n",
+            encoding="utf-8",
+        )
 
         mock_get_global_cafe_dir.return_value = global_cafe_dir
         mock_prompt_list.side_effect = ["developer", "Nick.md"]
@@ -74,7 +77,10 @@ class TestAgentEditAutoSync:
         agents_dir = global_cafe_dir / "agents" / "developer"
         agents_dir.mkdir(parents=True)
         agent_file = agents_dir / "Nick.md"
-        agent_file.write_text("test content")
+        agent_file.write_text(
+            "---\nname: Nick\ndescription: test\n---\n\ntest content\n",
+            encoding="utf-8",
+        )
 
         mock_get_global_cafe_dir.return_value = global_cafe_dir
         mock_prompt_list.side_effect = ["developer", "Nick.md"]

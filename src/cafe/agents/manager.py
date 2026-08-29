@@ -1010,7 +1010,6 @@ class AgentManager:
     ) -> tuple[str, str]:
         """Resolve and read an agent definition under one shared catalog lock."""
         from cafe.catalogs.resolver import (
-            CatalogKind,
             CatalogResolver,
             global_catalog_lock,
             read_valid_agent_definition,
@@ -1019,8 +1018,10 @@ class AgentManager:
         project_root = Path(cafe_dir).parent if cafe_dir else None
         resolver = CatalogResolver(project_root=project_root)
         with global_catalog_lock(resolver.global_root):
-            entry = resolver.resolve(
-                CatalogKind.AGENT, f"{role}/{agent_name}"
+            path = Path(
+                cls.get_agent_file_path(agent_name, role, cafe_dir)
+                if cafe_dir is not None
+                else cls.get_agent_file_path(agent_name, role)
             )
-            content = read_valid_agent_definition(entry.path, entry.key)
-            return str(entry.path), content
+            content = read_valid_agent_definition(path, f"{role}/{agent_name}")
+            return str(path), content
