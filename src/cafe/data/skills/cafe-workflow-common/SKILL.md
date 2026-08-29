@@ -1,7 +1,7 @@
 ---
 name: cafe-workflow-common
 description: Use this skill at the start of any CAFE workflow phase to load the bounded workflow digest, identify the current baton state, and ground the phase in shared context before reading phase-specific artifacts.
-version: 1.7.0
+version: 1.8.0
 ---
 
 # Workflow Common
@@ -123,13 +123,12 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 - Do not search `.cafe/` together with source and test trees. Query a specific issue artifact or metadata file only when the current handoff cannot be resolved from the runtime-provided paths.
 - Do not read a phase's own `streaming.jsonl` or full unbounded blackboard as a progress summary. Those are diagnostic evidence for a concrete failure, not normal workflow context.
 
-## Develop-to-review verification receipts
+## Repository-owned quality gates
 
-- The develop phase records its final repository-defined full test result with `cafe verification run`. The receipt is iteration-local, machine-generated, and valid only for the clean Git HEAD that was tested.
-- When a correction creates a new develop iteration without changing tracked files or HEAD, reuse the predecessor's still-valid receipt with `cafe verification reuse --source-output-file <previous-output> --output-file {output_file} --require-scope full` instead of rerunning the full suite. The command validates the source against the current clean HEAD before materializing new iteration-local evidence; never copy a receipt manually.
-- The review phase validates that evidence with `cafe verification check` and confirms the reported command is the repository-defined full suite required by the plan and test policy. A valid full receipt replaces a duplicate run of the same full suite or coverage command; it does not replace static review or requirement checks. For a concrete review risk, `cafe verification focus` accepts only a direct pytest receipt plus relative test-file or node-id selectors; it rejects shell/script runners and never replaces or edits the full receipt.
-- A missing, failed, stale, wrong-scope, or dirty-worktree receipt is not reusable. Review routes the exact problem back to develop instead of creating or repairing develop evidence itself.
-- Develop may run targeted tests and failing full attempts while changing code. It creates the reusable final full receipt only after all tracked changes are committed. If that run fails, fix and commit before replacing the receipt; after a passing receipt, do not change HEAD or tracked files.
+- The repository owns its default quality gates through versioned Git hooks and CI configuration. Workflow phases must not invent, duplicate, or strengthen the repository's full-suite, coverage, release, or push gates.
+- Develop runs only the targeted checks needed for fast implementation feedback. When a plan is supplied, map them to its Test List; otherwise select them from the changed behavior. Normal commits and pushes must allow the repository's configured hooks to run; use `--no-verify` only with explicit user authorization and record that bypass in the development summary.
+- Review evaluates the changed tests, targeted evidence, and any supplied hook or CI result. A missing CAFE verification receipt is not a finding, and review does not rerun repository-wide commands.
+- A custom playbook may explicitly declare a separate verification contract. That opt-in contract belongs to the custom workflow and does not make verification a default responsibility of develop or review.
 
 ## What Not To Do
 - Do not re-explain the shared workflow model in every phase artifact.
@@ -149,7 +148,7 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 | PR: local artifact vs remote publish ordering | Generic runtime prompt repeats PR-only lines on purpose; `cafe-pr` skill covers PR modes and title/body structure |
 | develop ↔ review disagreements and user arbitration | This skill (**Develop and review disagreement protocol**) |
 | Bounded code/search output and generated-log exclusions | This skill (**Bounded repository inspection**) |
-| Reuse of final full-test evidence across develop → review | This skill (**Develop-to-review verification receipts**) |
+| Repository hooks/CI versus phase-local targeted checks | This skill (**Repository-owned quality gates**) |
 | Issue decomposition assessment contract and phase-agent boundary | `references/issue_decomposition.md` |
 
 ## Confirming spec and plan with the user

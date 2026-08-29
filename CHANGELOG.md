@@ -6,9 +6,9 @@
   and bounded correction routes that repeat development, review, and QA before PR.
 - Keep the existing `simple`, `hotfix`, and `tdd` workflow behavior unchanged.
 - Enforce explicit sandbox, user lifecycle, and registered capability boundaries for workflow-managed scripts.
-- Remove the `cafe operation` background-job abstraction; repository checks now
-  use verification receipts while hooks, lifecycle scripts, and registered
-  capabilities retain their dedicated execution boundaries.
+- Remove the `cafe operation` background-job abstraction; repository Git hooks
+  and CI now own default quality gates, while verification receipts remain
+  opt-in for workflows that explicitly declare a separate contract.
 
 All notable changes to this project will be documented in this file.
 

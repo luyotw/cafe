@@ -1,7 +1,7 @@
 ---
 name: cafe-plan
 description: "產出可執行的開發計畫"
-version: 1.6.1
+version: 1.7.0
 workflow:
   execution_profile:
     workload: planning
@@ -83,6 +83,7 @@ Read your agent file: {agent_file}
   human-task 規則處理，並在 plan 明列哪些遠端 mutation 需要另行確認。
 - 產出計畫前必須完成 **`## Test List`**（`Unit tests (N)` 與 `Integration tests (M)`，每項有標籤並對應 invariant 或 user journey；N 或 M 為 0 時簡述原因）
 - 撰寫 Test List 與斷言規則時請閱讀 `references/test_invariants_policy.md`（integration 以 journey/invariant 描述，不以 UI component 列項）
+- 只把與變更直接相關的 targeted checks 安排為 develop task；repository 的 pre-commit、pre-push、CI、coverage 與 release gate 另標示為外部品質閘門，不得把它們重複寫成 phase 執行任務，也不得同時要求外層 script 與其內含的子指令
 - 在計畫輸出確認前，請依儲存庫證據及 shared skill「cafe-workflow-common」的
   `references/issue_decomposition.md` 評估實作範圍的拆分需求。請使用其中固定的
   `Decision: `keep` or `split``, `Rationale`, `Current issue scope`、`Trigger`

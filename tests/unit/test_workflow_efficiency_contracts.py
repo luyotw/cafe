@@ -26,7 +26,7 @@ def test_workflow_common_bounds_search_output_and_generated_logs() -> None:
     assert "Do not search `.cafe/` together with source and test trees" in normalized
 
 
-def test_develop_and_review_share_machine_checked_full_test_receipt() -> None:
+def test_develop_and_review_defer_repository_wide_gates_to_hooks_and_ci() -> None:
     common = (SKILLS / "cafe-workflow-common/SKILL.md").read_text(encoding="utf-8")
     develop = (SKILLS / "cafe-develop/SKILL.md").read_text(encoding="utf-8")
     develop_steps = (
@@ -36,25 +36,34 @@ def test_develop_and_review_share_machine_checked_full_test_receipt() -> None:
     review_steps = (SKILLS / "cafe-review/references/execution_steps.md").read_text(
         encoding="utf-8"
     )
-    receipt_instruction = (
-        SKILLS / "cafe-review/references/verification_receipt_instruction.md"
+    plan = (SKILLS / "cafe-plan/SKILL.md").read_text(encoding="utf-8")
+    bug_plan = (SKILLS / "cafe-plan/assets/templates/bug.md").read_text(
+        encoding="utf-8"
+    )
+    correction_steps = (
+        SKILLS / "cafe-develop/references/execution_steps_correction.md"
     ).read_text(encoding="utf-8")
 
-    assert "## Develop-to-review verification receipts" in common
-    assert "cafe verification reuse --source-output-file <previous-output>" in common
-    assert "never copy a receipt manually" in common
-    assert "Develop-to-review verification receipts" in develop
-    assert "cafe verification run --output-file {output_file}" in develop_steps
-    assert "Develop-to-review verification receipts" in review
-    assert "{verification_receipt_instruction}" in review_steps
-    assert "cafe verification check --output-file {develop_file}" in receipt_instruction
-    assert "recorded command is the repository-defined full suite" in receipt_instruction
-    assert "do not rerun the same full suite or coverage command" in receipt_instruction
+    assert "## Repository-owned quality gates" in common
+    assert "versioned Git hooks and CI configuration" in common
+    assert "use `--no-verify` only with explicit user authorization" in common
+    assert "Repository-owned quality gates" in develop
+    assert "when a plan is supplied, map them to its Test List" in develop_steps
+    assert "when a plan is supplied, map them to its Test List" in correction_steps
+    assert "pre-commit hooks ran for normal commits when configured" in develop_steps
+    assert "pre-commit hooks ran for normal commits when configured" in correction_steps
+    assert "cafe verification run" not in develop_steps
+    assert "cafe verification run" not in correction_steps
+    assert "Repository-owned quality gates" in review
+    assert "do not require a CAFE verification receipt" in review_steps
+    assert "cafe verification check" not in review_steps
+    assert "targeted checks" in plan
+    assert "pre-commit、pre-push、CI、coverage 與 release gate" in plan
+    assert "Run all existing tests" not in bug_plan
+    assert "configured Git hooks or CI" in bug_plan
 
     review_contract = yaml.safe_load(review.split("---", 2)[1])["workflow"]
-    assert review_contract["required_tools"] == [
-        "Bash(cafe verification check:*)"
-    ]
+    assert "required_tools" not in review_contract
 
     for playbook_name in (
         "direct",
@@ -65,12 +74,23 @@ def test_develop_and_review_share_machine_checked_full_test_receipt() -> None:
         "tdd-qa",
     ):
         playbook = yaml.safe_load((PLAYBOOKS / f"{playbook_name}.yaml").read_text())
-        assert "Bash(cafe verification check:*)" in playbook["steps"]["review"][
-            "allowed_tools"
-        ]
-        assert "Bash(cafe verification focus:*)" in playbook["steps"]["review"][
-            "allowed_tools"
-        ]
+        allowed_tools = playbook["steps"]["review"]["allowed_tools"]
+        assert "Bash(git:*)" in allowed_tools
+        assert not any("cafe verification" in tool for tool in allowed_tools)
+
+
+def test_planless_development_uses_change_scoped_targeted_checks() -> None:
+    develop_steps = (
+        SKILLS / "cafe-develop/references/execution_steps_normal.md"
+    ).read_text(encoding="utf-8")
+
+    assert "targeted tests for new or changed behavior" in develop_steps
+    assert "when a plan is supplied, map them to its Test List" in develop_steps
+
+    for playbook_name in ("direct", "hotfix"):
+        playbook = yaml.safe_load((PLAYBOOKS / f"{playbook_name}.yaml").read_text())
+        inputs = playbook["steps"]["develop"]["input_artifacts"]
+        assert "plan" not in inputs
 
 
 def test_review_corrections_close_root_causes_without_restarting_full_audit() -> None:

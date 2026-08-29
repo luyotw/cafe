@@ -46,7 +46,9 @@
 [ ] Explicit cross-component contracts: when two components share state via persistence or other indirect channels, the protocol is documented (in code or plan), not coincidental; flag implicit coupling that only works because of current framework behavior
 
 ## Testing Review
-{verification_receipt_instruction}[ ] Review test quality and edge cases
+[ ] Review the targeted test evidence for changed behavior; do not require a CAFE verification receipt or rerun repository-wide commands
+[ ] Review supplied Git-hook or CI results when available; report a disclosed bypass or failure without manufacturing replacement evidence
+[ ] Review test quality and edge cases
 [ ] Check the tests are not fragile or flaky
 
 ## Test Invariants Review

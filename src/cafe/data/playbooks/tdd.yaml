@@ -138,7 +138,7 @@ steps:
       - trigger: manual_handoff
         task_id: iteration-limit
         outcomes: {resume: review}
-    allowed_tools: [Read, Grep, Glob, "Bash(git:*)", "Bash(cafe verification check:*)", "Bash(cafe verification focus:*)"]
+    allowed_tools: [Read, Grep, Glob, "Bash(git:*)"]
     max_iterations: 5
     allowed_goto: [spec, develop, plan]
     hooks:
