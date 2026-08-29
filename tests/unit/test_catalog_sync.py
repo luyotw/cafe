@@ -433,6 +433,201 @@ def test_catalog_reader_fails_closed_for_an_unjournaled_orphan_transaction(
     assert len(evidence["rollback_errors"]) == 1
 
 
+def _write_recovery_journal(
+    transaction: Path,
+    record: dict[str, str],
+    **payload_updates: object,
+) -> None:
+    (transaction / "backups").mkdir(parents=True, exist_ok=True)
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "status": "publishing",
+        "records": [record],
+    }
+    payload.update(payload_updates)
+    (transaction / "transaction.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _recovery_reader(tmp_path: Path, global_root: Path) -> CatalogResolver:
+    return CatalogResolver(
+        project_root=tmp_path / "reader-project",
+        canonical_root=tmp_path / "reader-project",
+        global_root=global_root,
+        builtin_root=tmp_path / "reader-builtin",
+    )
+
+
+@pytest.mark.parametrize(
+    "record_update",
+    [
+        {"entry_id": "phase:develop"},
+        {"relative_path": "playbooks"},
+        {"new_digest": "not-a-content-digest"},
+        {"new_digest": "0" * 64},
+        {"state": "committed"},
+    ],
+    ids=[
+        "entry-path-mismatch",
+        "whole-catalog-path",
+        "digest",
+        "published-content-mismatch",
+        "state",
+    ],
+)
+def test_catalog_reader_rejects_unsafe_recovery_records_before_mutation(
+    tmp_path: Path, record_update: dict[str, str]
+) -> None:
+    global_root = tmp_path / "global"
+    target = _entry(global_root, CatalogKind.PLAYBOOK, "standard", "outside-authority")
+    original_digest = content_digest(target)
+    record = {
+        "entry_id": "playbook:standard",
+        "relative_path": "playbooks/standard.yaml",
+        "old_digest": "missing",
+        "new_digest": original_digest,
+        "state": "published",
+    }
+    record.update(record_update)
+    _write_recovery_journal(global_root / ".catalog-transactions" / "hostile-record", record)
+
+    with pytest.raises(CatalogRecoveryError):
+        _recovery_reader(tmp_path, global_root).resolve(CatalogKind.PLAYBOOK, "standard")
+
+    assert content_digest(target) == original_digest
+
+
+@pytest.mark.parametrize(
+    "payload_update",
+    [
+        {"schema_version": 2},
+        {"status": "attacker-controlled"},
+        {"records": []},
+    ],
+    ids=["schema", "status", "empty-records"],
+)
+def test_catalog_reader_rejects_unsafe_recovery_journals_before_mutation(
+    tmp_path: Path, payload_update: dict[str, object]
+) -> None:
+    global_root = tmp_path / "global"
+    target = _entry(global_root, CatalogKind.PLAYBOOK, "standard", "outside-authority")
+    original_digest = content_digest(target)
+    record = {
+        "entry_id": "playbook:standard",
+        "relative_path": "playbooks/standard.yaml",
+        "old_digest": "missing",
+        "new_digest": original_digest,
+        "state": "published",
+    }
+    _write_recovery_journal(
+        global_root / ".catalog-transactions" / "hostile-journal",
+        record,
+        **payload_update,
+    )
+
+    with pytest.raises(CatalogRecoveryError):
+        _recovery_reader(tmp_path, global_root).resolve(CatalogKind.PLAYBOOK, "standard")
+
+    assert content_digest(target) == original_digest
+
+
+@pytest.mark.parametrize("symlink_level", ["transactions-root", "transaction", "journal"])
+def test_catalog_reader_rejects_symlinked_transaction_ancestry_before_mutation(
+    tmp_path: Path, symlink_level: str
+) -> None:
+    global_root = tmp_path / "global"
+    target = _entry(global_root, CatalogKind.PLAYBOOK, "standard", "outside-authority")
+    original_digest = content_digest(target)
+    external_transaction = tmp_path / "external-transactions" / "hostile"
+    _write_recovery_journal(
+        external_transaction,
+        {
+            "entry_id": "playbook:standard",
+            "relative_path": "playbooks/standard.yaml",
+            "old_digest": "missing",
+            "new_digest": original_digest,
+            "state": "published",
+        },
+    )
+    transactions_root = global_root / ".catalog-transactions"
+    if symlink_level == "transactions-root":
+        transactions_root.symlink_to(external_transaction.parent, target_is_directory=True)
+    else:
+        transactions_root.mkdir()
+        transaction = transactions_root / "hostile"
+        if symlink_level == "transaction":
+            transaction.symlink_to(external_transaction, target_is_directory=True)
+        else:
+            (transaction / "backups").mkdir(parents=True)
+            (transaction / "transaction.json").symlink_to(external_transaction / "transaction.json")
+
+    with pytest.raises(CatalogRecoveryError):
+        _recovery_reader(tmp_path, global_root).resolve(CatalogKind.PLAYBOOK, "standard")
+
+    assert content_digest(target) == original_digest
+
+
+def test_catalog_reader_rejects_symlinked_target_ancestor_before_mutation(
+    tmp_path: Path,
+) -> None:
+    global_root = tmp_path / "global"
+    global_root.mkdir()
+    external_root = tmp_path / "external-target"
+    target = _entry(
+        external_root,
+        CatalogKind.PLAYBOOK,
+        "standard",
+        "outside-authority",
+    )
+    (global_root / "playbooks").symlink_to(target.parent, target_is_directory=True)
+    original_digest = content_digest(target)
+    _write_recovery_journal(
+        global_root / ".catalog-transactions" / "hostile-target",
+        {
+            "entry_id": "playbook:standard",
+            "relative_path": "playbooks/standard.yaml",
+            "old_digest": "missing",
+            "new_digest": original_digest,
+            "state": "published",
+        },
+    )
+
+    with pytest.raises(CatalogRecoveryError):
+        _recovery_reader(tmp_path, global_root).resolve(CatalogKind.PLAYBOOK, "standard")
+
+    assert content_digest(target) == original_digest
+
+
+def test_catalog_reader_rejects_symlinked_backup_ancestor_before_mutation(
+    tmp_path: Path,
+) -> None:
+    global_root = tmp_path / "global"
+    target = _entry(global_root, CatalogKind.PLAYBOOK, "standard", "published")
+    published_digest = content_digest(target)
+    external_root = tmp_path / "external-backup"
+    backup = _entry(external_root, CatalogKind.PLAYBOOK, "standard", "approved-old")
+    old_digest = content_digest(backup)
+    transaction = global_root / ".catalog-transactions" / "hostile-backup"
+    backup_root = transaction / "backups"
+    backup_root.mkdir(parents=True)
+    (backup_root / "playbooks").symlink_to(backup.parent, target_is_directory=True)
+    _write_recovery_journal(
+        transaction,
+        {
+            "entry_id": "playbook:standard",
+            "relative_path": "playbooks/standard.yaml",
+            "old_digest": old_digest,
+            "new_digest": published_digest,
+            "state": "published",
+        },
+    )
+
+    with pytest.raises(CatalogRecoveryError):
+        _recovery_reader(tmp_path, global_root).resolve(CatalogKind.PLAYBOOK, "standard")
+
+    assert content_digest(target) == published_digest
+    assert content_digest(backup) == old_digest
+
+
 def test_production_loaders_hold_the_catalog_lock_through_content_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
