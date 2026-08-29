@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,7 +12,7 @@ from typer.testing import CliRunner
 
 from cafe.core.automatic_steps import AutomaticExecutionResult, AutomaticExecutorRegistry
 from cafe.core.blackboard import BLACKBOARD_SCHEMA_VERSION, BlackboardStore
-from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.human_tasks import HumanTaskBinding, HumanTaskDecision, HumanTaskPolicy
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.ui.cli import app
@@ -225,6 +227,148 @@ def test_hybrid_journey_retains_one_visit_through_its_human_boundary(
     assert completed.completed is True
     assert portions == ["draft", "final"]
     assert BlackboardStore(issue_dir).load_or_create("mixed").step_visit_counts == {"mixed": 1}
+
+
+@pytest.mark.parametrize(
+    ("owner", "legacy_handoff", "replacement_step"),
+    (
+        ("human", False, "approval"),
+        ("hybrid", False, "approval"),
+        ("human", True, "approval"),
+        ("hybrid", True, "approval"),
+        ("agent", True, "replacement"),
+        ("human", True, "replacement"),
+        ("hybrid", True, "replacement"),
+    ),
+)
+def test_owner_replacement_supersedes_only_the_prior_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    owner: str,
+    legacy_handoff: bool,
+    replacement_step: str,
+) -> None:
+    """Test List 4: direct and hybrid handoffs replace named predecessors."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / f"{owner}-replacement"
+    trigger = (
+        "need_clarification" if owner == "agent" else "initial" if owner == "human" else "approve"
+    )
+    binding = HumanTaskBinding(trigger=trigger, task_id="approval", outcomes={"accept": "done"})
+    replacement_binding = HumanTaskBinding(
+        trigger=trigger,
+        task_id="replacement-approval",
+        outcomes={"accept": "done"},
+    )
+    replacement_policy = _approval_policy().model_copy(update={"id": "replacement-approval"})
+    monkeypatch.setattr(
+        runtime_mod,
+        "resolve_step_human_task",
+        lambda **kwargs: (
+            (replacement_policy, replacement_binding)
+            if kwargs["step_name"] == "replacement"
+            else (_approval_policy(), binding)
+        ),
+    )
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+    notifications: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: notifications.append(kwargs)
+        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+    )
+
+    step: dict[str, object] = {
+        "skill": "phase",
+        "role": "operator",
+        "human_tasks": [binding.model_dump()],
+        "on": {},
+    }
+    if owner == "agent":
+        step["valid_intents"] = [trigger]
+        step["on"] = {trigger: "user"}
+    else:
+        step["assignee_type"] = owner
+    if owner == "hybrid":
+        step["hybrid"] = {
+            "entry_portion": "approve",
+            "portions": [{"id": "approve", "owner": "human", "on": {"accept": {"step": "_done"}}}],
+        }
+    replacement_definition = dict(step)
+    replacement_definition["human_tasks"] = [replacement_binding.model_dump()]
+    playbook = {
+        "playbook": {"id": "owner-replacement"},
+        "steps": {"approval": step, "replacement": replacement_definition},
+    }
+
+    first = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=(
+            (lambda *_args, **_kwargs: (trigger, {}))
+            if owner == "agent"
+            else lambda *_args, **_kwargs: pytest.fail("human boundary ran an agent")
+        ),
+    ).run(start_step="approval")
+    records = HumanTaskRecordStore(issue_dir)
+    predecessor = records.tasks()[0]
+    if legacy_handoff:
+        persisted = json.loads(records.file_path.read_text(encoding="utf-8"))
+        persisted["tasks"][0]["handoff_key"] = "\u001f".join(
+            (predecessor.workflow_id, predecessor.step, "1", trigger, predecessor.policy_id)
+        )
+        records.file_path.write_text(json.dumps(persisted), encoding="utf-8")
+        predecessor = HumanTaskRecordStore(issue_dir).get_task(predecessor.id)
+    unrelated = records.materialize(
+        workflow_id=predecessor.workflow_id,
+        step=predecessor.step if legacy_handoff else "unrelated",
+        iteration=1,
+        trigger="unrelated",
+        policy_id="unrelated-approval",
+        prompt="Unrelated approval",
+        expected_result={},
+        continuations={"accept": "done"},
+        assignee_type="human",
+    )
+
+    replacement = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=(
+            (lambda *_args, **_kwargs: (trigger, {}))
+            if owner == "agent"
+            else lambda *_args, **_kwargs: pytest.fail("human boundary ran an agent")
+        ),
+    ).run(start_step=replacement_step)
+    updated = HumanTaskRecordStore(issue_dir)
+    current = next(
+        task for task in updated.tasks() if task.id not in {predecessor.id, unrelated.id}
+    )
+
+    assert first.completed is False
+    assert replacement.completed is False
+    assert updated.get_task(predecessor.id).status is HumanTaskStatus.CANCELLED
+    assert updated.get_task(predecessor.id).superseded_by_task_id == current.id
+    assert updated.get_wait_state(predecessor.id).released_at is not None
+    assert current.status is HumanTaskStatus.PENDING
+    if replacement_step == "replacement":
+        assert current.policy_id == "replacement-approval"
+    assert updated.get_task(unrelated.id).status is HumanTaskStatus.PENDING
+    assert updated.get_wait_state(unrelated.id).released_at is None
+    updated.complete(
+        workflow_id=predecessor.workflow_id,
+        task_id=unrelated.id,
+        payload={"accept": "done"},
+        source="test",
+    )
+    assert updated.get_task(unrelated.id).status is HumanTaskStatus.COMPLETED
+    assert [call["capability_request"]["args"]["task_id"] for call in notifications] == [
+        predecessor.id,
+        current.id,
+    ]
 
 
 def test_ownership_cli_dry_run_is_a_side_effect_free_simulation(

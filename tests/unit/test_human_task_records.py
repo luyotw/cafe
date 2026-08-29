@@ -153,6 +153,56 @@ def test_materialization_reports_creation_atomically_across_restart(tmp_path: Pa
     assert recovered.task == first.task
 
 
+def test_replacement_materialization_cancels_only_explicit_obsolete_pending_tasks(
+    tmp_path: Path,
+) -> None:
+    """Test List 4: replacement atomically deactivates only its named predecessor."""
+    store = HumanTaskRecordStore(tmp_path / "issue")
+    original = store.materialize(
+        workflow_id="workflow-one",
+        step="develop",
+        iteration=1,
+        trigger="need_permission",
+        policy_id="permission-answers",
+        prompt="Grant permission",
+        expected_result={"input_schema": "feedback"},
+        continuations={"submit": "develop"},
+        assignee_type="user",
+    )
+    unrelated = store.materialize(
+        workflow_id="workflow-one",
+        step="review",
+        iteration=1,
+        trigger="need_clarification",
+        policy_id="clarification-feedback",
+        prompt="Clarify review",
+        expected_result={"input_schema": "feedback"},
+        continuations={"submit": "review"},
+        assignee_type="user",
+    )
+
+    replacement = store.materialize_with_status(
+        workflow_id="workflow-one",
+        step="develop",
+        iteration=2,
+        trigger="need_permission",
+        policy_id="permission-answers",
+        prompt="Grant renewed permission",
+        expected_result={"input_schema": "feedback"},
+        continuations={"submit": "develop"},
+        assignee_type="user",
+        superseded_task_ids=(original.id,),
+    ).task
+
+    assert store.get_task(original.id).status is HumanTaskStatus.CANCELLED
+    assert store.get_wait_state(original.id).released_at is not None
+    assert store.get_task(unrelated.id).status is HumanTaskStatus.PENDING
+    assert store.get_wait_state(unrelated.id).released_at is None
+    superseded = [event for event in store.lifecycle_events() if event.event_type == "superseded"]
+    assert superseded[0].task_id == original.id
+    assert superseded[0].context["replacement_task_id"] == replacement.id
+
+
 @pytest.mark.skipif(os.name == "nt", reason="the durable record lock is POSIX file based")
 def test_only_one_concurrent_materialization_reports_creation(tmp_path: Path) -> None:
     """Only the process that durably creates the shared task reports creation."""

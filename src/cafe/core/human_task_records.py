@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Optional
+from typing import Any, Iterator, Mapping, Optional, Sequence
 from uuid import uuid4
 
 try:
@@ -67,6 +67,7 @@ class HumanTask:
     capability_approval: Optional[dict[str, Any]] = None
     completed_at: Optional[str] = None
     cancelled_at: Optional[str] = None
+    superseded_by_task_id: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -87,6 +88,7 @@ class HumanTask:
             ),
             "completed_at": self.completed_at,
             "cancelled_at": self.cancelled_at,
+            "superseded_by_task_id": self.superseded_by_task_id,
         }
 
     @classmethod
@@ -112,6 +114,7 @@ class HumanTask:
                 ),
                 completed_at=_optional_text(data.get("completed_at")),
                 cancelled_at=_optional_text(data.get("cancelled_at")),
+                superseded_by_task_id=_optional_text(data.get("superseded_by_task_id")),
             )
         except (TypeError, ValueError) as exc:
             raise HumanTaskRecordSchemaError(f"invalid human task: {exc}") from exc
@@ -410,6 +413,7 @@ class HumanTaskRecordStore:
         assignee_id: Optional[str] = None,
         capability_approval: Optional[Mapping[str, Any]] = None,
         handoff_key: Optional[str] = None,
+        superseded_task_ids: Sequence[str] = (),
     ) -> HumanTask:
         return self.materialize_with_status(
             workflow_id=workflow_id,
@@ -424,6 +428,7 @@ class HumanTaskRecordStore:
             assignee_id=assignee_id,
             capability_approval=capability_approval,
             handoff_key=handoff_key,
+            superseded_task_ids=superseded_task_ids,
         ).task
 
     def materialize_with_status(
@@ -441,6 +446,7 @@ class HumanTaskRecordStore:
         assignee_id: Optional[str] = None,
         capability_approval: Optional[Mapping[str, Any]] = None,
         handoff_key: Optional[str] = None,
+        superseded_task_ids: Sequence[str] = (),
     ) -> HumanTaskMaterialization:
         with self.transaction():
             envelope = self._load_for_workflow(workflow_id, create=True)
@@ -493,6 +499,25 @@ class HumanTaskRecordStore:
                 pause_reason=task.trigger,
                 created_at=now,
             )
+            for obsolete_task_id in dict.fromkeys(superseded_task_ids):
+                obsolete = envelope.tasks.get(obsolete_task_id)
+                if obsolete is None or obsolete.status is not HumanTaskStatus.PENDING:
+                    continue
+                cancelled = replace(
+                    obsolete,
+                    status=HumanTaskStatus.CANCELLED,
+                    cancelled_at=now,
+                    superseded_by_task_id=task.id,
+                )
+                envelope.tasks[obsolete.id] = cancelled
+                wait = envelope.wait_states[obsolete.id]
+                envelope.wait_states[obsolete.id] = replace(wait, released_at=now)
+                self._append_event(
+                    envelope,
+                    "superseded",
+                    task_id=obsolete.id,
+                    context={"replacement_task_id": task.id},
+                )
             self._append_event(
                 envelope,
                 "created",
