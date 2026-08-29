@@ -119,6 +119,48 @@ def test_actionable_message_bounds_project_controlled_metadata_to_one_safe_line_
     assert "https://attacker.invalid" not in payload
 
 
+@pytest.mark.parametrize(
+    "project_value",
+    [
+        "https://attacker.invalid/path",
+        "www.attacker.invalid",
+        "namespace:www.attacker.invalid",
+    ],
+)
+def test_actionable_message_rejects_url_shaped_project_metadata(project_value: str) -> None:
+    """Project-owned identifiers cannot add clickable links to a trusted notification."""
+    message = build_human_task_message(
+        repository=project_value,
+        workflow_id="workflow-one",
+        task_id="task-one",
+        step=project_value,
+        task_type=project_value,
+    )
+
+    payload = message.to_slack_payload()["text"]
+
+    assert project_value not in payload
+    assert message.repository.startswith("invalid-")
+    assert message.step.startswith("invalid-")
+    assert message.task_type.startswith("invalid-")
+
+
+def test_actionable_message_preserves_non_url_identifier_punctuation() -> None:
+    """Safe project identifiers remain recognizable instead of becoming opaque hashes."""
+    message = build_human_task_message(
+        repository="openfunltd/cafe.engine",
+        workflow_id="workflow:one",
+        task_id="task-one",
+        step="review.v2/approval",
+        task_type="namespace:permission",
+    )
+
+    assert message.repository == "openfunltd/cafe.engine"
+    assert message.workflow_id == "workflow:one"
+    assert message.step == "review.v2/approval"
+    assert message.task_type == "namespace:permission"
+
+
 def test_machine_notification_settings_ignore_project_and_environment_injection(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -87,10 +87,17 @@ def sanitize_human_task_metadata(value: str) -> str:
     if (
         len(value) <= MAX_NOTIFICATION_METADATA_LENGTH
         and SAFE_NOTIFICATION_METADATA.fullmatch(value) is not None
+        and not _is_url_shaped_metadata(value)
     ):
         return value
     digest = hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()[:12]
     return f"invalid-{digest}"
+
+
+def _is_url_shaped_metadata(value: str) -> bool:
+    """Reject link-like identifiers while retaining ordinary namespaced IDs."""
+    normalized = value.casefold()
+    return "://" in normalized or "www." in normalized
 
 
 @dataclass(frozen=True)
