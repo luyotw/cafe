@@ -1,0 +1,7 @@
+## Correction Review
+
+[ ] Read the previous review, previous closure rows, and correction delta first; re-verify every prior finding item by item
+[ ] For each corrected root cause, inspect the directly related equivalence classes in one pass: callers and consumers, supported modes and aliases, empty/single/multiple cardinalities, and applicable lifecycle paths; consolidate remaining violations into one finding and do not drip-feed sibling cases
+[ ] Review the correction delta and its direct callers, consumers, tests, and contracts, but do not restart an unrelated repository-wide audit; in one pass cover every applicable correctness, error-handling, security, performance, persistence, concurrency, fallback, data-loss, and source-of-truth risk, plus corrected-test quality for invariants/journeys versus implementation details, pure-logic unit and integration coverage, UI contracts, edge cases, fixture truthfulness, and flakiness
+[ ] Inspect outside the correction surface only when a closure row or a critical correctness, security, data-loss, or source-of-truth risk requires it, and state why that bounded expansion is relevant
+[ ] Restore the complete issue acceptance closure matrix from the previous review and current requirement sources, using the approved spec/plan when supplied or the recorded planless baseline otherwise; preserve every issue acceptance criterion and relevant invariant rather than dropping it merely because the latest delta did not touch it, and use the Acceptance Closure section to independently re-close every row

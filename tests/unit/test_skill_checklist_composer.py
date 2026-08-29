@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ from cafe.skills.checklist_composer import (
 from cafe.skills.contracts import SkillWorkflowContract
 from cafe.skills.loader import SkillLoader
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "checklists"
 DEVELOP_BASIC_PRINCIPLES = load_skill_reference("cafe-develop", "basic_principles.md")
 REVIEW_BASIC_PRINCIPLES = load_skill_reference("cafe-review", "basic_principles.md")
@@ -53,6 +55,11 @@ REQUIRED_SKILL_REFERENCES = {
     ],
     "review": [
         "execution_steps.md",
+        "execution_preflight.md",
+        "execution_acceptance_closure.md",
+        "execution_first_pass.md",
+        "execution_correction.md",
+        "execution_finalize.md",
         "feedback_instruction.md",
         "spec_read_instruction.md",
         "plan_read_instruction.md",
@@ -373,7 +380,9 @@ def test_golden_checklist_matches_fixture(case_name: str, tmp_path: Path) -> Non
                         f"First diff at line {i}:\n  actual:   {a!r}\n  expected: {e!r}"
                     )
             raise AssertionError(
-                f"Line count differs: actual={len(actual.splitlines())} expected={len(expected.splitlines())}"
+                "Line count differs: "
+                f"actual={len(actual.splitlines())} "
+                f"expected={len(expected.splitlines())}"
             )
     finally:
         AgentManager.read_agent_file = saved
@@ -443,6 +452,170 @@ def test_declared_checklist_uses_readable_builtin_agent_path_outside_checkout(
     assert agent_path.is_absolute()
     assert agent_path.is_file()
     assert agent_file in checklist.read_text(encoding="utf-8")
+
+
+def test_review_correction_runtime_composes_planless_closure_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        AgentManager,
+        "get_agent_file_path",
+        classmethod(_builtin_agent_path),
+    )
+    output_path = tmp_path / "review-correction-planless.md"
+
+    assert compose_declared_checklist(
+        skill_name="cafe-review",
+        contract=SkillLoader().get_workflow_contract("cafe-review"),
+        agent_name="Richard",
+        role="reviewer",
+        checklist_file_path=output_path,
+        iteration=2,
+        context={
+            "output_file": ".cafe/issues/test/review/iteration_002/output.md",
+            "base_branch": "develop",
+        },
+        artifacts={
+            "code": ".cafe/issues/test/develop/iteration_002/output.md",
+            "workflow_feedback": ".cafe/issues/test/workflow-feedback.md",
+        },
+        feedback=True,
+        template_mode="manual",
+    )
+
+    checklist = output_path.read_text(encoding="utf-8")
+    correction_heading = "## Correction Review"
+    matrix_heading = "## Acceptance Closure"
+    assert correction_heading in checklist
+    assert matrix_heading in checklist
+    assert checklist.index(correction_heading) < checklist.index(matrix_heading)
+    assert "recorded planless baseline" in checklist
+    assert "derive a bounded planless baseline" in checklist
+    assert "request clarification instead of guessing" in checklist
+    assert "invariants/journeys versus implementation details" in checklist
+    assert "UI contracts" in checklist
+    assert "applicable production entry point, consumer, or artifact" in checklist
+    assert "map to plan journeys/invariants" not in checklist
+    assert "exact copy only when mandated in the spec" not in checklist
+    assert "naming its production path" not in checklist
+    assert "need_permission" not in checklist
+    assert "{spec_" not in checklist
+    assert "{plan_" not in checklist
+
+
+def _review_checkbox_count(content: str) -> int:
+    return len(re.findall(r"^\[ \]", content, flags=re.MULTILINE))
+
+
+def _normalized_checklist_source(content: str) -> str:
+    return "\n".join(line.rstrip() for line in content.strip().splitlines())
+
+
+def test_review_legacy_aggregate_matches_first_pass_modules() -> None:
+    review_root = PROJECT_ROOT / "src/cafe/data/skills/cafe-review/references"
+    aggregate = (review_root / "execution_steps.md").read_text(encoding="utf-8")
+    expected = "\n\n".join(
+        (review_root / name).read_text(encoding="utf-8").strip()
+        for name in (
+            "execution_preflight.md",
+            "execution_acceptance_closure.md",
+            "execution_first_pass.md",
+            "execution_finalize.md",
+        )
+    )
+
+    assert _normalized_checklist_source(aggregate) == _normalized_checklist_source(expected)
+
+
+def test_review_composed_checklists_stay_within_budget_and_keep_role_guidance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_file = tmp_path / "BudgetReviewer.md"
+    agent_file.write_text(
+        "---\nname: BudgetReviewer\ndescription: Budget test reviewer\n---\n\n"
+        "You are a review budget fixture. Your behavioral guidelines are as follows:\n\n"
+        "- Check behavior rigorously\n"
+        "- Keep findings relevant\n"
+        "- Prefer independent evidence\n"
+        "- Communicate concisely\n"
+        "- Avoid speculative findings\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        AgentManager,
+        "get_agent_file_path",
+        classmethod(lambda cls, *_args, **_kwargs: str(agent_file)),
+    )
+    contract = SkillLoader().get_workflow_contract("cafe-review")
+    assert contract.checklist is not None
+    assert contract.checklist.include_role_guidance is True
+
+    planned_context = {
+        "output_file": ".cafe/issues/test/review/output.md",
+        "base_branch": "develop",
+        "spec_file": ".cafe/issues/test/spec/output.md",
+        "plan_file": ".cafe/issues/test/plan/output.md",
+        "feedback_file": ".cafe/issues/test/review/previous.md",
+    }
+    cases = (
+        ("first-planned", 1, planned_context, False),
+        ("correction-planned", 2, planned_context, True),
+        (
+            "correction-planless",
+            2,
+            {
+                "output_file": ".cafe/issues/test/review/output.md",
+                "base_branch": "develop",
+                "feedback_file": ".cafe/issues/test/review/previous.md",
+            },
+            True,
+        ),
+    )
+
+    for name, iteration, context, feedback in cases:
+        output_path = tmp_path / f"{name}.md"
+        assert compose_declared_checklist(
+            skill_name="cafe-review",
+            contract=contract,
+            agent_name="BudgetReviewer",
+            role="reviewer",
+            checklist_file_path=output_path,
+            iteration=iteration,
+            context=context,
+            artifacts={},
+            feedback=feedback,
+            template_mode="manual",
+        )
+        checklist = output_path.read_text(encoding="utf-8")
+        assert _review_checkbox_count(checklist) <= 28
+        assert checklist.count("## Agent Guidelines Checklist") == 1
+        assert checklist.split("## Agent Guidelines Checklist", 1)[1].count("[ ]") == 5
+        assert "## Acceptance Closure" in checklist
+        assert "## Finalize Review" in checklist
+        assert "need_permission" not in checklist
+        if iteration == 1:
+            assert "## First-Pass Behavior Review" in checklist
+            assert "## Correction Review" not in checklist
+        else:
+            assert "## Correction Review" in checklist
+            assert "## First-Pass Behavior Review" not in checklist
+
+    legacy_path = tmp_path / "legacy-pr-todo.md"
+    generate_review_checklist(
+        agent_name="BudgetReviewer",
+        spec_file_path=planned_context["spec_file"],
+        review_file_path=planned_context["output_file"],
+        base_branch="develop",
+        checklist_file_path=legacy_path,
+        pr_feedback_file_path=planned_context["feedback_file"],
+        plan_file_path=planned_context["plan_file"],
+        pr_todo_list_file_path=".cafe/issues/test/pr/output.md",
+        basic_principles=REVIEW_BASIC_PRINCIPLES,
+    )
+    legacy = legacy_path.read_text(encoding="utf-8")
+    assert _review_checkbox_count(legacy) <= 28
+    assert "## PR Todo List Check" in legacy
+    assert legacy.split("## Agent Guidelines Checklist", 1)[1].count("[ ]") == 5
 
 
 @pytest.mark.parametrize(
@@ -649,10 +822,7 @@ def test_generate_checklist_ignores_non_bullet_basic_principles_lines(tmp_path: 
         correction_mode=False,
         output_file=".cafe/issues/test/develop/iteration_001/output.md",
         basic_principles=(
-            "- Valid list item\n"
-            "Not a list item\n"
-            "* wrong bullet marker\n"
-            "- Another valid list item"
+            "- Valid list item\nNot a list item\n* wrong bullet marker\n- Another valid list item"
         ),
     )
 

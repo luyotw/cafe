@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -29,20 +30,18 @@ def test_workflow_common_bounds_search_output_and_generated_logs() -> None:
 def test_develop_and_review_defer_repository_wide_gates_to_hooks_and_ci() -> None:
     common = (SKILLS / "cafe-workflow-common/SKILL.md").read_text(encoding="utf-8")
     develop = (SKILLS / "cafe-develop/SKILL.md").read_text(encoding="utf-8")
-    develop_steps = (
-        SKILLS / "cafe-develop/references/execution_steps_normal.md"
-    ).read_text(encoding="utf-8")
+    develop_steps = (SKILLS / "cafe-develop/references/execution_steps_normal.md").read_text(
+        encoding="utf-8"
+    )
     review = (SKILLS / "cafe-review/SKILL.md").read_text(encoding="utf-8")
     review_steps = (SKILLS / "cafe-review/references/execution_steps.md").read_text(
         encoding="utf-8"
     )
     plan = (SKILLS / "cafe-plan/SKILL.md").read_text(encoding="utf-8")
-    bug_plan = (SKILLS / "cafe-plan/assets/templates/bug.md").read_text(
+    bug_plan = (SKILLS / "cafe-plan/assets/templates/bug.md").read_text(encoding="utf-8")
+    correction_steps = (SKILLS / "cafe-develop/references/execution_steps_correction.md").read_text(
         encoding="utf-8"
     )
-    correction_steps = (
-        SKILLS / "cafe-develop/references/execution_steps_correction.md"
-    ).read_text(encoding="utf-8")
 
     assert "## Repository-owned quality gates" in common
     assert "versioned Git hooks and CI configuration" in common
@@ -80,9 +79,9 @@ def test_develop_and_review_defer_repository_wide_gates_to_hooks_and_ci() -> Non
 
 
 def test_planless_development_uses_change_scoped_targeted_checks() -> None:
-    develop_steps = (
-        SKILLS / "cafe-develop/references/execution_steps_normal.md"
-    ).read_text(encoding="utf-8")
+    develop_steps = (SKILLS / "cafe-develop/references/execution_steps_normal.md").read_text(
+        encoding="utf-8"
+    )
 
     assert "targeted tests for new or changed behavior" in develop_steps
     assert "when a plan is supplied, map them to its Test List" in develop_steps
@@ -98,22 +97,81 @@ def test_review_corrections_close_root_causes_without_restarting_full_audit() ->
     review_steps = (SKILLS / "cafe-review/references/execution_steps.md").read_text(
         encoding="utf-8"
     )
-    correction = (
-        SKILLS / "cafe-review/references/correction_review_strategy.md"
-    ).read_text(encoding="utf-8")
+    review_root = SKILLS / "cafe-review/references"
+    correction = (review_root / "execution_correction.md").read_text(encoding="utf-8")
 
     contract = yaml.safe_load(review.split("---", 2)[1])["workflow"]["checklist"]
     assert contract["variants"][0]["when"] == {"iteration": 1}
     assert contract["variants"][1]["when"] == {"min_iteration": 2}
-    assert contract["variants"][1]["sections"][0] == {
-        "reference": "correction_review_strategy.md"
-    }
+    assert [section.get("reference") for section in contract["variants"][0]["sections"]] == [
+        "execution_preflight.md",
+        "execution_acceptance_closure.md",
+        "execution_first_pass.md",
+        "execution_finalize.md",
+        None,
+    ]
+    assert [section.get("reference") for section in contract["variants"][1]["sections"]] == [
+        "execution_preflight.md",
+        "execution_correction.md",
+        "execution_acceptance_closure.md",
+        "execution_finalize.md",
+        None,
+    ]
     assert "Trace each candidate defect to its root cause" in review_steps
     assert "re-verify every prior finding item by item" in correction
     assert "directly related equivalence classes in one pass" in correction
     assert "do not drip-feed sibling cases" in correction
     assert "do not restart an unrelated repository-wide audit" in correction
-    assert "one bounded closure sweep" in correction
+    assert "complete issue acceptance closure matrix" in correction
+    assert "recorded planless baseline" in correction
+    assert "every issue acceptance criterion and relevant invariant" in correction
+    assert "merely because the latest delta did not touch it" in correction
+    assert "acceptance criteria and invariants touched by the correction" not in correction
+    assert "applicable production entry point, consumer, or artifact" in review_steps
+    assert "runtime-behavior row" in review_steps
+    assert "original bounded probe through the production path" in review_steps
+    assert "synthetic fixtures or mocks" in review_steps
+    assert "Acceptance Closure Evidence" in review_steps
+    assert "derive a bounded planless baseline" in review_steps
+    assert (
+        "latest authoritative user feedback from PR comments or workflow inputs override"
+        in review_steps
+    )
+    assert "request clarification instead of guessing" in review_steps
+    assert "without a plan" in review_steps
+
+    checkbox = re.compile(r"\[ \]")
+    context_references = (
+        "spec_read_instruction.md",
+        "plan_read_instruction.md",
+        "feedback_instruction.md",
+        "spec_comparison_instruction.md",
+    )
+    context_count = sum(
+        len(checkbox.findall((review_root / name).read_text(encoding="utf-8")))
+        for name in context_references
+    )
+    expected_modes = {
+        "first": (
+            "execution_preflight.md",
+            "execution_acceptance_closure.md",
+            "execution_first_pass.md",
+            "execution_finalize.md",
+        ),
+        "correction": (
+            "execution_preflight.md",
+            "execution_correction.md",
+            "execution_acceptance_closure.md",
+            "execution_finalize.md",
+        ),
+    }
+    for names in expected_modes.values():
+        phase_owned_count = sum(
+            len(checkbox.findall((review_root / name).read_text(encoding="utf-8")))
+            for name in names
+        )
+        assert phase_owned_count == 16
+        assert phase_owned_count + context_count <= 20
 
 
 def _arm(*, policy: str, credits: float, quality: bool = True) -> dict[str, object]:
@@ -289,9 +347,9 @@ def test_correction_ab_rejects_non_git_repo_sha(tmp_path: Path) -> None:
 
 def test_driver_skill_requires_controlled_correction_ab_before_claim() -> None:
     skill = (SKILLS / "use-cafe-workflow/SKILL.md").read_text(encoding="utf-8")
-    reference = (
-        SKILLS / "use-cafe-workflow/references/correction_ab_experiment.md"
-    ).read_text(encoding="utf-8")
+    reference = (SKILLS / "use-cafe-workflow/references/correction_ab_experiment.md").read_text(
+        encoding="utf-8"
+    )
     normalized = " ".join(reference.split())
 
     assert "references/correction_ab_experiment.md" in skill
