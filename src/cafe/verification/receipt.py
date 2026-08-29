@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import tempfile
 import time
@@ -13,9 +15,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, SCHEMA_VERSION})
 VALID_SCOPES = frozenset({"full", "targeted"})
 PYTEST_EXECUTABLES = frozenset({"pytest", "py.test"})
+VERIFICATION_LOG_NAME = "verification.log"
+VERIFICATION_OUTPUT_MAX_BYTES = 32 * 1024
+VERIFICATION_OUTPUT_MAX_LINES = 80
 FOCUSED_SELECTOR_PATTERN = re.compile(
     r"^[A-Za-z0-9_.\-/]+\.py(?:::[A-Za-z0-9_.\[\]/\-]+)*$"
 )
@@ -38,6 +44,78 @@ class ReceiptCheck:
 def receipt_path_for_output(output_file: Path) -> Path:
     """Return the iteration-local receipt path for one phase output."""
     return output_file.resolve().parent / "verification.json"
+
+
+def verification_log_path_for_output(output_file: Path) -> Path:
+    """Return the iteration-local combined stdout/stderr log path."""
+    return receipt_path_for_output(output_file).parent / VERIFICATION_LOG_NAME
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _run_with_output_log(
+    command: Sequence[str], *, cwd: Path, log_path: Path
+) -> subprocess.CompletedProcess[bytes]:
+    """Run a command with combined output persisted without entering model context."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(
+        prefix=f".{log_path.name}.", dir=log_path.parent
+    )
+    try:
+        with os.fdopen(handle, "wb") as stream:
+            try:
+                result = subprocess.run(
+                    list(command),
+                    cwd=cwd,
+                    check=False,
+                    stdout=stream,
+                    stderr=subprocess.STDOUT,
+                )
+            except OSError as exc:
+                raise VerificationReceiptError(
+                    f"cannot start verification command {command[0]!r}: {exc}"
+                ) from exc
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, log_path)
+        return result
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def verification_log_excerpt(
+    receipt_path: Path,
+    *,
+    max_lines: int = VERIFICATION_OUTPUT_MAX_LINES,
+    max_bytes: int = VERIFICATION_OUTPUT_MAX_BYTES,
+) -> tuple[str, bool]:
+    """Read a bounded tail suitable for returning to a phase agent."""
+    log_path = receipt_path.resolve().parent / VERIFICATION_LOG_NAME
+    size = log_path.stat().st_size
+    offset = max(0, size - max_bytes)
+    with log_path.open("rb") as stream:
+        stream.seek(offset)
+        data = stream.read(max_bytes)
+    truncated = offset > 0
+    if offset:
+        newline = data.find(b"\n")
+        if newline >= 0:
+            data = data[newline + 1 :]
+    lines = data.splitlines()
+    if len(lines) > max_lines:
+        lines = lines[-max_lines:]
+        truncated = True
+    return b"\n".join(lines).decode("utf-8", errors="replace"), truncated
 
 
 def _run_git(args: Sequence[str], *, cwd: Path) -> str:
@@ -87,7 +165,7 @@ def run_verification(
     scope: str,
     cwd: Path | None = None,
 ) -> tuple[int, Path, dict[str, Any]]:
-    """Run one verification command and persist a receipt tied to a clean HEAD."""
+    """Run verification with a durable output log and a receipt tied to clean HEAD."""
     if scope not in VALID_SCOPES:
         raise VerificationReceiptError(
             f"scope must be one of: {', '.join(sorted(VALID_SCOPES))}"
@@ -104,21 +182,17 @@ def run_verification(
             "worktree must be clean before final verification; commit the implementation first"
         )
 
+    receipt_path = receipt_path_for_output(output_file)
+    log_path = verification_log_path_for_output(output_file)
     started_at = datetime.now().astimezone().isoformat()
     started = time.monotonic()
-    try:
-        result = subprocess.run(list(command), cwd=run_cwd, check=False)
-    except OSError as exc:
-        raise VerificationReceiptError(
-            f"cannot start verification command {command[0]!r}: {exc}"
-        ) from exc
+    result = _run_with_output_log(command, cwd=run_cwd, log_path=log_path)
     duration_seconds = round(time.monotonic() - started, 3)
     finished_at = datetime.now().astimezone().isoformat()
 
     root_after, head_after, status_after = _git_state(run_cwd)
     state_unchanged = root_after == root_before and head_after == head_before and not status_after
     valid = result.returncode == 0 and state_unchanged
-    receipt_path = receipt_path_for_output(output_file)
     payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "scope": scope,
@@ -135,6 +209,12 @@ def run_verification(
             "clean_before": True,
             "clean_after": not status_after,
             "head_unchanged": head_after == head_before,
+        },
+        "output_log": {
+            "path": VERIFICATION_LOG_NAME,
+            "sha256": _sha256_file(log_path),
+            "size_bytes": log_path.stat().st_size,
+            "stdout_stderr_combined": True,
         },
         "valid": valid,
     }
@@ -171,7 +251,8 @@ def check_verification_receipt(
         return ReceiptCheck(False, ("receipt root must be an object",), receipt_path)
 
     reasons: list[str] = []
-    if loaded.get("schema_version") != SCHEMA_VERSION:
+    schema_version = loaded.get("schema_version")
+    if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
         reasons.append(f"unsupported schema_version: {loaded.get('schema_version')!r}")
     if loaded.get("scope") != required_scope:
         reasons.append(
@@ -199,6 +280,42 @@ def check_verification_receipt(
         reasons.append("HEAD changed while verification was running")
     if required_scope == "full" and git_record.get("cwd_relative_to_root") != ".":
         reasons.append("full verification was not run from the worktree root")
+
+    if schema_version == SCHEMA_VERSION:
+        output_log = loaded.get("output_log")
+        if not isinstance(output_log, dict):
+            reasons.append("output log record is missing")
+        elif output_log.get("path") != VERIFICATION_LOG_NAME:
+            reasons.append("output log path is invalid")
+        else:
+            log_path = receipt_path.parent / VERIFICATION_LOG_NAME
+            try:
+                log_stat = log_path.lstat()
+            except OSError as exc:
+                reasons.append(f"output log is unreadable: {exc}")
+            else:
+                if not stat.S_ISREG(log_stat.st_mode):
+                    reasons.append("output log is not a regular file")
+                else:
+                    recorded_size = output_log.get("size_bytes")
+                    if (
+                        not isinstance(recorded_size, int)
+                        or isinstance(recorded_size, bool)
+                        or recorded_size != log_stat.st_size
+                    ):
+                        reasons.append("output log size does not match the receipt")
+                    recorded_digest = output_log.get("sha256")
+                    try:
+                        actual_digest = _sha256_file(log_path)
+                    except OSError as exc:
+                        reasons.append(f"output log is unreadable: {exc}")
+                    else:
+                        if (
+                            not isinstance(recorded_digest, str)
+                            or not re.fullmatch(r"[0-9a-f]{64}", recorded_digest)
+                            or recorded_digest != actual_digest
+                        ):
+                            reasons.append("output log digest does not match the receipt")
 
     try:
         current_root, current_head, current_status = _git_state(
@@ -246,6 +363,26 @@ def reuse_verification_receipt(
     payload = dict(checked.receipt)
     payload["reused_from"] = str(source_receipt_path)
     payload["reused_at"] = datetime.now().astimezone().isoformat()
+    target_receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    if payload.get("schema_version") == SCHEMA_VERSION:
+        source_log = source_receipt_path.parent / VERIFICATION_LOG_NAME
+        target_log = target_receipt_path.parent / VERIFICATION_LOG_NAME
+        handle, temporary = tempfile.mkstemp(
+            prefix=f".{target_log.name}.", dir=target_log.parent
+        )
+        try:
+            with source_log.open("rb") as source, os.fdopen(handle, "wb") as target:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    target.write(chunk)
+                target.flush()
+                os.fsync(target.fileno())
+            os.replace(temporary, target_log)
+        except BaseException:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+            raise
     _write_json_atomic(target_receipt_path, payload)
     return target_receipt_path, payload
 

@@ -540,7 +540,7 @@ def test_prepare_skill_installs_skill_and_returns_cli_invocation(tmp_path: Path)
     assert (project_root / ".codex" / "skills" / "cafe-plan" / "SKILL.md").exists()
 
 
-def test_packaged_develop_instruction_uses_verification_without_background_jobs(
+def test_packaged_develop_instruction_uses_repository_owned_quality_gates(
     tmp_path: Path,
 ) -> None:
     project_root = tmp_path / "project"
@@ -561,8 +561,8 @@ def test_packaged_develop_instruction_uses_verification_without_background_jobs(
     instruction = (project_root / ".codex/skills/cafe-develop/SKILL.md").read_text(
         encoding="utf-8"
     )
-    assert "repository 定義的 verification 路徑" in instruction
-    assert "不要另建背景工作或輪詢機制" in instruction
+    assert "與變更直接相關的 targeted checks" in instruction
+    assert "Repository-owned quality gates" in instruction
 
 
 def test_prepare_skill_renders_iteration_context_without_mutating_source(

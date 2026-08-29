@@ -69,5 +69,5 @@ When **N** or **M** is zero, add one sentence explaining why.
 
 ## Develop and review
 
-- **Develop:** Every new or changed test must map to a plan Test List item; follow this policy for assertions.
-- **Review:** Reject added/changed tests that violate the “what not to test” rules; accept allowed stable UI contracts. Existing unrelated tests do not require wholesale rewrites.
+- **Develop:** Every new or changed test must map to a plan Test List item; run targeted checks for changed behavior and let repository Git hooks or CI own their configured full-suite, coverage, push, and release gates.
+- **Review:** Reject added/changed tests that violate the “what not to test” rules; accept allowed stable UI contracts. Existing unrelated tests do not require wholesale rewrites, and missing CAFE verification receipts are not findings.

@@ -9,6 +9,7 @@
 [ ] Confirm the revised design remains the smallest design that satisfies the requirements, with no speculative scope or abstractions
 [ ] Preserve source requirement wording in ordinary Markdown; do not add packet-specific IDs or duplicate semantic contracts
 [ ] Keep **Negative space**, **Layering map**, and **Dependency ADR** filled and consistent with the revised plan (explicit "none" if still applicable)
+[ ] Keep develop validation targeted to changed behavior; preserve repository hooks/CI/coverage/release checks as external gates rather than phase tasks
 [ ] Write updated plan to {output_file} (NOT in your response)
 [ ] Keep "## Development Guide" section unchanged
 [ ] Confirm: Only wrote plans and steps, NO actual code

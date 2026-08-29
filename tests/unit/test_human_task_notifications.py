@@ -49,7 +49,8 @@ def _slack_request(**overrides: object) -> dict[str, object]:
             "repository": "openfunltd/cafe",
             "workflow_id": "workflow-one",
             "task_id": "task-one",
-            "reason": "Review the implementation plan.",
+            "step": "develop",
+            "task_type": "permission-answers",
         },
         "effects": {
             "writes": [],
@@ -76,22 +77,147 @@ def _write_credential(home: Path, value: str = VALID_WEBHOOK) -> Path:
     return credential
 
 
-def test_actionable_message_exposes_task_journey_without_credentials() -> None:
-    """Unit Test 4: task identity and supported actions are stable message fields."""
+def test_actionable_message_exposes_allowlisted_task_journey_without_prompt_or_credentials() -> None:
+    """Test List 2: notification content stays within the safe task allowlist."""
     message = build_human_task_message(
         repository="openfunltd/cafe",
         workflow_id="workflow-one",
         task_id="task-one",
-        reason="Review the implementation plan.",
+        step="develop",
+        task_type="permission-answers",
     )
 
     assert message.repository == "openfunltd/cafe"
     assert message.workflow_id == "workflow-one"
     assert message.task_id == "task-one"
-    assert message.reason == "Review the implementation plan."
+    assert message.step == "develop"
+    assert message.task_type == "permission-answers"
     assert message.inspect_command == "cafe task inspect task-one"
     assert message.complete_command == "cafe task complete task-one"
-    assert "secret-value" not in json.dumps(message.to_slack_payload())
+    payload = json.dumps(message.to_slack_payload())
+    assert "Review the implementation plan." not in payload
+    assert "secret-value" not in payload
+
+
+def test_actionable_message_bounds_project_controlled_metadata_to_one_safe_line_per_field() -> None:
+    """Test List 2: metadata cannot add Slack markup or notification lines."""
+    message = build_human_task_message(
+        repository="repository\n<!channel> *urgent*",
+        workflow_id="workflow\n@here",
+        task_id="task\n<https://attacker.invalid>",
+        step="develop\n<!subteam^S123>",
+        task_type="permission-answers\n@channel",
+    )
+
+    payload = message.to_slack_payload()["text"]
+
+    assert payload.count("\n") == 7
+    assert "<!channel>" not in payload
+    assert "<!subteam" not in payload
+    assert "@here" not in payload
+    assert "@channel" not in payload
+    assert "https://attacker.invalid" not in payload
+
+
+@pytest.mark.parametrize(
+    "project_value",
+    [
+        "https://attacker.invalid/path",
+        "www.attacker.invalid",
+        "namespace:www.attacker.invalid",
+    ],
+)
+def test_actionable_message_rejects_url_shaped_project_metadata(project_value: str) -> None:
+    """Project-owned identifiers cannot add clickable links to a trusted notification."""
+    message = build_human_task_message(
+        repository=project_value,
+        workflow_id="workflow-one",
+        task_id="task-one",
+        step=project_value,
+        task_type=project_value,
+    )
+
+    payload = message.to_slack_payload()["text"]
+
+    assert project_value not in payload
+    assert message.repository.startswith("invalid-")
+    assert message.step.startswith("invalid-")
+    assert message.task_type.startswith("invalid-")
+
+
+def test_actionable_message_preserves_non_url_identifier_punctuation() -> None:
+    """Safe project identifiers remain recognizable instead of becoming opaque hashes."""
+    message = build_human_task_message(
+        repository="openfunltd/cafe.engine",
+        workflow_id="workflow:one",
+        task_id="task-one",
+        step="review.v2/approval",
+        task_type="namespace:permission",
+    )
+
+    assert message.repository == "openfunltd/cafe.engine"
+    assert message.workflow_id == "workflow:one"
+    assert message.step == "review.v2/approval"
+    assert message.task_type == "namespace:permission"
+
+
+def test_machine_notification_settings_ignore_project_and_environment_injection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Test List 1: trusted machine settings alone choose the notification transport."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    (home / ".cafe").mkdir(parents=True)
+    project.mkdir()
+    (home / ".cafe" / "config.yaml").write_text(
+        "notifications:\n  human_tasks:\n    enabled: false\n    transport: slack\n",
+        encoding="utf-8",
+    )
+    (project / "config.yaml").write_text(
+        "human_task_notifications:\n  enabled: true\n  transport: attacker\n",
+        encoding="utf-8",
+    )
+    _set_home(monkeypatch, home)
+    monkeypatch.chdir(project)
+    monkeypatch.setenv("CAFE_HUMAN_TASK_TRANSPORT", "attacker")
+
+    settings = notification_mod.load_human_task_notification_settings()
+
+    assert settings.enabled is False
+    assert settings.transport == "slack"
+
+
+@pytest.mark.parametrize(
+    ("config", "expected_code"),
+    [
+        (
+            "notifications:\n  human_tasks:\n    enabled: sometimes\n    transport: slack\n",
+            "human_task_notification_config_invalid",
+        ),
+        (
+            "notifications:\n  human_tasks:\n    enabled: true\n    transport: email\n",
+            "human_task_notification_transport_unsupported",
+        ),
+    ],
+)
+def test_machine_notification_settings_skip_invalid_or_unsupported_transport(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, config: str, expected_code: str
+) -> None:
+    """Test List 1: unusable machine declarations never select an outbound adapter."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    home = tmp_path / "home"
+    (home / ".cafe").mkdir(parents=True)
+    (home / ".cafe" / "config.yaml").write_text(config, encoding="utf-8")
+    _set_home(monkeypatch, home)
+
+    settings = notification_mod.load_human_task_notification_settings()
+
+    assert settings.enabled is False
+    assert settings.outcome == "skipped"
+    assert settings.code == expected_code
 
 
 def test_credential_resolver_reads_only_the_fixed_user_file(
@@ -247,7 +373,8 @@ def test_outbound_adapter_classifies_delivery_outcomes(
         repository="openfunltd/cafe",
         workflow_id="workflow-one",
         task_id="task-one",
-        reason="Review the implementation plan.",
+        step="develop",
+        task_type="permission-answers",
     )
 
     if expected_code is None:
@@ -287,7 +414,8 @@ def test_outbound_adapter_installs_a_redirect_rejecting_opener(
         repository="openfunltd/cafe",
         workflow_id="workflow-one",
         task_id="task-one",
-        reason="Review the implementation plan.",
+        step="develop",
+        task_type="permission-answers",
     )
 
     post_slack_notification(VALID_WEBHOOK, message, timeout_sec=4.0)
@@ -338,6 +466,7 @@ def test_capability_receipts_classify_failures_without_secret_material(
         capability_request=_slack_request(),
         output_file=tmp_path / "output.md",
         timeout_sec=4.0,
+        trusted_human_task_notification=True,
     )
 
     assert run.receipt["success"] is False
@@ -367,6 +496,7 @@ def test_capability_receipt_records_success_and_policy_denial(
         registry=registry,
         capability_request=_slack_request(),
         output_file=tmp_path / "output.md",
+        trusted_human_task_notification=True,
     )
     denied = run_capability_request(
         repo_root=tmp_path,
@@ -379,6 +509,7 @@ def test_capability_receipt_records_success_and_policy_denial(
             }
         ),
         output_file=tmp_path / "output.md",
+        trusted_human_task_notification=True,
     )
 
     assert successful.receipt["success"] is True

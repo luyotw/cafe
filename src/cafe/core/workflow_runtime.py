@@ -33,7 +33,11 @@ from cafe.core.capabilities import (
     run_capability_request,
     validation_rejection_receipt,
 )
-from cafe.core.human_task_records import HumanTask, HumanTaskRecordStore
+from cafe.core.human_task_notifications import (
+    load_human_task_notification_settings,
+    sanitize_human_task_metadata,
+)
+from cafe.core.human_task_records import HumanTask, HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.human_tasks import resolve_step_human_task
 from cafe.core.playbook import resolve_step_behavior
 from cafe.core.questions_schema import validate_questions_xml
@@ -135,6 +139,7 @@ class BlackboardWorkflowRuntime:
             playbook_id=self.playbook_id,
             tolerate_invalid_baton=True,
         )
+        self._replaced_user_handoff: HandoffContract | None = None
 
     def _validate_automatic_executor_declarations(self) -> None:
         """Reject unavailable automatic authority before recording a workflow visit."""
@@ -162,25 +167,70 @@ class BlackboardWorkflowRuntime:
         return self.issue_dir.parent
 
     def _notify_new_human_task(self, task: HumanTask) -> None:
-        """Audit one fixed-boundary Slack attempt for a new standard task."""
-        if self.playbook_id != "standard" or self.playbook_source != "builtin":
-            return
+        """Record one source-independent, machine-controlled delivery decision."""
         attempt_id = f"slack-human-task:{task.id}"
         try:
             with self.blackboard_store.capability_receipt_transaction(self.blackboard):
+                try:
+                    current_task = HumanTaskRecordStore(self.issue_dir).get_task(task.id)
+                except Exception:
+                    return
+                if current_task.status is not HumanTaskStatus.PENDING:
+                    self._record_notification_outcome(
+                        current_task,
+                        attempt_id=attempt_id,
+                        code="human_task_notification_not_actionable",
+                        outcome="skipped",
+                    )
+                    return
                 self._dispatch_human_task_notification(task, attempt_id=attempt_id)
         except Exception:
             # Lock and persistence failures must not make Slack authoritative over human work.
             return
+
+    def _notification_inputs(self, task: HumanTask) -> dict[str, str]:
+        """Return the closed safe payload shared by receipts and capability requests."""
+        return {
+            "repository": sanitize_human_task_metadata(self._repository_root().name),
+            "workflow_id": sanitize_human_task_metadata(task.workflow_id),
+            "task_id": sanitize_human_task_metadata(task.id),
+            "step": sanitize_human_task_metadata(task.step),
+            "task_type": sanitize_human_task_metadata(task.policy_id),
+        }
+
+    def _record_notification_outcome(
+        self,
+        task: HumanTask,
+        *,
+        attempt_id: str,
+        code: str,
+        outcome: str,
+    ) -> None:
+        """Persist a non-dispatch notification decision without task prompt data."""
+        self.blackboard_store.upsert_capability_receipt(
+            self.blackboard,
+            {
+                "notification_attempt_id": attempt_id,
+                "correlation_id": attempt_id,
+                "capability": CAPABILITY_SLACK_HUMAN_TASK_ID,
+                "success": False,
+                "category": "notification_policy",
+                "code": code,
+                "decision": "skip",
+                "outcome": outcome,
+                "inputs": self._notification_inputs(task),
+                "outputs": {},
+                "workflow_id": task.workflow_id,
+                "task_id": task.id,
+            },
+        )
 
     def _dispatch_human_task_notification(self, task: HumanTask, *, attempt_id: str) -> None:
         existing_receipt = next(
             (
                 receipt
                 for receipt in self.blackboard.capability_receipts
-                if receipt.get("capability") == CAPABILITY_SLACK_HUMAN_TASK_ID
-                and receipt.get("workflow_id") == task.workflow_id
-                and receipt.get("task_id") == task.id
+                if receipt.get("notification_attempt_id") == attempt_id
             ),
             None,
         )
@@ -199,16 +249,33 @@ class BlackboardWorkflowRuntime:
                 self.blackboard_store.upsert_capability_receipt(
                     self.blackboard, interrupted_receipt
                 )
+            else:
+                dedup_attempt_id = f"{attempt_id}:deduplicated"
+                if not any(
+                    receipt.get("notification_attempt_id") == dedup_attempt_id
+                    for receipt in self.blackboard.capability_receipts
+                ):
+                    self._record_notification_outcome(
+                        task,
+                        attempt_id=dedup_attempt_id,
+                        code="human_task_notification_deduplicated",
+                        outcome="deduplicated",
+                    )
+            return
+        settings = load_human_task_notification_settings()
+        if not settings.enabled:
+            self._record_notification_outcome(
+                task,
+                attempt_id=attempt_id,
+                code=settings.code,
+                outcome=settings.outcome,
+            )
             return
         repo_root = self._repository_root()
+        notification_inputs = self._notification_inputs(task)
         capability_request = {
             "capability": CAPABILITY_SLACK_HUMAN_TASK_ID,
-            "args": {
-                "repository": repo_root.name,
-                "workflow_id": task.workflow_id,
-                "task_id": task.id,
-                "reason": task.prompt,
-            },
+            "args": notification_inputs,
             "effects": {
                 "writes": [],
                 "network_destinations": ["hooks.slack.com"],
@@ -226,11 +293,7 @@ class BlackboardWorkflowRuntime:
             "code": "slack_notification_attempting",
             "decision": "pending",
             "outcome": "attempting",
-            "inputs": {
-                "repository": repo_root.name,
-                "workflow_id": task.workflow_id,
-                "task_id": task.id,
-            },
+            "inputs": notification_inputs,
             "outputs": {},
             "workflow_id": task.workflow_id,
             "task_id": task.id,
@@ -244,6 +307,7 @@ class BlackboardWorkflowRuntime:
                 capability_request=capability_request,
                 output_file=self.issue_dir / "blackboard.json",
                 timeout_sec=SLACK_HUMAN_TASK_TIMEOUT_SEC,
+                trusted_human_task_notification=True,
             )
             receipt = dict(run.receipt)
         except Exception:  # The durable HumanTask remains authoritative on host failure.
@@ -843,6 +907,37 @@ class BlackboardWorkflowRuntime:
                 completed=False,
             )
 
+        replaced_handoff = self._replaced_user_handoff
+        self.blackboard_store.update_handoff_contract(
+            self.blackboard,
+            from_step=current_step,
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.MANUAL_HANDOFF,
+            status_code=status_code,
+            source="workflow.owner_human",
+        )
+        contract = self.blackboard.handoff_contract
+        if contract is None:
+            raise RuntimeError("human-owned task did not create a handoff contract")
+        handoff_key = self._human_task_handoff_key(contract)
+        if replaced_handoff is None:
+            existing_task = next(
+                (
+                    task
+                    for task in records.tasks()
+                    if task.workflow_id == self.blackboard.workflow_id
+                    and task.status is HumanTaskStatus.PENDING
+                    and task.step == current_step
+                    and task.iteration == iteration
+                    and task.trigger == trigger
+                    and task.policy_id == policy.id
+                ),
+                None,
+            )
+            if existing_task is not None:
+                handoff_key = existing_task.handoff_key
+
         materialization = records.materialize_with_status(
             workflow_id=self.blackboard.workflow_id,
             step=current_step,
@@ -853,22 +948,23 @@ class BlackboardWorkflowRuntime:
             expected_result=policy.model_dump(mode="json"),
             continuations=binding.outcomes,
             assignee_type="human",
+            handoff_key=handoff_key,
+            superseded_task_ids=self._superseded_human_task_ids(
+                records,
+                step=current_step,
+                iteration=iteration,
+                trigger=trigger,
+                policy_id=policy.id,
+                replaced_handoff=replaced_handoff,
+            ),
         )
         task = materialization.task
         self._notify_new_human_task(task)
+        self._replaced_user_handoff = None
         if cursor is not None:
             cursor["task_id"] = task.id
             self.blackboard.ownership_cursor = cursor
             self.blackboard_store.save(self.blackboard)
-        self.blackboard_store.update_handoff_contract(
-            self.blackboard,
-            from_step=current_step,
-            to_owner=HandoffOwner.USER,
-            to_step="user",
-            intent=HandoffIntent.MANUAL_HANDOFF,
-            status_code=status_code,
-            source="workflow.owner_human",
-        )
         self.blackboard_store.set_current_step(self.blackboard, "user")
         if materialization.created:
             self.blackboard_store.record_event(
@@ -1532,6 +1628,16 @@ class BlackboardWorkflowRuntime:
         contract_source: str = "workflow.pause",
         record_event: bool = True,
     ) -> PlaybookRunResult:
+        replaced_handoff = self._replaced_user_handoff
+        if (
+            replaced_handoff is None
+            and update_contract
+            and self.blackboard.current_step == "user"
+            and self.blackboard.handoff_contract is not None
+            and self.blackboard.handoff_contract.to_owner is HandoffOwner.USER
+            and self.blackboard.handoff_contract.to_step == "user"
+        ):
+            replaced_handoff = self.blackboard.handoff_contract
         if update_contract:
             self.blackboard_store.update_handoff_contract(
                 self.blackboard,
@@ -1542,7 +1648,11 @@ class BlackboardWorkflowRuntime:
                 status_code=status_code,
                 source=contract_source,
             )
-        self._materialize_user_handoff_task(current_step=current_step)
+        self._materialize_user_handoff_task(
+            current_step=current_step,
+            replaced_handoff=replaced_handoff,
+        )
+        self._replaced_user_handoff = None
         if record_event:
             self.blackboard_store.record_event(
                 self.blackboard,
@@ -1561,7 +1671,12 @@ class BlackboardWorkflowRuntime:
             completed=False,
         )
 
-    def _materialize_user_handoff_task(self, *, current_step: str) -> None:
+    def _materialize_user_handoff_task(
+        self,
+        *,
+        current_step: str,
+        replaced_handoff: HandoffContract | None = None,
+    ) -> None:
         """Create or recover a declared task before exposing the user pause."""
         step_def = self.steps.get(current_step)
         if not isinstance(step_def, dict):
@@ -1580,6 +1695,7 @@ class BlackboardWorkflowRuntime:
         trigger = contract.intent.value
         iteration = self._human_task_iteration(current_step)
         records = HumanTaskRecordStore(self.issue_dir)
+        handoff_key = self._human_task_handoff_key(contract)
         try:
             policy, binding = resolve_step_human_task(
                 playbook_data=self.playbook,
@@ -1602,6 +1718,23 @@ class BlackboardWorkflowRuntime:
             )
             return
 
+        if replaced_handoff is None:
+            existing_task = next(
+                (
+                    task
+                    for task in records.tasks()
+                    if task.workflow_id == self.blackboard.workflow_id
+                    and task.status is HumanTaskStatus.PENDING
+                    and task.step == current_step
+                    and task.iteration == iteration
+                    and task.trigger == trigger
+                    and task.policy_id == policy.id
+                ),
+                None,
+            )
+            if existing_task is not None:
+                handoff_key = existing_task.handoff_key
+
         materialization = records.materialize_with_status(
             workflow_id=self.blackboard.workflow_id,
             step=current_step,
@@ -1612,6 +1745,15 @@ class BlackboardWorkflowRuntime:
             expected_result=policy.model_dump(mode="json"),
             continuations=binding.outcomes,
             assignee_type="user",
+            handoff_key=handoff_key,
+            superseded_task_ids=self._superseded_human_task_ids(
+                records,
+                step=current_step,
+                iteration=iteration,
+                trigger=trigger,
+                policy_id=policy.id,
+                replaced_handoff=replaced_handoff,
+            ),
         )
         task = materialization.task
         self._notify_new_human_task(task)
@@ -1630,6 +1772,105 @@ class BlackboardWorkflowRuntime:
             return int(iteration_dir.name.removeprefix("iteration_"))
         except ValueError:
             return 1
+
+    def _superseded_human_task_ids(
+        self,
+        records: HumanTaskRecordStore,
+        *,
+        step: str,
+        iteration: int,
+        trigger: str,
+        policy_id: str,
+        replaced_handoff: HandoffContract | None = None,
+    ) -> tuple[str, ...]:
+        """Identify only named pending tasks replaced by this handoff.
+
+        A different handoff key or another pending task is never enough to
+        trigger cancellation. A newer iteration replaces its matching lineage;
+        an in-iteration replacement names its predecessor through the prior
+        durable user handoff identity.
+        """
+        superseded_task_ids = [
+            task.id
+            for task in records.tasks()
+            if task.workflow_id == self.blackboard.workflow_id
+            and task.status is HumanTaskStatus.PENDING
+            and task.step == step
+            and task.trigger == trigger
+            and task.policy_id == policy_id
+            and task.iteration < iteration
+        ]
+        if replaced_handoff is not None:
+            replaced_handoff_key = self._human_task_handoff_key(replaced_handoff)
+            legacy_predecessor_id = self._legacy_handoff_predecessor_id(records, replaced_handoff)
+            superseded_task_ids.extend(
+                task.id
+                for task in records.tasks()
+                if task.workflow_id == self.blackboard.workflow_id
+                and task.status is HumanTaskStatus.PENDING
+                and (task.handoff_key == replaced_handoff_key or task.id == legacy_predecessor_id)
+            )
+        return tuple(dict.fromkeys(superseded_task_ids))
+
+    def _legacy_handoff_predecessor_id(
+        self, records: HumanTaskRecordStore, handoff: HandoffContract
+    ) -> str | None:
+        """Recover one predecessor from pre-handoff-key task records.
+
+        Legacy keys describe a task binding, not a handoff instance. The
+        materialization event therefore supplies the exact task identity and
+        prevents an unrelated task on the same step from being superseded.
+        """
+        legacy_task_ids = {
+            task.id
+            for task in records.tasks()
+            if task.workflow_id == self.blackboard.workflow_id
+            and task.status is HumanTaskStatus.PENDING
+            and task.step == handoff.from_step
+            and task.handoff_key
+            == "\x1f".join(
+                (
+                    task.workflow_id,
+                    task.step,
+                    str(task.iteration),
+                    task.trigger,
+                    task.policy_id,
+                )
+            )
+        }
+        for event in self.blackboard.events:
+            if (
+                event.event_type == "human_task_materialized"
+                and event.timestamp >= handoff.created_at
+                and event.step == handoff.from_step
+            ):
+                task_id = event.data.get("task_id")
+                if isinstance(task_id, str) and task_id in legacy_task_ids:
+                    return task_id
+        return None
+
+    def _human_task_handoff_key(self, contract: HandoffContract) -> str:
+        """Return the stable identity of one user-facing handoff instance."""
+        return ":".join(
+            (
+                "user-handoff",
+                self.blackboard.workflow_id,
+                contract.from_step,
+                contract.intent.value,
+                contract.created_at,
+            )
+        )
+
+    def _remember_replaced_user_handoff(self) -> None:
+        """Retain the exact pending task identity across a start-step replacement."""
+        contract = self.blackboard.handoff_contract
+        if (
+            self.blackboard.current_step == "user"
+            and contract is not None
+            and contract.to_owner is HandoffOwner.USER
+            and contract.to_step == "user"
+        ):
+            self._replaced_user_handoff = contract
 
     def _emit_complete(
         self,
@@ -2863,6 +3104,7 @@ class BlackboardWorkflowRuntime:
             if reconciled is not None:
                 return reconciled
             if start_step is not None:
+                self._remember_replaced_user_handoff()
                 self.blackboard_store.set_current_step(self.blackboard, current_step)
                 self.blackboard_store.update_handoff_contract(
                     self.blackboard,
@@ -2910,6 +3152,7 @@ class BlackboardWorkflowRuntime:
             return reconciled
 
         if start_step is not None:
+            self._remember_replaced_user_handoff()
             self.blackboard_store.set_current_step(self.blackboard, current_step)
             self.blackboard_store.update_handoff_contract(
                 self.blackboard,

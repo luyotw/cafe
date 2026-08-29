@@ -1,15 +1,13 @@
 ---
 name: cafe-review
 description: "審查程式碼品質與風險"
-version: 1.4.2
+version: 1.5.0
 workflow:
   execution_profile:
     workload: review
     reasoning: high
     risk_domains: [correctness, security]
     fallback_strength: equivalent_or_stronger
-  required_tools:
-    - "Bash(cafe verification check:*)"
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback
@@ -62,7 +60,6 @@ workflow:
       plan_read_instruction: plan_read_instruction.md
       feedback_instruction: feedback_instruction.md
       spec_comparison_instruction: spec_comparison_instruction.md
-      verification_receipt_instruction: verification_receipt_instruction.md
     variants:
       - when: {iteration: 1}
         sections:
@@ -89,8 +86,8 @@ Read your agent file: {agent_file}
 - 先確認目前提供的需求、計畫與實作是否一致
 - 優先指出行為回歸、缺少測試與高風險問題
 - Repo 搜尋與輸出上限：請依 shared skill「cafe-workflow-common」的 **Bounded repository inspection**；本 skill 不重複敘述。
-- Develop 測試證據驗證與 full-suite reuse：請依 shared skill「cafe-workflow-common」的 **Develop-to-review verification receipts**；本 skill 不重複敘述。
-- 每個綁定本 skill 的 playbook 都必須提供受限的 receipt `check` 指令；`focus` 僅是有具體 review 風險時的選用診斷權限，不屬於必要工具契約。
+- 測試證據、repository hooks 與 CI 的分工：請依 shared skill「cafe-workflow-common」的 **Repository-owned quality gates**；本 skill 不重複敘述。
+- 審查變更相關的 targeted test 選擇與品質；不得因缺少 CAFE verification receipt 打回 develop，也不在 review 重跑 repository-wide 驗證。
 - 若需修改，把 next-step baton 寫成 `develop`
 - 通過時，把 next-step baton 寫成下一個 workflow step（預設 playbook 為 `pr`）
 - 與 developer 往返、仲裁、以及 blackboard/baton 更新：請依 shared skill「cafe-workflow-common」的 **Develop and review disagreement protocol** 與 **Shared Rules**；本 skill 不重複敘述。

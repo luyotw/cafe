@@ -1130,7 +1130,8 @@ def _notify_slack_human_task_adapter(
         repository=str(request.args["repository"]),
         workflow_id=str(request.args["workflow_id"]),
         task_id=str(request.args["task_id"]),
-        reason=str(request.args["reason"]),
+        step=str(request.args["step"]),
+        task_type=str(request.args["task_type"]),
     )
     try:
         webhook_url = load_slack_webhook_url()
@@ -1159,14 +1160,30 @@ def run_capability_request(
     capability_request: Mapping[str, Any],
     output_file: Path,
     timeout_sec: float = 600.0,
+    trusted_human_task_notification: bool = False,
 ) -> PrPublishRun:
-    """Evaluate and dispatch one request through the host-owned adapter allow-list."""
+    """Evaluate and dispatch one request through the host-owned adapter allow-list.
+
+    Slack HumanTask delivery is an internal consequence of durable task
+    materialization, rather than a generic project-declared capability.
+    """
     correlation_id = uuid.uuid4().hex[:20]
     raw_request = _normalize_legacy_pr_request(capability_request)
     cap_id = str(raw_request.get("capability") or "").strip()
     raw_fingerprint = hashlib.sha256(
         json.dumps(raw_request, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()
+
+    if cap_id == CAPABILITY_SLACK_HUMAN_TASK_ID and not trusted_human_task_notification:
+        return _non_dispatch_run(
+            correlation_id=correlation_id,
+            capability=cap_id,
+            fingerprint=raw_fingerprint,
+            code="human_task_notification_not_workflow_owned",
+            decision=PolicyDecision.DENY,
+            outcome="policy_denied",
+            inputs={},
+        )
 
     raw_manifest = registry.get(cap_id)
     if raw_manifest is None:

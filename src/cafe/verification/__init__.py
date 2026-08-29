@@ -8,6 +8,8 @@ from cafe.verification.receipt import (
     reuse_verification_receipt,
     run_focused_verification,
     run_verification,
+    verification_log_excerpt,
+    verification_log_path_for_output,
 )
 
 __all__ = [
@@ -18,4 +20,6 @@ __all__ = [
     "reuse_verification_receipt",
     "run_focused_verification",
     "run_verification",
+    "verification_log_excerpt",
+    "verification_log_path_for_output",
 ]

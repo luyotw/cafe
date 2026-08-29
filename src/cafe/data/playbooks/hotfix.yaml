@@ -66,6 +66,9 @@ steps:
       - trigger: need_clarification
         task_id: clarification-feedback
         outcomes: {submit: develop}
+      - trigger: need_permission
+        task_id: permission-answers
+        outcomes: {submit: develop}
     allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
     hooks:
       prepare_input: [UserInputCollector]
@@ -92,7 +95,7 @@ steps:
       - trigger: manual_handoff
         task_id: iteration-limit
         outcomes: {resume: review}
-    allowed_tools: [Read, Grep, Glob, "Bash(git:*)", "Bash(cafe verification check:*)", "Bash(cafe verification focus:*)"]
+    allowed_tools: [Read, Grep, Glob, "Bash(git:*)"]
     max_iterations: 1
     allowed_goto: [develop]
     hooks:
