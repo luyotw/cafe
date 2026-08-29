@@ -1,5 +1,8 @@
 """U3/U4/U5: content-bound, transactional catalog publication."""
 
+import json
+import subprocess
+import sys
 from pathlib import Path
 from threading import Event, Thread
 
@@ -9,6 +12,7 @@ from cafe.agents.manager import AgentManager
 from cafe.catalogs.migration import AgentSnapshotMigrator
 from cafe.catalogs.resolver import CatalogKind, CatalogResolver, content_digest
 from cafe.catalogs.sync import CatalogSyncError, CatalogSyncService, StaleComparisonError
+from cafe.catalogs.transactions import CatalogRecoveryError
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 
@@ -300,6 +304,133 @@ def test_catalog_readers_do_not_observe_an_in_progress_multi_entry_publish(
     assert any("new-playbook" in content for content in observed)
     assert any("new-phase" in content for content in observed)
     assert all("old-" not in content for content in observed)
+
+
+def test_keyboard_interrupt_after_first_publish_restores_the_complete_selection(
+    tmp_path: Path,
+) -> None:
+    def interrupt(boundary: str, entry_id: str | None) -> None:
+        if boundary == "published" and entry_id == "playbook:standard":
+            raise KeyboardInterrupt
+
+    service, project, global_root = _service(
+        tmp_path, failure_injector=interrupt
+    )
+    _entry(project / ".cafe", CatalogKind.PLAYBOOK, "standard", "new-playbook")
+    _entry(project / ".cafe", CatalogKind.PHASE, "develop", "new-phase")
+    old_playbook = _entry(
+        global_root, CatalogKind.PLAYBOOK, "standard", "old-playbook"
+    )
+    old_phase = _entry(global_root, CatalogKind.PHASE, "develop", "old-phase")
+    expected = (content_digest(old_playbook), content_digest(old_phase))
+    report = service.compare()
+
+    with pytest.raises(KeyboardInterrupt):
+        service.sync(report.token, ["playbook:standard", "phase:develop"])
+
+    assert content_digest(global_root / "playbooks" / "standard.yaml") == expected[0]
+    assert content_digest(global_root / "skills" / "develop") == expected[1]
+
+
+def test_restart_recovers_a_crashed_multi_entry_publish_before_catalog_read(
+    tmp_path: Path,
+) -> None:
+    service, project, global_root = _service(tmp_path)
+    _entry(project / ".cafe", CatalogKind.PLAYBOOK, "standard", "new-playbook")
+    _entry(project / ".cafe", CatalogKind.PHASE, "develop", "new-phase")
+    old_playbook = _entry(
+        global_root, CatalogKind.PLAYBOOK, "standard", "old-playbook"
+    )
+    old_phase = _entry(global_root, CatalogKind.PHASE, "develop", "old-phase")
+    expected = (content_digest(old_playbook), content_digest(old_phase))
+    report = service.compare()
+    crash_script = """
+import os
+import sys
+from pathlib import Path
+
+from cafe.catalogs.resolver import CatalogResolver
+from cafe.catalogs.sync import CatalogSyncService
+
+project = Path(sys.argv[1])
+global_root = Path(sys.argv[2])
+builtin = Path(sys.argv[3])
+token = sys.argv[4]
+
+def crash(boundary, entry_id):
+    if boundary == "published" and entry_id == "playbook:standard":
+        os._exit(86)
+
+resolver = CatalogResolver(
+    project_root=project,
+    canonical_root=project,
+    global_root=global_root,
+    builtin_root=builtin,
+)
+CatalogSyncService(resolver, failure_injector=crash).sync(
+    token, ["playbook:standard", "phase:develop"]
+)
+"""
+
+    crashed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            crash_script,
+            str(project),
+            str(global_root),
+            str(tmp_path / "builtin"),
+            report.token,
+        ],
+        check=False,
+    )
+    assert crashed.returncode == 86
+
+    reader_project = tmp_path / "reader-project"
+    reader = CatalogResolver(
+        project_root=reader_project,
+        canonical_root=reader_project,
+        global_root=global_root,
+        builtin_root=tmp_path / "reader-builtin",
+    )
+    observed = {
+        entry.entry_id: entry.digest
+        for entry in reader.entries([CatalogKind.PLAYBOOK, CatalogKind.PHASE])
+    }
+
+    assert observed == {
+        "playbook:standard": expected[0],
+        "phase:develop": expected[1],
+    }
+    receipts = list((global_root / ".catalog-transactions").glob("*/recovery.json"))
+    assert len(receipts) == 1
+    evidence = json.loads(receipts[0].read_text(encoding="utf-8"))
+    assert evidence["status"] == "rolled_back"
+    assert evidence["selected"] == ["playbook:standard", "phase:develop"]
+    assert evidence["rollback_errors"] == []
+
+
+def test_catalog_reader_fails_closed_for_an_unjournaled_orphan_transaction(
+    tmp_path: Path,
+) -> None:
+    global_root = tmp_path / "global"
+    _entry(global_root, CatalogKind.PLAYBOOK, "standard", "possibly-mixed")
+    orphan = global_root / ".catalog-transactions" / "legacy-orphan"
+    orphan.mkdir(parents=True)
+    reader = CatalogResolver(
+        project_root=tmp_path / "reader-project",
+        canonical_root=tmp_path / "reader-project",
+        global_root=global_root,
+        builtin_root=tmp_path / "builtin",
+    )
+
+    with pytest.raises(CatalogRecoveryError):
+        reader.resolve(CatalogKind.PLAYBOOK, "standard")
+
+    evidence = json.loads((orphan / "recovery.json").read_text(encoding="utf-8"))
+    assert evidence["status"] == "incomplete"
+    assert evidence["selected"] == []
+    assert len(evidence["rollback_errors"]) == 1
 
 
 def test_production_loaders_hold_the_catalog_lock_through_content_reads(

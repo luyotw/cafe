@@ -1,6 +1,7 @@
 """U6: conservative legacy-agent migration invariants."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -111,6 +112,54 @@ def test_changed_file_rejects_preview_token_without_modification(tmp_path: Path)
     with pytest.raises(StaleMigrationDecision):
         migrator.apply(preview.token, {"agent:developer/David": "retire"})
     assert snapshot.is_file()
+
+
+def test_retirement_fails_closed_when_source_is_swapped_at_the_move_boundary(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    builtin = tmp_path / "builtin"
+    source = _agent(
+        project / ".cafe" / "agents" / "developer" / "David.md",
+        "David",
+        "approved",
+    )
+    _agent(builtin / "agents" / "developer" / "David.md", "David", "fallback")
+    replacement = _agent(source.with_suffix(".replacement"), "David", "replacement")
+    swapped = False
+
+    def swap_source(boundary: str, entry_id: str | None) -> None:
+        nonlocal swapped
+        if boundary == "before_retire" and not swapped:
+            swapped = True
+            os.replace(replacement, source)
+
+    migrator = AgentSnapshotMigrator(
+        CatalogResolver(
+            project_root=project,
+            canonical_root=project,
+            global_root=tmp_path / "global",
+            builtin_root=builtin,
+        ),
+        is_tracked=lambda _path: False,
+        failure_injector=swap_source,
+    )
+    preview = migrator.preview()
+
+    with pytest.raises(StaleMigrationDecision):
+        migrator.apply(preview.token, {"agent:developer/David": "retire"})
+
+    manifest = (
+        project
+        / ".cafe"
+        / "migrations"
+        / "agent-snapshots"
+        / preview.token[:16]
+        / "manifest.json"
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert payload["status"] == "in_progress"
+    assert payload["items"][0]["state"] == "pending"
 
 
 def test_apply_requires_a_decision_for_every_legacy_file(tmp_path: Path) -> None:

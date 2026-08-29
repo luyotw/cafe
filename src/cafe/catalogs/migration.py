@@ -5,18 +5,20 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import subprocess
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Callable, Mapping, Optional
-
-import yaml
+from typing import Callable, Iterator, Mapping, Optional
 
 from cafe.catalogs.resolver import (
     CatalogKind,
     CatalogResolver,
+    CatalogValidationError,
     content_digest,
     global_catalog_lock,
+    read_valid_agent_definition,
 )
 
 
@@ -79,6 +81,62 @@ def _default_is_tracked(path: Path) -> bool:
     return result.returncode == 0
 
 
+def _filesystem_identity(metadata: os.stat_result) -> tuple[int, int, int]:
+    return (metadata.st_dev, metadata.st_ino, stat.S_IFMT(metadata.st_mode))
+
+
+def _open_file_digest(descriptor: int, mode: int) -> str:
+    digest = hashlib.sha256()
+    digest.update(f"F\0.\0{stat.S_IMODE(mode):o}\0".encode())
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    for chunk in iter(lambda: os.read(descriptor, 65536), b""):
+        digest.update(chunk)
+    digest.update(b"\0")
+    return digest.hexdigest()
+
+
+@contextmanager
+def _bound_agent_source(
+    path: Path, expected_digest: str
+) -> Iterator[tuple[int, int, int]]:
+    """Hold and validate the approved filesystem object through retirement."""
+    before = path.lstat()
+    identity = _filesystem_identity(before)
+    if stat.S_ISLNK(before.st_mode):
+        if content_digest(path) != expected_digest:
+            raise StaleMigrationDecision("Agent source changed before retirement")
+        after = path.lstat()
+        if _filesystem_identity(after) != identity:
+            raise StaleMigrationDecision("Agent source identity changed before retirement")
+        yield identity
+        return
+    if not stat.S_ISREG(before.st_mode):
+        raise StaleMigrationDecision("Agent source is not a regular file or symlink")
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened_before = os.fstat(descriptor)
+        if _filesystem_identity(opened_before) != identity:
+            raise StaleMigrationDecision("Agent source identity changed before retirement")
+        if _open_file_digest(descriptor, opened_before.st_mode) != expected_digest:
+            raise StaleMigrationDecision("Agent source changed before retirement")
+        opened_after = os.fstat(descriptor)
+        current = path.lstat()
+        if (
+            _filesystem_identity(opened_after) != identity
+            or opened_after.st_size != opened_before.st_size
+            or opened_after.st_mtime_ns != opened_before.st_mtime_ns
+            or _filesystem_identity(current) != identity
+        ):
+            raise StaleMigrationDecision("Agent source changed while being verified")
+        yield identity
+        if _filesystem_identity(os.fstat(descriptor)) != identity:
+            raise StaleMigrationDecision("Retired agent identity changed during migration")
+    finally:
+        os.close(descriptor)
+
+
 class AgentSnapshotMigrator:
     """Preview and recoverably retire legacy project agent snapshots."""
 
@@ -96,19 +154,27 @@ class AgentSnapshotMigrator:
     @staticmethod
     def _valid_agent(path: Path, expected_name: str) -> bool:
         try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
+            role = path.parent.name
+            read_valid_agent_definition(path, f"{role}/{expected_name}")
+        except CatalogValidationError:
             return False
-        if not text.startswith("---\n"):
-            return False
-        end = text.find("\n---", 4)
-        if end < 0:
-            return False
-        try:
-            metadata = yaml.safe_load(text[4:end])
-        except yaml.YAMLError:
-            return False
-        return isinstance(metadata, dict) and metadata.get("name") == expected_name
+        return True
+
+    def _project_agent_candidates(self) -> Iterator[tuple[str, Path, str]]:
+        project_roots = [
+            item
+            for item in self.resolver.catalog_roots(CatalogKind.AGENT)
+            if item[0] == "project"
+        ]
+        keys: set[str] = set()
+        for _source, root, _layer in project_roots:
+            keys.update(self.resolver._keys_at_root(CatalogKind.AGENT, root))
+        for key in sorted(keys):
+            for _source, root, _layer in reversed(project_roots):
+                path = self.resolver.candidate_path(CatalogKind.AGENT, key, root)
+                if path.exists() or path.is_symlink():
+                    yield key, path, content_digest(path)
+                    break
 
     def _fallback_digest(self, key: str) -> str:
         roots = [
@@ -147,24 +213,25 @@ class AgentSnapshotMigrator:
     def _preview(self) -> MigrationPreview:
         items: list[MigrationItem] = []
         confirmed = self._confirmed_preserved()
-        for entry in self.resolver.project_entries([CatalogKind.AGENT]):
-            expected_name = entry.key.split("/", 1)[1]
-            fallback_digest = self._fallback_digest(entry.key)
-            if not self._valid_agent(entry.path, expected_name):
+        for key, path, digest in self._project_agent_candidates():
+            entry_id = f"agent:{key}"
+            expected_name = key.split("/", 1)[1]
+            fallback_digest = self._fallback_digest(key)
+            if not self._valid_agent(path, expected_name):
                 status = "invalid"
-            elif self.is_tracked(entry.path):
+            elif self.is_tracked(path):
                 status = "intentional"
-            elif fallback_digest != "missing" and entry.digest == fallback_digest:
+            elif fallback_digest != "missing" and digest == fallback_digest:
                 status = "generated"
             else:
                 status = "ambiguous"
-            if (entry.entry_id, entry.digest) in confirmed:
+            if (entry_id, digest) in confirmed:
                 continue
             items.append(
                 MigrationItem(
-                    entry_id=entry.entry_id,
-                    path=entry.path,
-                    digest=entry.digest,
+                    entry_id=entry_id,
+                    path=path,
+                    digest=digest,
                     fallback_digest=fallback_digest,
                     status=status,
                 )
@@ -279,6 +346,58 @@ class AgentSnapshotMigrator:
             if temporary.exists():
                 temporary.unlink()
 
+    def _retire_identity_bound(
+        self,
+        source: Path,
+        destination: Path,
+        digest: str,
+        entry_id: str,
+    ) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with _bound_agent_source(source, digest) as approved_identity:
+            self.failure_injector("before_retire", entry_id)
+            if self._record_path_exists(destination):
+                raise StaleMigrationDecision(
+                    f"Retirement destination already exists: {entry_id}"
+                )
+            source_directory = os.open(source.parent, os.O_RDONLY)
+            destination_directory = os.open(destination.parent, os.O_RDONLY)
+            try:
+                os.replace(
+                    source.name,
+                    destination.name,
+                    src_dir_fd=source_directory,
+                    dst_dir_fd=destination_directory,
+                )
+                os.fsync(source_directory)
+                os.fsync(destination_directory)
+            finally:
+                os.close(source_directory)
+                os.close(destination_directory)
+
+            destination_matches = (
+                self._record_path_exists(destination)
+                and _filesystem_identity(destination.lstat()) == approved_identity
+                and content_digest(destination) == digest
+            )
+            if not destination_matches or self._record_path_exists(source):
+                if self._record_path_exists(destination) and not self._record_path_exists(
+                    source
+                ):
+                    os.replace(destination, source)
+                    source_directory = os.open(source.parent, os.O_RDONLY)
+                    destination_directory = os.open(destination.parent, os.O_RDONLY)
+                    try:
+                        os.fsync(source_directory)
+                        os.fsync(destination_directory)
+                    finally:
+                        os.close(source_directory)
+                        os.close(destination_directory)
+                raise StaleMigrationDecision(
+                    f"Retired agent does not match the approved identity: {entry_id}"
+                )
+            self.failure_injector("after_retire", entry_id)
+
     def _resume(
         self,
         manifest: Path,
@@ -318,17 +437,10 @@ class AgentSnapshotMigrator:
                     )
             else:
                 destination = Path(str(record["retired_path"]))
-                destination.parent.mkdir(parents=True, exist_ok=True)
                 if source.exists() or source.is_symlink():
-                    if (
-                        content_digest(source) != digest
-                        or self._record_path_exists(destination)
-                    ):
-                        raise StaleMigrationDecision(
-                            f"Retired agent changed during migration: {entry_id}"
-                        )
-                    os.replace(source, destination)
-                    self.failure_injector("after_retire", entry_id)
+                    self._retire_identity_bound(
+                        source, destination, digest, entry_id
+                    )
                 elif (
                     not self._record_path_exists(destination)
                     or content_digest(destination) != digest

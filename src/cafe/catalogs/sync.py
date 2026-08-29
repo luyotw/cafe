@@ -22,6 +22,15 @@ from cafe.catalogs.resolver import (
     CatalogValidationError,
     content_digest,
     global_catalog_lock,
+    read_valid_agent_definition,
+)
+from cafe.catalogs.transactions import (
+    fsync_directory,
+    fsync_directory_chain,
+    fsync_tree,
+    path_exists,
+    recover_catalog_transaction,
+    write_json_durable,
 )
 
 
@@ -132,9 +141,15 @@ def _validate_publishable(kind: CatalogKind, key: str, path: Path) -> None:
         if not isinstance(document, dict):
             raise CatalogSyncError(f"Invalid playbook {key}: expected a mapping")
         return
-    marker = path / "SKILL.md" if kind is CatalogKind.PHASE else path
+    if kind is CatalogKind.AGENT:
+        try:
+            read_valid_agent_definition(path, key)
+        except CatalogValidationError as exc:
+            raise CatalogSyncError(str(exc)) from exc
+        return
+    marker = path / "SKILL.md"
     metadata = _frontmatter(marker)
-    expected_name = key if kind is CatalogKind.PHASE else key.split("/", 1)[1]
+    expected_name = key
     if metadata.get("name") != expected_name:
         raise CatalogSyncError(
             f"Catalog frontmatter name must match {expected_name!r}: {marker}"
@@ -149,13 +164,6 @@ def _copy_entry(source: Path, destination: Path) -> None:
         shutil.copytree(source, destination, symlinks=True)
     else:
         shutil.copy2(source, destination, follow_symlinks=False)
-
-
-def _remove_path(path: Path) -> None:
-    if path.is_symlink() or path.is_file():
-        path.unlink()
-    elif path.is_dir():
-        shutil.rmtree(path)
 
 
 @contextmanager
@@ -404,8 +412,32 @@ class CatalogSyncService:
             backup_root = transaction / "backups"
             staged_root.mkdir(parents=True)
             backup_root.mkdir(parents=True)
-            published: list[str] = []
-            backed_up: list[str] = []
+            transactions_root = transaction.parent
+            fsync_directory(transaction)
+            fsync_directory(transactions_root)
+            fsync_directory(self.resolver.global_root)
+            fsync_directory(self.resolver.global_root.parent)
+            records: list[dict[str, str]] = []
+            for entry_id in selected:
+                item = differences[entry_id]
+                records.append(
+                    {
+                        "entry_id": entry_id,
+                        "relative_path": item.global_path.relative_to(
+                            self.resolver.global_root
+                        ).as_posix(),
+                        "old_digest": item.global_digest,
+                        "new_digest": item.project_digest,
+                        "state": "pending",
+                    }
+                )
+            journal = transaction / "transaction.json"
+            journal_payload: dict[str, object] = {
+                "schema_version": 1,
+                "status": "staging",
+                "records": records,
+            }
+            write_json_durable(journal, journal_payload)
             try:
                 for entry_id in selected:
                     item = differences[entry_id]
@@ -416,6 +448,9 @@ class CatalogSyncService:
                     _validate_publishable(CatalogKind(item.kind), item.key, staged)
                     if content_digest(staged) != item.project_digest:
                         raise CatalogSyncError(f"Staged content changed: {entry_id}")
+                fsync_tree(staged_root)
+                journal_payload["status"] = "prepared"
+                write_json_durable(journal, journal_payload)
 
                 self.failure_injector("pre_publish", None)
                 before_publish = self.compare(kinds=selected_kinds, entry_ids=entry_ids)
@@ -424,27 +459,38 @@ class CatalogSyncService:
                         "Catalog contents changed while staging; compare again"
                     )
 
-                for entry_id in selected:
+                journal_payload["status"] = "publishing"
+                write_json_durable(journal, journal_payload)
+                for index, entry_id in enumerate(selected):
                     item = differences[entry_id]
+                    record = records[index]
                     target = item.global_path
                     relative = target.relative_to(self.resolver.global_root)
                     backup = backup_root / relative
                     staged = staged_root / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
                     backup.parent.mkdir(parents=True, exist_ok=True)
-                    if target.exists() or target.is_symlink():
+                    fsync_directory_chain(target.parent, self.resolver.global_root)
+                    fsync_directory_chain(backup.parent, transaction)
+                    if path_exists(target):
                         os.replace(target, backup)
-                        backed_up.append(entry_id)
+                        fsync_directory_chain(target.parent, self.resolver.global_root)
+                        fsync_directory(backup.parent)
                         if content_digest(backup) != item.global_digest:
                             raise StaleComparisonError(
                                 f"Global content changed during publication: {entry_id}"
                             )
+                        record["state"] = "backed_up"
+                        write_json_durable(journal, journal_payload)
                     elif item.global_digest != "missing":
                         raise StaleComparisonError(
                             f"Global content changed during publication: {entry_id}"
                         )
                     os.replace(staged, target)
-                    published.append(entry_id)
+                    fsync_directory(target.parent)
+                    fsync_directory(staged.parent)
+                    record["state"] = "published"
+                    write_json_durable(journal, journal_payload)
                     self.failure_injector("published", entry_id)
 
                 self.failure_injector("post_check", None)
@@ -455,49 +501,22 @@ class CatalogSyncService:
                     raise CatalogSyncError(
                         "Post-publication verification failed: " + ", ".join(failed)
                     )
-            except Exception as exc:
-                rollback_errors: list[str] = []
-                restored: list[str] = []
-                for entry_id in reversed(published):
-                    try:
-                        self.failure_injector("rollback_remove", entry_id)
-                        _remove_path(differences[entry_id].global_path)
-                    except Exception as rollback_exc:
-                        rollback_errors.append(f"remove {entry_id}: {rollback_exc}")
-                for entry_id in reversed(backed_up):
-                    target = differences[entry_id].global_path
-                    relative = target.relative_to(self.resolver.global_root)
-                    backup = backup_root / relative
-                    try:
-                        self.failure_injector("rollback_restore", entry_id)
-                        if target.exists() or target.is_symlink():
-                            raise OSError("rollback target still exists")
-                        os.replace(backup, target)
-                        restored.append(entry_id)
-                    except Exception as rollback_exc:
-                        rollback_errors.append(f"restore {entry_id}: {rollback_exc}")
+                journal_payload["status"] = "committed"
+                write_json_durable(journal, journal_payload)
+            except BaseException as exc:
                 receipt = transaction / "recovery.json"
-                receipt.write_text(
-                    json.dumps(
-                        {
-                            "schema_version": 1,
-                            "status": "incomplete" if rollback_errors else "rolled_back",
-                            "selected": list(selected),
-                            "published": published,
-                            "restored": restored,
-                            "error": str(exc),
-                            "rollback_errors": rollback_errors,
-                            "backup_root": str(backup_root),
-                        },
-                        indent=2,
-                        sort_keys=True,
-                    )
-                    + "\n",
-                    encoding="utf-8",
+                recover_catalog_transaction(
+                    transaction,
+                    self.resolver.global_root,
+                    failure_injector=self.failure_injector,
+                    cause=exc,
                 )
+                if not isinstance(exc, Exception):
+                    raise
                 raise CatalogSyncError(
                     f"Catalog publication failed; recovery receipt: {receipt}"
                 ) from exc
 
             shutil.rmtree(transaction)
+            fsync_directory(transactions_root)
             return SyncResult(tuple(selected), after)

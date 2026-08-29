@@ -82,6 +82,51 @@ def test_invalid_project_entry_fails_instead_of_falling_through(tmp_path: Path) 
         resolver.resolve(CatalogKind.PLAYBOOK, "standard")
 
 
+@pytest.mark.parametrize(
+    ("invalid_layer", "invalid_content"),
+    [
+        ("project", b"\xff\xfeinvalid-agent"),
+        ("global", b"# missing frontmatter\n"),
+        (
+            "builtin",
+            b"---\nname: Wrong\ndescription: invalid\n---\n\n# Wrong\n",
+        ),
+    ],
+)
+def test_invalid_agent_at_effective_precedence_fails_closed(
+    tmp_path: Path, invalid_layer: str, invalid_content: bytes
+) -> None:
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    builtin = tmp_path / "builtin"
+    roots = {
+        "project": project / ".cafe",
+        "global": global_root,
+        "builtin": builtin,
+    }
+    precedence = ["builtin", "global", "project"]
+    invalid_index = precedence.index(invalid_layer)
+    for lower_layer in precedence[:invalid_index]:
+        _write_entry(
+            roots[lower_layer],
+            CatalogKind.AGENT,
+            "developer/David",
+            lower_layer,
+        )
+    invalid = roots[invalid_layer] / "agents" / "developer" / "David.md"
+    invalid.parent.mkdir(parents=True, exist_ok=True)
+    invalid.write_bytes(invalid_content)
+    resolver = CatalogResolver(
+        project_root=project,
+        canonical_root=project,
+        global_root=global_root,
+        builtin_root=builtin,
+    )
+
+    with pytest.raises(CatalogValidationError):
+        resolver.resolve(CatalogKind.AGENT, "developer/David")
+
+
 def test_active_worktree_overlays_only_matching_canonical_entry(tmp_path: Path) -> None:
     canonical = tmp_path / "canonical"
     worktree = tmp_path / "worktree"

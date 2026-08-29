@@ -62,7 +62,7 @@ _catalog_lock_state = threading.local()
 
 @contextmanager
 def global_catalog_lock(global_root: Path, *, exclusive: bool = False) -> Iterator[None]:
-    """Coordinate catalog readers and publishers without mutating the catalog."""
+    """Recover and coordinate catalog readers and publishers under one lock."""
     lock_root = Path(global_root).resolve().parent
     if not lock_root.exists():
         if not exclusive:
@@ -86,9 +86,14 @@ def global_catalog_lock(global_root: Path, *, exclusive: bool = False) -> Iterat
         return
 
     descriptor = os.open(lock_root, os.O_RDONLY)
-    fcntl.flock(descriptor, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
-    held[key] = {"depth": 1, "exclusive": exclusive, "descriptor": descriptor}
+    # Readers also enter exclusively so crash recovery completes before any
+    # catalog path or content can be exposed.
+    fcntl.flock(descriptor, fcntl.LOCK_EX)
     try:
+        from cafe.catalogs.transactions import recover_catalog_transactions
+
+        recover_catalog_transactions(Path(global_root).resolve())
+        held[key] = {"depth": 1, "exclusive": True, "descriptor": descriptor}
         yield
     finally:
         held.pop(key, None)
@@ -167,6 +172,31 @@ def content_digest(path: Path) -> str:
         for child in sorted(path.rglob("*"), key=lambda item: item.as_posix()):
             add_node(child, child.relative_to(path).as_posix())
     return digest.hexdigest()
+
+
+def read_valid_agent_definition(path: Path, key: str) -> str:
+    """Read one agent definition and validate its required identity metadata."""
+    if not path.is_file():
+        raise CatalogValidationError(f"Invalid agent {key}: markdown file is required")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise CatalogValidationError(f"Invalid agent {key}: unreadable UTF-8 content") from exc
+    if not text.startswith("---\n"):
+        raise CatalogValidationError(f"Invalid agent {key}: YAML frontmatter is required")
+    end = text.find("\n---", 4)
+    if end < 0:
+        raise CatalogValidationError(f"Invalid agent {key}: unterminated frontmatter")
+    try:
+        metadata = yaml.safe_load(text[4:end])
+    except yaml.YAMLError as exc:
+        raise CatalogValidationError(f"Invalid agent {key}: malformed frontmatter") from exc
+    expected_name = key.split("/", 1)[1]
+    if not isinstance(metadata, dict) or metadata.get("name") != expected_name:
+        raise CatalogValidationError(
+            f"Invalid agent {key}: frontmatter name must match {expected_name!r}"
+        )
+    return text
 
 
 class CatalogResolver:
@@ -263,8 +293,7 @@ class CatalogResolver:
             if not path.is_dir() or not marker.is_file():
                 raise CatalogValidationError(f"Invalid phase skill {key}: SKILL.md is required")
             return
-        if not path.is_file():
-            raise CatalogValidationError(f"Invalid agent {key}: markdown file is required")
+        read_valid_agent_definition(path, key)
 
     def _resolve_unlocked(self, kind: CatalogKind, key: str) -> CatalogEntry:
         key = self._validate_key(kind, key)
