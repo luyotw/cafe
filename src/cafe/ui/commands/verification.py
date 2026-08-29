@@ -14,6 +14,7 @@ from cafe.verification import (
     reuse_verification_receipt,
     run_focused_verification,
     run_verification,
+    verification_log_excerpt,
 )
 
 verification_app = typer.Typer(
@@ -30,7 +31,7 @@ def verification_run(
     output_file: Path = typer.Option(..., "--output-file"),
     scope: str = typer.Option("full", "--scope"),
 ) -> None:
-    """Run a command after ``--`` and write an iteration-local receipt."""
+    """Run a command after ``--`` and write an iteration-local log and receipt."""
     command: List[str] = list(ctx.args)
     if command[:1] == ["--"]:
         command = command[1:]
@@ -44,6 +45,10 @@ def verification_run(
         typer.echo(f"verification_error={exc}", err=True)
         raise typer.Exit(code=2)
 
+    excerpt, output_truncated = verification_log_excerpt(receipt_path)
+    if excerpt:
+        typer.echo(excerpt, err=bool(exit_code))
+    output_log = payload["output_log"]
     typer.echo(
         json.dumps(
             {
@@ -51,6 +56,9 @@ def verification_run(
                 "valid": payload["valid"],
                 "exit_code": payload["exit_code"],
                 "scope": payload["scope"],
+                "output_log": str(receipt_path.parent / output_log["path"]),
+                "output_bytes": output_log["size_bytes"],
+                "output_truncated": output_truncated,
             },
             ensure_ascii=False,
             sort_keys=True,
