@@ -703,6 +703,54 @@ def test_catalog_sync_global_interactive_preview_updates_only_selected_entry(
     assert not (global_root / "playbooks" / "standard.yaml").exists()
 
 
+def test_catalog_sync_global_bounds_human_summary_and_keeps_json_complete(
+    tmp_path: Path, monkeypatch
+) -> None:
+    current_global = {"path": tmp_path / "human-global"}
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: current_global["path"])
+
+    def run_sync(project: Path, *, json_output: bool):
+        project.mkdir()
+        monkeypatch.chdir(project)
+        entry_ids = []
+        for index in range(52):
+            name = f"item-{index}"
+            entry_ids.append(f"playbook:{name}")
+            path = project / ".cafe" / "playbooks" / f"{name}.yaml"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                f"playbook: {{id: {name}}}\nsteps: {{}}\n",
+                encoding="utf-8",
+            )
+        check = runner.invoke(app, ["catalog", "check", "--kind", "playbook", "--json"])
+        assert check.exit_code == 0, check.stdout
+        token = json.loads(check.stdout)["comparison_token"]
+        approvals = [value for entry_id in entry_ids for value in ("--approve", entry_id)]
+        arguments = [
+            "catalog",
+            "sync-global",
+            "--kind",
+            "playbook",
+            "--token",
+            token,
+            *approvals,
+        ]
+        if json_output:
+            arguments.append("--json")
+        return runner.invoke(app, arguments), entry_ids
+
+    human_result, entry_ids = run_sync(tmp_path / "human-project", json_output=False)
+    current_global["path"] = tmp_path / "json-global"
+    json_result, json_entry_ids = run_sync(tmp_path / "json-project", json_output=True)
+
+    assert human_result.exit_code == 0, human_result.stdout
+    assert sum("playbook:item-" in line for line in human_result.stdout.splitlines()) == 50
+    assert entry_ids[50] not in human_result.stdout
+    assert "--json" in human_result.stdout
+    assert json_result.exit_code == 0, json_result.stdout
+    assert set(json.loads(json_result.stdout)["updated"]) == set(json_entry_ids)
+
+
 def test_catalog_legacy_migration_requires_digest_bound_decisions(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -730,3 +778,35 @@ def test_catalog_legacy_migration_requires_digest_bound_decisions(
     assert result.exit_code == 0, result.stdout
     assert json.loads(result.stdout)["status"] == "completed"
     assert (tmp_path / ".cafe" / "agents" / "developer" / "David.md").is_file()
+
+
+def test_catalog_migration_bounds_human_preview_and_keeps_json_complete(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global")
+    entry_ids = []
+    for index in range(52):
+        name = f"Agent{index}"
+        entry_ids.append(f"agent:developer/{name}")
+        path = tmp_path / ".cafe" / "agents" / "developer" / f"{name}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"---\nname: {name}\ndescription: project\n---\n\nDevelop\n",
+            encoding="utf-8",
+        )
+
+    human_result = runner.invoke(app, ["catalog", "migrate-agents"])
+    json_result = runner.invoke(app, ["catalog", "migrate-agents", "--json"])
+
+    assert human_result.exit_code == 0, human_result.stdout
+    human_entry_ids = {
+        line.strip().split()[0]
+        for line in human_result.stdout.splitlines()
+        if line.strip().startswith("agent:developer/Agent")
+    }
+    assert len(human_entry_ids) == 50
+    assert len(set(entry_ids) - human_entry_ids) == 2
+    assert "--json" in human_result.stdout
+    assert json_result.exit_code == 0, json_result.stdout
+    assert {item["entry_id"] for item in json.loads(json_result.stdout)["items"]} == set(entry_ids)

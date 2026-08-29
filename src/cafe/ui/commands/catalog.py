@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Sequence, TypeVar
 
 import typer
 import yaml
@@ -43,6 +43,24 @@ def _cli_prompt_checkbox(*a, **kw):
 playbook_app = typer.Typer(help="Inspect and validate playbooks")
 skill_app = typer.Typer(help="Inspect and validate skills")
 catalog_app = typer.Typer(help="Compare and publish project CAFE catalogs")
+
+_HUMAN_DETAIL_LIMIT = 50
+_Detail = TypeVar("_Detail")
+
+
+def _print_bounded_details(
+    items: Sequence[_Detail],
+    render: Callable[[_Detail], str],
+    *,
+    inspection_hint: str,
+) -> None:
+    """Print concise human details with a complete inspection path."""
+    for item in items[:_HUMAN_DETAIL_LIMIT]:
+        console.print(f"  {render(item)}")
+    omitted = len(items) - _HUMAN_DETAIL_LIMIT
+    if omitted > 0:
+        console.print(f"  … {omitted} more; use {inspection_hint} to inspect")
+
 
 # ---------------------------------------------------------------------------
 # Console and backward-compat runtime bridge
@@ -99,16 +117,14 @@ def _print_catalog_report(report) -> None:
         f"[yellow]{len(differences)} project catalog difference(s)[/yellow] "
         f"token={report.token}"
     )
-    detail_limit = 50
-    for item in differences[:detail_limit]:
-        console.print(
-            f"  {item.entry_id}\t{item.reason}\t"
+    _print_bounded_details(
+        differences,
+        lambda item: (
+            f"{item.entry_id}\t{item.reason}\t"
             f"{item.project_digest[:12]} → {item.global_digest[:12]}"
-        )
-    if len(differences) > detail_limit:
-        console.print(
-            f"  … {len(differences) - detail_limit} more; use --json or --entry to inspect"
-        )
+        ),
+        inspection_hint="--json or --entry",
+    )
 
 
 @catalog_app.command(name="check")
@@ -198,8 +214,11 @@ def catalog_sync_global(
         typer.echo(json.dumps(result.as_dict(), ensure_ascii=False, sort_keys=True))
     else:
         console.print(f"[green]Published {len(result.updated)} catalog entry(s)[/green]")
-        for entry_id in result.updated:
-            console.print(f"  {entry_id}")
+        _print_bounded_details(
+            result.updated,
+            str,
+            inspection_hint="--json",
+        )
 
 
 @catalog_app.command(name="migrate-agents")
@@ -243,8 +262,11 @@ def catalog_migrate_agents(
                     f"[yellow]{len(preview.items)} legacy project agent(s)[/yellow] "
                     f"token={preview.token}"
                 )
-                for item in preview.items:
-                    console.print(f"  {item.entry_id}\t{item.status}\t{item.effect}")
+                _print_bounded_details(
+                    preview.items,
+                    lambda item: f"{item.entry_id}\t{item.status}\t{item.effect}",
+                    inspection_hint="--json",
+                )
             return
         if token is None or not decisions:
             raise CatalogSyncError(
