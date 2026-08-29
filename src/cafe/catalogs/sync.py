@@ -30,6 +30,7 @@ from cafe.catalogs.transactions import (
     fsync_tree,
     path_exists,
     recover_catalog_transaction,
+    retire_committed_transaction,
     write_json_durable,
 )
 
@@ -517,6 +518,5 @@ class CatalogSyncService:
                     f"Catalog publication failed; recovery receipt: {receipt}"
                 ) from exc
 
-            shutil.rmtree(transaction)
-            fsync_directory(transactions_root)
+            retire_committed_transaction(transaction, self.resolver.global_root)
             return SyncResult(tuple(selected), after)

@@ -19,6 +19,7 @@ RecoveryInjector = Callable[[str, Optional[str]], None]
 _MAX_TRANSACTION_RECORDS = 512
 _MAX_EVIDENCE_TEXT = 512
 _MAX_JOURNAL_BYTES = 1024 * 1024
+_COMMITTED_CLEANUP_PREFIX = ".committed-"
 _TRANSACTION_STATUSES = {
     "staging",
     "prepared",
@@ -285,13 +286,42 @@ def _validated_transaction_payload(
         record["state"] != "published" for record in records
     ):
         raise CatalogRecoveryError("Catalog transaction journal progress is invalid")
+    for record in records:
+        _confined_leaf(global_root, Path(record["relative_path"]))
+    if payload["status"] == "committed":
+        return records
     backup_root = transaction / "backups"
     _require_real_directory(backup_root, within=transaction)
     for record in records:
         relative = Path(record["relative_path"])
-        _confined_leaf(global_root, relative)
         _confined_leaf(backup_root, relative)
     return records
+
+
+def _validate_committed_content(
+    records: list[dict[str, str]], global_root: Path
+) -> None:
+    from cafe.catalogs.resolver import content_digest
+
+    for record in records:
+        target = _confined_leaf(global_root, Path(record["relative_path"]))
+        if not path_exists(target) or content_digest(target) != record["new_digest"]:
+            raise CatalogRecoveryError(
+                "Committed catalog content does not match transaction intent"
+            )
+
+
+def retire_committed_transaction(transaction: Path, global_root: Path) -> None:
+    """Atomically remove committed work from the recovery namespace before cleanup."""
+    _validate_transaction_location(transaction, global_root)
+    transactions_root = transaction.parent
+    cleanup = transactions_root / f"{_COMMITTED_CLEANUP_PREFIX}{transaction.name}"
+    if path_exists(cleanup):
+        raise CatalogRecoveryError(f"Catalog transaction cleanup path exists: {cleanup}")
+    os.replace(transaction, cleanup)
+    fsync_directory(transactions_root)
+    shutil.rmtree(cleanup)
+    fsync_directory(transactions_root)
 
 
 def _validate_recovery_content(
@@ -419,6 +449,11 @@ def recover_catalog_transactions(global_root: Path) -> None:
     _require_real_directory(global_root)
     _require_real_directory(transactions_root, within=global_root)
     for transaction in sorted(transactions_root.iterdir(), key=lambda item: item.name):
+        if transaction.name.startswith(_COMMITTED_CLEANUP_PREFIX):
+            _validate_transaction_location(transaction, global_root)
+            shutil.rmtree(transaction)
+            fsync_directory(transactions_root)
+            continue
         _validate_transaction_location(transaction, global_root)
         journal = transaction / "transaction.json"
         try:
@@ -447,11 +482,11 @@ def recover_catalog_transactions(global_root: Path) -> None:
         if not stat.S_ISREG(journal_metadata.st_mode):
             raise CatalogRecoveryError(f"Invalid catalog transaction journal: {journal}")
         payload = _read_transaction_journal(transaction, global_root)
-        _validated_transaction_payload(payload, transaction, global_root)
+        records = _validated_transaction_payload(payload, transaction, global_root)
         status = payload.get("status")
         if status == "committed":
-            shutil.rmtree(transaction)
-            fsync_directory(transactions_root)
+            _validate_committed_content(records, global_root)
+            retire_committed_transaction(transaction, global_root)
             continue
         if status == "rolled_back":
             continue

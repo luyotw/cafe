@@ -457,6 +457,66 @@ def _recovery_reader(tmp_path: Path, global_root: Path) -> CatalogResolver:
     )
 
 
+def test_catalog_reader_finishes_cleanup_for_committed_transaction_without_backups(
+    tmp_path: Path,
+) -> None:
+    global_root = tmp_path / "global"
+    target = _entry(global_root, CatalogKind.PLAYBOOK, "standard", "approved-old")
+    old_digest = content_digest(target)
+    target = _entry(global_root, CatalogKind.PLAYBOOK, "standard", "approved-new")
+    new_digest = content_digest(target)
+    transaction = global_root / ".catalog-transactions" / "committed"
+    _write_recovery_journal(
+        transaction,
+        {
+            "entry_id": "playbook:standard",
+            "relative_path": "playbooks/standard.yaml",
+            "old_digest": old_digest,
+            "new_digest": new_digest,
+            "state": "published",
+        },
+        status="committed",
+    )
+    (transaction / "backups").rmdir()
+
+    resolved = _recovery_reader(tmp_path, global_root).resolve(
+        CatalogKind.PLAYBOOK, "standard"
+    )
+
+    assert resolved is not None
+    assert resolved.digest == new_digest
+    assert not transaction.exists()
+
+
+def test_interrupted_committed_cleanup_does_not_block_catalog_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, project, global_root = _service(tmp_path)
+    project_entry = _entry(
+        project / ".cafe", CatalogKind.PLAYBOOK, "standard", "approved-new"
+    )
+    _entry(global_root, CatalogKind.PLAYBOOK, "standard", "approved-old")
+    report = service.compare()
+
+    def interrupt_cleanup(path: Path) -> None:
+        (path / "transaction.json").unlink()
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        "cafe.catalogs.transactions.shutil.rmtree", interrupt_cleanup
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        service.sync(report.token, ["playbook:standard"])
+    monkeypatch.undo()
+
+    resolved = _recovery_reader(tmp_path, global_root).resolve(
+        CatalogKind.PLAYBOOK, "standard"
+    )
+    assert resolved is not None
+    assert resolved.digest == content_digest(project_entry)
+
+
 @pytest.mark.parametrize(
     "record_update",
     [
