@@ -35,7 +35,10 @@ unexecuted.
 - Answer an authorized user handoff without overriding its structured baton.
   First read `handoffs_and_alignment.md`, resolve the active HumanTask and its
   input schema, then use the documented JSON payload with the current
-  `human_task_id`. If its declared outcome continues to an agent phase,
+  `human_task_id`. Runtime resolves that durable ID to the task's recorded step
+  and trigger before any intent-based or generic `--user-input` routing; an
+  unknown, stale, or mismatched ID must stop instead of becoming phase input.
+  If its declared outcome continues to an agent phase,
   reassess and configure that phase's model chain before submitting the payload,
   because the same invocation continues automatically through subsequent agent
   phases in `continuous` mode or executes the next single step in `single_step`

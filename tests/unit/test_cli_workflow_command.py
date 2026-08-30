@@ -9,7 +9,9 @@ from typer.testing import CliRunner
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.git import BranchHealth
+from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult
+from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui.cli import (
     _execute_single_step_alias,
     _find_external_resume_step,
@@ -24,6 +26,7 @@ from cafe.ui.cli_shared import (
     apply_alignment_decision_from_payload,
 )
 from cafe.ui.commands.workflow import _reset_baton_for_explicit_start_step
+from cafe.ui.human_tasks import resolve_step_human_task
 from cafe.utils.config import ConfigManager
 
 runner = CliRunner()
@@ -140,6 +143,39 @@ def _handoff_to_step(
         status_code=status_code,
         source="test.executor",
     )
+
+
+def _pause_with_iteration_limit_task(issue_dir: Path):
+    playbook = PlaybookLoader().load("standard")
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("review", playbook_id="standard")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="review",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.MANUAL_HANDOFF,
+        status_code="ITERATION_LIMIT_REACHED",
+        source="test",
+    )
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook,
+        step_name="review",
+        trigger="manual_handoff",
+    )
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=blackboard.workflow_id,
+        step="review",
+        iteration=1,
+        trigger="manual_handoff",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+    )
+    return store, task
 
 
 def test_alignment_checkpoint_menu_is_chat_first_and_concise() -> None:
@@ -534,6 +570,159 @@ def test_workflow_command_resume_user_input_targets_handoff_from_step(
         in (reloaded.handoff_summary or "").lower()
     )
     assert reloaded.current_step == "develop"
+
+
+def test_workflow_command_routes_manual_handoff_payload_through_durable_task(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-durable-manual"
+    store, task = _pause_with_iteration_limit_task(issue_dir)
+    executed_steps: list[str] = []
+
+    class FakeExecutor:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
+            executed_steps.append(step_name)
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-durable-manual"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--single-step",
+                "--user-input",
+                json.dumps(
+                    {
+                        "task": "iteration-limit",
+                        "decision": "resume",
+                        "human_task_id": task.id,
+                    }
+                ),
+            ],
+        )
+
+    records = HumanTaskRecordStore(issue_dir)
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert executed_steps == ["review"]
+    assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert records.get_wait_state(task.id).released_at is not None
+    assert len(records.results()) == 1
+    assert not (issue_dir / "review" / "iteration_001" / "user_input.md").exists()
+    assert any(
+        event.event_type == "human_task_completed"
+        for event in store.load_or_create("review", playbook_id="standard").events
+    )
+
+
+def test_workflow_command_rejects_unknown_durable_task_without_generic_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-unknown-durable"
+    store, task = _pause_with_iteration_limit_task(issue_dir)
+
+    with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-unknown-durable"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--single-step",
+                "--user-input",
+                json.dumps(
+                    {
+                        "task": "iteration-limit",
+                        "decision": "resume",
+                        "human_task_id": "unknown-task-id",
+                    }
+                ),
+            ],
+        )
+
+    records = HumanTaskRecordStore(issue_dir)
+    assert result.exit_code == 0
+    assert "Unknown durable human task" in result.stdout
+    assert records.get_task(task.id).status is HumanTaskStatus.PENDING
+    assert records.get_wait_state(task.id).released_at is None
+    assert store.load_or_create("review", playbook_id="standard").current_step == "user"
+    assert not (issue_dir / "review" / "iteration_001" / "user_input.md").exists()
+
+
+def test_workflow_command_retries_agent_after_durable_task_completion_once(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-durable-agent-retry"
+    _store, task = _pause_with_iteration_limit_task(issue_dir)
+
+    class FlakyExecutor:
+        calls = 0
+
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("agent failed after task completion")
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    executor = FlakyExecutor()
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=executor),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-durable-agent-retry"
+        mock_git_cls.return_value = git
+        first = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--single-step",
+                "--user-input",
+                json.dumps(
+                    {
+                        "task": "iteration-limit",
+                        "decision": "resume",
+                        "human_task_id": task.id,
+                    }
+                ),
+            ],
+        )
+        retry = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--single-step"],
+        )
+
+    records = HumanTaskRecordStore(issue_dir)
+    assert first.exit_code == 0
+    assert "Workflow interrupted" in first.stdout
+    assert retry.exit_code == 0, (retry.stdout, retry.exception)
+    assert executor.calls == 2
+    assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert records.get_wait_state(task.id).released_at is not None
+    assert len(records.results()) == 1
 
 
 def test_user_phase_alignment_checkpoint_approve_resumes_step(tmp_path: Path) -> None:
