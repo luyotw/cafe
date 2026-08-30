@@ -1,6 +1,6 @@
 ## Review Preflight
 
-[ ] Read {agent_file}, every supplied requirement, plan, implementation artifact, workflow or PR feedback, the previous review when applicable, and the correction delta packet; establish the bounded authoritative scope for this iteration
+[ ] Read {agent_file}, every supplied requirement, plan, implementation artifact, workflow or PR feedback, the previous review when applicable, and the correction delta packet; establish the bounded authoritative scope, ensure discovery occurs exactly once by consuming supplied native evidence or otherwise invoking the selected discovery skill, and retain its output only as candidate findings for independent CAFE validation
 {spec_read_instruction}{plan_read_instruction}{feedback_instruction}[ ] Record `base SHA`, `Reviewed HEAD`, `Previous Reviewed HEAD`, and the exact correction range in `Review Baseline`; when the previous review is not supplied, boundedly inspect earlier `iteration_*/output.md` siblings below the review directory derived from {output_file}; if the previous HEAD is missing, is not an ancestor, or has no recognizable evidence, prohibit reuse and review the cumulative `merge-base({base_branch}, HEAD)..HEAD` change
 [ ] Inspect `git log {base_branch}..HEAD`, the worktree, changed-file hygiene, and commit-message fit once; no new commit or any uncommitted work means development is incomplete, sensitive data or an unwanted committed file is critical, and message-style findings name affected SHAs plus complete non-interactive repair commands
 

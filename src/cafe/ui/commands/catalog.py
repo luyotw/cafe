@@ -16,6 +16,7 @@ from cafe.skills.global_installer import GlobalSkillSyncSummary, sync_global_ski
 from cafe.skills.importer import SkillImportSummary, import_skills, preview_importable_skills
 from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.skills.remover import SkillRemoveSummary, remove_skills
+from cafe.skills.review_fallback import ReviewFallbackUpdateError, ReviewFallbackUpdater
 from cafe.ui.inquirer_prompts import (  # noqa: F401 — kept for type resolution; actual calls go through cli for test-patch compat
     prompt_checkbox,
     prompt_confirm,
@@ -357,6 +358,47 @@ def skill_sync_global(
 
     _print_global_skill_sync_summary(summary)
     if summary.failed_count:
+        raise typer.Exit(1)
+
+
+@skill_app.command(name="update-review-fallback")
+def skill_update_review_fallback(
+    target_ref: str = typer.Option(
+        "main",
+        "--ref",
+        help="Upstream branch, tag, or commit to inspect",
+    ),
+    apply_update: bool = typer.Option(
+        False,
+        "--apply",
+        help="Apply the inspected snapshot and pin after drift/contract checks",
+    ),
+) -> None:
+    """Check or apply the pinned open-source review fallback update."""
+    loader = _build_skill_loader()
+    skill_dir = loader.builtin_root / "skills" / "cafe-review-fallback"
+    updater = ReviewFallbackUpdater(skill_dir)
+    try:
+        plan = updater.check(target_ref=target_ref)
+        console.print("source=anthropics/claude-plugins-official")
+        console.print(f"current={plan.current_revision}")
+        console.print(f"target={plan.target_revision}")
+        console.print(f"content_changed={str(plan.changed).lower()}")
+        if plan.diff:
+            console.print("\n[bold]Upstream delta[/bold]")
+            console.print(plan.diff, markup=False)
+        else:
+            console.print("[dim]No upstream content delta.[/dim]")
+        if apply_update:
+            updater.apply(plan)
+            console.print(
+                "[green]Applied pinned fallback snapshot.[/green] "
+                "Review the wrapper contract and run focused tests before committing."
+            )
+        else:
+            console.print("[dim]Read-only check; use --apply to update the pinned snapshot.[/dim]")
+    except ReviewFallbackUpdateError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(1)
 
 

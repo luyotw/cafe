@@ -1,0 +1,10 @@
+{
+  "license": "Apache-2.0",
+  "license_path": "references/LICENSE.md",
+  "pinned_revision": "ed404106fcd80ba98ecb7c851e531dcb626d13b7",
+  "schema_version": 1,
+  "snapshot_path": "references/upstream_code_reviewer.md",
+  "source_path": "plugins/pr-review-toolkit/agents/code-reviewer.md",
+  "source_repository": "anthropics/claude-plugins-official",
+  "source_sha256": "019395c3ce457460115cc703e2f4a86fed4bbe560dc58355051c4d877155d366"
+}

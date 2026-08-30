@@ -1,7 +1,7 @@
 ---
 name: cafe-review
 description: "審查程式碼品質與風險"
-version: 1.7.0
+version: 1.8.0
 workflow:
   execution_profile:
     workload: review
@@ -93,6 +93,7 @@ Read your agent file: {agent_file}
 ## Instructions
 - 以缺陷與風險為主
 - 先確認目前提供的需求、計畫與實作是否一致
+- 先依 runtime context 選定的 review discovery engine 完成一次完整候選缺陷掃描；原生 reviewer 與 fallback 都只能提供候選 finding，不能取代本 phase 的 acceptance、risk、ledger 與 handoff 判定
 - 優先指出行為回歸、缺少測試與高風險問題
 - Repo 搜尋與輸出上限：請依 shared skill「cafe-workflow-common」的 **Bounded repository inspection**；本 skill 不重複敘述。
 - 測試證據、repository hooks 與 CI 的分工：請依 shared skill「cafe-workflow-common」的 **Repository-owned quality gates**；本 skill 不重複敘述。
