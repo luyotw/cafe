@@ -1,7 +1,7 @@
 ---
 name: cafe-review
 description: "審查程式碼品質與風險"
-version: 1.6.0
+version: 1.7.0
 workflow:
   execution_profile:
     workload: review
@@ -64,15 +64,19 @@ workflow:
       - when: {iteration: 1}
         sections:
           - reference: execution_preflight.md
-          - reference: execution_acceptance_closure.md
+          - reference: execution_risk_assessment.md
           - reference: execution_first_pass.md
+          - reference: execution_acceptance_closure.md
+          - reference: execution_exit_audit.md
           - reference: execution_finalize.md
           - optional_checklist: basic_principles.md
       - when: {min_iteration: 2}
         sections:
           - reference: execution_preflight.md
           - reference: execution_correction.md
+          - reference: execution_risk_assessment.md
           - reference: execution_acceptance_closure.md
+          - reference: execution_exit_audit.md
           - reference: execution_finalize.md
           - optional_checklist: basic_principles.md
     include_role_guidance: true
@@ -93,7 +97,7 @@ Read your agent file: {agent_file}
 - Repo 搜尋與輸出上限：請依 shared skill「cafe-workflow-common」的 **Bounded repository inspection**；本 skill 不重複敘述。
 - 測試證據、repository hooks 與 CI 的分工：請依 shared skill「cafe-workflow-common」的 **Repository-owned quality gates**；本 skill 不重複敘述。
 - 審查變更相關的 targeted test 選擇與品質；不得因缺少 CAFE verification receipt 打回 develop，也不在 review 重跑 repository-wide 驗證。
-- 每一輪都要維護完整且標明來源的 issue acceptance closure matrix；correction review 可以聚焦差異，但不得遺失未被本次修正觸及的驗收條件或 invariant。
+- 每一輪都要維護 issue acceptance closure 與 triggered risk coverage；correction review 可以重用未失效的普通證據，但準備通過時，每個已觸發的 risk obligation 都必須有綁定目前 HEAD 的 fresh evidence。
 - 若需修改，把 next-step baton 寫成 `develop`
 - 通過時，把 next-step baton 寫成下一個 workflow step（預設 playbook 為 `pr`）
 - 與 developer 往返、仲裁、以及 blackboard/baton 更新：請依 shared skill「cafe-workflow-common」的 **Develop and review disagreement protocol** 與 **Shared Rules**；本 skill 不重複敘述。

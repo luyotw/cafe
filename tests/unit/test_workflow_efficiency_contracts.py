@@ -105,31 +105,32 @@ def test_review_corrections_close_root_causes_without_restarting_full_audit() ->
     assert contract["variants"][1]["when"] == {"min_iteration": 2}
     assert [section.get("reference") for section in contract["variants"][0]["sections"]] == [
         "execution_preflight.md",
-        "execution_acceptance_closure.md",
+        "execution_risk_assessment.md",
         "execution_first_pass.md",
+        "execution_acceptance_closure.md",
+        "execution_exit_audit.md",
         "execution_finalize.md",
         None,
     ]
     assert [section.get("reference") for section in contract["variants"][1]["sections"]] == [
         "execution_preflight.md",
         "execution_correction.md",
+        "execution_risk_assessment.md",
         "execution_acceptance_closure.md",
+        "execution_exit_audit.md",
         "execution_finalize.md",
         None,
     ]
     assert "Trace each candidate defect to its root cause" in review_steps
-    assert "re-verify every prior finding item by item" in correction
-    assert "directly related equivalence classes in one pass" in correction
-    assert "do not drip-feed sibling cases" in correction
-    assert "do not restart an unrelated repository-wide audit" in correction
-    assert "complete issue acceptance closure matrix" in correction
-    assert "recorded planless baseline" in correction
-    assert "every issue acceptance criterion and relevant invariant" in correction
-    assert "merely because the latest delta did not touch it" in correction
-    assert "acceptance criteria and invariants touched by the correction" not in correction
-    assert "applicable production entry point, consumer, or artifact" in review_steps
-    assert "runtime-behavior row" in review_steps
-    assert "original bounded probe through the production path" in review_steps
+    assert "re-verify each finding and corrected root cause" in correction
+    assert "map its complete boundary" in correction
+    assert "direct file byte equality alone is insufficient" in correction
+    assert "without restarting an unrelated repository-wide audit" in correction
+    assert "closed_reused" in correction
+    assert "closed_fresh" in correction
+    assert "Triggered Risk Coverage" in review_steps
+    assert "At most the twelve fixed obligations" in review_steps
+    assert "minimal production-path probe" in review_steps
     assert "synthetic fixtures or mocks" in review_steps
     assert "Acceptance Closure Evidence" in review_steps
     assert "derive a bounded planless baseline" in review_steps
@@ -138,7 +139,7 @@ def test_review_corrections_close_root_causes_without_restarting_full_audit() ->
         in review_steps
     )
     assert "request clarification instead of guessing" in review_steps
-    assert "without a plan" in review_steps
+    assert "recorded planless baseline" in review_steps
 
     checkbox = re.compile(r"\[ \]")
     context_references = (
@@ -154,14 +155,18 @@ def test_review_corrections_close_root_causes_without_restarting_full_audit() ->
     expected_modes = {
         "first": (
             "execution_preflight.md",
-            "execution_acceptance_closure.md",
+            "execution_risk_assessment.md",
             "execution_first_pass.md",
+            "execution_acceptance_closure.md",
+            "execution_exit_audit.md",
             "execution_finalize.md",
         ),
         "correction": (
             "execution_preflight.md",
             "execution_correction.md",
+            "execution_risk_assessment.md",
             "execution_acceptance_closure.md",
+            "execution_exit_audit.md",
             "execution_finalize.md",
         ),
     }
