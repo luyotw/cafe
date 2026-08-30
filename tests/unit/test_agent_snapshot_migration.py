@@ -43,12 +43,8 @@ def _migrator(
 
 
 def test_preview_classifies_proven_tracked_ambiguous_and_invalid_files(tmp_path: Path) -> None:
-    migrator, project, builtin = _migrator(
-        tmp_path, tracked={".cafe/agents/reviewer/Richard.md"}
-    )
-    builtin_david = _agent(
-        builtin / "agents" / "developer" / "David.md", "David", "fallback"
-    )
+    migrator, project, builtin = _migrator(tmp_path, tracked={".cafe/agents/reviewer/Richard.md"})
+    builtin_david = _agent(builtin / "agents" / "developer" / "David.md", "David", "fallback")
     _agent(
         project / ".cafe" / "agents" / "developer" / "David.md",
         "David",
@@ -93,9 +89,7 @@ def test_retirement_is_recoverable_and_preserves_other_project_agents(tmp_path: 
     )
 
     assert not snapshot.exists()
-    assert result.retired[0].read_text(encoding="utf-8") == fallback.read_text(
-        encoding="utf-8"
-    )
+    assert result.retired[0].read_text(encoding="utf-8") == fallback.read_text(encoding="utf-8")
     assert intentional.is_file()
     assert result.manifest.is_file()
 
@@ -103,9 +97,7 @@ def test_retirement_is_recoverable_and_preserves_other_project_agents(tmp_path: 
 def test_changed_file_rejects_preview_token_without_modification(tmp_path: Path) -> None:
     migrator, project, builtin = _migrator(tmp_path)
     _agent(builtin / "agents" / "developer" / "David.md", "David", "same")
-    snapshot = _agent(
-        project / ".cafe" / "agents" / "developer" / "David.md", "David", "same"
-    )
+    snapshot = _agent(project / ".cafe" / "agents" / "developer" / "David.md", "David", "same")
     preview = migrator.preview()
     snapshot.write_text(snapshot.read_text(encoding="utf-8") + "changed\n", encoding="utf-8")
 
@@ -150,12 +142,7 @@ def test_retirement_fails_closed_when_source_is_swapped_at_the_move_boundary(
         migrator.apply(preview.token, {"agent:developer/David": "retire"})
 
     manifest = (
-        project
-        / ".cafe"
-        / "migrations"
-        / "agent-snapshots"
-        / preview.token[:16]
-        / "manifest.json"
+        project / ".cafe" / "migrations" / "agent-snapshots" / preview.token[:16] / "manifest.json"
     )
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert payload["status"] == "in_progress"
@@ -172,9 +159,7 @@ def test_apply_requires_a_decision_for_every_legacy_file(tmp_path: Path) -> None
 
 
 def test_intentional_tracked_agent_cannot_be_retired(tmp_path: Path) -> None:
-    migrator, project, _builtin = _migrator(
-        tmp_path, tracked={".cafe/agents/reviewer/Richard.md"}
-    )
+    migrator, project, _builtin = _migrator(tmp_path, tracked={".cafe/agents/reviewer/Richard.md"})
     intentional = _agent(
         project / ".cafe" / "agents" / "reviewer" / "Richard.md",
         "Richard",
@@ -234,9 +219,7 @@ def test_preserve_decision_is_shared_by_canonical_and_linked_project_views(
     linked = tmp_path / "linked"
     builtin = tmp_path / "builtin"
     global_root = tmp_path / "global"
-    fallback = _agent(
-        builtin / "agents" / "developer" / "David.md", "David", "same"
-    )
+    fallback = _agent(builtin / "agents" / "developer" / "David.md", "David", "same")
     canonical_agent = _agent(
         canonical / ".cafe" / "agents" / "developer" / "David.md",
         "David",
@@ -255,9 +238,7 @@ def test_preserve_decision_is_shared_by_canonical_and_linked_project_views(
 
     preview = linked_migrator.preview()
     assert preview.items[0].path == canonical_agent
-    result = linked_migrator.apply(
-        preview.token, {"agent:developer/David": "preserve"}
-    )
+    result = linked_migrator.apply(preview.token, {"agent:developer/David": "preserve"})
 
     assert result.manifest.is_relative_to(canonical)
     assert linked_migrator.preview().items == ()
@@ -313,9 +294,7 @@ def test_retirement_journals_are_bound_to_the_active_project_view(
     canonical_result = canonical_migrator.apply(
         canonical_preview.token, {"agent:developer/David": "retire"}
     )
-    linked_result = linked_migrator.apply(
-        linked_preview.token, {"agent:developer/David": "retire"}
-    )
+    linked_result = linked_migrator.apply(linked_preview.token, {"agent:developer/David": "retire"})
 
     assert not (canonical / ".cafe" / "agents" / "developer" / "David.md").exists()
     assert not (linked / ".cafe" / "agents" / "developer" / "David.md").exists()
@@ -364,14 +343,10 @@ def test_interrupted_relative_symlink_retirement_resumes_from_recovery_entry(
 
 
 @pytest.mark.parametrize("changed_action", ["preserve", "retire"])
-def test_resume_revalidates_completed_checkpoint_state(
-    tmp_path: Path, changed_action: str
-) -> None:
+def test_resume_revalidates_completed_checkpoint_state(tmp_path: Path, changed_action: str) -> None:
     interrupted = False
 
-    def interrupt_before_second_checkpoint(
-        boundary: str, entry_id: str | None
-    ) -> None:
+    def interrupt_before_second_checkpoint(boundary: str, entry_id: str | None) -> None:
         nonlocal interrupted
         if (
             boundary == "before_manifest_write"
@@ -407,12 +382,7 @@ def test_resume_revalidates_completed_checkpoint_state(
         migrator.apply(preview.token, decisions)
 
     manifest = (
-        project
-        / ".cafe"
-        / "migrations"
-        / "agent-snapshots"
-        / preview.token[:16]
-        / "manifest.json"
+        project / ".cafe" / "migrations" / "agent-snapshots" / preview.token[:16] / "manifest.json"
     )
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     completed = payload["items"][0]
@@ -424,3 +394,153 @@ def test_resume_revalidates_completed_checkpoint_state(
 
     with pytest.raises(StaleMigrationDecision):
         migrator.apply(preview.token, decisions)
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    ["token", "project_root", "source_path", "retired_path"],
+)
+def test_manifest_identity_replacement_fails_before_migration_mutation(
+    tmp_path: Path, replacement: str
+) -> None:
+    def interrupt_before_retire(boundary: str, _entry_id: str | None) -> None:
+        if boundary == "before_retire":
+            raise OSError("injected interruption before retirement")
+
+    project = tmp_path / "project"
+    builtin = tmp_path / "builtin"
+    source = _agent(
+        project / ".cafe" / "agents" / "developer" / "David.md",
+        "David",
+        "same",
+    )
+    _agent(builtin / "agents" / "developer" / "David.md", "David", "same")
+    resolver = CatalogResolver(
+        project_root=project,
+        canonical_root=project,
+        global_root=tmp_path / "global",
+        builtin_root=builtin,
+    )
+    interrupted = AgentSnapshotMigrator(
+        resolver,
+        is_tracked=lambda _path: False,
+        failure_injector=interrupt_before_retire,
+    )
+    preview = interrupted.preview()
+    decisions = {"agent:developer/David": "retire"}
+    with pytest.raises(OSError):
+        interrupted.apply(preview.token, decisions)
+
+    manifest = (
+        project / ".cafe" / "migrations" / "agent-snapshots" / preview.token[:16] / "manifest.json"
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    external_source = _agent(tmp_path / "unrelated" / "David.md", "David", "same")
+    external_target = tmp_path / "outside" / "David.md"
+    if replacement == "token":
+        payload["token"] = "0" * 64
+    elif replacement == "project_root":
+        payload["project_root"] = str(tmp_path / "other-project")
+    elif replacement == "source_path":
+        payload["items"][0]["path"] = str(external_source)
+    else:
+        payload["items"][0]["retired_path"] = str(external_target)
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    resumed = AgentSnapshotMigrator(resolver, is_tracked=lambda _path: False)
+    with pytest.raises(StaleMigrationDecision):
+        resumed.apply(preview.token, decisions)
+    assert source.is_file()
+    assert external_source.is_file()
+    assert not external_target.exists()
+
+
+@pytest.mark.parametrize("unsafe_ancestor", ["transaction_root", "source", "retired"])
+def test_migration_rejects_symlinked_ancestry_before_external_write(
+    tmp_path: Path, unsafe_ancestor: str
+) -> None:
+    migrator, project, builtin = _migrator(tmp_path)
+    source = _agent(
+        project / ".cafe" / "agents" / "developer" / "David.md",
+        "David",
+        "same",
+    )
+    _agent(builtin / "agents" / "developer" / "David.md", "David", "same")
+    preview = migrator.preview()
+    transaction_root = project / ".cafe" / "migrations" / "agent-snapshots" / preview.token[:16]
+    external = tmp_path / "external"
+    external.mkdir()
+
+    if unsafe_ancestor == "transaction_root":
+        transaction_root.parent.mkdir(parents=True)
+        transaction_root.symlink_to(external, target_is_directory=True)
+    elif unsafe_ancestor == "source":
+        external_source_parent = external / "developer"
+        source.parent.rename(external_source_parent)
+        source.parent.symlink_to(external_source_parent, target_is_directory=True)
+    else:
+        (transaction_root / "retired").mkdir(parents=True)
+        (transaction_root / "retired" / "developer").symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(StaleMigrationDecision):
+        migrator.apply(preview.token, {"agent:developer/David": "retire"})
+    assert source.is_file()
+    assert not (external / "David.md").exists()
+    assert not (external / "manifest.json").exists()
+
+
+@pytest.mark.parametrize("retargeted_ancestor", ["source", "retired"])
+def test_migration_revalidates_ancestry_at_the_move_boundary(
+    tmp_path: Path, retargeted_ancestor: str
+) -> None:
+    project = tmp_path / "project"
+    builtin = tmp_path / "builtin"
+    source = _agent(
+        project / ".cafe" / "agents" / "developer" / "David.md",
+        "David",
+        "same",
+    )
+    _agent(builtin / "agents" / "developer" / "David.md", "David", "same")
+    resolver = CatalogResolver(
+        project_root=project,
+        canonical_root=project,
+        global_root=tmp_path / "global",
+        builtin_root=builtin,
+    )
+    external = tmp_path / "external"
+    external.mkdir()
+    changed = False
+
+    def retarget_before_move(boundary: str, _entry_id: str | None) -> None:
+        nonlocal changed
+        if boundary != "before_retire" or changed:
+            return
+        changed = True
+        if retargeted_ancestor == "source":
+            moved = external / "source-parent"
+            source.parent.rename(moved)
+            source.parent.symlink_to(moved, target_is_directory=True)
+        else:
+            destination_parent = (
+                project
+                / ".cafe"
+                / "migrations"
+                / "agent-snapshots"
+                / preview.token[:16]
+                / "retired"
+                / "developer"
+            )
+            destination_parent.rename(external / "retired-parent")
+            destination_parent.symlink_to(external, target_is_directory=True)
+
+    migrator = AgentSnapshotMigrator(
+        resolver,
+        is_tracked=lambda _path: False,
+        failure_injector=retarget_before_move,
+    )
+    preview = migrator.preview()
+
+    with pytest.raises(StaleMigrationDecision):
+        migrator.apply(preview.token, {"agent:developer/David": "retire"})
+    assert source.is_file()
+    assert not (external / "David.md").exists()

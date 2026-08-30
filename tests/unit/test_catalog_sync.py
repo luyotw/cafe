@@ -183,6 +183,30 @@ def test_digest_covers_file_mode_and_symlink_target(tmp_path: Path) -> None:
     assert len({initial, mode_changed, target_changed}) == 3
 
 
+@pytest.mark.parametrize("target_change", ["content", "mode"])
+def test_skill_symlink_target_change_invalidates_publication_approval(
+    tmp_path: Path, target_change: str
+) -> None:
+    service, project, global_root = _service(tmp_path)
+    project_skill = _entry(project / ".cafe", CatalogKind.PHASE, "develop", "project")
+    global_skill = _entry(global_root, CatalogKind.PHASE, "develop", "global")
+    target = project / "skill-assets" / "policy.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("approved\n", encoding="utf-8")
+    (project_skill / "policy.md").symlink_to(target)
+    report = service.compare()
+    before = content_digest(global_skill)
+
+    if target_change == "content":
+        target.write_text("replaced\n", encoding="utf-8")
+    else:
+        target.chmod(0o744)
+
+    with pytest.raises(StaleComparisonError):
+        service.sync(report.token, ["phase:develop"])
+    assert content_digest(global_skill) == before
+
+
 @pytest.mark.parametrize(
     "selected",
     [
@@ -192,9 +216,7 @@ def test_digest_covers_file_mode_and_symlink_target(tmp_path: Path) -> None:
         ["phase:../escape"],
     ],
 )
-def test_selection_validation_fails_before_publication(
-    tmp_path: Path, selected: list[str]
-) -> None:
+def test_selection_validation_fails_before_publication(tmp_path: Path, selected: list[str]) -> None:
     service, project, global_root = _service(tmp_path)
     _entry(project / ".cafe", CatalogKind.PHASE, "develop", "project")
     report = service.compare()
@@ -213,30 +235,24 @@ def test_stale_project_or_global_content_rejects_approved_write(tmp_path: Path) 
 
     with pytest.raises(StaleComparisonError):
         service.sync(report.token, ["playbook:standard"])
-    assert "marker: global" in (
-        global_root / "playbooks" / "standard.yaml"
-    ).read_text(encoding="utf-8")
+    assert "marker: global" in (global_root / "playbooks" / "standard.yaml").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_selected_mixed_catalog_entries_publish_as_one_verified_operation(
     tmp_path: Path,
 ) -> None:
     service, project, global_root = _service(tmp_path)
-    playbook = _entry(
-        project / ".cafe", CatalogKind.PLAYBOOK, "standard", "project"
-    )
+    playbook = _entry(project / ".cafe", CatalogKind.PLAYBOOK, "standard", "project")
     phase = _entry(project / ".cafe", CatalogKind.PHASE, "develop", "project")
     declined = _entry(project / ".cafe", CatalogKind.AGENT, "developer/David", "project")
     report = service.compare()
 
-    result = service.sync(
-        report.token, ["playbook:standard", "phase:develop"]
-    )
+    result = service.sync(report.token, ["playbook:standard", "phase:develop"])
 
     assert set(result.updated) == {"playbook:standard", "phase:develop"}
-    assert content_digest(global_root / "playbooks" / "standard.yaml") == content_digest(
-        playbook
-    )
+    assert content_digest(global_root / "playbooks" / "standard.yaml") == content_digest(playbook)
     assert content_digest(global_root / "skills" / "develop") == content_digest(phase)
     assert not (global_root / "agents" / "developer" / "David.md").exists()
     assert declined.is_file()
@@ -253,9 +269,7 @@ def test_catalog_readers_do_not_observe_an_in_progress_multi_entry_publish(
             first_published.set()
             assert allow_completion.wait(timeout=5)
 
-    service, project, global_root = _service(
-        tmp_path, failure_injector=pause_after_first_publish
-    )
+    service, project, global_root = _service(tmp_path, failure_injector=pause_after_first_publish)
     _entry(project / ".cafe", CatalogKind.PLAYBOOK, "standard", "new-playbook")
     _entry(project / ".cafe", CatalogKind.PHASE, "develop", "new-phase")
     _entry(global_root, CatalogKind.PLAYBOOK, "standard", "old-playbook")
@@ -279,11 +293,9 @@ def test_catalog_readers_do_not_observe_an_in_progress_multi_entry_publish(
     def read_catalogs() -> None:
         entries = reader.entries([CatalogKind.PLAYBOOK, CatalogKind.PHASE])
         observed.extend(
-            (
-                entry.path / "SKILL.md"
-                if entry.kind is CatalogKind.PHASE
-                else entry.path
-            ).read_text(encoding="utf-8")
+            (entry.path / "SKILL.md" if entry.kind is CatalogKind.PHASE else entry.path).read_text(
+                encoding="utf-8"
+            )
             for entry in entries
         )
 
@@ -313,14 +325,10 @@ def test_keyboard_interrupt_after_first_publish_restores_the_complete_selection(
         if boundary == "published" and entry_id == "playbook:standard":
             raise KeyboardInterrupt
 
-    service, project, global_root = _service(
-        tmp_path, failure_injector=interrupt
-    )
+    service, project, global_root = _service(tmp_path, failure_injector=interrupt)
     _entry(project / ".cafe", CatalogKind.PLAYBOOK, "standard", "new-playbook")
     _entry(project / ".cafe", CatalogKind.PHASE, "develop", "new-phase")
-    old_playbook = _entry(
-        global_root, CatalogKind.PLAYBOOK, "standard", "old-playbook"
-    )
+    old_playbook = _entry(global_root, CatalogKind.PLAYBOOK, "standard", "old-playbook")
     old_phase = _entry(global_root, CatalogKind.PHASE, "develop", "old-phase")
     expected = (content_digest(old_playbook), content_digest(old_phase))
     report = service.compare()
@@ -338,9 +346,7 @@ def test_restart_recovers_a_crashed_multi_entry_publish_before_catalog_read(
     service, project, global_root = _service(tmp_path)
     _entry(project / ".cafe", CatalogKind.PLAYBOOK, "standard", "new-playbook")
     _entry(project / ".cafe", CatalogKind.PHASE, "develop", "new-phase")
-    old_playbook = _entry(
-        global_root, CatalogKind.PLAYBOOK, "standard", "old-playbook"
-    )
+    old_playbook = _entry(global_root, CatalogKind.PLAYBOOK, "standard", "old-playbook")
     old_phase = _entry(global_root, CatalogKind.PHASE, "develop", "old-phase")
     expected = (content_digest(old_playbook), content_digest(old_phase))
     report = service.compare()
@@ -479,9 +485,7 @@ def test_catalog_reader_finishes_cleanup_for_committed_transaction_without_backu
     )
     (transaction / "backups").rmdir()
 
-    resolved = _recovery_reader(tmp_path, global_root).resolve(
-        CatalogKind.PLAYBOOK, "standard"
-    )
+    resolved = _recovery_reader(tmp_path, global_root).resolve(CatalogKind.PLAYBOOK, "standard")
 
     assert resolved is not None
     assert resolved.digest == new_digest
@@ -492,9 +496,7 @@ def test_interrupted_committed_cleanup_does_not_block_catalog_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service, project, global_root = _service(tmp_path)
-    project_entry = _entry(
-        project / ".cafe", CatalogKind.PLAYBOOK, "standard", "approved-new"
-    )
+    project_entry = _entry(project / ".cafe", CatalogKind.PLAYBOOK, "standard", "approved-new")
     _entry(global_root, CatalogKind.PLAYBOOK, "standard", "approved-old")
     report = service.compare()
 
@@ -502,17 +504,13 @@ def test_interrupted_committed_cleanup_does_not_block_catalog_reads(
         (path / "transaction.json").unlink()
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(
-        "cafe.catalogs.transactions.shutil.rmtree", interrupt_cleanup
-    )
+    monkeypatch.setattr("cafe.catalogs.transactions.shutil.rmtree", interrupt_cleanup)
 
     with pytest.raises(KeyboardInterrupt):
         service.sync(report.token, ["playbook:standard"])
     monkeypatch.undo()
 
-    resolved = _recovery_reader(tmp_path, global_root).resolve(
-        CatalogKind.PLAYBOOK, "standard"
-    )
+    resolved = _recovery_reader(tmp_path, global_root).resolve(CatalogKind.PLAYBOOK, "standard")
     assert resolved is not None
     assert resolved.digest == content_digest(project_entry)
 
@@ -699,9 +697,7 @@ def test_production_loaders_hold_the_catalog_lock_through_content_reads(
             first_published.set()
             assert allow_completion.wait(timeout=5)
 
-    service, project, global_root = _service(
-        tmp_path, failure_injector=pause_after_first_publish
-    )
+    service, project, global_root = _service(tmp_path, failure_injector=pause_after_first_publish)
 
     def write_playbook(root: Path, role: str) -> None:
         path = root / "playbooks" / "standard.yaml"
@@ -736,9 +732,7 @@ def test_production_loaders_hold_the_catalog_lock_through_content_reads(
         builtin_root=tmp_path / "reader-builtin",
     )
     cached_skills.discover()
-    monkeypatch.setattr(
-        "cafe.utils.config.get_global_cafe_dir", lambda: global_root
-    )
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
     observed: dict[str, object] = {}
     errors: list[BaseException] = []
     publish_errors: list[BaseException] = []
@@ -780,11 +774,16 @@ def test_production_loaders_hold_the_catalog_lock_through_content_reads(
             target=capture,
             args=(
                 "playbook",
-                lambda: PlaybookLoader(
-                    project_root=reader_project,
-                    global_root=global_root,
-                    builtin_root=tmp_path / "reader-builtin",
-                ).load_model("standard").model.steps["develop"].role,
+                lambda: (
+                    PlaybookLoader(
+                        project_root=reader_project,
+                        global_root=global_root,
+                        builtin_root=tmp_path / "reader-builtin",
+                    )
+                    .load_model("standard")
+                    .model.steps["develop"]
+                    .role
+                ),
             ),
         ),
         Thread(

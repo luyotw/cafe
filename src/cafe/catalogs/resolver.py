@@ -123,9 +123,7 @@ def _nearest_project_root(start: Path) -> Path:
     return start.resolve()
 
 
-def discover_project_roots(
-    start: Path, *, git_runner: GitRunner = _run_git
-) -> ProjectRoots:
+def discover_project_roots(start: Path, *, git_runner: GitRunner = _run_git) -> ProjectRoots:
     """Discover the active checkout and canonical repository without writing either."""
     start = Path(start).resolve()
     try:
@@ -151,26 +149,46 @@ def content_digest(path: Path) -> str:
 
     digest = hashlib.sha256()
 
-    def add_node(node: Path, relative: str) -> None:
+    active_nodes: set[tuple[int, int, int]] = set()
+
+    def add_tree(node: Path, relative: str) -> None:
         metadata = node.lstat()
         mode = stat.S_IMODE(metadata.st_mode)
         if node.is_symlink():
             digest.update(f"L\0{relative}\0{mode:o}\0{os.readlink(node)}\0".encode())
-        elif node.is_file():
-            digest.update(f"F\0{relative}\0{mode:o}\0".encode())
-            with node.open("rb") as handle:
-                for chunk in iter(lambda: handle.read(65536), b""):
-                    digest.update(chunk)
-            digest.update(b"\0")
-        elif node.is_dir():
-            digest.update(f"D\0{relative}\0{mode:o}\0".encode())
-        else:
-            raise CatalogValidationError(f"Unsupported catalog node: {node}")
+            if relative == ".":
+                return
+            try:
+                target = node.resolve(strict=True)
+            except (OSError, RuntimeError):
+                digest.update(f"T\0{relative}\0missing\0".encode())
+            else:
+                digest.update(f"T\0{relative}\0".encode())
+                add_tree(target, f"{relative}/<target>")
+            return
 
-    add_node(path, ".")
-    if path.is_dir() and not path.is_symlink():
-        for child in sorted(path.rglob("*"), key=lambda item: item.as_posix()):
-            add_node(child, child.relative_to(path).as_posix())
+        identity = (metadata.st_dev, metadata.st_ino, stat.S_IFMT(metadata.st_mode))
+        if identity in active_nodes:
+            digest.update(f"C\0{relative}\0".encode())
+            return
+        active_nodes.add(identity)
+        try:
+            if node.is_file():
+                digest.update(f"F\0{relative}\0{mode:o}\0".encode())
+                with node.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(65536), b""):
+                        digest.update(chunk)
+                digest.update(b"\0")
+            elif node.is_dir():
+                digest.update(f"D\0{relative}\0{mode:o}\0".encode())
+                for child in sorted(node.iterdir(), key=lambda item: item.name):
+                    add_tree(child, f"{relative}/{child.name}")
+            else:
+                raise CatalogValidationError(f"Unsupported catalog node: {node}")
+        finally:
+            active_nodes.remove(identity)
+
+    add_tree(path, ".")
     return digest.hexdigest()
 
 
@@ -258,9 +276,7 @@ class CatalogResolver:
             ("global", self.global_root / directory, None),
         ]
         if self.canonical_root != self.project_root:
-            roots.append(
-                ("project", self.canonical_root / ".cafe" / directory, "canonical")
-            )
+            roots.append(("project", self.canonical_root / ".cafe" / directory, "canonical"))
         roots.append(("project", self.project_root / ".cafe" / directory, "active"))
         return roots
 
@@ -326,9 +342,7 @@ class CatalogResolver:
         else:
             for role_dir in root.iterdir():
                 if role_dir.is_dir():
-                    yield from (
-                        f"{role_dir.name}/{item.stem}" for item in role_dir.glob("*.md")
-                    )
+                    yield from (f"{role_dir.name}/{item.stem}" for item in role_dir.glob("*.md"))
 
     def _keys_unlocked(self, kind: CatalogKind) -> list[str]:
         keys: set[str] = set()
@@ -349,9 +363,7 @@ class CatalogResolver:
                 for key in self._keys_unlocked(kind)
             ]
 
-    def project_entries(
-        self, kinds: Optional[Iterable[CatalogKind]] = None
-    ) -> list[CatalogEntry]:
+    def project_entries(self, kinds: Optional[Iterable[CatalogKind]] = None) -> list[CatalogEntry]:
         """Return the effective canonical-plus-active project view only."""
         selected = list(kinds or CatalogKind)
         results: list[CatalogEntry] = []

@@ -116,9 +116,7 @@ def test_tree_snapshot_rejects_runtime_directory_replacement(
     script.write_text("#!/bin/sh\necho safe\n", encoding="utf-8")
     attacker = tmp_path / "attacker"
     (attacker / "scripts").mkdir(parents=True)
-    (attacker / "scripts" / "hook.sh").write_text(
-        "#!/bin/sh\necho attacker\n", encoding="utf-8"
-    )
+    (attacker / "scripts" / "hook.sh").write_text("#!/bin/sh\necho attacker\n", encoding="utf-8")
     displaced = root / "displaced"
     native_open = os.open
     swapped = False
@@ -322,4 +320,5 @@ def test_script_launcher_inventory_covers_workflow_process_calls() -> None:
         Visitor().visit(tree)
 
     assert "src/cafe/core/sandbox_execution.py::run" in discovered
+    assert "src/cafe/verification/receipt.py::_run_with_output_log" in discovered
     assert discovered == documented

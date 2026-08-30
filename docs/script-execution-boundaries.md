@@ -74,7 +74,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/utils/github.py::update_pr` | Registered GitHub effect boundary |
 | `src/cafe/verification/receipt.py::_run_git` | Internal fixed Git query |
 | `src/cafe/verification/receipt.py::run_focused_verification` | Explicit verification runner |
-| `src/cafe/verification/receipt.py::run_verification` | Explicit verification runner |
+| `src/cafe/verification/receipt.py::_run_with_output_log` | Explicit verification runner |
 
 ## Migrating custom hooks
 

@@ -20,6 +20,33 @@ from cafe.catalogs.resolver import (
     global_catalog_lock,
     read_valid_agent_definition,
 )
+from cafe.catalogs.transactions import write_json_durable
+
+_MANIFEST_VERSION = 2
+_MANIFEST_OPERATION = "agent_snapshot_migration"
+_MANIFEST_FIELDS = {
+    "version",
+    "operation",
+    "token",
+    "canonical_root",
+    "project_root",
+    "transaction_root",
+    "status",
+    "items",
+    "retired",
+    "preserved",
+}
+_RECORD_FIELDS = {
+    "entry_id",
+    "path",
+    "digest",
+    "fallback_digest",
+    "status",
+    "effect",
+    "action",
+    "retired_path",
+    "state",
+}
 
 
 class StaleMigrationDecision(RuntimeError):
@@ -96,9 +123,7 @@ def _open_file_digest(descriptor: int, mode: int) -> str:
 
 
 @contextmanager
-def _bound_agent_source(
-    path: Path, expected_digest: str
-) -> Iterator[tuple[int, int, int]]:
+def _bound_agent_source(path: Path, expected_digest: str) -> Iterator[tuple[int, int, int]]:
     """Hold and validate the approved filesystem object through retirement."""
     before = path.lstat()
     identity = _filesystem_identity(before)
@@ -162,9 +187,7 @@ class AgentSnapshotMigrator:
 
     def _project_agent_candidates(self) -> Iterator[tuple[str, Path, str]]:
         project_roots = [
-            item
-            for item in self.resolver.catalog_roots(CatalogKind.AGENT)
-            if item[0] == "project"
+            item for item in self.resolver.catalog_roots(CatalogKind.AGENT) if item[0] == "project"
         ]
         keys: set[str] = set()
         for _source, root, _layer in project_roots:
@@ -178,9 +201,7 @@ class AgentSnapshotMigrator:
 
     def _fallback_digest(self, key: str) -> str:
         roots = [
-            item
-            for item in self.resolver.catalog_roots(CatalogKind.AGENT)
-            if item[0] != "project"
+            item for item in self.resolver.catalog_roots(CatalogKind.AGENT) if item[0] != "project"
         ]
         for _source, root, _layer in reversed(roots):
             path = self.resolver.candidate_path(CatalogKind.AGENT, key, root)
@@ -188,10 +209,34 @@ class AgentSnapshotMigrator:
                 return content_digest(path)
         return "missing"
 
-    def _token(self, items: list[MigrationItem]) -> str:
+    def _classification_status(
+        self,
+        key: str,
+        content_path: Path,
+        digest: str,
+        fallback_digest: str,
+        *,
+        tracked_path: Optional[Path] = None,
+    ) -> str:
+        expected_name = key.split("/", 1)[1]
+        if not self._valid_agent(content_path, expected_name):
+            return "invalid"
+        if self.is_tracked(tracked_path or content_path):
+            return "intentional"
+        if fallback_digest != "missing" and digest == fallback_digest:
+            return "generated"
+        return "ambiguous"
+
+    def _token(
+        self,
+        items: list[MigrationItem],
+        *,
+        canonical_root: Optional[Path] = None,
+        project_root: Optional[Path] = None,
+    ) -> str:
         payload = {
-            "canonical_root": str(self.resolver.canonical_root),
-            "project_root": str(self.resolver.project_root),
+            "canonical_root": str(canonical_root or self.resolver.canonical_root),
+            "project_root": str(project_root or self.resolver.project_root),
             "items": [
                 {
                     "entry_id": item.entry_id,
@@ -215,16 +260,8 @@ class AgentSnapshotMigrator:
         confirmed = self._confirmed_preserved()
         for key, path, digest in self._project_agent_candidates():
             entry_id = f"agent:{key}"
-            expected_name = key.split("/", 1)[1]
             fallback_digest = self._fallback_digest(key)
-            if not self._valid_agent(path, expected_name):
-                status = "invalid"
-            elif self.is_tracked(path):
-                status = "intentional"
-            elif fallback_digest != "missing" and digest == fallback_digest:
-                status = "generated"
-            else:
-                status = "ambiguous"
+            status = self._classification_status(key, path, digest, fallback_digest)
             if (entry_id, digest) in confirmed:
                 continue
             items.append(
@@ -241,37 +278,335 @@ class AgentSnapshotMigrator:
 
     def _transaction_root(self, token: str) -> Path:
         return (
-            self.resolver.canonical_root
-            / ".cafe"
-            / "migrations"
-            / "agent-snapshots"
-            / token[:16]
+            self.resolver.canonical_root / ".cafe" / "migrations" / "agent-snapshots" / token[:16]
         )
 
     @staticmethod
-    def _result_from_manifest(manifest: Path) -> MigrationResult:
-        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    def _result_from_manifest(manifest: Path, payload: Mapping[str, object]) -> MigrationResult:
         return MigrationResult(
             retired=tuple(Path(item) for item in payload.get("retired", [])),
             preserved=tuple(Path(item) for item in payload.get("preserved", [])),
             manifest=manifest,
         )
 
-    def _confirmed_preserved(self) -> set[tuple[str, str]]:
-        roots = dict.fromkeys(
+    @staticmethod
+    def _validate_directory_ancestry(root: Path, directory: Path, *, allow_missing: bool) -> None:
+        try:
+            relative = directory.relative_to(root)
+        except ValueError as exc:
+            raise StaleMigrationDecision(
+                "Migration path is outside its authorized project root"
+            ) from exc
+
+        try:
+            root_metadata = root.lstat()
+        except OSError as exc:
+            raise StaleMigrationDecision("Migration project root is unavailable") from exc
+        if not stat.S_ISDIR(root_metadata.st_mode) or root.is_symlink():
+            raise StaleMigrationDecision("Migration project root is unsafe")
+        resolved_root = root.resolve(strict=True)
+
+        current = root
+        missing = False
+        for part in relative.parts:
+            current /= part
+            try:
+                metadata = current.lstat()
+            except FileNotFoundError:
+                missing = True
+                if allow_missing:
+                    continue
+                raise StaleMigrationDecision("Migration directory ancestry is unavailable")
+            except OSError as exc:
+                raise StaleMigrationDecision("Migration directory ancestry is unavailable") from exc
+            if missing or not stat.S_ISDIR(metadata.st_mode) or current.is_symlink():
+                raise StaleMigrationDecision("Migration directory ancestry is unsafe")
+            try:
+                if not current.resolve(strict=True).is_relative_to(resolved_root):
+                    raise StaleMigrationDecision(
+                        "Migration directory ancestry escapes its project root"
+                    )
+            except OSError as exc:
+                raise StaleMigrationDecision("Migration directory ancestry is unavailable") from exc
+
+    @classmethod
+    def _ensure_safe_directory(cls, root: Path, directory: Path) -> None:
+        cls._validate_directory_ancestry(root, directory, allow_missing=True)
+        relative = directory.relative_to(root)
+        current = root
+        for part in relative.parts:
+            current /= part
+            try:
+                current.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
+            cls._validate_directory_ancestry(root, current, allow_missing=False)
+
+    def _source_root(self, entry_id: str, source: Path) -> tuple[Path, str]:
+        if not entry_id.startswith("agent:"):
+            raise StaleMigrationDecision("Migration manifest entry identity is invalid")
+        key = entry_id.removeprefix("agent:")
+        try:
+            self.resolver._validate_key(CatalogKind.AGENT, key)
+        except CatalogValidationError as exc:
+            raise StaleMigrationDecision("Migration manifest entry identity is invalid") from exc
+        for project_root in dict.fromkeys(
             (self.resolver.canonical_root, self.resolver.project_root)
+        ):
+            expected = self.resolver.candidate_path(
+                CatalogKind.AGENT,
+                key,
+                project_root / ".cafe" / "agents",
+            )
+            if source == expected:
+                return project_root, key
+        raise StaleMigrationDecision(
+            "Migration manifest source does not match the active project view"
         )
+
+    def _validate_record_paths(
+        self,
+        records: list[dict[str, object]],
+        transaction_root: Path,
+        *,
+        allow_missing_destinations: bool,
+    ) -> None:
+        for record in records:
+            entry_id = str(record["entry_id"])
+            source = Path(str(record["path"]))
+            source_root, key = self._source_root(entry_id, source)
+            self._validate_directory_ancestry(source_root, source.parent, allow_missing=False)
+            action = str(record["action"])
+            retired_path = record.get("retired_path")
+            if action == "preserve":
+                if retired_path is not None:
+                    raise StaleMigrationDecision(
+                        "Preserved migration record has a retirement target"
+                    )
+                continue
+            role, name = key.split("/", 1)
+            expected = transaction_root / "retired" / role / f"{name}.md"
+            if retired_path is None or Path(str(retired_path)) != expected:
+                raise StaleMigrationDecision(
+                    "Migration retirement target does not match its operation"
+                )
+            self._validate_directory_ancestry(
+                self.resolver.canonical_root,
+                expected.parent,
+                allow_missing=allow_missing_destinations,
+            )
+
+    def _read_manifest(self, manifest: Path) -> dict[str, object]:
+        self._validate_directory_ancestry(
+            self.resolver.canonical_root, manifest.parent, allow_missing=False
+        )
+        try:
+            metadata = manifest.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or manifest.is_symlink():
+                raise StaleMigrationDecision("Migration manifest path is unsafe")
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+        except StaleMigrationDecision:
+            raise
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise StaleMigrationDecision("Migration manifest is unreadable") from exc
+        if not isinstance(payload, dict):
+            raise StaleMigrationDecision("Migration manifest schema is invalid")
+        return payload
+
+    def _validate_manifest(
+        self,
+        manifest: Path,
+        payload: dict[str, object],
+        token: str,
+        decisions: Mapping[str, str],
+        *,
+        share_canonical_preserves: bool = False,
+    ) -> list[dict[str, object]]:
+        transaction_root = self._transaction_root(token)
+        if manifest != transaction_root / "manifest.json" or set(payload) != _MANIFEST_FIELDS:
+            raise StaleMigrationDecision("Migration manifest identity is invalid")
+        if (
+            type(payload["version"]) is not int
+            or payload["version"] != _MANIFEST_VERSION
+            or payload["operation"] != _MANIFEST_OPERATION
+            or payload["token"] != token
+            or payload["canonical_root"] != str(self.resolver.canonical_root)
+            or payload["transaction_root"] != str(transaction_root)
+            or payload["status"] not in {"in_progress", "completed"}
+        ):
+            raise StaleMigrationDecision("Migration manifest identity is stale")
+
+        records = payload["items"]
+        if not isinstance(records, list) or any(
+            not isinstance(record, dict) or set(record) != _RECORD_FIELDS for record in records
+        ):
+            raise StaleMigrationDecision("Migration manifest records are invalid")
+        typed_records = [record for record in records if isinstance(record, dict)]
+        recorded_items: list[MigrationItem] = []
+        recorded_decisions: dict[str, str] = {}
+        seen: set[str] = set()
+        for record in typed_records:
+            entry_id = record["entry_id"]
+            action = record["action"]
+            state = record["state"]
+            if (
+                not isinstance(entry_id, str)
+                or entry_id in seen
+                or action not in {"preserve", "retire"}
+                or state not in {"pending", "completed"}
+                or record["effect"] != "shadows_fallback"
+                or record["status"] not in {"invalid", "intentional", "generated", "ambiguous"}
+            ):
+                raise StaleMigrationDecision("Migration manifest record is stale")
+            digest = record["digest"]
+            fallback_digest = record["fallback_digest"]
+            if not isinstance(digest, str) or not isinstance(fallback_digest, str):
+                raise StaleMigrationDecision("Migration manifest digest is invalid")
+            if not (
+                len(digest) == 64
+                and all(character in "0123456789abcdef" for character in digest)
+                and (
+                    fallback_digest == "missing"
+                    or (
+                        len(fallback_digest) == 64
+                        and all(character in "0123456789abcdef" for character in fallback_digest)
+                    )
+                )
+            ):
+                raise StaleMigrationDecision("Migration manifest digest is invalid")
+            seen.add(entry_id)
+            recorded_decisions[entry_id] = str(action)
+            recorded_items.append(
+                MigrationItem(
+                    entry_id=entry_id,
+                    path=Path(str(record["path"])),
+                    digest=digest,
+                    fallback_digest=fallback_digest,
+                    status=str(record["status"]),
+                    effect="shadows_fallback",
+                )
+            )
+        if [item.entry_id for item in recorded_items] != sorted(seen):
+            raise StaleMigrationDecision("Migration manifest record order is invalid")
+        if recorded_decisions != dict(decisions):
+            raise MigrationDecisionError("Migration decisions do not match the migration journal")
+        recorded_project_root = Path(str(payload["project_root"]))
+        project_view_matches = recorded_project_root == self.resolver.project_root
+        canonical_preserve = (
+            share_canonical_preserves
+            and payload["status"] == "completed"
+            and all(record["action"] == "preserve" for record in typed_records)
+            and all(
+                item.path
+                == self.resolver.candidate_path(
+                    CatalogKind.AGENT,
+                    item.entry_id.removeprefix("agent:"),
+                    self.resolver.canonical_root / ".cafe" / "agents",
+                )
+                for item in recorded_items
+            )
+        )
+        if not project_view_matches and not canonical_preserve:
+            raise StaleMigrationDecision("Migration manifest project view is stale")
+        if self._token(recorded_items, project_root=recorded_project_root) != token:
+            raise StaleMigrationDecision("Migration manifest does not match its preview")
+        self._validate_record_paths(
+            typed_records,
+            transaction_root,
+            allow_missing_destinations=False,
+        )
+
+        retired = payload["retired"]
+        preserved = payload["preserved"]
+        if not isinstance(retired, list) or not isinstance(preserved, list):
+            raise StaleMigrationDecision("Migration manifest result is invalid")
+        expected_retired = [
+            str(record["retired_path"]) for record in typed_records if record["action"] == "retire"
+        ]
+        expected_preserved = [
+            str(record["path"]) for record in typed_records if record["action"] == "preserve"
+        ]
+        if payload["status"] == "completed":
+            if any(record["state"] != "completed" for record in typed_records):
+                raise StaleMigrationDecision("Migration manifest progress is invalid")
+            if retired != expected_retired or preserved != expected_preserved:
+                raise StaleMigrationDecision("Migration manifest result is stale")
+        elif retired or preserved:
+            raise StaleMigrationDecision("In-progress migration contains final results")
+
+        if payload["status"] == "completed":
+            return typed_records
+
+        current_items: list[MigrationItem] = []
+        for item, record in zip(recorded_items, typed_records):
+            source = item.path
+            destination = (
+                Path(str(record["retired_path"])) if record["action"] == "retire" else None
+            )
+            if self._record_path_exists(source):
+                content_path = source
+                status = self._classification_status(
+                    item.entry_id.removeprefix("agent:"),
+                    source,
+                    content_digest(source),
+                    self._fallback_digest(item.entry_id.removeprefix("agent:")),
+                )
+            elif destination is not None and self._record_path_exists(destination):
+                content_path = destination
+                status = item.status
+            else:
+                raise StaleMigrationDecision("Migration manifest content is unavailable")
+            digest = content_digest(content_path)
+            fallback_digest = self._fallback_digest(item.entry_id.removeprefix("agent:"))
+            current_items.append(
+                MigrationItem(
+                    entry_id=item.entry_id,
+                    path=item.path,
+                    digest=digest,
+                    fallback_digest=fallback_digest,
+                    status=status,
+                )
+            )
+        if self._token(current_items, project_root=recorded_project_root) != token:
+            raise StaleMigrationDecision("Migration manifest content is stale")
+        return typed_records
+
+    def _confirmed_preserved(self) -> set[tuple[str, str]]:
+        roots = dict.fromkeys((self.resolver.canonical_root, self.resolver.project_root))
         confirmed: set[tuple[str, str]] = set()
         for project_root in roots:
             root = project_root / ".cafe" / "migrations" / "agent-snapshots"
+            if not root.exists() and not root.is_symlink():
+                continue
+            try:
+                self._validate_directory_ancestry(project_root, root, allow_missing=False)
+            except StaleMigrationDecision:
+                continue
             for manifest in sorted(root.glob("*/manifest.json")):
                 try:
-                    payload = json.loads(manifest.read_text(encoding="utf-8"))
-                except (OSError, UnicodeError, json.JSONDecodeError):
+                    payload = self._read_manifest(manifest)
+                    records = payload.get("items")
+                    if not isinstance(records, list):
+                        continue
+                    decisions = {
+                        str(record.get("entry_id")): str(record.get("action"))
+                        for record in records
+                        if isinstance(record, dict)
+                    }
+                    self._validate_manifest(
+                        manifest,
+                        payload,
+                        str(payload.get("token")),
+                        decisions,
+                        share_canonical_preserves=True,
+                    )
+                except (StaleMigrationDecision, MigrationDecisionError):
                     continue
                 if payload.get("status") != "completed":
                     continue
                 for record in payload.get("items", []):
+                    if isinstance(record, dict):
+                        self._validate_completed_record(record)
                     if isinstance(record, dict) and record.get("action") == "preserve":
                         confirmed.add(
                             (
@@ -299,10 +634,7 @@ class AgentSnapshotMigrator:
         digest = str(record["digest"])
         action = str(record["action"])
         if action == "preserve":
-            if (
-                not self._record_path_exists(source)
-                or content_digest(source) != digest
-            ):
+            if not self._record_path_exists(source) or content_digest(source) != digest:
                 raise StaleMigrationDecision(
                     f"Preserved agent changed after checkpoint: {entry_id}"
                 )
@@ -329,22 +661,10 @@ class AgentSnapshotMigrator:
         entry_id: Optional[str],
     ) -> None:
         self.failure_injector("before_manifest_write", entry_id)
-        temporary = manifest.with_suffix(".tmp")
-        try:
-            with temporary.open("w", encoding="utf-8") as handle:
-                json.dump(payload, handle, ensure_ascii=False, indent=2)
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, manifest)
-            directory = os.open(manifest.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
-        finally:
-            if temporary.exists():
-                temporary.unlink()
+        self._validate_directory_ancestry(
+            self.resolver.canonical_root, manifest.parent, allow_missing=False
+        )
+        write_json_durable(manifest, payload)
 
     def _retire_identity_bound(
         self,
@@ -353,15 +673,28 @@ class AgentSnapshotMigrator:
         digest: str,
         entry_id: str,
     ) -> None:
-        destination.parent.mkdir(parents=True, exist_ok=True)
+        source_root, _key = self._source_root(entry_id, source)
+        self._validate_directory_ancestry(source_root, source.parent, allow_missing=False)
+        self._validate_directory_ancestry(
+            self.resolver.canonical_root,
+            destination.parent,
+            allow_missing=False,
+        )
         with _bound_agent_source(source, digest) as approved_identity:
             self.failure_injector("before_retire", entry_id)
+            self._validate_directory_ancestry(source_root, source.parent, allow_missing=False)
+            self._validate_directory_ancestry(
+                self.resolver.canonical_root,
+                destination.parent,
+                allow_missing=False,
+            )
             if self._record_path_exists(destination):
-                raise StaleMigrationDecision(
-                    f"Retirement destination already exists: {entry_id}"
-                )
-            source_directory = os.open(source.parent, os.O_RDONLY)
-            destination_directory = os.open(destination.parent, os.O_RDONLY)
+                raise StaleMigrationDecision(f"Retirement destination already exists: {entry_id}")
+            directory_flags = (
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            )
+            source_directory = os.open(source.parent, directory_flags)
+            destination_directory = os.open(destination.parent, directory_flags)
             try:
                 os.replace(
                     source.name,
@@ -381,12 +714,10 @@ class AgentSnapshotMigrator:
                 and content_digest(destination) == digest
             )
             if not destination_matches or self._record_path_exists(source):
-                if self._record_path_exists(destination) and not self._record_path_exists(
-                    source
-                ):
+                if self._record_path_exists(destination) and not self._record_path_exists(source):
                     os.replace(destination, source)
-                    source_directory = os.open(source.parent, os.O_RDONLY)
-                    destination_directory = os.open(destination.parent, os.O_RDONLY)
+                    source_directory = os.open(source.parent, directory_flags)
+                    destination_directory = os.open(destination.parent, directory_flags)
                     try:
                         os.fsync(source_directory)
                         os.fsync(destination_directory)
@@ -413,9 +744,7 @@ class AgentSnapshotMigrator:
             if isinstance(record, dict)
         }
         if recorded_decisions != dict(decisions):
-            raise MigrationDecisionError(
-                "Migration decisions do not match the in-progress journal"
-            )
+            raise MigrationDecisionError("Migration decisions do not match the in-progress journal")
 
         for record in records:
             if not isinstance(record, dict):
@@ -428,19 +757,14 @@ class AgentSnapshotMigrator:
             digest = str(record["digest"])
             action = str(record["action"])
             if action == "preserve":
-                if (
-                    not self._record_path_exists(source)
-                    or content_digest(source) != digest
-                ):
+                if not self._record_path_exists(source) or content_digest(source) != digest:
                     raise StaleMigrationDecision(
                         f"Preserved agent changed during migration: {entry_id}"
                     )
             else:
                 destination = Path(str(record["retired_path"]))
                 if source.exists() or source.is_symlink():
-                    self._retire_identity_bound(
-                        source, destination, digest, entry_id
-                    )
+                    self._retire_identity_bound(source, destination, digest, entry_id)
                 elif (
                     not self._record_path_exists(destination)
                     or content_digest(destination) != digest
@@ -469,36 +793,24 @@ class AgentSnapshotMigrator:
             }
         )
         self._write_manifest(manifest, payload, entry_id=None)
-        return self._result_from_manifest(manifest)
+        return self._result_from_manifest(manifest, payload)
 
     def apply(self, token: str, decisions: Mapping[str, str]) -> MigrationResult:
         """Apply explicit digest-bound decisions without deleting any agent content."""
         transaction_root = self._transaction_root(token)
         manifest = transaction_root / "manifest.json"
-        if manifest.is_file():
-            payload = json.loads(manifest.read_text(encoding="utf-8"))
+        self._validate_directory_ancestry(
+            self.resolver.canonical_root,
+            transaction_root,
+            allow_missing=True,
+        )
+        if manifest.exists() or manifest.is_symlink():
+            payload = self._read_manifest(manifest)
+            records = self._validate_manifest(manifest, payload, token, decisions)
             if payload.get("status") == "completed":
-                records = payload.get("items")
-                if not isinstance(records, list):
-                    raise MigrationDecisionError(
-                        "Migration journal is missing item records"
-                    )
-                recorded_decisions = {
-                    str(record.get("entry_id")): str(record.get("action"))
-                    for record in records
-                    if isinstance(record, dict)
-                }
-                if recorded_decisions != dict(decisions):
-                    raise MigrationDecisionError(
-                        "Migration decisions do not match the completed journal"
-                    )
                 for record in records:
-                    if not isinstance(record, dict):
-                        raise MigrationDecisionError(
-                            "Migration journal contains an invalid item"
-                        )
                     self._validate_completed_record(record)
-                return self._result_from_manifest(manifest)
+                return self._result_from_manifest(manifest, payload)
             return self._resume(manifest, payload, decisions)
 
         current = self.preview()
@@ -532,7 +844,6 @@ class AgentSnapshotMigrator:
             )
 
         retirement_root = transaction_root / "retired"
-        retirement_root.mkdir(parents=True, exist_ok=True)
         records = []
         for item in current.items:
             action = decisions[item.entry_id]
@@ -551,9 +862,28 @@ class AgentSnapshotMigrator:
                 }
             )
 
+        self._validate_record_paths(
+            records,
+            transaction_root,
+            allow_missing_destinations=True,
+        )
+        self._ensure_safe_directory(self.resolver.canonical_root, transaction_root)
+        self._ensure_safe_directory(self.resolver.canonical_root, transaction_root / "retired")
+        for record in records:
+            retired_path = record["retired_path"]
+            if retired_path is not None:
+                self._ensure_safe_directory(
+                    self.resolver.canonical_root,
+                    Path(str(retired_path)).parent,
+                )
+
         payload: dict[str, object] = {
-            "version": 1,
+            "version": _MANIFEST_VERSION,
+            "operation": _MANIFEST_OPERATION,
             "token": token,
+            "canonical_root": str(self.resolver.canonical_root),
+            "project_root": str(self.resolver.project_root),
+            "transaction_root": str(transaction_root),
             "status": "in_progress",
             "items": records,
             "retired": [],

@@ -137,43 +137,35 @@ class SkillLoader:
 
     def _discover_unlocked(self, *, strict: bool = False) -> List[SkillCatalogEntry]:
         catalog: Dict[str, SkillCatalogEntry] = {}
-        for source, root in self._skill_roots():
-            if not root.exists():
-                continue
+        for resolved in self.resolver.entries([CatalogKind.PHASE]):
+            skill_dir = resolved.path
+            skill_file = skill_dir / "SKILL.md"
+            metadata = self._read_skill_frontmatter(skill_file)
+            name = str(metadata.get("name", skill_dir.name))
+            description = str(metadata.get("description", "")).strip()
+            warning = None
 
-            for skill_dir in sorted(root.iterdir()):
-                if not skill_dir.is_dir():
-                    continue
-                skill_file = skill_dir / "SKILL.md"
-                if not skill_file.exists():
-                    continue
-
-                metadata = self._read_skill_frontmatter(skill_file)
-                name = str(metadata.get("name", skill_dir.name))
-                description = str(metadata.get("description", "")).strip()
-                warning = None
-
-                if name != skill_dir.name:
-                    mismatch = (
-                        f"Skill frontmatter name '{name}' does not match folder '{skill_dir.name}'"
-                    )
-                    if source == "builtin" or strict:
-                        raise ValueError(mismatch)
-                    warning = mismatch
-                elif source != "builtin" and skill_dir.name in _SKILL_ALIASES:
-                    warning = (
-                        f"Skill '{skill_dir.name}' uses a deprecated builtin name; "
-                        f"rename it to '{_SKILL_ALIASES[skill_dir.name]}' to override the builtin, "
-                        "or pick a distinct name"
-                    )
-
-                catalog[skill_dir.name] = SkillCatalogEntry(
-                    name=skill_dir.name,
-                    description=description,
-                    directory=skill_dir,
-                    source=source,
-                    warning=warning,
+            if name != skill_dir.name:
+                mismatch = (
+                    f"Skill frontmatter name '{name}' does not match folder '{skill_dir.name}'"
                 )
+                if resolved.source == "builtin" or strict:
+                    raise ValueError(mismatch)
+                warning = mismatch
+            elif resolved.source != "builtin" and skill_dir.name in _SKILL_ALIASES:
+                warning = (
+                    f"Skill '{skill_dir.name}' uses a deprecated builtin name; "
+                    f"rename it to '{_SKILL_ALIASES[skill_dir.name]}' to override the builtin, "
+                    "or pick a distinct name"
+                )
+
+            catalog[skill_dir.name] = SkillCatalogEntry(
+                name=skill_dir.name,
+                description=description,
+                directory=skill_dir,
+                source=resolved.source,
+                warning=warning,
+            )
 
         self._catalog = catalog
         return sorted(catalog.values(), key=lambda item: item.name)
