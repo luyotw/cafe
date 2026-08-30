@@ -503,9 +503,13 @@ def test_review_correction_runtime_composes_planless_closure_contract(
     assert "derive a bounded planless baseline" in checklist
     assert "request clarification instead of guessing" in checklist
     assert "production path" in checklist
-    assert "map its complete boundary" in checklist
+    assert "map each complete boundary" in checklist
     assert "closed_fresh" in checklist
     assert "closed_reused" in checklist
+    assert "Correction Impact Set" in checklist
+    assert "do not rerun probes for rows validly carried as `closed_reused`" in checklist
+    assert "Carried Evidence Summary" in checklist
+    assert "`closed_reused` can never pass" not in checklist
     assert "map to plan journeys/invariants" not in checklist
     assert "exact copy only when mandated in the spec" not in checklist
     assert "naming its production path" not in checklist
@@ -614,6 +618,8 @@ def test_review_composed_checklists_stay_within_budget_and_keep_role_guidance(
         else:
             assert "## Correction Review" in checklist
             assert "## First-Pass Behavior Review" not in checklist
+            assert "Correction Impact Set" in checklist
+            assert "do not rerun probes for rows validly carried as `closed_reused`" in checklist
 
     legacy_path = tmp_path / "legacy-pr-todo.md"
     generate_review_checklist(
