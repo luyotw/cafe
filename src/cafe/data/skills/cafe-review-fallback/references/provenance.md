@@ -6,6 +6,6 @@
 - Pin and source digest: `../assets/upstream.json`
 - Maintainer command: `cafe skill update-review-fallback`
 
-CAFE keeps the upstream reviewer text as a pinned snapshot and wraps it with a provider-neutral skill. The wrapper deliberately changes invocation, scope ownership, project-guidance naming, conditional lenses, output authority, and handoff behavior. An upstream snapshot update does not weaken or replace the outer `cafe-review` acceptance and risk contract.
+CAFE records the exact digest of the pinned upstream source, then deterministically strips its frontmatter and normalizes provider-specific project-guidance names into `review_procedure.md`. Only that provider-neutral procedure is installed as executable review guidance. The wrapper deliberately changes invocation, scope ownership, conditional lenses, output authority, and handoff behavior. An upstream update does not weaken or replace the outer `cafe-review` acceptance and risk contract.
 
-Use `cafe skill update-review-fallback` to check the current upstream delta. Add `--apply` only after inspecting that delta. The updater refuses locally modified snapshots and incompatible upstream structures; normal repository review and tests remain required before committing an applied update.
+Use `cafe skill update-review-fallback` to check the normalized procedure delta. Add `--apply` only after inspecting that delta. The updater refuses locally modified procedures and incompatible upstream structures; normal repository review and tests remain required before committing an applied update.

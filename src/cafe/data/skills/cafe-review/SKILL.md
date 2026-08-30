@@ -1,8 +1,10 @@
 ---
 name: cafe-review
 description: "審查程式碼品質與風險"
-version: 1.8.0
+version: 1.9.0
 workflow:
+  runtime_hooks:
+    prepare_input: [ReviewDiscoveryHook]
   execution_profile:
     workload: review
     reasoning: high

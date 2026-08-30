@@ -1,7 +1,7 @@
 ---
 name: write-cafe-phase
 description: Use this skill when creating, updating, or repairing a CAFE workflow phase or its supporting shared/chat skill under src/cafe/data/skills or .cafe/skills. Covers phase scope, SKILL.md structure, placeholders, plan handoffs, and runtime conventions, including declarative defects identified by use-cafe-workflow. Not for generic skill files, playbook YAML, driver skills, or CAFE core/runtime defects.
-version: 2.6.0
+version: 2.7.0
 ---
 
 # Write CAFE Phase Skill
@@ -81,6 +81,7 @@ version: 2.6.0
 - For a plan → execute pair, wire the playbook artifact contract before using `{plan_file}`; a skill body alone does not make the handoff work.
 - For planned output approval, wire `on.confirm_output` in the playbook before claiming the phase participates in the kickoff stop contract; routing text in the skill alone is insufficient.
 - Every phase skill declares a provider-neutral `workflow.execution_profile` with workload, reasoning, risk domains, and fallback strength. Never put a CLI provider, model name, pricing tier, or current availability claim in that profile.
+- Use `workflow.runtime_hooks` only when the phase needs a runtime-registered host capability before or after agent execution. The skill selects a named, explicitly skill-declarable hook; it never embeds provider-specific Python branching or arbitrary hook scripts.
 - If one playbook step selects different skills by iteration, describe each skill honestly. The workflow driver resolves the actual iteration skill and conservatively aggregates all variants at kickoff.
 - Declare every mandatory tool dependency once in `workflow.required_tools`; every playbook step that selects the skill must grant it in `allowed_tools`.
 - Do not duplicate global workflow handoff rules across many phase skills. Put those rules in a shared skill.

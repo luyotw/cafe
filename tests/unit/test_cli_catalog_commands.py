@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from cafe.ui.cli import app
@@ -230,6 +231,47 @@ def test_skill_validate_supports_strict_mode(tmp_path: Path, monkeypatch) -> Non
     assert "warning:" in result.stdout
     assert strict_result.exit_code == 1
     assert "does not match folder" in strict_result.stdout
+
+
+@pytest.mark.parametrize(
+    ("stage", "hook_name", "error"),
+    [
+        ("prepare_input", "TypoDiscoveryHook", "Unknown skill runtime hook"),
+        (
+            "before_execute",
+            "ReviewDiscoveryHook",
+            "cannot be declared by a skill in stage 'before_execute'",
+        ),
+    ],
+)
+def test_skill_validate_strict_rejects_invalid_runtime_hook_binding(
+    tmp_path: Path,
+    monkeypatch,
+    stage: str,
+    hook_name: str,
+    error: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    skill_dir = tmp_path / ".cafe" / "skills" / "cafe-custom-review"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"""---
+name: cafe-custom-review
+description: custom review
+workflow:
+  runtime_hooks:
+    {stage}: [{hook_name}]
+---
+
+Review.
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["skill", "validate", "--strict"])
+
+    assert result.exit_code == 1
+    assert error in " ".join(result.stdout.split())
 
 
 def test_skill_import_copies_multiple_valid_skill_folders(tmp_path: Path, monkeypatch) -> None:

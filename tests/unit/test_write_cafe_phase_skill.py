@@ -28,3 +28,5 @@ def test_write_cafe_phase_repairs_only_its_declarative_layer() -> None:
     assert "provider-neutral execution-requirement metadata" in normalized_spec
     assert "Do not name a CLI provider, model, pricing tier" in normalized_spec
     assert "conservatively aggregate every declared variant" in normalized_spec
+    assert "workflow.runtime_hooks" in skill
+    assert "arbitrary scripts and unrelated privileged hooks remain unavailable" in normalized_spec

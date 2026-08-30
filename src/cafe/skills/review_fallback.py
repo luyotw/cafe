@@ -39,15 +39,21 @@ class ReviewFallbackUpdatePlan:
 
     current_revision: str
     target_revision: str
-    current_sha256: str
-    target_sha256: str
-    snapshot_path: Path
-    target_content: bytes
+    current_source_sha256: str
+    target_source_sha256: str
+    current_procedure_sha256: str
+    target_procedure_sha256: str
+    procedure_path: Path
+    target_source: bytes
+    target_procedure: bytes
     diff: str
 
     @property
     def changed(self) -> bool:
-        return self.current_sha256 != self.target_sha256
+        return (
+            self.current_source_sha256 != self.target_source_sha256
+            or self.current_procedure_sha256 != self.target_procedure_sha256
+        )
 
 
 class ReviewFallbackUpdater:
@@ -56,7 +62,7 @@ class ReviewFallbackUpdater:
     MANIFEST_RELATIVE_PATH = Path("assets/upstream.json")
     LOCK_RELATIVE_PATH = Path("assets/update.lock")
     EXPECTED_LICENSE_PATH = "references/LICENSE.md"
-    EXPECTED_SNAPSHOT_PATH = "references/upstream_code_reviewer.md"
+    EXPECTED_PROCEDURE_PATH = "references/review_procedure.md"
     EXPECTED_REPOSITORY = "anthropics/claude-plugins-official"
     EXPECTED_SOURCE_PATH = "plugins/pr-review-toolkit/agents/code-reviewer.md"
     MAX_DOWNLOAD_BYTES = 512 * 1024
@@ -69,8 +75,9 @@ class ReviewFallbackUpdater:
 
     def check(self, *, target_ref: str = "main") -> ReviewFallbackUpdatePlan:
         """Resolve upstream and return a bounded, non-mutating update plan."""
-        manifest, snapshot_path, current_content = self._verified_local_state()
-        current_sha = self._sha256(current_content)
+        manifest, procedure_path, current_procedure = self._verified_local_state()
+        current_source_sha = self._required_digest(manifest, "source_sha256")
+        current_procedure_sha = self._sha256(current_procedure)
 
         repository = self._safe_repository(self._required_string(manifest, "source_repository"))
         if repository != self.EXPECTED_REPOSITORY:
@@ -83,52 +90,97 @@ class ReviewFallbackUpdater:
             raise ReviewFallbackUpdateError(
                 f"fallback source_path must remain {self.EXPECTED_SOURCE_PATH}"
             )
-        target_content = self._download_source(repository, target_revision, source_path)
-        self._validate_upstream_content(target_content)
-        target_sha = self._sha256(target_content)
-        diff = self._bounded_diff(current_content, target_content, snapshot_path.name)
+        current_revision = self._required_string(manifest, "pinned_revision")
+        current_source = self._download_source(repository, current_revision, source_path)
+        self._validate_upstream_content(current_source)
+        if self._sha256(current_source) != current_source_sha:
+            raise ReviewFallbackUpdateError(
+                "pinned upstream source no longer matches source_sha256"
+            )
+        if self._normalize_upstream_content(current_source) != current_procedure:
+            raise ReviewFallbackUpdateError(
+                "bundled fallback procedure is not reproducible from the pinned source"
+            )
+
+        target_source = (
+            current_source
+            if target_revision == current_revision
+            else self._download_source(repository, target_revision, source_path)
+        )
+        self._validate_upstream_content(target_source)
+        target_source_sha = self._sha256(target_source)
+        target_procedure = self._normalize_upstream_content(target_source)
+        target_procedure_sha = self._sha256(target_procedure)
+        source_diff = self._bounded_diff(
+            current_source,
+            target_source,
+            Path(source_path).name,
+        )
+        procedure_diff = self._bounded_diff(
+            current_procedure,
+            target_procedure,
+            procedure_path.name,
+        )
+        diff_sections: list[str] = []
+        if source_diff:
+            diff_sections.append("Source delta:\n" + source_diff)
+        if procedure_diff:
+            diff_sections.append("Portable procedure delta:\n" + procedure_diff)
         return ReviewFallbackUpdatePlan(
-            current_revision=self._required_string(manifest, "pinned_revision"),
+            current_revision=current_revision,
             target_revision=target_revision,
-            current_sha256=current_sha,
-            target_sha256=target_sha,
-            snapshot_path=snapshot_path,
-            target_content=target_content,
-            diff=diff,
+            current_source_sha256=current_source_sha,
+            target_source_sha256=target_source_sha,
+            current_procedure_sha256=current_procedure_sha,
+            target_procedure_sha256=target_procedure_sha,
+            procedure_path=procedure_path,
+            target_source=target_source,
+            target_procedure=target_procedure,
+            diff="\n\n".join(diff_sections),
         )
 
     def apply(self, plan: ReviewFallbackUpdatePlan) -> None:
         """Apply a checked plan after verifying neither source file has drifted."""
         with self._exclusive_update_lock():
-            manifest, snapshot_path, current_content = self._verified_local_state()
+            manifest, procedure_path, current_procedure = self._verified_local_state()
             if self._required_string(manifest, "pinned_revision") != plan.current_revision:
                 raise ReviewFallbackUpdateError("fallback manifest changed after the update check")
-            if snapshot_path != plan.snapshot_path:
+            if self._required_digest(manifest, "source_sha256") != plan.current_source_sha256:
                 raise ReviewFallbackUpdateError(
-                    "fallback snapshot target changed after the update check"
+                    "fallback source provenance changed after the update check"
                 )
-            if self._sha256(current_content) != plan.current_sha256:
-                raise ReviewFallbackUpdateError("fallback snapshot changed after the update check")
-            if self._sha256(plan.target_content) != plan.target_sha256:
-                raise ReviewFallbackUpdateError("fallback update plan content digest is invalid")
+            if procedure_path != plan.procedure_path:
+                raise ReviewFallbackUpdateError(
+                    "fallback procedure target changed after the update check"
+                )
+            if self._sha256(current_procedure) != plan.current_procedure_sha256:
+                raise ReviewFallbackUpdateError("fallback procedure changed after the update check")
+            if self._sha256(plan.target_procedure) != plan.target_procedure_sha256:
+                raise ReviewFallbackUpdateError("fallback update plan procedure digest is invalid")
             self._validate_revision(plan.target_revision, field="target revision")
-            self._validate_upstream_content(plan.target_content)
+            if self._sha256(plan.target_source) != plan.target_source_sha256:
+                raise ReviewFallbackUpdateError("fallback update plan source digest is invalid")
+            self._validate_upstream_content(plan.target_source)
+            if self._normalize_upstream_content(plan.target_source) != plan.target_procedure:
+                raise ReviewFallbackUpdateError("fallback update plan procedure is not reproducible")
+            self._validate_procedure_content(plan.target_procedure)
 
             next_manifest = dict(manifest)
             next_manifest["pinned_revision"] = plan.target_revision
-            next_manifest["source_sha256"] = plan.target_sha256
-            self._atomic_write(snapshot_path, plan.target_content)
+            next_manifest["source_sha256"] = plan.target_source_sha256
+            next_manifest["procedure_sha256"] = plan.target_procedure_sha256
+            self._atomic_write(procedure_path, plan.target_procedure)
             try:
                 self._atomic_write(
                     self.skill_dir / self.MANIFEST_RELATIVE_PATH,
                     (json.dumps(next_manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
                 )
             except Exception:
-                self._atomic_write(snapshot_path, current_content)
+                self._atomic_write(procedure_path, current_procedure)
                 raise
 
     def verify_local(self) -> None:
-        """Fail closed unless the bundled snapshot matches its pinned provenance."""
+        """Fail closed unless the portable procedure matches its pinned provenance."""
         self._verified_local_state()
 
     def _verified_local_state(self) -> tuple[dict[str, object], Path, bytes]:
@@ -147,16 +199,17 @@ class ReviewFallbackUpdater:
             self._required_string(manifest, "pinned_revision"),
             field="pinned_revision",
         )
-        snapshot_path = self._snapshot_path(manifest)
-        current_content = self._read_snapshot(snapshot_path)
-        current_sha = self._sha256(current_content)
-        expected_sha = self._required_string(manifest, "source_sha256")
+        self._required_digest(manifest, "source_sha256")
+        procedure_path = self._procedure_path(manifest)
+        current_procedure = self._read_procedure(procedure_path)
+        current_sha = self._sha256(current_procedure)
+        expected_sha = self._required_digest(manifest, "procedure_sha256")
         if current_sha != expected_sha:
             raise ReviewFallbackUpdateError(
-                "bundled fallback snapshot has local drift; reconcile or restore it before update"
+                "bundled fallback procedure has local drift; reconcile or restore it before update"
             )
-        self._validate_upstream_content(current_content)
-        return manifest, snapshot_path, current_content
+        self._validate_procedure_content(current_procedure)
+        return manifest, procedure_path, current_procedure
 
     @contextmanager
     def _exclusive_update_lock(self) -> Iterator[None]:
@@ -203,8 +256,8 @@ class ReviewFallbackUpdater:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ReviewFallbackUpdateError(f"invalid fallback manifest: {exc}") from exc
-        if not isinstance(raw, dict) or raw.get("schema_version") != 1:
-            raise ReviewFallbackUpdateError("fallback manifest must use schema_version 1")
+        if not isinstance(raw, dict) or raw.get("schema_version") != 2:
+            raise ReviewFallbackUpdateError("fallback manifest must use schema_version 2")
         if raw.get("license") != "Apache-2.0":
             raise ReviewFallbackUpdateError("fallback manifest must retain Apache-2.0 provenance")
         if self._required_string(raw, "license_path") != self.EXPECTED_LICENSE_PATH:
@@ -219,14 +272,14 @@ class ReviewFallbackUpdater:
             raise ReviewFallbackUpdateError("fallback Apache-2.0 license copy is missing")
         return raw
 
-    def _snapshot_path(self, manifest: Mapping[str, object]) -> Path:
-        if self._required_string(manifest, "snapshot_path") != self.EXPECTED_SNAPSHOT_PATH:
+    def _procedure_path(self, manifest: Mapping[str, object]) -> Path:
+        if self._required_string(manifest, "procedure_path") != self.EXPECTED_PROCEDURE_PATH:
             raise ReviewFallbackUpdateError(
-                f"fallback snapshot_path must remain {self.EXPECTED_SNAPSHOT_PATH}"
+                f"fallback procedure_path must remain {self.EXPECTED_PROCEDURE_PATH}"
             )
         return self._safe_skill_relative_path(
-            self._required_string(manifest, "snapshot_path"),
-            field="snapshot_path",
+            self._required_string(manifest, "procedure_path"),
+            field="procedure_path",
         )
 
     def _safe_skill_relative_path(self, value: str, *, field: str) -> Path:
@@ -270,11 +323,22 @@ class ReviewFallbackUpdater:
         return value.strip()
 
     @staticmethod
-    def _read_snapshot(path: Path) -> bytes:
+    def _validate_digest(value: str, *, field: str) -> None:
+        if re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise ReviewFallbackUpdateError(f"{field} must be a lowercase SHA-256 digest")
+
+    @classmethod
+    def _required_digest(cls, manifest: Mapping[str, object], field: str) -> str:
+        value = cls._required_string(manifest, field)
+        cls._validate_digest(value, field=field)
+        return value
+
+    @staticmethod
+    def _read_procedure(path: Path) -> bytes:
         try:
             return path.read_bytes()
         except OSError as exc:
-            raise ReviewFallbackUpdateError(f"cannot read fallback snapshot: {exc}") from exc
+            raise ReviewFallbackUpdateError(f"cannot read fallback procedure: {exc}") from exc
 
     def _resolve_revision(self, repository: str, target_ref: str) -> str:
         normalized_ref = target_ref.strip()
@@ -328,6 +392,71 @@ class ReviewFallbackUpdater:
             raise ReviewFallbackUpdateError(
                 "upstream review contract changed; manual adapter review is required: "
                 + ", ".join(missing)
+            )
+
+    @classmethod
+    def _normalize_upstream_content(cls, content: bytes) -> bytes:
+        """Strip provider metadata and normalize project-guidance terminology."""
+        cls._validate_upstream_content(content)
+        text = content.decode("utf-8")
+        if not text.startswith("---\n"):
+            raise ReviewFallbackUpdateError(
+                "upstream review frontmatter changed; manual adapter review is required"
+            )
+        frontmatter_end = text.find("\n---\n", 4)
+        if frontmatter_end < 0:
+            raise ReviewFallbackUpdateError(
+                "upstream review frontmatter changed; manual adapter review is required"
+            )
+        body = text[frontmatter_end + len("\n---\n") :].lstrip("\n")
+        replacements = {
+            "project guidelines in CLAUDE.md": (
+                "the repository's applicable project-guidance files"
+            ),
+            "explicit project rules (typically in CLAUDE.md or equivalent)": (
+                "explicit rules in the repository's applicable project-guidance files"
+            ),
+            "not explicitly in CLAUDE.md": "not explicitly required by project guidance",
+            "explicit CLAUDE.md violation": "explicit project-guidance violation",
+            "Specific CLAUDE.md rule": "Specific project-guidance rule",
+        }
+        for before, after in replacements.items():
+            body = body.replace(before, after)
+        normalized = (
+            "# Portable Code Review Procedure\n\n"
+            "> Adapted from the pinned upstream reviewer. Provider and model metadata are "
+            "intentionally excluded.\n\n"
+            + body.rstrip()
+            + "\n"
+        ).encode("utf-8")
+        cls._validate_procedure_content(normalized)
+        return normalized
+
+    @staticmethod
+    def _validate_procedure_content(content: bytes) -> None:
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ReviewFallbackUpdateError("fallback procedure must be UTF-8") from exc
+        required_markers = (
+            "# Portable Code Review Procedure",
+            "## Review Scope",
+            "## Core Review Responsibilities",
+            "## Issue Confidence Scoring",
+            "Only report issues with confidence ≥ 80",
+            "## Output Format",
+        )
+        missing = [marker for marker in required_markers if marker not in text]
+        if missing:
+            raise ReviewFallbackUpdateError(
+                "portable review procedure is incomplete: " + ", ".join(missing)
+            )
+        forbidden = ("CLAUDE.md", "model: opus", "color: green", "name: code-reviewer")
+        present = [marker for marker in forbidden if marker in text]
+        if present:
+            raise ReviewFallbackUpdateError(
+                "portable review procedure contains provider-specific metadata: "
+                + ", ".join(present)
             )
 
     @classmethod

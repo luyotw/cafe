@@ -18,6 +18,7 @@ from cafe.core.blackboard import (
     HandoffOwner,
 )
 from cafe.core.hooks import HookResult
+from cafe.core.hooks.review import ReviewDiscoveryHook
 from cafe.core.resume_user_input import CONTINUE_USER_INPUT
 from cafe.core.session_continuation import (
     SessionContinuation,
@@ -27,6 +28,7 @@ from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import AgentCLI, AgentConfig, CliEntry, TokenUsage
 from cafe.phases.generic_phase import GenericPhase, GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
+from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.skills.review_engines import NativeReviewTelemetry, ReviewEngineContext
@@ -155,6 +157,11 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
             workflow = (
                 "workflow:\n  prompt_inputs:\n"
                 "    - artifacts: [code]\n      placeholder: develop_file\n      required: false\n"
+            )
+        if name == "cafe-review":
+            workflow = (
+                "workflow:\n  runtime_hooks:\n"
+                "    prepare_input: [ReviewDiscoveryHook]\n"
             )
         if name == "synthesis":
             workflow = (
@@ -309,6 +316,66 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert reloaded.handoff_contract.intent == HandoffIntent.WORKFLOW_COMPLETE
     assert reloaded.handoff_contract.status_code == "confirmed"
     assert reloaded.handoff_contract.source == "workflow.status_transition_adapter"
+
+
+def test_backup_cli_skill_sync_refuses_external_symlink(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    external_root = tmp_path / "external-claude"
+    external_skills = external_root / "skills"
+    external_skills.mkdir(parents=True)
+    sentinel = external_skills / "sentinel.txt"
+    sentinel.write_text("protected\n", encoding="utf-8")
+    (tmp_path / ".claude").symlink_to(external_root)
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-backup-symlink"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+
+    class BackupManager(FakeAgentManager):
+        def get_execution_config(self, agent_name, phase_name=None, continuation=None):
+            return AgentConfig(
+                name=agent_name,
+                cli=AgentCLI.CODEX,
+                model="primary-model",
+                clis=[
+                    CliEntry(cli=AgentCLI.CODEX, model="primary-model"),
+                    CliEntry(cli=AgentCLI.CLAUDE, model="backup-model"),
+                ],
+                backup_clis=[AgentCLI.CLAUDE],
+            )
+
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-backup-symlink",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=BackupManager("confirmed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+
+    with pytest.raises(SkillDiscoveryError, match="Refusing to traverse"):
+        executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    assert sentinel.read_text(encoding="utf-8") == "protected\n"
+    assert not (external_skills / NativeSkillBridge.MANAGED_SKILLS_MANIFEST).exists()
+    assert not (external_skills / "cafe-spec").exists()
 
 
 def test_generic_step_passes_declared_read_only_guard_to_agent_manager(
@@ -1257,6 +1324,12 @@ def test_review_step_uses_effective_sticky_cli_and_exact_builtin_fallback(
                 ),
             )
 
+    monkeypatch.setattr(
+        ReviewDiscoveryHook,
+        "service_factory",
+        FailedNativeReviewService,
+    )
+
     agent_manager = StickyProviderManager("confirmed")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
@@ -1266,7 +1339,6 @@ def test_review_step_uses_effective_sticky_cli_and_exact_builtin_fallback(
         agent_manager=agent_manager,
         git_ops=FakeGitOperations(),
         role_agent_map={"reviewer": "Richard"},
-        review_engine_service=FailedNativeReviewService(),  # type: ignore[arg-type]
     )
 
     result = executor.execute_step("review", playbook["steps"]["review"], state)
@@ -1315,6 +1387,7 @@ def test_review_step_uses_effective_sticky_cli_and_exact_builtin_fallback(
     assert "Phase skill: select the invocation for the CLI executing this prompt" in prompt
     assert "/cafe-review for copilot" in prompt
     assert "$cafe-review for codex" in prompt
+    assert "Runtime hook instructions:" in prompt
     assert "Review discovery engine:" in prompt
     assert "- id: anthropic-pr-review-toolkit" in prompt
     assert "/cafe-review-fallback for copilot" in prompt

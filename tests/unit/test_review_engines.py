@@ -9,7 +9,6 @@ from cafe.core.types import AgentCLI
 from cafe.skills.review_engines import (
     ReviewEngineService,
     native_review_capability_rows,
-    review_engine_prompt_context,
 )
 
 
@@ -179,24 +178,6 @@ def test_cursor_uses_fallback_until_native_skill_has_a_completion_receipt(tmp_pa
     assert result.engine_id == "anthropic-pr-review-toolkit"
     assert "no compatible native review capability" in (result.fallback_reason or "")
     assert "/cafe-review-fallback" in result.guidance
-
-
-def test_review_engine_prompt_context_preserves_selection_reason(tmp_path: Path) -> None:
-    service = ReviewEngineService(runner=RecordingRunner([]), home_dir=tmp_path / "home")
-    selection = service.prepare(
-        cli=AgentCLI.COPILOT,
-        project_root=tmp_path,
-        base_branch="main",
-        model=None,
-        evidence_file=tmp_path / "review_engine.md",
-        fallback_invocation="/cafe-review-fallback",
-    )
-
-    context = review_engine_prompt_context(selection)
-
-    assert context["review_engine_id"] == "anthropic-pr-review-toolkit"
-    assert context["review_engine_mode"] == "fallback_skill"
-    assert "copilot" in context["review_engine_fallback_reason"]
 
 
 def test_native_review_capability_registry_is_explicit_and_bounded() -> None:

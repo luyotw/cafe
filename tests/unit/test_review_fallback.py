@@ -29,18 +29,20 @@ format
 
 def _write_skill(tmp_path: Path, *, content: bytes = REQUIRED_SOURCE) -> Path:
     skill_dir = tmp_path / "cafe-review-fallback"
-    snapshot = skill_dir / "references/upstream_code_reviewer.md"
+    procedure = skill_dir / "references/review_procedure.md"
     license_file = skill_dir / "references/LICENSE.md"
-    snapshot.parent.mkdir(parents=True)
+    procedure.parent.mkdir(parents=True)
     license_file.write_text("Apache License 2.0\n", encoding="utf-8")
-    snapshot.write_bytes(content)
+    normalized = ReviewFallbackUpdater._normalize_upstream_content(content)
+    procedure.write_bytes(normalized)
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "source_repository": "anthropics/claude-plugins-official",
         "source_path": "plugins/pr-review-toolkit/agents/code-reviewer.md",
         "pinned_revision": "a" * 40,
         "source_sha256": hashlib.sha256(content).hexdigest(),
-        "snapshot_path": "references/upstream_code_reviewer.md",
+        "procedure_path": "references/review_procedure.md",
+        "procedure_sha256": hashlib.sha256(normalized).hexdigest(),
         "license": "Apache-2.0",
         "license_path": "references/LICENSE.md",
     }
@@ -54,26 +56,36 @@ def _write_skill(tmp_path: Path, *, content: bytes = REQUIRED_SOURCE) -> Path:
     return skill_dir
 
 
-def _fetcher(target: bytes, *, revision: str = "b" * 40):
+def _fetcher(
+    target: bytes,
+    *,
+    revision: str = "b" * 40,
+    current: bytes = REQUIRED_SOURCE,
+):
     def fetch(url: str) -> bytes:
         if "api.github.com" in url:
             return json.dumps({"sha": revision}).encode("utf-8")
+        if f"/{'a' * 40}/" in url:
+            return current
         return target
 
     return fetch
 
 
-def test_bundled_fallback_snapshot_matches_pin_and_license() -> None:
+def test_bundled_fallback_procedure_matches_pin_and_license() -> None:
     project_root = Path(__file__).resolve().parents[2]
     skill_dir = project_root / "src/cafe/data/skills/cafe-review-fallback"
     manifest = json.loads((skill_dir / "assets/upstream.json").read_text(encoding="utf-8"))
-    snapshot = (skill_dir / manifest["snapshot_path"]).read_bytes()
+    procedure = (skill_dir / manifest["procedure_path"]).read_bytes()
 
     assert manifest["license"] == "Apache-2.0"
     assert len(manifest["pinned_revision"]) == 40
-    assert hashlib.sha256(snapshot).hexdigest() == manifest["source_sha256"]
+    assert len(manifest["source_sha256"]) == 64
+    assert hashlib.sha256(procedure).hexdigest() == manifest["procedure_sha256"]
     assert (skill_dir / manifest["license_path"]).is_file()
-    assert b"Only report issues with confidence \xe2\x89\xa5 80" in snapshot
+    assert b"Only report issues with confidence \xe2\x89\xa5 80" in procedure
+    assert b"model: opus" not in procedure
+    assert b"CLAUDE.md" not in procedure
 
 
 def test_update_check_is_read_only_and_returns_bounded_diff(tmp_path: Path) -> None:
@@ -86,11 +98,14 @@ def test_update_check_is_read_only_and_returns_bounded_diff(tmp_path: Path) -> N
     assert plan.changed
     assert plan.current_revision == "a" * 40
     assert plan.target_revision == "b" * 40
+    assert "Source delta:" in plan.diff
+    assert "Portable procedure delta:" in plan.diff
     assert "complete scope" in plan.diff
-    assert (skill_dir / "references/upstream_code_reviewer.md").read_bytes() == REQUIRED_SOURCE
+    expected = ReviewFallbackUpdater._normalize_upstream_content(REQUIRED_SOURCE)
+    assert (skill_dir / "references/review_procedure.md").read_bytes() == expected
 
 
-def test_apply_revalidates_drift_and_updates_snapshot_and_pin(tmp_path: Path) -> None:
+def test_apply_revalidates_drift_and_updates_procedure_and_pin(tmp_path: Path) -> None:
     skill_dir = _write_skill(tmp_path)
     target = REQUIRED_SOURCE.replace(b"scope\n", b"complete scope\n")
     updater = ReviewFallbackUpdater(skill_dir, fetcher=_fetcher(target))
@@ -99,14 +114,16 @@ def test_apply_revalidates_drift_and_updates_snapshot_and_pin(tmp_path: Path) ->
     updater.apply(plan)
 
     manifest = json.loads((skill_dir / "assets/upstream.json").read_text(encoding="utf-8"))
-    assert (skill_dir / "references/upstream_code_reviewer.md").read_bytes() == target
+    procedure = ReviewFallbackUpdater._normalize_upstream_content(target)
+    assert (skill_dir / "references/review_procedure.md").read_bytes() == procedure
     assert manifest["pinned_revision"] == "b" * 40
     assert manifest["source_sha256"] == hashlib.sha256(target).hexdigest()
+    assert manifest["procedure_sha256"] == hashlib.sha256(procedure).hexdigest()
 
 
-def test_update_rejects_local_snapshot_drift(tmp_path: Path) -> None:
+def test_update_rejects_local_procedure_drift(tmp_path: Path) -> None:
     skill_dir = _write_skill(tmp_path)
-    (skill_dir / "references/upstream_code_reviewer.md").write_text(
+    (skill_dir / "references/review_procedure.md").write_text(
         "locally modified\n",
         encoding="utf-8",
     )
@@ -125,6 +142,32 @@ def test_update_rejects_incompatible_upstream_contract(tmp_path: Path) -> None:
 
     with pytest.raises(ReviewFallbackUpdateError, match="manual adapter review"):
         updater.check()
+
+
+def test_update_rejects_unverifiable_current_pin(tmp_path: Path) -> None:
+    skill_dir = _write_skill(tmp_path)
+    changed_current = REQUIRED_SOURCE.replace(b"scope\n", b"drifted scope\n")
+    updater = ReviewFallbackUpdater(
+        skill_dir,
+        fetcher=_fetcher(REQUIRED_SOURCE, current=changed_current),
+    )
+
+    with pytest.raises(ReviewFallbackUpdateError, match="source_sha256"):
+        updater.check()
+
+
+def test_source_only_update_reports_raw_delta_without_procedure_delta(tmp_path: Path) -> None:
+    skill_dir = _write_skill(tmp_path)
+    target = REQUIRED_SOURCE.replace(b"name: code-reviewer", b"name: portable-reviewer")
+    updater = ReviewFallbackUpdater(skill_dir, fetcher=_fetcher(target))
+
+    plan = updater.check()
+
+    assert plan.changed
+    assert "Source delta:" in plan.diff
+    assert "name: portable-reviewer" in plan.diff
+    assert "Portable procedure delta:" not in plan.diff
+    assert plan.current_procedure_sha256 == plan.target_procedure_sha256
 
 
 def test_update_rejects_non_github_repository_manifest(tmp_path: Path) -> None:
@@ -147,7 +190,7 @@ def test_concurrent_apply_serializes_and_rejects_stale_plan(tmp_path: Path) -> N
     second = ReviewFallbackUpdater(skill_dir, fetcher=_fetcher(target_two, revision="c" * 40))
     first_plan = first.check()
     second_plan = second.check()
-    snapshot_written = threading.Event()
+    procedure_written = threading.Event()
     release_first = threading.Event()
     second_finished = threading.Event()
     errors: list[Exception] = []
@@ -155,8 +198,8 @@ def test_concurrent_apply_serializes_and_rejects_stale_plan(tmp_path: Path) -> N
 
     def delayed_atomic_write(path: Path, content: bytes) -> None:
         original_atomic_write(path, content)
-        if path == first_plan.snapshot_path and content == first_plan.target_content:
-            snapshot_written.set()
+        if path == first_plan.procedure_path and content == first_plan.target_procedure:
+            procedure_written.set()
             assert release_first.wait(timeout=2)
 
     first._atomic_write = delayed_atomic_write  # type: ignore[method-assign]
@@ -175,7 +218,7 @@ def test_concurrent_apply_serializes_and_rejects_stale_plan(tmp_path: Path) -> N
     first_thread = threading.Thread(target=apply_first)
     second_thread = threading.Thread(target=apply_second)
     first_thread.start()
-    assert snapshot_written.wait(timeout=2)
+    assert procedure_written.wait(timeout=2)
     second_thread.start()
     assert not second_finished.wait(timeout=0.1)
     release_first.set()

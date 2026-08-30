@@ -9,9 +9,11 @@ import typer
 import yaml
 from rich.console import Console
 
+from cafe.core.hooks import BUILTIN_HOOKS, resolve_skill_hook_class
 from cafe.core.playbook import confirmation_gate_steps
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook, format_dot, format_text_report
+from cafe.skills.contracts import RUNTIME_HOOK_STAGES
 from cafe.skills.global_installer import GlobalSkillSyncSummary, sync_global_skills
 from cafe.skills.importer import SkillImportSummary, import_skills, preview_importable_skills
 from cafe.skills.loader import SkillLoader, canonical_skill_name
@@ -220,7 +222,18 @@ def skill_validate(
 ) -> None:
     """Validate all discovered skills."""
     try:
-        items = _build_skill_loader().discover(strict=strict)
+        loader = _build_skill_loader()
+        items = loader.discover(strict=strict)
+        if strict:
+            for item in items:
+                contract = loader.get_workflow_contract(item.name)
+                for stage in RUNTIME_HOOK_STAGES:
+                    for hook_name in getattr(contract.runtime_hooks, stage):
+                        resolve_skill_hook_class(
+                            BUILTIN_HOOKS,
+                            name=hook_name,
+                            stage=stage,
+                        )
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
@@ -392,11 +405,11 @@ def skill_update_review_fallback(
         if apply_update:
             updater.apply(plan)
             console.print(
-                "[green]Applied pinned fallback snapshot.[/green] "
+                "[green]Applied pinned fallback procedure.[/green] "
                 "Review the wrapper contract and run focused tests before committing."
             )
         else:
-            console.print("[dim]Read-only check; use --apply to update the pinned snapshot.[/dim]")
+            console.print("[dim]Read-only check; use --apply to update the pinned procedure.[/dim]")
     except ReviewFallbackUpdateError as exc:
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(1)

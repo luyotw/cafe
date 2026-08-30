@@ -25,7 +25,7 @@ from cafe.core.execution_boundary import (
     ScriptLaunchRequest,
     TrustSource,
 )
-from cafe.core.hooks import BUILTIN_HOOKS, HookResult
+from cafe.core.hooks import BUILTIN_HOOKS, HookResult, resolve_skill_hook_class
 from cafe.core.hooks.script_schema import validate_script_args_schema
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.sandbox_execution import MIGRATION_GUIDANCE, SandboxExecutor
@@ -266,16 +266,11 @@ class GenericPhase:
                     "This is a derived manifest, not a new source of truth. Read previous_output and re-verify prior findings or requested changes item by item before completing this step.",
                 ]
             )
-        if context and context.get("review_engine_guidance"):
+        if context and context.get("runtime_hook_instructions"):
             runtime_context.extend(
                 [
-                    "Review discovery engine:",
-                    f"- id: {context.get('review_engine_id', 'unknown')}",
-                    f"- mode: {context.get('review_engine_mode', 'unknown')}",
-                    context["review_engine_guidance"],
-                    "The discovery engine supplies candidates only. Complete the phase skill's "
-                    "full acceptance, risk, ledger, and handoff procedure even when discovery "
-                    "already found a blocker.",
+                    "Runtime hook instructions:",
+                    context["runtime_hook_instructions"],
                 ]
             )
         if context and context.get("user_input"):
@@ -353,6 +348,7 @@ class GenericPhase:
             **hook_kwargs,
         )
         runtime_context.update(before.context_updates)
+        hook_prompt_instructions = list(before.prompt_instructions)
         events.extend(before.events)
         artifact_ready = artifact_ready and before.artifact_ready
         if not before.continue_pipeline:
@@ -374,6 +370,11 @@ class GenericPhase:
             **hook_kwargs,
         )
         runtime_context.update(prepared.context_updates)
+        hook_prompt_instructions.extend(prepared.prompt_instructions)
+        if hook_prompt_instructions:
+            runtime_context["runtime_hook_instructions"] = "\n\n".join(
+                hook_prompt_instructions
+            )
         events.extend(prepared.events)
         artifact_ready = artifact_ready and prepared.artifact_ready
         if not prepared.continue_pipeline:
@@ -486,8 +487,18 @@ class GenericPhase:
         **kwargs: Any,
     ) -> HookResult:
         declared = kwargs["step_def"].get("hooks", {}).get(stage, [])
+        contract = self.skill_loader.get_workflow_contract(str(kwargs["skill_name"]))
+        skill_declared = list(getattr(contract.runtime_hooks, stage))
+        skill_hook_names = set(skill_declared)
+        declared = [
+            entry
+            for entry in declared
+            if not (isinstance(entry, str) and entry in skill_hook_names)
+        ]
         defaults = [
-            name for name in self.DEFAULT_STAGE_HOOKS.get(stage, ()) if name not in declared
+            name
+            for name in self.DEFAULT_STAGE_HOOKS.get(stage, ())
+            if name not in declared and name not in skill_hook_names
         ]
         trusted_hooks: list[object] = []
         trusted_artifact = {
@@ -503,10 +514,15 @@ class GenericPhase:
             and isinstance(getattr(kwargs.get("phase"), "issue_dir", None), Path)
         ):
             trusted_hooks.append(self._CONFIRMED_ARTIFACT_SYNC_HOOK)
-        hook_entries = [*trusted_hooks, *defaults, *declared]
+        hook_entries = [
+            *(("runtime", hook) for hook in trusted_hooks),
+            *(("runtime", hook) for hook in defaults),
+            *(("playbook", hook) for hook in declared),
+            *(("skill", hook) for hook in skill_declared),
+        ]
         aggregate = HookResult()
 
-        for hook_entry in hook_entries:
+        for hook_source, hook_entry in hook_entries:
             result: HookResult
             if hook_entry is self._CONFIRMED_ARTIFACT_SYNC_HOOK:
                 result = self._run_confirmed_artifact_sync_hook(
@@ -518,7 +534,15 @@ class GenericPhase:
                     hook_kwargs=kwargs,
                 )
             elif isinstance(hook_entry, str):
-                hook_cls = self.hook_registry.get(str(hook_entry))
+                hook_cls = (
+                    resolve_skill_hook_class(
+                        self.hook_registry,
+                        name=hook_entry,
+                        stage=stage,
+                    )
+                    if hook_source == "skill"
+                    else self.hook_registry.get(hook_entry)
+                )
                 if hook_cls is None:
                     raise ValueError(f"Unknown hook '{hook_entry}' in stage '{stage}'")
                 hook = hook_cls()
@@ -539,6 +563,7 @@ class GenericPhase:
                 )
 
             aggregate.context_updates.update(result.context_updates)
+            aggregate.prompt_instructions.extend(result.prompt_instructions)
             stage_context = kwargs.get("context")
             if isinstance(stage_context, dict):
                 stage_context.update(result.context_updates)

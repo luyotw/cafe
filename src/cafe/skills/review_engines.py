@@ -370,20 +370,6 @@ class ReviewEngineService:
         return f"{truncated}\n\n[CAFE truncated native review output at 64 KiB]"
 
 
-def review_engine_prompt_context(context: ReviewEngineContext) -> dict[str, str]:
-    """Return the stable prompt context projection for one engine selection."""
-    result = {
-        "review_engine_id": context.engine_id,
-        "review_engine_mode": context.mode,
-        "review_engine_guidance": context.guidance,
-    }
-    if context.evidence_file is not None:
-        result["review_engine_evidence_file"] = str(context.evidence_file)
-    if context.fallback_reason is not None:
-        result["review_engine_fallback_reason"] = context.fallback_reason
-    return result
-
-
 def native_review_capability_rows() -> Sequence[NativeReviewCapability]:
     """Expose immutable capability metadata for diagnostics and contract tests."""
     return tuple(NATIVE_REVIEW_CAPABILITIES.values())
