@@ -1,7 +1,7 @@
 ---
 name: write-cafe-phase
 description: Use this skill when creating, updating, or repairing a CAFE workflow phase or its supporting shared/chat skill under src/cafe/data/skills or .cafe/skills. Covers phase scope, SKILL.md structure, placeholders, plan handoffs, and runtime conventions, including declarative defects identified by use-cafe-workflow. Not for generic skill files, playbook YAML, driver skills, or CAFE core/runtime defects.
-version: 2.6.0
+version: 2.8.0
 ---
 
 # Write CAFE Phase Skill
@@ -29,6 +29,17 @@ version: 2.6.0
 - If the new behavior belongs across multiple phases, prefer one shared/common skill instead of repeating the rule in each phase skill.
 - If one phase decides and another phase implements, treat them as a plan → execute pair instead of inventing an ad hoc handoff file.
 - If a phase's user-confirmed result determines the exact work of the next phase, let that phase end by producing the next confirmed plan; do not make the next phase rediscover scope.
+- If the phase needs a reusable domain procedure, follow `references/skill-spec.md` §16 before writing it from scratch.
+
+## Supporting Skill Selection
+
+- Treat domain behavior such as UI design, specification, or code review as phase-skill composition, not as a new CAFE core capability.
+- Evaluate candidates independently for every supported target CLI in this order: (1) a suitable CLI-native skill, (2) a suitable auditable open-source skill, then (3) a newly authored procedure. Stop at the first suitable tier for that CLI; unresolved CLIs may continue to lower tiers. Never skip an available tier without explaining why it is unsuitable.
+- Build one proposed selection matrix covering every target CLI. Before adopting any candidate, installing or vendoring its content, or starting a self-authored option, present the matrix, source and license when applicable, material tradeoffs, and integration plan to the user; wait for explicit confirmation.
+- If the user rejects one CLI's proposed candidate, advance only that CLI to its next tier, rebuild the matrix, and ask again. Never propose the self-authored option for a CLI until its native and open-source tiers have both been evaluated and ruled out or rejected.
+- Read-only discovery and evaluation for unresolved CLI rows may happen before approval; confirmation is required before the proposed matrix becomes the selected implementation.
+- Keep the CAFE phase skill authoritative for its workflow contract, artifacts, checklist, approval gates, and handoff. A selected supporting skill supplies domain procedure only.
+- Resolve and package the confirmed choice at authoring time. Do not make workflow execution search the network, download mutable content, or silently substitute a different skill.
 
 ## Declarative Repair Boundary
 
@@ -89,14 +100,15 @@ version: 2.6.0
 ## Writing Process
 1. Write the frontmatter first, including `workflow.execution_profile` for every phase skill.
 2. Write a short title and purpose section.
-3. For a plan → execute pair or forward plan chain, define every `output_artifact: plan` → `input_artifacts: [plan]` binding and each implementation plan shape before writing the skills.
-4. For every planned user approval, add the phase routing decision and verify the bound playbook step declares `on.confirm_output`.
-5. Add only the always-needed workflow steps to `SKILL.md`.
-6. If detailed material is only needed conditionally, move it to `references/` and say exactly when to read it.
-7. If the task needs deterministic or repeated command execution, add a script under `scripts/` instead of embedding a long fragile command.
-8. If the task needs external network access, credentials, GitHub/API mutation, or other operations likely to be blocked by agent sandboxing, put the operation behind a skill script and document whether workflow hooks should call that script host-side.
-9. Add a concrete output template only when output shape matters.
-10. Re-read the draft and cut anything that is obvious model knowledge or duplicated elsewhere.
+3. If reusable domain guidance is needed, complete the supporting-skill evaluation and user-confirmed selection in §16 before implementing that guidance.
+4. For a plan → execute pair or forward plan chain, define every `output_artifact: plan` → `input_artifacts: [plan]` binding and each implementation plan shape before writing the skills.
+5. For every planned user approval, add the phase routing decision and verify the bound playbook step declares `on.confirm_output`.
+6. Add only the always-needed workflow steps to `SKILL.md`.
+7. If detailed material is only needed conditionally, move it to `references/` and say exactly when to read it.
+8. If the task needs deterministic or repeated command execution, add a script under `scripts/` instead of embedding a long fragile command.
+9. If the task needs external network access, credentials, GitHub/API mutation, or other operations likely to be blocked by agent sandboxing, put the operation behind a skill script and document whether workflow hooks should call that script host-side.
+10. Add a concrete output template only when output shape matters.
+11. Re-read the draft and cut anything that is obvious model knowledge or duplicated elsewhere.
 
 ## SKILL.md Checklist
 - `name` matches the folder name.
@@ -112,6 +124,7 @@ version: 2.6.0
 - A bridge phase that consumes one plan and produces the next clearly distinguishes incoming `{plan_file}` from next-plan `{output_file}`, completes the incoming checklist before handoff, and supports a `not_required` next plan.
 - Every planned output-confirmation route has a matching playbook `on.confirm_output` declaration; reactive user interruptions are not mislabeled as kickoff candidates.
 - Mandatory tools are declared in `workflow.required_tools`; optional diagnostics are not made unconditional, and every binding playbook grants the declared tools.
+- Reusable domain procedure follows native → open-source → self-authored evaluation independently per target CLI, and the complete selection matrix has explicit user confirmation before adoption or implementation.
 
 ## When To Add References
 - Add `references/` only for details that would otherwise bloat `SKILL.md`.
@@ -142,3 +155,4 @@ version: 2.6.0
 - Check that execution reads and updates the same implementation plan passed by `{plan_file}`, while runtime checklist rules remain in `execution_steps_*` and `basic_principles.md`.
 - Check that user review loops stay in the phase responsible for the output; do not add routine backward transitions merely to regenerate a checklist. Reopen upstream only when a previously confirmed source of truth is invalidated.
 - Check that every planned user approval is visible in `cafe playbook confirmation-gates <id>` and that distinct approval ownership choices are represented by distinct playbook steps.
+- Check that supporting domain guidance was selected at authoring time with user confirmation, remains subordinate to the phase contract, and introduces no runtime network discovery or silent fallback.

@@ -23,9 +23,10 @@ from cafe.core.session_continuation import (
     SessionContinuationPolicy,
 )
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.core.types import AgentCLI, AgentConfig, TokenUsage
+from cafe.core.types import AgentCLI, AgentConfig, CliEntry, TokenUsage
 from cafe.phases.generic_phase import GenericPhase, GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
+from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.phase_config import PhaseStepModelResolution
@@ -300,6 +301,66 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert reloaded.handoff_contract.intent == HandoffIntent.WORKFLOW_COMPLETE
     assert reloaded.handoff_contract.status_code == "confirmed"
     assert reloaded.handoff_contract.source == "workflow.status_transition_adapter"
+
+
+def test_backup_cli_skill_sync_refuses_external_symlink(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    external_root = tmp_path / "external-claude"
+    external_skills = external_root / "skills"
+    external_skills.mkdir(parents=True)
+    sentinel = external_skills / "sentinel.txt"
+    sentinel.write_text("protected\n", encoding="utf-8")
+    (tmp_path / ".claude").symlink_to(external_root)
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-backup-symlink"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+
+    class BackupManager(FakeAgentManager):
+        def get_execution_config(self, agent_name, phase_name=None, continuation=None):
+            return AgentConfig(
+                name=agent_name,
+                cli=AgentCLI.CODEX,
+                model="primary-model",
+                clis=[
+                    CliEntry(cli=AgentCLI.CODEX, model="primary-model"),
+                    CliEntry(cli=AgentCLI.CLAUDE, model="backup-model"),
+                ],
+                backup_clis=[AgentCLI.CLAUDE],
+            )
+
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-backup-symlink",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=BackupManager("confirmed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+
+    with pytest.raises(SkillDiscoveryError, match="Refusing to traverse"):
+        executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    assert sentinel.read_text(encoding="utf-8") == "protected\n"
+    assert not (external_skills / NativeSkillBridge.MANAGED_SKILLS_MANIFEST).exists()
+    assert not (external_skills / "cafe-spec").exists()
 
 
 def test_generic_step_passes_declared_read_only_guard_to_agent_manager(
@@ -1131,7 +1192,7 @@ def test_first_iteration_declared_initial_task_uses_empty_optional_input(
     assert executor._load_iteration_user_input_candidate("draft") == ""
 
 
-def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill(
+def test_review_step_installs_phase_skill_for_effective_cli_chain(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -1181,7 +1242,21 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
         return original_install_skill(name, cli, context)
 
     monkeypatch.setattr(generic_phase.skill_bridge, "install_skill", record_skill_install)
-    agent_manager = FakeAgentManager("confirmed")
+
+    class StickyProviderManager(FakeAgentManager):
+        def get_execution_config(self, agent_name, phase_name=None, continuation=None):
+            return AgentConfig(
+                name=agent_name,
+                cli=AgentCLI.COPILOT,
+                model="sticky-review-model",
+                clis=[
+                    CliEntry(cli=AgentCLI.COPILOT, model="sticky-review-model"),
+                    CliEntry(cli=AgentCLI.CODEX, model="backup-review-model"),
+                ],
+                backup_clis=[AgentCLI.CODEX],
+            )
+
+    agent_manager = StickyProviderManager("confirmed")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-review-skill",
@@ -1194,11 +1269,19 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
 
     result = executor.execute_step("review", playbook["steps"]["review"], state)
 
-    assert (tmp_path / ".codex" / "skills" / "cafe-workflow-common" / "SKILL.md").exists()
-    assert (tmp_path / ".codex" / "skills" / "cafe-github_sync" / "SKILL.md").exists()
-    assert (tmp_path / ".codex" / "skills" / "cafe-review" / "SKILL.md").exists()
-    assert installed_skill_names == ["cafe-workflow-common", "cafe-github_sync", "review"]
     iteration_dir = issue_dir / "review" / "iteration_001"
+    assert (tmp_path / ".copilot" / "skills" / "cafe-workflow-common" / "SKILL.md").exists()
+    assert (tmp_path / ".copilot" / "skills" / "cafe-github_sync" / "SKILL.md").exists()
+    assert (tmp_path / ".copilot" / "skills" / "cafe-review" / "SKILL.md").exists()
+    assert (tmp_path / ".codex" / "skills" / "cafe-review" / "SKILL.md").exists()
+    assert installed_skill_names == [
+        "cafe-workflow-common",
+        "cafe-github_sync",
+        "review",
+        "cafe-workflow-common",
+        "cafe-github_sync",
+        "review",
+    ]
     output_file = iteration_dir / "output.md"
     checklist_file = iteration_dir / "checklist.md"
     assert result.artifacts["review_feedback"] == str(output_file)
@@ -1223,7 +1306,10 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
     assert "write(./.cafe/issues/issue-review-skill/next_step.txt)" in allowed_tools
 
     prompt = agent_manager.prompts[-1]
-    assert "Phase skill: $cafe-review" in prompt
+    assert "Phase skill: select the invocation for the CLI executing this prompt" in prompt
+    assert "/cafe-review for copilot" in prompt
+    assert "$cafe-review for codex" in prompt
+    assert "Runtime hook instructions:" not in prompt
     assert f"output_file={output_file}" in prompt
     assert f"checklist_file={checklist_file}" in prompt
     assert "blackboard_file=./.cafe/issues/issue-review-skill/blackboard.json" in prompt

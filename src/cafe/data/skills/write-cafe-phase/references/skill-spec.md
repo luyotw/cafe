@@ -503,3 +503,46 @@ CAFE 在 step 啟動時先從 artifact state 解析 incoming `plan`，再為本 
 ### When not to produce a checklist for the next phase
 
 若下一 phase 只是讀取前一結果後進行新的分析、規劃或固定程序，而不是執行上游已決定的工作，就不需要 plan checklist。一般 report、manifest 或 source path 足夠；不要為每個相鄰 step 都機械式產生 `plan`。
+
+## 16. Supporting domain skill 的選型與組合
+
+當 phase 需要 UI design、specification、review 或其他可重用的 domain procedure 時，由
+`write-cafe-phase` 在 authoring time 完成選型與組合。這不是 CAFE core runtime 的
+domain capability，runtime 不應認得特定 domain 名稱、上網搜尋 Skill，或臨時下載內容。
+
+### 固定評估順序
+
+對每個預定支援的 agent CLI **分別、獨立**依下列順序評估：
+
+1. **CLI-native Skill**：先盤點該 CLI 已內建或已正式提供、且符合 phase 目標的 Skill。有合適方案時，把它記入該 CLI 的 proposed row，不再為該 CLI 評估更低層候選。沒有合適方案時，該 CLI 才進入開源層。
+2. **開源 Skill**：只為尚未解決的 CLI 搜尋可審查的開源實作，並檢查來源、license、revision、可維護性、指令邊界與安全風險。有合適方案時，把它記入該 CLI 的 proposed row，不再為該 CLI 進入自行撰寫層；沒有合適方案時，該 CLI 才進入自行撰寫層。
+3. **自行撰寫**：只有該 CLI 的原生與開源兩層都已完成評估，且均無合適選項或已被 user 拒絕後，才可把新撰 domain procedure 列為該 CLI 的 proposed row。
+
+「原生」指 agent CLI 的 Skill 機制，不是 provider-specific subprocess、host hook 或 CAFE
+Python capability。某層有候選但不適用時，先記錄具體原因，再進入下一層；不得靜默跳過。
+
+### User confirmation gate
+
+可在確認前進行不會改變本機或遠端狀態的盤點、搜尋、閱讀與評估。每個 CLI 只能在當前層無合適候選時進入下一層；某個 CLI 已找到原生候選，不會阻止其他尚未解決的 CLI 繼續評估開源或自撰方案。先完成覆蓋所有目標 CLI 的 proposed selection matrix；決定使用哪一個方案前，
+必須向 user 提供：
+
+- 建議選項與所屬層級；
+- 來源、license 與固定 revision/digest（適用時）；
+- 各目標 CLI 的支援範圍與已知缺口；
+- 主要取捨、整合方式，以及缺口所需的 fallback；
+- 會被新增、複製、安裝或維護的檔案。
+
+等待 user 明確確認後，才可採用原生 Skill、安裝或 vendor 開源內容，或開始撰寫新的
+domain procedure。確認的是一份完整、具體的 selection matrix；不得在實作過程中自動更換來源或改用另一層。若 user 拒絕某個 CLI row 的候選，只將該 CLI 進入下一層，更新整份 matrix 並重新取得確認。
+
+### 組合邊界
+
+- Phase skill 仍是 workflow contract 的唯一 owner：它定義 artifact、checklist、user approval、handoff
+  與 CAFE-specific acceptance。Supporting Skill 只提供 domain procedure，不取代 phase skill。
+- 選擇開源 Skill 時，固定已審查的 revision 與 digest，在 phase skill 內 vendor 可重現的 snapshot
+  或一層 supporting reference。如果上游會持續更新，提供手動執行的可審查 updater；不得在 phase
+  runtime 自動拉取。
+- 選擇 CLI-native Skill 時，明寫支援的 CLI 與 invocation 契約。若其他目標 CLI 沒有等價原生
+  Skill，對這些尚未解決的 CLI 依序評估開源或自行撰寫 fallback，併入同一份 user-confirmed selection matrix。
+- Runtime 只負責安裝、啟用與執行已固定的 Skill 組合；不搜尋網路、不下載 mutable
+  latest、不猜測替代品，也不需要新增 UI Design、Spec、Review 等 domain-specific core 分支。

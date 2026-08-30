@@ -1,6 +1,6 @@
 ## Review Preflight
 
-[ ] Read src/cafe/data/agents/reviewer/Alice.md, every supplied requirement, plan, implementation artifact, workflow or PR feedback, the previous review when applicable, and the correction delta packet; establish the bounded authoritative scope for this iteration
+[ ] Read src/cafe/data/agents/reviewer/Alice.md, every supplied requirement, plan, implementation artifact, workflow or PR feedback, the previous review when applicable, and the correction delta packet; establish the bounded authoritative scope, apply the authoring-time selected review procedure exactly once, and retain its output only as candidate findings for independent CAFE validation
 [ ] Read the requirements specification .cafe/issues/test/spec/iteration_001/output.md
 [ ] Read the implementation plan .cafe/issues/test/plan/iteration_001/output.md
 [ ] Read PR feedback in (not available) (if exists) to see user feedback and requests
