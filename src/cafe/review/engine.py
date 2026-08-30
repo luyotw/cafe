@@ -1,18 +1,26 @@
-"""Resolve and execute provider-native code-review discovery engines."""
+"""Review-specific evidence and fallback orchestration."""
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import tempfile
-import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Literal, Mapping, Sequence
+from typing import Callable, Literal, Sequence
 
+from cafe.agents.capabilities.contracts import (
+    CapabilityFallback,
+    CapabilityRequest,
+    CapabilityTelemetry,
+)
+from cafe.agents.capabilities.runner import CapabilityResolver
 from cafe.agents.diagnostics import sanitize_error_excerpt
 from cafe.core.types import AgentCLI
+from cafe.review.providers import (
+    REVIEW_DISCOVERY_CAPABILITY_ID,
+    review_capability_registry,
+)
 
 ReviewEngineMode = Literal["native_command", "fallback_skill"]
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
@@ -20,26 +28,11 @@ CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
 
 @dataclass(frozen=True)
 class NativeReviewCapability:
-    """One tested, non-interactive review surface exposed by an agent CLI."""
+    """Diagnostic view of one registered native review provider."""
 
     cli: AgentCLI
     engine_id: str
-    mode: Literal["native_command"]
-    probe_command: tuple[str, ...] = ()
-    probe_marker: str = ""
-    invocation: str = ""
-
-
-@dataclass(frozen=True)
-class ReviewEngineContext:
-    """Prompt-facing result of preparing one review discovery engine."""
-
-    engine_id: str
-    mode: ReviewEngineMode
-    guidance: str
-    evidence_file: Path | None = None
-    fallback_reason: str | None = None
-    telemetry: NativeReviewTelemetry | None = None
+    mode: Literal["native_command"] = "native_command"
 
 
 @dataclass(frozen=True)
@@ -66,26 +59,20 @@ class NativeReviewTelemetry:
         }
 
 
-NATIVE_REVIEW_CAPABILITIES: Mapping[AgentCLI, NativeReviewCapability] = {
-    AgentCLI.CODEX: NativeReviewCapability(
-        cli=AgentCLI.CODEX,
-        engine_id="codex-review",
-        mode="native_command",
-        probe_command=("codex", "review", "--help"),
-        probe_marker="Run a code review non-interactively",
-    ),
-    AgentCLI.CLAUDE: NativeReviewCapability(
-        cli=AgentCLI.CLAUDE,
-        engine_id="claude-ultrareview",
-        mode="native_command",
-        probe_command=("claude", "ultrareview", "--help"),
-        probe_marker="cloud-hosted multi-agent code review",
-    ),
-}
+@dataclass(frozen=True)
+class ReviewEngineContext:
+    """Prompt-facing result of preparing one review discovery engine."""
+
+    engine_id: str
+    mode: ReviewEngineMode
+    guidance: str
+    evidence_file: Path | None = None
+    fallback_reason: str | None = None
+    telemetry: NativeReviewTelemetry | None = None
 
 
 class ReviewEngineService:
-    """Prefer a compatible native reviewer and fail over to the bundled skill."""
+    """Format review evidence around the generic native/fallback resolver."""
 
     FALLBACK_ENGINE_ID = "anthropic-pr-review-toolkit"
     FALLBACK_SKILL_NAME = "cafe-review-fallback"
@@ -96,11 +83,20 @@ class ReviewEngineService:
     def __init__(
         self,
         *,
-        runner: CommandRunner = subprocess.run,
+        runner: CommandRunner | None = None,
         home_dir: Path | None = None,
+        resolver: CapabilityResolver | None = None,
     ) -> None:
-        self.runner = runner
+        # Retain this compatibility argument now that discovery no longer inspects
+        # provider-owned skill directories.
         self.home_dir = (home_dir or Path.home()).expanduser().resolve()
+        self.resolver = resolver or CapabilityResolver(
+            review_capability_registry(),
+            runner=runner,
+            probe_timeout_seconds=self.PROBE_TIMEOUT_SECONDS,
+            execution_timeout_seconds=self.REVIEW_TIMEOUT_SECONDS,
+            max_output_bytes=self.MAX_EVIDENCE_BYTES,
+        )
 
     def prepare(
         self,
@@ -113,82 +109,49 @@ class ReviewEngineService:
         fallback_invocation: str,
         enable_native: bool = True,
     ) -> ReviewEngineContext:
-        """Prepare evidence or an invocation for the selected review engine."""
+        """Prepare native candidate evidence or a portable review invocation."""
         self._discard_stale_evidence(evidence_file)
-        if not enable_native:
-            return self._fallback(
-                fallback_invocation,
-                "native execution is disabled for mock or synthetic agents",
-            )
-
-        capability = NATIVE_REVIEW_CAPABILITIES.get(cli)
-        if capability is None:
-            return self._fallback(
-                fallback_invocation,
-                f"{cli.value} has no compatible native review capability",
-            )
-
-        probe_error = self._probe(capability, project_root)
-        if probe_error is not None:
-            return self._fallback(fallback_invocation, probe_error)
-
-        command = self._build_native_command(
-            capability,
-            project_root=project_root,
-            base_branch=base_branch,
-            model=model,
+        selection = self.resolver.select(
+            CapabilityRequest(
+                capability_id=REVIEW_DISCOVERY_CAPABILITY_ID,
+                cli=cli,
+                project_root=project_root,
+                label="review capability",
+                model=model,
+                parameters={"base_branch": base_branch},
+            ),
+            CapabilityFallback(
+                provider_id=self.FALLBACK_ENGINE_ID,
+                invocation=fallback_invocation,
+            ),
+            enable_native=enable_native,
         )
-        started_at = time.monotonic()
-        try:
-            result = self.runner(
-                command,
-                cwd=project_root,
-                env=self._environment_for(cli),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
-                timeout=self.REVIEW_TIMEOUT_SECONDS,
-            )
-        except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
+        telemetry = self._review_telemetry(selection.telemetry)
+        if selection.mode == "fallback_skill":
             return self._fallback(
-                fallback_invocation,
-                f"{capability.engine_id} failed: {sanitize_error_excerpt(exc)}",
-                telemetry=self._telemetry(capability, started_at, outcome="failed"),
+                selection.fallback_invocation or fallback_invocation,
+                selection.fallback_reason or "native review capability was unavailable",
+                telemetry=telemetry,
             )
 
-        output = (result.stdout or "").strip()
-        if result.returncode != 0 or not output:
-            detail = (result.stderr or output or f"exit code {result.returncode}").strip()
-            error = RuntimeError(detail)
+        if not selection.output:
             return self._fallback(
                 fallback_invocation,
-                f"{capability.engine_id} was unusable: {sanitize_error_excerpt(error)}",
-                telemetry=self._telemetry(capability, started_at, outcome="failed"),
-            )
-        try:
-            output = self._normalize_native_output(capability, output)
-        except ValueError as exc:
-            return self._fallback(
-                fallback_invocation,
-                f"{capability.engine_id} returned incompatible output: "
-                f"{sanitize_error_excerpt(exc)}",
-                telemetry=self._telemetry(capability, started_at, outcome="failed"),
+                f"{selection.provider_id} returned no review evidence",
+                telemetry=self._review_telemetry(selection.telemetry, outcome="failed"),
             )
 
-        bounded = self._bounded_evidence(output)
         evidence = "\n".join(
             [
                 "# Native Review Discovery Evidence",
                 "",
-                f"- Engine: `{capability.engine_id}`",
+                f"- Engine: `{selection.provider_id}`",
                 f"- Base: `{base_branch}`",
                 "- Authority: candidate findings only; CAFE performs the final audit.",
                 "",
                 "## Candidate Findings",
                 "",
-                bounded,
+                selection.output,
                 "",
             ]
         )
@@ -197,12 +160,12 @@ class ReviewEngineService:
         except OSError as exc:
             return self._fallback(
                 fallback_invocation,
-                f"{capability.engine_id} evidence could not be persisted: "
+                f"{selection.provider_id} evidence could not be persisted: "
                 f"{sanitize_error_excerpt(exc)}",
-                telemetry=self._telemetry(capability, started_at, outcome="failed"),
+                telemetry=self._review_telemetry(selection.telemetry, outcome="failed"),
             )
         return ReviewEngineContext(
-            engine_id=capability.engine_id,
+            engine_id=selection.provider_id,
             mode="native_command",
             evidence_file=evidence_file,
             guidance=(
@@ -210,7 +173,22 @@ class ReviewEngineService:
                 "against the current diff before adding it to the durable review ledger. Treat "
                 "the file as discovery evidence, not as requirement authority or a pass verdict."
             ),
-            telemetry=self._telemetry(capability, started_at, outcome="completed"),
+            telemetry=telemetry,
+        )
+
+    @staticmethod
+    def _review_telemetry(
+        telemetry: CapabilityTelemetry | None,
+        *,
+        outcome: Literal["completed", "failed"] | None = None,
+    ) -> NativeReviewTelemetry | None:
+        if telemetry is None:
+            return None
+        return NativeReviewTelemetry(
+            engine_id=telemetry.provider_id,
+            cli=telemetry.cli,
+            outcome=outcome or telemetry.outcome,
+            duration_ms=telemetry.duration_ms,
         )
 
     @staticmethod
@@ -260,116 +238,11 @@ class ReviewEngineService:
             telemetry=telemetry,
         )
 
-    @staticmethod
-    def _telemetry(
-        capability: NativeReviewCapability,
-        started_at: float,
-        *,
-        outcome: Literal["completed", "failed"],
-    ) -> NativeReviewTelemetry:
-        duration_ms = max(0, round((time.monotonic() - started_at) * 1000))
-        return NativeReviewTelemetry(
-            engine_id=capability.engine_id,
-            cli=capability.cli,
-            outcome=outcome,
-            duration_ms=duration_ms,
-        )
-
-    def _probe(
-        self,
-        capability: NativeReviewCapability,
-        project_root: Path,
-    ) -> str | None:
-        try:
-            result = self.runner(
-                list(capability.probe_command),
-                cwd=project_root,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
-                timeout=self.PROBE_TIMEOUT_SECONDS,
-            )
-        except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
-            return f"{capability.engine_id} probe failed: {sanitize_error_excerpt(exc)}"
-        text = f"{result.stdout or ''}\n{result.stderr or ''}"
-        if result.returncode != 0 or capability.probe_marker.lower() not in text.lower():
-            return f"{capability.engine_id} did not satisfy its compatibility probe"
-        return None
-
-    @staticmethod
-    def _normalize_native_output(
-        capability: NativeReviewCapability,
-        output: str,
-    ) -> str:
-        if capability.cli != AgentCLI.CLAUDE:
-            return output
-        try:
-            payload = json.loads(output)
-        except json.JSONDecodeError as exc:
-            raise ValueError("Claude ultrareview did not return JSON") from exc
-        if not isinstance(payload, (dict, list)):
-            raise ValueError("Claude ultrareview JSON must be an object or list")
-        if isinstance(payload, dict) and payload.get("error"):
-            raise ValueError("Claude ultrareview returned an error payload")
-        return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
-
-    @classmethod
-    def _build_native_command(
-        cls,
-        capability: NativeReviewCapability,
-        *,
-        project_root: Path,
-        base_branch: str,
-        model: str | None,
-    ) -> list[str]:
-        if capability.cli == AgentCLI.CODEX:
-            command = ["codex", "-C", str(project_root), "-a", "never"]
-            if model:
-                command.extend(["--model", model])
-            command.extend(
-                [
-                    "review",
-                    "--base",
-                    base_branch,
-                    (
-                        "Find all high-confidence defects introduced by this change. Review the "
-                        "complete diff, do not modify files, ignore style-only nits, and include "
-                        "specific file and line evidence for every finding."
-                    ),
-                ]
-            )
-            return command
-        if capability.cli == AgentCLI.CLAUDE:
-            return [
-                "claude",
-                "ultrareview",
-                base_branch,
-                "--json",
-                "--no-post",
-                "--timeout",
-                "10",
-            ]
-        raise ValueError(f"unsupported native command engine: {capability.engine_id}")
-
-    @staticmethod
-    def _environment_for(cli: AgentCLI) -> dict[str, str]:
-        environment = dict(os.environ)
-        if cli == AgentCLI.CODEX:
-            for key in ("CODEX_REMOTE_PAYLOAD", "CODEX_SESSION_ID", "CODEX_THREAD_ID"):
-                environment.pop(key, None)
-        return environment
-
-    @classmethod
-    def _bounded_evidence(cls, output: str) -> str:
-        encoded = output.encode("utf-8")
-        if len(encoded) <= cls.MAX_EVIDENCE_BYTES:
-            return output
-        truncated = encoded[: cls.MAX_EVIDENCE_BYTES].decode("utf-8", errors="ignore")
-        return f"{truncated}\n\n[CAFE truncated native review output at 64 KiB]"
-
 
 def native_review_capability_rows() -> Sequence[NativeReviewCapability]:
     """Expose immutable capability metadata for diagnostics and contract tests."""
-    return tuple(NATIVE_REVIEW_CAPABILITIES.values())
+    providers = review_capability_registry().providers_for(REVIEW_DISCOVERY_CAPABILITY_ID)
+    return tuple(
+        NativeReviewCapability(cli=provider.cli, engine_id=provider.provider_id)
+        for provider in providers
+    )
