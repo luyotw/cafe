@@ -325,7 +325,11 @@ class GenericWorkflowStepExecutor(Phase):
             same_invocation_retry=same_invocation_retry,
         )
         self._apply_step_agent_model(step_name=step_name, step_def=step_def, agent_name=agent_name)
-        agent_cli = self.agent_manager.get_agent(agent_name).config.cli
+        effective_agent_config = self._resolve_execution_config_for_iteration(
+            agent_name=agent_name,
+            step_name=step_name,
+            continuation=self._session_continuation,
+        )
         context = self._build_context(
             step_name=step_name,
             step_def=step_def,
@@ -347,20 +351,35 @@ class GenericWorkflowStepExecutor(Phase):
             role=step_def.get("role"),
             step_name=step_name,
         )
-        self.generic_phase.skill_bridge.synchronize_skills(
-            [*workflow_skill_names, skill_name],
-            agent_cli,
-            install=False,
-        )
-        shared_skill_invocations = self.generic_phase.prepare_skills(
-            skill_names=workflow_skill_names,
-            agent_cli=agent_cli,
-            context=context,
-        )
-        skill_invocation = self.generic_phase.prepare_skill(
-            skill_name=skill_name,
-            agent_cli=agent_cli,
-            context=context,
+        managed_skill_names = [*workflow_skill_names, skill_name]
+        runtime_agent_clis = self._configured_clis_from_config(effective_agent_config)
+
+        shared_invocations_by_skill: List[Dict[AgentCLI, str]] = [{} for _ in workflow_skill_names]
+        phase_invocations: Dict[AgentCLI, str] = {}
+        for target_cli in runtime_agent_clis:
+            self.generic_phase.skill_bridge.synchronize_skills(
+                managed_skill_names,
+                target_cli,
+                install=False,
+            )
+            target_shared_invocations = self.generic_phase.prepare_skills(
+                skill_names=workflow_skill_names,
+                agent_cli=target_cli,
+                context=context,
+            )
+            for index, invocation in enumerate(target_shared_invocations):
+                shared_invocations_by_skill[index][target_cli] = invocation
+            phase_invocations[target_cli] = self.generic_phase.prepare_skill(
+                skill_name=skill_name,
+                agent_cli=target_cli,
+                context=context,
+            )
+        shared_skill_invocations = [
+            self.generic_phase.skill_bridge.provider_aware_invocation(invocations)
+            for invocations in shared_invocations_by_skill
+        ]
+        skill_invocation = self.generic_phase.skill_bridge.provider_aware_invocation(
+            phase_invocations
         )
         if not checklist_file.exists():
             self._generate_checklist(
@@ -400,6 +419,7 @@ class GenericWorkflowStepExecutor(Phase):
                 if self._is_baton_retry_user_input(resolved_user_input)
                 else allowed_tools
             )
+
             def execute_agent() -> tuple[str, Optional[PhaseStatusCode]]:
                 return self._execute_agent_iteration(
                     agent_name=agent_name,
@@ -431,6 +451,14 @@ class GenericWorkflowStepExecutor(Phase):
                 response, _ = execute_agent()
             return response
 
+        def transform_runtime_context(runtime_context: Dict[str, str]) -> Dict[str, str]:
+            return self._apply_resume_to_runtime_context(
+                runtime_context,
+                step_name,
+                blackboard_state,
+                extra_prompt,
+            )
+
         execution = self.generic_phase.execute(
             skill_name=skill_name,
             step_def=step_def,
@@ -456,14 +484,7 @@ class GenericWorkflowStepExecutor(Phase):
                     else None
                 ),
                 "blackboard_state": blackboard_state,
-                "transform_runtime_context": (
-                    lambda runtime_context: self._apply_resume_to_runtime_context(
-                        runtime_context,
-                        step_name,
-                        blackboard_state,
-                        extra_prompt,
-                    )
-                ),
+                "transform_runtime_context": transform_runtime_context,
             },
         )
 
@@ -896,15 +917,18 @@ class GenericWorkflowStepExecutor(Phase):
             config = self.agent_manager.get_agent(agent_name).config
         except Exception:
             return []
-        if getattr(config, "clis", None):
-            return [
-                entry.cli
-                for entry in config.clis
-                if hasattr(entry, "cli") and isinstance(entry.cli, AgentCLI)
-            ]
-        configured = []
+        return self._configured_clis_from_config(config)
+
+    @staticmethod
+    def _configured_clis_from_config(config: Any) -> list[AgentCLI]:
+        """Return the active CLI followed by every configured failover CLI."""
+        configured: list[AgentCLI] = []
         if isinstance(getattr(config, "cli", None), AgentCLI):
             configured.append(config.cli)
+        for entry in getattr(config, "clis", None) or []:
+            cli = getattr(entry, "cli", None)
+            if isinstance(cli, AgentCLI) and cli not in configured:
+                configured.append(cli)
         configured.extend(
             cli
             for cli in getattr(config, "backup_clis", [])

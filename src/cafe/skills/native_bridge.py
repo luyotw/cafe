@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 
 from cafe.catalogs.resolver import global_catalog_lock
 from cafe.core.types import AgentCLI
@@ -78,11 +79,28 @@ class NativeSkillBridge:
     def _ensure_native_skills_dir(self, cli: AgentCLI) -> Path:
         """Return a usable project-local native skill directory for one CLI."""
         skills_root = self.get_native_skills_dir(cli)
-        if skills_root.is_symlink() and not skills_root.exists():
-            skills_root.unlink()
-        elif skills_root.exists() and not skills_root.is_dir():
-            skills_root.unlink()
+        relative = skills_root.relative_to(self.project_root)
+        current = self.project_root
+        for part in relative.parts:
+            current = current / part
+            if current.is_symlink():
+                if current == skills_root and not current.exists():
+                    current.unlink()
+                    continue
+                raise SkillDiscoveryError(
+                    f"Refusing to traverse project-local CLI skill symlink: {current}"
+                )
+            if current.exists() and not current.is_dir():
+                if current != skills_root:
+                    raise SkillDiscoveryError(
+                        f"CLI skill directory ancestor is not a directory: {current}"
+                    )
+                current.unlink()
         skills_root.mkdir(parents=True, exist_ok=True)
+        if not skills_root.resolve().is_relative_to(self.project_root):
+            raise SkillDiscoveryError(
+                f"CLI skill directory escapes the project root: {skills_root}"
+            )
         self._ensure_cli_dir_git_excluded(cli)
         return skills_root
 
@@ -128,6 +146,21 @@ class NativeSkillBridge:
                 skill_file.write_text(rendered, encoding="utf-8")
             self._record_managed_skill(cli, target_dir.name)
             return target_dir
+
+    @staticmethod
+    def provider_aware_invocation(invocations: Mapping[AgentCLI, str]) -> str:
+        """Describe one installed skill across the effective CLI fallback chain."""
+        grouped: dict[str, list[str]] = {}
+        for cli, invocation in invocations.items():
+            grouped.setdefault(invocation, []).append(cli.value)
+        if not grouped:
+            raise ValueError("at least one CLI skill invocation is required")
+        if len(grouped) == 1:
+            return next(iter(grouped))
+        choices = "; ".join(
+            f"{invocation} for {', '.join(cli_names)}" for invocation, cli_names in grouped.items()
+        )
+        return f"select the invocation for the CLI executing this prompt: {choices}"
 
     def synchronize_skills(
         self,
