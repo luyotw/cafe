@@ -3,11 +3,15 @@
 import json
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Event, Thread
+from types import SimpleNamespace
 
 import pytest
 
+import cafe.catalogs.resolver as resolver_module
+import cafe.catalogs.sync as sync_module
 from cafe.agents.manager import AgentManager
 from cafe.catalogs.migration import AgentSnapshotMigrator
 from cafe.catalogs.resolver import (
@@ -424,6 +428,65 @@ def test_catalog_digest_rejects_work_beyond_explicit_bounds(
 
     with pytest.raises(CatalogValidationError):
         content_digest(tree, **{limit: value})
+
+
+def test_catalog_digest_stops_directory_iteration_at_node_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    yielded = 0
+
+    @contextmanager
+    def oversized_directory(_path: object):
+        def entries():
+            nonlocal yielded
+            for index in range(100):
+                yielded += 1
+                yield SimpleNamespace(name=f"child-{index}")
+
+        yield entries()
+
+    monkeypatch.setattr(resolver_module.os, "scandir", oversized_directory)
+
+    with pytest.raises(CatalogValidationError):
+        content_digest(tree, max_nodes=2)
+
+    assert yielded == 2
+
+
+def test_catalog_copy_stops_directory_iteration_at_node_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, project, global_root = _service(tmp_path)
+    _entry(project / ".cafe", CatalogKind.PHASE, "develop", "project")
+    approved = service.compare()
+    real_scandir = sync_module.os.scandir
+    yielded = 0
+
+    @contextmanager
+    def oversized_directory(descriptor: object):
+        nonlocal yielded
+        if not isinstance(descriptor, int):
+            with real_scandir(descriptor) as entries:
+                yield entries
+            return
+
+        def entries():
+            nonlocal yielded
+            for index in range(sync_module.MAX_CATALOG_NODES * 2):
+                yielded += 1
+                yield SimpleNamespace(name=f"child-{index}")
+
+        yield entries()
+
+    monkeypatch.setattr(sync_module.os, "scandir", oversized_directory)
+
+    with pytest.raises(CatalogSyncError):
+        service.sync(approved.token, ["phase:develop"])
+
+    assert yielded == sync_module.MAX_CATALOG_NODES
+    assert not (global_root / "skills" / "develop").exists()
 
 
 @pytest.mark.parametrize("target_change", ["content", "mode"])

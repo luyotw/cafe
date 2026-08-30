@@ -386,7 +386,6 @@ def _durable_task_matches_current_handoff(task: HumanTask, blackboard: Any) -> b
         or contract.to_owner is not HandoffOwner.USER
         or contract.to_step != "user"
         or contract.from_step != task.step
-        or contract.intent.value != task.trigger
     ):
         return False
     current_key = ":".join(
@@ -399,8 +398,12 @@ def _durable_task_matches_current_handoff(task: HumanTask, blackboard: Any) -> b
         )
     )
     if task.handoff_key.startswith("user-handoff:"):
+        # Human-owned and hybrid tasks intentionally use a generic
+        # ``manual_handoff`` contract while retaining ``initial`` or the
+        # portion ID as their executable trigger.  The structured key is the
+        # identity shared by both sides of that boundary.
         return task.handoff_key == current_key
-    return task.status is HumanTaskStatus.PENDING
+    return task.status is HumanTaskStatus.PENDING and contract.intent.value == task.trigger
 
 
 def _durable_task_routing_rejection(

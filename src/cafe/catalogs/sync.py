@@ -24,6 +24,7 @@ from cafe.catalogs.resolver import (
     CatalogKind,
     CatalogResolver,
     CatalogValidationError,
+    bounded_directory_names,
     content_digest,
     global_catalog_lock,
     read_valid_agent_definition,
@@ -288,11 +289,13 @@ def _copy_node(
                 )
                 if opened_identity != identity:
                     raise StaleComparisonError(f"Catalog source changed while copying: {source}")
-                children = sorted(os.listdir(descriptor))
-                if budget.nodes + len(children) > MAX_CATALOG_NODES:
-                    raise CatalogSyncError(
+                children = bounded_directory_names(
+                    descriptor,
+                    max_entries=MAX_CATALOG_NODES - budget.nodes,
+                    limit_error=lambda: CatalogSyncError(
                         f"Catalog entry exceeds copy node limit: {budget.source}"
-                    )
+                    ),
+                )
                 destination.mkdir(mode=mode)
                 anchored = _directory_descriptor_path(descriptor)
                 for name in children:

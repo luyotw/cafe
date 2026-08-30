@@ -64,6 +64,22 @@ MAX_CATALOG_BYTES = 64 * 1024 * 1024
 MAX_CATALOG_DEPTH = 64
 
 
+def bounded_directory_names(
+    directory: Path | int,
+    *,
+    max_entries: int,
+    limit_error: Callable[[], Exception],
+) -> list[str]:
+    """Collect sortable entry names without reading beyond the declared bound."""
+    names: list[str] = []
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            if len(names) >= max_entries:
+                raise limit_error()
+            names.append(entry.name)
+    return sorted(names)
+
+
 @contextmanager
 def global_catalog_lock(global_root: Path, *, exclusive: bool = False) -> Iterator[None]:
     """Recover and coordinate catalog readers and publishers under one lock."""
@@ -274,15 +290,15 @@ def content_digest(
                 digest.update(b"\0")
             elif stat.S_ISDIR(metadata.st_mode):
                 digest.update(f"D\0{relative}\0{mode:o}\0".encode())
-                children: list[Path] = []
-                for child in node.iterdir():
-                    if node_count + len(children) >= max_nodes:
-                        raise CatalogValidationError(
-                            f"Catalog entry exceeds digest node limit: {path}"
-                        )
-                    children.append(child)
-                for child in sorted(children, key=lambda item: item.name):
-                    add_tree(child, f"{relative}/{child.name}", depth + 1)
+                names = bounded_directory_names(
+                    node,
+                    max_entries=max_nodes - node_count,
+                    limit_error=lambda: CatalogValidationError(
+                        f"Catalog entry exceeds digest node limit: {path}"
+                    ),
+                )
+                for name in names:
+                    add_tree(node / name, f"{relative}/{name}", depth + 1)
             else:
                 raise CatalogValidationError(f"Unsupported catalog node: {node}")
         finally:
