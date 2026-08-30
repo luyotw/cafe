@@ -59,9 +59,9 @@ GitRunner = Callable[[tuple[str, ...], Path], str]
 
 _catalog_lock_state = threading.local()
 
-_MAX_DIGEST_NODES = 10_000
-_MAX_DIGEST_BYTES = 64 * 1024 * 1024
-_MAX_DIGEST_DEPTH = 64
+MAX_CATALOG_NODES = 10_000
+MAX_CATALOG_BYTES = 64 * 1024 * 1024
+MAX_CATALOG_DEPTH = 64
 
 
 @contextmanager
@@ -148,9 +148,9 @@ def discover_project_roots(start: Path, *, git_runner: GitRunner = _run_git) -> 
 def content_digest(
     path: Path,
     *,
-    max_nodes: int = _MAX_DIGEST_NODES,
-    max_bytes: int = _MAX_DIGEST_BYTES,
-    max_depth: int = _MAX_DIGEST_DEPTH,
+    max_nodes: int = MAX_CATALOG_NODES,
+    max_bytes: int = MAX_CATALOG_BYTES,
+    max_depth: int = MAX_CATALOG_DEPTH,
     root_symlink_base: Optional[Path] = None,
 ) -> str:
     """Hash one confined catalog entry with deterministic resource bounds."""
@@ -413,8 +413,12 @@ class CatalogResolver:
 
     def _resolve_unlocked(self, kind: CatalogKind, key: str) -> CatalogEntry:
         key = self._validate_key(kind, key)
-        for source, root, project_layer in reversed(self.catalog_roots(kind)):
-            if not self._catalog_root_available(root):
+        roots = [
+            (source, root, project_layer, self._catalog_root_available(root))
+            for source, root, project_layer in self.catalog_roots(kind)
+        ]
+        for source, root, project_layer, available in reversed(roots):
+            if not available:
                 continue
             path = self.candidate_path(kind, key, root)
             if not path.exists() and not path.is_symlink():

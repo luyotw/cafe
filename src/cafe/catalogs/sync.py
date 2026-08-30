@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -16,6 +17,9 @@ import yaml
 
 from cafe.catalogs.migration import AgentSnapshotMigrator
 from cafe.catalogs.resolver import (
+    MAX_CATALOG_BYTES,
+    MAX_CATALOG_DEPTH,
+    MAX_CATALOG_NODES,
     CatalogEntry,
     CatalogKind,
     CatalogResolver,
@@ -157,21 +161,201 @@ def _validate_publishable(kind: CatalogKind, key: str, path: Path) -> None:
         )
 
 
-def _copy_entry(source: Path, destination: Path) -> None:
+@dataclass
+class _CopyBudget:
+    source: Path
+    nodes: int = 0
+    bytes: int = 0
+
+    def add_node(self, depth: int) -> None:
+        if depth > MAX_CATALOG_DEPTH:
+            raise CatalogSyncError(f"Catalog entry exceeds copy depth limit: {self.source}")
+        self.nodes += 1
+        if self.nodes > MAX_CATALOG_NODES:
+            raise CatalogSyncError(f"Catalog entry exceeds copy node limit: {self.source}")
+
+    def add_bytes(self, size: int) -> None:
+        self.bytes += size
+        if self.bytes > MAX_CATALOG_BYTES:
+            raise CatalogSyncError(f"Catalog entry exceeds copy byte limit: {self.source}")
+
+
+def _confined_symlink_target(link: Path, authority_root: Path) -> Path:
+    target_path = Path(os.readlink(link))
+    if not target_path.is_absolute():
+        target_path = link.parent / target_path
+    try:
+        prospective = target_path.resolve(strict=False)
+        if not prospective.is_relative_to(authority_root):
+            raise CatalogSyncError(f"Catalog symlink target escapes entry authority: {link}")
+        target = target_path.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise CatalogSyncError(f"Catalog symlink target is unavailable: {link}") from exc
+    if not target.is_relative_to(authority_root):
+        raise CatalogSyncError(f"Catalog symlink target escapes entry authority: {link}")
+    return target
+
+
+def _directory_descriptor_path(descriptor: int) -> Path:
+    for descriptor_root in (Path("/proc/self/fd"), Path("/dev/fd")):
+        candidate = descriptor_root / str(descriptor)
+        if candidate.exists():
+            return candidate
+    raise CatalogSyncError("Descriptor-backed catalog traversal is unavailable")
+
+
+def _copy_node(
+    source: Path,
+    destination: Path,
+    *,
+    authority_root: Path,
+    materialize_symlinks: bool,
+    budget: _CopyBudget,
+    depth: int,
+    active_nodes: set[tuple[int, int, int]],
+) -> None:
+    budget.add_node(depth)
+    metadata = source.lstat()
+    mode = stat.S_IMODE(metadata.st_mode)
+    if stat.S_ISLNK(metadata.st_mode):
+        if not materialize_symlinks:
+            os.symlink(os.readlink(source), destination)
+            return
+        target = _confined_symlink_target(source, authority_root)
+        target_metadata = target.lstat()
+        target_identity = (
+            target_metadata.st_dev,
+            target_metadata.st_ino,
+            stat.S_IFMT(target_metadata.st_mode),
+        )
+        if target_identity in active_nodes:
+            raise CatalogSyncError(f"Catalog symlink cycle cannot be materialized: {source}")
+        _copy_node(
+            target,
+            destination,
+            authority_root=authority_root,
+            materialize_symlinks=True,
+            budget=budget,
+            depth=depth,
+            active_nodes=active_nodes,
+        )
+        return
+
+    identity = (metadata.st_dev, metadata.st_ino, stat.S_IFMT(metadata.st_mode))
+    if identity in active_nodes:
+        raise CatalogSyncError(f"Catalog node cycle cannot be materialized: {source}")
+    active_nodes.add(identity)
+    try:
+        if stat.S_ISREG(metadata.st_mode):
+            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(source, flags)
+            try:
+                opened = os.fstat(descriptor)
+                opened_identity = (
+                    opened.st_dev,
+                    opened.st_ino,
+                    stat.S_IFMT(opened.st_mode),
+                )
+                if opened_identity != identity:
+                    raise StaleComparisonError(f"Catalog source changed while copying: {source}")
+                with os.fdopen(descriptor, "rb", closefd=False) as source_handle:
+                    with destination.open("xb") as destination_handle:
+                        while True:
+                            remaining = MAX_CATALOG_BYTES - budget.bytes
+                            chunk = source_handle.read(min(65536, remaining + 1))
+                            if not chunk:
+                                break
+                            budget.add_bytes(len(chunk))
+                            destination_handle.write(chunk)
+                destination.chmod(mode)
+            finally:
+                os.close(descriptor)
+            return
+        if stat.S_ISDIR(metadata.st_mode):
+            flags = (
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            descriptor = os.open(source, flags)
+            try:
+                opened = os.fstat(descriptor)
+                opened_identity = (
+                    opened.st_dev,
+                    opened.st_ino,
+                    stat.S_IFMT(opened.st_mode),
+                )
+                if opened_identity != identity:
+                    raise StaleComparisonError(f"Catalog source changed while copying: {source}")
+                children = sorted(os.listdir(descriptor))
+                if budget.nodes + len(children) > MAX_CATALOG_NODES:
+                    raise CatalogSyncError(
+                        f"Catalog entry exceeds copy node limit: {budget.source}"
+                    )
+                destination.mkdir(mode=mode)
+                anchored = _directory_descriptor_path(descriptor)
+                for name in children:
+                    _copy_node(
+                        anchored / name,
+                        destination / name,
+                        authority_root=authority_root,
+                        materialize_symlinks=materialize_symlinks,
+                        budget=budget,
+                        depth=depth + 1,
+                        active_nodes=active_nodes,
+                    )
+                destination.chmod(mode)
+            finally:
+                os.close(descriptor)
+            return
+        raise CatalogSyncError(f"Unsupported catalog node: {source}")
+    finally:
+        active_nodes.remove(identity)
+
+
+def _copy_entry(source: Path, destination: Path, *, expected_digest: str) -> None:
+    try:
+        current_digest = content_digest(source)
+    except CatalogValidationError as exc:
+        raise StaleComparisonError(f"Catalog source changed before staging: {source}") from exc
+    if current_digest != expected_digest:
+        raise StaleComparisonError(f"Catalog source changed before staging: {source}")
+
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if source.is_symlink():
-        authority_root = source.parent.resolve(strict=True)
-        target = source.resolve(strict=True)
-        if not target.is_relative_to(authority_root):
-            raise CatalogSyncError(f"Catalog symlink target escapes entry authority: {source}")
-        if target.is_dir():
-            shutil.copytree(target, destination, symlinks=False)
+    temporary = destination.with_name(f".{destination.name}.copy-{uuid.uuid4().hex}")
+    budget = _CopyBudget(source=source)
+    try:
+        if source.is_symlink():
+            authority_root = source.parent.resolve(strict=True)
+            copy_source = _confined_symlink_target(source, authority_root)
+            materialize_symlinks = True
         else:
-            shutil.copy2(target, destination, follow_symlinks=False)
-    elif source.is_dir():
-        shutil.copytree(source, destination, symlinks=True)
-    else:
-        shutil.copy2(source, destination, follow_symlinks=False)
+            copy_source = source
+            authority_root = (
+                source.resolve(strict=True)
+                if source.is_dir()
+                else source.parent.resolve(strict=True)
+            )
+            materialize_symlinks = False
+        _copy_node(
+            copy_source,
+            temporary,
+            authority_root=authority_root,
+            materialize_symlinks=materialize_symlinks,
+            budget=budget,
+            depth=0,
+            active_nodes=set(),
+        )
+        if content_digest(temporary) != expected_digest:
+            raise StaleComparisonError(f"Catalog source changed while staging: {source}")
+        os.replace(temporary, destination)
+    except BaseException:
+        if temporary.is_dir() and not temporary.is_symlink():
+            shutil.rmtree(temporary, ignore_errors=True)
+        else:
+            temporary.unlink(missing_ok=True)
+        raise
 
 
 @contextmanager
@@ -452,7 +636,11 @@ class CatalogSyncService:
                     relative = item.global_path.relative_to(self.resolver.global_root)
                     staged = staged_root / relative
                     self.failure_injector("stage", entry_id)
-                    _copy_entry(item.project_path, staged)
+                    _copy_entry(
+                        item.project_path,
+                        staged,
+                        expected_digest=item.project_digest,
+                    )
                     if content_digest(staged) != item.project_digest:
                         raise CatalogSyncError(f"Staged content changed: {entry_id}")
                     _validate_publishable(CatalogKind(item.kind), item.key, staged)

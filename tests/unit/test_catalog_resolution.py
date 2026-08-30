@@ -134,6 +134,39 @@ def test_direct_resolution_rejects_broken_project_catalog_root(
 
 
 @pytest.mark.parametrize(
+    ("kind", "key", "directory"),
+    [
+        (CatalogKind.PLAYBOOK, "standard", "playbooks"),
+        (CatalogKind.PHASE, "develop", "skills"),
+        (CatalogKind.AGENT, "developer/David", "agents"),
+    ],
+)
+def test_direct_and_enumerated_resolution_share_lower_root_validation(
+    tmp_path: Path,
+    kind: CatalogKind,
+    key: str,
+    directory: str,
+) -> None:
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    _write_entry(project / ".cafe", kind, key, "project")
+    broken_global = global_root / directory
+    broken_global.parent.mkdir(parents=True)
+    broken_global.symlink_to(global_root / f"missing-{directory}", target_is_directory=True)
+    resolver = CatalogResolver(
+        project_root=project,
+        canonical_root=project,
+        global_root=global_root,
+        builtin_root=tmp_path / "builtin",
+    )
+
+    with pytest.raises(CatalogValidationError):
+        resolver.resolve(kind, key)
+    with pytest.raises(CatalogValidationError):
+        resolver.keys(kind)
+
+
+@pytest.mark.parametrize(
     ("invalid_layer", "invalid_content"),
     [
         ("project", b"\xff\xfeinvalid-agent"),

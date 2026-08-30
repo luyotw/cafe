@@ -164,6 +164,8 @@ def _pause_with_iteration_limit_task(issue_dir: Path):
         step_name="review",
         trigger="manual_handoff",
     )
+    contract = blackboard.handoff_contract
+    assert contract is not None
     task = HumanTaskRecordStore(issue_dir).materialize(
         workflow_id=blackboard.workflow_id,
         step="review",
@@ -174,6 +176,15 @@ def _pause_with_iteration_limit_task(issue_dir: Path):
         expected_result=policy.model_dump(mode="json"),
         continuations=binding.outcomes,
         assignee_type="user",
+        handoff_key=":".join(
+            (
+                "user-handoff",
+                blackboard.workflow_id,
+                contract.from_step,
+                contract.intent.value,
+                contract.created_at,
+            )
+        ),
     )
     return store, task
 
@@ -624,6 +635,89 @@ def test_workflow_command_routes_manual_handoff_payload_through_durable_task(
     assert any(
         event.event_type == "human_task_completed"
         for event in store.load_or_create("review", playbook_id="standard").events
+    )
+
+
+def test_workflow_command_rejects_completed_durable_task_from_later_handoff(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-durable-replay"
+    store, task = _pause_with_iteration_limit_task(issue_dir)
+    executed_steps: list[str] = []
+
+    class FakeExecutor:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
+            executed_steps.append(step_name)
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    payload = json.dumps(
+        {
+            "task": "iteration-limit",
+            "decision": "resume",
+            "human_task_id": task.id,
+        }
+    )
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-durable-replay"
+        mock_git_cls.return_value = git
+        completed = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--single-step",
+                "--user-input",
+                payload,
+            ],
+        )
+        assert completed.exit_code == 0, (completed.stdout, completed.exception)
+        assert executed_steps == ["review"]
+
+        blackboard = store.load_or_create("plan", playbook_id="standard")
+        store.set_current_step(blackboard, "user")
+        store.update_handoff_contract(
+            blackboard,
+            from_step="plan",
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
+            status_code="alignment_checkpoint",
+            source="test",
+        )
+        executed_steps.clear()
+        replayed = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--single-step",
+                "--user-input",
+                payload,
+            ],
+        )
+
+    reloaded = store.load_or_create("plan", playbook_id="standard")
+    assert replayed.exit_code == 0, (replayed.stdout, replayed.exception)
+    assert executed_steps == []
+    assert reloaded.current_step == "user"
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.intent is HandoffIntent.ALIGNMENT_CHECKPOINT
+    assert reloaded.handoff_contract.from_step == "plan"
+    assert any(
+        event.event_type == "human_task_rejected"
+        and event.data.get("task_id") == task.id
+        for event in reloaded.events
     )
 
 

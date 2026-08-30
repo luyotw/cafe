@@ -340,6 +340,56 @@ def test_root_directory_symlink_materializes_confined_nested_target(
     )
 
 
+def test_nested_symlink_replacement_is_rejected_before_staging_target_content(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    skills = project / ".cafe" / "skills"
+    support = skills / "support"
+    target = support / "variants" / "develop"
+    target.mkdir(parents=True)
+    (support / "SKILL.md").write_text(
+        "---\nname: support\ndescription: support\n---\n",
+        encoding="utf-8",
+    )
+    (target / "SKILL.md").write_text(
+        "---\nname: develop\ndescription: project\n---\n",
+        encoding="utf-8",
+    )
+    approved_policy = support / "shared" / "policy.md"
+    approved_policy.parent.mkdir()
+    approved_policy.write_text("approved policy\n", encoding="utf-8")
+    nested_link = target / "policy.md"
+    nested_link.symlink_to("../../shared/policy.md")
+    (skills / "develop").symlink_to(target.relative_to(skills), target_is_directory=True)
+    external = tmp_path / "external-policy.md"
+    external_marker = b"unapproved external policy\n"
+    external.write_bytes(external_marker)
+
+    def replace_nested_link(boundary: str, entry_id: str | None) -> None:
+        if boundary == "stage" and entry_id == "phase:develop":
+            nested_link.unlink()
+            nested_link.symlink_to(external)
+
+    resolver = CatalogResolver(
+        project_root=project,
+        canonical_root=project,
+        global_root=global_root,
+        builtin_root=tmp_path / "builtin",
+    )
+    service = CatalogSyncService(resolver, failure_injector=replace_nested_link)
+    approved = service.compare()
+
+    with pytest.raises(CatalogSyncError):
+        service.sync(approved.token, ["phase:develop"])
+
+    transactions = global_root / ".catalog-transactions"
+    staged_files = [path for path in transactions.rglob("*") if path.is_file()]
+    assert all(path.read_bytes() != external_marker for path in staged_files)
+    assert not (global_root / "skills" / "develop").exists()
+
+
 @pytest.mark.parametrize("link_level", ["entry", "nested"])
 def test_catalog_comparison_rejects_symlink_targets_outside_entry_authority(
     tmp_path: Path, link_level: str
