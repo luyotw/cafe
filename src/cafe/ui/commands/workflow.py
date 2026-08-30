@@ -33,7 +33,10 @@ from cafe.ui.cli_shared import (
 from cafe.ui.cli_shared import (
     resolve_iteration_number as _resolve_iteration_number,
 )
-from cafe.ui.human_tasks import apply_human_task_payload
+from cafe.ui.human_tasks import (
+    apply_durable_human_task_payload_if_present,
+    apply_human_task_payload,
+)
 from cafe.utils.config import ConfigError, validate_directories_exist
 
 
@@ -862,6 +865,25 @@ def workflow(
                             allowed_steps=step_keys,
                         )
                         from_step = getattr(contract, "from_step", None) or blackboard.current_step
+                        durable_result = apply_durable_human_task_payload_if_present(
+                            issue_dir=issue_dir,
+                            playbook_data=playbook_data,
+                            blackboard=blackboard,
+                            raw_payload=user_input,
+                            source="command",
+                        )
+                        if durable_result is not None:
+                            if durable_result.rejection is not None:
+                                console.print(
+                                    f"[yellow]{durable_result.rejection.message}[/yellow]"
+                                )
+                                console.print(
+                                    f"[dim]{durable_result.rejection.correction_guidance}[/dim]"
+                                )
+                                return
+                            user_input = None
+                            pending_start_step = durable_result.target
+                            continue
                         if contract.intent == HandoffIntent.ALIGNMENT_CHECKPOINT:
                             decision_payload = parse_alignment_decision_payload(user_input)
                             if decision_payload is None:
