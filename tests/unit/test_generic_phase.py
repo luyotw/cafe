@@ -196,6 +196,25 @@ def test_build_prompt_includes_user_input_when_set(tmp_path: Path) -> None:
     assert "Please prioritize the auth module." in prompt
 
 
+def test_build_prompt_keeps_review_engine_as_discovery_only(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+    prompt = phase.build_prompt(
+        skill_name="cafe-review",
+        skill_invocation="$cafe-review",
+        context={
+            "review_engine_id": "codex-review",
+            "review_engine_mode": "native_command",
+            "review_engine_guidance": "Read candidates from review_engine.md.",
+        },
+    )
+
+    assert "Review discovery engine:" in prompt
+    assert "- id: codex-review" in prompt
+    assert "- mode: native_command" in prompt
+    assert "Read candidates from review_engine.md." in prompt
+    assert "Complete the phase skill's full acceptance, risk, ledger, and handoff" in prompt
+
+
 def test_build_prompt_renders_actionable_current_resume_scope(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     prompt = phase.build_prompt(
