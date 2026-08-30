@@ -215,6 +215,80 @@ def test_root_symlink_digest_binds_confined_target_behavior(
     assert content_digest(global_playbook) == before
 
 
+def test_approved_root_symlink_publishes_self_contained_global_content(
+    tmp_path: Path,
+) -> None:
+    service, project, global_root = _service(tmp_path)
+    playbooks = project / ".cafe" / "playbooks"
+    target = playbooks / "standard.data"
+    target.parent.mkdir(parents=True)
+    target.write_text("playbook: {id: standard}\nsteps: {}\n", encoding="utf-8")
+    project_entry = playbooks / "standard.yaml"
+    project_entry.symlink_to(target.name)
+    approved = service.compare()
+
+    result = service.sync(approved.token, ["playbook:standard"])
+    project_entry.unlink()
+    target.unlink()
+    global_entry = CatalogResolver(
+        project_root=tmp_path / "other-project",
+        canonical_root=tmp_path / "other-project",
+        global_root=global_root,
+        builtin_root=tmp_path / "other-builtin",
+    ).resolve(CatalogKind.PLAYBOOK, "standard")
+
+    assert result.updated == ("playbook:standard",)
+    assert result.comparison.status == "identical"
+    assert global_entry.source == "global"
+    assert global_entry.digest == approved.differences[0].project_digest
+
+
+def test_approved_directory_root_symlink_publishes_self_contained_global_content(
+    tmp_path: Path,
+) -> None:
+    service, project, global_root = _service(tmp_path)
+    skills = project / ".cafe" / "skills"
+    support = skills / "support"
+    support.mkdir(parents=True)
+    (support / "SKILL.md").write_text(
+        "---\nname: support\ndescription: project\n---\n",
+        encoding="utf-8",
+    )
+    target = support / "variants" / "develop"
+    target.mkdir(parents=True)
+    (target / "SKILL.md").write_text(
+        "---\nname: develop\ndescription: project\n---\n",
+        encoding="utf-8",
+    )
+    project_entry = skills / "develop"
+    project_entry.symlink_to(target.relative_to(skills), target_is_directory=True)
+    approved = service.compare()
+    approved_digest = next(
+        item.project_digest
+        for item in approved.differences
+        if item.entry_id == "phase:develop"
+    )
+
+    result = service.sync(approved.token, ["phase:develop"])
+    project_entry.unlink()
+    (target / "SKILL.md").unlink()
+    target.rmdir()
+    target.parent.rmdir()
+    global_entry = CatalogResolver(
+        project_root=tmp_path / "other-project",
+        canonical_root=tmp_path / "other-project",
+        global_root=global_root,
+        builtin_root=tmp_path / "other-builtin",
+    ).resolve(CatalogKind.PHASE, "develop")
+
+    assert result.updated == ("phase:develop",)
+    assert "phase:develop" not in {
+        item.entry_id for item in result.comparison.differences
+    }
+    assert global_entry.source == "global"
+    assert global_entry.digest == approved_digest
+
+
 @pytest.mark.parametrize("link_level", ["entry", "nested"])
 def test_catalog_comparison_rejects_symlink_targets_outside_entry_authority(
     tmp_path: Path, link_level: str

@@ -169,6 +169,26 @@ def content_digest(
     if not authority_root.is_dir():
         raise CatalogValidationError("Catalog digest authority must be a directory")
 
+    digest_root = path
+    if path.is_symlink():
+        target_base = Path(root_symlink_base) if root_symlink_base is not None else path.parent
+        target_path = Path(os.readlink(path))
+        if not target_path.is_absolute():
+            target_path = target_base / target_path
+        try:
+            prospective_target = target_path.resolve(strict=False)
+            if not prospective_target.is_relative_to(authority_root):
+                raise CatalogValidationError(
+                    f"Catalog symlink target escapes entry authority: {path}"
+                )
+            digest_root = target_path.resolve(strict=True)
+            if not digest_root.is_relative_to(authority_root):
+                raise CatalogValidationError(
+                    f"Catalog symlink target escapes entry authority: {path}"
+                )
+        except (OSError, RuntimeError) as exc:
+            raise CatalogValidationError(f"Catalog symlink target is unavailable: {path}") from exc
+
     digest = hashlib.sha256()
     active_nodes: set[tuple[int, int, int]] = set()
     node_count = 0
@@ -249,7 +269,7 @@ def content_digest(
         finally:
             active_nodes.remove(identity)
 
-    add_tree(path, ".", 0)
+    add_tree(digest_root, ".", 0)
     return digest.hexdigest()
 
 
@@ -395,9 +415,11 @@ class CatalogResolver:
             return self._resolve_unlocked(kind, key)
 
     def _keys_at_root(self, kind: CatalogKind, root: Path) -> Iterator[str]:
+        if root.is_symlink():
+            raise CatalogValidationError(f"Catalog root is not a real directory: {root}")
         if not root.exists():
             return
-        if root.is_symlink() or not root.is_dir():
+        if not root.is_dir():
             raise CatalogValidationError(f"Catalog root is not a real directory: {root}")
         if kind is CatalogKind.PLAYBOOK:
             yield from (item.stem for item in root.glob("*.yaml"))

@@ -11,6 +11,7 @@ from cafe.catalogs.resolver import (
     CatalogValidationError,
     discover_project_roots,
 )
+from cafe.skills.loader import SkillLoader
 
 
 def _write_entry(root: Path, kind: CatalogKind, key: str, marker: str) -> Path:
@@ -80,6 +81,25 @@ def test_invalid_project_entry_fails_instead_of_falling_through(tmp_path: Path) 
 
     with pytest.raises(CatalogValidationError):
         resolver.resolve(CatalogKind.PLAYBOOK, "standard")
+
+
+def test_broken_project_catalog_root_fails_instead_of_falling_through(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    builtin = tmp_path / "builtin"
+    _write_entry(builtin, CatalogKind.PHASE, "develop", "builtin")
+    catalog_root = project / ".cafe" / "skills"
+    catalog_root.parent.mkdir(parents=True)
+    catalog_root.symlink_to(project / "missing-skills", target_is_directory=True)
+    loader = SkillLoader(
+        project_root=project,
+        global_root=tmp_path / "global",
+        builtin_root=builtin,
+    )
+
+    with pytest.raises(CatalogValidationError):
+        loader.discover()
 
 
 @pytest.mark.parametrize(

@@ -160,7 +160,14 @@ def _validate_publishable(kind: CatalogKind, key: str, path: Path) -> None:
 def _copy_entry(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     if source.is_symlink():
-        destination.symlink_to(os.readlink(source))
+        authority_root = source.parent.resolve(strict=True)
+        target = source.resolve(strict=True)
+        if not target.is_relative_to(authority_root):
+            raise CatalogSyncError(f"Catalog symlink target escapes entry authority: {source}")
+        if target.is_dir():
+            shutil.copytree(target, destination, symlinks=True)
+        else:
+            shutil.copy2(target, destination, follow_symlinks=False)
     elif source.is_dir():
         shutil.copytree(source, destination, symlinks=True)
     else:
