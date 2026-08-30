@@ -266,18 +266,6 @@ class GenericPhase:
                     "This is a derived manifest, not a new source of truth. Read previous_output and re-verify prior findings or requested changes item by item before completing this step.",
                 ]
             )
-        if context and context.get("review_engine_guidance"):
-            runtime_context.extend(
-                [
-                    "Review discovery engine:",
-                    f"- id: {context.get('review_engine_id', 'unknown')}",
-                    f"- mode: {context.get('review_engine_mode', 'unknown')}",
-                    context["review_engine_guidance"],
-                    "The discovery engine supplies candidates only. Complete the phase skill's "
-                    "full acceptance, risk, ledger, and handoff procedure even when discovery "
-                    "already found a blocker.",
-                ]
-            )
         if context and context.get("user_input"):
             runtime_context.extend(
                 ["Current user input for this iteration:", context["user_input"]]

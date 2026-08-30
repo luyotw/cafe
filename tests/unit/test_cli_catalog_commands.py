@@ -1,7 +1,6 @@
 """Tests for playbook/skill catalog CLI commands."""
 
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from typer.testing import CliRunner
@@ -131,32 +130,6 @@ def test_skill_sync_global_reports_when_no_cli_is_detected(
     assert result.exit_code == 0
     assert "No supported CLI agents detected" in result.stdout
     assert not home_dir.exists()
-
-
-def test_skill_review_fallback_update_is_read_only_by_default(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    updater = SimpleNamespace(
-        check=lambda target_ref: SimpleNamespace(
-            current_revision="a" * 40,
-            target_revision="b" * 40,
-            changed=True,
-            diff="--- pinned\n+++ upstream",
-        ),
-        apply=lambda plan: (_ for _ in ()).throw(AssertionError("must stay read-only")),
-    )
-
-    with patch(
-        "cafe.ui.commands.catalog.ReviewFallbackUpdater",
-        return_value=updater,
-    ):
-        result = runner.invoke(app, ["skill", "update-review-fallback"])
-
-    assert result.exit_code == 0
-    assert f"current={'a' * 40}" in result.stdout
-    assert "content_changed=true" in result.stdout
-    assert "Read-only check" in result.stdout
 
 
 def test_playbook_validate_reports_warning_and_strict_failure(tmp_path: Path, monkeypatch) -> None:

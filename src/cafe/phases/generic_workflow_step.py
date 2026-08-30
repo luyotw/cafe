@@ -11,7 +11,6 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
-from cafe.agents.executor import AgentExecutor as ConcreteAgentExecutor
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import (
     ArtifactEntry,
@@ -67,8 +66,6 @@ from cafe.skills.contracts import (
     resolve_prompt_inputs,
 )
 from cafe.skills.loader import SkillLoader, canonical_skill_name
-from cafe.skills.review_engines import ReviewEngineService, review_engine_prompt_context
-from cafe.skills.review_fallback import ReviewFallbackUpdater
 from cafe.templates.manager import TemplateManager
 from cafe.utils.git_utils import get_git_toplevel, get_repo_root, to_cwd_relative_path
 from cafe.utils.phase_config import load_phase_step_model
@@ -140,7 +137,6 @@ class GenericWorkflowStepExecutor(Phase):
         interactive: bool = False,
         config_allowed_directories: Optional[List[str]] = None,
         extra_allowed_directories: Optional[List[str]] = None,
-        review_engine_service: Optional[ReviewEngineService] = None,
     ) -> None:
         self.interactive = interactive
         self.issue_dir = issue_dir
@@ -164,7 +160,6 @@ class GenericWorkflowStepExecutor(Phase):
         self._config_allowed_directories: List[str] = list(config_allowed_directories or [])
         self._extra_allowed_directories: List[str] = list(extra_allowed_directories or [])
         self._template_allowed_directories: List[str] = []
-        self.review_engine_service = review_engine_service or ReviewEngineService()
 
     def _get_allowed_directories(self) -> List[str]:
         base = super()._get_allowed_directories()
@@ -177,19 +172,6 @@ class GenericWorkflowStepExecutor(Phase):
             )
         )
         return merged
-
-    @staticmethod
-    def _provider_aware_invocation(invocations: Mapping[AgentCLI, str]) -> str:
-        """Describe one skill invocation across a runtime fallback chain."""
-        grouped: Dict[str, List[str]] = {}
-        for cli, invocation in invocations.items():
-            grouped.setdefault(invocation, []).append(cli.value)
-        if len(grouped) == 1:
-            return next(iter(grouped))
-        choices = "; ".join(
-            f"{invocation} for {', '.join(cli_names)}" for invocation, cli_names in grouped.items()
-        )
-        return f"select the invocation for the CLI executing this prompt: {choices}"
 
     @staticmethod
     def _read_regular_file(path: Path, *, fail_closed: bool) -> Optional[bytes]:
@@ -343,12 +325,7 @@ class GenericWorkflowStepExecutor(Phase):
             same_invocation_retry=same_invocation_retry,
         )
         self._apply_step_agent_model(step_name=step_name, step_def=step_def, agent_name=agent_name)
-        effective_agent_config = self._resolve_execution_config_for_iteration(
-            agent_name=agent_name,
-            step_name=step_name,
-            continuation=self._session_continuation,
-        )
-        agent_cli = effective_agent_config.cli
+        agent_cli = self.agent_manager.get_agent(agent_name).config.cli
         context = self._build_context(
             step_name=step_name,
             step_def=step_def,
@@ -370,61 +347,21 @@ class GenericWorkflowStepExecutor(Phase):
             role=step_def.get("role"),
             step_name=step_name,
         )
-        is_review_phase = canonical_skill_name(skill_name) == "cafe-review"
-        managed_skill_names = [*workflow_skill_names, skill_name]
-        review_agent_clis = [agent_cli]
-        if is_review_phase:
-            for entry in getattr(effective_agent_config, "clis", None) or []:
-                entry_cli = getattr(entry, "cli", None)
-                if isinstance(entry_cli, AgentCLI) and entry_cli not in review_agent_clis:
-                    review_agent_clis.append(entry_cli)
-            for backup_cli in getattr(effective_agent_config, "backup_clis", None) or []:
-                if isinstance(backup_cli, AgentCLI) and backup_cli not in review_agent_clis:
-                    review_agent_clis.append(backup_cli)
-
-        shared_invocations_by_skill: List[Dict[AgentCLI, str]] = [{} for _ in workflow_skill_names]
-        phase_invocations: Dict[AgentCLI, str] = {}
-        fallback_invocations: Dict[AgentCLI, str] = {}
-        fallback_review_invocation = ""
-        for target_cli in review_agent_clis:
-            self.generic_phase.skill_bridge.synchronize_skills(
-                managed_skill_names,
-                target_cli,
-                install=False,
-            )
-            target_shared_invocations = self.generic_phase.prepare_skills(
-                skill_names=workflow_skill_names,
-                agent_cli=target_cli,
-                context=context,
-            )
-            for index, invocation in enumerate(target_shared_invocations):
-                shared_invocations_by_skill[index][target_cli] = invocation
-            phase_invocations[target_cli] = self.generic_phase.prepare_skill(
-                skill_name=skill_name,
-                agent_cli=target_cli,
-                context=context,
-            )
-            if not is_review_phase:
-                continue
-            fallback_skill_name = ReviewEngineService.FALLBACK_SKILL_NAME
-            self.generic_phase.skill_bridge.install_builtin_skill(
-                fallback_skill_name,
-                target_cli,
-                verifier=lambda skill_dir: ReviewFallbackUpdater(skill_dir).verify_local(),
-            )
-            fallback_invocations[target_cli] = (
-                self.generic_phase.skill_bridge.get_builtin_invocation(
-                    fallback_skill_name,
-                    target_cli,
-                )
-            )
-        shared_skill_invocations = [
-            self._provider_aware_invocation(invocations)
-            for invocations in shared_invocations_by_skill
-        ]
-        skill_invocation = self._provider_aware_invocation(phase_invocations)
-        if is_review_phase:
-            fallback_review_invocation = self._provider_aware_invocation(fallback_invocations)
+        self.generic_phase.skill_bridge.synchronize_skills(
+            [*workflow_skill_names, skill_name],
+            agent_cli,
+            install=False,
+        )
+        shared_skill_invocations = self.generic_phase.prepare_skills(
+            skill_names=workflow_skill_names,
+            agent_cli=agent_cli,
+            context=context,
+        )
+        skill_invocation = self.generic_phase.prepare_skill(
+            skill_name=skill_name,
+            agent_cli=agent_cli,
+            context=context,
+        )
         if not checklist_file.exists():
             self._generate_checklist(
                 step_name=step_name,
@@ -463,7 +400,6 @@ class GenericWorkflowStepExecutor(Phase):
                 if self._is_baton_retry_user_input(resolved_user_input)
                 else allowed_tools
             )
-
             def execute_agent() -> tuple[str, Optional[PhaseStatusCode]]:
                 return self._execute_agent_iteration(
                     agent_name=agent_name,
@@ -495,60 +431,6 @@ class GenericWorkflowStepExecutor(Phase):
                 response, _ = execute_agent()
             return response
 
-        def transform_runtime_context(runtime_context: Dict[str, str]) -> Dict[str, str]:
-            transformed = self._apply_resume_to_runtime_context(
-                runtime_context,
-                step_name,
-                blackboard_state,
-                extra_prompt,
-            )
-            if not is_review_phase:
-                return transformed
-            primary_executor = self.agent_manager.get_agent(agent_name)
-            base_branch = str(
-                self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
-                or self.git_ops.get_default_base_branch()
-            )
-            engine_context = self.review_engine_service.prepare(
-                cli=agent_cli,
-                project_root=self._get_skill_loader().project_root.resolve(),
-                base_branch=base_branch,
-                model=getattr(effective_agent_config, "model", None),
-                evidence_file=iteration_dir / "review_engine.md",
-                fallback_invocation=fallback_review_invocation,
-                enable_native=isinstance(primary_executor, ConcreteAgentExecutor),
-            )
-            discovery_record: Dict[str, Any] = {
-                "engine_id": engine_context.engine_id,
-                "mode": engine_context.mode,
-            }
-            if engine_context.fallback_reason is not None:
-                discovery_record["fallback_reason"] = engine_context.fallback_reason
-            if engine_context.telemetry is not None:
-                unmetered = engine_context.telemetry.to_dict()
-                discovery_record["native_invocation"] = unmetered
-                existing_stats: Dict[str, Any] = {}
-                context_file = self._resolve_iteration_context_file(iteration_dir)
-                raw_context = self._read_regular_file(context_file, fail_closed=False)
-                if raw_context is not None:
-                    try:
-                        prior_context = json.loads(raw_context.decode("utf-8"))
-                    except (UnicodeDecodeError, json.JSONDecodeError):
-                        prior_context = None
-                    if isinstance(prior_context, dict) and isinstance(
-                        prior_context.get("stats"), dict
-                    ):
-                        existing_stats.update(prior_context["stats"])
-                existing_stats["usage_complete"] = False
-                prior_invocations = existing_stats.get("unmetered_invocations")
-                invocations = list(prior_invocations) if isinstance(prior_invocations, list) else []
-                invocations.append(unmetered)
-                existing_stats["unmetered_invocations"] = invocations
-                phase_specific_data["stats"] = existing_stats
-            phase_specific_data["review_discovery"] = discovery_record
-            transformed.update(review_engine_prompt_context(engine_context))
-            return transformed
-
         execution = self.generic_phase.execute(
             skill_name=skill_name,
             step_def=step_def,
@@ -574,7 +456,14 @@ class GenericWorkflowStepExecutor(Phase):
                     else None
                 ),
                 "blackboard_state": blackboard_state,
-                "transform_runtime_context": transform_runtime_context,
+                "transform_runtime_context": (
+                    lambda runtime_context: self._apply_resume_to_runtime_context(
+                        runtime_context,
+                        step_name,
+                        blackboard_state,
+                        extra_prompt,
+                    )
+                ),
             },
         )
 
