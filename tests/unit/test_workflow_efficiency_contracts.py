@@ -122,15 +122,21 @@ def test_review_corrections_close_root_causes_without_restarting_full_audit() ->
         None,
     ]
     assert "Trace each candidate defect to its root cause" in review_steps
-    assert "re-verify each finding and corrected root cause" in correction
-    assert "map its complete boundary" in correction
+    assert "re-verify each prior blocker and corrected root cause" in correction
+    assert "map each complete boundary" in correction
     assert "direct file byte equality alone is insufficient" in correction
     assert "without restarting an unrelated repository-wide audit" in correction
     assert "closed_reused" in correction
-    assert "closed_fresh" in correction
+    assert "Correction Impact Set" in correction
+    assert "instead of rerunning its probe or rewriting its evidence" in correction
     assert "Triggered Risk Coverage" in review_steps
     assert "At most the twelve fixed obligations" in review_steps
     assert "minimal production-path probe" in review_steps
+    assert "changed trust or durable-state boundary" in review_steps
+    assert "do not rerun probes for rows validly carried as `closed_reused`" in review_steps
+    assert "`closed_reused` can never pass" not in review_steps
+    assert "every triggered obligation to be `closed_fresh`" not in review_steps
+    assert "Carried Evidence Summary" in review_steps
     assert "synthetic fixtures or mocks" in review_steps
     assert "Acceptance Closure Evidence" in review_steps
     assert "derive a bounded planless baseline" in review_steps

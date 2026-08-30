@@ -47,7 +47,7 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
     expected_versions = {
         "cafe-spec": "1.4.0",
         "cafe-plan": "1.7.0",
-        "cafe-review": "1.10.0",
+        "cafe-review": "1.11.0",
         "cafe-workflow-common": "1.8.0",
         "use-cafe-workflow": "1.27.0",
     }
@@ -92,7 +92,7 @@ def test_develop_and_review_check_long_running_resource_amplification() -> None:
     expected = "確認 long-running script 不會造成不可接受的系統負荷或資源放大"
 
     for skill_name in ("cafe-develop", "cafe-review"):
-        reference = (
-            builtin_root / skill_name / "references" / "basic_principles.md"
-        ).read_text(encoding="utf-8")
+        reference = (builtin_root / skill_name / "references" / "basic_principles.md").read_text(
+            encoding="utf-8"
+        )
         assert expected in reference
