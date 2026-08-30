@@ -92,7 +92,6 @@ version: 2.8.0
 - For a plan → execute pair, wire the playbook artifact contract before using `{plan_file}`; a skill body alone does not make the handoff work.
 - For planned output approval, wire `on.confirm_output` in the playbook before claiming the phase participates in the kickoff stop contract; routing text in the skill alone is insufficient.
 - Every phase skill declares a provider-neutral `workflow.execution_profile` with workload, reasoning, risk domains, and fallback strength. Never put a CLI provider, model name, pricing tier, or current availability claim in that profile.
-- Use `workflow.runtime_hooks` only when the phase needs a runtime-registered host capability before or after agent execution. The skill selects a named, explicitly skill-declarable hook; it never embeds provider-specific Python branching or arbitrary hook scripts.
 - If one playbook step selects different skills by iteration, describe each skill honestly. The workflow driver resolves the actual iteration skill and conservatively aggregates all variants at kickoff.
 - Declare every mandatory tool dependency once in `workflow.required_tools`; every playbook step that selects the skill must grant it in `allowed_tools`.
 - Do not duplicate global workflow handoff rules across many phase skills. Put those rules in a shared skill.

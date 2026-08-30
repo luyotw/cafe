@@ -11,7 +11,6 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
-from cafe.agents.executor import AgentExecutor as ConcreteAgentExecutor
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import (
     ArtifactEntry,
@@ -331,7 +330,6 @@ class GenericWorkflowStepExecutor(Phase):
             step_name=step_name,
             continuation=self._session_continuation,
         )
-        agent_cli = effective_agent_config.cli
         context = self._build_context(
             step_name=step_name,
             step_def=step_def,
@@ -487,19 +485,6 @@ class GenericWorkflowStepExecutor(Phase):
                 ),
                 "blackboard_state": blackboard_state,
                 "transform_runtime_context": transform_runtime_context,
-                "runtime_agent_cli": agent_cli,
-                "runtime_agent_clis": runtime_agent_clis,
-                "runtime_agent_model": getattr(effective_agent_config, "model", None),
-                "runtime_project_root": self._get_skill_loader().project_root.resolve(),
-                "runtime_base_branch": str(
-                    self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
-                    or self.git_ops.get_default_base_branch()
-                ),
-                "runtime_native_execution_enabled": isinstance(
-                    self.agent_manager.get_agent(agent_name), ConcreteAgentExecutor
-                ),
-                "iteration_context_file": self._resolve_iteration_context_file(iteration_dir),
-                "phase_specific_data": phase_specific_data,
             },
         )
 

@@ -9,11 +9,11 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import Mapping
 
 from cafe.core.types import AgentCLI
 from cafe.skills.exceptions import SkillDiscoveryError
-from cafe.skills.loader import SkillLoader, read_skill_frontmatter
+from cafe.skills.loader import SkillLoader
 
 
 @dataclass(frozen=True)
@@ -142,53 +142,6 @@ class NativeSkillBridge:
         self._record_managed_skill(cli, target_dir.name)
         return target_dir
 
-    def install_builtin_skill(
-        self,
-        name: str,
-        cli: AgentCLI,
-        *,
-        verifier: Callable[[Path], None] | None = None,
-    ) -> Path:
-        """Install an exact builtin skill without catalog shadow resolution.
-
-        This path is reserved for runtime-governed skills whose bundled
-        provenance is part of the workflow contract. The optional verifier is
-        run on both the source and installed copy so drift fails closed before
-        the agent receives an invocation.
-        """
-        if Path(name).name != name:
-            raise SkillDiscoveryError(f"Invalid builtin skill name: {name!r}")
-        builtin_skills_root = (self.skill_loader.builtin_root / "skills").resolve()
-        source_dir = builtin_skills_root / name
-        if source_dir.is_symlink() or not source_dir.is_dir():
-            raise SkillDiscoveryError(f"Builtin skill not found: {name}")
-        if not source_dir.resolve().is_relative_to(builtin_skills_root):
-            raise SkillDiscoveryError(f"Builtin skill escapes catalog root: {name}")
-        metadata = read_skill_frontmatter(source_dir / "SKILL.md")
-        if metadata.get("name") != name:
-            raise SkillDiscoveryError(f"Builtin skill frontmatter name must match folder: {name}")
-        if verifier is not None:
-            verifier(source_dir)
-
-        target_dir = self._ensure_native_skills_dir(cli) / name
-        if target_dir.exists():
-            shutil.rmtree(target_dir)
-        shutil.copytree(source_dir, target_dir)
-        try:
-            if verifier is not None:
-                verifier(target_dir)
-        except Exception:
-            shutil.rmtree(target_dir, ignore_errors=True)
-            raise
-        self._record_managed_skill(cli, target_dir.name)
-        return target_dir
-
-    def get_builtin_invocation(self, name: str, cli: AgentCLI) -> str:
-        """Return invocation syntax for an exact builtin skill name."""
-        if Path(name).name != name:
-            raise SkillDiscoveryError(f"Invalid builtin skill name: {name!r}")
-        return f"{self.CLI_PREFIXES[cli]}{name}"
-
     @staticmethod
     def provider_aware_invocation(invocations: Mapping[AgentCLI, str]) -> str:
         """Describe one installed skill across the effective CLI fallback chain."""
@@ -200,8 +153,7 @@ class NativeSkillBridge:
         if len(grouped) == 1:
             return next(iter(grouped))
         choices = "; ".join(
-            f"{invocation} for {', '.join(cli_names)}"
-            for invocation, cli_names in grouped.items()
+            f"{invocation} for {', '.join(cli_names)}" for invocation, cli_names in grouped.items()
         )
         return f"select the invocation for the CLI executing this prompt: {choices}"
 

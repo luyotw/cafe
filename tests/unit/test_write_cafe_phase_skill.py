@@ -28,8 +28,6 @@ def test_write_cafe_phase_repairs_only_its_declarative_layer() -> None:
     assert "provider-neutral execution-requirement metadata" in normalized_spec
     assert "Do not name a CLI provider, model, pricing tier" in normalized_spec
     assert "conservatively aggregate every declared variant" in normalized_spec
-    assert "workflow.runtime_hooks" in skill
-    assert "arbitrary scripts and unrelated privileged hooks remain unavailable" in normalized_spec
 
 
 def test_write_cafe_phase_requires_confirmed_supporting_skill_selection() -> None:
@@ -59,7 +57,10 @@ def test_write_cafe_phase_requires_confirmed_supporting_skill_selection() -> Non
     assert "某個 CLI 已找到原生候選，不會阻止其他尚未解決的 CLI" in normalized_spec
     assert "先完成覆蓋所有目標 CLI 的 proposed selection matrix" in normalized_spec
     assert "決定使用哪一個方案前" in normalized_spec
-    assert "等待 user 明確確認後，才可採用原生 Skill、安裝或 vendor 開源內容，或開始撰寫" in normalized_spec
+    assert (
+        "等待 user 明確確認後，才可採用原生 Skill、安裝或 vendor 開源內容，或開始撰寫"
+        in normalized_spec
+    )
     assert "Runtime 只負責安裝、啟用與執行已固定的 Skill 組合" in normalized_spec
     assert "不搜尋網路、不下載 mutable latest、不猜測替代品" in normalized_spec
     assert "不得在 phase runtime 自動拉取" in normalized_spec

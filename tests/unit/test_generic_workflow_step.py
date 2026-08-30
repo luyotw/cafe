@@ -1,7 +1,6 @@
 """Tests for direct workflow step execution."""
 
 import json
-import shutil
 from collections.abc import Iterator
 from pathlib import Path
 from types import MethodType, SimpleNamespace
@@ -18,7 +17,6 @@ from cafe.core.blackboard import (
     HandoffOwner,
 )
 from cafe.core.hooks import HookResult
-from cafe.core.hooks.review import ReviewDiscoveryHook
 from cafe.core.resume_user_input import CONTINUE_USER_INPUT
 from cafe.core.session_continuation import (
     SessionContinuation,
@@ -28,13 +26,10 @@ from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import AgentCLI, AgentConfig, CliEntry, TokenUsage
 from cafe.phases.generic_phase import GenericPhase, GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
-from cafe.review.engine import NativeReviewTelemetry, ReviewEngineContext
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.phase_config import PhaseStepModelResolution
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(autouse=True)
@@ -158,11 +153,6 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
                 "workflow:\n  prompt_inputs:\n"
                 "    - artifacts: [code]\n      placeholder: develop_file\n      required: false\n"
             )
-        if name == "cafe-review":
-            workflow = (
-                "workflow:\n  runtime_hooks:\n"
-                "    prepare_input: [ReviewDiscoveryHook]\n"
-            )
         if name == "synthesis":
             workflow = (
                 "workflow:\n  prompt_inputs:\n"
@@ -176,11 +166,6 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
             f"---\nname: {name}\ndescription: desc\n{workflow}---\n\n{body}",
             encoding="utf-8",
         )
-    shutil.copytree(
-        REPO_ROOT / "src/cafe/data/skills/cafe-review-fallback",
-        skill_root / "cafe-review-fallback",
-        dirs_exist_ok=True,
-    )
     synthesis_templates = skill_root / "synthesis" / "assets" / "templates"
     synthesis_templates.mkdir(parents=True, exist_ok=True)
     (synthesis_templates / "evidence.md").write_text("# Evidence\n", encoding="utf-8")
@@ -1207,7 +1192,7 @@ def test_first_iteration_declared_initial_task_uses_empty_optional_input(
     assert executor._load_iteration_user_input_candidate("draft") == ""
 
 
-def test_review_step_uses_effective_sticky_cli_and_exact_builtin_fallback(
+def test_review_step_installs_phase_skill_for_effective_cli_chain(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -1249,48 +1234,14 @@ def test_review_step_uses_effective_sticky_cli_and_exact_builtin_fallback(
     store.set_artifact(state, "spec", str(spec_file))
     store.set_artifact(state, "plan", str(plan_file))
     generic_phase = _build_loader(tmp_path)
-    project_shadow = tmp_path / ".cafe/skills/cafe-review-fallback"
-    project_shadow.mkdir(parents=True)
-    (project_shadow / "SKILL.md").write_text(
-        "---\nname: cafe-review-fallback\ndescription: shadow\n---\n\nUnpinned shadow.\n",
-        encoding="utf-8",
-    )
-    generic_phase.skill_loader.discover()
-    iteration_dir = issue_dir / "review/iteration_001"
-    iteration_dir.mkdir(parents=True)
-    (iteration_dir / "iteration.json").write_text(
-        json.dumps(
-            {
-                "iteration": 1,
-                "stats": {
-                    "input_tokens": 17,
-                    "total_cost_usd": 0.25,
-                    "unmetered_invocations": [{"kind": "earlier_auxiliary"}],
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
     installed_skill_names: list[str] = []
-    installed_builtin_names: list[str] = []
     original_install_skill = generic_phase.skill_bridge.install_skill
-    original_install_builtin_skill = generic_phase.skill_bridge.install_builtin_skill
 
     def record_skill_install(name, cli, context=None):
         installed_skill_names.append(name)
         return original_install_skill(name, cli, context)
 
     monkeypatch.setattr(generic_phase.skill_bridge, "install_skill", record_skill_install)
-
-    def record_builtin_skill_install(name, cli, *, verifier=None):
-        installed_builtin_names.append(name)
-        return original_install_builtin_skill(name, cli, verifier=verifier)
-
-    monkeypatch.setattr(
-        generic_phase.skill_bridge,
-        "install_builtin_skill",
-        record_builtin_skill_install,
-    )
 
     class StickyProviderManager(FakeAgentManager):
         def get_execution_config(self, agent_name, phase_name=None, continuation=None):
@@ -1305,31 +1256,6 @@ def test_review_step_uses_effective_sticky_cli_and_exact_builtin_fallback(
                 backup_clis=[AgentCLI.CODEX],
             )
 
-    class FailedNativeReviewService:
-        def prepare(self, **kwargs):
-            assert kwargs["cli"] == AgentCLI.COPILOT
-            assert kwargs["model"] == "sticky-review-model"
-            assert "/cafe-review-fallback for copilot" in kwargs["fallback_invocation"]
-            assert "$cafe-review-fallback for codex" in kwargs["fallback_invocation"]
-            return ReviewEngineContext(
-                engine_id="anthropic-pr-review-toolkit",
-                mode="fallback_skill",
-                fallback_reason="native review failed",
-                guidance=f"Invoke {kwargs['fallback_invocation']} exactly once.",
-                telemetry=NativeReviewTelemetry(
-                    engine_id="native-review-attempt",
-                    cli=AgentCLI.COPILOT,
-                    outcome="failed",
-                    duration_ms=23,
-                ),
-            )
-
-    monkeypatch.setattr(
-        ReviewDiscoveryHook,
-        "service_factory",
-        FailedNativeReviewService,
-    )
-
     agent_manager = StickyProviderManager("confirmed")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
@@ -1343,6 +1269,7 @@ def test_review_step_uses_effective_sticky_cli_and_exact_builtin_fallback(
 
     result = executor.execute_step("review", playbook["steps"]["review"], state)
 
+    iteration_dir = issue_dir / "review" / "iteration_001"
     assert (tmp_path / ".copilot" / "skills" / "cafe-workflow-common" / "SKILL.md").exists()
     assert (tmp_path / ".copilot" / "skills" / "cafe-github_sync" / "SKILL.md").exists()
     assert (tmp_path / ".copilot" / "skills" / "cafe-review" / "SKILL.md").exists()
@@ -1355,11 +1282,6 @@ def test_review_step_uses_effective_sticky_cli_and_exact_builtin_fallback(
         "cafe-github_sync",
         "review",
     ]
-    assert installed_builtin_names == ["cafe-review-fallback", "cafe-review-fallback"]
-    installed_fallback = tmp_path / ".copilot/skills/cafe-review-fallback"
-    assert "Unpinned shadow" not in (installed_fallback / "SKILL.md").read_text(encoding="utf-8")
-    assert (installed_fallback / "assets/upstream.json").is_file()
-    assert (tmp_path / ".codex/skills/cafe-review-fallback/assets/upstream.json").is_file()
     output_file = iteration_dir / "output.md"
     checklist_file = iteration_dir / "checklist.md"
     assert result.artifacts["review_feedback"] == str(output_file)
@@ -1387,24 +1309,11 @@ def test_review_step_uses_effective_sticky_cli_and_exact_builtin_fallback(
     assert "Phase skill: select the invocation for the CLI executing this prompt" in prompt
     assert "/cafe-review for copilot" in prompt
     assert "$cafe-review for codex" in prompt
-    assert "Runtime hook instructions:" in prompt
-    assert "Review discovery engine:" in prompt
-    assert "- id: anthropic-pr-review-toolkit" in prompt
-    assert "/cafe-review-fallback for copilot" in prompt
-    assert "$cafe-review-fallback for codex" in prompt
+    assert "Runtime hook instructions:" not in prompt
     assert f"output_file={output_file}" in prompt
     assert f"checklist_file={checklist_file}" in prompt
     assert "blackboard_file=./.cafe/issues/issue-review-skill/blackboard.json" in prompt
     assert "next_step_file=./.cafe/issues/issue-review-skill/next_step.txt" in prompt
-    iteration_record = json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))
-    assert iteration_record["stats"]["input_tokens"] == 17
-    assert iteration_record["stats"]["total_cost_usd"] == 0.25
-    assert iteration_record["stats"]["usage_complete"] is False
-    assert [item["kind"] for item in iteration_record["stats"]["unmetered_invocations"]] == [
-        "earlier_auxiliary",
-        "native_review",
-    ]
-    assert iteration_record["stats"]["unmetered_invocations"][-1]["duration_ms"] == 23
 
 
 def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(

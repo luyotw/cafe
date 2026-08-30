@@ -196,29 +196,6 @@ def test_build_prompt_includes_user_input_when_set(tmp_path: Path) -> None:
     assert "Please prioritize the auth module." in prompt
 
 
-def test_build_prompt_renders_generic_runtime_hook_instructions(tmp_path: Path) -> None:
-    phase = GenericPhase(_setup_loader(tmp_path))
-    prompt = phase.build_prompt(
-        skill_name="cafe-review",
-        skill_invocation="$cafe-review",
-        context={
-            "runtime_hook_instructions": (
-                "Review discovery engine:\n"
-                "- id: codex-review\n"
-                "- mode: native_command\n"
-                "Read candidates from review_engine.md.\n"
-                "Complete the phase skill's full acceptance, risk, ledger, and handoff."
-            ),
-        },
-    )
-
-    assert "Review discovery engine:" in prompt
-    assert "- id: codex-review" in prompt
-    assert "- mode: native_command" in prompt
-    assert "Read candidates from review_engine.md." in prompt
-    assert "Complete the phase skill's full acceptance, risk, ledger, and handoff" in prompt
-
-
 def test_build_prompt_renders_actionable_current_resume_scope(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     prompt = phase.build_prompt(
@@ -369,21 +346,6 @@ class PrepareHook:
         return HookResult(context_updates={"who": "prepared"})
 
 
-class SkillPrepareHook:
-    name = "SkillPrepareHook"
-    skill_stages = frozenset({"prepare_input"})
-
-    def run(self, **kwargs):
-        return HookResult(prompt_instructions=["Run the skill-selected discovery pass."])
-
-
-class RuntimeOnlyHook:
-    name = "RuntimeOnlyHook"
-
-    def run(self, **kwargs):
-        return HookResult()
-
-
 class CapturePreparedContextHook:
     name = "CapturePreparedContextHook"
     seen_context: dict[str, str] = {}
@@ -445,65 +407,6 @@ def test_execute_short_circuits_when_before_execute_stops(tmp_path: Path) -> Non
     assert calls == []
     assert result.status_code == PhaseStatusCode.NEED_CLARIFICATION
     assert result.events == [{"type": "stopped"}]
-
-
-def test_execute_runs_skill_declared_host_hook(tmp_path: Path) -> None:
-    loader = _setup_loader(tmp_path)
-    skill_file = loader.get_skill_dir("cafe-plan") / "SKILL.md"
-    skill_file.write_text(
-        """---
-name: cafe-plan
-description: desc
-workflow:
-  runtime_hooks:
-    prepare_input: [SkillPrepareHook]
----
-
-Plan.
-""",
-        encoding="utf-8",
-    )
-    loader.discover()
-    phase = GenericPhase(loader, hook_registry={"SkillPrepareHook": SkillPrepareHook})
-    prompts: list[str] = []
-
-    phase.execute(
-        skill_name="cafe-plan",
-        skill_invocation="/plan",
-        step_def={"valid_intents": ["confirmed"]},
-        agent_executor=lambda prompt: prompts.append(prompt) or "confirmed",
-    )
-
-    assert "Runtime hook instructions:" in prompts[0]
-    assert "Run the skill-selected discovery pass." in prompts[0]
-
-
-def test_execute_rejects_hook_not_exposed_to_skills(tmp_path: Path) -> None:
-    loader = _setup_loader(tmp_path)
-    skill_file = loader.get_skill_dir("cafe-plan") / "SKILL.md"
-    skill_file.write_text(
-        """---
-name: cafe-plan
-description: desc
-workflow:
-  runtime_hooks:
-    prepare_input: [RuntimeOnlyHook]
----
-
-Plan.
-""",
-        encoding="utf-8",
-    )
-    loader.discover()
-    phase = GenericPhase(loader, hook_registry={"RuntimeOnlyHook": RuntimeOnlyHook})
-
-    with pytest.raises(ValueError, match="cannot be declared by a skill"):
-        phase.execute(
-            skill_name="cafe-plan",
-            skill_invocation="/plan",
-            step_def={"valid_intents": ["confirmed"]},
-            agent_executor=lambda prompt: "confirmed",
-        )
 
 
 def test_execute_runs_prepare_input_and_after_execute_retry(tmp_path: Path) -> None:

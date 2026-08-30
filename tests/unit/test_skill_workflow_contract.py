@@ -78,22 +78,6 @@ def test_workflow_contract_parses_provider_neutral_execution_profile() -> None:
     assert contract.execution_profile.risk_domains == ("correctness", "security")
 
 
-def test_workflow_contract_parses_named_runtime_hooks() -> None:
-    contract = SkillWorkflowContract.model_validate(
-        {"runtime_hooks": {"prepare_input": ["ReviewDiscoveryHook"]}}
-    )
-
-    assert contract.runtime_hooks.prepare_input == ("ReviewDiscoveryHook",)
-
-
-@pytest.mark.parametrize("hook_name", ["", "../ReviewDiscoveryHook", "nested/hook"])
-def test_workflow_contract_rejects_unsafe_runtime_hook_names(hook_name: str) -> None:
-    with pytest.raises(ValidationError, match="runtime hook"):
-        SkillWorkflowContract.model_validate(
-            {"runtime_hooks": {"prepare_input": [hook_name]}}
-        )
-
-
 def test_workflow_contract_rejects_invalid_execution_profile() -> None:
     with pytest.raises(ValidationError, match="risk_domains must not contain duplicates"):
         SkillWorkflowContract.model_validate(

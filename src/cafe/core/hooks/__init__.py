@@ -17,7 +17,6 @@ class HookResult:
     artifact_ready: bool = True
     override_status_code: Optional[PhaseStatusCode] = None
     context_updates: Dict[str, str] = field(default_factory=dict)
-    prompt_instructions: List[str] = field(default_factory=list)
     events: List[Dict[str, Any]] = field(default_factory=list)
 
 
@@ -82,7 +81,6 @@ from cafe.core.hooks.native import (
 )
 from cafe.core.hooks.alignment import AlignmentCheckpointGate
 from cafe.core.hooks.feedback import GitHubPRFeedbackSource, LocalReviewContextProvider
-from cafe.core.hooks.review import ReviewDiscoveryHook
 
 
 BUILTIN_HOOKS = {
@@ -101,23 +99,5 @@ BUILTIN_HOOKS = {
         PRCommentPoster,
         PRLinkOpener,
         AlignmentCheckpointGate,
-        ReviewDiscoveryHook,
     ]
 }
-
-
-def resolve_skill_hook_class(
-    hook_registry: Dict[str, type],
-    *,
-    name: str,
-    stage: str,
-) -> type:
-    """Resolve one host hook only when it explicitly permits skill selection."""
-    hook_cls = hook_registry.get(name)
-    if hook_cls is None:
-        raise ValueError(f"Unknown skill runtime hook '{name}' in stage '{stage}'")
-    if stage not in getattr(hook_cls, "skill_stages", ()):
-        raise ValueError(
-            f"Hook '{name}' cannot be declared by a skill in stage '{stage}'"
-        )
-    return hook_cls

@@ -284,12 +284,6 @@ ExecutionWorkload = Literal[
 ]
 ExecutionReasoning = Literal["routine", "standard", "high"]
 FallbackStrength = Literal["equivalent", "equivalent_or_stronger"]
-RUNTIME_HOOK_STAGES = (
-    "before_execute",
-    "prepare_input",
-    "after_execute",
-    "publish_output",
-)
 
 
 class ExecutionProfile(BaseModel):
@@ -311,25 +305,6 @@ class ExecutionProfile(BaseModel):
         return cleaned
 
 
-class RuntimeHooksContract(BaseModel):
-    """Named host hooks selected by a skill at supported lifecycle stages."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    before_execute: Tuple[str, ...] = ()
-    prepare_input: Tuple[str, ...] = ()
-    after_execute: Tuple[str, ...] = ()
-    publish_output: Tuple[str, ...] = ()
-
-    @field_validator(*RUNTIME_HOOK_STAGES)
-    @classmethod
-    def _validate_hook_names(cls, value: Tuple[str, ...]) -> Tuple[str, ...]:
-        cleaned = tuple(_safe_token(item, field_name="runtime hook") for item in value)
-        if len(set(cleaned)) != len(cleaned):
-            raise ValueError("runtime hook names must be unique within a stage")
-        return cleaned
-
-
 class SkillWorkflowContract(BaseModel):
     """All optional workflow metadata carried in a skill frontmatter block."""
 
@@ -342,7 +317,6 @@ class SkillWorkflowContract(BaseModel):
     output_templates: Optional[OutputTemplatesContract] = None
     human_tasks: Tuple[HumanTaskPolicy, ...] = ()
     execution_profile: Optional[ExecutionProfile] = None
-    runtime_hooks: RuntimeHooksContract = Field(default_factory=RuntimeHooksContract)
 
     @field_validator("required_tools")
     @classmethod

@@ -1,7 +1,8 @@
-"""Governed upstream updates for the bundled portable review skill."""
+"""Governed upstream updates for cafe-review's portable procedure."""
 
 from __future__ import annotations
 
+import argparse
 import difflib
 import hashlib
 import json
@@ -47,6 +48,7 @@ class ReviewFallbackUpdatePlan:
     target_source: bytes
     target_procedure: bytes
     diff: str
+    diff_truncated: bool
 
     @property
     def changed(self) -> bool:
@@ -59,9 +61,9 @@ class ReviewFallbackUpdatePlan:
 class ReviewFallbackUpdater:
     """Check and apply a pinned update without overwriting local drift."""
 
-    MANIFEST_RELATIVE_PATH = Path("assets/upstream.json")
-    LOCK_RELATIVE_PATH = Path("assets/update.lock")
-    EXPECTED_LICENSE_PATH = "references/LICENSE.md"
+    MANIFEST_RELATIVE_PATH = Path("assets/review_fallback_upstream.json")
+    LOCK_RELATIVE_PATH = Path("assets/review_fallback_update.lock")
+    EXPECTED_LICENSE_PATH = "references/review_fallback_LICENSE.md"
     EXPECTED_PROCEDURE_PATH = "references/review_procedure.md"
     EXPECTED_REPOSITORY = "anthropics/claude-plugins-official"
     EXPECTED_SOURCE_PATH = "plugins/pr-review-toolkit/agents/code-reviewer.md"
@@ -111,12 +113,12 @@ class ReviewFallbackUpdater:
         target_source_sha = self._sha256(target_source)
         target_procedure = self._normalize_upstream_content(target_source)
         target_procedure_sha = self._sha256(target_procedure)
-        source_diff = self._bounded_diff(
+        source_diff, source_diff_truncated = self._bounded_diff(
             current_source,
             target_source,
             Path(source_path).name,
         )
-        procedure_diff = self._bounded_diff(
+        procedure_diff, procedure_diff_truncated = self._bounded_diff(
             current_procedure,
             target_procedure,
             procedure_path.name,
@@ -137,12 +139,21 @@ class ReviewFallbackUpdater:
             target_source=target_source,
             target_procedure=target_procedure,
             diff="\n\n".join(diff_sections),
+            diff_truncated=source_diff_truncated or procedure_diff_truncated,
         )
 
     def apply(self, plan: ReviewFallbackUpdatePlan) -> None:
         """Apply a checked plan after verifying neither source file has drifted."""
+        if plan.diff_truncated:
+            raise ReviewFallbackUpdateError(
+                "upstream delta was truncated; inspect and update the procedure manually"
+            )
         with self._exclusive_update_lock():
             manifest, procedure_path, current_procedure = self._verified_local_state()
+            manifest_path = self._safe_skill_file(
+                self.MANIFEST_RELATIVE_PATH,
+                field="fallback manifest",
+            )
             if self._required_string(manifest, "pinned_revision") != plan.current_revision:
                 raise ReviewFallbackUpdateError("fallback manifest changed after the update check")
             if self._required_digest(manifest, "source_sha256") != plan.current_source_sha256:
@@ -174,7 +185,7 @@ class ReviewFallbackUpdater:
             self._atomic_write(procedure_path, plan.target_procedure)
             try:
                 self._atomic_write(
-                    self.skill_dir / self.MANIFEST_RELATIVE_PATH,
+                    manifest_path,
                     (json.dumps(next_manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
                 )
             except Exception:
@@ -215,7 +226,10 @@ class ReviewFallbackUpdater:
 
     @contextmanager
     def _exclusive_update_lock(self) -> Iterator[None]:
-        lock_path = self.skill_dir / self.LOCK_RELATIVE_PATH
+        lock_path = self._safe_skill_file(
+            self.LOCK_RELATIVE_PATH,
+            field="fallback update lock",
+        )
         flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
@@ -253,7 +267,10 @@ class ReviewFallbackUpdater:
                 os.close(descriptor)
 
     def _load_manifest(self) -> dict[str, object]:
-        path = self.skill_dir / self.MANIFEST_RELATIVE_PATH
+        path = self._safe_skill_file(
+            self.MANIFEST_RELATIVE_PATH,
+            field="fallback manifest",
+        )
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -266,12 +283,10 @@ class ReviewFallbackUpdater:
             raise ReviewFallbackUpdateError(
                 f"fallback license_path must remain {self.EXPECTED_LICENSE_PATH}"
             )
-        license_path = self._safe_skill_relative_path(
-            self._required_string(raw, "license_path"),
+        self._safe_skill_file(
+            Path(self._required_string(raw, "license_path")),
             field="license_path",
         )
-        if not license_path.is_file():
-            raise ReviewFallbackUpdateError("fallback Apache-2.0 license copy is missing")
         return raw
 
     def _procedure_path(self, manifest: Mapping[str, object]) -> Path:
@@ -279,27 +294,32 @@ class ReviewFallbackUpdater:
             raise ReviewFallbackUpdateError(
                 f"fallback procedure_path must remain {self.EXPECTED_PROCEDURE_PATH}"
             )
-        return self._safe_skill_relative_path(
-            self._required_string(manifest, "procedure_path"),
+        return self._safe_skill_file(
+            Path(self._required_string(manifest, "procedure_path")),
             field="procedure_path",
         )
 
-    def _safe_skill_relative_path(self, value: str, *, field: str) -> Path:
-        relative = Path(value)
+    def _safe_skill_file(self, relative: Path, *, field: str) -> Path:
+        """Resolve one existing regular file without traversing skill-local symlinks."""
         if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
             raise ReviewFallbackUpdateError(f"{field} must stay inside the fallback skill")
         candidate = self.skill_dir / relative
         current = self.skill_dir
-        for part in relative.parts:
+        for index, part in enumerate(relative.parts):
             current = current / part
-            if current.is_symlink():
+            try:
+                metadata = current.lstat()
+            except OSError as exc:
+                raise ReviewFallbackUpdateError(f"{field} is missing or unreadable: {exc}") from exc
+            if stat.S_ISLNK(metadata.st_mode):
                 raise ReviewFallbackUpdateError(f"{field} must not traverse a symlink")
-        resolved = candidate.resolve()
+            if index < len(relative.parts) - 1 and not stat.S_ISDIR(metadata.st_mode):
+                raise ReviewFallbackUpdateError(f"{field} ancestor must be a directory")
+            if index == len(relative.parts) - 1 and not stat.S_ISREG(metadata.st_mode):
+                raise ReviewFallbackUpdateError(f"{field} must be a regular file")
+        resolved = candidate.resolve(strict=True)
         if not resolved.is_relative_to(self.skill_dir):
             raise ReviewFallbackUpdateError(f"{field} escapes the fallback skill")
-        references_dir = (self.skill_dir / "references").resolve()
-        if not resolved.is_relative_to(references_dir):
-            raise ReviewFallbackUpdateError(f"{field} must stay inside references")
         return resolved
 
     @staticmethod
@@ -411,6 +431,24 @@ class ReviewFallbackUpdater:
                 "upstream review frontmatter changed; manual adapter review is required"
             )
         body = text[frontmatter_end + len("\n---\n") :].lstrip("\n")
+        body = re.sub(
+            r"## When to invoke\n.*?(?=## Review Scope\n)",
+            "",
+            body,
+            flags=re.DOTALL,
+        )
+        body = re.sub(
+            r"## Review Scope\n.*?(?=\n## Core Review Responsibilities\n)",
+            (
+                "## Review Scope\n\n"
+                "Review the caller-supplied authoritative change scope completely. "
+                "Include committed, staged, unstaged, and untracked changes whenever "
+                "the supplied scope includes them; never substitute a default `git diff` "
+                "scope or stop after the first finding.\n"
+            ),
+            body,
+            flags=re.DOTALL,
+        )
         replacements = {
             "project guidelines in CLAUDE.md": (
                 "the repository's applicable project-guidance files"
@@ -424,12 +462,17 @@ class ReviewFallbackUpdater:
         }
         for before, after in replacements.items():
             body = body.replace(before, after)
+        body = body.replace(
+            "If no high-confidence issues exist, confirm the code meets standards with a brief summary.",
+            (
+                'If no high-confidence issues exist, report "No candidate findings." '
+                "This discovery result is not a CAFE pass/fail verdict."
+            ),
+        )
         normalized = (
             "# Portable Code Review Procedure\n\n"
             "> Adapted from the pinned upstream reviewer. Provider and model metadata are "
-            "intentionally excluded.\n\n"
-            + body.rstrip()
-            + "\n"
+            "intentionally excluded.\n\n" + body.rstrip() + "\n"
         ).encode("utf-8")
         cls._validate_procedure_content(normalized)
         return normalized
@@ -443,17 +486,29 @@ class ReviewFallbackUpdater:
         required_markers = (
             "# Portable Code Review Procedure",
             "## Review Scope",
+            "caller-supplied authoritative change scope completely",
             "## Core Review Responsibilities",
             "## Issue Confidence Scoring",
             "Only report issues with confidence ≥ 80",
             "## Output Format",
+            'report "No candidate findings."',
+            "not a CAFE pass/fail verdict",
         )
         missing = [marker for marker in required_markers if marker not in text]
         if missing:
             raise ReviewFallbackUpdateError(
                 "portable review procedure is incomplete: " + ", ".join(missing)
             )
-        forbidden = ("CLAUDE.md", "model: opus", "color: green", "name: code-reviewer")
+        forbidden = (
+            "CLAUDE.md",
+            "model: opus",
+            "color: green",
+            "name: code-reviewer",
+            "## When to invoke",
+            "Spawn this agent",
+            "By default, review unstaged changes",
+            "confirm the code meets standards",
+        )
         present = [marker for marker in forbidden if marker in text]
         if present:
             raise ReviewFallbackUpdateError(
@@ -462,9 +517,9 @@ class ReviewFallbackUpdater:
             )
 
     @classmethod
-    def _bounded_diff(cls, before: bytes, after: bytes, filename: str) -> str:
+    def _bounded_diff(cls, before: bytes, after: bytes, filename: str) -> tuple[str, bool]:
         if before == after:
-            return ""
+            return "", False
         before_lines = before.decode("utf-8", errors="replace").splitlines()
         after_lines = after.decode("utf-8", errors="replace").splitlines()
         lines = list(
@@ -481,9 +536,10 @@ class ReviewFallbackUpdater:
         encoded = text.encode("utf-8")
         if len(encoded) > cls.MAX_DIFF_BYTES:
             text = encoded[: cls.MAX_DIFF_BYTES].decode("utf-8", errors="ignore")
-        if len(selected) < len(lines) or len(text.encode("utf-8")) < len(encoded):
+        truncated = len(selected) < len(lines) or len(text.encode("utf-8")) < len(encoded)
+        if truncated:
             text += "\n[CAFE truncated upstream diff]"
-        return text
+        return text, truncated
 
     @staticmethod
     def _sha256(content: bytes) -> str:
@@ -525,3 +581,73 @@ class ReviewFallbackUpdater:
         finally:
             if temporary_path.exists():
                 temporary_path.unlink()
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Check the pinned upstream and optionally apply the reviewed update."""
+    parser = argparse.ArgumentParser(
+        description="Check or update cafe-review's pinned portable procedure."
+    )
+    parser.add_argument(
+        "--ref",
+        default="main",
+        help="Upstream branch, tag, or commit to inspect (default: main)",
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply an exact previously inspected revision and source digest",
+    )
+    parser.add_argument(
+        "--expect-source-sha256",
+        help="Exact target_source_sha256 printed by the prior read-only check",
+    )
+    arguments = parser.parse_args(argv)
+    skill_dir = Path(__file__).resolve().parent.parent
+    updater = ReviewFallbackUpdater(skill_dir)
+    try:
+        if arguments.apply:
+            updater._validate_revision(arguments.ref, field="--apply --ref")
+            if arguments.expect_source_sha256 is None:
+                raise ReviewFallbackUpdateError(
+                    "--apply requires --expect-source-sha256 from a prior read-only check"
+                )
+            updater._validate_digest(
+                arguments.expect_source_sha256,
+                field="--expect-source-sha256",
+            )
+        plan = updater.check(target_ref=arguments.ref)
+        print("source=anthropics/claude-plugins-official")
+        print(f"current={plan.current_revision}")
+        print(f"target={plan.target_revision}")
+        print(f"target_source_sha256={plan.target_source_sha256}")
+        print(f"content_changed={str(plan.changed).lower()}")
+        if plan.diff:
+            print("\nUpstream delta")
+            print(plan.diff)
+        else:
+            print("No upstream content delta.")
+        if arguments.apply:
+            if plan.target_revision.lower() != arguments.ref.lower():
+                raise ReviewFallbackUpdateError(
+                    "resolved target revision differs from the exact inspected --ref"
+                )
+            if plan.target_source_sha256 != arguments.expect_source_sha256.lower():
+                raise ReviewFallbackUpdateError(
+                    "target source digest differs from the previously inspected digest"
+                )
+            updater.apply(plan)
+            print("Applied pinned portable procedure; review and test before committing.")
+        else:
+            print(
+                "Read-only check; after reviewing the complete delta, apply with "
+                f"--ref {plan.target_revision} --expect-source-sha256 "
+                f"{plan.target_source_sha256} --apply."
+            )
+    except ReviewFallbackUpdateError as exc:
+        parser.exit(1, f"error: {exc}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

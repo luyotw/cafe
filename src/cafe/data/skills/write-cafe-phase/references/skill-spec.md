@@ -57,8 +57,6 @@ how the skill consumes them:
 
 ```yaml
 workflow:
-  runtime_hooks:
-    prepare_input: [ExampleDiscoveryHook]
   execution_profile:
     workload: research
     reasoning: high
@@ -105,16 +103,6 @@ variant, while execution-time reassessment resolves the skill for the actual
 iteration. A legacy custom phase without this field receives the neutral
 `general`/`standard`/`equivalent` default and must be reported as
 defaulted rather than silently inferred from its step name.
-
-- `runtime_hooks` lets a phase skill select a host capability without adding a
-  phase-name or skill-name branch to generic runtime code. Supported stages are
-  `before_execute`, `prepare_input`, `after_execute`, and `publish_output`.
-  Entries are stable registered hook names only. Runtime accepts a skill-owned
-  declaration only when that hook implementation explicitly allows the named
-  stage; arbitrary scripts and unrelated privileged hooks remain unavailable.
-  Keep provider probing, failover, bounded native execution, and telemetry in
-  the registered hook implementation. Keep the provider-neutral selection and
-  phase intent in the skill declaration.
 
 - `required_tools` lists tool contracts the skill cannot execute correctly
   without. Every playbook step selecting the skill must grant each declaration

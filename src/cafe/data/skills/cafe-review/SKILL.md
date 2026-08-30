@@ -1,10 +1,8 @@
 ---
 name: cafe-review
 description: "審查程式碼品質與風險"
-version: 1.9.0
+version: 1.10.0
 workflow:
-  runtime_hooks:
-    prepare_input: [ReviewDiscoveryHook]
   execution_profile:
     workload: review
     reasoning: high
@@ -92,10 +90,17 @@ Read your agent file: {agent_file}
 ## Context
 - Use the workflow inputs listed in the runtime context. Review every supplied requirement, plan, implementation artifact, and feedback item that applies to this run.
 
+## Available scripts
+- `scripts/update_review_fallback.py` — maintainer-only updater for the pinned open-source review procedure; never run it during workflow execution.
+
+    python scripts/update_review_fallback.py --help
+
 ## Instructions
 - 以缺陷與風險為主
 - 先確認目前提供的需求、計畫與實作是否一致
-- 先依 runtime context 選定的 review discovery engine 完成一次完整候選缺陷掃描；原生 reviewer 與 fallback 都只能提供候選 finding，不能取代本 phase 的 acceptance、risk、ledger 與 handoff 判定
+- 使用本版經 authoring-time 確認的 review discovery matrix：Codex 與 Claude 的既有 reviewer 是 host-side CLI command，不是 phase 內可直接組合的原生 Skill；Gemini、Cursor 與 Copilot 也沒有已確認的等價原生 Skill，因此五個 CLI 都使用 `references/review_procedure.md` 的 pinned 開源 procedure。不得在 runtime 自行搜尋、下載或替換 reviewer
+- 讀取 `references/review_procedure.md`，依本輪完整 change scope 執行恰好一次候選缺陷掃描；其輸出只能作為 candidate findings，不能取代本 phase 的 acceptance、risk、ledger 與 handoff 判定
+- 若未來某個 CLI 提供可在 phase 內直接組合的原生 review Skill，必須先依 `write-cafe-phase` 的 selection matrix 流程取得 user 確認，再更新本 Skill；不得把 `codex review`、`claude ultrareview` 或其他巢狀 CLI subprocess 當成原生 Skill 偷跑
 - 優先指出行為回歸、缺少測試與高風險問題
 - Repo 搜尋與輸出上限：請依 shared skill「cafe-workflow-common」的 **Bounded repository inspection**；本 skill 不重複敘述。
 - 測試證據、repository hooks 與 CI 的分工：請依 shared skill「cafe-workflow-common」的 **Repository-owned quality gates**；本 skill 不重複敘述。

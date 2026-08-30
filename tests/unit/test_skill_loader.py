@@ -345,39 +345,6 @@ def test_install_skill_refuses_valid_symlink_to_external_directory(
     assert not (external_skills / "cafe-plan").exists()
 
 
-def test_install_builtin_skill_ignores_project_shadow_and_verifies_copy(tmp_path: Path) -> None:
-    builtin_root = tmp_path / "builtin" / "skills"
-    project_root = tmp_path / "project"
-    _write_skill(builtin_root, "trusted-review")
-    _write_skill(project_root / ".cafe" / "skills", "trusted-review")
-    (builtin_root / "trusted-review" / "marker.txt").write_text("builtin\n", encoding="utf-8")
-    (project_root / ".cafe/skills/trusted-review/marker.txt").write_text(
-        "shadow\n", encoding="utf-8"
-    )
-    loader = SkillLoader(
-        project_root=project_root,
-        global_root=tmp_path / "global",
-        builtin_root=tmp_path / "builtin",
-    )
-    loader.discover()
-    bridge = NativeSkillBridge(loader, project_root=project_root, home_dir=tmp_path / "home")
-    verified: list[Path] = []
-
-    def verify(skill_dir: Path) -> None:
-        assert (skill_dir / "marker.txt").read_text(encoding="utf-8") == "builtin\n"
-        verified.append(skill_dir)
-
-    installed = bridge.install_builtin_skill(
-        "trusted-review",
-        AgentCLI.CODEX,
-        verifier=verify,
-    )
-
-    assert (installed / "marker.txt").read_text(encoding="utf-8") == "builtin\n"
-    assert verified == [builtin_root / "trusted-review", installed]
-    assert bridge.get_builtin_invocation("trusted-review", AgentCLI.CODEX) == "$trusted-review"
-
-
 @pytest.mark.parametrize("manifest_contents", ["{broken", "{}"])
 def test_synchronize_skills_recovers_stale_skills_from_a_corrupted_manifest(
     tmp_path: Path, manifest_contents: str

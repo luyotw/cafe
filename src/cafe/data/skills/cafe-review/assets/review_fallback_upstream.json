@@ -1,9 +1,9 @@
 {
   "license": "Apache-2.0",
-  "license_path": "references/LICENSE.md",
+  "license_path": "references/review_fallback_LICENSE.md",
   "pinned_revision": "ed404106fcd80ba98ecb7c851e531dcb626d13b7",
   "procedure_path": "references/review_procedure.md",
-  "procedure_sha256": "dbbbc902da6b5f8ce5ff208e61fe8ec1673371a270f5229dce3f8d4ac3af1696",
+  "procedure_sha256": "838b0d355c60d6f45a394d3eb64da6df9521e30c33a6bb076152f7f9d9b1a2c3",
   "schema_version": 2,
   "source_path": "plugins/pr-review-toolkit/agents/code-reviewer.md",
   "source_repository": "anthropics/claude-plugins-official",

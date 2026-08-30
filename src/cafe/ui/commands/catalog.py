@@ -9,12 +9,9 @@ import typer
 import yaml
 from rich.console import Console
 
-from cafe.core.hooks import BUILTIN_HOOKS, resolve_skill_hook_class
 from cafe.core.playbook import confirmation_gate_steps
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook, format_dot, format_text_report
-from cafe.review.fallback import ReviewFallbackUpdateError, ReviewFallbackUpdater
-from cafe.skills.contracts import RUNTIME_HOOK_STAGES
 from cafe.skills.global_installer import GlobalSkillSyncSummary, sync_global_skills
 from cafe.skills.importer import SkillImportSummary, import_skills, preview_importable_skills
 from cafe.skills.loader import SkillLoader, canonical_skill_name
@@ -222,18 +219,7 @@ def skill_validate(
 ) -> None:
     """Validate all discovered skills."""
     try:
-        loader = _build_skill_loader()
-        items = loader.discover(strict=strict)
-        if strict:
-            for item in items:
-                contract = loader.get_workflow_contract(item.name)
-                for stage in RUNTIME_HOOK_STAGES:
-                    for hook_name in getattr(contract.runtime_hooks, stage):
-                        resolve_skill_hook_class(
-                            BUILTIN_HOOKS,
-                            name=hook_name,
-                            stage=stage,
-                        )
+        items = _build_skill_loader().discover(strict=strict)
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
@@ -371,47 +357,6 @@ def skill_sync_global(
 
     _print_global_skill_sync_summary(summary)
     if summary.failed_count:
-        raise typer.Exit(1)
-
-
-@skill_app.command(name="update-review-fallback")
-def skill_update_review_fallback(
-    target_ref: str = typer.Option(
-        "main",
-        "--ref",
-        help="Upstream branch, tag, or commit to inspect",
-    ),
-    apply_update: bool = typer.Option(
-        False,
-        "--apply",
-        help="Apply the inspected snapshot and pin after drift/contract checks",
-    ),
-) -> None:
-    """Check or apply the pinned open-source review fallback update."""
-    loader = _build_skill_loader()
-    skill_dir = loader.builtin_root / "skills" / "cafe-review-fallback"
-    updater = ReviewFallbackUpdater(skill_dir)
-    try:
-        plan = updater.check(target_ref=target_ref)
-        console.print("source=anthropics/claude-plugins-official")
-        console.print(f"current={plan.current_revision}")
-        console.print(f"target={plan.target_revision}")
-        console.print(f"content_changed={str(plan.changed).lower()}")
-        if plan.diff:
-            console.print("\n[bold]Upstream delta[/bold]")
-            console.print(plan.diff, markup=False)
-        else:
-            console.print("[dim]No upstream content delta.[/dim]")
-        if apply_update:
-            updater.apply(plan)
-            console.print(
-                "[green]Applied pinned fallback procedure.[/green] "
-                "Review the wrapper contract and run focused tests before committing."
-            )
-        else:
-            console.print("[dim]Read-only check; use --apply to update the pinned procedure.[/dim]")
-    except ReviewFallbackUpdateError as exc:
-        console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(1)
 
 
