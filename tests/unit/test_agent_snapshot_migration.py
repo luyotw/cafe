@@ -11,7 +11,7 @@ from cafe.catalogs.migration import (
     MigrationDecisionError,
     StaleMigrationDecision,
 )
-from cafe.catalogs.resolver import CatalogResolver
+from cafe.catalogs.resolver import CatalogResolver, CatalogValidationError
 
 
 def _agent(path: Path, name: str, body: str) -> Path:
@@ -104,6 +104,42 @@ def test_changed_file_rejects_preview_token_without_modification(tmp_path: Path)
     with pytest.raises(StaleMigrationDecision):
         migrator.apply(preview.token, {"agent:developer/David": "retire"})
     assert snapshot.is_file()
+
+
+@pytest.mark.parametrize("change_point", ["before_apply", "after_complete"])
+def test_symlink_target_change_invalidates_migration_decision_and_replay(
+    tmp_path: Path, change_point: str
+) -> None:
+    migrator, project, _builtin = _migrator(tmp_path)
+    source = project / ".cafe" / "agents" / "developer" / "David.md"
+    target = _agent(source.with_suffix(".agent"), "David", "approved")
+    source.symlink_to(target.name)
+    preview = migrator.preview()
+    decisions = {"agent:developer/David": "retire"}
+
+    if change_point == "before_apply":
+        target.write_text(target.read_text(encoding="utf-8") + "changed\n", encoding="utf-8")
+        with pytest.raises(StaleMigrationDecision):
+            migrator.apply(preview.token, decisions)
+        assert source.is_symlink()
+    else:
+        migrator.apply(preview.token, decisions)
+        target.write_text(target.read_text(encoding="utf-8") + "changed\n", encoding="utf-8")
+        with pytest.raises(StaleMigrationDecision):
+            migrator.apply(preview.token, decisions)
+
+
+def test_migration_preview_rejects_symlink_target_outside_entry_authority(
+    tmp_path: Path,
+) -> None:
+    migrator, project, _builtin = _migrator(tmp_path)
+    external = _agent(tmp_path / "external-agent", "David", "outside")
+    source = project / ".cafe" / "agents" / "developer" / "David.md"
+    source.parent.mkdir(parents=True)
+    source.symlink_to(external)
+
+    with pytest.raises(CatalogValidationError):
+        migrator.preview()
 
 
 def test_retirement_fails_closed_when_source_is_swapped_at_the_move_boundary(
@@ -314,10 +350,9 @@ def test_interrupted_relative_symlink_retirement_resumes_from_recovery_entry(
 
     project = tmp_path / "project"
     role_dir = project / ".cafe" / "agents" / "developer"
-    _agent(project / ".cafe" / "agent-assets" / "David.md", "David", "custom")
+    _agent(role_dir / "David.agent", "David", "custom")
     source = role_dir / "David.md"
-    source.parent.mkdir(parents=True)
-    relative_target = Path("../../agent-assets/David.md")
+    relative_target = Path("David.agent")
     source.symlink_to(relative_target)
     migrator = AgentSnapshotMigrator(
         CatalogResolver(

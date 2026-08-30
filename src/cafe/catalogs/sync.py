@@ -446,9 +446,9 @@ class CatalogSyncService:
                     staged = staged_root / relative
                     self.failure_injector("stage", entry_id)
                     _copy_entry(item.project_path, staged)
-                    _validate_publishable(CatalogKind(item.kind), item.key, staged)
                     if content_digest(staged) != item.project_digest:
                         raise CatalogSyncError(f"Staged content changed: {entry_id}")
+                    _validate_publishable(CatalogKind(item.kind), item.key, staged)
                 fsync_tree(staged_root)
                 journal_payload["status"] = "prepared"
                 write_json_durable(journal, journal_payload)

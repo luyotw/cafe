@@ -10,7 +10,12 @@ import pytest
 
 from cafe.agents.manager import AgentManager
 from cafe.catalogs.migration import AgentSnapshotMigrator
-from cafe.catalogs.resolver import CatalogKind, CatalogResolver, content_digest
+from cafe.catalogs.resolver import (
+    CatalogKind,
+    CatalogResolver,
+    CatalogValidationError,
+    content_digest,
+)
 from cafe.catalogs.sync import CatalogSyncError, CatalogSyncService, StaleComparisonError
 from cafe.catalogs.transactions import CatalogRecoveryError
 from cafe.playbooks.loader import PlaybookLoader
@@ -184,16 +189,78 @@ def test_digest_covers_file_mode_and_symlink_target(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("target_change", ["content", "mode"])
+def test_root_symlink_digest_binds_confined_target_behavior(
+    tmp_path: Path, target_change: str
+) -> None:
+    service, project, global_root = _service(tmp_path)
+    playbooks = project / ".cafe" / "playbooks"
+    target = playbooks / "standard.data"
+    target.parent.mkdir(parents=True)
+    target.write_text("playbook: {id: standard}\nsteps: {}\n", encoding="utf-8")
+    (playbooks / "standard.yaml").symlink_to(target.name)
+    global_playbook = _entry(global_root, CatalogKind.PLAYBOOK, "standard", "global")
+    approved = service.compare()
+    before = content_digest(global_playbook)
+
+    if target_change == "content":
+        target.write_text(
+            "playbook: {id: standard}\nsteps: {}\nchanged: true\n",
+            encoding="utf-8",
+        )
+    else:
+        target.chmod(0o744)
+
+    with pytest.raises(StaleComparisonError):
+        service.sync(approved.token, ["playbook:standard"])
+    assert content_digest(global_playbook) == before
+
+
+@pytest.mark.parametrize("link_level", ["entry", "nested"])
+def test_catalog_comparison_rejects_symlink_targets_outside_entry_authority(
+    tmp_path: Path, link_level: str
+) -> None:
+    service, project, _global_root = _service(tmp_path)
+    external = tmp_path / "external"
+    if link_level == "entry":
+        external.write_text("playbook: {id: standard}\nsteps: {}\n", encoding="utf-8")
+        link = project / ".cafe" / "playbooks" / "standard.yaml"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(external)
+    else:
+        skill = _entry(project / ".cafe", CatalogKind.PHASE, "develop", "project")
+        external.write_text("outside\n", encoding="utf-8")
+        (skill / "policy.md").symlink_to(external)
+
+    with pytest.raises(CatalogValidationError):
+        service.compare()
+
+
+@pytest.mark.parametrize(
+    ("limit", "value"),
+    [("max_nodes", 1), ("max_bytes", 3), ("max_depth", 0)],
+)
+def test_catalog_digest_rejects_work_beyond_explicit_bounds(
+    tmp_path: Path, limit: str, value: int
+) -> None:
+    tree = tmp_path / "tree"
+    nested = tree / "nested"
+    nested.mkdir(parents=True)
+    (nested / "content").write_text("1234", encoding="utf-8")
+
+    with pytest.raises(CatalogValidationError):
+        content_digest(tree, **{limit: value})
+
+
+@pytest.mark.parametrize("target_change", ["content", "mode"])
 def test_skill_symlink_target_change_invalidates_publication_approval(
     tmp_path: Path, target_change: str
 ) -> None:
     service, project, global_root = _service(tmp_path)
     project_skill = _entry(project / ".cafe", CatalogKind.PHASE, "develop", "project")
     global_skill = _entry(global_root, CatalogKind.PHASE, "develop", "global")
-    target = project / "skill-assets" / "policy.md"
-    target.parent.mkdir(parents=True)
+    target = project_skill / "policy.data"
     target.write_text("approved\n", encoding="utf-8")
-    (project_skill / "policy.md").symlink_to(target)
+    (project_skill / "policy.md").symlink_to(target.name)
     report = service.compare()
     before = content_digest(global_skill)
 

@@ -15,6 +15,15 @@ from cafe.ui.human_tasks import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_global_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
+    )
+
+
 def _write_skill(root: Path, name: str) -> None:
     skill_dir = root / name
     skill_dir.mkdir(parents=True, exist_ok=True)

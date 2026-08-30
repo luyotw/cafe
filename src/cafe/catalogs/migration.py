@@ -122,6 +122,13 @@ def _open_file_digest(descriptor: int, mode: int) -> str:
     return digest.hexdigest()
 
 
+def _retired_content_digest(path: Path, source: Path) -> str:
+    """Digest a retired root symlink as if it remained at its approved source."""
+    if path.is_symlink() and path != source:
+        return content_digest(path, root_symlink_base=source.parent)
+    return content_digest(path)
+
+
 @contextmanager
 def _bound_agent_source(path: Path, expected_digest: str) -> Iterator[tuple[int, int, int]]:
     """Hold and validate the approved filesystem object through retirement."""
@@ -205,7 +212,7 @@ class AgentSnapshotMigrator:
         ]
         for _source, root, _layer in reversed(roots):
             path = self.resolver.candidate_path(CatalogKind.AGENT, key, root)
-            if path.is_file() or path.is_symlink():
+            if path.exists() or path.is_symlink():
                 return content_digest(path)
         return "missing"
 
@@ -556,7 +563,7 @@ class AgentSnapshotMigrator:
                 status = item.status
             else:
                 raise StaleMigrationDecision("Migration manifest content is unavailable")
-            digest = content_digest(content_path)
+            digest = _retired_content_digest(content_path, source)
             fallback_digest = self._fallback_digest(item.entry_id.removeprefix("agent:"))
             current_items.append(
                 MigrationItem(
@@ -647,7 +654,7 @@ class AgentSnapshotMigrator:
         if (
             self._record_path_exists(source)
             or not self._record_path_exists(destination)
-            or content_digest(destination) != digest
+            or _retired_content_digest(destination, source) != digest
         ):
             raise StaleMigrationDecision(
                 f"Retired agent recovery evidence changed after checkpoint: {entry_id}"
@@ -711,7 +718,7 @@ class AgentSnapshotMigrator:
             destination_matches = (
                 self._record_path_exists(destination)
                 and _filesystem_identity(destination.lstat()) == approved_identity
-                and content_digest(destination) == digest
+                and _retired_content_digest(destination, source) == digest
             )
             if not destination_matches or self._record_path_exists(source):
                 if self._record_path_exists(destination) and not self._record_path_exists(source):
@@ -767,7 +774,7 @@ class AgentSnapshotMigrator:
                     self._retire_identity_bound(source, destination, digest, entry_id)
                 elif (
                     not self._record_path_exists(destination)
-                    or content_digest(destination) != digest
+                    or _retired_content_digest(destination, source) != digest
                 ):
                     raise StaleMigrationDecision(
                         f"Retired agent state is unrecoverable: {entry_id}"
@@ -813,7 +820,12 @@ class AgentSnapshotMigrator:
                 return self._result_from_manifest(manifest, payload)
             return self._resume(manifest, payload, decisions)
 
-        current = self.preview()
+        try:
+            current = self.preview()
+        except CatalogValidationError as exc:
+            raise StaleMigrationDecision(
+                "Agent migration source became unsafe; compare again"
+            ) from exc
         if current.token != token:
             raise StaleMigrationDecision("Agent migration preview is stale; compare again")
         expected = {item.entry_id for item in current.items}

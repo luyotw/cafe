@@ -59,6 +59,10 @@ GitRunner = Callable[[tuple[str, ...], Path], str]
 
 _catalog_lock_state = threading.local()
 
+_MAX_DIGEST_NODES = 10_000
+_MAX_DIGEST_BYTES = 64 * 1024 * 1024
+_MAX_DIGEST_DEPTH = 64
+
 
 @contextmanager
 def global_catalog_lock(global_root: Path, *, exclusive: bool = False) -> Iterator[None]:
@@ -141,30 +145,71 @@ def discover_project_roots(start: Path, *, git_runner: GitRunner = _run_git) -> 
         return ProjectRoots(active=root, canonical=root)
 
 
-def content_digest(path: Path) -> str:
-    """Hash validated file/tree content, modes, and symlink targets deterministically."""
+def content_digest(
+    path: Path,
+    *,
+    max_nodes: int = _MAX_DIGEST_NODES,
+    max_bytes: int = _MAX_DIGEST_BYTES,
+    max_depth: int = _MAX_DIGEST_DEPTH,
+    root_symlink_base: Optional[Path] = None,
+) -> str:
+    """Hash one confined catalog entry with deterministic resource bounds."""
     path = Path(path)
     if not path.exists() and not path.is_symlink():
         return "missing"
+    if max_nodes < 1 or max_bytes < 0 or max_depth < 0:
+        raise CatalogValidationError("Catalog digest bounds must be non-negative")
+
+    if root_symlink_base is not None:
+        authority_root = Path(root_symlink_base).resolve(strict=True)
+    elif path.is_symlink() or not path.is_dir():
+        authority_root = path.parent.resolve(strict=True)
+    else:
+        authority_root = path.resolve(strict=True)
+    if not authority_root.is_dir():
+        raise CatalogValidationError("Catalog digest authority must be a directory")
 
     digest = hashlib.sha256()
-
     active_nodes: set[tuple[int, int, int]] = set()
+    node_count = 0
+    byte_count = 0
 
-    def add_tree(node: Path, relative: str) -> None:
+    def add_tree(node: Path, relative: str, depth: int) -> None:
+        nonlocal byte_count, node_count
+        if depth > max_depth:
+            raise CatalogValidationError(f"Catalog entry exceeds digest depth limit: {path}")
+        node_count += 1
+        if node_count > max_nodes:
+            raise CatalogValidationError(f"Catalog entry exceeds digest node limit: {path}")
         metadata = node.lstat()
         mode = stat.S_IMODE(metadata.st_mode)
         if node.is_symlink():
-            digest.update(f"L\0{relative}\0{mode:o}\0{os.readlink(node)}\0".encode())
-            if relative == ".":
-                return
+            link_target = os.readlink(node)
+            digest.update(f"L\0{relative}\0{mode:o}\0{link_target}\0".encode())
+            target_base = (
+                Path(root_symlink_base)
+                if relative == "." and root_symlink_base is not None
+                else node.parent
+            )
+            target_path = Path(link_target)
+            if not target_path.is_absolute():
+                target_path = target_base / target_path
             try:
-                target = node.resolve(strict=True)
+                prospective_target = target_path.resolve(strict=False)
+                if not prospective_target.is_relative_to(authority_root):
+                    raise CatalogValidationError(
+                        f"Catalog symlink target escapes entry authority: {node}"
+                    )
+                target = target_path.resolve(strict=True)
+                if not target.is_relative_to(authority_root):
+                    raise CatalogValidationError(
+                        f"Catalog symlink target escapes entry authority: {node}"
+                    )
             except (OSError, RuntimeError):
                 digest.update(f"T\0{relative}\0missing\0".encode())
             else:
                 digest.update(f"T\0{relative}\0".encode())
-                add_tree(target, f"{relative}/<target>")
+                add_tree(target, f"{relative}/<target>", depth + 1)
             return
 
         identity = (metadata.st_dev, metadata.st_ino, stat.S_IFMT(metadata.st_mode))
@@ -173,22 +218,38 @@ def content_digest(path: Path) -> str:
             return
         active_nodes.add(identity)
         try:
-            if node.is_file():
+            if stat.S_ISREG(metadata.st_mode):
                 digest.update(f"F\0{relative}\0{mode:o}\0".encode())
                 with node.open("rb") as handle:
-                    for chunk in iter(lambda: handle.read(65536), b""):
+                    while True:
+                        remaining = max_bytes - byte_count
+                        chunk = handle.read(min(65536, remaining + 1))
+                        if not chunk:
+                            break
+                        byte_count += len(chunk)
+                        if byte_count > max_bytes:
+                            raise CatalogValidationError(
+                                f"Catalog entry exceeds digest byte limit: {path}"
+                            )
                         digest.update(chunk)
                 digest.update(b"\0")
-            elif node.is_dir():
+            elif stat.S_ISDIR(metadata.st_mode):
                 digest.update(f"D\0{relative}\0{mode:o}\0".encode())
-                for child in sorted(node.iterdir(), key=lambda item: item.name):
-                    add_tree(child, f"{relative}/{child.name}")
+                children: list[Path] = []
+                for child in node.iterdir():
+                    if node_count + len(children) >= max_nodes:
+                        raise CatalogValidationError(
+                            f"Catalog entry exceeds digest node limit: {path}"
+                        )
+                    children.append(child)
+                for child in sorted(children, key=lambda item: item.name):
+                    add_tree(child, f"{relative}/{child.name}", depth + 1)
             else:
                 raise CatalogValidationError(f"Unsupported catalog node: {node}")
         finally:
             active_nodes.remove(identity)
 
-    add_tree(path, ".")
+    add_tree(path, ".", 0)
     return digest.hexdigest()
 
 
@@ -317,13 +378,14 @@ class CatalogResolver:
             path = self.candidate_path(kind, key, root)
             if not path.exists() and not path.is_symlink():
                 continue
+            entry_digest = content_digest(path)
             self._validate_entry(kind, key, path)
             return CatalogEntry(
                 kind=kind,
                 key=key,
                 source=source,
                 path=path,
-                digest=content_digest(path),
+                digest=entry_digest,
                 project_layer=project_layer,
             )
         raise FileNotFoundError(f"{kind.value.title()} not found: {key}")
@@ -335,12 +397,18 @@ class CatalogResolver:
     def _keys_at_root(self, kind: CatalogKind, root: Path) -> Iterator[str]:
         if not root.exists():
             return
+        if root.is_symlink() or not root.is_dir():
+            raise CatalogValidationError(f"Catalog root is not a real directory: {root}")
         if kind is CatalogKind.PLAYBOOK:
             yield from (item.stem for item in root.glob("*.yaml"))
         elif kind is CatalogKind.PHASE:
-            yield from (item.name for item in root.iterdir() if item.is_dir())
+            yield from (item.name for item in root.iterdir() if item.is_symlink() or item.is_dir())
         else:
             for role_dir in root.iterdir():
+                if role_dir.is_symlink():
+                    raise CatalogValidationError(
+                        f"Agent role directory must not be a symlink: {role_dir}"
+                    )
                 if role_dir.is_dir():
                     yield from (f"{role_dir.name}/{item.stem}" for item in role_dir.glob("*.md"))
 
@@ -376,6 +444,7 @@ class CatalogResolver:
                 for _source, root, layer in reversed(project_roots):
                     path = self.candidate_path(kind, key, root)
                     if path.exists() or path.is_symlink():
+                        entry_digest = content_digest(path)
                         self._validate_entry(kind, key, path)
                         results.append(
                             CatalogEntry(
@@ -383,7 +452,7 @@ class CatalogResolver:
                                 key=key,
                                 source="project",
                                 path=path,
-                                digest=content_digest(path),
+                                digest=entry_digest,
                                 project_layer=layer,
                             )
                         )
