@@ -1,6 +1,4 @@
 ## Finalize Review
 
-[ ] Confirm that the reviewer modified no code
-[ ] Write a brief `## Todo List` to {output_file}; findings use categorized checkbox items with file path and line number, and `Acceptance Closure Evidence` has one concise row per criterion or invariant naming its source, applicable production entry point, consumer, or artifact, evidence, and status; identify defects without providing code solutions or manufacturing a verification receipt
-[ ] Route missing requirement authority or required user input/authorization through a reactive user handoff declared by the active review step (builtin default: `need_clarification`), never an undeclared intent; route implementation, test, developer-suppliable evidence gaps, or other blocking findings to `develop`; only a fully closed review proceeds to the next workflow step
-[ ] Write the next-step baton for that result; keep the response brief because workflow transitions are controlled by the baton
+[ ] Confirm that the reviewer modified no code, then write {output_file} in this exact order: `## Review Baseline`, `## Todo List`, `## Triggered Risk Coverage`, `## Acceptance Closure Evidence`, `## Outcome`; Todo findings use categorized severity checkboxes with file path and line number, say explicitly when there are no blockers, and identify defects without code solutions, raw unbounded output, or a manufactured verification receipt
+[ ] Route missing requirement authority or required user input through the active review step's declared reactive handoff; route implementation, test, evidence, or other blocking findings to `develop`; only a fully closed exit audit proceeds to the next workflow step, then write the next-step baton and keep the response brief

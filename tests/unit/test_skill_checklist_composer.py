@@ -56,9 +56,11 @@ REQUIRED_SKILL_REFERENCES = {
     "review": [
         "execution_steps.md",
         "execution_preflight.md",
+        "execution_risk_assessment.md",
         "execution_acceptance_closure.md",
         "execution_first_pass.md",
         "execution_correction.md",
+        "execution_exit_audit.md",
         "execution_finalize.md",
         "feedback_instruction.md",
         "spec_read_instruction.md",
@@ -485,16 +487,25 @@ def test_review_correction_runtime_composes_planless_closure_contract(
 
     checklist = output_path.read_text(encoding="utf-8")
     correction_heading = "## Correction Review"
+    risk_heading = "## Triggered Risk Assessment"
     matrix_heading = "## Acceptance Closure"
+    exit_heading = "## Exit Audit"
     assert correction_heading in checklist
+    assert risk_heading in checklist
     assert matrix_heading in checklist
-    assert checklist.index(correction_heading) < checklist.index(matrix_heading)
-    assert "recorded planless baseline" in checklist
+    assert exit_heading in checklist
+    assert (
+        checklist.index(correction_heading)
+        < checklist.index(risk_heading)
+        < checklist.index(matrix_heading)
+        < checklist.index(exit_heading)
+    )
     assert "derive a bounded planless baseline" in checklist
     assert "request clarification instead of guessing" in checklist
-    assert "invariants/journeys versus implementation details" in checklist
-    assert "UI contracts" in checklist
-    assert "applicable production entry point, consumer, or artifact" in checklist
+    assert "production path" in checklist
+    assert "map its complete boundary" in checklist
+    assert "closed_fresh" in checklist
+    assert "closed_reused" in checklist
     assert "map to plan journeys/invariants" not in checklist
     assert "exact copy only when mandated in the spec" not in checklist
     assert "naming its production path" not in checklist
@@ -518,8 +529,10 @@ def test_review_legacy_aggregate_matches_first_pass_modules() -> None:
         (review_root / name).read_text(encoding="utf-8").strip()
         for name in (
             "execution_preflight.md",
-            "execution_acceptance_closure.md",
+            "execution_risk_assessment.md",
             "execution_first_pass.md",
+            "execution_acceptance_closure.md",
+            "execution_exit_audit.md",
             "execution_finalize.md",
         )
     )
@@ -590,7 +603,9 @@ def test_review_composed_checklists_stay_within_budget_and_keep_role_guidance(
         assert _review_checkbox_count(checklist) <= 28
         assert checklist.count("## Agent Guidelines Checklist") == 1
         assert checklist.split("## Agent Guidelines Checklist", 1)[1].count("[ ]") == 5
+        assert checklist.count("## Triggered Risk Assessment") == 1
         assert "## Acceptance Closure" in checklist
+        assert checklist.count("## Exit Audit") == 1
         assert "## Finalize Review" in checklist
         assert "need_permission" not in checklist
         if iteration == 1:
