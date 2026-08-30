@@ -13,12 +13,12 @@ from cafe.core.hooks import BUILTIN_HOOKS, resolve_skill_hook_class
 from cafe.core.playbook import confirmation_gate_steps
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook, format_dot, format_text_report
+from cafe.review.fallback import ReviewFallbackUpdateError, ReviewFallbackUpdater
 from cafe.skills.contracts import RUNTIME_HOOK_STAGES
 from cafe.skills.global_installer import GlobalSkillSyncSummary, sync_global_skills
 from cafe.skills.importer import SkillImportSummary, import_skills, preview_importable_skills
 from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.skills.remover import SkillRemoveSummary, remove_skills
-from cafe.skills.review_fallback import ReviewFallbackUpdateError, ReviewFallbackUpdater
 from cafe.ui.inquirer_prompts import (  # noqa: F401 — kept for type resolution; actual calls go through cli for test-patch compat
     prompt_checkbox,
     prompt_confirm,

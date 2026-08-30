@@ -11,9 +11,9 @@ from typing import Any, Sequence
 
 from cafe.core.hooks import HookResult
 from cafe.core.types import AgentCLI
+from cafe.review.engine import ReviewEngineContext, ReviewEngineService
+from cafe.review.fallback import ReviewFallbackUpdater
 from cafe.skills.native_bridge import NativeSkillBridge
-from cafe.skills.review_engines import ReviewEngineContext, ReviewEngineService
-from cafe.skills.review_fallback import ReviewFallbackUpdater
 
 
 class ReviewDiscoveryHook:

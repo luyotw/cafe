@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from cafe.skills import review_fallback as review_fallback_module
-from cafe.skills.review_fallback import ReviewFallbackUpdateError, ReviewFallbackUpdater
+from cafe.review import fallback as review_fallback_module
+from cafe.review.fallback import ReviewFallbackUpdateError, ReviewFallbackUpdater
 
 REQUIRED_SOURCE = b"""---
 name: code-reviewer

@@ -162,7 +162,9 @@ class ReviewFallbackUpdater:
                 raise ReviewFallbackUpdateError("fallback update plan source digest is invalid")
             self._validate_upstream_content(plan.target_source)
             if self._normalize_upstream_content(plan.target_source) != plan.target_procedure:
-                raise ReviewFallbackUpdateError("fallback update plan procedure is not reproducible")
+                raise ReviewFallbackUpdateError(
+                    "fallback update plan procedure is not reproducible"
+                )
             self._validate_procedure_content(plan.target_procedure)
 
             next_manifest = dict(manifest)

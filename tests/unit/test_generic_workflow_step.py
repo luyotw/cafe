@@ -28,10 +28,10 @@ from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import AgentCLI, AgentConfig, CliEntry, TokenUsage
 from cafe.phases.generic_phase import GenericPhase, GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
+from cafe.review.engine import NativeReviewTelemetry, ReviewEngineContext
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
-from cafe.skills.review_engines import NativeReviewTelemetry, ReviewEngineContext
 from cafe.utils.phase_config import PhaseStepModelResolution
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

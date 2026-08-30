@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 from cafe.core.types import AgentCLI
-from cafe.skills.review_engines import (
+from cafe.review.engine import (
     ReviewEngineService,
     native_review_capability_rows,
 )
