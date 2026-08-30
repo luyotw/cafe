@@ -165,7 +165,7 @@ def _copy_entry(source: Path, destination: Path) -> None:
         if not target.is_relative_to(authority_root):
             raise CatalogSyncError(f"Catalog symlink target escapes entry authority: {source}")
         if target.is_dir():
-            shutil.copytree(target, destination, symlinks=True)
+            shutil.copytree(target, destination, symlinks=False)
         else:
             shutil.copy2(target, destination, follow_symlinks=False)
     elif source.is_dir():

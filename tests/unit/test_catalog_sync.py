@@ -289,6 +289,57 @@ def test_approved_directory_root_symlink_publishes_self_contained_global_content
     assert global_entry.digest == approved_digest
 
 
+def test_root_directory_symlink_materializes_confined_nested_target(
+    tmp_path: Path,
+) -> None:
+    service, project, global_root = _service(tmp_path)
+    skills = project / ".cafe" / "skills"
+    support = skills / "support"
+    target = support / "variants" / "develop"
+    target.mkdir(parents=True)
+    (support / "SKILL.md").write_text(
+        "---\nname: support\ndescription: support\n---\n",
+        encoding="utf-8",
+    )
+    (target / "SKILL.md").write_text(
+        "---\nname: develop\ndescription: project\n---\n",
+        encoding="utf-8",
+    )
+    shared_policy = support / "shared" / "policy.md"
+    shared_policy.parent.mkdir()
+    shared_policy.write_text("approved policy\n", encoding="utf-8")
+    nested_link = target / "policy.md"
+    nested_link.symlink_to("../../shared/policy.md")
+    project_entry = skills / "develop"
+    project_entry.symlink_to(target.relative_to(skills), target_is_directory=True)
+    approved = service.compare()
+    approved_digest = next(
+        item.project_digest
+        for item in approved.differences
+        if item.entry_id == "phase:develop"
+    )
+
+    result = service.sync(approved.token, ["phase:develop"])
+    project_entry.unlink()
+    nested_link.unlink()
+    shared_policy.unlink()
+    global_entry = CatalogResolver(
+        project_root=tmp_path / "other-project",
+        canonical_root=tmp_path / "other-project",
+        global_root=global_root,
+        builtin_root=tmp_path / "other-builtin",
+    ).resolve(CatalogKind.PHASE, "develop")
+
+    assert result.updated == ("phase:develop",)
+    assert "phase:develop" not in {
+        item.entry_id for item in result.comparison.differences
+    }
+    assert global_entry.digest == approved_digest
+    assert (global_entry.path / "policy.md").read_text(encoding="utf-8") == (
+        "approved policy\n"
+    )
+
+
 @pytest.mark.parametrize("link_level", ["entry", "nested"])
 def test_catalog_comparison_rejects_symlink_targets_outside_entry_authority(
     tmp_path: Path, link_level: str

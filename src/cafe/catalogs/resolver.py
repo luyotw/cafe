@@ -169,6 +169,7 @@ def content_digest(
     if not authority_root.is_dir():
         raise CatalogValidationError("Catalog digest authority must be a directory")
 
+    materialize_nested_symlinks = path.is_symlink()
     digest_root = path
     if path.is_symlink():
         target_base = Path(root_symlink_base) if root_symlink_base is not None else path.parent
@@ -205,7 +206,6 @@ def content_digest(
         mode = stat.S_IMODE(metadata.st_mode)
         if node.is_symlink():
             link_target = os.readlink(node)
-            digest.update(f"L\0{relative}\0{mode:o}\0{link_target}\0".encode())
             target_base = (
                 Path(root_symlink_base)
                 if relative == "." and root_symlink_base is not None
@@ -226,8 +226,27 @@ def content_digest(
                         f"Catalog symlink target escapes entry authority: {node}"
                     )
             except (OSError, RuntimeError):
+                if materialize_nested_symlinks:
+                    raise CatalogValidationError(
+                        f"Catalog symlink target is unavailable: {node}"
+                    )
+                digest.update(f"L\0{relative}\0{mode:o}\0{link_target}\0".encode())
                 digest.update(f"T\0{relative}\0missing\0".encode())
             else:
+                if materialize_nested_symlinks:
+                    target_metadata = target.lstat()
+                    target_identity = (
+                        target_metadata.st_dev,
+                        target_metadata.st_ino,
+                        stat.S_IFMT(target_metadata.st_mode),
+                    )
+                    if target_identity in active_nodes:
+                        raise CatalogValidationError(
+                            f"Catalog symlink cycle cannot be materialized: {node}"
+                        )
+                    add_tree(target, relative, depth)
+                    return
+                digest.update(f"L\0{relative}\0{mode:o}\0{link_target}\0".encode())
                 digest.update(f"T\0{relative}\0".encode())
                 add_tree(target, f"{relative}/<target>", depth + 1)
             return
@@ -395,6 +414,8 @@ class CatalogResolver:
     def _resolve_unlocked(self, kind: CatalogKind, key: str) -> CatalogEntry:
         key = self._validate_key(kind, key)
         for source, root, project_layer in reversed(self.catalog_roots(kind)):
+            if not self._catalog_root_available(root):
+                continue
             path = self.candidate_path(kind, key, root)
             if not path.exists() and not path.is_symlink():
                 continue
@@ -415,12 +436,9 @@ class CatalogResolver:
             return self._resolve_unlocked(kind, key)
 
     def _keys_at_root(self, kind: CatalogKind, root: Path) -> Iterator[str]:
-        if root.is_symlink():
-            raise CatalogValidationError(f"Catalog root is not a real directory: {root}")
-        if not root.exists():
+        if not self._catalog_root_available(root):
             return
-        if not root.is_dir():
-            raise CatalogValidationError(f"Catalog root is not a real directory: {root}")
+
         if kind is CatalogKind.PLAYBOOK:
             yield from (item.stem for item in root.glob("*.yaml"))
         elif kind is CatalogKind.PHASE:
@@ -433,6 +451,16 @@ class CatalogResolver:
                     )
                 if role_dir.is_dir():
                     yield from (f"{role_dir.name}/{item.stem}" for item in role_dir.glob("*.md"))
+
+    @staticmethod
+    def _catalog_root_available(root: Path) -> bool:
+        if root.is_symlink():
+            raise CatalogValidationError(f"Catalog root is not a real directory: {root}")
+        if not root.exists():
+            return False
+        if not root.is_dir():
+            raise CatalogValidationError(f"Catalog root is not a real directory: {root}")
+        return True
 
     def _keys_unlocked(self, kind: CatalogKind) -> list[str]:
         keys: set[str] = set()

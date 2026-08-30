@@ -103,6 +103,37 @@ def test_broken_project_catalog_root_fails_instead_of_falling_through(
 
 
 @pytest.mark.parametrize(
+    ("kind", "key", "directory"),
+    [
+        (CatalogKind.PLAYBOOK, "standard", "playbooks"),
+        (CatalogKind.PHASE, "develop", "skills"),
+        (CatalogKind.AGENT, "developer/David", "agents"),
+    ],
+)
+def test_direct_resolution_rejects_broken_project_catalog_root(
+    tmp_path: Path,
+    kind: CatalogKind,
+    key: str,
+    directory: str,
+) -> None:
+    project = tmp_path / "project"
+    builtin = tmp_path / "builtin"
+    _write_entry(builtin, kind, key, "builtin")
+    catalog_root = project / ".cafe" / directory
+    catalog_root.parent.mkdir(parents=True)
+    catalog_root.symlink_to(project / f"missing-{directory}", target_is_directory=True)
+    resolver = CatalogResolver(
+        project_root=project,
+        canonical_root=project,
+        global_root=tmp_path / "global",
+        builtin_root=builtin,
+    )
+
+    with pytest.raises(CatalogValidationError):
+        resolver.resolve(kind, key)
+
+
+@pytest.mark.parametrize(
     ("invalid_layer", "invalid_content"),
     [
         ("project", b"\xff\xfeinvalid-agent"),
