@@ -223,8 +223,11 @@ def move_without_replacement(
     source_directory: BoundDirectory,
     destination_directory: BoundDirectory,
     expected_source_identity: Optional[EntryIdentity] = None,
+    expected_source_digest: Optional[str] = None,
 ) -> None:
-    """Atomically move one entry between bound parents without overwriting."""
+    """Move one content-bound entry between bound parents without overwriting."""
+    from cafe.catalogs.resolver import content_digest
+
     source_directory.verify()
     destination_directory.verify()
     if (
@@ -232,6 +235,12 @@ def move_without_replacement(
         and entry_identity(source_directory, source_name) != expected_source_identity
     ):
         raise FileNotFoundError(errno.ENOENT, "Catalog source identity changed", source_name)
+    if (
+        expected_source_digest is not None
+        and content_digest(source_directory.path / source_name)
+        != expected_source_digest
+    ):
+        raise FileNotFoundError(errno.ENOENT, "Catalog source content changed", source_name)
     _native_move_without_replacement(
         source_name,
         destination_name,
@@ -240,11 +249,17 @@ def move_without_replacement(
     )
     source_directory.verify()
     destination_directory.verify()
-    if (
+    identity_changed = (
         expected_source_identity is not None
         and entry_identity(destination_directory, destination_name)
         != expected_source_identity
-    ):
+    )
+    content_changed = (
+        expected_source_digest is not None
+        and content_digest(destination_directory.path / destination_name)
+        != expected_source_digest
+    )
+    if identity_changed or content_changed:
         try:
             _native_move_without_replacement(
                 destination_name,
@@ -254,7 +269,12 @@ def move_without_replacement(
             )
         except (FileExistsError, FileNotFoundError, NotImplementedError, OSError):
             pass
-        raise FileNotFoundError(errno.ENOENT, "Catalog source identity changed", source_name)
+        change = "identity" if identity_changed else "content"
+        raise FileNotFoundError(
+            errno.ENOENT,
+            f"Catalog source {change} changed",
+            source_name,
+        )
 
 
 def fsync_directory(path: Path) -> None:
@@ -591,6 +611,7 @@ def _retain_published_for_recovery(
             source_directory=target_directory,
             destination_directory=removed_directory,
             expected_source_identity=target_identity,
+            expected_source_digest=expected_digest,
         )
     except FileExistsError as exc:
         raise OSError("published content changed before rollback removal") from exc
@@ -603,6 +624,7 @@ def _retain_published_for_recovery(
     if content_digest(removed) == expected_digest:
         return False
     removed_identity = entry_identity(removed_directory, removed.name)
+    removed_digest = content_digest(removed)
     try:
         move_without_replacement(
             removed.name,
@@ -610,6 +632,7 @@ def _retain_published_for_recovery(
             source_directory=removed_directory,
             destination_directory=target_directory,
             expected_source_identity=removed_identity,
+            expected_source_digest=removed_digest,
         )
     except (FileExistsError, FileNotFoundError) as exc:
         if entry_exists(target_directory, target.name):
@@ -768,6 +791,7 @@ def recover_catalog_transaction(
                             source_directory=backup_directory,
                             destination_directory=target_directory,
                             expected_source_identity=backup_identity,
+                            expected_source_digest=record["old_digest"],
                         )
                     except (FileExistsError, FileNotFoundError) as exc:
                         raise OSError("target changed before rollback restore") from exc

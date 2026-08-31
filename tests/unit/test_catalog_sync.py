@@ -1343,6 +1343,97 @@ def test_publication_preserves_global_leaf_replaced_immediately_before_backup(
     assert resolved.digest == content_digest(target)
 
 
+def test_publication_preserves_global_leaf_modified_in_place_before_backup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, project, global_root = _service(tmp_path)
+    _entry(project / ".cafe", CatalogKind.PLAYBOOK, "standard", "approved-new")
+    target = _entry(
+        global_root,
+        CatalogKind.PLAYBOOK,
+        "standard",
+        "approved-old",
+    )
+    intervening = b"playbook: {id: standard}\nsteps: {}\nmarker: intervening\n"
+    original_identity = (target.stat().st_dev, target.stat().st_ino)
+    real_move = transactions_module._native_move_without_replacement
+    modified = False
+
+    def modify_leaf_before_move(*args, **kwargs) -> None:
+        nonlocal modified
+        source_directory = kwargs["source_directory"]
+        if not modified and source_directory.path == target.parent:
+            target.write_bytes(intervening)
+            assert (target.stat().st_dev, target.stat().st_ino) == original_identity
+            modified = True
+        real_move(*args, **kwargs)
+
+    monkeypatch.setattr(
+        transactions_module,
+        "_native_move_without_replacement",
+        modify_leaf_before_move,
+    )
+    report = service.compare()
+
+    with pytest.raises(CatalogSyncError):
+        service.sync(report.token, ["playbook:standard"])
+
+    assert modified is True
+    assert target.read_bytes() == intervening
+    receipt = next((global_root / ".catalog-transactions").glob("*/recovery.json"))
+    evidence = json.loads(receipt.read_text(encoding="utf-8"))
+    assert evidence["status"] == "rolled_back"
+    assert evidence["preserved"] == ["playbook:standard"]
+
+
+def test_publication_rejects_staged_leaf_modified_in_place_before_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, project, global_root = _service(tmp_path)
+    _entry(project / ".cafe", CatalogKind.PLAYBOOK, "standard", "approved-new")
+    target = _entry(
+        global_root,
+        CatalogKind.PLAYBOOK,
+        "standard",
+        "approved-old",
+    )
+    approved_old = target.read_bytes()
+    unapproved = b"playbook: {id: standard}\nsteps: {}\nmarker: unapproved\n"
+    real_move = transactions_module._native_move_without_replacement
+    modified = False
+
+    def modify_staged_leaf_before_move(*args, **kwargs) -> None:
+        nonlocal modified
+        source_directory = kwargs["source_directory"]
+        source = source_directory.path / args[0]
+        if not modified and "staged" in source_directory.path.parts:
+            staged_identity = (source.stat().st_dev, source.stat().st_ino)
+            source.write_bytes(unapproved)
+            assert (source.stat().st_dev, source.stat().st_ino) == staged_identity
+            modified = True
+        real_move(*args, **kwargs)
+
+    monkeypatch.setattr(
+        transactions_module,
+        "_native_move_without_replacement",
+        modify_staged_leaf_before_move,
+    )
+    report = service.compare()
+
+    with pytest.raises(CatalogSyncError):
+        service.sync(report.token, ["playbook:standard"])
+
+    assert modified is True
+    assert target.read_bytes() == approved_old
+    receipt = next((global_root / ".catalog-transactions").glob("*/recovery.json"))
+    evidence = json.loads(receipt.read_text(encoding="utf-8"))
+    assert evidence["status"] == "rolled_back"
+    assert evidence["restored"] == ["playbook:standard"]
+    assert evidence["preserved"] == []
+
+
 def test_rollback_preserves_global_leaf_replaced_inside_source_move(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

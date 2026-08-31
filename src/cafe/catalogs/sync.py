@@ -775,6 +775,7 @@ class CatalogSyncService:
                                     source_directory=target_directory,
                                     destination_directory=backup_directory,
                                     expected_source_identity=target_identity,
+                                    expected_source_digest=item.global_digest,
                                 )
                             except (FileExistsError, FileNotFoundError) as exc:
                                 raise StaleComparisonError(
@@ -807,6 +808,7 @@ class CatalogSyncService:
                                 source_directory=staged_directory,
                                 destination_directory=target_directory,
                                 expected_source_identity=staged_identity,
+                                expected_source_digest=item.project_digest,
                             )
                         except (FileExistsError, FileNotFoundError) as exc:
                             raise StaleComparisonError(
