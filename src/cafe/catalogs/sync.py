@@ -104,6 +104,29 @@ class ComparisonReport:
 
 
 @dataclass(frozen=True)
+class ComparisonPage:
+    """One bounded discovery page for a catalog scope over the operation limit."""
+
+    affected_entry_ids: tuple[str, ...]
+    next_cursor: Optional[str]
+    page_token: str
+    page_entry_count: int
+    effective_digests: dict[str, str]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "status": "over_budget",
+            "entry_limit": MAX_CATALOG_OPERATION_ENTRIES,
+            "page_entry_count": self.page_entry_count,
+            "page_token": self.page_token,
+            "effective_digests": self.effective_digests,
+            "affected_entry_ids": list(self.affected_entry_ids),
+            "next_cursor": self.next_cursor,
+        }
+
+
+@dataclass(frozen=True)
 class SyncResult:
     updated: tuple[str, ...]
     comparison: ComparisonReport
@@ -458,11 +481,42 @@ class CatalogSyncService:
         with global_catalog_lock(self.resolver.global_root):
             return self._compare(kinds=kinds, entry_ids=entry_ids)
 
+    def compare_page(
+        self,
+        *,
+        kinds: Optional[Iterable[CatalogKind]] = None,
+        after_entry_id: Optional[str] = None,
+    ) -> ComparisonPage:
+        """Inspect one bounded page after an unscoped comparison exceeds its limit."""
+        selected_kinds = self._normalize_kinds(kinds)
+        if after_entry_id is not None:
+            cursor_kind, _cursor_key = self._parse_entry_id(after_entry_id)
+            if cursor_kind not in selected_kinds:
+                raise CatalogSyncError("Continuation cursor is outside selected kinds")
+        with global_catalog_lock(self.resolver.global_root):
+            entry_ids, next_cursor = self.resolver.entry_id_page(
+                selected_kinds,
+                after_entry_id=after_entry_id,
+            )
+            report = self._compare(
+                kinds=selected_kinds,
+                entry_ids=entry_ids,
+                allow_non_project_entries=True,
+            )
+        return ComparisonPage(
+            affected_entry_ids=tuple(item.entry_id for item in report.differences),
+            next_cursor=next_cursor,
+            page_token=report.token,
+            page_entry_count=len(entry_ids),
+            effective_digests=report.effective_digests,
+        )
+
     def _compare(
         self,
         *,
         kinds: Optional[Iterable[CatalogKind]] = None,
         entry_ids: Optional[Sequence[str]] = None,
+        allow_non_project_entries: bool = False,
     ) -> ComparisonReport:
         selected_kinds = self._normalize_kinds(kinds)
         if entry_ids is not None and len(entry_ids) > MAX_CATALOG_OPERATION_ENTRIES:
@@ -508,7 +562,7 @@ class CatalogSyncService:
             entry for entry in project_entries if entry.entry_id not in blocked_agents
         ]
         available = {entry.entry_id for entry in project_entries}
-        if requested is not None:
+        if requested is not None and not allow_non_project_entries:
             unknown = sorted(requested - available)
             if unknown:
                 raise CatalogSyncError(f"No project catalog entry for: {', '.join(unknown)}")

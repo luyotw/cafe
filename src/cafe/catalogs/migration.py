@@ -7,7 +7,7 @@ import json
 import os
 import stat
 import subprocess
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Iterator, Mapping, Optional
@@ -206,15 +206,39 @@ class AgentSnapshotMigrator:
                     yield key, path, content_digest(path)
                     break
 
-    def _fallback_digest(self, key: str) -> str:
+    def _fallback_path(self, key: str) -> Optional[Path]:
         roots = [
             item for item in self.resolver.catalog_roots(CatalogKind.AGENT) if item[0] != "project"
         ]
         for _source, root, _layer in reversed(roots):
             path = self.resolver.candidate_path(CatalogKind.AGENT, key, root)
             if path.exists() or path.is_symlink():
-                return content_digest(path)
-        return "missing"
+                return path
+        return None
+
+    def _fallback_digest(self, key: str) -> str:
+        path = self._fallback_path(key)
+        return content_digest(path) if path is not None else "missing"
+
+    def _fallback_identity_is_current(
+        self,
+        key: str,
+        path: Optional[Path],
+        digest: str,
+        identity: Optional[tuple[int, int, int]],
+    ) -> bool:
+        current = self._fallback_path(key)
+        if path is None:
+            return current is None and digest == "missing"
+        if current != path or identity is None:
+            return False
+        try:
+            return (
+                _filesystem_identity(current.lstat()) == identity
+                and content_digest(current) == digest
+            )
+        except (OSError, CatalogValidationError):
+            return False
 
     def _classification_status(
         self,
@@ -688,58 +712,88 @@ class AgentSnapshotMigrator:
             destination.parent,
             allow_missing=False,
         )
-        with _bound_agent_source(source, digest) as approved_identity:
-            self.failure_injector("before_retire", entry_id)
-            if self._fallback_digest(key) != fallback_digest:
-                raise StaleMigrationDecision(
-                    f"Agent fallback changed before retirement: {entry_id}"
+        with global_catalog_lock(self.resolver.global_root):
+            with _bound_agent_source(source, digest) as approved_identity:
+                self.failure_injector("before_retire", entry_id)
+                if self._fallback_digest(key) != fallback_digest:
+                    raise StaleMigrationDecision(
+                        f"Agent fallback changed before retirement: {entry_id}"
+                    )
+                fallback_path = self._fallback_path(key)
+                if (fallback_path is None) != (fallback_digest == "missing"):
+                    raise StaleMigrationDecision(
+                        f"Agent fallback identity changed before retirement: {entry_id}"
+                    )
+                fallback_context = (
+                    nullcontext(None)
+                    if fallback_path is None
+                    else _bound_agent_source(fallback_path, fallback_digest)
                 )
-            self._validate_directory_ancestry(source_root, source.parent, allow_missing=False)
-            self._validate_directory_ancestry(
-                self.resolver.canonical_root,
-                destination.parent,
-                allow_missing=False,
-            )
-            if self._record_path_exists(destination):
-                raise StaleMigrationDecision(f"Retirement destination already exists: {entry_id}")
-            directory_flags = (
-                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-            )
-            source_directory = os.open(source.parent, directory_flags)
-            destination_directory = os.open(destination.parent, directory_flags)
-            try:
-                os.replace(
-                    source.name,
-                    destination.name,
-                    src_dir_fd=source_directory,
-                    dst_dir_fd=destination_directory,
-                )
-                os.fsync(source_directory)
-                os.fsync(destination_directory)
-            finally:
-                os.close(source_directory)
-                os.close(destination_directory)
-
-            destination_matches = (
-                self._record_path_exists(destination)
-                and _filesystem_identity(destination.lstat()) == approved_identity
-                and _retired_content_digest(destination, source) == digest
-            )
-            if not destination_matches or self._record_path_exists(source):
-                if self._record_path_exists(destination) and not self._record_path_exists(source):
-                    os.replace(destination, source)
+                with fallback_context as approved_fallback_identity:
+                    self._validate_directory_ancestry(
+                        source_root, source.parent, allow_missing=False
+                    )
+                    self._validate_directory_ancestry(
+                        self.resolver.canonical_root,
+                        destination.parent,
+                        allow_missing=False,
+                    )
+                    if self._record_path_exists(destination):
+                        raise StaleMigrationDecision(
+                            f"Retirement destination already exists: {entry_id}"
+                        )
+                    directory_flags = (
+                        os.O_RDONLY
+                        | getattr(os, "O_DIRECTORY", 0)
+                        | getattr(os, "O_NOFOLLOW", 0)
+                    )
                     source_directory = os.open(source.parent, directory_flags)
                     destination_directory = os.open(destination.parent, directory_flags)
                     try:
+                        os.replace(
+                            source.name,
+                            destination.name,
+                            src_dir_fd=source_directory,
+                            dst_dir_fd=destination_directory,
+                        )
                         os.fsync(source_directory)
                         os.fsync(destination_directory)
+                        destination_matches = (
+                            self._record_path_exists(destination)
+                            and _filesystem_identity(destination.lstat()) == approved_identity
+                            and _retired_content_digest(destination, source) == digest
+                        )
+                        fallback_matches = self._fallback_identity_is_current(
+                            key,
+                            fallback_path,
+                            fallback_digest,
+                            approved_fallback_identity,
+                        )
+                        if (
+                            not destination_matches
+                            or self._record_path_exists(source)
+                            or not fallback_matches
+                        ):
+                            if (
+                                self._record_path_exists(destination)
+                                and not self._record_path_exists(source)
+                            ):
+                                os.replace(
+                                    destination.name,
+                                    source.name,
+                                    src_dir_fd=destination_directory,
+                                    dst_dir_fd=source_directory,
+                                )
+                                os.fsync(source_directory)
+                                os.fsync(destination_directory)
+                            raise StaleMigrationDecision(
+                                "Retirement identities changed before the decision "
+                                f"was consumed: {entry_id}"
+                            )
                     finally:
                         os.close(source_directory)
                         os.close(destination_directory)
-                raise StaleMigrationDecision(
-                    f"Retired agent does not match the approved identity: {entry_id}"
-                )
-            self.failure_injector("after_retire", entry_id)
+                self.failure_injector("after_retire", entry_id)
 
     def _resume(
         self,

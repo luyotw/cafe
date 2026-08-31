@@ -107,6 +107,17 @@ def test_combined_comparison_rejects_an_operation_over_the_shared_entry_limit(
         service.compare(kinds=[CatalogKind.PHASE])
 
     assert raised.value.limit == MAX_CATALOG_OPERATION_ENTRIES
+    first_page = service.compare_page(kinds=[CatalogKind.PHASE])
+    assert len(first_page.affected_entry_ids) == MAX_CATALOG_OPERATION_ENTRIES
+    assert first_page.affected_entry_ids[0] == "phase:phase-000"
+    assert first_page.next_cursor == "phase:phase-511"
+
+    final_page = service.compare_page(
+        kinds=[CatalogKind.PHASE],
+        after_entry_id=first_page.next_cursor,
+    )
+    assert final_page.affected_entry_ids == ("phase:phase-512",)
+    assert final_page.next_cursor is None
     assert not (global_root / ".catalog-transactions").exists()
 
 

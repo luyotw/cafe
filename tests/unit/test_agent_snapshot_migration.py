@@ -11,7 +11,7 @@ from cafe.catalogs.migration import (
     MigrationDecisionError,
     StaleMigrationDecision,
 )
-from cafe.catalogs.resolver import CatalogResolver, CatalogValidationError
+from cafe.catalogs.resolver import CatalogKind, CatalogResolver, CatalogValidationError
 
 
 def _agent(path: Path, name: str, body: str) -> Path:
@@ -231,6 +231,61 @@ def test_retirement_fails_closed_when_fallback_changes_at_the_move_boundary(
     assert source.is_file()
     assert payload["status"] == "in_progress"
     assert payload["items"][0]["state"] == "pending"
+
+
+def test_retirement_restores_project_source_when_fallback_changes_after_final_read(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    source = _agent(
+        project / ".cafe" / "agents" / "developer" / "David.md",
+        "David",
+        "approved",
+    )
+    fallback = _agent(
+        global_root / "agents" / "developer" / "David.md",
+        "David",
+        "approved",
+    )
+    replacement = _agent(fallback.with_suffix(".replacement"), "David", "replacement")
+    resolver = CatalogResolver(
+        project_root=project,
+        canonical_root=project,
+        global_root=global_root,
+        builtin_root=tmp_path / "builtin",
+    )
+    armed = False
+    changed = False
+
+    def arm_after_boundary(boundary: str, _entry_id: str | None) -> None:
+        nonlocal armed
+        if boundary == "before_retire":
+            armed = True
+
+    migrator = AgentSnapshotMigrator(
+        resolver,
+        is_tracked=lambda _path: False,
+        failure_injector=arm_after_boundary,
+    )
+    preview = migrator.preview()
+    fallback_digest = migrator._fallback_digest
+
+    def replace_after_digest_read(key: str) -> str:
+        nonlocal changed
+        digest = fallback_digest(key)
+        if armed and not changed:
+            changed = True
+            os.replace(replacement, fallback)
+        return digest
+
+    migrator._fallback_digest = replace_after_digest_read  # type: ignore[method-assign]
+
+    with pytest.raises(StaleMigrationDecision):
+        migrator.apply(preview.token, {"agent:developer/David": "retire"})
+
+    assert source.is_file()
+    assert resolver.resolve(CatalogKind.AGENT, "developer/David").source == "project"
 
 
 def test_apply_requires_a_decision_for_every_legacy_file(tmp_path: Path) -> None:

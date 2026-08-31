@@ -590,12 +590,35 @@ def test_catalog_check_json_reports_a_bounded_over_budget_state(
 
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload == {
-        "entry_limit": MAX_CATALOG_OPERATION_ENTRIES,
-        "schema_version": 1,
-        "status": "over_budget",
+    assert payload["entry_limit"] == MAX_CATALOG_OPERATION_ENTRIES
+    assert payload["schema_version"] == 1
+    assert payload["status"] == "over_budget"
+    assert payload["page_entry_count"] == MAX_CATALOG_OPERATION_ENTRIES
+    assert payload["affected_entry_ids"][0] == "phase:phase-000"
+    affected_entry_ids = set(payload["affected_entry_ids"])
+    cursor = payload["next_cursor"]
+    while cursor is not None:
+        continuation = runner.invoke(
+            app,
+            [
+                "catalog",
+                "check",
+                "--kind",
+                "phase",
+                "--after-entry",
+                cursor,
+                "--json",
+            ],
+        )
+        assert continuation.exit_code == 1
+        continuation_payload = json.loads(continuation.stdout)
+        assert continuation_payload["page_entry_count"] <= MAX_CATALOG_OPERATION_ENTRIES
+        affected_entry_ids.update(continuation_payload["affected_entry_ids"])
+        cursor = continuation_payload["next_cursor"]
+    assert affected_entry_ids == {
+        f"phase:phase-{index:03d}"
+        for index in range(MAX_CATALOG_OPERATION_ENTRIES + 1)
     }
-    assert len(result.stdout) < 256
 
     narrowed = runner.invoke(
         app,
