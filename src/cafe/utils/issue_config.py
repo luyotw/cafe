@@ -20,6 +20,38 @@ def read_issue_config(config_path: Path) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _repository_root_for_config(config_path: Path) -> Path:
+    resolved = config_path.resolve()
+    for parent in resolved.parents:
+        if parent.name == ".cafe":
+            return parent.parent
+    return Path.cwd().resolve()
+
+
+def resolve_issue_config_path(config_path: Path) -> Path:
+    """Resolve a repo inventory pointer to the active-worktree authority."""
+    path = Path(config_path).resolve()
+    config = read_issue_config(path)
+    if not config:
+        return path
+    raw_worktree = config.get("worktree_path")
+    if not isinstance(raw_worktree, str) or not raw_worktree.strip():
+        return path
+    worktree = Path(raw_worktree)
+    if not worktree.is_absolute():
+        worktree = _repository_root_for_config(path) / worktree
+    issue_name = config.get("issue_name")
+    if not isinstance(issue_name, str) or not issue_name.strip():
+        issue_name = path.parent.name
+    candidate = worktree / ".cafe" / "issues" / issue_name / "issue.yaml"
+    return candidate.resolve() if candidate.exists() else path
+
+
+def read_authoritative_issue_config(config_path: Path) -> Optional[Dict[str, Any]]:
+    """Read policy and workflow metadata from the active issue authority."""
+    return read_issue_config(resolve_issue_config_path(config_path))
+
+
 def parse_issue_config_value(config_data: Optional[Dict[str, Any]], key: str) -> Optional[Any]:
     """Read a dotted or top-level key from parsed issue config data."""
     if not config_data:

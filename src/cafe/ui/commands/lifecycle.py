@@ -12,7 +12,12 @@ import typer
 import yaml
 
 from cafe.core.active_issue import clear_marker_if_matches, write_marker
-from cafe.utils.issue_config import resolve_issue_id
+from cafe.core.issue_policy_store import (
+    IssuePolicyStore,
+    PrepareWouldClobberError,
+    write_issue_inventory,
+)
+from cafe.utils.issue_config import resolve_issue_config_path, resolve_issue_id
 
 VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
 
@@ -378,22 +383,6 @@ def prepare(
             console.print("[yellow]Please run 'cafe init' first to set up CAFE.[/yellow]")
             raise typer.Exit(1)
 
-        # 1.1. Templates remain materialized; agents resolve dynamically.
-        from cafe.ui.init_helpers import sync_templates
-
-        cafe_dir = Path(".cafe")
-        template_success, template_failed = sync_templates(cafe_dir)
-
-        # Display sync summary
-        if template_success > 0:
-            console.print(
-                f"  [green]✓[/green] Updated .cafe directory with {template_success} template(s)"
-            )
-        if template_failed > 0:
-            console.print(
-                f"  [yellow]⚠[/yellow] Warning: Failed to copy {template_failed} file(s)"
-            )
-
         from cafe.core.prepare_profile import PrepareProfile, PrepareRigorError
         from cafe.playbooks.loader import PlaybookLoader
         from cafe.ui.cli_shared import _resolve_selected_playbook
@@ -431,6 +420,39 @@ def prepare(
             else:
                 console.print("[red]Error: Issue name is required in non-interactive mode.[/red]")
                 raise typer.Exit(1)
+
+        root_issue_dir = Path(".cafe") / "issues" / issue_name
+        existing_config = root_issue_dir / "issue.yaml"
+        existing_issue_dir = (
+            resolve_issue_config_path(existing_config).parent
+            if existing_config.exists()
+            else root_issue_dir
+        )
+        try:
+            IssuePolicyStore.ensure_prepare_target_available(existing_issue_dir)
+            if worktree and worktree.strip():
+                explicit_worktree_issue_dir = (
+                    Path(worktree.strip()) / ".cafe" / "issues" / issue_name
+                )
+                IssuePolicyStore.ensure_prepare_target_available(explicit_worktree_issue_dir)
+        except PrepareWouldClobberError as exc:
+            console.print(f"[red]Error: {exc}[/red]")
+            raise typer.Exit(1)
+
+        # Templates remain materialized, but no preparation mutation occurs
+        # until an active workflow has been ruled out.
+        from cafe.ui.init_helpers import sync_templates
+
+        cafe_dir = Path(".cafe")
+        template_success, template_failed = sync_templates(cafe_dir)
+        if template_success > 0:
+            console.print(
+                f"  [green]✓[/green] Updated .cafe directory with {template_success} template(s)"
+            )
+        if template_failed > 0:
+            console.print(
+                f"  [yellow]⚠[/yellow] Warning: Failed to copy {template_failed} file(s)"
+            )
 
         # 4. Initialize Git operations
         initialized_git_now = False
@@ -915,13 +937,16 @@ def prepare(
         with open(issue_config_file, "w", encoding="utf-8") as f:
             yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)
 
-        # For worktree mode, also create issue.yaml in repo root for cafe ls to read
+        # For worktree mode, keep only a policy-free inventory pointer in the root checkout.
         if use_worktree:
             repo_root_issue_dir = Path(f".cafe/issues/{issue_name}")
             repo_root_issue_dir.mkdir(parents=True, exist_ok=True)
             repo_root_config_file = repo_root_issue_dir / "issue.yaml"
-            with open(repo_root_config_file, "w", encoding="utf-8") as f:
-                yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)
+            write_issue_inventory(
+                repo_root_config_file,
+                issue_name=issue_name,
+                worktree_path=Path(str(worktree_path)),
+            )
 
         console.print()
         # Display relative path instead of absolute path
