@@ -680,8 +680,10 @@ class CatalogSyncService:
             )
             staged_root = transaction / "staged"
             backup_root = transaction / "backups"
+            displaced_root = transaction / "displaced"
             staged_root.mkdir(parents=True)
             backup_root.mkdir(parents=True)
+            displaced_root.mkdir(parents=True)
             transactions_root = transaction.parent
             fsync_directory(transaction)
             fsync_directory(transactions_root)
@@ -741,6 +743,7 @@ class CatalogSyncService:
                     target = item.global_path
                     relative = target.relative_to(self.resolver.global_root)
                     backup = backup_root / relative
+                    displaced = displaced_root / relative
                     staged = staged_root / relative
                     with (
                         bound_directory(
@@ -753,6 +756,11 @@ class CatalogSyncService:
                             relative.parent,
                             create=True,
                         ) as backup_directory,
+                        bound_directory(
+                            displaced_root,
+                            relative.parent,
+                            create=True,
+                        ) as displaced_directory,
                         bound_directory(staged_root, relative.parent) as staged_directory,
                     ):
                         target_exists = entry_exists(target_directory, target.name)
@@ -765,21 +773,55 @@ class CatalogSyncService:
                                 target_directory,
                                 target.name,
                             )
-                            if content_digest(target) != item.global_digest:
+                            bound_target_parent = _directory_descriptor_path(
+                                target_directory.descriptor
+                            )
+                            bound_target = bound_target_parent / target.name
+                            if content_digest(bound_target) != item.global_digest:
                                 raise StaleComparisonError(
                                     f"Global content changed during publication: {entry_id}"
                                 )
                             try:
-                                move_without_replacement(
-                                    target.name,
-                                    backup.name,
-                                    source_directory=target_directory,
-                                    destination_directory=backup_directory,
-                                    expected_source_identity=target_identity,
-                                    expected_source_digest=item.global_digest,
-                                    expected_source_digest_parent=target_directory.path,
-                                )
+                                if stat.S_ISLNK(target_identity[2]):
+                                    _copy_entry(
+                                        bound_target,
+                                        backup,
+                                        expected_digest=item.global_digest,
+                                    )
+                                    fsync_tree(backup)
+                                    move_without_replacement(
+                                        target.name,
+                                        displaced.name,
+                                        source_directory=target_directory,
+                                        destination_directory=displaced_directory,
+                                        expected_source_identity=target_identity,
+                                    )
+                                    if (
+                                        content_digest_at_parent(
+                                            displaced,
+                                            bound_target_parent,
+                                        )
+                                        != item.global_digest
+                                    ):
+                                        raise StaleComparisonError(
+                                            "Global content changed during publication: "
+                                            f"{entry_id}"
+                                        )
+                                else:
+                                    move_without_replacement(
+                                        target.name,
+                                        backup.name,
+                                        source_directory=target_directory,
+                                        destination_directory=backup_directory,
+                                        expected_source_identity=target_identity,
+                                        expected_source_digest=item.global_digest,
+                                        expected_source_digest_parent=target_directory.path,
+                                    )
                             except (FileExistsError, FileNotFoundError) as exc:
+                                raise StaleComparisonError(
+                                    f"Global content changed during publication: {entry_id}"
+                                ) from exc
+                            except (CatalogValidationError, OSError) as exc:
                                 raise StaleComparisonError(
                                     f"Global content changed during publication: {entry_id}"
                                 ) from exc

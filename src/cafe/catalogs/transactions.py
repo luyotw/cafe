@@ -575,19 +575,24 @@ def retire_committed_transaction(transaction: Path, global_root: Path) -> None:
 def _validate_recovery_content(
     records: list[dict[str, str]], transaction: Path, global_root: Path
 ) -> None:
-    from cafe.catalogs.resolver import content_digest
+    from cafe.catalogs.resolver import CatalogValidationError, content_digest
 
     backup_root = transaction / "backups"
     for record in records:
         relative = Path(record["relative_path"])
         target = global_root / relative
         backup = backup_root / relative
-        target_digest = content_digest(target) if path_exists(target) else None
-        backup_digest = (
-            content_digest_at_parent(backup, target.parent)
-            if path_exists(backup)
-            else None
-        )
+        try:
+            target_digest = content_digest(target) if path_exists(target) else None
+            backup_digest = (
+                content_digest_at_parent(backup, target.parent)
+                if path_exists(backup)
+                else None
+            )
+        except (CatalogValidationError, OSError) as exc:
+            raise CatalogRecoveryError(
+                "Catalog recovery content is unreadable"
+            ) from exc
         if record["old_digest"] == "missing":
             if backup_digest is not None:
                 raise CatalogRecoveryError(
@@ -686,7 +691,7 @@ def recover_catalog_transaction(
     _payload: Optional[dict[str, object]] = None,
 ) -> dict[str, object]:
     """Restore one incomplete publication to its durable pre-update state."""
-    from cafe.catalogs.resolver import content_digest
+    from cafe.catalogs.resolver import CatalogValidationError, content_digest
 
     journal = transaction / "transaction.json"
     payload = _payload or _read_transaction_journal(transaction, global_root)
@@ -789,6 +794,14 @@ def recover_catalog_transaction(
                 ):
                     raise OSError("removed publication evidence does not match intent")
 
+                if (
+                    target_exists
+                    and backup_exists
+                    and target_digest == record["old_digest"]
+                ):
+                    restored.append(entry_id)
+                    continue
+
                 if target_exists and backup_exists:
                     concurrent_content_preserved = _retain_published_for_recovery(
                         target,
@@ -860,7 +873,14 @@ def recover_catalog_transaction(
             if record["entry_id"] in preserved:
                 continue
             target = global_root / Path(record["relative_path"])
-            if content_digest(target) != record["old_digest"]:
+            try:
+                restored_digest = content_digest(target)
+            except (CatalogValidationError, OSError) as exc:
+                rollback_errors.append(
+                    f"{record['entry_id']}: {_bounded_text(exc)}"
+                )
+                continue
+            if restored_digest != record["old_digest"]:
                 rollback_errors.append(
                     f"{record['entry_id']}: pre-update digest verification failed"
                 )

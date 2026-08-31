@@ -360,7 +360,59 @@ def test_publication_restores_supported_global_root_symlink_after_failure(
     receipt = next((global_root / ".catalog-transactions").glob("*/recovery.json"))
     evidence = json.loads(receipt.read_text(encoding="utf-8"))
 
-    assert global_entry.is_symlink()
+    assert content_digest(global_entry) == approved_old_digest
+    assert resolved is not None
+    assert resolved.source == "global"
+    assert resolved.digest == approved_old_digest
+    assert evidence["status"] == "rolled_back"
+    assert evidence["restored"] == ["playbook:standard"]
+
+
+def test_publication_recovers_durable_global_root_symlink_after_backing_loss(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, project, global_root = _service(tmp_path)
+    _entry(project / ".cafe", CatalogKind.PLAYBOOK, "standard", "approved-new")
+    global_playbooks = global_root / "playbooks"
+    global_target = global_playbooks / "standard.data"
+    global_target.parent.mkdir(parents=True)
+    global_target.write_text(
+        "playbook: {id: standard}\nsteps: {}\nmarker: approved-old\n",
+        encoding="utf-8",
+    )
+    global_entry = global_playbooks / "standard.yaml"
+    global_entry.symlink_to(global_target.name)
+    approved_old_digest = content_digest(global_entry)
+    real_move = transactions_module._native_move_without_replacement
+    backing_removed = False
+
+    def remove_backing_after_move(*args, **kwargs) -> None:
+        nonlocal backing_removed
+        source_directory = kwargs["source_directory"]
+        real_move(*args, **kwargs)
+        if not backing_removed and source_directory.path == global_playbooks:
+            global_target.unlink()
+            backing_removed = True
+
+    monkeypatch.setattr(
+        transactions_module,
+        "_native_move_without_replacement",
+        remove_backing_after_move,
+    )
+    approved = service.compare()
+
+    with pytest.raises(CatalogSyncError):
+        service.sync(approved.token, ["playbook:standard"])
+
+    receipt = next((global_root / ".catalog-transactions").glob("*/recovery.json"))
+    evidence = json.loads(receipt.read_text(encoding="utf-8"))
+    resolved = _recovery_reader(tmp_path, global_root).resolve(
+        CatalogKind.PLAYBOOK,
+        "standard",
+    )
+
+    assert backing_removed is True
     assert content_digest(global_entry) == approved_old_digest
     assert resolved is not None
     assert resolved.source == "global"
