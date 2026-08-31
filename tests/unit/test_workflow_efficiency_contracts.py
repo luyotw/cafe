@@ -99,6 +99,11 @@ def test_review_corrections_close_root_causes_without_restarting_full_audit() ->
     )
     review_root = SKILLS / "cafe-review/references"
     correction = (review_root / "execution_correction.md").read_text(encoding="utf-8")
+    risk_assessment = (review_root / "execution_risk_assessment.md").read_text(
+        encoding="utf-8"
+    )
+    exit_audit = (review_root / "execution_exit_audit.md").read_text(encoding="utf-8")
+    finalize = (review_root / "execution_finalize.md").read_text(encoding="utf-8")
 
     contract = yaml.safe_load(review.split("---", 2)[1])["workflow"]["checklist"]
     assert contract["variants"][0]["when"] == {"iteration": 1}
@@ -129,6 +134,16 @@ def test_review_corrections_close_root_causes_without_restarting_full_audit() ->
     assert "closed_reused" in correction
     assert "Correction Impact Set" in correction
     assert "instead of rerunning its probe or rewriting its evidence" in correction
+    assert "never exercised the composed producer-to-consumer limit" in correction
+    assert "strictest downstream schema/journal/recovery limit" in risk_assessment
+    assert "last controllable point before irreversible use" in risk_assessment
+    assert "actual automatic-consumer output/work" in risk_assessment
+    assert "Cumulative Seam Coverage Summary" in exit_audit
+    assert "inspect only missing or affected seams rather than restarting it" in exit_audit
+    assert "using a `limit + 1` failure case" in exit_audit
+    assert "decision-bound direct or fallback input" in exit_audit
+    assert "actual automatic consumer" in exit_audit
+    assert "Cumulative Seam Coverage Summary" in finalize
     assert "Triggered Risk Coverage" in review_steps
     assert "At most the twelve fixed obligations" in review_steps
     assert "minimal production-path probe" in review_steps

@@ -509,6 +509,10 @@ def test_review_correction_runtime_composes_planless_closure_contract(
     assert "Correction Impact Set" in checklist
     assert "do not rerun probes for rows validly carried as `closed_reused`" in checklist
     assert "Carried Evidence Summary" in checklist
+    assert "Cumulative Seam Coverage Summary" in checklist
+    assert "strictest downstream schema, journal, recovery, and reader limits" in checklist
+    assert "decision-bound direct or fallback input" in checklist
+    assert "actual automatic consumer" in checklist
     assert "`closed_reused` can never pass" not in checklist
     assert "map to plan journeys/invariants" not in checklist
     assert "exact copy only when mandated in the spec" not in checklist
@@ -611,6 +615,9 @@ def test_review_composed_checklists_stay_within_budget_and_keep_role_guidance(
         assert "## Acceptance Closure" in checklist
         assert checklist.count("## Exit Audit") == 1
         assert "## Finalize Review" in checklist
+        assert "Cumulative Seam Coverage Summary" in checklist
+        assert "using a `limit + 1` failure case" in checklist
+        assert "actual automatic consumer" in checklist
         assert "need_permission" not in checklist
         if iteration == 1:
             assert "## First-Pass Behavior Review" in checklist
