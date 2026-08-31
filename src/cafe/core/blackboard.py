@@ -430,6 +430,7 @@ class BlackboardState:
     handoff_summary: str = ""
     handoff_contract: Optional[HandoffContract] = None
     ownership_cursor: Optional[Dict[str, Any]] = None
+    driver_state: Dict[str, Any] = field(default_factory=dict)
     step_attempt_counts: Dict[str, int] = field(default_factory=dict)
     updated_at: str = field(default_factory=_now_iso)
 
@@ -448,6 +449,7 @@ class BlackboardState:
                 self.handoff_contract.to_dict() if self.handoff_contract is not None else None
             ),
             "ownership_cursor": dict(self.ownership_cursor) if self.ownership_cursor else None,
+            "driver_state": dict(self.driver_state),
             "step_attempt_counts": dict(self.step_attempt_counts),
             "updated_at": self.updated_at,
         }
@@ -505,6 +507,10 @@ class BlackboardState:
                 )
             attempts[str(step)] = count
 
+        raw_driver_state = data.get("driver_state", {})
+        if not isinstance(raw_driver_state, dict):
+            raise ValueError("blackboard driver_state must be an object")
+
         return cls(
             current_step=str(data.get("current_step", initial_step)),
             playbook_id=str(data.get("playbook_id", "standard")),
@@ -530,6 +536,7 @@ class BlackboardState:
                 else None
             ),
             ownership_cursor=cursor,
+            driver_state=dict(raw_driver_state),
             step_attempt_counts=attempts,
             updated_at=str(data.get("updated_at", _now_iso())),
         )
@@ -544,7 +551,9 @@ class BlackboardStore:
     def __init__(self, issue_dir: Path) -> None:
         self.issue_dir = issue_dir
         self.file_path = issue_dir / BLACKBOARD_FILENAME
+        self.state_lock_path = issue_dir / f".{BLACKBOARD_FILENAME}.state.lock"
         self.receipt_lock_path = issue_dir / f".{BLACKBOARD_FILENAME}.receipt.lock"
+        self.driver_lock_path = self.state_lock_path
         self.next_step_path = issue_dir / NEXT_STEP_FILENAME
 
     def load_or_create(
@@ -553,6 +562,20 @@ class BlackboardStore:
         playbook_id: str = "standard",
         *,
         tolerate_invalid_baton: bool = False,
+    ) -> BlackboardState:
+        with self._thread_lock_for(self.file_path):
+            return self._load_or_create_unlocked(
+                initial_step,
+                playbook_id,
+                tolerate_invalid_baton=tolerate_invalid_baton,
+            )
+
+    def _load_or_create_unlocked(
+        self,
+        initial_step: str,
+        playbook_id: str,
+        *,
+        tolerate_invalid_baton: bool,
     ) -> BlackboardState:
         if self.file_path.exists():
             raw = json.loads(self.file_path.read_text(encoding="utf-8"))
@@ -606,6 +629,12 @@ class BlackboardStore:
                 state.handoff_contract = None
                 self.save(state)
                 return None
+            if (
+                state.handoff_contract is not None
+                and state.handoff_contract.to_next_step_dict()
+                == contract.to_next_step_dict()
+            ):
+                return state.handoff_contract
             state.handoff_contract = contract
             self.save(state)
             return contract
@@ -807,6 +836,23 @@ class BlackboardStore:
                         state.__dict__.clear()
                         state.__dict__.update(persisted.__dict__)
                     yield state
+
+    @contextmanager
+    def driver_transaction(self, state: BlackboardState) -> Iterator[BlackboardState]:
+        """Atomically mutate driver state across threads and processes."""
+        with self._thread_lock_for(self.file_path):
+            self.issue_dir.mkdir(parents=True, exist_ok=True)
+            with self.driver_lock_path.open("a+", encoding="utf-8") as lock_file:
+                with _process_file_lock(lock_file):
+                    if self.file_path.exists():
+                        raw = json.loads(self.file_path.read_text(encoding="utf-8"))
+                        persisted = BlackboardState.from_dict(
+                            raw, initial_step=state.current_step
+                        )
+                        state.__dict__.clear()
+                        state.__dict__.update(persisted.__dict__)
+                    yield state
+                    self.save(state)
 
     @classmethod
     def _thread_lock_for(cls, file_path: Path) -> threading.RLock:
