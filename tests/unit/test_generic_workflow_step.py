@@ -521,7 +521,12 @@ def test_generic_workflow_step_agent_written_baton_preserved(tmp_path: Path, mon
                 "allowed_tools": ["Read"],
                 "valid_intents": ["confirmed"],
                 "on": {"await_agent": "_done"},
-            }
+            },
+            "plan": {
+                "skill": "cafe-plan",
+                "role": "pm",
+                "on": {"await_agent": "_done"},
+            },
         },
     }
 
@@ -1450,6 +1455,9 @@ def test_generic_workflow_step_prompt_keeps_skill_invocations_only(
     assert "Phase skill instructions:" not in prompt
     assert "Read blackboard first." not in prompt
     assert "Write PR content to:" not in prompt
+    assert "workflow_complete→done" in prompt
+    assert "await_agent→done" not in prompt
+    assert "valid intent values: [workflow_complete]" in prompt
 
 
 def test_generic_workflow_step_pr_prompt_overrides_external_state_guardrail(

@@ -133,6 +133,6 @@ steps:
         task_id: local-review
         outcomes: {approve: _done, request_changes: develop}
         feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
-    "on": {confirm_output: pr, await_agent: _done, need_permission: pr, manual_handoff: develop}
+    "on": {confirm_output: pr, workflow_complete: _done, need_permission: pr, manual_handoff: develop}
 
 entry_point: spec

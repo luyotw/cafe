@@ -324,7 +324,7 @@ steps:
       completion: baton
       publish_confirmation: true
     on:
-      await_agent: _done
+      workflow_complete: _done
 """.strip(),
         encoding="utf-8",
     )
@@ -1595,11 +1595,13 @@ def test_build_workflow_step_executor_passes_allowed_directories(
             issue_name="issue-dirs",
             playbook_data={"playbook": {"id": "default"}, "roles": {}, "steps": {}},
             generic_phase=MagicMock(),
+            open_pr=True,
             extra_allowed_directories=["docs"],
         )
 
     assert executor._config_allowed_directories == ["src"]
     assert executor._extra_allowed_directories == ["docs"]
+    assert executor.open_pr is True
 
 
 def test_workflow_accepts_add_dir_and_passes_through(tmp_path: Path, monkeypatch) -> None:
@@ -3557,12 +3559,14 @@ steps:
                 "plan",
                 "--single-step",
                 "--mute-agent-output",
+                "--open-pr",
             ],
         )
         assert result.exit_code == 0
         assert executed_steps == ["plan"]
         assert mock_builder.call_args.kwargs["phase_name"] == "plan"
         assert mock_builder.call_args.kwargs["stream_agent_output"] is False
+        assert mock_builder.call_args.kwargs["open_pr"] is True
 
 
 def test_workflow_command_rebuilds_executor_for_each_active_phase(

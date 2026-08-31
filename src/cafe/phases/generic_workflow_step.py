@@ -135,10 +135,12 @@ class GenericWorkflowStepExecutor(Phase):
         role_configs: Optional[Dict[str, Dict[str, Any]]] = None,
         step_user_inputs: Optional[Dict[str, str]] = None,
         interactive: bool = False,
+        open_pr: bool = False,
         config_allowed_directories: Optional[List[str]] = None,
         extra_allowed_directories: Optional[List[str]] = None,
     ) -> None:
         self.interactive = interactive
+        self.open_pr = open_pr
         self.issue_dir = issue_dir
         self.issue_name = issue_name
         self.playbook = playbook
@@ -1233,11 +1235,25 @@ class GenericWorkflowStepExecutor(Phase):
         valid_to_steps = list(playbook.get("steps", {}).keys()) + ["user", "done"]
         # 本 step 依 intent 定義的下一步（含 _done → done 正規化），給 agent 明確指向。
         step_on = step_def.get("on", {}) if isinstance(step_def.get("on"), dict) else {}
-        step_transitions = {
-            str(k): ("done" if str(v) in ("_done", "done") else str(v)) for k, v in step_on.items()
-        }
-        valid_baton_intents = effective_step_handoff_intents(step_def)
         behavior = resolve_step_behavior(playbook, step_name)
+        terminal_targets = {"_done", "done"}
+        terminal_route_intents = {
+            str(intent) for intent, target in step_on.items() if str(target) in terminal_targets
+        }
+        step_transitions: Dict[str, str] = {}
+        for raw_intent, raw_target in step_on.items():
+            target = "done" if str(raw_target) in terminal_targets else str(raw_target)
+            intent = str(raw_intent)
+            if behavior.completion == "baton" and target == "done":
+                intent = HandoffIntent.WORKFLOW_COMPLETE.value
+            step_transitions[intent] = target
+        valid_baton_intents = effective_step_handoff_intents(step_def)
+        if behavior.completion == "baton" and terminal_route_intents:
+            valid_baton_intents = [
+                intent for intent in valid_baton_intents if intent not in terminal_route_intents
+            ]
+            if HandoffIntent.WORKFLOW_COMPLETE.value not in valid_baton_intents:
+                valid_baton_intents.append(HandoffIntent.WORKFLOW_COMPLETE.value)
         context = {
             "agent_file": AgentManager.get_agent_file_path(agent_name, role_dir),
             "handoff_summary": getattr(blackboard_state, "handoff_summary", ""),
@@ -1252,6 +1268,7 @@ class GenericWorkflowStepExecutor(Phase):
             "valid_to_steps": ", ".join(valid_to_steps),
             "valid_baton_intents": ", ".join(valid_baton_intents),
             "step_transitions": ", ".join(f"{i}→{s}" for i, s in step_transitions.items()),
+            "behavior_completion": behavior.completion,
             "publish_confirmation": behavior.publish_confirmation,
         }
 
@@ -1699,6 +1716,7 @@ class GenericWorkflowStepExecutor(Phase):
                 payload,
                 current_step=step_name,
             )
+            contract.validate(allowed_steps=list(self.playbook.get("steps", {}).keys()))
             allowed_handoff_intents = set(effective_step_handoff_intents(step_def or {}))
             return (
                 contract.from_step == step_name
