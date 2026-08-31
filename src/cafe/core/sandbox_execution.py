@@ -15,6 +15,7 @@ from cafe.core.execution_boundary import (
     ExecutionClass,
     ExecutionReceipt,
     ScriptLaunchRequest,
+    ScriptSnapshot,
     snapshot_script,
 )
 
@@ -119,12 +120,28 @@ class SandboxExecutor:
         self.codex_path = shutil.which("codex") if codex_path == "auto" else codex_path
         self.runner = runner
 
-    def run(self, request: ScriptLaunchRequest) -> SandboxRunResult:
+    def run(
+        self,
+        request: ScriptLaunchRequest,
+        *,
+        prepared_snapshot: ScriptSnapshot | None = None,
+    ) -> SandboxRunResult:
         correlation_id = uuid.uuid4().hex
-        try:
-            snapshot = snapshot_script(request.script, allowed_root=request.script.parent)
-        except (OSError, ValueError) as exc:
-            return self._denied(request, correlation_id, "script_identity_invalid", str(exc))
+        owns_snapshot = prepared_snapshot is None
+        if prepared_snapshot is None:
+            try:
+                snapshot = snapshot_script(request.script, allowed_root=request.script.parent)
+            except (OSError, ValueError) as exc:
+                return self._denied(request, correlation_id, "script_identity_invalid", str(exc))
+        else:
+            snapshot = prepared_snapshot
+            if request.script != snapshot.path:
+                return self._denied(
+                    request,
+                    correlation_id,
+                    "script_identity_invalid",
+                    "prepared snapshot does not match the launch request",
+                )
         try:
             if request.execution_class not in {ExecutionClass.SANDBOX, ExecutionClass.LIFECYCLE}:
                 return self._denied(
@@ -140,7 +157,7 @@ class SandboxExecutor:
                     "sandbox_backend_unavailable",
                     canonical_identity=snapshot.digest,
                 )
-            state = _sandbox_state(request.boundary, extra_readable=(snapshot.path.parent,))
+            state = _sandbox_state(request.boundary, extra_readable=(snapshot.root,))
             command = [
                 self.codex_path,
                 "sandbox",
@@ -184,7 +201,17 @@ class SandboxExecutor:
             )
             return SandboxRunResult(None, _output(exc.stdout), _output(exc.stderr), receipt)
         finally:
-            snapshot.cleanup()
+            if owns_snapshot:
+                snapshot.cleanup()
+
+    def deny(
+        self,
+        request: ScriptLaunchRequest,
+        reason: str,
+        detail: str = "",
+    ) -> SandboxRunResult:
+        """Create a typed denial receipt without launching a process."""
+        return self._denied(request, uuid.uuid4().hex, reason, detail)
 
     @staticmethod
     def _denied(

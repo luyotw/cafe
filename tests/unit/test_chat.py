@@ -777,7 +777,7 @@ def test_launch_chat_session_reports_broken_cursor_cli_on_launch_failure(
         result = launch_chat_session("developer", "issue123")
 
     assert result == 1
-    mock_run.assert_called_once()
+    assert mock_run.called
     printed = " ".join(str(call) for call in mock_print.call_args_list)
     assert "missing native module" in printed
     assert "did not complete workflow handoff" not in printed

@@ -355,13 +355,21 @@ def _builtin_agent_path(cls, name, role, **_kw: object) -> str:
     return f"src/cafe/data/agents/{role}/{name}.md"
 
 
+def _builtin_agent_file(cls, name, role, **_kw: object) -> tuple[str, str]:
+    """Provide stable golden-fixture guidance at the agent reader boundary."""
+    path = _builtin_agent_path(cls, name, role)
+    source = Path(path)
+    content = source.read_text(encoding="utf-8") if source.is_file() else ""
+    return path, content
+
+
 @pytest.mark.parametrize(
     "case_name", json.loads((FIXTURES_DIR / "manifest.json").read_text(encoding="utf-8"))
 )
 def test_golden_checklist_matches_fixture(case_name: str, tmp_path: Path) -> None:
     """Composed checklists stay equivalent to the pre-migration golden snapshots."""
-    saved = AgentManager.get_agent_file_path
-    AgentManager.get_agent_file_path = classmethod(_builtin_agent_path)  # type: ignore[assignment]
+    saved = AgentManager.read_agent_file
+    AgentManager.read_agent_file = classmethod(_builtin_agent_file)  # type: ignore[assignment]
     try:
         output_path = tmp_path / f"{case_name}.md"
         GOLDEN_RUNNERS[case_name](output_path)
@@ -379,7 +387,7 @@ def test_golden_checklist_matches_fixture(case_name: str, tmp_path: Path) -> Non
                 f"expected={len(expected.splitlines())}"
             )
     finally:
-        AgentManager.get_agent_file_path = saved
+        AgentManager.read_agent_file = saved
 
 
 @pytest.mark.parametrize("case_name", sorted(PRODUCTION_GOLDEN_CASES))
@@ -388,8 +396,8 @@ def test_production_composer_golden_checklist_matches_fixture(
 ) -> None:
     """The workflow runtime's declarative composer preserves golden output."""
     case = PRODUCTION_GOLDEN_CASES[case_name]
-    saved = AgentManager.get_agent_file_path
-    AgentManager.get_agent_file_path = classmethod(_builtin_agent_path)  # type: ignore[assignment]
+    saved = AgentManager.read_agent_file
+    AgentManager.read_agent_file = classmethod(_builtin_agent_file)  # type: ignore[assignment]
     try:
         output_path = tmp_path / f"production-{case_name}.md"
         assert compose_declared_checklist(
@@ -410,7 +418,42 @@ def test_production_composer_golden_checklist_matches_fixture(
             expected = expected.replace(f"{line}\n", "")
         assert actual == expected
     finally:
-        AgentManager.get_agent_file_path = saved
+        AgentManager.read_agent_file = saved
+
+
+def test_declared_checklist_uses_readable_builtin_agent_path_outside_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A composed checklist points to builtin guidance the phase can open."""
+    working_dir = tmp_path / "working"
+    working_dir.mkdir()
+    monkeypatch.chdir(working_dir)
+    monkeypatch.setattr(
+        Path,
+        "home",
+        classmethod(lambda cls: tmp_path / "empty-home"),
+    )
+    case = PRODUCTION_GOLDEN_CASES["develop_normal"]
+    checklist = tmp_path / "develop.md"
+
+    assert compose_declared_checklist(
+        skill_name=case["skill"],
+        contract=SkillLoader().get_workflow_contract(case["skill"]),
+        agent_name="David",
+        role="developer",
+        checklist_file_path=checklist,
+        iteration=case["iteration"],
+        context=case["context"],
+        artifacts={},
+        feedback=False,
+        template_mode="manual",
+    )
+
+    agent_file, _ = AgentManager.read_agent_file("David", "developer")
+    agent_path = Path(agent_file)
+    assert agent_path.is_absolute()
+    assert agent_path.is_file()
+    assert agent_file in checklist.read_text(encoding="utf-8")
 
 
 def test_review_correction_runtime_composes_planless_closure_contract(
@@ -633,6 +676,11 @@ def test_short_builtin_playbook_checklists_compose_with_declared_artifact_scope(
     monkeypatch,
 ) -> None:
     """Shipped short workflows omit unavailable optional checklist instructions."""
+    agent_file = tmp_path / "agent.md"
+    agent_file.write_text(
+        "---\nname: Ada\ndescription: test\n---\n\nTest guidance.\n",
+        encoding="utf-8",
+    )
     step = PlaybookLoader().load_model(playbook_id).model.steps[step_name]
     scope = set(step.input_artifacts or [])
     context = {
@@ -646,7 +694,7 @@ def test_short_builtin_playbook_checklists_compose_with_declared_artifact_scope(
     }
     monkeypatch.setattr(
         "cafe.skills.checklist_composer.AgentManager.get_agent_file_path",
-        lambda *_: "agent.md",
+        lambda *_: str(agent_file),
     )
     checklist = tmp_path / f"{playbook_id}-{step_name}.md"
     assert compose_declared_checklist(
@@ -765,7 +813,7 @@ def test_review_and_pr_checklists_include_basic_principles(tmp_path: Path) -> No
     pr_path = tmp_path / "pr_checklist.md"
 
     generate_review_checklist(
-        agent_name="Alice",
+        agent_name="Richard",
         spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
         review_file_path=".cafe/issues/test/review/iteration_001/output.md",
         base_branch="develop",

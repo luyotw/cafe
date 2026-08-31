@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Sequence, TypeVar
 
 import typer
 import yaml
 from rich.console import Console
 
+from cafe.catalogs.resolver import (
+    MAX_CATALOG_DISCOVERY_ENTRIES,
+    MAX_CATALOG_OPERATION_ENTRIES,
+    CatalogKind,
+    CatalogOperationLimitError,
+    CatalogResolver,
+)
+from cafe.catalogs.sync import CatalogSyncError, CatalogSyncService, OverBudgetDiscovery
 from cafe.core.playbook import confirmation_gate_steps
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook, format_dot, format_text_report
@@ -38,6 +47,25 @@ def _cli_prompt_checkbox(*a, **kw):
 # ---------------------------------------------------------------------------
 playbook_app = typer.Typer(help="Inspect and validate playbooks")
 skill_app = typer.Typer(help="Inspect and validate skills")
+catalog_app = typer.Typer(help="Compare and publish project CAFE catalogs")
+
+_HUMAN_DETAIL_LIMIT = 50
+_Detail = TypeVar("_Detail")
+
+
+def _print_bounded_details(
+    items: Sequence[_Detail],
+    render: Callable[[_Detail], str],
+    *,
+    inspection_hint: str,
+) -> None:
+    """Print concise human details with a complete inspection path."""
+    for item in items[:_HUMAN_DETAIL_LIMIT]:
+        console.print(f"  {render(item)}")
+    omitted = len(items) - _HUMAN_DETAIL_LIMIT
+    if omitted > 0:
+        console.print(f"  … {omitted} more; use {inspection_hint} to inspect")
+
 
 # ---------------------------------------------------------------------------
 # Console and backward-compat runtime bridge
@@ -64,6 +92,205 @@ def _build_playbook_loader() -> PlaybookLoader:
 def _build_skill_loader() -> SkillLoader:
     """Build skill loader with cwd-based project root."""
     return SkillLoader(project_root=Path.cwd())
+
+
+def _build_catalog_service() -> CatalogSyncService:
+    """Build the trusted catalog service for the active project view."""
+    return CatalogSyncService(CatalogResolver(project_root=Path.cwd()))
+
+
+def _parse_catalog_kinds(values: list[str]) -> list[CatalogKind]:
+    if not values:
+        return list(CatalogKind)
+    try:
+        kinds = [CatalogKind(value) for value in values]
+    except ValueError as exc:
+        raise CatalogSyncError(
+            "Catalog kind must be one of: playbook, phase, agent"
+        ) from exc
+    if len(set(kinds)) != len(kinds):
+        raise CatalogSyncError("Duplicate --kind values are not allowed")
+    return kinds
+
+
+def _print_catalog_report(report) -> None:
+    """Print a bounded human report while retaining complete JSON output separately."""
+    differences = report.differences
+    if not differences:
+        return
+    console.print(
+        f"[yellow]{len(differences)} project catalog difference(s)[/yellow] "
+        f"token={report.token}"
+    )
+    _print_bounded_details(
+        differences,
+        lambda item: (
+            f"{item.entry_id}\t{item.reason}\t"
+            f"{item.project_digest[:12]} → {item.global_digest[:12]}"
+        ),
+        inspection_hint="--json or --entry",
+    )
+
+
+def _report_catalog_operation_limit(
+    error: CatalogOperationLimitError,
+    *,
+    json_output: bool,
+    discovery: Optional[OverBudgetDiscovery] = None,
+    scope: str = "catalog",
+    requested_entry_count: Optional[int] = None,
+) -> None:
+    if json_output:
+        payload = (
+            discovery.as_dict()
+            if discovery is not None
+            else {
+                "schema_version": 1,
+                "status": "over_budget",
+                "entry_limit": error.limit,
+                "scope": scope,
+            }
+        )
+        if requested_entry_count is not None:
+            payload["requested_entry_count"] = requested_entry_count
+        if scope == "catalog" and error.limit == MAX_CATALOG_DISCOVERY_ENTRIES:
+            payload["discovery_entry_limit"] = error.limit
+            payload["discovery_complete"] = False
+        typer.echo(json.dumps(payload, sort_keys=True))
+    else:
+        console.print(f"[red]Error: {error}[/red]")
+        if discovery is not None:
+            _print_bounded_details(
+                discovery.affected_entry_ids,
+                str,
+                inspection_hint="--json or an exact --entry scope",
+            )
+
+
+@catalog_app.command(name="check")
+def catalog_check(
+    kinds: list[str] = typer.Option(
+        [], "--kind", help="Catalog kind; repeat for playbook, phase, or agent"
+    ),
+    entries: list[str] = typer.Option(
+        [], "--entry", help="Stable entry ID; repeat to limit the comparison"
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit complete machine JSON"),
+) -> None:
+    """Compare intentional project entries with their Global destinations."""
+    service: Optional[CatalogSyncService] = None
+    selected_kinds: list[CatalogKind] = []
+    try:
+        selected_kinds = _parse_catalog_kinds(kinds)
+        service = _build_catalog_service()
+        report = service.compare(
+            kinds=selected_kinds,
+            entry_ids=entries or None,
+        )
+    except CatalogOperationLimitError as exc:
+        if service is not None and not entries and exc.limit == MAX_CATALOG_OPERATION_ENTRIES:
+            try:
+                discovery = service.discover_over_budget(kinds=selected_kinds)
+            except CatalogOperationLimitError:
+                _report_catalog_operation_limit(
+                    CatalogOperationLimitError(MAX_CATALOG_DISCOVERY_ENTRIES),
+                    json_output=json_output,
+                    scope="catalog",
+                )
+            else:
+                _report_catalog_operation_limit(
+                    exc,
+                    json_output=json_output,
+                    discovery=discovery,
+                )
+        else:
+            _report_catalog_operation_limit(
+                exc,
+                json_output=json_output,
+                scope="explicit" if entries else "catalog",
+                requested_entry_count=len(entries) if entries else None,
+            )
+        raise typer.Exit(1)
+    except (CatalogSyncError, OSError, ValueError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
+    if json_output:
+        typer.echo(json.dumps(report.as_dict(), ensure_ascii=False, sort_keys=True))
+    else:
+        _print_catalog_report(report)
+
+
+@catalog_app.command(name="sync-global")
+def catalog_sync_global(
+    kinds: list[str] = typer.Option(
+        [], "--kind", help="Catalog kind; repeat for playbook, phase, or agent"
+    ),
+    entries: list[str] = typer.Option(
+        [], "--entry", help="Stable entry ID; repeat to limit the comparison"
+    ),
+    token: Optional[str] = typer.Option(
+        None, "--token", help="Exact token returned by catalog check"
+    ),
+    approved: list[str] = typer.Option(
+        [], "--approve", help="Approved entry ID; repeat for an exact selection"
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit complete machine JSON"),
+) -> None:
+    """Publish an explicitly approved project selection to Global settings."""
+    try:
+        selected_kinds = _parse_catalog_kinds(kinds)
+        service = _build_catalog_service()
+        if token is not None or approved:
+            if token is None or not approved:
+                raise CatalogSyncError(
+                    "Non-interactive publication requires --token and at least one --approve"
+                )
+            selected = approved
+            comparison_token = token
+        else:
+            report = service.compare(
+                kinds=selected_kinds,
+                entry_ids=entries or None,
+            )
+            _print_catalog_report(report)
+            if not report.differences:
+                return
+            selected = _cli_prompt_checkbox(
+                message="Select project catalog entries to publish to Global:",
+                choices=[item.entry_id for item in report.differences],
+            )
+            if not selected:
+                console.print("[dim]Cancelled[/dim]")
+                return
+            if not _cli_prompt_confirm(
+                f"Publish {len(selected)} entry(s) approved by token {report.token[:12]}?",
+                default=False,
+            ):
+                console.print("[dim]Cancelled[/dim]")
+                return
+            comparison_token = report.token
+        result = service.sync(
+            comparison_token,
+            selected,
+            kinds=selected_kinds,
+            entry_ids=entries or None,
+        )
+    except CatalogOperationLimitError as exc:
+        _report_catalog_operation_limit(exc, json_output=json_output)
+        raise typer.Exit(1)
+    except (CatalogSyncError, OSError, ValueError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
+    if json_output:
+        typer.echo(json.dumps(result.as_dict(), ensure_ascii=False, sort_keys=True))
+    else:
+        console.print(f"[green]Published {len(result.updated)} catalog entry(s)[/green]")
+        _print_bounded_details(
+            result.updated,
+            str,
+            inspection_hint="--json",
+        )
+
 
 
 # ---------------------------------------------------------------------------

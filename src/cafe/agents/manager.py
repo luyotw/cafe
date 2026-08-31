@@ -987,7 +987,7 @@ class AgentManager:
         """Get the path to agent md file (for use in prompts).
 
         Searches in order: local .cafe/agents/ first, then ~/.cafe/agents/,
-        then falls back to src/cafe/data/agents/.
+        then falls back to the builtin agent catalog.
 
         Args:
             agent_name: Agent name (e.g. "Roger", "David", "Richard", "John")
@@ -997,22 +997,31 @@ class AgentManager:
         Returns:
             str: Agent file path
         """
-        from pathlib import Path
+        from cafe.catalogs.resolver import CatalogKind, CatalogResolver
 
-        agent_filename = f"{agent_name}.md"
+        project_root = Path(cafe_dir).parent if cafe_dir else None
+        resolver = CatalogResolver(project_root=project_root)
+        entry = resolver.resolve(CatalogKind.AGENT, f"{role}/{agent_name}")
+        return str(entry.path)
 
-        # Search upward from cwd for .cafe/agents/ (works in worktrees and subdirectories)
-        current = Path.cwd().resolve()
-        while current != current.parent:
-            local_path = current / ".cafe" / "agents" / role / agent_filename
-            if local_path.exists():
-                return str(local_path)
-            current = current.parent
+    @classmethod
+    def read_agent_file(
+        cls, agent_name: str, role: str, cafe_dir: str = None
+    ) -> tuple[str, str]:
+        """Resolve and read an agent definition under one shared catalog lock."""
+        from cafe.catalogs.resolver import (
+            CatalogResolver,
+            global_catalog_lock,
+            read_valid_agent_definition,
+        )
 
-        # Fall back to global ~/.cafe/agents/
-        home_path = Path.home() / ".cafe" / "agents" / role / agent_filename
-        if home_path.exists():
-            return str(home_path)
-
-        # Fall back to system default
-        return f"src/cafe/data/agents/{role}/{agent_name}.md"
+        project_root = Path(cafe_dir).parent if cafe_dir else None
+        resolver = CatalogResolver(project_root=project_root)
+        with global_catalog_lock(resolver.global_root):
+            path = Path(
+                cls.get_agent_file_path(agent_name, role, cafe_dir)
+                if cafe_dir is not None
+                else cls.get_agent_file_path(agent_name, role)
+            )
+            content = read_valid_agent_definition(path, f"{role}/{agent_name}")
+            return str(path), content

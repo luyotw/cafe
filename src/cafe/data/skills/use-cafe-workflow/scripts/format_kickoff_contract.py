@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shlex
 import shutil
@@ -103,6 +104,25 @@ def _load_yaml_mapping(path: Path, *, label: str) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError(f"{label} must contain a top-level mapping: {path}")
     return raw
+
+
+def _json_mapping(value: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"must be valid JSON: {exc.msg}") from exc
+    if not isinstance(parsed, dict):
+        raise argparse.ArgumentTypeError("must be a JSON object")
+    return parsed
+
+
+def _validate_preflight(
+    value: dict[str, Any], *, label: str, required: set[str]
+) -> dict[str, Any]:
+    missing = sorted(required - set(value))
+    if missing:
+        raise ValueError(f"{label} preflight is missing: {', '.join(missing)}")
+    return value
 
 
 def _load_strategic_context(path: Path, issue_name: str) -> tuple[dict[str, Any], str]:
@@ -275,6 +295,8 @@ def _parser() -> argparse.ArgumentParser:
         choices=tuple(sorted(_MODEL_ADJUSTMENT_AUTHORITIES)),
         required=True,
     )
+    parser.add_argument("--update-preflight", type=_json_mapping, required=True)
+    parser.add_argument("--catalog-preflight", type=_json_mapping, required=True)
     parser.add_argument(
         "--execution-mode",
         choices=tuple(sorted(_EXECUTION_MODES)),
@@ -356,6 +378,40 @@ def render(args: argparse.Namespace) -> str:
         args.phase_rationale,
         step_names=set(model.steps),
     )
+    update_preflight = _validate_preflight(
+        args.update_preflight,
+        label="runtime update",
+        required={
+            "checked_at",
+            "status",
+            "installed_version",
+            "latest_version",
+            "decision",
+            "comparison_token",
+            "post_change_evidence",
+        },
+    )
+    catalog_preflight = _validate_preflight(
+        args.catalog_preflight,
+        label="catalog",
+        required={
+            "checked_at",
+            "status",
+            "comparison_token",
+            "effective_digests",
+            "decision",
+            "post_change_evidence",
+        },
+    )
+    effective_digests = catalog_preflight["effective_digests"]
+    if not isinstance(effective_digests, dict) or set(effective_digests) != {
+        "playbook",
+        "phase",
+        "agent",
+    }:
+        raise ValueError(
+            "catalog preflight effective_digests must cover playbook, phase, and agent"
+        )
     zh = effective_locale.lower().startswith("zh")
     worktree = args.worktree if args.worktree else "current checkout"
 
@@ -420,6 +476,42 @@ def render(args: argparse.Namespace) -> str:
             ["driver_confirmable", ", ".join(driver_confirmable) or "[]"],
             ["worktree", worktree],
             ["mandate_source", mandate_source],
+        ],
+    )
+    preflight = _table(
+        summary_headers,
+        [
+            ["runtime_update.checked_at", update_preflight["checked_at"]],
+            ["runtime_update.status", update_preflight["status"]],
+            [
+                "runtime_update.versions",
+                f"{update_preflight['installed_version']} → "
+                f"{update_preflight['latest_version']}",
+            ],
+            ["runtime_update.decision", update_preflight["decision"]],
+            [
+                "runtime_update.comparison_token",
+                update_preflight["comparison_token"],
+            ],
+            [
+                "runtime_update.post_change_evidence",
+                update_preflight["post_change_evidence"],
+            ],
+            ["catalog.checked_at", catalog_preflight["checked_at"]],
+            ["catalog.status", catalog_preflight["status"]],
+            ["catalog.decision", catalog_preflight["decision"]],
+            ["catalog.comparison_token", catalog_preflight["comparison_token"]],
+            [
+                "catalog.effective_digests",
+                ", ".join(
+                    f"{kind}={effective_digests[kind]}"
+                    for kind in ("playbook", "phase", "agent")
+                ),
+            ],
+            [
+                "catalog.post_change_evidence",
+                catalog_preflight["post_change_evidence"],
+            ],
         ],
     )
 
@@ -510,6 +602,8 @@ def render(args: argparse.Namespace) -> str:
         [
             title,
             summary,
+            "### Preflight evidence",
+            preflight,
             "### Phases",
             _table(phase_headers, phase_rows),
             "### Phase execution requirements",

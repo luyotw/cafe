@@ -337,6 +337,13 @@ def apply_durable_human_task_payload_if_present(
                     task_id=submitted_id,
                     message="This durable human task belongs to a different workflow.",
                 )
+            if not _durable_task_matches_current_handoff(task, blackboard):
+                return _durable_task_routing_rejection(
+                    issue_dir=issue_dir,
+                    blackboard=blackboard,
+                    task_id=submitted_id,
+                    message="This durable human task no longer belongs to the current handoff.",
+                )
             if active_tasks and all(active.id != task.id for active in active_tasks):
                 return _durable_task_routing_rejection(
                     issue_dir=issue_dir,
@@ -373,6 +380,34 @@ def apply_durable_human_task_payload_if_present(
             source=source,
             record_store=record_store,
         )
+
+
+def _durable_task_matches_current_handoff(task: HumanTask, blackboard: Any) -> bool:
+    contract = getattr(blackboard, "handoff_contract", None)
+    if (
+        getattr(blackboard, "current_step", None) != "user"
+        or contract is None
+        or contract.to_owner is not HandoffOwner.USER
+        or contract.to_step != "user"
+        or contract.from_step != task.step
+    ):
+        return False
+    current_key = ":".join(
+        (
+            "user-handoff",
+            task.workflow_id,
+            contract.from_step,
+            contract.intent.value,
+            contract.created_at,
+        )
+    )
+    if task.handoff_key.startswith("user-handoff:"):
+        # Human-owned and hybrid tasks intentionally use a generic
+        # ``manual_handoff`` contract while retaining ``initial`` or the
+        # portion ID as their executable trigger.  The structured key is the
+        # identity shared by both sides of that boundary.
+        return task.handoff_key == current_key
+    return task.status is HumanTaskStatus.PENDING and contract.intent.value == task.trigger
 
 
 def _durable_task_routing_rejection(

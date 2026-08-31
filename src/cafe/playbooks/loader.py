@@ -8,9 +8,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
+from cafe.catalogs.resolver import CatalogKind, CatalogResolver, global_catalog_lock
 from cafe.core.playbook import LoadedPlaybook, load_playbook_file
 from cafe.skills.loader import SkillLoader
-from cafe.utils.config import get_global_cafe_dir
 
 
 def apply_issue_playbook_overrides(
@@ -82,9 +82,14 @@ class PlaybookLoader:
         global_root: Optional[Path] = None,
         builtin_root: Optional[Path] = None,
     ) -> None:
-        self.project_root = project_root or self._find_project_root(Path.cwd())
-        self.global_root = global_root or get_global_cafe_dir()
-        self.builtin_root = builtin_root or (Path(__file__).parent.parent / "data")
+        self.resolver = CatalogResolver(
+            project_root=project_root,
+            global_root=global_root,
+            builtin_root=builtin_root,
+        )
+        self.project_root = self.resolver.project_root
+        self.global_root = self.resolver.global_root
+        self.builtin_root = self.resolver.builtin_root
 
     @staticmethod
     def _find_project_root(start: Path) -> Path:
@@ -96,50 +101,36 @@ class PlaybookLoader:
         return start.resolve()
 
     def _roots(self) -> List[Path]:
-        return [
-            self.builtin_root / "playbooks",
-            self.global_root / "playbooks",
-            self.project_root / ".cafe" / "playbooks",
-        ]
+        return [root for _source, root, _layer in self.resolver.catalog_roots(CatalogKind.PLAYBOOK)]
 
     def _source_roots(self) -> List[Tuple[str, Path]]:
         return [
-            ("builtin", self.builtin_root / "playbooks"),
-            ("global", self.global_root / "playbooks"),
-            ("project", self.project_root / ".cafe" / "playbooks"),
+            (source, root)
+            for source, root, _layer in self.resolver.catalog_roots(CatalogKind.PLAYBOOK)
         ]
 
     def list_playbooks(self) -> List[str]:
-        names = set()
-        for root in self._roots():
-            if not root.exists():
-                continue
-            for file in root.glob("*.yaml"):
-                names.add(file.stem)
-        return sorted(names)
+        return self.resolver.keys(CatalogKind.PLAYBOOK)
 
     def _resolve_path(self, name: str) -> tuple[str, Path]:
-        filename = f"{name}.yaml" if not name.endswith(".yaml") else name
-        for source, root in reversed(self._source_roots()):
-            path = root / filename
-            if path.exists():
-                return source, path
-        raise FileNotFoundError(f"Playbook not found: {name}")
+        entry = self.resolver.resolve(CatalogKind.PLAYBOOK, name)
+        return entry.source, entry.path
 
     def load_model(self, name: str, *, strict: bool = False) -> LoadedPlaybook:
-        source, path = self._resolve_path(name)
-        skill_loader = SkillLoader(
-            project_root=self.project_root,
-            global_root=self.global_root,
-            builtin_root=self.builtin_root,
-        )
-        skill_loader.discover(strict=strict)
-        return load_playbook_file(
-            path,
-            source=source,
-            skill_loader=skill_loader,
-            strict=strict,
-        )
+        with global_catalog_lock(self.global_root):
+            source, path = self._resolve_path(name)
+            skill_loader = SkillLoader(
+                project_root=self.project_root,
+                global_root=self.global_root,
+                builtin_root=self.builtin_root,
+            )
+            skill_loader.discover(strict=strict)
+            return load_playbook_file(
+                path,
+                source=source,
+                skill_loader=skill_loader,
+                strict=strict,
+            )
 
     def load(self, name: str, *, strict: bool = False) -> Dict:
         return self.load_model(name, strict=strict).as_dict()

@@ -61,6 +61,15 @@ agents:
 class TestChatCommand:
     """測試 cafe chat <role> 命令功能"""
 
+    def test_chat_help_describes_playbook_declared_roles(self):
+        """U1/I1: 公開 help 不應把 workflow role 誤述為固定清單。"""
+        result = runner.invoke(app, ["chat", "--help"], env={"COLUMNS": "200"})
+
+        assert result.exit_code == 0
+        help_text = " ".join(result.stdout.lower().replace("│", " ").split())
+        assert "playbook-declared role" in help_text
+        assert "pm, developer, or reviewer" not in help_text
+
     def test_chat_validates_role_parameter(self, tmp_path: Path, mock_initialized_branch, config_with_agents):
         """測試 role 參數驗證 - 應只接受 pm、developer、reviewer"""
         # 測試無效的 role - 應該在驗證階段就失敗（exit code 1）

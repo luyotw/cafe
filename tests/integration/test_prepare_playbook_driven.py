@@ -136,6 +136,7 @@ class TestPreparePlaybookDriven:
         assert config_data["spec"]["rigor"] == "medium"
         assert config_data["spec"]["template"] == "auto"
         assert config_data["plan"]["template"] == "default"
+        assert not (temp_repo_dir / ".cafe" / "agents").exists()
 
     def test_cli_playbook_selection_is_persisted_without_repository_default(
         self, temp_repo_dir, mock_git_ops

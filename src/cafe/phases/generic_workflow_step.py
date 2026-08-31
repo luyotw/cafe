@@ -1220,14 +1220,6 @@ class GenericWorkflowStepExecutor(Phase):
         baton_path: Optional[Path] = None,
     ) -> Dict[str, str]:
         role = str(step_def.get("role", "developer"))
-        role_dir = {
-            "pm": "pm",
-            "reviewer": "reviewer",
-            "writer": "writer",
-            "editor": "editor",
-            "researcher": "researcher",
-            "ops": "ops",
-        }.get(role, "developer")
         # 這條 playbook 實際可用的 to_step（= 所有 step 名 + 內建 user/done），
         # 與 baton 驗證器一致。注入 prompt 讓 agent 不會憑共用 skill 的範例（如 pr）
         # 猜出本 playbook 不存在的 step。
@@ -1236,6 +1228,9 @@ class GenericWorkflowStepExecutor(Phase):
         # 本 step 依 intent 定義的下一步（含 _done → done 正規化），給 agent 明確指向。
         step_on = step_def.get("on", {}) if isinstance(step_def.get("on"), dict) else {}
         behavior = resolve_step_behavior(playbook, step_name)
+        _agent_source, agent_content = AgentManager.read_agent_file(agent_name, role)
+        materialized_agent = output_file.parent / "context_agent_file.md"
+        self._restore_control_file(materialized_agent, agent_content.encode("utf-8"))
         terminal_targets = {"_done", "done"}
         terminal_route_intents = {
             str(intent) for intent, target in step_on.items() if str(target) in terminal_targets
@@ -1255,7 +1250,7 @@ class GenericWorkflowStepExecutor(Phase):
             if HandoffIntent.WORKFLOW_COMPLETE.value not in valid_baton_intents:
                 valid_baton_intents.append(HandoffIntent.WORKFLOW_COMPLETE.value)
         context = {
-            "agent_file": AgentManager.get_agent_file_path(agent_name, role_dir),
+            "agent_file": self._display_path(materialized_agent),
             "handoff_summary": getattr(blackboard_state, "handoff_summary", ""),
             "blackboard_digest": self._build_blackboard_digest(blackboard_state),
             "issue_dir": self._display_path(self.issue_dir),

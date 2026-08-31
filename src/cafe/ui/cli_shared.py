@@ -21,7 +21,7 @@ import yaml
 from rich.console import Console
 
 from cafe.agents.manager import AgentManager
-from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.blackboard import BlackboardStore, HandoffContract, HandoffIntent, HandoffOwner
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.types import AgentCLI, AgentConfig, CliEntry
 from cafe.core.workflow_models import BatonRejected
@@ -593,14 +593,18 @@ def _consume_pending_chat_handoff(
             source="workflow.consume_handoff",
         )
     elif target_step == "user":
-        store.update_handoff_contract(
+        store.write_handoff_contract(
             blackboard,
-            from_step=contract.from_step,
-            to_owner=HandoffOwner.USER,
-            to_step="user",
-            intent=contract.intent,
-            status_code=contract.status_code,
-            source="workflow.consume_handoff",
+            HandoffContract(
+                version=contract.version,
+                from_step=contract.from_step,
+                to_owner=HandoffOwner.USER,
+                to_step="user",
+                intent=contract.intent,
+                status_code=contract.status_code,
+                created_at=contract.created_at,
+                source="workflow.consume_handoff",
+            ),
         )
     else:
         store.update_handoff_contract(

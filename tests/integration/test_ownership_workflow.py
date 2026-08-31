@@ -16,7 +16,10 @@ from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.human_tasks import HumanTaskBinding, HumanTaskDecision, HumanTaskPolicy
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.ui.cli import app
-from cafe.ui.human_tasks import apply_human_task_payload
+from cafe.ui.human_tasks import (
+    apply_durable_human_task_payload_if_present,
+    apply_human_task_payload,
+)
 
 
 def _approval_policy() -> HumanTaskPolicy:
@@ -79,12 +82,10 @@ def test_agent_human_agent_journey_resumes_across_runtime_instances(
     ).run(start_step="draft")
     task = HumanTaskRecordStore(issue_dir).tasks()[0]
     state = BlackboardStore(issue_dir).load_or_create("draft")
-    applied = apply_human_task_payload(
+    applied = apply_durable_human_task_payload_if_present(
         issue_dir=issue_dir,
         playbook_data=playbook,
         blackboard=state,
-        from_step="approval",
-        trigger="initial",
         raw_payload={"task": "approval", "decision": "accept", "human_task_id": task.id},
         source="integration",
     )
@@ -93,6 +94,8 @@ def test_agent_human_agent_journey_resumes_across_runtime_instances(
     ).run()
 
     assert paused.final_status_code == "HUMAN_TASK_PENDING"
+    assert applied is not None
+    assert applied.rejection is None
     assert applied.target == "final"
     assert completed.completed is True
     assert agent_steps == ["draft", "final"]
@@ -210,12 +213,10 @@ def test_hybrid_journey_retains_one_visit_through_its_human_boundary(
     ).run(start_step="mixed")
     task = HumanTaskRecordStore(issue_dir).tasks()[0]
     state = BlackboardStore(issue_dir).load_or_create("mixed")
-    apply_human_task_payload(
+    applied = apply_durable_human_task_payload_if_present(
         issue_dir=issue_dir,
         playbook_data=playbook,
         blackboard=state,
-        from_step="mixed",
-        trigger="approve",
         raw_payload={"task": "approval", "decision": "accept", "human_task_id": task.id},
         source="integration",
     )
@@ -224,6 +225,9 @@ def test_hybrid_journey_retains_one_visit_through_its_human_boundary(
     ).run()
 
     assert paused.final_status_code == "HYBRID_HUMAN_TASK_PENDING"
+    assert applied is not None
+    assert applied.rejection is None
+    assert applied.target == "mixed"
     assert completed.completed is True
     assert portions == ["draft", "final"]
     assert BlackboardStore(issue_dir).load_or_create("mixed").step_visit_counts == {"mixed": 1}

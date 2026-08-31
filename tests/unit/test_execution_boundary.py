@@ -13,6 +13,7 @@ from cafe.core.execution_boundary import (
     ScriptLaunchRequest,
     TrustSource,
     snapshot_script,
+    snapshot_script_tree,
 )
 
 
@@ -102,6 +103,112 @@ def test_snapshot_rejects_ancestor_swap_during_open(
     with pytest.raises((OSError, ValueError)):
         snapshot_script(script, allowed_root=root)
     assert swapped is True
+
+
+def test_tree_snapshot_rejects_runtime_directory_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "skills"
+    skill = root / "cafe-plan"
+    scripts = skill / "scripts"
+    scripts.mkdir(parents=True)
+    script = scripts / "hook.sh"
+    script.write_text("#!/bin/sh\necho safe\n", encoding="utf-8")
+    attacker = tmp_path / "attacker"
+    (attacker / "scripts").mkdir(parents=True)
+    (attacker / "scripts" / "hook.sh").write_text("#!/bin/sh\necho attacker\n", encoding="utf-8")
+    displaced = root / "displaced"
+    native_open = os.open
+    swapped = False
+
+    def replace_skill_directory(path, flags, *args, **kwargs):
+        nonlocal swapped
+        if not swapped and path == "cafe-plan":
+            swapped = True
+            skill.rename(displaced)
+            attacker.rename(skill)
+        return native_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", replace_skill_directory)
+
+    with pytest.raises(ValueError):
+        snapshot_script_tree(script, allowed_root=root)
+    assert swapped is True
+
+
+def test_tree_snapshot_contains_only_declared_entries_and_hashes_the_runtime_closure(
+    tmp_path: Path,
+) -> None:
+    catalog = tmp_path / "catalog"
+    phase = catalog / "phase"
+    shared = tmp_path / "global" / "shared"
+    undeclared = catalog / "undeclared"
+    (phase / "scripts").mkdir(parents=True)
+    (shared / "scripts").mkdir(parents=True)
+    (undeclared / "scripts").mkdir(parents=True)
+    script = phase / "scripts" / "hook.sh"
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+    shared_resource = shared / "scripts" / "message.txt"
+    shared_resource.write_text("first\n", encoding="utf-8")
+    (undeclared / "scripts" / "secret.txt").write_text("secret\n", encoding="utf-8")
+
+    first = snapshot_script_tree(
+        script,
+        allowed_root=catalog,
+        runtime_entries={"phase": phase, "shared": shared},
+    )
+    try:
+        assert (first.root / "phase" / "scripts" / "hook.sh").is_file()
+        assert (first.root / "shared" / "scripts" / "message.txt").is_file()
+        assert not (first.root / "undeclared").exists()
+        first_digest = first.digest
+    finally:
+        first.cleanup()
+
+    shared_resource.write_text("second\n", encoding="utf-8")
+    second = snapshot_script_tree(
+        script,
+        allowed_root=catalog,
+        runtime_entries={"phase": phase, "shared": shared},
+    )
+    try:
+        assert second.digest != first_digest
+    finally:
+        second.cleanup()
+
+
+@pytest.mark.parametrize(
+    ("tree_builder", "limits"),
+    [
+        (
+            lambda root: [
+                (root / "extra-a").write_text("a", encoding="utf-8"),
+                (root / "extra-b").write_text("b", encoding="utf-8"),
+            ],
+            {"max_files": 2},
+        ),
+        (
+            lambda root: (root / "large.txt").write_text("oversized", encoding="utf-8"),
+            {"max_bytes": 8},
+        ),
+        (
+            lambda root: (root / "one" / "two" / "three").mkdir(parents=True),
+            {"max_depth": 2},
+        ),
+    ],
+)
+def test_tree_snapshot_rejects_runtime_closure_over_resource_limits(
+    tmp_path: Path, tree_builder, limits: dict[str, int]
+) -> None:
+    catalog = tmp_path / "catalog"
+    skill = catalog / "phase"
+    skill.mkdir(parents=True)
+    script = skill / "hook.sh"
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+    tree_builder(skill)
+
+    with pytest.raises(ValueError, match="limit"):
+        snapshot_script_tree(script, allowed_root=catalog, **limits)
 
 
 def test_script_launcher_inventory_covers_workflow_process_calls() -> None:
@@ -213,4 +320,5 @@ def test_script_launcher_inventory_covers_workflow_process_calls() -> None:
         Visitor().visit(tree)
 
     assert "src/cafe/core/sandbox_execution.py::run" in discovered
+    assert "src/cafe/verification/receipt.py::_run_with_output_log" in discovered
     assert discovered == documented

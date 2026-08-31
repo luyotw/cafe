@@ -1,13 +1,24 @@
 """Tests for playbook/skill catalog CLI commands."""
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from cafe.ui.cli import app
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_global_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
+    )
 
 
 def test_playbook_list_includes_builtin_entries(tmp_path: Path, monkeypatch) -> None:
@@ -493,3 +504,337 @@ def test_help_hides_legacy_phase_aliases() -> None:
     commands_section = result.stdout.split("╭─ Commands", 1)[1]
     for command_name in ("spec", "plan", "develop", "dev", "review", "pr"):
         assert f"│ {command_name} " not in commands_section
+
+
+def _write_catalog_entries(project: Path) -> None:
+    playbook = project / ".cafe" / "playbooks" / "standard.yaml"
+    playbook.parent.mkdir(parents=True, exist_ok=True)
+    playbook.write_text("playbook: {id: standard}\nsteps: {}\n", encoding="utf-8")
+    skill = project / ".cafe" / "skills" / "develop" / "SKILL.md"
+    skill.parent.mkdir(parents=True, exist_ok=True)
+    skill.write_text(
+        "---\nname: develop\ndescription: project\n---\n\nDevelop\n",
+        encoding="utf-8",
+    )
+    agent = project / ".cafe" / "agents" / "developer" / "David.md"
+    agent.parent.mkdir(parents=True, exist_ok=True)
+    agent.write_text(
+        "---\nname: David\ndescription: project\n---\n\nDevelop\n",
+        encoding="utf-8",
+    )
+
+
+def test_catalog_check_defaults_to_all_three_kinds_with_complete_json(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    global_root = tmp_path / "global"
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
+    _write_catalog_entries(tmp_path)
+
+    result = runner.invoke(app, ["catalog", "check", "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert {item["entry_id"] for item in payload["entries"]} == {
+        "playbook:standard",
+        "phase:develop",
+        "agent:developer/David",
+    }
+    assert payload["difference_count"] == 3
+    assert set(payload["effective_digests"]) == {"playbook", "phase", "agent"}
+
+
+def test_catalog_check_json_reports_a_bounded_over_budget_state(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from cafe.catalogs.resolver import (
+        MAX_CATALOG_DISCOVERY_ENTRIES,
+        MAX_CATALOG_OPERATION_ENTRIES,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
+    )
+    entry_count = (MAX_CATALOG_OPERATION_ENTRIES * 2) + 1
+    for index in range(entry_count):
+        skill = tmp_path / ".cafe" / "skills" / f"phase-{index:03d}" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text(
+            f"---\nname: phase-{index:03d}\ndescription: project\n---\n",
+            encoding="utf-8",
+        )
+
+    result = runner.invoke(app, ["catalog", "check", "--kind", "phase", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["entry_limit"] == MAX_CATALOG_OPERATION_ENTRIES
+    assert payload["discovery_entry_limit"] == MAX_CATALOG_DISCOVERY_ENTRIES
+    assert payload["discovery_complete"] is True
+    assert payload["schema_version"] == 1
+    assert payload["status"] == "over_budget"
+    assert payload["affected_entry_ids"][0] == "phase:phase-000"
+    assert set(payload["affected_entry_ids"]) == {
+        f"phase:phase-{index:03d}" for index in range(entry_count)
+    }
+    assert "next_cursor" not in payload
+
+    narrowed = runner.invoke(
+        app,
+        [
+            "catalog",
+            "check",
+            "--kind",
+            "phase",
+            "--entry",
+            "phase:phase-000",
+            "--json",
+        ],
+    )
+    assert narrowed.exit_code == 0, narrowed.stdout
+    assert [item["entry_id"] for item in json.loads(narrowed.stdout)["entries"]] == [
+        "phase:phase-000"
+    ]
+
+
+def test_catalog_check_scoped_over_budget_does_not_fall_back_to_unscoped_discovery(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from cafe.catalogs.resolver import MAX_CATALOG_OPERATION_ENTRIES
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
+    )
+    entry_ids: list[str] = []
+    for index in range(MAX_CATALOG_OPERATION_ENTRIES + 1):
+        name = f"phase-{index:03d}"
+        entry_ids.append(f"phase:{name}")
+        skill = tmp_path / ".cafe" / "skills" / name / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text(
+            f"---\nname: {name}\ndescription: project\n---\n",
+            encoding="utf-8",
+        )
+    unrelated = tmp_path / ".cafe" / "skills" / "aaa" / "SKILL.md"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text(
+        "---\nname: aaa\ndescription: unrelated\n---\n",
+        encoding="utf-8",
+    )
+
+    arguments = ["catalog", "check", "--kind", "phase", "--json"]
+    arguments.extend(value for entry_id in entry_ids for value in ("--entry", entry_id))
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "over_budget"
+    assert payload["scope"] == "explicit"
+    assert payload["requested_entry_count"] == MAX_CATALOG_OPERATION_ENTRIES + 1
+    assert "affected_entry_ids" not in payload
+
+
+def test_catalog_check_json_reports_fallback_only_effective_digests(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    global_root = tmp_path / "global"
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
+
+    before = runner.invoke(app, ["catalog", "check", "--json"])
+    global_playbook = global_root / "playbooks" / "global-only.yaml"
+    global_playbook.parent.mkdir(parents=True)
+    global_playbook.write_text(
+        "playbook: {id: global-only}\nsteps: {}\n", encoding="utf-8"
+    )
+    after = runner.invoke(app, ["catalog", "check", "--json"])
+
+    assert before.exit_code == 0, before.stdout
+    assert after.exit_code == 0, after.stdout
+    before_payload = json.loads(before.stdout)
+    after_payload = json.loads(after.stdout)
+    assert set(before_payload["effective_digests"]) == {
+        "playbook",
+        "phase",
+        "agent",
+    }
+    assert before_payload["status"] == "no_project_entries"
+    assert after_payload["effective_digests"]["playbook"] != before_payload[
+        "effective_digests"
+    ]["playbook"]
+    assert after_payload["comparison_token"] != before_payload["comparison_token"]
+
+
+def test_catalog_check_supports_kind_and_entry_filters(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
+    )
+    _write_catalog_entries(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "catalog",
+            "check",
+            "--kind",
+            "playbook",
+            "--entry",
+            "playbook:standard",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert [item["entry_id"] for item in payload["entries"]] == ["playbook:standard"]
+
+
+def test_catalog_sync_global_requires_and_honors_exact_noninteractive_approval(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    global_root = tmp_path / "global"
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
+    _write_catalog_entries(tmp_path)
+    check = runner.invoke(
+        app,
+        [
+            "catalog",
+            "check",
+            "--entry",
+            "playbook:standard",
+            "--json",
+        ],
+    )
+    token = json.loads(check.stdout)["comparison_token"]
+
+    missing_approval = runner.invoke(
+        app, ["catalog", "sync-global", "--token", token, "--json"]
+    )
+    result = runner.invoke(
+        app,
+        [
+            "catalog",
+            "sync-global",
+            "--entry",
+            "playbook:standard",
+            "--token",
+            token,
+            "--approve",
+            "playbook:standard",
+            "--json",
+        ],
+    )
+
+    assert missing_approval.exit_code == 1
+    assert result.exit_code == 0, result.stdout
+    assert json.loads(result.stdout)["updated"] == ["playbook:standard"]
+    assert (global_root / "playbooks" / "standard.yaml").is_file()
+
+
+def test_catalog_sync_global_rejects_stale_cli_token(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    global_root = tmp_path / "global"
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
+    _write_catalog_entries(tmp_path)
+    check = runner.invoke(app, ["catalog", "check", "--json"])
+    token = json.loads(check.stdout)["comparison_token"]
+    agent = tmp_path / ".cafe" / "agents" / "developer" / "David.md"
+    agent.write_text(agent.read_text(encoding="utf-8") + "changed\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "catalog",
+            "sync-global",
+            "--token",
+            token,
+            "--approve",
+            "agent:developer/David",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert not (global_root / "agents" / "developer" / "David.md").exists()
+
+
+def test_catalog_sync_global_interactive_preview_updates_only_selected_entry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    global_root = tmp_path / "global"
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
+    _write_catalog_entries(tmp_path)
+
+    with (
+        patch("cafe.ui.cli.prompt_checkbox", return_value=["phase:develop"]),
+        patch("cafe.ui.cli.prompt_confirm", return_value=True),
+    ):
+        result = runner.invoke(app, ["catalog", "sync-global"])
+
+    assert result.exit_code == 0, result.stdout
+    assert (global_root / "skills" / "develop" / "SKILL.md").is_file()
+    assert not (global_root / "playbooks" / "standard.yaml").exists()
+
+
+def test_catalog_sync_global_bounds_human_summary_and_keeps_json_complete(
+    tmp_path: Path, monkeypatch
+) -> None:
+    current_global = {"path": tmp_path / "human-global"}
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: current_global["path"])
+
+    def run_sync(project: Path, *, json_output: bool):
+        project.mkdir()
+        monkeypatch.chdir(project)
+        entry_ids = []
+        for index in range(52):
+            name = f"item-{index}"
+            entry_ids.append(f"playbook:{name}")
+            path = project / ".cafe" / "playbooks" / f"{name}.yaml"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                f"playbook: {{id: {name}}}\nsteps: {{}}\n",
+                encoding="utf-8",
+            )
+        check = runner.invoke(app, ["catalog", "check", "--kind", "playbook", "--json"])
+        assert check.exit_code == 0, check.stdout
+        token = json.loads(check.stdout)["comparison_token"]
+        approvals = [value for entry_id in entry_ids for value in ("--approve", entry_id)]
+        arguments = [
+            "catalog",
+            "sync-global",
+            "--kind",
+            "playbook",
+            "--token",
+            token,
+            *approvals,
+        ]
+        if json_output:
+            arguments.append("--json")
+        return runner.invoke(app, arguments), entry_ids
+
+    human_result, entry_ids = run_sync(tmp_path / "human-project", json_output=False)
+    current_global["path"] = tmp_path / "json-global"
+    json_result, json_entry_ids = run_sync(tmp_path / "json-project", json_output=True)
+
+    assert human_result.exit_code == 0, human_result.stdout
+    assert sum("playbook:item-" in line for line in human_result.stdout.splitlines()) == 50
+    assert entry_ids[50] not in human_result.stdout
+    assert "--json" in human_result.stdout
+    assert json_result.exit_code == 0, json_result.stdout
+    assert set(json.loads(json_result.stdout)["updated"]) == set(json_entry_ids)
+
+
+def test_catalog_exposes_comparison_and_sync_without_migration_command() -> None:
+    result = runner.invoke(app, ["catalog", "--help"])
+    removed_command = "-".join(("migrate", "agents"))
+    removed = runner.invoke(app, ["catalog", removed_command])
+
+    assert result.exit_code == 0
+    assert "check" in result.stdout
+    assert "sync-global" in result.stdout
+    assert removed.exit_code != 0

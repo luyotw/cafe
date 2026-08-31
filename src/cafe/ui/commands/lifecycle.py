@@ -378,21 +378,20 @@ def prepare(
             console.print("[yellow]Please run 'cafe init' first to set up CAFE.[/yellow]")
             raise typer.Exit(1)
 
-        # 1.1. Sync agents and templates at the beginning of prepare
-        from cafe.ui.init_helpers import sync_agents, sync_templates
+        # 1.1. Templates remain materialized; agents resolve dynamically.
+        from cafe.ui.init_helpers import sync_templates
 
         cafe_dir = Path(".cafe")
-        agent_success, agent_failed = sync_agents(cafe_dir)
         template_success, template_failed = sync_templates(cafe_dir)
 
         # Display sync summary
-        if agent_success > 0 or template_success > 0:
+        if template_success > 0:
             console.print(
-                f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s) and {template_success} template(s)"
+                f"  [green]✓[/green] Updated .cafe directory with {template_success} template(s)"
             )
-        if agent_failed > 0 or template_failed > 0:
+        if template_failed > 0:
             console.print(
-                f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed + template_failed} file(s)"
+                f"  [yellow]⚠[/yellow] Warning: Failed to copy {template_failed} file(s)"
             )
 
         from cafe.core.prepare_profile import PrepareProfile, PrepareRigorError
@@ -607,7 +606,7 @@ def prepare(
         console.print(f"Base branch: {base_branch}")
         console.print()
 
-        # 9. Initialize default templates and agents if not exists (in repo root)
+        # 9. Initialize default templates if not present (in repo root)
         cafe_dir = Path(".cafe")
         _ensure_default_content(cafe_dir)
 
@@ -879,7 +878,7 @@ def prepare(
             (worktree_issues_dir / entry_step_name).mkdir(exist_ok=True)
             (worktree_issues_dir / "sessions").mkdir(exist_ok=True)
 
-            # Initialize default templates and agents in worktree .cafe
+            # Initialize default templates in worktree .cafe; agents stay fallback-only.
             _ensure_default_content(worktree_cafe_dir)
             try:
                 _ensure_worktree_cafe_excluded(worktree_abs)

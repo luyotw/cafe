@@ -12,6 +12,7 @@ metadata: {version: 1.28.0}
   artifacts, blackboard state, or baton handoffs.
 - Keep driver decisions grounded in the confirmed kickoff contract and
   `.cafe/strategic_context.yaml`.
+- Preflight runtime updates and all three catalogs read-only; apply only exact, separately approved tokens and recheck afterward.
 - Prefer non-interactive commands so work can run unattended and resume cleanly.
 - Diagnose abnormal workflow behavior only far enough to choose the correct,
   safe repair layer.
@@ -96,8 +97,8 @@ If more than one situation applies, read every listed reference before acting; d
 ## Driver checklist
 ### Start or resume
 
-- [ ] Run the project/global skill check. Ask only for differences; never prompt
-  for identical catalogs or when the project has no skill overrides.
+- [ ] Run runtime and combined catalog preflight before a new kickoff or stale
+  resume; record unavailable status and keep both approval scopes separate.
 - [ ] Read the kickoff and strategic-context references.
 - [ ] Resolve or select the active playbook using `references/playbook_selection.md`,
   recording its rationale and independent-QA decision without creating a repository
@@ -135,7 +136,6 @@ If more than one situation applies, read every listed reference before acting; d
 - [ ] Report the relevant test evidence and final state in the effective locale.
 
 ## Reference index
-
 - `references/kickoff.md` — locale, confirmation contract, formatter, prepare.
 - `references/project_global_skill_sync.md` — silent check and approved updates.
 - `references/strategic_context.md` — documents, mandate, protected overrides.
