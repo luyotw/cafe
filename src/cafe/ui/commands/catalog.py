@@ -12,12 +12,13 @@ from rich.console import Console
 
 from cafe.catalogs.migration import AgentSnapshotMigrator
 from cafe.catalogs.resolver import (
+    MAX_CATALOG_DISCOVERY_ENTRIES,
     MAX_CATALOG_OPERATION_ENTRIES,
     CatalogKind,
     CatalogOperationLimitError,
     CatalogResolver,
 )
-from cafe.catalogs.sync import CatalogSyncError, CatalogSyncService, ComparisonPage
+from cafe.catalogs.sync import CatalogSyncError, CatalogSyncService, OverBudgetDiscovery
 from cafe.core.playbook import confirmation_gate_steps
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook, format_dot, format_text_report
@@ -136,32 +137,35 @@ def _report_catalog_operation_limit(
     error: CatalogOperationLimitError,
     *,
     json_output: bool,
-    page: Optional[ComparisonPage] = None,
+    discovery: Optional[OverBudgetDiscovery] = None,
+    scope: str = "catalog",
+    requested_entry_count: Optional[int] = None,
 ) -> None:
     if json_output:
         payload = (
-            page.as_dict()
-            if page is not None
+            discovery.as_dict()
+            if discovery is not None
             else {
                 "schema_version": 1,
                 "status": "over_budget",
                 "entry_limit": error.limit,
+                "scope": scope,
             }
         )
+        if requested_entry_count is not None:
+            payload["requested_entry_count"] = requested_entry_count
+        if scope == "catalog" and error.limit == MAX_CATALOG_DISCOVERY_ENTRIES:
+            payload["discovery_entry_limit"] = error.limit
+            payload["discovery_complete"] = False
         typer.echo(json.dumps(payload, sort_keys=True))
     else:
         console.print(f"[red]Error: {error}[/red]")
-        if page is not None:
+        if discovery is not None:
             _print_bounded_details(
-                page.affected_entry_ids,
+                discovery.affected_entry_ids,
                 str,
-                inspection_hint="--json",
+                inspection_hint="--json or an exact --entry scope",
             )
-            if page.next_cursor is not None:
-                console.print(
-                    "  Continue with "
-                    f"[bold]--after-entry {page.next_cursor}[/bold]"
-                )
 
 
 @catalog_app.command(name="check")
@@ -172,11 +176,6 @@ def catalog_check(
     entries: list[str] = typer.Option(
         [], "--entry", help="Stable entry ID; repeat to limit the comparison"
     ),
-    after_entry: Optional[str] = typer.Option(
-        None,
-        "--after-entry",
-        help="Continue bounded over-budget discovery after this stable entry ID",
-    ),
     json_output: bool = typer.Option(False, "--json", help="Emit complete machine JSON"),
 ) -> None:
     """Compare intentional project entries with their Global destinations."""
@@ -184,31 +183,34 @@ def catalog_check(
     selected_kinds: list[CatalogKind] = []
     try:
         selected_kinds = _parse_catalog_kinds(kinds)
-        if after_entry is not None and entries:
-            raise CatalogSyncError("--after-entry cannot be combined with --entry")
         service = _build_catalog_service()
-        if after_entry is not None:
-            page = service.compare_page(
-                kinds=selected_kinds,
-                after_entry_id=after_entry,
-            )
-            _report_catalog_operation_limit(
-                CatalogOperationLimitError(MAX_CATALOG_OPERATION_ENTRIES),
-                json_output=json_output,
-                page=page,
-            )
-            raise typer.Exit(1)
         report = service.compare(
             kinds=selected_kinds,
             entry_ids=entries or None,
         )
     except CatalogOperationLimitError as exc:
-        page = (
-            service.compare_page(kinds=selected_kinds)
-            if service is not None
-            else None
-        )
-        _report_catalog_operation_limit(exc, json_output=json_output, page=page)
+        if service is not None and not entries and exc.limit == MAX_CATALOG_OPERATION_ENTRIES:
+            try:
+                discovery = service.discover_over_budget(kinds=selected_kinds)
+            except CatalogOperationLimitError:
+                _report_catalog_operation_limit(
+                    CatalogOperationLimitError(MAX_CATALOG_DISCOVERY_ENTRIES),
+                    json_output=json_output,
+                    scope="catalog",
+                )
+            else:
+                _report_catalog_operation_limit(
+                    exc,
+                    json_output=json_output,
+                    discovery=discovery,
+                )
+        else:
+            _report_catalog_operation_limit(
+                exc,
+                json_output=json_output,
+                scope="explicit" if entries else "catalog",
+                requested_entry_count=len(entries) if entries else None,
+            )
         raise typer.Exit(1)
     except (CatalogSyncError, OSError, ValueError) as exc:
         console.print(f"[red]Error: {exc}[/red]")

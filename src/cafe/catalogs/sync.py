@@ -19,6 +19,7 @@ from cafe.catalogs.migration import AgentSnapshotMigrator
 from cafe.catalogs.resolver import (
     MAX_CATALOG_BYTES,
     MAX_CATALOG_DEPTH,
+    MAX_CATALOG_DISCOVERY_ENTRIES,
     MAX_CATALOG_NODES,
     MAX_CATALOG_OPERATION_ENTRIES,
     CatalogEntry,
@@ -104,25 +105,27 @@ class ComparisonReport:
 
 
 @dataclass(frozen=True)
-class ComparisonPage:
-    """One bounded discovery page for a catalog scope over the operation limit."""
+class OverBudgetDiscovery:
+    """One complete, hard-bounded discovery result for an oversized catalog."""
 
     affected_entry_ids: tuple[str, ...]
-    next_cursor: Optional[str]
-    page_token: str
-    page_entry_count: int
+    comparison_token: str
+    compared_entry_count: int
     effective_digests: dict[str, str]
+    discovery_complete: bool = True
+    discovery_entry_limit: int = MAX_CATALOG_DISCOVERY_ENTRIES
 
     def as_dict(self) -> dict[str, object]:
         return {
             "schema_version": 1,
             "status": "over_budget",
             "entry_limit": MAX_CATALOG_OPERATION_ENTRIES,
-            "page_entry_count": self.page_entry_count,
-            "page_token": self.page_token,
+            "discovery_entry_limit": self.discovery_entry_limit,
+            "discovery_complete": self.discovery_complete,
+            "compared_entry_count": self.compared_entry_count,
+            "comparison_token": self.comparison_token,
             "effective_digests": self.effective_digests,
             "affected_entry_ids": list(self.affected_entry_ids),
-            "next_cursor": self.next_cursor,
         }
 
 
@@ -478,36 +481,33 @@ class CatalogSyncService:
         kinds: Optional[Iterable[CatalogKind]] = None,
         entry_ids: Optional[Sequence[str]] = None,
     ) -> ComparisonReport:
+        operation_limit = (
+            MAX_CATALOG_OPERATION_ENTRIES
+            if entry_ids is None
+            else MAX_CATALOG_DISCOVERY_ENTRIES
+        )
         with global_catalog_lock(self.resolver.global_root):
-            return self._compare(kinds=kinds, entry_ids=entry_ids)
+            return self._compare(
+                kinds=kinds,
+                entry_ids=entry_ids,
+                operation_limit=operation_limit,
+            )
 
-    def compare_page(
+    def discover_over_budget(
         self,
         *,
         kinds: Optional[Iterable[CatalogKind]] = None,
-        after_entry_id: Optional[str] = None,
-    ) -> ComparisonPage:
-        """Inspect one bounded page after an unscoped comparison exceeds its limit."""
-        selected_kinds = self._normalize_kinds(kinds)
-        if after_entry_id is not None:
-            cursor_kind, _cursor_key = self._parse_entry_id(after_entry_id)
-            if cursor_kind not in selected_kinds:
-                raise CatalogSyncError("Continuation cursor is outside selected kinds")
+    ) -> OverBudgetDiscovery:
+        """Identify every difference once within the catalog discovery hard limit."""
         with global_catalog_lock(self.resolver.global_root):
-            entry_ids, next_cursor = self.resolver.entry_id_page(
-                selected_kinds,
-                after_entry_id=after_entry_id,
-            )
             report = self._compare(
-                kinds=selected_kinds,
-                entry_ids=entry_ids,
-                allow_non_project_entries=True,
+                kinds=kinds,
+                operation_limit=MAX_CATALOG_DISCOVERY_ENTRIES,
             )
-        return ComparisonPage(
+        return OverBudgetDiscovery(
             affected_entry_ids=tuple(item.entry_id for item in report.differences),
-            next_cursor=next_cursor,
-            page_token=report.token,
-            page_entry_count=len(entry_ids),
+            comparison_token=report.token,
+            compared_entry_count=len(report.entries),
             effective_digests=report.effective_digests,
         )
 
@@ -516,7 +516,7 @@ class CatalogSyncService:
         *,
         kinds: Optional[Iterable[CatalogKind]] = None,
         entry_ids: Optional[Sequence[str]] = None,
-        allow_non_project_entries: bool = False,
+        operation_limit: int = MAX_CATALOG_OPERATION_ENTRIES,
     ) -> ComparisonReport:
         selected_kinds = self._normalize_kinds(kinds)
         if entry_ids is not None and len(entry_ids) > MAX_CATALOG_OPERATION_ENTRIES:
@@ -532,26 +532,14 @@ class CatalogSyncService:
                     raise CatalogSyncError(f"Entry filter is outside selected kinds: {entry_id}")
                 requested_identities[entry_id] = (kind, key)
 
-        if requested is None:
-            effective_entries = self.resolver.entries(
-                selected_kinds,
-                max_entries=MAX_CATALOG_OPERATION_ENTRIES,
-            )
-            project_entries = self.resolver.project_entries(
-                selected_kinds,
-                max_entries=MAX_CATALOG_OPERATION_ENTRIES,
-            )
-        else:
-            effective_entries = []
-            for entry_id in sorted(requested):
-                kind, key = requested_identities[entry_id]
-                try:
-                    effective_entries.append(self.resolver.resolve(kind, key))
-                except FileNotFoundError as exc:
-                    raise CatalogSyncError(f"No project catalog entry for: {entry_id}") from exc
-            project_entries = [
-                entry for entry in effective_entries if entry.source == "project"
-            ]
+        effective_entries = self.resolver.entries(
+            selected_kinds,
+            max_entries=operation_limit,
+        )
+        project_entries = self.resolver.project_entries(
+            selected_kinds,
+            max_entries=operation_limit,
+        )
         effective_digests = self._effective_digests(effective_entries, selected_kinds)
         blocked_agents = (
             AgentSnapshotMigrator(self.resolver).publication_blocked_entry_ids()
@@ -562,13 +550,12 @@ class CatalogSyncService:
             entry for entry in project_entries if entry.entry_id not in blocked_agents
         ]
         available = {entry.entry_id for entry in project_entries}
-        if requested is not None and not allow_non_project_entries:
+        if requested is not None:
             unknown = sorted(requested - available)
             if unknown:
                 raise CatalogSyncError(f"No project catalog entry for: {', '.join(unknown)}")
-            project_entries = [entry for entry in project_entries if entry.entry_id in requested]
 
-        comparison_items: list[ComparisonItem] = []
+        scope_items: list[ComparisonItem] = []
         for entry in project_entries:
             _validate_publishable(entry.kind, entry.key, entry.path)
             global_path = self._global_path(entry)
@@ -585,7 +572,7 @@ class CatalogSyncService:
                     reason = (
                         "identical" if global_digest == entry.digest else "content_mismatch"
                     )
-            comparison_items.append(
+            scope_items.append(
                 ComparisonItem(
                     entry_id=entry.entry_id,
                     kind=entry.kind.value,
@@ -598,12 +585,17 @@ class CatalogSyncService:
                     reason=reason,
                 )
             )
-        comparison_items.sort(key=lambda item: item.entry_id)
+        scope_items.sort(key=lambda item: item.entry_id)
+        comparison_items = (
+            scope_items
+            if requested is None
+            else [item for item in scope_items if item.entry_id in requested]
+        )
         roots = tuple(
             dict.fromkeys((self.resolver.canonical_root, self.resolver.project_root))
         )
         token = self._comparison_token(
-            comparison_items,
+            scope_items,
             effective_digests,
             roots,
             self.resolver.global_root,

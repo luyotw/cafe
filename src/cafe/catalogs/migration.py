@@ -484,7 +484,7 @@ class AgentSnapshotMigrator:
                 not isinstance(entry_id, str)
                 or entry_id in seen
                 or action not in {"preserve", "retire"}
-                or state not in {"pending", "completed"}
+                or state not in {"pending", "retiring", "completed"}
                 or record["effect"] != "shadows_fallback"
                 or record["status"] not in {"invalid", "intentional", "generated", "ambiguous"}
             ):
@@ -588,7 +588,13 @@ class AgentSnapshotMigrator:
             else:
                 raise StaleMigrationDecision("Migration manifest content is unavailable")
             digest = _retired_content_digest(content_path, source)
-            fallback_digest = self._fallback_digest(item.entry_id.removeprefix("agent:"))
+            fallback_digest = (
+                item.fallback_digest
+                if destination is not None
+                and not self._record_path_exists(source)
+                and self._record_path_exists(destination)
+                else self._fallback_digest(item.entry_id.removeprefix("agent:"))
+            )
             current_items.append(
                 MigrationItem(
                     entry_id=item.entry_id,
@@ -795,6 +801,75 @@ class AgentSnapshotMigrator:
                         os.close(destination_directory)
                 self.failure_injector("after_retire", entry_id)
 
+    def _restore_unfinished_retirement(
+        self,
+        source: Path,
+        destination: Path,
+        digest: str,
+        entry_id: str,
+    ) -> None:
+        """Restore project precedence before retrying an uncheckpointed retirement."""
+        source_root, _key = self._source_root(entry_id, source)
+        with global_catalog_lock(self.resolver.global_root):
+            source_exists = self._record_path_exists(source)
+            destination_exists = self._record_path_exists(destination)
+            if source_exists and not destination_exists:
+                return
+            if source_exists or not destination_exists:
+                raise StaleMigrationDecision(
+                    f"Unfinished retirement state is unrecoverable: {entry_id}"
+                )
+            self._validate_directory_ancestry(
+                source_root, source.parent, allow_missing=False
+            )
+            self._validate_directory_ancestry(
+                self.resolver.canonical_root,
+                destination.parent,
+                allow_missing=False,
+            )
+            if _retired_content_digest(destination, source) != digest:
+                raise StaleMigrationDecision(
+                    f"Retired agent recovery evidence changed: {entry_id}"
+                )
+            approved_identity = _filesystem_identity(destination.lstat())
+            directory_flags = (
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            source_directory = os.open(source.parent, directory_flags)
+            destination_directory = os.open(destination.parent, directory_flags)
+            try:
+                current = os.stat(
+                    destination.name,
+                    dir_fd=destination_directory,
+                    follow_symlinks=False,
+                )
+                if _filesystem_identity(current) != approved_identity:
+                    raise StaleMigrationDecision(
+                        f"Retired agent recovery identity changed: {entry_id}"
+                    )
+                os.replace(
+                    destination.name,
+                    source.name,
+                    src_dir_fd=destination_directory,
+                    dst_dir_fd=source_directory,
+                )
+                os.fsync(source_directory)
+                os.fsync(destination_directory)
+            finally:
+                os.close(source_directory)
+                os.close(destination_directory)
+            if (
+                not self._record_path_exists(source)
+                or self._record_path_exists(destination)
+                or _filesystem_identity(source.lstat()) != approved_identity
+                or content_digest(source) != digest
+            ):
+                raise StaleMigrationDecision(
+                    f"Project authority could not be restored: {entry_id}"
+                )
+
     def _resume(
         self,
         manifest: Path,
@@ -830,21 +905,22 @@ class AgentSnapshotMigrator:
                     )
             else:
                 destination = Path(str(record["retired_path"]))
-                if source.exists() or source.is_symlink():
-                    self._retire_identity_bound(
-                        source,
-                        destination,
-                        digest,
-                        fallback_digest,
-                        entry_id,
-                    )
-                elif (
-                    not self._record_path_exists(destination)
-                    or _retired_content_digest(destination, source) != digest
-                ):
-                    raise StaleMigrationDecision(
-                        f"Retired agent state is unrecoverable: {entry_id}"
-                    )
+                self._restore_unfinished_retirement(
+                    source,
+                    destination,
+                    digest,
+                    entry_id,
+                )
+                if record.get("state") != "retiring":
+                    record["state"] = "retiring"
+                    self._write_manifest(manifest, payload, entry_id=entry_id)
+                self._retire_identity_bound(
+                    source,
+                    destination,
+                    digest,
+                    fallback_digest,
+                    entry_id,
+                )
             record["state"] = "completed"
             self._write_manifest(manifest, payload, entry_id=entry_id)
 

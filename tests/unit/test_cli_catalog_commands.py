@@ -572,13 +572,17 @@ def test_catalog_check_defaults_to_all_three_kinds_with_complete_json(
 def test_catalog_check_json_reports_a_bounded_over_budget_state(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from cafe.catalogs.resolver import MAX_CATALOG_OPERATION_ENTRIES
+    from cafe.catalogs.resolver import (
+        MAX_CATALOG_DISCOVERY_ENTRIES,
+        MAX_CATALOG_OPERATION_ENTRIES,
+    )
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
     )
-    for index in range(MAX_CATALOG_OPERATION_ENTRIES + 1):
+    entry_count = (MAX_CATALOG_OPERATION_ENTRIES * 2) + 1
+    for index in range(entry_count):
         skill = tmp_path / ".cafe" / "skills" / f"phase-{index:03d}" / "SKILL.md"
         skill.parent.mkdir(parents=True)
         skill.write_text(
@@ -591,34 +595,15 @@ def test_catalog_check_json_reports_a_bounded_over_budget_state(
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
     assert payload["entry_limit"] == MAX_CATALOG_OPERATION_ENTRIES
+    assert payload["discovery_entry_limit"] == MAX_CATALOG_DISCOVERY_ENTRIES
+    assert payload["discovery_complete"] is True
     assert payload["schema_version"] == 1
     assert payload["status"] == "over_budget"
-    assert payload["page_entry_count"] == MAX_CATALOG_OPERATION_ENTRIES
     assert payload["affected_entry_ids"][0] == "phase:phase-000"
-    affected_entry_ids = set(payload["affected_entry_ids"])
-    cursor = payload["next_cursor"]
-    while cursor is not None:
-        continuation = runner.invoke(
-            app,
-            [
-                "catalog",
-                "check",
-                "--kind",
-                "phase",
-                "--after-entry",
-                cursor,
-                "--json",
-            ],
-        )
-        assert continuation.exit_code == 1
-        continuation_payload = json.loads(continuation.stdout)
-        assert continuation_payload["page_entry_count"] <= MAX_CATALOG_OPERATION_ENTRIES
-        affected_entry_ids.update(continuation_payload["affected_entry_ids"])
-        cursor = continuation_payload["next_cursor"]
-    assert affected_entry_ids == {
-        f"phase:phase-{index:03d}"
-        for index in range(MAX_CATALOG_OPERATION_ENTRIES + 1)
+    assert set(payload["affected_entry_ids"]) == {
+        f"phase:phase-{index:03d}" for index in range(entry_count)
     }
+    assert "next_cursor" not in payload
 
     narrowed = runner.invoke(
         app,
@@ -636,6 +621,44 @@ def test_catalog_check_json_reports_a_bounded_over_budget_state(
     assert [item["entry_id"] for item in json.loads(narrowed.stdout)["entries"]] == [
         "phase:phase-000"
     ]
+
+
+def test_catalog_check_scoped_over_budget_does_not_fall_back_to_unscoped_discovery(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from cafe.catalogs.resolver import MAX_CATALOG_OPERATION_ENTRIES
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
+    )
+    entry_ids: list[str] = []
+    for index in range(MAX_CATALOG_OPERATION_ENTRIES + 1):
+        name = f"phase-{index:03d}"
+        entry_ids.append(f"phase:{name}")
+        skill = tmp_path / ".cafe" / "skills" / name / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text(
+            f"---\nname: {name}\ndescription: project\n---\n",
+            encoding="utf-8",
+        )
+    unrelated = tmp_path / ".cafe" / "skills" / "aaa" / "SKILL.md"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text(
+        "---\nname: aaa\ndescription: unrelated\n---\n",
+        encoding="utf-8",
+    )
+
+    arguments = ["catalog", "check", "--kind", "phase", "--json"]
+    arguments.extend(value for entry_id in entry_ids for value in ("--entry", entry_id))
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "over_budget"
+    assert payload["scope"] == "explicit"
+    assert payload["requested_entry_count"] == MAX_CATALOG_OPERATION_ENTRIES + 1
+    assert "affected_entry_ids" not in payload
 
 
 def test_catalog_check_json_reports_fallback_only_effective_digests(

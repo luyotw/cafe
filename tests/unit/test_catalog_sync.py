@@ -15,6 +15,7 @@ import cafe.catalogs.sync as sync_module
 from cafe.agents.manager import AgentManager
 from cafe.catalogs.migration import AgentSnapshotMigrator
 from cafe.catalogs.resolver import (
+    MAX_CATALOG_DISCOVERY_ENTRIES,
     MAX_CATALOG_OPERATION_ENTRIES,
     CatalogKind,
     CatalogOperationLimitError,
@@ -107,17 +108,21 @@ def test_combined_comparison_rejects_an_operation_over_the_shared_entry_limit(
         service.compare(kinds=[CatalogKind.PHASE])
 
     assert raised.value.limit == MAX_CATALOG_OPERATION_ENTRIES
-    first_page = service.compare_page(kinds=[CatalogKind.PHASE])
-    assert len(first_page.affected_entry_ids) == MAX_CATALOG_OPERATION_ENTRIES
-    assert first_page.affected_entry_ids[0] == "phase:phase-000"
-    assert first_page.next_cursor == "phase:phase-511"
+    discovery = service.discover_over_budget(kinds=[CatalogKind.PHASE])
+    assert discovery.discovery_complete is True
+    assert discovery.discovery_entry_limit == MAX_CATALOG_DISCOVERY_ENTRIES
+    assert len(discovery.affected_entry_ids) == MAX_CATALOG_OPERATION_ENTRIES + 1
+    assert discovery.affected_entry_ids[0] == "phase:phase-000"
+    assert discovery.affected_entry_ids[-1] == "phase:phase-512"
 
-    final_page = service.compare_page(
+    selected = ["phase:phase-512"]
+    exact = service.compare(
         kinds=[CatalogKind.PHASE],
-        after_entry_id=first_page.next_cursor,
+        entry_ids=selected,
     )
-    assert final_page.affected_entry_ids == ("phase:phase-512",)
-    assert final_page.next_cursor is None
+    _entry(project / ".cafe", CatalogKind.PHASE, "phase-000a", "inserted")
+    refreshed = service.compare(kinds=[CatalogKind.PHASE], entry_ids=selected)
+    assert refreshed.token != exact.token
     assert not (global_root / ".catalog-transactions").exists()
 
 

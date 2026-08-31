@@ -8,7 +8,6 @@ import os
 import stat
 import subprocess
 import threading
-from bisect import insort
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -72,6 +71,7 @@ MAX_CATALOG_NODES = 10_000
 MAX_CATALOG_BYTES = 64 * 1024 * 1024
 MAX_CATALOG_DEPTH = 64
 MAX_CATALOG_OPERATION_ENTRIES = 512
+MAX_CATALOG_DISCOVERY_ENTRIES = 2048
 
 
 def bounded_directory_names(
@@ -531,39 +531,6 @@ class CatalogResolver:
                 )
                 results.extend(self._resolve_unlocked(kind, key) for key in keys)
             return results
-
-    def entry_id_page(
-        self,
-        kinds: Optional[Iterable[CatalogKind]] = None,
-        *,
-        after_entry_id: Optional[str] = None,
-        max_entries: int = MAX_CATALOG_OPERATION_ENTRIES,
-    ) -> tuple[tuple[str, ...], Optional[str]]:
-        """Return the next stable, memory-bounded page of effective entry IDs."""
-        if max_entries < 1:
-            raise CatalogValidationError("Catalog entry page limit must be positive")
-        selected = list(kinds or CatalogKind)
-        page: list[str] = []
-        page_ids: set[str] = set()
-        with global_catalog_lock(self.global_root):
-            for kind in selected:
-                for _source, root, _layer in self.catalog_roots(kind):
-                    for key in self._keys_at_root(kind, root):
-                        entry_id = f"{kind.value}:{key}"
-                        if after_entry_id is not None and entry_id <= after_entry_id:
-                            continue
-                        if entry_id in page_ids:
-                            continue
-                        if len(page) >= max_entries + 1 and entry_id >= page[-1]:
-                            continue
-                        insort(page, entry_id)
-                        page_ids.add(entry_id)
-                        if len(page) > max_entries + 1:
-                            page_ids.remove(page.pop())
-        has_more = len(page) > max_entries
-        entries = tuple(page[:max_entries])
-        next_cursor = entries[-1] if has_more else None
-        return entries, next_cursor
 
     def project_entries(
         self,

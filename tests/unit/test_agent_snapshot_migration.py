@@ -182,7 +182,7 @@ def test_retirement_fails_closed_when_source_is_swapped_at_the_move_boundary(
     )
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert payload["status"] == "in_progress"
-    assert payload["items"][0]["state"] == "pending"
+    assert payload["items"][0]["state"] == "retiring"
 
 
 def test_retirement_fails_closed_when_fallback_changes_at_the_move_boundary(
@@ -230,7 +230,7 @@ def test_retirement_fails_closed_when_fallback_changes_at_the_move_boundary(
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert source.is_file()
     assert payload["status"] == "in_progress"
-    assert payload["items"][0]["state"] == "pending"
+    assert payload["items"][0]["state"] == "retiring"
 
 
 def test_retirement_restores_project_source_when_fallback_changes_after_final_read(
@@ -349,6 +349,55 @@ def test_interrupted_retirement_resumes_from_durable_manifest(tmp_path: Path) ->
     assert len(result.retired) == 2
     assert all(path.is_file() for path in result.retired)
     assert repeated == result
+
+
+def test_interrupted_fallback_validation_restores_project_authority_on_resume(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    source = _agent(
+        project / ".cafe" / "agents" / "developer" / "David.md",
+        "David",
+        "approved",
+    )
+    fallback = _agent(
+        global_root / "agents" / "developer" / "David.md",
+        "David",
+        "approved",
+    )
+    replacement = _agent(fallback.with_suffix(".replacement"), "David", "replacement")
+    resolver = CatalogResolver(
+        project_root=project,
+        canonical_root=project,
+        global_root=global_root,
+        builtin_root=tmp_path / "builtin",
+    )
+    migrator = AgentSnapshotMigrator(resolver, is_tracked=lambda _path: False)
+    preview = migrator.preview()
+    decisions = {"agent:developer/David": "retire"}
+    original_check = migrator._fallback_identity_is_current
+    interrupted = False
+
+    def interrupt_post_move_validation(*args, **kwargs) -> bool:
+        nonlocal interrupted
+        if not interrupted:
+            interrupted = True
+            os.replace(replacement, fallback)
+            raise OSError("injected interruption during fallback validation")
+        return original_check(*args, **kwargs)
+
+    migrator._fallback_identity_is_current = (  # type: ignore[method-assign]
+        interrupt_post_move_validation
+    )
+
+    with pytest.raises(OSError, match="fallback validation"):
+        migrator.apply(preview.token, decisions)
+    with pytest.raises(StaleMigrationDecision):
+        migrator.apply(preview.token, decisions)
+
+    assert source.is_file()
+    assert resolver.resolve(CatalogKind.AGENT, "developer/David").source == "project"
 
 
 def test_preserve_decision_is_shared_by_canonical_and_linked_project_views(

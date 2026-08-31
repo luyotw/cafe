@@ -215,7 +215,8 @@ def test_use_cafe_workflow_preflights_runtime_and_all_catalogs_before_execution(
     assert "continues with the installed version" in normalized
     assert "over_budget" in reference
     assert "affected_entry_ids" in reference
-    assert "--after-entry" in reference
+    assert "discovery_complete" in reference
+    assert "must not paginate" in normalized
     assert "one exact combined `--entry` scope" in normalized
     assert "cafe update apply --token" in reference
     assert "cafe catalog sync-global --token" in reference

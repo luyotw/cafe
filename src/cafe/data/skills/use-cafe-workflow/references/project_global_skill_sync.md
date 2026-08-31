@@ -22,11 +22,15 @@ digests without copying fallback entries into the project.
 - An empty catalog difference list means identical content or no project
   entries are eligible. Stay silent and do not ask a catalog question.
 - A catalog status of `over_budget` is an explicit incomplete preflight, not a
-  no-difference result. Collect each page's `affected_entry_ids`, following
-  `next_cursor` with `--after-entry <cursor>` until it is null. Present the
-  collected IDs in one bounded decision, then run one exact combined `--entry`
-  scope for the approved selection (up to the reported entry limit) to obtain
-  its content-bound token. Do not treat a page token as publication approval.
+  no-difference result. When `discovery_complete` is true, its single
+  `affected_entry_ids` set is complete within the reported hard discovery
+  limit. Present that set in one bounded decision, then run one exact combined
+  `--entry` scope for the approved selection (up to the reported entry limit)
+  to obtain its content-bound token. The exact token also binds the complete
+  discovery scope. The Driver must not paginate, repeat whole-catalog scans, or
+  treat the discovery token as publication approval. If `discovery_complete`
+  is false, stop the preflight with the reported hard-limit error instead of
+  presenting a partial decision.
 - When catalog differences exist, show one bounded report covering all three
   catalog kinds and ask one combined catalog decision for the exact selected
   entry IDs.
