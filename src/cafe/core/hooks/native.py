@@ -15,6 +15,7 @@ from cafe.core.initial_input import (
     InitialInputResult,
     load_initial_input_selection,
 )
+from cafe.core.playbook import resolve_step_behavior
 from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
 from cafe.core.status_codes import PhaseStatusCode, step_on_declares
 from cafe.skills.loader import SkillLoader
@@ -84,6 +85,26 @@ def _publish_confirmation_declared(
     return False
 
 
+def _uses_baton_completion(
+    *,
+    phase: Any,
+    step_name: str,
+    context: Optional[dict[str, Any]] = None,
+    step_def: Any = None,
+) -> bool:
+    """Resolve whether a publishing step uses the strict baton completion contract."""
+    playbook = getattr(phase, "playbook", None)
+    if playbook is not None:
+        try:
+            return resolve_step_behavior(playbook, step_name).completion == "baton"
+        except (AttributeError, KeyError, TypeError, ValueError):
+            pass
+    if isinstance(context, dict) and "behavior_completion" in context:
+        return context["behavior_completion"] == "baton"
+    behavior = step_def.get("behavior") if isinstance(step_def, dict) else None
+    return isinstance(behavior, dict) and behavior.get("completion") == "baton"
+
+
 def _publish_requested(
     *,
     phase: Any,
@@ -95,7 +116,16 @@ def _publish_requested(
     """Return True when a declared publishing step reaches its handoff."""
     if not _publish_confirmation_declared(context=context, step_def=step_def):
         return False
-    if _hook_status_value(status_code) == PhaseStatusCode.CONFIRMED.value:
+    baton_completion = _uses_baton_completion(
+        phase=phase,
+        step_name=step_name,
+        context=context,
+        step_def=step_def,
+    )
+    if (
+        _hook_status_value(status_code) == PhaseStatusCode.CONFIRMED.value
+        and not baton_completion
+    ):
         return True
 
     baton_file: Optional[Path] = None
@@ -119,8 +149,11 @@ def _publish_requested(
             payload,
             current_step=step_name,
         )
+        playbook = getattr(phase, "playbook", {})
+        allowed_steps = list(playbook.get("steps", {}).keys()) if isinstance(playbook, dict) else []
+        contract.validate(allowed_steps=allowed_steps or [step_name])
     except json.JSONDecodeError:
-        return raw_baton == "done"
+        return not baton_completion and raw_baton == "done"
     except Exception:
         return False
 
@@ -128,7 +161,7 @@ def _publish_requested(
         contract.from_step == step_name
         and contract.to_owner == HandoffOwner.DONE
         and contract.to_step == "done"
-        and contract.intent in {HandoffIntent.AWAIT_AGENT, HandoffIntent.WORKFLOW_COMPLETE}
+        and contract.intent == HandoffIntent.WORKFLOW_COMPLETE
     )
 
 
@@ -1573,7 +1606,7 @@ class PRCommentPoster(NoOpHook):
 
 
 class PRLinkOpener(NoOpHook):
-    """Open the created/updated PR in the user's browser."""
+    """Open the created/updated PR only after an explicit workflow opt-in."""
 
     name = "PRLinkOpener"
 
@@ -1581,6 +1614,8 @@ class PRLinkOpener(NoOpHook):
         if kwargs.get("stage") != "publish_output":
             return HookResult()
         phase = kwargs.get("phase")
+        if phase is None or getattr(phase, "open_pr", False) is not True:
+            return HookResult()
         step_name = str(kwargs.get("step_name") or "")
         if not _publish_requested(
             phase=phase,
@@ -1600,7 +1635,7 @@ class PRLinkOpener(NoOpHook):
             run_capability_request,
         )
 
-        repo_root = GitHubPRCreator._resolve_repo_root(phase) if phase is not None else Path.cwd()
+        repo_root = GitHubPRCreator._resolve_repo_root(phase)
         try:
             registry = load_capability_registry(default_capability_definition_dirs(repo_root))
             run = run_capability_request(

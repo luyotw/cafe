@@ -502,6 +502,7 @@ def _build_workflow_step_executor(
     role_agent_map_override: Optional[Dict[str, str]] = None,
     step_user_inputs: Optional[Dict[str, str]] = None,
     interactive: bool = False,
+    open_pr: bool = False,
     extra_allowed_directories: Optional[List[str]] = None,
     stream_agent_output: bool = True,
 ) -> GenericWorkflowStepExecutor:
@@ -525,6 +526,7 @@ def _build_workflow_step_executor(
         role_configs={},
         step_user_inputs=step_user_inputs,
         interactive=interactive,
+        open_pr=open_pr,
         config_allowed_directories=config_manager.get_allowed_directories(),
         extra_allowed_directories=extra_allowed_directories,
     )

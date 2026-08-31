@@ -5,12 +5,12 @@ import inspect
 
 import pytest
 
-from cafe.core import workflow_runtime
 from cafe.agents import manager as agent_manager
+from cafe.core import workflow_runtime
 from cafe.core.hooks import native as native_hooks
+from cafe.core.hooks.native import _publish_requested
 from cafe.core.playbook import PlaybookDefinition, resolve_step_behavior
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
-from cafe.core.hooks.native import _publish_requested
 from cafe.phases import generic_phase, generic_workflow_step
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui import cli_shared
@@ -186,6 +186,29 @@ def test_publish_confirmation_requires_the_publish_capability():
 
     with pytest.raises(ValueError, match="cafe.pr.publish"):
         PlaybookDefinition.model_validate(payload)
+
+
+def test_baton_completion_requires_workflow_complete_for_terminal_transition():
+    """A baton-driven terminal route must be valid for the done owner."""
+    payload = {
+        "playbook": {"id": "terminal-baton"},
+        "steps": {
+            "publish": {
+                "role": "operator",
+                "skill": "phase",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="requires terminal transitions to use workflow_complete"):
+        PlaybookDefinition.model_validate(payload)
+
+    payload["steps"]["publish"]["on"] = {"workflow_complete": "_done"}
+    model = PlaybookDefinition.model_validate(payload)
+
+    assert model.steps["publish"].on == {"workflow_complete": "_done"}
 
 
 def test_custom_named_publish_step_uses_declared_baton_and_receipt_contract(tmp_path):
