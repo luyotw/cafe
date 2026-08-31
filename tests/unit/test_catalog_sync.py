@@ -1246,6 +1246,60 @@ def test_publication_preserves_target_created_after_backup(tmp_path: Path) -> No
     assert content_digest(receipt.parent / "backups" / "playbooks" / "standard.yaml") == old_digest
 
 
+def test_publication_preserves_global_leaf_replaced_immediately_before_backup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, project, global_root = _service(tmp_path)
+    _entry(project / ".cafe", CatalogKind.PLAYBOOK, "standard", "approved-new")
+    _entry(project / ".cafe", CatalogKind.PHASE, "develop", "approved-new-phase")
+    target = _entry(
+        global_root,
+        CatalogKind.PLAYBOOK,
+        "standard",
+        "approved-old",
+    )
+    old_phase = _entry(
+        global_root,
+        CatalogKind.PHASE,
+        "develop",
+        "approved-old-phase",
+    )
+    old_phase_digest = content_digest(old_phase)
+    intervening = b"playbook: {id: standard}\nsteps: {}\nmarker: intervening\n"
+    real_move = sync_module.move_without_replacement
+    replaced = False
+
+    def replace_leaf_before_move(*args, **kwargs) -> None:
+        nonlocal replaced
+        source_directory = kwargs["source_directory"]
+        if not replaced and source_directory.path == target.parent:
+            replacement = target.with_suffix(".replacement")
+            replacement.write_bytes(intervening)
+            replacement.replace(target)
+            replaced = True
+        real_move(*args, **kwargs)
+
+    monkeypatch.setattr(sync_module, "move_without_replacement", replace_leaf_before_move)
+    report = service.compare()
+
+    with pytest.raises(CatalogSyncError):
+        service.sync(report.token, ["phase:develop", "playbook:standard"])
+
+    assert replaced is True
+    assert target.read_bytes() == intervening
+    assert content_digest(old_phase) == old_phase_digest
+    receipt = next((global_root / ".catalog-transactions").glob("*/recovery.json"))
+    evidence = json.loads(receipt.read_text(encoding="utf-8"))
+    assert evidence["status"] == "rolled_back"
+    resolved = _recovery_reader(tmp_path, global_root).resolve(
+        CatalogKind.PLAYBOOK,
+        "standard",
+    )
+    assert resolved is not None
+    assert resolved.digest == content_digest(target)
+
+
 @pytest.mark.parametrize("ancestor", ["target-remove", "target-restore", "backup-restore"])
 def test_rollback_rejects_ancestor_replacement_without_external_mutation(
     tmp_path: Path,

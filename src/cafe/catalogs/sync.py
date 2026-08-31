@@ -35,6 +35,7 @@ from cafe.catalogs.resolver import (
 from cafe.catalogs.transactions import (
     bound_directory,
     entry_exists,
+    entry_identity,
     fsync_directory,
     fsync_tree,
     move_without_replacement,
@@ -759,12 +760,21 @@ class CatalogSyncService:
                                 f"Global content changed during publication: {entry_id}"
                             )
                         if target_exists:
+                            target_identity = entry_identity(
+                                target_directory,
+                                target.name,
+                            )
+                            if content_digest(target) != item.global_digest:
+                                raise StaleComparisonError(
+                                    f"Global content changed during publication: {entry_id}"
+                                )
                             try:
                                 move_without_replacement(
                                     target.name,
                                     backup.name,
                                     source_directory=target_directory,
                                     destination_directory=backup_directory,
+                                    expected_source_identity=target_identity,
                                 )
                             except (FileExistsError, FileNotFoundError) as exc:
                                 raise StaleComparisonError(
@@ -786,12 +796,17 @@ class CatalogSyncService:
                             raise StaleComparisonError(
                                 f"Global content changed during publication: {entry_id}"
                             )
+                        staged_identity = entry_identity(
+                            staged_directory,
+                            staged.name,
+                        )
                         try:
                             move_without_replacement(
                                 staged.name,
                                 target.name,
                                 source_directory=staged_directory,
                                 destination_directory=target_directory,
+                                expected_source_identity=staged_identity,
                             )
                         except (FileExistsError, FileNotFoundError) as exc:
                             raise StaleComparisonError(
