@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui.human_tasks import apply_human_task_payload, resolve_step_human_task
 
@@ -110,6 +113,152 @@ def test_default_human_tasks_validate_and_route_all_user_handoff_patterns(tmp_pa
 
     assert no_change.target == "pr"
     assert no_change_store.load_or_create("develop").current_step == "pr"
+
+
+def test_builtin_develop_permission_task_completes_and_resumes_develop(tmp_path: Path) -> None:
+    """Test List 3: built-in permission feedback resumes without consumer workflow glue."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "permission-resume"
+    playbook = PlaybookLoader().load("standard")
+    store, state = _paused_default_state(
+        issue_dir, from_step="develop", intent=HandoffIntent.NEED_PERMISSION
+    )
+    task = _materialize_default_task(
+        issue_dir, state, from_step="develop", trigger="need_permission"
+    )
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="develop",
+        trigger="need_permission",
+        raw_payload={"human_task_id": task.id, "feedback": "Permission granted."},
+        source="integration",
+    )
+
+    assert result.target == "develop"
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert store.load_or_create("develop").current_step == "develop"
+
+
+def test_replacement_task_rejects_stale_completion_and_preserves_unrelated_wait(
+    tmp_path: Path,
+) -> None:
+    """Test List 4: only an explicit replacement deactivates its named predecessor."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "replacement"
+    playbook = PlaybookLoader().load("standard")
+    store, state = _paused_default_state(
+        issue_dir, from_step="develop", intent=HandoffIntent.NEED_PERMISSION
+    )
+    original = _materialize_default_task(
+        issue_dir, state, from_step="develop", trigger="need_permission"
+    )
+    records = HumanTaskRecordStore(issue_dir)
+    unrelated = records.materialize(
+        workflow_id=state.workflow_id,
+        step="review",
+        iteration=1,
+        trigger="need_clarification",
+        policy_id="clarification-feedback",
+        prompt="Clarify the review.",
+        expected_result={"input_schema": "feedback"},
+        continuations={"submit": "review"},
+        assignee_type="user",
+    )
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook, step_name="develop", trigger="need_permission", iteration=2
+    )
+    replacement = records.materialize(
+        workflow_id=state.workflow_id,
+        step="develop",
+        iteration=2,
+        trigger="need_permission",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+        superseded_task_ids=(original.id,),
+    )
+
+    stale = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="develop",
+        trigger="need_permission",
+        raw_payload={"human_task_id": original.id, "feedback": "Use stale permission."},
+        source="command",
+    )
+    completed = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="develop",
+        trigger="need_permission",
+        raw_payload={"human_task_id": replacement.id, "feedback": "Permission granted."},
+        source="command",
+    )
+
+    assert stale.target is None
+    assert stale.rejection is not None
+    assert records.get_task(original.id).status is HumanTaskStatus.CANCELLED
+    assert records.get_task(original.id).superseded_by_task_id == replacement.id
+    assert records.get_task(unrelated.id).status is HumanTaskStatus.PENDING
+    assert records.get_wait_state(unrelated.id).released_at is None
+    assert completed.target == "develop"
+    assert records.get_task(replacement.id).status is HumanTaskStatus.COMPLETED
+
+
+def test_runtime_replacement_handoff_supersedes_and_notifies_only_the_new_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test List 4: a replacement handoff is a runtime-owned atomic journey."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "runtime-replacement"
+    notifications: list[dict[str, object]] = []
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: notifications.append(kwargs)
+        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+    )
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="need permission",
+            artifacts={},
+            status_code="need_permission",
+            auto_continue=False,
+        )
+
+    first = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("standard"),
+        executor=executor,
+    ).run(start_step="develop")
+    records = HumanTaskRecordStore(issue_dir)
+    original = records.tasks()[0]
+
+    replacement_runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("standard"),
+        executor=executor,
+    )
+    replacement = replacement_runtime.run(start_step="develop")
+    tasks = HumanTaskRecordStore(issue_dir).tasks()
+    current = next(task for task in tasks if task.id != original.id)
+
+    assert first.completed is False
+    assert replacement.completed is False
+    assert HumanTaskRecordStore(issue_dir).get_task(original.id).status is HumanTaskStatus.CANCELLED
+    assert HumanTaskRecordStore(issue_dir).get_task(original.id).superseded_by_task_id == current.id
+    assert current.status is HumanTaskStatus.PENDING
+    assert len(notifications) == 2
+    assert notifications[-1]["capability_request"]["args"]["task_id"] == current.id
 
 
 def test_invalid_default_human_task_response_keeps_the_user_pause(tmp_path: Path) -> None:

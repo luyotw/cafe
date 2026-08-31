@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -73,8 +74,102 @@ def test_run_and_check_verification_receipt_for_clean_head(tmp_path: Path) -> No
     assert payload["git"]["clean_before"] is True
     assert payload["git"]["clean_after"] is True
     assert payload["git"]["cwd_relative_to_root"] == "."
+    log_path = receipt_path.parent / payload["output_log"]["path"]
+    assert log_path.read_text(encoding="utf-8") == "passed\n"
+    assert payload["output_log"]["size_bytes"] == log_path.stat().st_size
+    assert payload["output_log"]["sha256"] == hashlib.sha256(
+        log_path.read_bytes()
+    ).hexdigest()
     assert checked.valid is True
     assert checked.reasons == ()
+
+
+def test_verification_captures_combined_stdout_and_stderr(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    output = _output_file(repo)
+
+    _, receipt_path, _ = run_verification(
+        output_file=output,
+        command=[
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                "print('stdout-line', flush=True); "
+                "print('stderr-line', file=sys.stderr, flush=True)"
+            ),
+        ],
+        scope="full",
+        cwd=repo,
+    )
+
+    log = (receipt_path.parent / "verification.log").read_text(encoding="utf-8")
+    assert log.splitlines() == ["stdout-line", "stderr-line"]
+
+
+def test_check_rejects_tampered_verification_log(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    output = _output_file(repo)
+    _, receipt_path, _ = run_verification(
+        output_file=output,
+        command=[sys.executable, "-c", "print('trusted')"],
+        scope="full",
+        cwd=repo,
+    )
+    (receipt_path.parent / "verification.log").write_text(
+        "tampered\n", encoding="utf-8"
+    )
+
+    checked = check_verification_receipt(output_file=output, cwd=repo)
+
+    assert checked.valid is False
+    assert any("output log" in reason for reason in checked.reasons)
+
+
+def test_verification_replaces_log_symlink_without_writing_its_target(
+    tmp_path: Path,
+) -> None:
+    repo = _repo(tmp_path)
+    output = _output_file(repo)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("untouched\n", encoding="utf-8")
+    log_path = output.parent / "verification.log"
+    log_path.symlink_to(victim)
+
+    _, receipt_path, _ = run_verification(
+        output_file=output,
+        command=[sys.executable, "-c", "print('safe-output')"],
+        scope="full",
+        cwd=repo,
+    )
+
+    assert victim.read_text(encoding="utf-8") == "untouched\n"
+    assert not log_path.is_symlink()
+    assert log_path.read_text(encoding="utf-8") == "safe-output\n"
+    log_path.unlink()
+    log_path.symlink_to(victim)
+    checked = check_verification_receipt(output_file=output, cwd=repo)
+    assert checked.valid is False
+    assert "output log is not a regular file" in checked.reasons
+
+
+def test_version_one_receipt_remains_backward_readable(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    output = _output_file(repo)
+    _, receipt_path, _ = run_verification(
+        output_file=output,
+        command=[sys.executable, "-c", "pass"],
+        scope="full",
+        cwd=repo,
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["schema_version"] = 1
+    receipt.pop("output_log")
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    checked = check_verification_receipt(output_file=output, cwd=repo)
+
+    assert checked.valid is True
 
 
 def test_receipt_becomes_stale_when_head_changes(tmp_path: Path) -> None:
@@ -120,6 +215,9 @@ def test_reuse_materializes_a_valid_receipt_for_the_next_iteration(tmp_path: Pat
     assert receipt_path == target_output.parent / "verification.json"
     assert payload["reused_from"] == str(source_output.parent / "verification.json")
     assert payload["reused_at"]
+    assert (target_output.parent / "verification.log").read_bytes() == (
+        source_output.parent / "verification.log"
+    ).read_bytes()
     assert checked.valid is True
     assert checked.receipt == payload
 
@@ -200,7 +298,7 @@ def test_failed_verification_writes_non_reusable_receipt(tmp_path: Path) -> None
 
     exit_code, _, payload = run_verification(
         output_file=output,
-        command=[sys.executable, "-c", "raise SystemExit(7)"],
+        command=[sys.executable, "-c", "print('failed-output'); raise SystemExit(7)"],
         scope="full",
         cwd=repo,
     )
@@ -208,6 +306,9 @@ def test_failed_verification_writes_non_reusable_receipt(tmp_path: Path) -> None
 
     assert exit_code == 7
     assert payload["valid"] is False
+    assert (
+        output.parent / payload["output_log"]["path"]
+    ).read_text(encoding="utf-8") == "failed-output\n"
     assert checked.valid is False
     assert "recorded verification did not pass" in checked.reasons
 
@@ -315,6 +416,39 @@ def test_verification_cli_runs_and_checks_receipt(tmp_path: Path, monkeypatch) -
     assert check_result.exit_code == 0, check_result.stdout
     assert '"reasons": []' in check_result.stdout
     assert '"command":' in check_result.stdout
+
+
+def test_verification_cli_returns_only_a_bounded_output_tail(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo = _repo(tmp_path)
+    output = _output_file(repo)
+    monkeypatch.chdir(repo)
+
+    result = runner.invoke(
+        app,
+        [
+            "verification",
+            "run",
+            "--output-file",
+            str(output),
+            "--scope",
+            "full",
+            "--",
+            sys.executable,
+            "-c",
+            "for i in range(120): print(f'line-{i:03d}-' + 'x' * 1000)",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "line-000-" not in result.stdout
+    assert "line-119-" in result.stdout
+    assert '"output_truncated": true' in result.stdout
+    assert len(result.stdout.encode("utf-8")) < 40 * 1024
+    log = output.parent / "verification.log"
+    assert "line-000-" in log.read_text(encoding="utf-8")
+    assert log.stat().st_size > 100 * 1024
 
 
 def test_verification_cli_reuses_receipt_for_new_iteration(

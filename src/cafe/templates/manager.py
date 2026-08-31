@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
+from cafe.catalogs.resolver import global_catalog_lock
 from cafe.utils.config import get_global_cafe_dir
 
 if TYPE_CHECKING:
@@ -88,6 +89,14 @@ class TemplateManager:
         return dest
 
     def list_templates(self) -> List[Tuple[str, str]]:
+        """List templates while the owning skill catalog remains stable."""
+        from cafe.skills.loader import SkillLoader
+
+        loader = self.skill_loader or SkillLoader()
+        with global_catalog_lock(loader.global_root):
+            return self._list_templates_unlocked()
+
+    def _list_templates_unlocked(self) -> List[Tuple[str, str]]:
         """List all available templates from system, global, and local directories.
 
         Returns:

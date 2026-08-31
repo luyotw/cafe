@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -26,35 +27,42 @@ def test_workflow_common_bounds_search_output_and_generated_logs() -> None:
     assert "Do not search `.cafe/` together with source and test trees" in normalized
 
 
-def test_develop_and_review_share_machine_checked_full_test_receipt() -> None:
+def test_develop_and_review_defer_repository_wide_gates_to_hooks_and_ci() -> None:
     common = (SKILLS / "cafe-workflow-common/SKILL.md").read_text(encoding="utf-8")
     develop = (SKILLS / "cafe-develop/SKILL.md").read_text(encoding="utf-8")
-    develop_steps = (
-        SKILLS / "cafe-develop/references/execution_steps_normal.md"
-    ).read_text(encoding="utf-8")
+    develop_steps = (SKILLS / "cafe-develop/references/execution_steps_normal.md").read_text(
+        encoding="utf-8"
+    )
     review = (SKILLS / "cafe-review/SKILL.md").read_text(encoding="utf-8")
     review_steps = (SKILLS / "cafe-review/references/execution_steps.md").read_text(
         encoding="utf-8"
     )
-    receipt_instruction = (
-        SKILLS / "cafe-review/references/verification_receipt_instruction.md"
-    ).read_text(encoding="utf-8")
+    plan = (SKILLS / "cafe-plan/SKILL.md").read_text(encoding="utf-8")
+    bug_plan = (SKILLS / "cafe-plan/assets/templates/bug.md").read_text(encoding="utf-8")
+    correction_steps = (SKILLS / "cafe-develop/references/execution_steps_correction.md").read_text(
+        encoding="utf-8"
+    )
 
-    assert "## Develop-to-review verification receipts" in common
-    assert "cafe verification reuse --source-output-file <previous-output>" in common
-    assert "never copy a receipt manually" in common
-    assert "Develop-to-review verification receipts" in develop
-    assert "cafe verification run --output-file {output_file}" in develop_steps
-    assert "Develop-to-review verification receipts" in review
-    assert "{verification_receipt_instruction}" in review_steps
-    assert "cafe verification check --output-file {develop_file}" in receipt_instruction
-    assert "recorded command is the repository-defined full suite" in receipt_instruction
-    assert "do not rerun the same full suite or coverage command" in receipt_instruction
+    assert "## Repository-owned quality gates" in common
+    assert "versioned Git hooks and CI configuration" in common
+    assert "use `--no-verify` only with explicit user authorization" in common
+    assert "Repository-owned quality gates" in develop
+    assert "when a plan is supplied, map them to its Test List" in develop_steps
+    assert "when a plan is supplied, map them to its Test List" in correction_steps
+    assert "pre-commit hooks ran for normal commits when configured" in develop_steps
+    assert "pre-commit hooks ran for normal commits when configured" in correction_steps
+    assert "cafe verification run" not in develop_steps
+    assert "cafe verification run" not in correction_steps
+    assert "Repository-owned quality gates" in review
+    assert "do not require a CAFE verification receipt" in review_steps
+    assert "cafe verification check" not in review_steps
+    assert "targeted checks" in plan
+    assert "pre-commit、pre-push、CI、coverage 與 release gate" in plan
+    assert "Run all existing tests" not in bug_plan
+    assert "configured Git hooks or CI" in bug_plan
 
     review_contract = yaml.safe_load(review.split("---", 2)[1])["workflow"]
-    assert review_contract["required_tools"] == [
-        "Bash(cafe verification check:*)"
-    ]
+    assert "required_tools" not in review_contract
 
     for playbook_name in (
         "direct",
@@ -65,12 +73,23 @@ def test_develop_and_review_share_machine_checked_full_test_receipt() -> None:
         "tdd-qa",
     ):
         playbook = yaml.safe_load((PLAYBOOKS / f"{playbook_name}.yaml").read_text())
-        assert "Bash(cafe verification check:*)" in playbook["steps"]["review"][
-            "allowed_tools"
-        ]
-        assert "Bash(cafe verification focus:*)" in playbook["steps"]["review"][
-            "allowed_tools"
-        ]
+        allowed_tools = playbook["steps"]["review"]["allowed_tools"]
+        assert "Bash(git:*)" in allowed_tools
+        assert not any("cafe verification" in tool for tool in allowed_tools)
+
+
+def test_planless_development_uses_change_scoped_targeted_checks() -> None:
+    develop_steps = (SKILLS / "cafe-develop/references/execution_steps_normal.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "targeted tests for new or changed behavior" in develop_steps
+    assert "when a plan is supplied, map them to its Test List" in develop_steps
+
+    for playbook_name in ("direct", "hotfix"):
+        playbook = yaml.safe_load((PLAYBOOKS / f"{playbook_name}.yaml").read_text())
+        inputs = playbook["steps"]["develop"]["input_artifacts"]
+        assert "plan" not in inputs
 
 
 def test_review_corrections_close_root_causes_without_restarting_full_audit() -> None:
@@ -78,22 +97,107 @@ def test_review_corrections_close_root_causes_without_restarting_full_audit() ->
     review_steps = (SKILLS / "cafe-review/references/execution_steps.md").read_text(
         encoding="utf-8"
     )
-    correction = (
-        SKILLS / "cafe-review/references/correction_review_strategy.md"
-    ).read_text(encoding="utf-8")
+    review_root = SKILLS / "cafe-review/references"
+    correction = (review_root / "execution_correction.md").read_text(encoding="utf-8")
+    risk_assessment = (review_root / "execution_risk_assessment.md").read_text(
+        encoding="utf-8"
+    )
+    exit_audit = (review_root / "execution_exit_audit.md").read_text(encoding="utf-8")
+    finalize = (review_root / "execution_finalize.md").read_text(encoding="utf-8")
 
     contract = yaml.safe_load(review.split("---", 2)[1])["workflow"]["checklist"]
     assert contract["variants"][0]["when"] == {"iteration": 1}
     assert contract["variants"][1]["when"] == {"min_iteration": 2}
-    assert contract["variants"][1]["sections"][0] == {
-        "reference": "correction_review_strategy.md"
-    }
+    assert [section.get("reference") for section in contract["variants"][0]["sections"]] == [
+        "execution_preflight.md",
+        "execution_risk_assessment.md",
+        "execution_first_pass.md",
+        "execution_acceptance_closure.md",
+        "execution_exit_audit.md",
+        "execution_finalize.md",
+        None,
+    ]
+    assert [section.get("reference") for section in contract["variants"][1]["sections"]] == [
+        "execution_preflight.md",
+        "execution_correction.md",
+        "execution_risk_assessment.md",
+        "execution_acceptance_closure.md",
+        "execution_exit_audit.md",
+        "execution_finalize.md",
+        None,
+    ]
     assert "Trace each candidate defect to its root cause" in review_steps
-    assert "re-verify every prior finding item by item" in correction
-    assert "directly related equivalence classes in one pass" in correction
-    assert "do not drip-feed sibling cases" in correction
-    assert "do not restart an unrelated repository-wide audit" in correction
-    assert "one bounded closure sweep" in correction
+    assert "re-verify each prior blocker and corrected root cause" in correction
+    assert "map each complete boundary" in correction
+    assert "direct file byte equality alone is insufficient" in correction
+    assert "without restarting an unrelated repository-wide audit" in correction
+    assert "closed_reused" in correction
+    assert "Correction Impact Set" in correction
+    assert "instead of rerunning its probe or rewriting its evidence" in correction
+    assert "never exercised the composed producer-to-consumer limit" in correction
+    assert "strictest downstream schema/journal/recovery limit" in risk_assessment
+    assert "last controllable point before irreversible use" in risk_assessment
+    assert "actual automatic-consumer output/work" in risk_assessment
+    assert "Cumulative Seam Coverage Summary" in exit_audit
+    assert "inspect only missing or affected seams rather than restarting it" in exit_audit
+    assert "using a `limit + 1` failure case" in exit_audit
+    assert "decision-bound direct or fallback input" in exit_audit
+    assert "actual automatic consumer" in exit_audit
+    assert "Cumulative Seam Coverage Summary" in finalize
+    assert "Triggered Risk Coverage" in review_steps
+    assert "At most the twelve fixed obligations" in review_steps
+    assert "minimal production-path probe" in review_steps
+    assert "changed trust or durable-state boundary" in review_steps
+    assert "do not rerun probes for rows validly carried as `closed_reused`" in review_steps
+    assert "`closed_reused` can never pass" not in review_steps
+    assert "every triggered obligation to be `closed_fresh`" not in review_steps
+    assert "Carried Evidence Summary" in review_steps
+    assert "synthetic fixtures or mocks" in review_steps
+    assert "Acceptance Closure Evidence" in review_steps
+    assert "derive a bounded planless baseline" in review_steps
+    assert (
+        "latest authoritative user feedback from PR comments or workflow inputs override"
+        in review_steps
+    )
+    assert "request clarification instead of guessing" in review_steps
+    assert "recorded planless baseline" in review_steps
+
+    checkbox = re.compile(r"\[ \]")
+    context_references = (
+        "spec_read_instruction.md",
+        "plan_read_instruction.md",
+        "feedback_instruction.md",
+        "spec_comparison_instruction.md",
+    )
+    context_count = sum(
+        len(checkbox.findall((review_root / name).read_text(encoding="utf-8")))
+        for name in context_references
+    )
+    expected_modes = {
+        "first": (
+            "execution_preflight.md",
+            "execution_risk_assessment.md",
+            "execution_first_pass.md",
+            "execution_acceptance_closure.md",
+            "execution_exit_audit.md",
+            "execution_finalize.md",
+        ),
+        "correction": (
+            "execution_preflight.md",
+            "execution_correction.md",
+            "execution_risk_assessment.md",
+            "execution_acceptance_closure.md",
+            "execution_exit_audit.md",
+            "execution_finalize.md",
+        ),
+    }
+    for names in expected_modes.values():
+        phase_owned_count = sum(
+            len(checkbox.findall((review_root / name).read_text(encoding="utf-8")))
+            for name in names
+        )
+        assert phase_owned_count == 16
+        assert phase_owned_count + context_count <= 20
 
 
 def _arm(*, policy: str, credits: float, quality: bool = True) -> dict[str, object]:
@@ -269,9 +373,9 @@ def test_correction_ab_rejects_non_git_repo_sha(tmp_path: Path) -> None:
 
 def test_driver_skill_requires_controlled_correction_ab_before_claim() -> None:
     skill = (SKILLS / "use-cafe-workflow/SKILL.md").read_text(encoding="utf-8")
-    reference = (
-        SKILLS / "use-cafe-workflow/references/correction_ab_experiment.md"
-    ).read_text(encoding="utf-8")
+    reference = (SKILLS / "use-cafe-workflow/references/correction_ab_experiment.md").read_text(
+        encoding="utf-8"
+    )
     normalized = " ".join(reference.split())
 
     assert "references/correction_ab_experiment.md" in skill

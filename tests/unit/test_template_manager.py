@@ -1,10 +1,12 @@
 """Tests for template manager."""
 
 from pathlib import Path
+from threading import Event, Thread
 from unittest.mock import patch
 
 import pytest
 
+from cafe.catalogs.resolver import global_catalog_lock
 from cafe.templates.manager import TemplateManager
 from cafe.skills.loader import SkillLoader
 
@@ -44,6 +46,65 @@ class TestTemplateManager:
         assert manager.get_template_path("evidence") == (
             skill_dir / "assets" / "templates" / "evidence.md"
         )
+
+    def test_list_templates_holds_catalog_lock_through_template_reads(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        global_root = tmp_path / "global"
+        skill_dir = global_root / "skills" / "research-report"
+        templates = skill_dir / "assets" / "templates"
+        templates.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: research-report\ndescription: report\n---\n", encoding="utf-8"
+        )
+        (templates / "evidence.md").write_text("# Evidence\n", encoding="utf-8")
+        loader = SkillLoader(
+            project_root=tmp_path / "project",
+            global_root=global_root,
+            builtin_root=tmp_path / "builtin",
+        )
+        manager = TemplateManager(
+            template_type="research-report",
+            skill_name="research-report",
+            skill_loader=loader,
+        )
+        resolved = Event()
+        allow_read = Event()
+        writer_entered = Event()
+        errors: list[BaseException] = []
+        original_builtin_dir = manager._builtin_dir
+
+        def pause_after_resolution() -> Path:
+            path = original_builtin_dir()
+            resolved.set()
+            assert allow_read.wait(timeout=5)
+            return path
+
+        def read_templates() -> None:
+            try:
+                manager.list_templates()
+            except BaseException as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+
+        def publish() -> None:
+            with global_catalog_lock(global_root, exclusive=True):
+                writer_entered.set()
+
+        monkeypatch.setattr(manager, "_builtin_dir", pause_after_resolution)
+        reader = Thread(target=read_templates)
+        writer = Thread(target=publish)
+        reader.start()
+        assert resolved.wait(timeout=5)
+        writer.start()
+        try:
+            assert not writer_entered.wait(timeout=0.2)
+        finally:
+            allow_read.set()
+        reader.join(timeout=5)
+        writer.join(timeout=5)
+
+        assert errors == []
+        assert writer_entered.is_set()
 
     def test_add_template_copies_file(self, tmp_path: Path) -> None:
         """Test that adding a template copies the file to the global directory."""

@@ -1,11 +1,11 @@
 """Tests for the blackboard-first workflow runtime."""
 
-from concurrent.futures import ThreadPoolExecutor
 import json
 import multiprocessing
-from pathlib import Path
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -1910,10 +1910,10 @@ def test_runtime_materializes_one_declared_task_and_recovers_it_after_restart(
     assert request["args"]["repository"] == tmp_path.name
 
 
-def test_runtime_notifies_trusted_human_owned_creation_but_not_spoofed_standard_tasks(
+def test_runtime_notifies_human_owned_creation_for_builtin_and_project_playbooks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Both creation paths use the registered capability, gated to standard."""
+    """Both builtin and project playbooks use the same registered capability."""
     import cafe.core.workflow_runtime as runtime_mod
 
     policy = HumanTaskPolicy(
@@ -1969,13 +1969,15 @@ def test_runtime_notifies_trusted_human_owned_creation_but_not_spoofed_standard_
         executor=lambda *_args: (_ for _ in ()).throw(AssertionError("human step ran agent")),
     ).run(start_step="approval")
 
-    assert len(calls) == 1
+    assert len(calls) == 2
     standard_task = HumanTaskRecordStore(standard_dir).tasks()[0]
     project_task = HumanTaskRecordStore(project_dir).tasks()[0]
     assert calls[0]["capability_request"]["args"]["task_id"] == standard_task.id
+    assert calls[1]["capability_request"]["args"]["task_id"] == project_task.id
     assert calls[0]["timeout_sec"] == 5.0
     assert project_task.id != standard_task.id
-    assert BlackboardStore(project_dir).load_or_create("approval").capability_receipts == []
+    project_receipts = BlackboardStore(project_dir).load_or_create("approval").capability_receipts
+    assert project_receipts[0]["task_id"] == project_task.id
 
 
 def test_notification_failure_preserves_pending_task_and_user_handoff(
@@ -2180,8 +2182,6 @@ def test_concurrent_stale_runtimes_claim_one_notification_attempt(
         for future in futures:
             future.result(timeout=10)
 
-    for runtime in runtimes:
-        runtime.blackboard_store.save(runtime.blackboard)
     state = BlackboardStore(issue_dir).load_or_create("spec")
     matching_receipts = [
         receipt
@@ -2190,7 +2190,12 @@ def test_concurrent_stale_runtimes_claim_one_notification_attempt(
         and receipt.get("task_id") == task.id
     ]
     assert len(dispatches) == 1
-    assert len(matching_receipts) == 1
+    assert len(matching_receipts) == 2
+    assert any(receipt.get("success") is True for receipt in matching_receipts)
+    assert any(
+        receipt.get("code") == "human_task_notification_deduplicated"
+        for receipt in matching_receipts
+    )
 
 
 def test_independent_runtimes_claim_one_notification_attempt_across_processes(
@@ -2241,7 +2246,12 @@ def test_independent_runtimes_claim_one_notification_attempt_across_processes(
         if receipt.get("capability") == "cafe.slack.human_task"
         and receipt.get("task_id") == task.id
     ]
-    assert len(matching_receipts) == 1
+    assert len(matching_receipts) == 2
+    assert any(receipt.get("success") is True for receipt in matching_receipts)
+    assert any(
+        receipt.get("code") == "human_task_notification_deduplicated"
+        for receipt in matching_receipts
+    )
 
 
 def test_receipt_transaction_uses_windows_process_lock_without_fcntl(
@@ -2865,9 +2875,12 @@ def test_runtime_handles_keyboard_interrupt(tmp_path: Path) -> None:
     assert bb.step_attempt_counts == {}
 
 
-def test_runtime_handles_agent_execution_error(tmp_path: Path) -> None:
-    """AgentExecutionError records step_interrupted and returns INTERRUPTED."""
+def test_runtime_handles_agent_execution_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AgentExecutionError pauses for a notified retry task instead of inferring completion."""
     from cafe.agents.executor import AgentExecutionError
+    from cafe.ui.human_tasks import apply_human_task_payload
 
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-agent-error"
     playbook = {
@@ -2888,6 +2901,8 @@ def test_runtime_handles_agent_execution_error(tmp_path: Path) -> None:
         playbook=playbook,
         executor=executor,
     )
+    notifications = []
+    monkeypatch.setattr(runtime, "_notify_new_human_task", notifications.append)
 
     result = runtime.run(start_step="spec", max_transitions=5)
 
@@ -2906,10 +2921,46 @@ def test_runtime_handles_agent_execution_error(tmp_path: Path) -> None:
     assert msg["step"] == "spec"
     assert msg["reason"] == "agent_rate_limit"
     assert bb.step_attempt_counts == {}
+    assert bb.current_step == "user"
+    assert bb.handoff_contract is not None
+    assert bb.handoff_contract.to_owner is HandoffOwner.USER
+    assert bb.handoff_contract.source == "workflow.agent_execution_interrupted"
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    assert task.step == "spec"
+    assert task.trigger == "agent_execution_interrupted"
+    assert task.policy_id == "agent-execution-interrupted"
+    assert task.continuations == {"retry": "spec"}
+    assert notifications == [task]
+    assert not any(event.event_type == "step_reconciled" for event in bb.events)
+
+    applied = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=bb,
+        from_step="spec",
+        trigger=task.trigger,
+        raw_payload={
+            "task": task.policy_id,
+            "decision": "retry",
+            "human_task_id": task.id,
+        },
+        source="test",
+    )
+
+    assert applied.target == "spec"
+    resumed = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
+    assert resumed.current_step == "spec"
+    assert resumed.handoff_contract is not None
+    assert resumed.handoff_contract.to_owner is HandoffOwner.AGENT
+    assert resumed.handoff_contract.to_step == "spec"
+    assert runtime._try_reconcile_current_step(current_step="spec") is None
 
 
-def test_runtime_reconciles_agent_error_after_valid_handoff(tmp_path: Path) -> None:
-    """Agent failure after a complete on-disk handoff records a reconciled transition."""
+def test_runtime_does_not_reconcile_agent_error_after_valid_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An agent process error always pauses for review, even after partial handoff evidence."""
     from cafe.agents.executor import AgentExecutionError
 
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-reconcile-agent-error"
@@ -2940,35 +2991,27 @@ def test_runtime_reconciles_agent_error_after_valid_handoff(tmp_path: Path) -> N
         playbook=playbook,
         executor=executor,
     )
+    notifications = []
+    monkeypatch.setattr(runtime, "_notify_new_human_task", notifications.append)
 
     result = runtime.run(start_step="spec", max_transitions=5)
 
     assert result.completed is False
     assert result.final_step == "spec"
-    assert result.final_status_code == "confirmed"
+    assert result.final_status_code == "INTERRUPTED:agent_connection_stalled"
 
     bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
-    assert bb.current_step == "plan"
-    assert [e.event_type for e in bb.events].count("step_reconciled") == 1
-    reconciled_event = next(e for e in bb.events if e.event_type == "step_reconciled")
-    assert reconciled_event.data["to_step"] == "plan"
-    assert reconciled_event.data["validated_evidence"] == ["baton", "output", "checklist"]
-    assert not any(
-        e.event_type == "workflow_paused" and e.data.get("status_code") == "INTERRUPTED"
-        for e in bb.events
-    )
-
-    iteration_data = json.loads(
-        (issue_dir / "spec" / "iteration_001" / "iteration.json").read_text()
-    )
-    assert iteration_data["status_code"] == "confirmed"
-    assert iteration_data["end_time"]
+    assert bb.current_step == "user"
+    assert not any(e.event_type == "step_reconciled" for e in bb.events)
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    assert task.continuations == {"retry": "spec"}
+    assert notifications == [task]
 
 
 def test_runtime_preserves_interrupted_when_reconciliation_evidence_incomplete(
     tmp_path: Path,
 ) -> None:
-    """Incomplete persisted evidence should not be inferred as a completed handoff."""
+    """An incomplete agent error pauses with a retry task rather than a stale baton."""
     from cafe.agents.executor import AgentExecutionError
 
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-reconcile-incomplete"
@@ -3004,9 +3047,9 @@ def test_runtime_preserves_interrupted_when_reconciliation_evidence_incomplete(
     assert result.final_status_code == "INTERRUPTED:agent_connection_stalled"
 
     bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
-    assert bb.current_step == "spec"
-    failed_event = next(e for e in bb.events if e.event_type == "step_reconciliation_failed")
-    assert "checklist_complete" in failed_event.data["missing_evidence"]
+    assert bb.current_step == "user"
+    assert HumanTaskRecordStore(issue_dir).tasks()[0].continuations == {"retry": "spec"}
+    assert not any(e.event_type == "step_reconciliation_failed" for e in bb.events)
     assert any(
         e.event_type == "workflow_paused" and e.data.get("status_code") == "INTERRUPTED"
         for e in bb.events

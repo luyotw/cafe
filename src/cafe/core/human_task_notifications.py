@@ -2,19 +2,27 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+import yaml
+
 SLACK_WEBHOOK_FILENAME = ".slack-webhook"
 SLACK_WEBHOOK_HOST = "hooks.slack.com"
 MAX_CREDENTIAL_BYTES = 8192
+MACHINE_CONFIG_DIRECTORY = ".cafe"
+MACHINE_CONFIG_FILENAME = "config.yaml"
+MAX_NOTIFICATION_METADATA_LENGTH = 128
+SAFE_NOTIFICATION_METADATA = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
 
 
 class SlackNotificationError(RuntimeError):
@@ -33,7 +41,8 @@ class HumanTaskSlackMessage:
     repository: str
     workflow_id: str
     task_id: str
-    reason: str
+    step: str
+    task_type: str
     inspect_command: str
     complete_command: str
 
@@ -43,8 +52,9 @@ class HumanTaskSlackMessage:
                 "CAFE HumanTask requires action",
                 f"Repository: {self.repository}",
                 f"Workflow: {self.workflow_id}",
+                f"Step: {self.step}",
                 f"HumanTask: {self.task_id}",
-                f"Reason: {self.reason}",
+                f"Task type: {self.task_type}",
                 f"Inspect: {self.inspect_command}",
                 f"Complete: {self.complete_command}",
             )
@@ -53,16 +63,134 @@ class HumanTaskSlackMessage:
 
 
 def build_human_task_message(
-    *, repository: str, workflow_id: str, task_id: str, reason: str
+    *, repository: str, workflow_id: str, task_id: str, step: str, task_type: str
 ) -> HumanTaskSlackMessage:
     """Build the supported task inspection and completion journey."""
+    repository = sanitize_human_task_metadata(repository)
+    workflow_id = sanitize_human_task_metadata(workflow_id)
+    task_id = sanitize_human_task_metadata(task_id)
+    step = sanitize_human_task_metadata(step)
+    task_type = sanitize_human_task_metadata(task_type)
     return HumanTaskSlackMessage(
         repository=repository,
         workflow_id=workflow_id,
         task_id=task_id,
-        reason=reason,
+        step=step,
+        task_type=task_type,
         inspect_command=f"cafe task inspect {task_id}",
         complete_command=f"cafe task complete {task_id}",
+    )
+
+
+def sanitize_human_task_metadata(value: str) -> str:
+    """Keep task metadata identifiable without making it Slack-authored content."""
+    if (
+        len(value) <= MAX_NOTIFICATION_METADATA_LENGTH
+        and SAFE_NOTIFICATION_METADATA.fullmatch(value) is not None
+        and not _is_url_shaped_metadata(value)
+    ):
+        return value
+    digest = hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()[:12]
+    return f"invalid-{digest}"
+
+
+def _is_url_shaped_metadata(value: str) -> bool:
+    """Reject link-like identifiers while retaining ordinary namespaced IDs."""
+    normalized = value.casefold()
+    return "://" in normalized or "www." in normalized
+
+
+@dataclass(frozen=True)
+class HumanTaskNotificationSettings:
+    """Machine-owned transport decision for one HumanTask notification."""
+
+    enabled: bool
+    transport: str
+    outcome: Literal["enabled", "disabled", "skipped"]
+    code: str
+
+
+def load_human_task_notification_settings() -> HumanTaskNotificationSettings:
+    """Resolve the machine-only notification setting without project input.
+
+    The absence of a machine config preserves the established Slack delivery
+    behavior. Operators can explicitly disable delivery in ``~/.cafe/config.yaml``;
+    malformed or unsupported declarations are observable skipped outcomes.
+    """
+    config_path = _trusted_user_home() / MACHINE_CONFIG_DIRECTORY / MACHINE_CONFIG_FILENAME
+    if not config_path.exists():
+        return HumanTaskNotificationSettings(
+            enabled=True,
+            transport="slack",
+            outcome="enabled",
+            code="human_task_notification_enabled",
+        )
+    try:
+        raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError):
+        return HumanTaskNotificationSettings(
+            enabled=False,
+            transport="",
+            outcome="skipped",
+            code="human_task_notification_config_invalid",
+        )
+    if raw_config is None:
+        raw_config = {}
+    if not isinstance(raw_config, dict):
+        return HumanTaskNotificationSettings(
+            enabled=False,
+            transport="",
+            outcome="skipped",
+            code="human_task_notification_config_invalid",
+        )
+    notifications = raw_config.get("notifications", {})
+    if notifications is None:
+        notifications = {}
+    if not isinstance(notifications, dict):
+        return HumanTaskNotificationSettings(
+            enabled=False,
+            transport="",
+            outcome="skipped",
+            code="human_task_notification_config_invalid",
+        )
+    declaration = notifications.get("human_tasks", {})
+    if declaration is None:
+        declaration = {}
+    if not isinstance(declaration, dict):
+        return HumanTaskNotificationSettings(
+            enabled=False,
+            transport="",
+            outcome="skipped",
+            code="human_task_notification_config_invalid",
+        )
+    enabled = declaration.get("enabled", True)
+    transport = declaration.get("transport", "slack")
+    if not isinstance(enabled, bool) or not isinstance(transport, str):
+        return HumanTaskNotificationSettings(
+            enabled=False,
+            transport="",
+            outcome="skipped",
+            code="human_task_notification_config_invalid",
+        )
+    if not enabled:
+        return HumanTaskNotificationSettings(
+            enabled=False,
+            transport=transport,
+            outcome="disabled",
+            code="human_task_notification_disabled",
+        )
+    if transport != "slack":
+        return HumanTaskNotificationSettings(
+            enabled=False,
+            transport=transport,
+            outcome="skipped",
+            code="human_task_notification_transport_unsupported",
+        )
+    return HumanTaskNotificationSettings(
+        enabled=True,
+        transport=transport,
+        outcome="enabled",
+        code="human_task_notification_enabled",
     )
 
 

@@ -22,7 +22,7 @@ class TestAgentEditAutoSync:
     @patch("cafe.ui.init_helpers.sync_agents")
     @patch("cafe.ui.cli.prompt_list")
     @patch("cafe.utils.config.get_global_cafe_dir")
-    def test_agent_edit_triggers_sync_after_successful_edit(
+    def test_agent_edit_does_not_materialize_project_snapshot_after_successful_edit(
         self,
         mock_get_global_cafe_dir: MagicMock,
         mock_prompt_list: MagicMock,
@@ -31,14 +31,17 @@ class TestAgentEditAutoSync:
         runner: CliRunner,
         tmp_path: Path,
     ) -> None:
-        """Test that agent edit triggers sync after successful edit."""
+        """An explicit Global edit does not copy the agent back into the project."""
         # Setup global cafe directory
         global_cafe_dir = tmp_path / ".cafe_global"
         global_cafe_dir.mkdir()
         agents_dir = global_cafe_dir / "agents" / "developer"
         agents_dir.mkdir(parents=True)
         agent_file = agents_dir / "Nick.md"
-        agent_file.write_text("test content")
+        agent_file.write_text(
+            "---\nname: Nick\ndescription: test\n---\n\ntest content\n",
+            encoding="utf-8",
+        )
 
         mock_get_global_cafe_dir.return_value = global_cafe_dir
         mock_prompt_list.side_effect = ["developer", "Nick.md"]
@@ -51,8 +54,8 @@ class TestAgentEditAutoSync:
 
         result = runner.invoke(app, ["agent", "edit"])
 
-        # Verify sync was called after edit
-        assert mock_sync_agents.called
+        assert result.exit_code == 0
+        mock_sync_agents.assert_not_called()
 
     @patch("cafe.ui.cli.subprocess.run")
     @patch("cafe.ui.init_helpers.sync_agents")
@@ -74,7 +77,10 @@ class TestAgentEditAutoSync:
         agents_dir = global_cafe_dir / "agents" / "developer"
         agents_dir.mkdir(parents=True)
         agent_file = agents_dir / "Nick.md"
-        agent_file.write_text("test content")
+        agent_file.write_text(
+            "---\nname: Nick\ndescription: test\n---\n\ntest content\n",
+            encoding="utf-8",
+        )
 
         mock_get_global_cafe_dir.return_value = global_cafe_dir
         mock_prompt_list.side_effect = ["developer", "Nick.md"]

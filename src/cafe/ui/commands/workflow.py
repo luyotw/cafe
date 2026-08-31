@@ -33,7 +33,10 @@ from cafe.ui.cli_shared import (
 from cafe.ui.cli_shared import (
     resolve_iteration_number as _resolve_iteration_number,
 )
-from cafe.ui.human_tasks import apply_human_task_payload
+from cafe.ui.human_tasks import (
+    apply_durable_human_task_payload_if_present,
+    apply_human_task_payload,
+)
 from cafe.utils.config import ConfigError, validate_directories_exist
 
 
@@ -581,6 +584,11 @@ def workflow(
         "--mute-agent-output",
         help="Suppress agent response streaming while preserving workflow events and artifacts",
     ),
+    open_pr: bool = typer.Option(
+        False,
+        "--open-pr",
+        help="Open the published pull request in a browser (explicit opt-in)",
+    ),
     dry_run: bool = typer.Option(
         True, "--dry-run/--execute", help="Preview the read-only workflow simulation"
     ),
@@ -696,6 +704,7 @@ def workflow(
                 phase_name=phase_name,
                 step_user_inputs=initial_step_user_inputs,
                 interactive=_interactive_mode(),
+                open_pr=open_pr,
                 extra_allowed_directories=add_dir_values,
                 stream_agent_output=not mute_agent_output,
             )
@@ -862,6 +871,25 @@ def workflow(
                             allowed_steps=step_keys,
                         )
                         from_step = getattr(contract, "from_step", None) or blackboard.current_step
+                        durable_result = apply_durable_human_task_payload_if_present(
+                            issue_dir=issue_dir,
+                            playbook_data=playbook_data,
+                            blackboard=blackboard,
+                            raw_payload=user_input,
+                            source="command",
+                        )
+                        if durable_result is not None:
+                            if durable_result.rejection is not None:
+                                console.print(
+                                    f"[yellow]{durable_result.rejection.message}[/yellow]"
+                                )
+                                console.print(
+                                    f"[dim]{durable_result.rejection.correction_guidance}[/dim]"
+                                )
+                                return
+                            user_input = None
+                            pending_start_step = durable_result.target
+                            continue
                         if contract.intent == HandoffIntent.ALIGNMENT_CHECKPOINT:
                             decision_payload = parse_alignment_decision_payload(user_input)
                             if decision_payload is None:

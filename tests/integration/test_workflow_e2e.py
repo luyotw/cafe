@@ -260,7 +260,7 @@ steps:
     hooks:
       prepare_input: [UserInputCollector]
       publish_output: [GitHubPRCreator]
-    on: {await_agent: _done}
+    on: {workflow_complete: _done}
 """.strip(),
         encoding="utf-8",
     )
@@ -501,6 +501,84 @@ def test_default_requested_changes_follow_declared_loop_without_publish_authorit
     assert workflow_result.final_step == "pr"
     assert executed_steps == ["develop", "review", "pr"]
     assert WorkflowFeedbackLedger(issue_dir).pending() == []
+
+
+def test_builtin_permission_notification_completes_and_reaches_reviewed_pr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test List 5: the #419 journey uses only builtin workflow declarations."""
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "permission-reviewed-pr"
+    playbook = PlaybookLoader().load("standard")
+    notification_requests: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: notification_requests.append(kwargs["capability_request"])
+        or SimpleNamespace(
+            receipt={
+                "capability": "cafe.slack.human_task",
+                "success": True,
+                "outcome": "success",
+            }
+        ),
+    )
+    visits: list[str] = []
+
+    def executor(step_name: str, step_def: dict, _state: BlackboardState) -> StepExecutionResult:
+        visits.append(step_name)
+        if step_name == "develop" and visits.count("develop") == 1:
+            return StepExecutionResult(
+                response="need_permission",
+                artifacts={},
+                status_code="need_permission",
+            )
+        events = []
+        if step_name == "pr":
+            _write_pr_done_baton(issue_dir)
+            events.append({"type": "pr_synced", "url": "https://example.test/pr/419"})
+        return StepExecutionResult(
+            response="confirmed",
+            artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+            status_code="confirmed",
+            events=events,
+        )
+
+    paused = _run_until_settled(
+        issue_dir=issue_dir, playbook=playbook, executor=executor, max_transitions=20
+    )
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    resumed = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="develop",
+        trigger="need_permission",
+        raw_payload={"human_task_id": task.id, "feedback": "Permission granted."},
+        source="integration",
+    )
+    completed = _run_until_settled(
+        issue_dir=issue_dir, playbook=playbook, executor=executor, max_transitions=20
+    )
+
+    assert paused.completed is False
+    assert task.status is HumanTaskStatus.PENDING
+    assert resumed.target == "develop"
+    assert completed.completed is True
+    assert completed.final_step == "pr"
+    assert visits.count("develop") == 2
+    assert notification_requests[0]["args"] == {
+        "repository": tmp_path.name,
+        "workflow_id": task.workflow_id,
+        "task_id": task.id,
+        "step": "develop",
+        "task_type": "permission-answers",
+    }
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
 
 
 def test_default_parity_and_metadata_absent_lifecycle_boundary(tmp_path: Path, monkeypatch) -> None:

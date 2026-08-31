@@ -71,7 +71,7 @@ _(If N or M is 0, one sentence explains why.)_
 
 ### Phase 4: Verification
 - [ ] Verify the bug-reproducing test now passes
-- [ ] Run all existing tests to check for regressions
+- [ ] Let the repository's configured Git hooks or CI run its regression gate; do not duplicate that gate inside develop
 - [ ] Test edge cases manually
 - [ ] Add additional test cases if needed
 

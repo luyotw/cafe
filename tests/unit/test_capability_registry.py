@@ -21,7 +21,6 @@ from cafe.core.capabilities import (
     run_pr_publish_capability,
 )
 
-
 SLACK_CREDENTIAL = "slack_human_task_webhook"
 SLACK_DESTINATION = "hooks.slack.com"
 
@@ -209,7 +208,8 @@ def _slack_request(**overrides: object) -> dict[str, object]:
             "repository": "openfunltd/cafe",
             "workflow_id": "workflow-one",
             "task_id": "task-one",
-            "reason": "Review the implementation plan.",
+            "step": "develop",
+            "task_type": "permission-answers",
         },
         "effects": {
             "writes": [],
@@ -234,7 +234,8 @@ def test_registered_slack_human_task_capability_has_fixed_boundary(tmp_path: Pat
         "repository",
         "workflow_id",
         "task_id",
-        "reason",
+        "step",
+        "task_type",
     }
     assert set(manifest.arguments.properties) == set(manifest.arguments.required)
     assert manifest.effects.network_destinations == (SLACK_DESTINATION,)
@@ -244,6 +245,68 @@ def test_registered_slack_human_task_capability_has_fixed_boundary(tmp_path: Pat
 
     evaluation = evaluate_capability_request(registry, _slack_request())
     assert evaluation.decision is PolicyDecision.ALLOW
+
+
+def test_slack_human_task_capability_requires_workflow_owned_dispatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Test List 2: generic requests cannot invoke or audit HumanTask delivery."""
+    import cafe.core.capabilities as cap_mod
+
+    registry = load_capability_registry(default_capability_definition_dirs(tmp_path))
+    adapter_calls: list[dict[str, object]] = []
+
+    def _adapter(**kwargs: object) -> tuple[dict[str, object], None]:
+        adapter_calls.append(kwargs)
+        return {"delivered": True, "workflow_id": "workflow-one", "task_id": "task-one"}, None
+
+    monkeypatch.setitem(cap_mod.HOST_CAPABILITY_ADAPTERS, "notify_slack_human_task", _adapter)
+    request = _slack_request()
+    request["args"] = {
+        **request["args"],
+        "repository": "project-supplied-secret-bearing-value",
+    }
+
+    rejected = run_capability_request(
+        repo_root=tmp_path,
+        registry=registry,
+        capability_request=request,
+        output_file=tmp_path / "receipt.md",
+    )
+
+    assert rejected.receipt["success"] is False
+    assert rejected.receipt["code"] == "human_task_notification_not_workflow_owned"
+    assert rejected.receipt["inputs"] == {}
+    assert "project-supplied-secret-bearing-value" not in str(rejected.receipt)
+    assert adapter_calls == []
+
+    malformed = {
+        **request,
+        "unexpected": "malformed-secret-bearing-value",
+    }
+    malformed_rejected = run_capability_request(
+        repo_root=tmp_path,
+        registry=registry,
+        capability_request=malformed,
+        output_file=tmp_path / "receipt.md",
+    )
+
+    assert malformed_rejected.receipt["success"] is False
+    assert malformed_rejected.receipt["code"] == "human_task_notification_not_workflow_owned"
+    assert malformed_rejected.receipt["inputs"] == {}
+    assert "malformed-secret-bearing-value" not in str(malformed_rejected.receipt)
+    assert adapter_calls == []
+
+    authorized = run_capability_request(
+        repo_root=tmp_path,
+        registry=registry,
+        capability_request=request,
+        output_file=tmp_path / "receipt.md",
+        trusted_human_task_notification=True,
+    )
+
+    assert authorized.receipt["success"] is True
+    assert len(adapter_calls) == 1
 
 
 @pytest.mark.parametrize(

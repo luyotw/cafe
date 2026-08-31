@@ -24,12 +24,14 @@ from cafe.core.human_task_records import (
     TaskResult,
 )
 from cafe.core.human_tasks import (
+    AGENT_EXECUTION_INTERRUPTED_TRIGGER,
     HumanTaskBinding,
     HumanTaskCompletion,
     HumanTaskPolicy,
     HumanTaskPolicyError,
     HumanTaskQuestion,
     HumanTaskRejection,
+    agent_execution_interrupted_human_task,
     resolve_human_task_continuation,
     validate_human_task_completion,
 )
@@ -51,6 +53,8 @@ def resolve_step_human_task(
     iteration: int = 1,
 ) -> tuple[HumanTaskPolicy, HumanTaskBinding]:
     """UI adapter that preserves the existing configurable skill-loader boundary."""
+    if trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER:
+        return agent_execution_interrupted_human_task(step_name=step_name)
     return _resolve_step_human_task(
         playbook_data=playbook_data,
         step_name=step_name,
@@ -281,6 +285,149 @@ def apply_human_task_payload(
             source=source,
             record_store=record_store,
         )
+
+
+def apply_durable_human_task_payload_if_present(
+    *,
+    issue_dir: Path,
+    playbook_data: Mapping[str, Any],
+    blackboard: Any,
+    raw_payload: str | Mapping[str, Any],
+    source: str,
+) -> Optional[HumanTaskApplication]:
+    """Apply a durable task response before intent-based user-input routing.
+
+    A durable task is the authority for its originating step and trigger.  This
+    prevents a valid ``human_task_id`` from falling through as ordinary phase
+    input when the blackboard intent is a generic or custom user handoff.
+    """
+    submitted_id = _submitted_human_task_id(raw_payload)
+    record_store = HumanTaskRecordStore(issue_dir)
+    if not record_store.exists:
+        if submitted_id is None:
+            return None
+        return _durable_task_routing_rejection(
+            issue_dir=issue_dir,
+            blackboard=blackboard,
+            task_id=submitted_id,
+            message=f"Unknown durable human task {submitted_id!r}.",
+        )
+
+    with record_store.transaction():
+        active_tasks = [
+            task
+            for task in record_store.tasks()
+            if task.workflow_id == blackboard.workflow_id
+            and task.status is HumanTaskStatus.PENDING
+            and record_store.get_wait_state(task.id).released_at is None
+        ]
+        if submitted_id is not None:
+            try:
+                task = record_store.get_task(submitted_id)
+            except HumanTaskCorrelationError:
+                return _durable_task_routing_rejection(
+                    issue_dir=issue_dir,
+                    blackboard=blackboard,
+                    task_id=submitted_id,
+                    message=f"Unknown durable human task {submitted_id!r}.",
+                )
+            if task.workflow_id != blackboard.workflow_id:
+                return _durable_task_routing_rejection(
+                    issue_dir=issue_dir,
+                    blackboard=blackboard,
+                    task_id=submitted_id,
+                    message="This durable human task belongs to a different workflow.",
+                )
+            if not _durable_task_matches_current_handoff(task, blackboard):
+                return _durable_task_routing_rejection(
+                    issue_dir=issue_dir,
+                    blackboard=blackboard,
+                    task_id=submitted_id,
+                    message="This durable human task no longer belongs to the current handoff.",
+                )
+            if active_tasks and all(active.id != task.id for active in active_tasks):
+                return _durable_task_routing_rejection(
+                    issue_dir=issue_dir,
+                    blackboard=blackboard,
+                    task_id=submitted_id,
+                    message="This response belongs to a different pending durable human task.",
+                )
+        elif not active_tasks:
+            return None
+        elif len(active_tasks) == 1:
+            task = active_tasks[0]
+        else:
+            return _durable_task_routing_rejection(
+                issue_dir=issue_dir,
+                blackboard=blackboard,
+                task_id=None,
+                message="This workflow has multiple pending durable human tasks.",
+            )
+
+        if task.capability_approval is not None:
+            return _durable_task_routing_rejection(
+                issue_dir=issue_dir,
+                blackboard=blackboard,
+                task_id=task.id,
+                message="Capability approval tasks must be completed through the task command.",
+            )
+        return _apply_human_task_payload(
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+            from_step=task.step,
+            trigger=task.trigger,
+            raw_payload=raw_payload,
+            source=source,
+            record_store=record_store,
+        )
+
+
+def _durable_task_matches_current_handoff(task: HumanTask, blackboard: Any) -> bool:
+    contract = getattr(blackboard, "handoff_contract", None)
+    if (
+        getattr(blackboard, "current_step", None) != "user"
+        or contract is None
+        or contract.to_owner is not HandoffOwner.USER
+        or contract.to_step != "user"
+        or contract.from_step != task.step
+    ):
+        return False
+    current_key = ":".join(
+        (
+            "user-handoff",
+            task.workflow_id,
+            contract.from_step,
+            contract.intent.value,
+            contract.created_at,
+        )
+    )
+    if task.handoff_key.startswith("user-handoff:"):
+        # Human-owned and hybrid tasks intentionally use a generic
+        # ``manual_handoff`` contract while retaining ``initial`` or the
+        # portion ID as their executable trigger.  The structured key is the
+        # identity shared by both sides of that boundary.
+        return task.handoff_key == current_key
+    return task.status is HumanTaskStatus.PENDING and contract.intent.value == task.trigger
+
+
+def _durable_task_routing_rejection(
+    *,
+    issue_dir: Path,
+    blackboard: Any,
+    task_id: Optional[str],
+    message: str,
+) -> HumanTaskApplication:
+    rejection = HumanTaskRejection(
+        message=message,
+        correction_guidance=("Inspect the pending task and submit its exact structured response."),
+    )
+    BlackboardStore(issue_dir).record_event(
+        blackboard,
+        "human_task_rejected",
+        {"task_id": task_id, "reason": message},
+    )
+    return HumanTaskApplication(target=None, policy=None, rejection=rejection)
 
 
 def _apply_human_task_payload(

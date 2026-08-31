@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import yaml
 
+from cafe.catalogs.resolver import global_catalog_lock
 from cafe.core.blackboard import BlackboardState, BlackboardStore, HandoffIntent
 from cafe.core.capabilities import (
     CAPABILITY_ISSUE_COMMENT_ID,
@@ -24,6 +25,7 @@ from cafe.core.execution_boundary import (
     ExecutionClass,
     ScriptLaunchRequest,
     TrustSource,
+    snapshot_script_tree,
 )
 from cafe.core.hooks import BUILTIN_HOOKS, HookResult
 from cafe.core.hooks.script_schema import validate_script_args_schema
@@ -332,6 +334,7 @@ class GenericPhase:
         events: List[Dict[str, Any]] = []
         artifact_ready = True
         hook_kwargs = dict(hook_context or {})
+        hook_kwargs["shared_skill_invocations"] = list(shared_skill_invocations or [])
 
         before = self._run_hook_stage(
             "before_execute",
@@ -587,53 +590,87 @@ class GenericPhase:
                     ]
                 )
 
-        script_path = self._resolve_script_path(skill_name=skill_name, script=script)
-        resolved_args = self._resolve_script_args(
-            args_template=args_template,
-            context=context or {},
-            hook_kwargs=hook_kwargs,
-        )
+        with global_catalog_lock(self.skill_loader.global_root):
+            script_path = self._resolve_script_path(skill_name=skill_name, script=script)
+            resolved_args = self._resolve_script_args(
+                args_template=args_template,
+                context=context or {},
+                hook_kwargs=hook_kwargs,
+            )
 
-        validation_errors: list[str] = []
-        if schema is not None:
-            validation_errors = validate_script_args_schema(args=resolved_args, schema=schema)
-            if validation_errors:
-                return HookResult(
-                    continue_pipeline=False,
-                    override_status_code=PhaseStatusCode.NEED_PERMISSION,
-                    events=[
-                        {
-                            "type": "script_hook",
-                            "step": str(hook_kwargs.get("step_name") or ""),
-                            "skill": skill_name,
-                            "stage": stage,
-                            "script": script,
-                            "status": "validation_failed",
-                            "exit_code": None,
-                            "stdout": "",
-                            "stderr": "",
-                            "validation_errors": validation_errors,
-                        }
-                    ],
+            validation_errors: list[str] = []
+            if schema is not None:
+                validation_errors = validate_script_args_schema(args=resolved_args, schema=schema)
+                if validation_errors:
+                    return HookResult(
+                        continue_pipeline=False,
+                        override_status_code=PhaseStatusCode.NEED_PERMISSION,
+                        events=[
+                            {
+                                "type": "script_hook",
+                                "step": str(hook_kwargs.get("step_name") or ""),
+                                "skill": skill_name,
+                                "stage": stage,
+                                "script": script,
+                                "status": "validation_failed",
+                                "exit_code": None,
+                                "stdout": "",
+                                "stderr": "",
+                                "validation_errors": validation_errors,
+                            }
+                        ],
+                    )
+
+            cwd = Path.cwd().resolve()
+
+            def request_for(
+                candidate: Path, *, runtime_root: Optional[Path] = None
+            ) -> ScriptLaunchRequest:
+                command = self._build_script_command(
+                    script_path=candidate, args=resolved_args
+                )
+                readable_roots = (cwd, runtime_root) if runtime_root is not None else (cwd,)
+                return ScriptLaunchRequest(
+                    execution_class=ExecutionClass.SANDBOX,
+                    trust_source=TrustSource.WORKFLOW,
+                    script=candidate,
+                    args=tuple(command[2:]),
+                    boundary=EffectiveBoundary(
+                        cwd=cwd,
+                        readable_roots=readable_roots,
+                        writable_roots=(cwd,),
+                        network_destinations=(),
+                        environment=os.environ,
+                    ),
+                    timeout_seconds=timeout_seconds or 60.0,
                 )
 
-        cwd = Path.cwd().resolve()
-        command = self._build_script_command(script_path=script_path, args=resolved_args)
-        request = ScriptLaunchRequest(
-            execution_class=ExecutionClass.SANDBOX,
-            trust_source=TrustSource.WORKFLOW,
-            script=script_path,
-            args=tuple(command[2:]),
-            boundary=EffectiveBoundary(
-                cwd=cwd,
-                readable_roots=(cwd, script_path.parent),
-                writable_roots=(cwd,),
-                network_destinations=(),
-                environment=os.environ,
-            ),
-            timeout_seconds=timeout_seconds or 60.0,
-        )
-        result = SandboxExecutor().run(request)
+            try:
+                phase_skill_dir = self.skill_loader.get_skill_dir(skill_name)
+                runtime_entries = {phase_skill_dir.name: phase_skill_dir}
+                for invocation in hook_kwargs.get("shared_skill_invocations", []):
+                    declared_name = str(invocation).removeprefix("$").removeprefix("/")
+                    shared_skill_dir = self.skill_loader.get_skill_dir(declared_name)
+                    runtime_entries[shared_skill_dir.name] = shared_skill_dir
+                script_snapshot = snapshot_script_tree(
+                    script_path,
+                    allowed_root=phase_skill_dir.parent,
+                    runtime_entries=runtime_entries,
+                )
+            except (LookupError, OSError, ValueError) as exc:
+                script_snapshot = None
+                result = SandboxExecutor().deny(
+                    request_for(script_path), "script_identity_invalid", str(exc)
+                )
+
+        if script_snapshot is not None:
+            try:
+                result = SandboxExecutor().run(
+                    request_for(script_snapshot.path, runtime_root=script_snapshot.root),
+                    prepared_snapshot=script_snapshot,
+                )
+            finally:
+                script_snapshot.cleanup()
         receipt = result.receipt.model_dump(mode="json")
         event = {
             "type": "script_hook",

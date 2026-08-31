@@ -22,6 +22,7 @@ from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.commands import audit as audit_commands
 from cafe.ui.commands import verification as verification_commands
 from cafe.ui.commands import trust as trust_commands
+from cafe.ui.commands import update as update_commands
 from cafe.ui.cli_shared import (
     CONTENT_TYPE_FILE_MAP as _SHARED_CONTENT_TYPE_FILE_MAP,
     VALID_CONTENT_TYPES as _SHARED_VALID_CONTENT_TYPES,
@@ -51,7 +52,6 @@ from cafe.ui.chat import get_chat_next_step_path as _compat_get_chat_next_step_p
 from cafe.ui.display import Display
 from cafe.ui.init_helpers import (
     check_available_clis,
-    copy_agents_to_local,
     copy_templates_to_local,
     list_available_agents,
 )
@@ -665,30 +665,28 @@ def _get_version() -> str:
 
 
 def _ensure_default_content(cafe_dir: Path) -> None:
-    """Copy agent and template files into local .cafe directory.
+    """Copy template files into the local .cafe directory.
 
-    Copies from global custom (~/.cafe/) and system default (src/cafe/data/)
-    directories. Global custom files take precedence over system defaults.
+    Agents resolve dynamically through the project/Global/builtin catalog and
+    are deliberately not materialized as project snapshots.
 
     Args:
         cafe_dir: Path to .cafe directory
     """
-    # Copy agents and templates to local .cafe
-    agent_results = copy_agents_to_local(cafe_dir)
     template_results = copy_templates_to_local(cafe_dir)
 
-    # Count results
-    agent_success = sum(1 for _, _, success in agent_results if success)
-    agent_failed = sum(1 for _, _, success in agent_results if not success)
     template_success = sum(1 for _, _, success in template_results if success)
     template_failed = sum(1 for _, _, success in template_results if not success)
 
-    # Display summary
-    if agent_success > 0 or template_success > 0:
-        console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s) and {template_success} template(s)")
+    if template_success > 0:
+        console.print(
+            f"  [green]✓[/green] Updated .cafe directory with {template_success} template(s)"
+        )
 
-    if agent_failed > 0 or template_failed > 0:
-        console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed + template_failed} file(s)")
+    if template_failed > 0:
+        console.print(
+            f"  [yellow]⚠[/yellow] Warning: Failed to copy {template_failed} file(s)"
+        )
 
 
 def _sync_lifecycle_runtime() -> None:
@@ -782,6 +780,8 @@ app.add_typer(agent_app, name="agent")
 # Playbook and skill management commands
 app.add_typer(catalog_commands.playbook_app, name="playbook")
 app.add_typer(catalog_commands.skill_app, name="skill")
+app.add_typer(catalog_commands.catalog_app, name="catalog")
+app.add_typer(update_commands.update_app, name="update")
 
 # Workflow verification receipts
 app.add_typer(verification_commands.verification_app, name="verification")
@@ -1059,16 +1059,6 @@ def agent_edit() -> None:
         except ValueError:
             console.print(f"[green]✓[/green] Agent updated successfully: {agent_file}")
 
-        # Auto-sync agents to local .cafe directory
-        from cafe.ui.init_helpers import sync_agents
-        cafe_dir = Path(".cafe")
-        if cafe_dir.exists():
-            agent_success, agent_failed = sync_agents(cafe_dir)
-            if agent_success > 0:
-                console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s)")
-            if agent_failed > 0:
-                console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed} agent file(s)")
-
     except subprocess.CalledProcessError:
         console.print("[red]Error: Failed to edit agent[/red]")
         raise typer.Exit(1)
@@ -1186,25 +1176,20 @@ def agent_sync() -> None:
 @app.command(name="chat", context_settings={"allow_extra_args": False, "ignore_unknown_options": False})
 def chat_with_agent(
     ctx: typer.Context,
-    role: str = typer.Argument(..., help="Role: pm, developer, or reviewer"),
+    role: str = typer.Argument(..., help="Playbook-declared role"),
 ) -> None:
-    """Open interactive chat with specified role Agent
+    """Open interactive chat with a playbook-declared role Agent
 
     This command allows you to quickly interact with an Agent of specified role,
     without manually looking up and entering session id.
     The system automatically infers the issue from current branch and loads corresponding session.
-
-    \b
-    Supported roles:
-    - pm: Product Manager Agent
-    - developer: Developer Agent
-    - reviewer: Reviewer Agent
+    Valid roles come from the active issue's playbook, including custom roles.
 
     \b
     Examples:
-        cafe chat pm
         cafe chat developer
-        cafe chat reviewer
+        cafe chat qa
+        cafe chat researcher
     """
     # 1. Validate role parameter
     issue_name = _get_and_validate_branch(ctx, "chat")
@@ -1238,8 +1223,6 @@ def main() -> Optional[int]:
     if not _check_repo_entrypoint_alignment():
         return 1
     _auto_sync_global_helper_skills()
-    # Check for updates and auto-upgrade if available
-    _check_for_updates()
     app()
     return None
 
@@ -1293,105 +1276,6 @@ def _check_dependencies() -> None:
     except Exception:
         # If check fails, continue anyway
         pass
-
-
-def _check_for_updates() -> None:
-    """Check for new versions of cafe-engine and auto-update if available.
-
-    This function:
-    1. Checks if auto-update is enabled in .cafe/config.yaml
-    2. Respects CAFE_SKIP_UPDATE_CHECK environment variable
-    3. Rate-limits checks to once per 24 hours
-    4. Queries PyPI for the latest version
-    5. Automatically upgrades if a newer version is available
-    6. Fails silently without blocking the workflow
-    """
-    import os
-    import urllib.request
-    import json
-    import importlib.metadata
-    import subprocess
-
-    # Check if update check is explicitly disabled via environment variable
-    if os.getenv("CAFE_SKIP_UPDATE_CHECK"):
-        return
-
-    # Try to load config to check if auto-update is enabled
-    try:
-        config_manager = ConfigManager()
-        if config_manager.config_file.exists():
-            config = config_manager.load_config()
-            # Check if auto_update is explicitly disabled (default is True)
-            if config.get("settings", {}).get("auto_update") is False:
-                return
-    except Exception:
-        # If config loading fails, proceed with update check
-        pass
-
-    # Import helper functions from config module
-    from cafe.utils.config import should_check_for_updates, update_last_check_timestamp
-
-    # Check if enough time has passed since last update
-    if not should_check_for_updates():
-        return
-
-    try:
-        # Get current installed version
-        try:
-            current_version = importlib.metadata.version("cafe-engine")
-        except importlib.metadata.PackageNotFoundError:
-            # If package not found, skip update check
-            return
-
-        # Query PyPI for latest version
-        pypi_url = "https://pypi.org/pypi/cafe-engine/json"
-        try:
-            with urllib.request.urlopen(pypi_url, timeout=2) as response:
-                pypi_data = json.loads(response.read().decode())
-                latest_version = pypi_data["info"]["version"]
-        except Exception:
-            # If PyPI query fails, just update timestamp and return
-            update_last_check_timestamp()
-            return
-
-        # Update the last check timestamp
-        update_last_check_timestamp()
-
-        # Compare versions (simple string comparison works for semantic versioning)
-        # Parse versions properly for comparison
-        from packaging.version import Version
-
-        current = Version(current_version)
-        latest = Version(latest_version)
-
-        if latest > current:
-            # Newer version available, attempt upgrade
-            try:
-                # Run pip upgrade non-interactively
-                result = subprocess.run(
-                    ["pip", "install", "--upgrade", "cafe-engine"],
-                    capture_output=True,
-                    timeout=30,
-                )
-
-                if result.returncode == 0:
-                    console.print(
-                        f"\n[green]✓ cafe-engine upgraded from {current_version} to {latest_version}[/green]"
-                    )
-                else:
-                    # Upgrade failed, but don't block workflow
-                    pass
-            except Exception:
-                # If upgrade fails, don't block workflow
-                pass
-
-    except Exception:
-        # Catch all exceptions to ensure we never block the main workflow
-        pass
-
-
-
-
 
 
 if __name__ == "__main__":

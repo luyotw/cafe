@@ -1,15 +1,13 @@
 ---
 name: cafe-review
 description: "審查程式碼品質與風險"
-version: 1.4.2
+version: 1.12.0
 workflow:
   execution_profile:
     workload: review
     reasoning: high
     risk_domains: [correctness, security]
     fallback_strength: equivalent_or_stronger
-  required_tools:
-    - "Bash(cafe verification check:*)"
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback
@@ -62,16 +60,24 @@ workflow:
       plan_read_instruction: plan_read_instruction.md
       feedback_instruction: feedback_instruction.md
       spec_comparison_instruction: spec_comparison_instruction.md
-      verification_receipt_instruction: verification_receipt_instruction.md
     variants:
       - when: {iteration: 1}
         sections:
-          - reference: execution_steps.md
+          - reference: execution_preflight.md
+          - reference: execution_risk_assessment.md
+          - reference: execution_first_pass.md
+          - reference: execution_acceptance_closure.md
+          - reference: execution_exit_audit.md
+          - reference: execution_finalize.md
           - optional_checklist: basic_principles.md
       - when: {min_iteration: 2}
         sections:
-          - reference: correction_review_strategy.md
-          - reference: execution_steps.md
+          - reference: execution_preflight.md
+          - reference: execution_correction.md
+          - reference: execution_risk_assessment.md
+          - reference: execution_acceptance_closure.md
+          - reference: execution_exit_audit.md
+          - reference: execution_finalize.md
           - optional_checklist: basic_principles.md
     include_role_guidance: true
 ---
@@ -84,13 +90,22 @@ Read your agent file: {agent_file}
 ## Context
 - Use the workflow inputs listed in the runtime context. Review every supplied requirement, plan, implementation artifact, and feedback item that applies to this run.
 
+## Available scripts
+- `scripts/update_review_fallback.py` — maintainer-only updater for the pinned open-source review procedure; never run it during workflow execution.
+
+    python scripts/update_review_fallback.py --help
+
 ## Instructions
 - 以缺陷與風險為主
 - 先確認目前提供的需求、計畫與實作是否一致
+- 使用本版經 authoring-time 確認的 review discovery matrix：Codex 與 Claude 的既有 reviewer 是 host-side CLI command，不是 phase 內可直接組合的原生 Skill；Gemini、Cursor 與 Copilot 也沒有已確認的等價原生 Skill，因此五個 CLI 都使用 `references/review_procedure.md` 的 pinned 開源 procedure。不得在 runtime 自行搜尋、下載或替換 reviewer
+- 讀取 `references/review_procedure.md`，每輪執行恰好一次候選缺陷掃描；首輪使用累積 change scope，correction 輪只使用本輪 `Correction Impact Set`，其輸出只能作為 candidate findings，不能取代本 phase 的 acceptance、risk、ledger 與 handoff 判定
+- 若未來某個 CLI 提供可在 phase 內直接組合的原生 review Skill，必須先依 `write-cafe-phase` 的 selection matrix 流程取得 user 確認，再更新本 Skill；不得把 `codex review`、`claude ultrareview` 或其他巢狀 CLI subprocess 當成原生 Skill 偷跑
 - 優先指出行為回歸、缺少測試與高風險問題
 - Repo 搜尋與輸出上限：請依 shared skill「cafe-workflow-common」的 **Bounded repository inspection**；本 skill 不重複敘述。
-- Develop 測試證據驗證與 full-suite reuse：請依 shared skill「cafe-workflow-common」的 **Develop-to-review verification receipts**；本 skill 不重複敘述。
-- 每個綁定本 skill 的 playbook 都必須提供受限的 receipt `check` 指令；`focus` 僅是有具體 review 風險時的選用診斷權限，不屬於必要工具契約。
+- 測試證據、repository hooks 與 CI 的分工：請依 shared skill「cafe-workflow-common」的 **Repository-owned quality gates**；本 skill 不重複敘述。
+- 審查變更相關的 targeted test 選擇與品質；不得因缺少 CAFE verification receipt 打回 develop，也不在 review 重跑 repository-wide 驗證。
+- 首輪建立完整 issue acceptance closure 與 triggered risk coverage 基線；correction 輪只重開上輪 blocker、本輪修正影響的 row 與新 finding，完整邊界經證明未變的 row 以 `closed_reused` 引用既有證據，不重跑 probe 或重寫內容；但 `closed_reused` 只省略重複證據，不得省略 provisional pass 前建立或核對完整累積變更的 cross-component seam coverage，已完整記錄且未受影響的 seam 可沿用。
 - 若需修改，把 next-step baton 寫成 `develop`
 - 通過時，把 next-step baton 寫成下一個 workflow step（預設 playbook 為 `pr`）
 - 與 developer 往返、仲裁、以及 blackboard/baton 更新：請依 shared skill「cafe-workflow-common」的 **Develop and review disagreement protocol** 與 **Shared Rules**；本 skill 不重複敘述。

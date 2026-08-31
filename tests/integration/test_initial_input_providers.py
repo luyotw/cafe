@@ -117,7 +117,7 @@ playbook:
   id: intake
 roles:
   researcher:
-    default_agent: David
+    default_agent: Morgan
 entry_point: intake
 steps:
   intake:
@@ -231,7 +231,7 @@ def _prepare_intake_issue(
         generic_phase=generic_phase,
         agent_manager=manager,
         git_ops=_GitOps(),
-        role_agent_map={"researcher": "David"},
+        role_agent_map={"researcher": "Morgan"},
         step_user_inputs=step_user_inputs,
     )
     return executor, manager, issue_dir, step

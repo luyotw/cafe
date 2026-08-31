@@ -23,4 +23,5 @@ unset GIT_OBJECT_DIRECTORY
 unset GIT_ALTERNATE_OBJECT_DIRECTORIES
 
 "$PROJECT_PYTHON" -m pytest tests/unit/ tests/integration/ -q --tb=short \
-    --cov=cafe --cov-report=term-missing --cov-fail-under=75
+    --cov=cafe --cov-report=term-missing --cov-fail-under=75 \
+    --durations=50 --durations-min=0.5

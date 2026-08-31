@@ -13,7 +13,7 @@ def test_packaged_workflow_common_uses_bounded_digest() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-workflow-common")
 
-    assert "version: 1.7.0" in text
+    assert "version: 1.8.0" in text
     assert "Bounded blackboard digest" in text
     assert "Do **not** read or print the whole file" in text
     assert '"from_step": "<current step name>"' not in text
@@ -22,13 +22,13 @@ def test_packaged_workflow_common_uses_bounded_digest() -> None:
     assert "Do not skip the blackboard read" not in text
 
 
-def test_packaged_develop_skill_uses_verification_guidance() -> None:
+def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-develop")
 
-    assert "version: 1.8.0" in text
-    assert "repository 定義的 verification 路徑" in text
-    assert "不要另建背景工作或輪詢機制" in text
+    assert "version: 1.9.0" in text
+    assert "與變更直接相關的 targeted checks" in text
+    assert "Repository-owned quality gates" in text
     assert "max_read_only_commands" not in text
     assert "20 次" not in text
     assert "failing test" not in text
@@ -37,7 +37,7 @@ def test_packaged_develop_skill_uses_verification_guidance() -> None:
     assert "3 次唯讀呼叫內" not in text
     assert "`Task Status` 僅使用 schema 允許的 `completed`" in text
     assert "不得寫 `done`" in text
-    assert "verification receipt 是獨立證據，不能取代 summary" in text
+    assert "在 handoff 前寫入非空的 development summary" in text
 
 
 def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
@@ -46,9 +46,9 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
 
     expected_versions = {
         "cafe-spec": "1.4.0",
-        "cafe-plan": "1.6.1",
-        "cafe-review": "1.4.2",
-        "cafe-workflow-common": "1.7.0",
+        "cafe-plan": "1.7.0",
+        "cafe-review": "1.12.0",
+        "cafe-workflow-common": "1.8.0",
         "use-cafe-workflow": "1.28.0",
     }
     for name, version in expected_versions.items():
@@ -92,7 +92,7 @@ def test_develop_and_review_check_long_running_resource_amplification() -> None:
     expected = "確認 long-running script 不會造成不可接受的系統負荷或資源放大"
 
     for skill_name in ("cafe-develop", "cafe-review"):
-        reference = (
-            builtin_root / skill_name / "references" / "basic_principles.md"
-        ).read_text(encoding="utf-8")
+        reference = (builtin_root / skill_name / "references" / "basic_principles.md").read_text(
+            encoding="utf-8"
+        )
         assert expected in reference

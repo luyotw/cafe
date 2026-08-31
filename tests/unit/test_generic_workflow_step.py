@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cafe.agents.executor import AgentExecutionError
+from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import (
     ArtifactEntry,
     ArtifactKind,
@@ -23,9 +24,10 @@ from cafe.core.session_continuation import (
     SessionContinuationPolicy,
 )
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.core.types import AgentCLI, AgentConfig, TokenUsage
+from cafe.core.types import AgentCLI, AgentConfig, CliEntry, TokenUsage
 from cafe.phases.generic_phase import GenericPhase, GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
+from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.phase_config import PhaseStepModelResolution
@@ -302,6 +304,66 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert reloaded.handoff_contract.source == "workflow.status_transition_adapter"
 
 
+def test_backup_cli_skill_sync_refuses_external_symlink(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    external_root = tmp_path / "external-claude"
+    external_skills = external_root / "skills"
+    external_skills.mkdir(parents=True)
+    sentinel = external_skills / "sentinel.txt"
+    sentinel.write_text("protected\n", encoding="utf-8")
+    (tmp_path / ".claude").symlink_to(external_root)
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-backup-symlink"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+
+    class BackupManager(FakeAgentManager):
+        def get_execution_config(self, agent_name, phase_name=None, continuation=None):
+            return AgentConfig(
+                name=agent_name,
+                cli=AgentCLI.CODEX,
+                model="primary-model",
+                clis=[
+                    CliEntry(cli=AgentCLI.CODEX, model="primary-model"),
+                    CliEntry(cli=AgentCLI.CLAUDE, model="backup-model"),
+                ],
+                backup_clis=[AgentCLI.CLAUDE],
+            )
+
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-backup-symlink",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=BackupManager("confirmed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+
+    with pytest.raises(SkillDiscoveryError, match="Refusing to traverse"):
+        executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    assert sentinel.read_text(encoding="utf-8") == "protected\n"
+    assert not (external_skills / NativeSkillBridge.MANAGED_SKILLS_MANIFEST).exists()
+    assert not (external_skills / "cafe-spec").exists()
+
+
 def test_generic_step_passes_declared_read_only_guard_to_agent_manager(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -460,7 +522,12 @@ def test_generic_workflow_step_agent_written_baton_preserved(tmp_path: Path, mon
                 "allowed_tools": ["Read"],
                 "valid_intents": ["confirmed"],
                 "on": {"await_agent": "_done"},
-            }
+            },
+            "plan": {
+                "skill": "cafe-plan",
+                "role": "pm",
+                "on": {"await_agent": "_done"},
+            },
         },
     }
 
@@ -1131,7 +1198,7 @@ def test_first_iteration_declared_initial_task_uses_empty_optional_input(
     assert executor._load_iteration_user_input_candidate("draft") == ""
 
 
-def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill(
+def test_review_step_installs_phase_skill_for_effective_cli_chain(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -1181,7 +1248,21 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
         return original_install_skill(name, cli, context)
 
     monkeypatch.setattr(generic_phase.skill_bridge, "install_skill", record_skill_install)
-    agent_manager = FakeAgentManager("confirmed")
+
+    class StickyProviderManager(FakeAgentManager):
+        def get_execution_config(self, agent_name, phase_name=None, continuation=None):
+            return AgentConfig(
+                name=agent_name,
+                cli=AgentCLI.COPILOT,
+                model="sticky-review-model",
+                clis=[
+                    CliEntry(cli=AgentCLI.COPILOT, model="sticky-review-model"),
+                    CliEntry(cli=AgentCLI.CODEX, model="backup-review-model"),
+                ],
+                backup_clis=[AgentCLI.CODEX],
+            )
+
+    agent_manager = StickyProviderManager("confirmed")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-review-skill",
@@ -1194,11 +1275,19 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
 
     result = executor.execute_step("review", playbook["steps"]["review"], state)
 
-    assert (tmp_path / ".codex" / "skills" / "cafe-workflow-common" / "SKILL.md").exists()
-    assert (tmp_path / ".codex" / "skills" / "cafe-github_sync" / "SKILL.md").exists()
-    assert (tmp_path / ".codex" / "skills" / "cafe-review" / "SKILL.md").exists()
-    assert installed_skill_names == ["cafe-workflow-common", "cafe-github_sync", "review"]
     iteration_dir = issue_dir / "review" / "iteration_001"
+    assert (tmp_path / ".copilot" / "skills" / "cafe-workflow-common" / "SKILL.md").exists()
+    assert (tmp_path / ".copilot" / "skills" / "cafe-github_sync" / "SKILL.md").exists()
+    assert (tmp_path / ".copilot" / "skills" / "cafe-review" / "SKILL.md").exists()
+    assert (tmp_path / ".codex" / "skills" / "cafe-review" / "SKILL.md").exists()
+    assert installed_skill_names == [
+        "cafe-workflow-common",
+        "cafe-github_sync",
+        "review",
+        "cafe-workflow-common",
+        "cafe-github_sync",
+        "review",
+    ]
     output_file = iteration_dir / "output.md"
     checklist_file = iteration_dir / "checklist.md"
     assert result.artifacts["review_feedback"] == str(output_file)
@@ -1223,7 +1312,10 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
     assert "write(./.cafe/issues/issue-review-skill/next_step.txt)" in allowed_tools
 
     prompt = agent_manager.prompts[-1]
-    assert "Phase skill: $cafe-review" in prompt
+    assert "Phase skill: select the invocation for the CLI executing this prompt" in prompt
+    assert "/cafe-review for copilot" in prompt
+    assert "$cafe-review for codex" in prompt
+    assert "Runtime hook instructions:" not in prompt
     assert f"output_file={output_file}" in prompt
     assert f"checklist_file={checklist_file}" in prompt
     assert "blackboard_file=./.cafe/issues/issue-review-skill/blackboard.json" in prompt
@@ -1364,6 +1456,9 @@ def test_generic_workflow_step_prompt_keeps_skill_invocations_only(
     assert "Phase skill instructions:" not in prompt
     assert "Read blackboard first." not in prompt
     assert "Write PR content to:" not in prompt
+    assert "workflow_complete→done" in prompt
+    assert "await_agent→done" not in prompt
+    assert "valid intent values: [workflow_complete]" in prompt
 
 
 def test_generic_workflow_step_pr_prompt_overrides_external_state_guardrail(
@@ -3106,6 +3201,97 @@ def test_workflow_limits_prompt_inputs_to_step_artifacts(tmp_path: Path) -> None
             agent_name="David",
             output_file=tmp_path / "output.md",
         )
+
+
+def test_build_context_materializes_agent_for_later_external_read(tmp_path: Path) -> None:
+    executor = _make_minimal_executor(tmp_path)
+    state = BlackboardStore(executor.issue_dir).load_or_create("plan")
+    source = tmp_path / "global" / "agents" / "developer" / "David.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("---\nname: David\n---\n\nold guidance\n", encoding="utf-8")
+    output_file = executor.issue_dir / "plan" / "iteration_001" / "output.md"
+
+    with patch.object(AgentManager, "get_agent_file_path", return_value=str(source)):
+        context = executor._build_context(
+            step_name="plan",
+            step_def={"skill": "cafe-plan", "role": "developer"},
+            blackboard_state=state,
+            agent_name="David",
+            output_file=output_file,
+        )
+
+    source.write_text("---\nname: David\n---\n\nnew guidance\n", encoding="utf-8")
+
+    materialized = Path(context["agent_file"])
+    assert materialized != source
+    assert "old guidance" in materialized.read_text(encoding="utf-8")
+
+
+def test_build_context_resolves_builtin_agent_from_declared_qa_role(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    working_dir = tmp_path / "working"
+    working_dir.mkdir()
+    monkeypatch.chdir(working_dir)
+    issue_dir = tmp_path / ".cafe" / "issues" / "qa-fallback"
+    playbook = {
+        "playbook": {"id": "qa-fallback"},
+        "roles": {"qa": {"default_agent": "Quinn"}},
+        "steps": {
+            "qa": {
+                "skill": "cafe-plan",
+                "role": "qa",
+                "output_artifact": "qa_feedback",
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="qa-fallback",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={},
+    )
+    state = BlackboardStore(executor.issue_dir).load_or_create("qa")
+
+    with patch.object(Path, "home", return_value=tmp_path / "empty-home"):
+        _source, expected_guidance = AgentManager.read_agent_file("Quinn", "qa")
+        result = executor.execute_step("qa", playbook["steps"]["qa"], state)
+
+    assert result.status_code == "confirmed"
+    materialized = issue_dir / "qa" / "iteration_001" / "context_agent_file.md"
+    assert materialized.read_text(encoding="utf-8") == expected_guidance
+
+
+def test_build_context_resolves_global_agent_from_custom_declared_role(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    working_dir = tmp_path / "working"
+    working_dir.mkdir()
+    monkeypatch.chdir(working_dir)
+    global_home = tmp_path / "global-home"
+    global_agent = global_home / ".cafe" / "agents" / "security" / "Avery.md"
+    global_agent.parent.mkdir(parents=True)
+    expected_guidance = "---\nname: Avery\n---\n\nReview security boundaries.\n"
+    global_agent.write_text(expected_guidance, encoding="utf-8")
+    executor = _make_minimal_executor(tmp_path)
+    state = BlackboardStore(executor.issue_dir).load_or_create("audit")
+    output_file = executor.issue_dir / "audit" / "iteration_001" / "output.md"
+
+    with patch.object(Path, "home", return_value=global_home):
+        context = executor._build_context(
+            step_name="audit",
+            step_def={"skill": "cafe-plan", "role": "security"},
+            blackboard_state=state,
+            agent_name="Avery",
+            output_file=output_file,
+        )
+
+    assert Path(context["agent_file"]).read_text(encoding="utf-8") == expected_guidance
 
 
 def test_workflow_limits_checklist_inputs_to_step_artifacts(tmp_path: Path) -> None:

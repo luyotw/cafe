@@ -1,76 +1,57 @@
-## Checklist
+## Review Preflight
 
-[ ] Read src/cafe/data/agents/reviewer/Alice.md to understand your role and native language
+[ ] Read src/cafe/data/agents/reviewer/Alice.md, every supplied requirement, plan, implementation artifact, workflow or PR feedback, the previous review when applicable, and the correction delta packet; establish the bounded authoritative scope, apply the authoring-time selected review procedure exactly once, and retain its output only as candidate findings for independent CAFE validation
 [ ] Read the requirements specification .cafe/issues/test/spec/iteration_001/output.md
 [ ] Read the implementation plan .cafe/issues/test/plan/iteration_001/output.md
 [ ] Read PR feedback in (not available) (if exists) to see user feedback and requests
-[ ] Prioritize user feedback from PR comments over spec requirements if there are conflicts
+[ ] Record `base SHA`, `Reviewed HEAD`, `Previous Reviewed HEAD`, and the exact correction range in `Review Baseline`; when the previous review is not supplied, boundedly inspect earlier `iteration_*/output.md` siblings below the review directory derived from .cafe/issues/test/review/iteration_001/output.md; if the previous HEAD is missing, is not an ancestor, or has no recognizable evidence, prohibit reuse and review the cumulative `merge-base(develop, HEAD)..HEAD` change
+[ ] Inspect `git log develop..HEAD`, the worktree, changed-file hygiene, and commit-message fit once; no new commit or any uncommitted work means development is incomplete, sensitive data or an unwanted committed file is critical, and message-style findings name affected SHAs plus complete non-interactive repair commands
 
-## Git Status and Security Check
-[ ] Check if there are new commits (use `git log develop..HEAD`). If no commits exist, development is incomplete - hand off to `develop`
-[ ] Check for uncommitted changes (if any, development is incomplete)
-[ ] Check for sensitive info in committed files (passwords, API keys, credentials)
-[ ] If sensitive info found: treat as critical issue, require immediate removal from commit history
+## Triggered Risk Assessment
 
-## Commit Message Style Check (Critical - Must Match Base Branch)
-[ ] Get current branch commits: `git log develop..HEAD --pretty=format:"%H%n%B"`
-[ ] Get base branch reference commits: `git log develop --max-count=5`
-[ ] Determine base branch commit style: single-line or multi-line (subject + body lines, use `git log <sha> -1 --format="%B" | wc -l`)
-[ ] Determine current branch commit style: same method
-[ ] Check consistency: body presence (multi-line description) matches base branch
-[ ] Check consistency: language (Chinese/English) matches base branch
-[ ] If style mismatch found: list commit SHAs, explain correct style, provide update commands
-[ ] Provide complete git rebase commands for developer to execute directly (non-interactive, see prompt)
+[ ] On the first review, build the cumulative change-and-risk map from the production diff, requirement authority, caller and consumer paths, configuration and defaults, persisted state, identity inputs, mutation targets, locks, snapshots, fixtures, and external effects; on a correction review, retain that baseline and update it only for the `Correction Impact Set` and newly surfaced triggers
+[ ] On the first review, add one `Triggered Risk Coverage` row for every applicable obligation; on a correction review, write detailed rows only for previous-open, impacted, reopened, or new obligations and list unaffected rows by stable ID in the compact `Carried Evidence Summary`; group components only when they share one control and list every member of that equivalence class, recording `Risk ID | trigger (path/symbol and reason) | production path | probe (setup -> mutation/action -> expected -> observed) | evidence HEAD | status`, with status limited to `open | closed_fresh | closed_reused | n/a`
+[ ] On the first review, obtain independent evidence for each triggered obligation through a minimal production-path probe or the strongest bounded alternative; on a correction review, require a fresh production-path probe only for a previous blocker, a new finding or obligation, or a changed trust or durable-state boundary, use the strongest bounded targeted alternative for other impacted rows, and do not rerun probes for rows validly carried as `closed_reused`; for a composed boundary, evidence must cover the production seam rather than isolated helpers, including producer-accepted cardinality versus the strictest downstream schema/journal/recovery limit at `limit + 1`, every decision-bound input changed at the last controllable point before irreversible use, and actual automatic-consumer output/work at empty, single, many, and over-budget inputs; one probe may serve multiple obligations only when it records a distinct assertion and observation for each, and a passing command or raw test name alone is never evidence
 
-## Implementation Completeness Check
-[ ] Check for unfinished items in implementation plan
-[ ] Compare implementation against .cafe/issues/test/spec/iteration_001/output.md
-[ ] Verify all acceptance criteria are met
-[ ] Confirm: Verified all requirements are met, nothing missed
+| Domain | Trigger surface | Fixed obligations |
+| --- | --- | --- |
+| **A - Identity / decision binding** | Digest, token, approval, cache key, snapshot identity, or version identity | **A1:** Identity covers every direct or indirect behavior-changing input; changing any such input changes identity or invalidates the decision. **A2:** Check/approval and use/apply consume the same identity; replaced or stale input fails closed. |
+| **P - Durable state / lifecycle** | Manifest, journal, checkpoint, migration, resume, retry, or recovery | **P1:** Persisted state is bound to operation, version, source, target, and decision; malformed, stale, replayed, or cross-operation state is rejected before mutation. **P2:** Every durable transition can resume or roll back idempotently after interruption without skipping a decision or acting on the wrong object. |
+| **M - Mutation scope / target** | Write, move, delete, install, publish, filesystem mutation, or external-state mutation | **M1:** The target stays within the authorized root or object; ancestor, symlink/alias, and canonicalization behavior cannot retarget it. **M2:** Partial failure affects only the selected scope, preserves unrelated existing data, and leaves recoverable audit state. |
+| **R - Resolution / adapters** | Precedence, fallback/default, alias, resolver, or one policy with multiple production consumers | **R1:** Every production consumer uses the same canonical policy and returns the same value or error for the same input; verify with differential parity. **R2:** An invalid highest-authority or configured source fails closed, while missing/default/alias and empty/single/multiple cases never silently change authority. |
+| **C - Concurrency / check-use** | Lock, snapshot, transaction publication, or reader/writer overlap | **C1:** Protection spans lookup through content/state consumption so a race cannot replace the checked identity. **C2:** Readers observe a complete before or after state, never mixed or partial state. |
+| **X - Executable / capability / resource boundary** | Hook, plugin/skill closure, subprocess, network, untrusted executable input, or long-running work | **X1:** Capability and execution closure are minimal; input cannot introduce undeclared code or data access. **X2:** Time, size, count, depth, output, and cancellation are bounded, and non-success states are explicit without resource amplification. |
 
-## Code Quality Review
-[ ] Trace each candidate defect to its root cause, inspect directly related modes, aliases, entry points, and lifecycle paths in the same pass, and consolidate sibling symptoms into one actionable finding
-[ ] Check conformance to existing project coding style
-[ ] Check if existing code patterns and utilities were reused
-[ ] Check for code duplication or excessive duplicate code
-[ ] Verify proper error handling
-[ ] Check code correctness, readability, performance, security
-[ ] Check for missing updates (error messages, prompts, documentation, examples)
-[ ] Comment hygiene (no landmines): code comments must not contain unverified speculation presented as fact. If a comment makes a claim ("this happens because...", "X is safe because...") it must be backed by evidence in code/tests/docs/links, or rewritten as a question/TODO with the missing evidence explicitly stated.
-[ ] Check for files that should not be committed (config files, log files)
-[ ] Check for files or code that should not be deleted
-[ ] Check if existing unused code can be removed
+Do not expand this table into a new attack taxonomy. At most the twelve fixed obligations above may become rows, and only when their trigger surface is present.
+
+## First-Pass Behavior Review
+
+[ ] Trace each candidate defect to its root cause and inspect changed public callers, supported modes and aliases, empty/single/multiple cardinalities, and applicable lifecycle paths in the same pass; consolidate sibling symptoms into one actionable finding
 
 ## Anti-Over-Engineering Review
-[ ] Confirm the implemented design is the smallest design that satisfies the approved requirements; flag speculative scope, abstractions, or extension points that are not needed now
-[ ] Dependency ADR vs manifest diff: diff dependency manifests (`package.json`, `pyproject.toml`, `requirements*.txt`, or equivalent) against the approved plan's **Dependency ADR** list; any package present in the manifest diff but **not declared** in the plan is undeclared — route back to `develop` and name the package in review output
-[ ] Dependency hygiene: every new manifest entry has a matching ADR entry and serves a declared requirement; flag unannounced or undeclared dependencies
-[ ] Stale majors: if the plan or manifests introduce a **new major** released within the last **30 days**, verify the ADR justifies the risk or an acceptable stable alternative was chosen; flag unjustified bleeding-edge majors
-[ ] Layering and speculative abstractions: business logic that could be a pure function is not buried inside a UI component; no abstractions added for hypothetical future scenarios; implementation matches the layering map declared in the plan
-[ ] Explicit cross-component contracts: when two components share state via persistence or other indirect channels, the protocol is documented (in code or plan), not coincidental; flag implicit coupling that only works because of current framework behavior
 
-## Testing Review
-[ ] Review test quality and edge cases
-[ ] Check the tests are not fragile or flaky
+[ ] Review applicable correctness, error handling, security, performance, persistence, concurrency, fallback, retry/resume, data-loss, and source-of-truth behavior together with code quality and repository fit; require the smallest design that satisfies the approved requirements or recorded planless baseline, apply Dependency ADR vs manifest diff and Dependency hygiene when planned, check new majors released within the last 30 days, reject undeclared dependencies and unnecessary Layering and speculative abstractions, require Explicit cross-component contracts, and catch missing errors, docs, deletions, or committed-file hygiene
 
-## Test Invariants Review
-[ ] Plan includes a **Test List** with **Unit tests (N)** and **Integration tests (M)**; each item has a label mapped to an invariant or user journey; if N or M is zero, the plan states why
-[ ] New/changed tests align with the plan Test List and protect invariants or journey outcomes—not implementation details
-[ ] New/changed tests do **not** couple to disallowed UI copy, CSS classes, DOM structure, or internal state shape (unless spec/DoD explicitly allows exact copy as a product requirement)
-[ ] Integration tests map to plan journeys/invariants, not per-component or internal UI structure
-[ ] Extractable pure business logic in shared library modules has unit-level coverage when applicable
-[ ] Allowed UI contracts are respected: accessibility roles/labels, test ids (`data-testid`), and exact copy only when mandated in the spec
+## Testing and Invariants Review
 
-## Final Steps
-[ ] Confirm: No code was modified
-[ ] Write review findings to .cafe/issues/test/review/iteration_001/output.md in todo list format (same format as PR phase)
-[ ] Use this structure: ## Todo List / ### [Category] / - [ ] item or - [x] item
-[ ] Group issues by category (e.g., "Commit Message Style", "Code Quality", "Testing")
-[ ] Each issue should be a checkbox item with file path and line number
-[ ] If no issues found, all items should be marked [x]
-[ ] Do NOT provide code solutions, only identify issues
-[ ] Write the next-step baton to hand off to the next workflow target; the runtime updates blackboard
-[ ] Keep the response brief; workflow transitions are controlled by the baton
+[ ] Review targeted tests against acceptance and risk rows plus the supplied Test List or recorded planless baseline: require invariants and user journeys rather than implementation details, applicable pure-logic unit coverage and integration journeys, allowed UI contracts, edge cases, truthful fixtures, and non-fragile assertions; review supplied hook or CI evidence when available, do not require a CAFE verification receipt, and do not run repository-wide validation
+
+## Acceptance Closure
+
+[ ] Compare implementation against .cafe/issues/test/spec/iteration_001/output.md
+[ ] Select and record the review baseline: use the approved spec and plan when supplied, but let the latest authoritative user feedback from PR comments or workflow inputs override them where they conflict; otherwise derive a bounded planless baseline from supplied user or issue intent, workflow feedback, code/development summary, commit context, and observable behavior in the change without inventing requirements; request clarification instead of guessing when requirement authority is insufficient
+[ ] On the first review, build one `Acceptance Closure Evidence` row for every acceptance criterion and relevant invariant; on a correction review, write detailed rows only for previous-open, impacted, reopened, or new criteria and list unaffected rows by stable ID in the compact `Carried Evidence Summary`; detailed rows record `ID | claim and source | production path | risk evidence refs | independent evidence | status`, keep requirements claims separate from triggered risk obligations, and limit status to `open | closed_fresh | closed_reused | n/a`
+[ ] Pass only when every first-review row is independently evidenced, or on correction review every previous-open, impacted, reopened, or new row is independently evidenced at the recorded baseline and every carried `closed_reused` row has a recognizable source review plus valid unchanged-boundary proof; every referenced risk row must satisfy the cumulative seam exit audit, and developer assertions, previous `closed` labels alone, passing command names, or synthetic fixtures or mocks that bypass the reviewed production contract cannot close a row
+
+## Exit Audit
+
+[ ] If the current result is a provisional pass, require a recognizable `Cumulative Seam Coverage Summary` for the current review lineage: when absent or incomplete, boundedly audit `merge-base(develop, HEAD)..HEAD`; on a correction review, reconcile the correction delta and current cumulative change map against that summary and inspect only missing or affected seams rather than restarting it; this is not another portable candidate scan or a rerun of every probe: cover acceptance-to-production contracts by reconciling producer input/cardinality with the strictest downstream schema, journal, recovery, and reader limits using a `limit + 1` failure case, verifying protection from the final recheck of every decision-bound direct or fallback input through irreversible use, and measuring bounded work/output at the actual automatic consumer rather than only a human formatter or helper; reopen any obligation whose retained evidence never covered that composed seam, and if blockers already remain record why the exit audit was skipped instead of manufacturing pass evidence
+[ ] Before routing a pass, freeze the current HEAD and require every previous-open, impacted, reopened, or newly uncovered seam row to be `closed_fresh` at that HEAD; allow an unaffected row or seam to remain `closed_reused` only when its source review and evidence HEAD are recognizable, the previous HEAD is an ancestor, and the cumulative seam summary plus delta inspection prove the complete production boundary and actual consumer remain valid—otherwise reopen it and obtain fresh evidence
+
+## Finalize Review
+
+[ ] Confirm that the reviewer modified no code, then write .cafe/issues/test/review/iteration_001/output.md in this exact order: `## Review Baseline`, `## Todo List`, `## Triggered Risk Coverage`, `## Acceptance Closure Evidence`, `## Outcome`; on a provisional pass, keep a compact `Cumulative Seam Coverage Summary` in `Review Baseline` for applicable limit compatibility, decision check-to-use, and automatic-consumer budget seams with source review and evidence HEAD; on correction review, also put the `Correction Impact Set` and compact `Carried Evidence Summary` there, keep detailed risk and acceptance rows to previous-open, impacted, reopened, or new entries, and reference unaffected evidence by stable ID, source review, evidence HEAD, and unchanged-boundary reason instead of rewriting it; Todo findings use categorized severity checkboxes with file path and line number, say explicitly when there are no blockers, and identify defects without code solutions, raw unbounded output, or a manufactured verification receipt
+[ ] Route missing requirement authority or required user input through the active review step's declared reactive handoff; route implementation, test, evidence, or other blocking findings to `develop`; only a fully closed exit audit proceeds to the next workflow step, then write the next-step baton and keep the response brief
 
 ## Basic Principles
 

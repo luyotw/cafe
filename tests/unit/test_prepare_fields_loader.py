@@ -1,11 +1,14 @@
 """Tests for prepare field schema and fields_ref loading."""
 
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 import yaml
 from pydantic import ValidationError
 
+import cafe.core.prepare_fields as prepare_fields_module
+from cafe.catalogs.resolver import global_catalog_lock
 from cafe.core.prepare_fields import (
     FieldsRefKind,
     load_fields_ref,
@@ -29,6 +32,65 @@ MINIMAL_FIELD = {
         {"value": "high", "label": "High"},
     ],
 }
+
+
+def test_skill_fields_ref_holds_catalog_lock_through_asset_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    global_root = tmp_path / "global"
+    skill_dir = global_root / "skills" / "spec"
+    asset = skill_dir / "assets" / "prepare" / "fields.yaml"
+    asset.parent.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: spec\ndescription: spec\n---\n", encoding="utf-8"
+    )
+    asset.write_text(yaml.safe_dump({"fields": [MINIMAL_FIELD]}), encoding="utf-8")
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=global_root,
+        builtin_root=tmp_path / "builtin",
+    )
+    resolved = Event()
+    allow_read = Event()
+    writer_entered = Event()
+    errors: list[BaseException] = []
+    original_resolve = prepare_fields_module.resolve_fields_ref_path
+
+    def pause_after_resolution(**kwargs) -> Path:
+        path = original_resolve(**kwargs)
+        resolved.set()
+        assert allow_read.wait(timeout=5)
+        return path
+
+    def read_fields() -> None:
+        try:
+            load_fields_ref(
+                ref="skill://spec/assets/prepare/fields.yaml",
+                playbook_path=tmp_path / "playbooks" / "test.yaml",
+                skill_loader=loader,
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    def publish() -> None:
+        with global_catalog_lock(global_root, exclusive=True):
+            writer_entered.set()
+
+    monkeypatch.setattr(prepare_fields_module, "resolve_fields_ref_path", pause_after_resolution)
+    reader = Thread(target=read_fields)
+    writer = Thread(target=publish)
+    reader.start()
+    assert resolved.wait(timeout=5)
+    writer.start()
+    try:
+        assert not writer_entered.wait(timeout=0.2)
+    finally:
+        allow_read.set()
+    reader.join(timeout=5)
+    writer.join(timeout=5)
+
+    assert errors == []
+    assert writer_entered.is_set()
 
 
 def test_prepare_field_schema_parses_valid_definition() -> None:

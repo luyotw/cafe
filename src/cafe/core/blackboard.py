@@ -713,6 +713,7 @@ class BlackboardStore:
         )
 
         if prior_contract is not None and same_blackboard_handoff:
+            contract.created_at = prior_contract.created_at
             if contract.source == "unknown":
                 prior_source = str(prior_contract.source)
                 if prior_source:

@@ -9,7 +9,9 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 
+from cafe.catalogs.resolver import global_catalog_lock
 from cafe.core.types import AgentCLI
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
@@ -77,11 +79,28 @@ class NativeSkillBridge:
     def _ensure_native_skills_dir(self, cli: AgentCLI) -> Path:
         """Return a usable project-local native skill directory for one CLI."""
         skills_root = self.get_native_skills_dir(cli)
-        if skills_root.is_symlink() and not skills_root.exists():
-            skills_root.unlink()
-        elif skills_root.exists() and not skills_root.is_dir():
-            skills_root.unlink()
+        relative = skills_root.relative_to(self.project_root)
+        current = self.project_root
+        for part in relative.parts:
+            current = current / part
+            if current.is_symlink():
+                if current == skills_root and not current.exists():
+                    current.unlink()
+                    continue
+                raise SkillDiscoveryError(
+                    f"Refusing to traverse project-local CLI skill symlink: {current}"
+                )
+            if current.exists() and not current.is_dir():
+                if current != skills_root:
+                    raise SkillDiscoveryError(
+                        f"CLI skill directory ancestor is not a directory: {current}"
+                    )
+                current.unlink()
         skills_root.mkdir(parents=True, exist_ok=True)
+        if not skills_root.resolve().is_relative_to(self.project_root):
+            raise SkillDiscoveryError(
+                f"CLI skill directory escapes the project root: {skills_root}"
+            )
         self._ensure_cli_dir_git_excluded(cli)
         return skills_root
 
@@ -109,20 +128,39 @@ class NativeSkillBridge:
         Using the worktree-local skill directory avoids cross-process races when
         multiple CAFE workflows install/update the same native skill in parallel.
         """
-        source_dir = self.skill_loader.get_skill_dir(name)
-        target_dir = self._ensure_native_skills_dir(cli) / self.get_installed_skill_name(name)
+        with global_catalog_lock(self.skill_loader.global_root):
+            source_dir = self.skill_loader.get_skill_dir(name)
+            target_dir = (
+                self._ensure_native_skills_dir(cli)
+                / self.get_installed_skill_name(name)
+            )
 
-        if target_dir.exists():
-            shutil.rmtree(target_dir)
-        shutil.copytree(source_dir, target_dir)
-        if context:
-            skill_file = target_dir / "SKILL.md"
-            rendered = skill_file.read_text(encoding="utf-8")
-            for key, value in context.items():
-                rendered = rendered.replace(f"{{{key}}}", str(value))
-            skill_file.write_text(rendered, encoding="utf-8")
-        self._record_managed_skill(cli, target_dir.name)
-        return target_dir
+            if target_dir.exists():
+                shutil.rmtree(target_dir)
+            shutil.copytree(source_dir, target_dir)
+            if context:
+                skill_file = target_dir / "SKILL.md"
+                rendered = skill_file.read_text(encoding="utf-8")
+                for key, value in context.items():
+                    rendered = rendered.replace(f"{{{key}}}", str(value))
+                skill_file.write_text(rendered, encoding="utf-8")
+            self._record_managed_skill(cli, target_dir.name)
+            return target_dir
+
+    @staticmethod
+    def provider_aware_invocation(invocations: Mapping[AgentCLI, str]) -> str:
+        """Describe one installed skill across the effective CLI fallback chain."""
+        grouped: dict[str, list[str]] = {}
+        for cli, invocation in invocations.items():
+            grouped.setdefault(invocation, []).append(cli.value)
+        if not grouped:
+            raise ValueError("at least one CLI skill invocation is required")
+        if len(grouped) == 1:
+            return next(iter(grouped))
+        choices = "; ".join(
+            f"{invocation} for {', '.join(cli_names)}" for invocation, cli_names in grouped.items()
+        )
+        return f"select the invocation for the CLI executing this prompt: {choices}"
 
     def synchronize_skills(
         self,
@@ -139,26 +177,30 @@ class NativeSkillBridge:
         unrelated native skills. On first use, existing catalog-backed entries
         are treated as legacy CAFE installs so an upgrade also clears stale skills.
         """
-        desired: list[tuple[str, str]] = []
-        seen: set[str] = set()
-        for name in names:
-            installed_name = self.skill_loader.get_skill_dir(name).name
-            if installed_name in seen:
-                continue
-            seen.add(installed_name)
-            desired.append((name, installed_name))
+        with global_catalog_lock(self.skill_loader.global_root):
+            desired: list[tuple[str, str]] = []
+            seen: set[str] = set()
+            for name in names:
+                installed_name = self.skill_loader.get_skill_dir(name).name
+                if installed_name in seen:
+                    continue
+                seen.add(installed_name)
+                desired.append((name, installed_name))
 
-        self._ensure_native_skills_dir(cli)
-        managed = self._read_managed_skills(cli)
-        if managed is None:
-            managed = self._legacy_managed_skills(cli)
-        desired_names = {installed_name for _, installed_name in desired}
-        for stale_name in managed - desired_names:
-            self._remove_managed_skill(cli, stale_name)
-        self._write_managed_skills(cli, desired_names)
-        if not install:
-            return []
-        return [self.install_skill(name, cli, context=context) for name, _ in desired]
+            self._ensure_native_skills_dir(cli)
+            managed = self._read_managed_skills(cli)
+            if managed is None:
+                managed = self._legacy_managed_skills(cli)
+            desired_names = {installed_name for _, installed_name in desired}
+            for stale_name in managed - desired_names:
+                self._remove_managed_skill(cli, stale_name)
+            self._write_managed_skills(cli, desired_names)
+            if not install:
+                return []
+            return [
+                self.install_skill(name, cli, context=context)
+                for name, _ in desired
+            ]
 
     def _managed_skills_manifest(self, cli: AgentCLI) -> Path:
         return self.get_native_skills_dir(cli) / self.MANAGED_SKILLS_MANIFEST

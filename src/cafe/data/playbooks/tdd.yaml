@@ -103,6 +103,9 @@ steps:
       - trigger: need_clarification
         task_id: clarification-feedback
         outcomes: {submit: develop}
+      - trigger: need_permission
+        task_id: permission-answers
+        outcomes: {submit: develop}
       - trigger: no_changes_needed
         task_id: no-change-decision
         outcomes: {agree: pr, disagree: develop}
@@ -135,7 +138,7 @@ steps:
       - trigger: manual_handoff
         task_id: iteration-limit
         outcomes: {resume: review}
-    allowed_tools: [Read, Grep, Glob, "Bash(git:*)", "Bash(cafe verification check:*)", "Bash(cafe verification focus:*)"]
+    allowed_tools: [Read, Grep, Glob, "Bash(git:*)"]
     max_attempts_per_cycle: 5
     allowed_goto: [spec, develop, plan]
     hooks:
@@ -173,7 +176,7 @@ steps:
         feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
     "on":
       confirm_output: pr
-      await_agent: _done
+      workflow_complete: _done
       need_permission: pr
       manual_handoff: develop
 

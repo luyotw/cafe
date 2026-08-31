@@ -38,7 +38,7 @@ class PhaseReviewMixin:
         Args:
             item_name: Item name to confirm (e.g. "plan", "code", "requirements")
             agent_name: Agent name (e.g. "Developer", "PM", "Reviewer")
-            role: Agent role for chat ("pm", "developer", or "reviewer")
+            role: Step-declared agent role for chat, resolved by the active playbook.
             output_file: Optional path to the agent's output file. When provided,
                          its content is re-printed after returning from chat so the
                          user can re-read it before making a decision.
@@ -148,7 +148,7 @@ class PhaseReviewMixin:
         option before the multiline text prompt.
 
         Args:
-            role: Agent role for inline chat ("pm", "developer", "reviewer").
+            role: Step-declared agent role for inline chat, resolved by the active playbook.
                   When provided, a "Chat with [agent_name]" option is shown.
             agent_name: Display name of the agent (e.g. "Roger", "David"). Used in
                         the "Chat with [agent_name]" label. Falls back to role if not given.
