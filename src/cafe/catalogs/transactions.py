@@ -171,22 +171,14 @@ def entry_identity(directory: BoundDirectory, name: str) -> EntryIdentity:
     return _filesystem_identity(metadata)
 
 
-def move_without_replacement(
+def _native_move_without_replacement(
     source_name: str,
     destination_name: str,
     *,
     source_directory: BoundDirectory,
     destination_directory: BoundDirectory,
-    expected_source_identity: Optional[EntryIdentity] = None,
 ) -> None:
-    """Atomically move one entry between bound parents without overwriting."""
-    source_directory.verify()
-    destination_directory.verify()
-    if (
-        expected_source_identity is not None
-        and entry_identity(source_directory, source_name) != expected_source_identity
-    ):
-        raise FileNotFoundError(errno.ENOENT, "Catalog source identity changed", source_name)
+    """Perform one native no-replacement rename between already bound parents."""
     library = ctypes.CDLL(None, use_errno=True)
     rename = getattr(library, "renameat2", None)
     flags = 1  # Linux RENAME_NOREPLACE
@@ -222,6 +214,30 @@ def move_without_replacement(
     os.fsync(destination_directory.descriptor)
     if source_directory.descriptor != destination_directory.descriptor:
         os.fsync(source_directory.descriptor)
+
+
+def move_without_replacement(
+    source_name: str,
+    destination_name: str,
+    *,
+    source_directory: BoundDirectory,
+    destination_directory: BoundDirectory,
+    expected_source_identity: Optional[EntryIdentity] = None,
+) -> None:
+    """Atomically move one entry between bound parents without overwriting."""
+    source_directory.verify()
+    destination_directory.verify()
+    if (
+        expected_source_identity is not None
+        and entry_identity(source_directory, source_name) != expected_source_identity
+    ):
+        raise FileNotFoundError(errno.ENOENT, "Catalog source identity changed", source_name)
+    _native_move_without_replacement(
+        source_name,
+        destination_name,
+        source_directory=source_directory,
+        destination_directory=destination_directory,
+    )
     source_directory.verify()
     destination_directory.verify()
     if (
@@ -229,6 +245,15 @@ def move_without_replacement(
         and entry_identity(destination_directory, destination_name)
         != expected_source_identity
     ):
+        try:
+            _native_move_without_replacement(
+                destination_name,
+                source_name,
+                source_directory=destination_directory,
+                destination_directory=source_directory,
+            )
+        except (FileExistsError, FileNotFoundError, NotImplementedError, OSError):
+            pass
         raise FileNotFoundError(errno.ENOENT, "Catalog source identity changed", source_name)
 
 
@@ -524,21 +549,19 @@ def _validate_recovery_content(
                 )
             continue
         if backup_digest is not None:
-            if backup_digest != record["old_digest"] and record["state"] != "pending":
+            if backup_digest != record["old_digest"]:
                 raise CatalogRecoveryError(
                     "Catalog recovery backup does not match transaction intent"
                 )
             if (
                 target_digest is not None
-                and target_digest != record["new_digest"]
-                and record["state"] != "pending"
+                and target_digest not in {record["old_digest"], record["new_digest"]}
+                and record["state"] == "backed_up"
             ):
                 raise CatalogRecoveryError(
                     "Catalog recovery target does not match transaction intent"
                 )
-        elif target_digest is None or (
-            target_digest != record["old_digest"] and record["state"] != "pending"
-        ):
+        elif target_digest is None:
             raise CatalogRecoveryError("Catalog recovery pre-update content is unavailable")
 
 
@@ -551,7 +574,7 @@ def _retain_published_for_recovery(
     target_directory: BoundDirectory,
     removed_directory: BoundDirectory,
     failure_injector: RecoveryInjector,
-) -> None:
+) -> bool:
     """Move published bytes to transaction evidence without consuming a replacement."""
     from cafe.catalogs.resolver import content_digest
 
@@ -569,11 +592,16 @@ def _retain_published_for_recovery(
             destination_directory=removed_directory,
             expected_source_identity=target_identity,
         )
-    except (FileExistsError, FileNotFoundError) as exc:
+    except FileExistsError as exc:
+        raise OSError("published content changed before rollback removal") from exc
+    except FileNotFoundError as exc:
+        if entry_exists(target_directory, target.name):
+            if content_digest(target) != expected_digest:
+                return True
         raise OSError("published content changed before rollback removal") from exc
     removed_directory.verify()
     if content_digest(removed) == expected_digest:
-        return
+        return False
     removed_identity = entry_identity(removed_directory, removed.name)
     try:
         move_without_replacement(
@@ -583,9 +611,11 @@ def _retain_published_for_recovery(
             destination_directory=target_directory,
             expected_source_identity=removed_identity,
         )
-    except Exception as exc:
+    except (FileExistsError, FileNotFoundError) as exc:
+        if entry_exists(target_directory, target.name):
+            return True
         raise OSError("intervening target was retained as recovery evidence") from exc
-    raise OSError("published content changed before rollback removal")
+    return True
 
 
 def recover_catalog_transaction(
@@ -680,44 +710,10 @@ def recover_catalog_transaction(
                 target_digest = content_digest(target) if target_exists else None
                 backup_digest = content_digest(backup) if backup_exists else None
 
-                pending_external = record["state"] == "pending" and (
-                    (
-                        record["old_digest"] == "missing"
-                        and target_digest not in {None, record["new_digest"]}
-                    )
-                    or (
-                        record["old_digest"] != "missing"
-                        and (
-                            backup_digest not in {None, record["old_digest"]}
-                            or (
-                                target_digest not in {
-                                    None,
-                                    record["old_digest"],
-                                    record["new_digest"],
-                                }
-                            )
-                        )
-                    )
-                )
-                if pending_external:
-                    if target_exists:
-                        preserved.append(entry_id)
-                        continue
-                    if not backup_exists:
-                        raise OSError("concurrent Global content is unavailable")
-                    backup_identity = entry_identity(backup_directory, backup.name)
-                    try:
-                        move_without_replacement(
-                            backup.name,
-                            target.name,
-                            source_directory=backup_directory,
-                            destination_directory=target_directory,
-                            expected_source_identity=backup_identity,
-                        )
-                    except (FileExistsError, FileNotFoundError) as exc:
-                        raise OSError(
-                            "concurrent Global content changed during recovery"
-                        ) from exc
+                expected_target_digests = {record["new_digest"]}
+                if record["old_digest"] != "missing":
+                    expected_target_digests.add(record["old_digest"])
+                if target_digest is not None and target_digest not in expected_target_digests:
                     preserved.append(entry_id)
                     continue
 
@@ -727,7 +723,7 @@ def recover_catalog_transaction(
                     raise OSError("removed publication evidence does not match intent")
 
                 if target_exists and backup_exists:
-                    _retain_published_for_recovery(
+                    concurrent_content_preserved = _retain_published_for_recovery(
                         target,
                         removed,
                         expected_digest=record["new_digest"],
@@ -736,13 +732,16 @@ def recover_catalog_transaction(
                         removed_directory=removed_directory,
                         failure_injector=failure_injector,
                     )
+                    if concurrent_content_preserved:
+                        preserved.append(entry_id)
+                        continue
                     target_exists = False
 
                 if record["old_digest"] == "missing":
                     if backup_exists:
                         raise OSError("unexpected backup for a previously missing entry")
                     if target_exists:
-                        _retain_published_for_recovery(
+                        concurrent_content_preserved = _retain_published_for_recovery(
                             target,
                             removed,
                             expected_digest=record["new_digest"],
@@ -751,6 +750,9 @@ def recover_catalog_transaction(
                             removed_directory=removed_directory,
                             failure_injector=failure_injector,
                         )
+                        if concurrent_content_preserved:
+                            preserved.append(entry_id)
+                            continue
                     target_directory.verify()
                     if entry_exists(target_directory, target.name):
                         raise OSError("previously missing target was not removed")

@@ -12,6 +12,7 @@ import pytest
 
 import cafe.catalogs.resolver as resolver_module
 import cafe.catalogs.sync as sync_module
+import cafe.catalogs.transactions as transactions_module
 from cafe.agents.manager import AgentManager
 from cafe.catalogs.migration import AgentSnapshotMigrator
 from cafe.catalogs.resolver import (
@@ -930,6 +931,48 @@ def test_catalog_reader_rejects_unsafe_recovery_journals_before_mutation(
     assert content_digest(target) == original_digest
 
 
+def test_catalog_reader_rejects_unbound_pending_backup_before_mutation(
+    tmp_path: Path,
+) -> None:
+    global_root = tmp_path / "global"
+    transaction = global_root / ".catalog-transactions" / "unbound-pending-backup"
+    approved_old = _entry(
+        tmp_path / "approved-old",
+        CatalogKind.PLAYBOOK,
+        "standard",
+        "approved-old",
+    )
+    approved_new = _entry(
+        tmp_path / "approved-new",
+        CatalogKind.PLAYBOOK,
+        "standard",
+        "approved-new",
+    )
+    unbound_backup = _entry(
+        transaction / "backups",
+        CatalogKind.PLAYBOOK,
+        "standard",
+        "unbound-backup",
+    )
+    unbound_digest = content_digest(unbound_backup)
+    _write_recovery_journal(
+        transaction,
+        {
+            "entry_id": "playbook:standard",
+            "relative_path": "playbooks/standard.yaml",
+            "old_digest": content_digest(approved_old),
+            "new_digest": content_digest(approved_new),
+            "state": "pending",
+        },
+    )
+
+    with pytest.raises(CatalogRecoveryError):
+        _recovery_reader(tmp_path, global_root).resolve(CatalogKind.PLAYBOOK, "standard")
+
+    assert not (global_root / "playbooks" / "standard.yaml").exists()
+    assert content_digest(unbound_backup) == unbound_digest
+
+
 @pytest.mark.parametrize("symlink_level", ["transactions-root", "transaction", "journal"])
 def test_catalog_reader_rejects_symlinked_transaction_ancestry_before_mutation(
     tmp_path: Path, symlink_level: str
@@ -1289,6 +1332,67 @@ def test_publication_preserves_global_leaf_replaced_immediately_before_backup(
     assert replaced is True
     assert target.read_bytes() == intervening
     assert content_digest(old_phase) == old_phase_digest
+    receipt = next((global_root / ".catalog-transactions").glob("*/recovery.json"))
+    evidence = json.loads(receipt.read_text(encoding="utf-8"))
+    assert evidence["status"] == "rolled_back"
+    resolved = _recovery_reader(tmp_path, global_root).resolve(
+        CatalogKind.PLAYBOOK,
+        "standard",
+    )
+    assert resolved is not None
+    assert resolved.digest == content_digest(target)
+
+
+def test_rollback_preserves_global_leaf_replaced_inside_source_move(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rollback_started = False
+
+    def fail_after_publish(boundary: str, entry_id: str | None) -> None:
+        nonlocal rollback_started
+        if boundary == "published" and entry_id == "playbook:standard":
+            rollback_started = True
+            raise OSError("trigger rollback")
+
+    service, project, global_root = _service(
+        tmp_path,
+        failure_injector=fail_after_publish,
+    )
+    _entry(project / ".cafe", CatalogKind.PLAYBOOK, "standard", "approved-new")
+    target = _entry(
+        global_root,
+        CatalogKind.PLAYBOOK,
+        "standard",
+        "approved-old",
+    )
+    intervening = b"playbook: {id: standard}\nsteps: {}\nmarker: intervening\n"
+    real_entry_identity = transactions_module.entry_identity
+    rollback_target_checks = 0
+
+    def replace_leaf_after_source_check(directory, name):
+        nonlocal rollback_target_checks
+        identity = real_entry_identity(directory, name)
+        if rollback_started and directory.path == target.parent and name == target.name:
+            rollback_target_checks += 1
+            if rollback_target_checks == 2:
+                replacement = target.with_suffix(".replacement")
+                replacement.write_bytes(intervening)
+                replacement.replace(target)
+        return identity
+
+    monkeypatch.setattr(
+        transactions_module,
+        "entry_identity",
+        replace_leaf_after_source_check,
+    )
+    report = service.compare()
+
+    with pytest.raises(CatalogSyncError):
+        service.sync(report.token, ["playbook:standard"])
+
+    assert rollback_target_checks >= 2
+    assert target.read_bytes() == intervening
     receipt = next((global_root / ".catalog-transactions").glob("*/recovery.json"))
     evidence = json.loads(receipt.read_text(encoding="utf-8"))
     assert evidence["status"] == "rolled_back"
