@@ -3,6 +3,16 @@
 本規範從既有 builtin skills（`src/cafe/data/skills/`）抽象而來。新增或修改 skill 時必須遵守；
 若既有 skill 與本規範衝突，以本規範為準並順手修正。
 
+## 目錄
+
+- §1–3：skill 類型、catalog、frontmatter 與 repair boundary
+- §4–6：phase 結構、placeholder、handoff 與 confirmation gate
+- §7–12：shared rules、iteration、resources、語言與 playbook binding
+- §13：驗收 checklist
+- §14–15：plan → execute 與 forward-only plan chain
+- §16：supporting domain skill 選型
+- §17：可中斷／大量工作 phase 的 checkpoint 與 resume
+
 ## 1. Skill 的四種類型與內外之分
 
 | 類型 | 界別 | 用途 | 例子 |
@@ -374,6 +384,8 @@ skill 文件內不要假設只有某一條 playbook 會用它。
 - [ ] planned user approval 同時有 phase routing decision 與 playbook `on.confirm_output`；reactive interruption 未混入 kickoff 候選
 - [ ] 必要工具已集中宣告在 `workflow.required_tools`，所有綁定 step 的 `allowed_tools` 均滿足宣告，選用診斷工具沒有誤列為必要工具
 - [ ] 若 planned gate set 有變更，已執行 `cafe playbook confirmation-gates <id>` 並回報 issue contract 需要重新確認
+- [ ] 多 target、長時間、live API、subagent 或反覆 review phase 已依 §17 定義與 output/downstream/publish contract 相容的 durable progress owner、per-target/stage dependency fingerprints、bounded unit、evidence-backed resume 與 final sweep；沒有把 runtime checklist 當 per-target ledger
+- [ ] 若修正要套用既有 iteration，critical resume algorithm 位於 `SKILL.md`，而非只新增 `execution_steps_*`；已說明舊 `checklist.md` 不會重建，且 migration 不會把未有 receipt 的 review/approval 猜成完成
 
 ## 14. Plan → Execute phase pair 的 artifact contract
 
@@ -546,3 +558,110 @@ domain procedure。確認的是一份完整、具體的 selection matrix；不�
   Skill，對這些尚未解決的 CLI 依序評估開源或自行撰寫 fallback，併入同一份 user-confirmed selection matrix。
 - Runtime 只負責安裝、啟用與執行已固定的 Skill 組合；不搜尋網路、不下載 mutable
   latest、不猜測替代品，也不需要新增 UI Design、Spec、Review 等 domain-specific core 分支。
+
+## 17. 可中斷與大量工作 phase 的 checkpoint/resume contract
+
+只要 phase 有下列任一特徵，就視為 **interruption-prone**，authoring 時必須先設計 resume，不能等第一次 rate limit 才補：
+
+- 一輪處理多個可獨立識別的 target（檔案、dataset、URL、客戶、測試案例等）；
+- 依賴 live API、網路、subagent、長時間轉檔或反覆 review loop；
+- 正常工作量可能超過一次 agent CLI/provider session；
+- 中斷後若從頭執行，會重複昂貴查證、遠端 mutation 或大量文件改寫。
+
+簡單、單一、可快速原子完成的 phase 不必硬加 ledger。判準不是 phase 名稱，而是中斷後的重工與錯誤風險。
+
+### 17.1 先定義 progress owner 與生命週期
+
+Runtime `checklist.md` 是 **單一 phase iteration 的 procedure completion gate**。它回答「這輪是否遵守完 phase 程序」，不適合作為 N 個 targets 各做到哪裡的 resume ledger，也不能假設在同一 iteration 重入時會因 phase source 更新而自動重建。
+
+先讀 phase 的 output template、downstream consumers、finalizer 與 publish hooks，再依需要恢復的範圍選擇持久位置：
+
+| 恢復範圍／output contract | progress owner | 注意事項 |
+| --- | --- | --- |
+| 同一 iteration，且 output schema、所有 consumers/finalizers/publish hooks 明確允許 partial 與 final ledger | `{output_file}` 內的 structured progress section | evidence 必須 sanitized；finalization 依宣告保留或安全轉換 ledger |
+| 同一 iteration，但 output 是 exact-shape、會直接公開，或 consumer/hook 不接受額外 section | playbook 明確宣告的 artifact，或 domain-owned workspace ledger | 不得把 ledger 塞進 `{output_file}`；final artifact 保持 exact/public contract |
+| 跨 correction iterations | playbook 明確宣告並傳遞的 artifact，或 domain-owned workspace ledger | 必須有明確 input/output contract；不要靠猜上一輪 output path |
+| plan → execute implementation tasks | `{plan_file}` 的 task checkboxes | 依 §14 原地更新；不要再複製一份 progress sidecar |
+
+`{output_file}` 不是無條件預設。若 final artifact 有 exact ordered sections、machine schema、public publication 或會被 hook 直接消費，只有 contract 明確允許 ledger 以及安全 finalization 時才能使用；否則另選 declared/domain-owned owner。Ledger evidence 只放穩定、必要、已清理的 receipt/identifier，不放 credential、token、raw API error 或不需要公開的內部路徑。
+
+不要建立未在 skill/playbook 說明的隱藏 runtime sidecar。若同一 progress transformation 會反覆執行、row 很多或格式容易寫壞，提供 phase-owned idempotent script，以 structured input/output 驗證 ledger；script 仍不能把 generated artifact 變成 authoring source of truth。Finalization 必須明寫何時、如何產生合法 final artifact，以及 digest 的 algorithm、scope 與 scope/projection schema version。Separate ledger 對完整 final artifact bytes 計算 digest；embedded ledger 對排除 ledger 與 finalization metadata 的 canonical domain-payload projection 計算 digest，不得對含 digest 欄位的整個檔案做自我參照 hash。所有 rows 與 global validation 完成後，依該 scope 持久化 final artifact 與 `finalized` digest receipt；resume 必須用同一 versioned scope 重算驗證。唯一 ledger 必須保留到 checklist、baton、handoff 與 runtime completion 都已 durable；phase agent 不得因已產生 final artifact 就移除或覆寫唯一 ledger，也不得假設自己寫完 baton 就能觀察 runtime 已成功完成。清理或封存只能由 post-success runtime/host hook，或後續 retention policy 在 durable completion 後執行。
+
+### 17.2 最小 ledger contract
+
+Ledger 至少記錄：
+
+- schema/version，讓後續 skill revision 能辨識舊格式；
+- run-context fingerprint（便於辨識整輪環境，但不能單獨證明某個 row 仍有效）；
+- 完整、排序、穩定的 target set；
+- 每個 target 的 stages 與 `pending`/`done` 狀態；
+- 每個 target/stage 的 dependency fingerprint：涵蓋該 stage 實際讀取的 tracked、untracked、dirty workspace content，以及 mutable API/input 的穩定 version、ETag、content hash 或 receipt；單一 Git HEAD 不足以代表 dirty 或 target-specific inputs；
+- 每個 `done` stage 的 evidence/receipt；
+- 跨 target final sweep 或整體發布狀態。
+- finalization receipt：`finalized` 狀態、digest algorithm、scope、scope/projection schema version 與 digest；separate ledger 的 scope 是完整 artifact bytes，embedded ledger 的 scope 是排除 ledger/finalization metadata 的 canonical domain payload。
+
+可用 Markdown table 或 JSON；格式必須 deterministic，且 partial state 本身可安全讀回。例如：
+
+```markdown
+## Durable progress
+
+- Schema: `1`
+- Run-context fingerprint: `<context-hash>`
+- Target set: `<stable sorted identifiers>`
+- Global final sweep: `pending`
+
+| target | stage | dependency fingerprint | status | evidence |
+| --- | --- | --- | --- | --- |
+| `target-a` | acquire | `sha256:<relevant-input-content>` | done | `sanitized receipt id` |
+| `target-a` | validate | `sha256:<produced-files+validator-version>` | done | `validator exit 0` |
+| `target-a` | review | `sha256:<reviewed-files+review-contract>` | pending | - |
+```
+
+`done` 不是「看起來有檔案」的同義詞。每個 stage 要先定義 dependency set 與可接受 evidence；subjective review、human approval、push/import/publish 等外部 mutation 必須有逐 target 或整體 receipt，不能由本機檔案存在推論。若 ledger 可能進入 downstream 或公開輸出，evidence 必須只含 sanitized identifiers。
+
+### 17.3 Bounded execution 與 checkpoint timing
+
+- 定義一個 bounded unit，例如一次 1 個 target 的 acquire/produce/validate，或一次最多 3 個 targets 的 read-only review。
+- 每完成一個 stage，先確認 evidence 已落盤，再立即更新 ledger，才進入下一個 stage/target。不要等全部 targets 完成才第一次寫 progress。
+- 選擇 unit 大小時給出 interruption budget：provider 無預警終止時，最多只重做目前 unit。大量工作預設最多損失 1 個 target；若 batch 較大，必須說明為何可接受。
+- 遠端 mutation 仍依 idempotent script/receipt 規則；checkpoint 不能把「已送出但未 read-back」標成 done。
+- 所有 rows 完成後再跑 global final sweep。Sweep 命中問題時只降級受影響 rows，修正並重新驗證，不清空無關進度。
+
+### 17.4 Resume algorithm
+
+每次進入 phase，先讀 progress owner，再做任何廣泛掃描或網路查證：
+
+1. 重新解析 current run context、完整 target set，以及每個 target/stage 的 dependency fingerprints；fingerprint 必須納入相關 dirty/untracked content 與 mutable input identity，不能只讀 Git HEAD。
+2. 只有 stage dependency fingerprint 相同且 evidence existence/integrity check 通過時，才信任該 `done` stage；相符就跳過，不為了重新取得上下文而重跑昂貴工作。若 ledger 已標記 `finalized`，依 receipt 記錄的 algorithm 與 scope/projection version 重算完全相同的 bytes/projection；不相符或 projection version 無法解析時，finalization 降回 `pending`。
+3. dependency 或 target membership 改變且 impact 可由已宣告 dependency graph deterministic 映射時，只把受影響 row/stage 降回 `pending`。若只有 global fingerprint、dependency set 不完整或 impact 無法證明，必須降級所有依賴該 changed/ambiguous input 的 rows，不得假設其他 completion 仍有效。
+4. 從第一個 `pending` stage 續跑；每個 bounded unit 完成即 checkpoint。
+5. 依 §17.1 的 output contract finalization：允許 ledger 的 artifact 才可包含 final ledger；其 digest 只涵蓋排除 ledger/finalization metadata 的 versioned canonical domain-payload projection。Exact/public output 從 separate progress owner 產生合法 final artifact，該 ledger 的 digest 涵蓋完整 final artifact bytes。持久化 artifact 與 ledger 的 `finalized` receipt 時記錄 algorithm、scope/version 與 digest，避免 embedded digest 自我參照；即使 checklist、baton 或 handoff 已寫出，phase agent 也不得刪除或取代唯一 ledger。Ledger 保留到 runtime 已 durable 記錄 phase completion，之後只由 post-success runtime/host hook 或 retention policy 清理或封存。
+
+Phase contract 負責讓 retry 安全、單調前進，不負責 provider retry scheduling。不要在 phase 內加入無限 sleep/retry loop；何時再次啟動 `cafe make`、完成 durable retry task 或等待額度恢復，屬 driver/runtime。
+
+### 17.5 為既有 in-flight iteration 加入 resumability
+
+舊版 phase 可能已建立許多 partial deliverables，但沒有 ledger。修正時必須提供一次性的 migration：
+
+1. phase agent 先初始化所有 targets/stages 為 `pending` 並立即寫入 progress owner；外層 repair agent 不手改 generated issue artifacts。
+2. 只用 deterministic local evidence 回填，例如 profile JSON 可解析且不含 error、必要檔案存在、validator exit 0；回填 `done` 時同時記錄該 stage 的 current dependency fingerprint，不能只補 status。
+3. 每完成一個 target 的 migration 判定就 checkpoint，避免 migration 本身再次 all-or-nothing。
+4. 沒有明確 receipt 的 consumer review、human confirmation、remote push/import/publish 一律維持 `pending`。
+5. migration 後只處理 pending stages，不因 runtime checklist 仍未勾選就重掃已回填完成的 rows。
+
+CAFE 會保留既有 iteration 的 `checklist.md`；`references/execution_steps_*` 的新增項目通常只會出現在新產生的 checklist。因此：
+
+- 會保護當前 in-flight iteration 的 critical resume algorithm 必須放在 `SKILL.md` always-on instructions；可以同步更新 checklist reference，供新 iterations 強制檢查，但不能只改 reference。
+- 不得直接編輯既有 `.cafe/issues/.../checklist.md` 來偽造 contract rollout。若非得讓新 checklist gate 套用，應由 user 授權建立新 iteration/reset，或把需求分類為 runtime migration/core enhancement；先評估 artifact 損失。
+
+### 17.6 Source、activation 與驗證
+
+Repair 仍只改 writable source of truth（project `.cafe/skills/<name>/` 或 authorized CAFE builtin source），不改 `.claude/skills/`、其他 CLI-native install、global copy 或 generated issue files。
+
+驗證至少包含：
+
+1. `cafe skill validate --strict`，以及受影響 playbook 的 `cafe playbook validate <id> --strict`。
+2. `cafe skill list`/`show` 確認 resolved source 是剛修改的 project/builtin skill，沒有被另一 catalog shadow。
+3. 對既有 iteration，讓一次 execution attempt 至少走到 phase preparation；runtime 會重新安裝 resolved skill，即使 provider 隨後 rate-limit。之後在 worktree-local CLI-native path（例如 `.claude/skills/<name>/SKILL.md`）read-only 搜尋新版 unique marker，確認 active prompt skill 已更新。不得在該 install 上修檔。
+4. 說明舊 runtime checklist 是否仍是上一版；若是，確認 critical behavior 已在 active `SKILL.md`，且沒有錯誤宣稱 checklist gate 已 rollout。
+5. 用至少四個 scenario audit 驗收：大量 targets 中斷後只重做一個 bounded unit；legacy partial files 能 evidence-only migration；exact/public output 不會被 ledger 汙染；單一快速 phase 不會被迫承擔不必要 ledger。
