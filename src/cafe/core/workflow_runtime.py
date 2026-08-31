@@ -38,7 +38,11 @@ from cafe.core.human_task_notifications import (
     sanitize_human_task_metadata,
 )
 from cafe.core.human_task_records import HumanTask, HumanTaskRecordStore, HumanTaskStatus
-from cafe.core.human_tasks import resolve_step_human_task
+from cafe.core.human_tasks import (
+    AGENT_EXECUTION_INTERRUPTED_TRIGGER,
+    agent_execution_interrupted_human_task,
+    resolve_step_human_task,
+)
 from cafe.core.playbook import resolve_step_behavior
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import (
@@ -635,6 +639,101 @@ class BlackboardWorkflowRuntime:
                 "step": current_step,
                 "reason": reason,
             },
+        )
+
+    @staticmethod
+    def _is_agent_execution_interruption(reason: str) -> bool:
+        """Whether an agent process ended without a trusted completion result."""
+        return reason == "agent_error" or reason.startswith("agent_")
+
+    def _pause_for_agent_execution_interruption(
+        self,
+        *,
+        current_step: str,
+        reason: str,
+        runtime: str,
+    ) -> PlaybookRunResult:
+        """Create one notified HumanTask instead of inferring completion from partial output."""
+        records = HumanTaskRecordStore(self.issue_dir)
+        iteration = self._human_task_iteration(current_step)
+        policy, binding = agent_execution_interrupted_human_task(step_name=current_step)
+        self.blackboard_store.update_handoff_contract(
+            self.blackboard,
+            from_step=current_step,
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.MANUAL_HANDOFF,
+            status_code="INTERRUPTED",
+            source="workflow.agent_execution_interrupted",
+        )
+        contract = self.blackboard.handoff_contract
+        if contract is None:
+            raise RuntimeError("agent interruption did not create a handoff contract")
+        materialization = records.materialize_with_status(
+            workflow_id=self.blackboard.workflow_id,
+            step=current_step,
+            iteration=iteration,
+            trigger=AGENT_EXECUTION_INTERRUPTED_TRIGGER,
+            policy_id=policy.id,
+            prompt=policy.prompt,
+            expected_result=policy.model_dump(mode="json"),
+            continuations=binding.outcomes,
+            assignee_type="user",
+            handoff_key=self._human_task_handoff_key(contract),
+        )
+        task = materialization.task
+        self._notify_new_human_task(task)
+        self.blackboard_store.set_current_step(self.blackboard, "user")
+        if materialization.created:
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "agent_execution_task_materialized",
+                {
+                    "step": current_step,
+                    "reason": reason,
+                    "task_id": task.id,
+                    "trigger": AGENT_EXECUTION_INTERRUPTED_TRIGGER,
+                },
+            )
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "workflow_paused",
+            {
+                "step": current_step,
+                "status_code": "INTERRUPTED",
+                "reason": reason,
+                "runtime": runtime,
+                "task_id": task.id,
+            },
+        )
+        return PlaybookRunResult(
+            final_step=current_step,
+            final_status_code=f"INTERRUPTED:{reason}",
+            completed=False,
+            detail=task.id,
+        )
+
+    def _has_agent_execution_interruption_task(self, *, current_step: str) -> bool:
+        """Keep a system-created retry task authoritative over legacy reconciliation."""
+        iteration = self._human_task_iteration(current_step)
+        try:
+            if any(
+                task.workflow_id == self.blackboard.workflow_id
+                and task.step == current_step
+                and task.iteration == iteration
+                and task.trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+                and task.status in {HumanTaskStatus.PENDING, HumanTaskStatus.COMPLETED}
+                for task in HumanTaskRecordStore(self.issue_dir).tasks()
+            ):
+                return True
+        except Exception:
+            # The event is still sufficient to keep a newly-created task authoritative
+            # if its durable record is temporarily unreadable.
+            pass
+        return any(
+            event.event_type == "agent_execution_task_materialized"
+            and event.step == current_step
+            for event in self.blackboard.events
         )
 
     def _load_agent_written_handoff_contract(self, *, current_step: str) -> HandoffContract:
@@ -2275,6 +2374,10 @@ class BlackboardWorkflowRuntime:
     ) -> Optional[PlaybookRunResult]:
         if reason in {"interrupted", "keyboard_interrupt", "publish_error"}:
             return None
+        if self._is_agent_execution_interruption(reason) and (
+            self._has_agent_execution_interruption_task(current_step=current_step)
+        ):
+            return None
 
         result = self._validate_reconciled_handoff(current_step=current_step)
 
@@ -2389,6 +2492,16 @@ class BlackboardWorkflowRuntime:
                         same_invocation_retry=_baton_attempt > 0,
                     )
                 except StepInterrupted as si:
+                    if self._is_agent_execution_interruption(si.reason):
+                        self._rollback_step_visit(
+                            current_step=current_step,
+                            visit_count=visit_count,
+                        )
+                        return self._pause_for_agent_execution_interruption(
+                            current_step=current_step,
+                            reason=si.reason,
+                            runtime=runtime_label,
+                        )
                     reconciled = self._try_reconcile_interrupted_step(
                         current_step=current_step,
                         runtime=runtime_label,
@@ -2667,6 +2780,16 @@ class BlackboardWorkflowRuntime:
                         same_invocation_retry=_baton_attempt > 0,
                     )
                 except StepInterrupted as si:
+                    if self._is_agent_execution_interruption(si.reason):
+                        self._rollback_step_visit(
+                            current_step=current_step,
+                            visit_count=visit_count,
+                        )
+                        return self._pause_for_agent_execution_interruption(
+                            current_step=current_step,
+                            reason=si.reason,
+                            runtime=runtime_label,
+                        )
                     reconciled = self._try_reconcile_interrupted_step(
                         current_step=current_step,
                         runtime=runtime_label,

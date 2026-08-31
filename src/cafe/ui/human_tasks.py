@@ -24,12 +24,14 @@ from cafe.core.human_task_records import (
     TaskResult,
 )
 from cafe.core.human_tasks import (
+    AGENT_EXECUTION_INTERRUPTED_TRIGGER,
     HumanTaskBinding,
     HumanTaskCompletion,
     HumanTaskPolicy,
     HumanTaskPolicyError,
     HumanTaskQuestion,
     HumanTaskRejection,
+    agent_execution_interrupted_human_task,
     resolve_human_task_continuation,
     validate_human_task_completion,
 )
@@ -50,6 +52,8 @@ def resolve_step_human_task(
     iteration: int = 1,
 ) -> tuple[HumanTaskPolicy, HumanTaskBinding]:
     """UI adapter that preserves the existing configurable skill-loader boundary."""
+    if trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER:
+        return agent_execution_interrupted_human_task(step_name=step_name)
     return _resolve_step_human_task(
         playbook_data=playbook_data,
         step_name=step_name,
