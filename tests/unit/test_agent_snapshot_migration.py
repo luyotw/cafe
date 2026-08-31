@@ -351,6 +351,90 @@ def test_interrupted_retirement_resumes_from_durable_manifest(tmp_path: Path) ->
     assert repeated == result
 
 
+def test_retirement_preserves_source_replaced_after_atomic_move(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    builtin = tmp_path / "builtin"
+    source = _agent(
+        project / ".cafe" / "agents" / "developer" / "David.md",
+        "David",
+        "approved",
+    )
+    _agent(builtin / "agents" / "developer" / "David.md", "David", "approved")
+    replaced = False
+
+    def replace_after_move(boundary: str, _entry_id: str | None) -> None:
+        nonlocal replaced
+        if boundary == "after_retire_move" and not replaced:
+            replaced = True
+            _agent(source, "David", "intervening")
+
+    resolver = CatalogResolver(
+        project_root=project,
+        canonical_root=project,
+        global_root=tmp_path / "global",
+        builtin_root=builtin,
+    )
+    migrator = AgentSnapshotMigrator(
+        resolver,
+        is_tracked=lambda _path: False,
+        failure_injector=replace_after_move,
+    )
+    preview = migrator.preview()
+
+    with pytest.raises(StaleMigrationDecision):
+        migrator.apply(preview.token, {"agent:developer/David": "retire"})
+
+    manifest = (
+        project / ".cafe" / "migrations" / "agent-snapshots" / preview.token[:16] / "manifest.json"
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    retired = Path(payload["items"][0]["retired_path"])
+    assert replaced
+    assert "intervening" in source.read_text(encoding="utf-8")
+    assert "approved" in retired.read_text(encoding="utf-8")
+    assert resolver.resolve(CatalogKind.AGENT, "developer/David").source == "project"
+
+
+def test_retirement_resumes_when_interrupted_after_atomic_move(tmp_path: Path) -> None:
+    interrupted = False
+
+    def interrupt_after_move(boundary: str, _entry_id: str | None) -> None:
+        nonlocal interrupted
+        if boundary == "after_retire_move" and not interrupted:
+            interrupted = True
+            raise OSError("injected interruption after atomic move")
+
+    project = tmp_path / "project"
+    builtin = tmp_path / "builtin"
+    source = _agent(
+        project / ".cafe" / "agents" / "developer" / "David.md",
+        "David",
+        "approved",
+    )
+    _agent(builtin / "agents" / "developer" / "David.md", "David", "approved")
+    migrator = AgentSnapshotMigrator(
+        CatalogResolver(
+            project_root=project,
+            canonical_root=project,
+            global_root=tmp_path / "global",
+            builtin_root=builtin,
+        ),
+        is_tracked=lambda _path: False,
+        failure_injector=interrupt_after_move,
+    )
+    preview = migrator.preview()
+    decisions = {"agent:developer/David": "retire"}
+
+    with pytest.raises(OSError, match="atomic move"):
+        migrator.apply(preview.token, decisions)
+
+    result = migrator.apply(preview.token, decisions)
+
+    assert interrupted
+    assert not source.exists()
+    assert result.retired[0].is_file()
+
+
 def test_interrupted_fallback_validation_restores_project_authority_on_resume(
     tmp_path: Path,
 ) -> None:

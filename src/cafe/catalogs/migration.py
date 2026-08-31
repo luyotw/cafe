@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -137,21 +139,46 @@ def _move_without_replacement(
     destination_directory: int,
     conflict_message: str,
 ) -> None:
-    """Move one filesystem object without overwriting a concurrent destination."""
-    try:
-        os.link(
-            source_name,
-            destination_name,
-            src_dir_fd=source_directory,
-            dst_dir_fd=destination_directory,
-            follow_symlinks=False,
+    """Atomically move one object without overwriting a concurrent destination."""
+    library = ctypes.CDLL(None, use_errno=True)
+    rename = getattr(library, "renameat2", None)
+    flags = 1  # Linux RENAME_NOREPLACE
+    if rename is None:
+        rename = getattr(library, "renameatx_np", None)
+        flags = 4  # macOS RENAME_EXCL
+    if rename is None:
+        raise MigrationDecisionError(
+            "Atomic no-replacement rename is unavailable on this platform"
         )
-    except FileExistsError as exc:
-        raise StaleMigrationDecision(conflict_message) from exc
-    except FileNotFoundError as exc:
-        raise StaleMigrationDecision("Migration source changed before move") from exc
+
+    rename.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    rename.restype = ctypes.c_int
+    result = rename(
+        source_directory,
+        os.fsencode(source_name),
+        destination_directory,
+        os.fsencode(destination_name),
+        flags,
+    )
+    if result != 0:
+        error = ctypes.get_errno()
+        if error in {errno.EEXIST, errno.ENOTEMPTY}:
+            raise StaleMigrationDecision(conflict_message)
+        if error == errno.ENOENT:
+            raise StaleMigrationDecision("Migration source changed before move")
+        if error in {errno.EINVAL, errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP}:
+            raise MigrationDecisionError(
+                "Filesystem does not support atomic no-replacement rename"
+            )
+        raise OSError(error, os.strerror(error))
+
     os.fsync(destination_directory)
-    os.unlink(source_name, dir_fd=source_directory)
     os.fsync(source_directory)
 
 
@@ -791,6 +818,7 @@ class AgentSnapshotMigrator:
                                 f"Retirement destination changed before move: {entry_id}"
                             ),
                         )
+                        self.failure_injector("after_retire_move", entry_id)
                         destination_matches = (
                             self._record_path_exists(destination)
                             and _filesystem_identity(destination.lstat()) == approved_identity
