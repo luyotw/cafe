@@ -185,6 +185,54 @@ def test_retirement_fails_closed_when_source_is_swapped_at_the_move_boundary(
     assert payload["items"][0]["state"] == "pending"
 
 
+def test_retirement_fails_closed_when_fallback_changes_at_the_move_boundary(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    source = _agent(
+        project / ".cafe" / "agents" / "developer" / "David.md",
+        "David",
+        "approved",
+    )
+    fallback = _agent(
+        global_root / "agents" / "developer" / "David.md",
+        "David",
+        "approved",
+    )
+    changed = False
+
+    def change_fallback(boundary: str, entry_id: str | None) -> None:
+        nonlocal changed
+        if boundary == "before_retire" and not changed:
+            changed = True
+            _agent(fallback, "David", "replacement")
+
+    resolver = CatalogResolver(
+        project_root=project,
+        canonical_root=project,
+        global_root=global_root,
+        builtin_root=tmp_path / "builtin",
+    )
+    migrator = AgentSnapshotMigrator(
+        resolver,
+        is_tracked=lambda _path: False,
+        failure_injector=change_fallback,
+    )
+    preview = migrator.preview()
+
+    with pytest.raises(StaleMigrationDecision):
+        migrator.apply(preview.token, {"agent:developer/David": "retire"})
+
+    manifest = (
+        project / ".cafe" / "migrations" / "agent-snapshots" / preview.token[:16] / "manifest.json"
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert source.is_file()
+    assert payload["status"] == "in_progress"
+    assert payload["items"][0]["state"] == "pending"
+
+
 def test_apply_requires_a_decision_for_every_legacy_file(tmp_path: Path) -> None:
     migrator, project, _builtin = _migrator(tmp_path)
     _agent(project / ".cafe" / "agents" / "pm" / "Roger.md", "Roger", "custom")

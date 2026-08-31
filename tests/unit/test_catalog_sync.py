@@ -15,7 +15,9 @@ import cafe.catalogs.sync as sync_module
 from cafe.agents.manager import AgentManager
 from cafe.catalogs.migration import AgentSnapshotMigrator
 from cafe.catalogs.resolver import (
+    MAX_CATALOG_OPERATION_ENTRIES,
     CatalogKind,
+    CatalogOperationLimitError,
     CatalogResolver,
     CatalogValidationError,
     content_digest,
@@ -87,6 +89,25 @@ def test_combined_comparison_is_content_bound_and_silent_without_project_entries
     original_token = report.token
     _entry(global_root, CatalogKind.AGENT, "developer/David", "changed")
     assert service.compare().token != original_token
+
+
+def test_combined_comparison_rejects_an_operation_over_the_shared_entry_limit(
+    tmp_path: Path,
+) -> None:
+    service, project, global_root = _service(tmp_path)
+    for index in range(MAX_CATALOG_OPERATION_ENTRIES + 1):
+        _entry(
+            project / ".cafe",
+            CatalogKind.PHASE,
+            f"phase-{index:03d}",
+            "project",
+        )
+
+    with pytest.raises(CatalogOperationLimitError) as raised:
+        service.compare(kinds=[CatalogKind.PHASE])
+
+    assert raised.value.limit == MAX_CATALOG_OPERATION_ENTRIES
+    assert not (global_root / ".catalog-transactions").exists()
 
 
 def test_effective_digests_cover_global_and_builtin_only_entries(tmp_path: Path) -> None:
@@ -1175,6 +1196,35 @@ def test_every_transaction_boundary_rolls_back_the_complete_selection(
 
     assert content_digest(global_root / "playbooks" / "standard.yaml") == expected[0]
     assert content_digest(global_root / "skills" / "develop") == expected[1]
+
+
+def test_maximum_accepted_selection_recovers_from_first_stage_failure(
+    tmp_path: Path,
+) -> None:
+    failed = False
+
+    def fail(boundary: str, _entry_id: str | None) -> None:
+        nonlocal failed
+        if boundary == "stage" and not failed:
+            failed = True
+            raise OSError("injected first-stage failure")
+
+    service, project, _global_root = _service(tmp_path, failure_injector=fail)
+    for index in range(MAX_CATALOG_OPERATION_ENTRIES):
+        _entry(
+            project / ".cafe",
+            CatalogKind.PHASE,
+            f"phase-{index:03d}",
+            "project",
+        )
+    report = service.compare(kinds=[CatalogKind.PHASE])
+    selected = [item.entry_id for item in report.differences]
+
+    with pytest.raises(CatalogSyncError):
+        service.sync(report.token, selected, kinds=[CatalogKind.PHASE])
+
+    recovered = service.compare(kinds=[CatalogKind.PHASE])
+    assert len(recovered.differences) == MAX_CATALOG_OPERATION_ENTRIES
 
 
 def test_rollback_failure_retains_bounded_recovery_evidence(tmp_path: Path) -> None:

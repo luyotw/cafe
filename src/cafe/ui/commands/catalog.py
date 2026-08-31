@@ -11,7 +11,11 @@ import yaml
 from rich.console import Console
 
 from cafe.catalogs.migration import AgentSnapshotMigrator
-from cafe.catalogs.resolver import CatalogKind, CatalogResolver
+from cafe.catalogs.resolver import (
+    CatalogKind,
+    CatalogOperationLimitError,
+    CatalogResolver,
+)
 from cafe.catalogs.sync import CatalogSyncError, CatalogSyncService
 from cafe.core.playbook import confirmation_gate_steps
 from cafe.playbooks.loader import PlaybookLoader
@@ -127,6 +131,24 @@ def _print_catalog_report(report) -> None:
     )
 
 
+def _report_catalog_operation_limit(
+    error: CatalogOperationLimitError, *, json_output: bool
+) -> None:
+    if json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "status": "over_budget",
+                    "entry_limit": error.limit,
+                },
+                sort_keys=True,
+            )
+        )
+    else:
+        console.print(f"[red]Error: {error}[/red]")
+
+
 @catalog_app.command(name="check")
 def catalog_check(
     kinds: list[str] = typer.Option(
@@ -143,6 +165,9 @@ def catalog_check(
             kinds=_parse_catalog_kinds(kinds),
             entry_ids=entries or None,
         )
+    except CatalogOperationLimitError as exc:
+        _report_catalog_operation_limit(exc, json_output=json_output)
+        raise typer.Exit(1)
     except (CatalogSyncError, OSError, ValueError) as exc:
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(1)
@@ -207,6 +232,9 @@ def catalog_sync_global(
             kinds=selected_kinds,
             entry_ids=entries or None,
         )
+    except CatalogOperationLimitError as exc:
+        _report_catalog_operation_limit(exc, json_output=json_output)
+        raise typer.Exit(1)
     except (CatalogSyncError, OSError, ValueError) as exc:
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(1)

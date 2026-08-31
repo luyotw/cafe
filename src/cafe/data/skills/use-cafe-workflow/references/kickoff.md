@@ -144,6 +144,8 @@ Before rendering a new contract, and before resuming one that is stale, follow
 `cafe catalog check --json`, then record both bounded results. Identical content
 and a catalog with no eligible project entries are silent. An unavailable
 runtime check is visible and recorded but continues with the installed version.
+A catalog `over_budget` result is incomplete and must be narrowed by kind or
+entry before kickoff continues; it must not be treated as a no-difference result.
 
 Runtime installation and project-to-Global catalog publication are separate
 approval scopes. Bind each decision to its reported comparison token. After an

@@ -21,6 +21,14 @@ class CatalogValidationError(ValueError):
     """Raised when the highest-precedence catalog entry is invalid."""
 
 
+class CatalogOperationLimitError(CatalogValidationError):
+    """Raised when one catalog operation exceeds its durable entry budget."""
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        super().__init__(f"Catalog operation exceeds the {limit}-entry limit")
+
+
 class CatalogKind(str, Enum):
     """Catalog types with stable public identifiers."""
 
@@ -62,6 +70,7 @@ _catalog_lock_state = threading.local()
 MAX_CATALOG_NODES = 10_000
 MAX_CATALOG_BYTES = 64 * 1024 * 1024
 MAX_CATALOG_DEPTH = 64
+MAX_CATALOG_OPERATION_ENTRIES = 512
 
 
 def bounded_directory_names(
@@ -482,26 +491,52 @@ class CatalogResolver:
             raise CatalogValidationError(f"Catalog root is not a real directory: {root}")
         return True
 
-    def _keys_unlocked(self, kind: CatalogKind) -> list[str]:
+    def _keys_unlocked(
+        self,
+        kind: CatalogKind,
+        *,
+        max_entries: Optional[int] = None,
+        operation_limit: Optional[int] = None,
+    ) -> list[str]:
         keys: set[str] = set()
         for _source, root, _layer in self.catalog_roots(kind):
-            keys.update(self._keys_at_root(kind, root))
+            for key in self._keys_at_root(kind, root):
+                if key in keys:
+                    continue
+                if max_entries is not None and len(keys) >= max_entries:
+                    raise CatalogOperationLimitError(operation_limit or max_entries)
+                keys.add(key)
         return sorted(keys)
 
     def keys(self, kind: CatalogKind) -> list[str]:
         with global_catalog_lock(self.global_root):
             return self._keys_unlocked(kind)
 
-    def entries(self, kinds: Optional[Iterable[CatalogKind]] = None) -> list[CatalogEntry]:
+    def entries(
+        self,
+        kinds: Optional[Iterable[CatalogKind]] = None,
+        *,
+        max_entries: Optional[int] = None,
+    ) -> list[CatalogEntry]:
         selected = list(kinds or CatalogKind)
         with global_catalog_lock(self.global_root):
-            return [
-                self._resolve_unlocked(kind, key)
-                for kind in selected
-                for key in self._keys_unlocked(kind)
-            ]
+            results: list[CatalogEntry] = []
+            for kind in selected:
+                remaining = None if max_entries is None else max_entries - len(results)
+                keys = self._keys_unlocked(
+                    kind,
+                    max_entries=remaining,
+                    operation_limit=max_entries,
+                )
+                results.extend(self._resolve_unlocked(kind, key) for key in keys)
+            return results
 
-    def project_entries(self, kinds: Optional[Iterable[CatalogKind]] = None) -> list[CatalogEntry]:
+    def project_entries(
+        self,
+        kinds: Optional[Iterable[CatalogKind]] = None,
+        *,
+        max_entries: Optional[int] = None,
+    ) -> list[CatalogEntry]:
         """Return the effective canonical-plus-active project view only."""
         selected = list(kinds or CatalogKind)
         results: list[CatalogEntry] = []
@@ -509,7 +544,12 @@ class CatalogResolver:
             project_roots = [item for item in self.catalog_roots(kind) if item[0] == "project"]
             keys: set[str] = set()
             for _source, root, _layer in project_roots:
-                keys.update(self._keys_at_root(kind, root))
+                for key in self._keys_at_root(kind, root):
+                    if key in keys:
+                        continue
+                    if max_entries is not None and len(results) + len(keys) >= max_entries:
+                        raise CatalogOperationLimitError(max_entries)
+                    keys.add(key)
             for key in sorted(keys):
                 for _source, root, layer in reversed(project_roots):
                     path = self.candidate_path(kind, key, root)

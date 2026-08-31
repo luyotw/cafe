@@ -10,13 +10,14 @@ import tempfile
 from pathlib import Path
 from typing import Callable, Optional
 
+from cafe.catalogs.resolver import MAX_CATALOG_OPERATION_ENTRIES
+
 
 class CatalogRecoveryError(RuntimeError):
     """Raised before catalog reads when an incomplete transaction cannot recover."""
 
 
 RecoveryInjector = Callable[[str, Optional[str]], None]
-_MAX_TRANSACTION_RECORDS = 512
 _MAX_EVIDENCE_TEXT = 512
 _MAX_JOURNAL_BYTES = 1024 * 1024
 _COMMITTED_CLEANUP_PREFIX = ".committed-"
@@ -187,7 +188,7 @@ def _validated_records(payload: dict[str, object]) -> list[dict[str, str]]:
     if (
         not isinstance(raw_records, list)
         or not raw_records
-        or len(raw_records) > _MAX_TRANSACTION_RECORDS
+        or len(raw_records) > MAX_CATALOG_OPERATION_ENTRIES
     ):
         raise CatalogRecoveryError("Catalog transaction record set is invalid or unbounded")
     records: list[dict[str, str]] = []
@@ -432,7 +433,7 @@ def recover_catalog_transaction(
         "published": published,
         "restored": restored,
         "error": _bounded_text(cause),
-        "rollback_errors": rollback_errors[:_MAX_TRANSACTION_RECORDS],
+        "rollback_errors": rollback_errors[:MAX_CATALOG_OPERATION_ENTRIES],
         "backup_root": str(backup_root),
     }
     payload["status"] = "rollback_incomplete" if rollback_errors else "rolled_back"

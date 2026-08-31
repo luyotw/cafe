@@ -213,6 +213,8 @@ def test_use_cafe_workflow_preflights_runtime_and_all_catalogs_before_execution(
     assert "separate approval scopes" in normalized
     assert "must not be described as current" in normalized
     assert "continues with the installed version" in normalized
+    assert "over_budget" in reference
+    assert "narrow the catalog check" in normalized_lower
     assert "cafe update apply --token" in reference
     assert "cafe catalog sync-global --token" in reference
     assert "re-run both read-only checks" in normalized_lower

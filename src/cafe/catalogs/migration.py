@@ -678,9 +678,10 @@ class AgentSnapshotMigrator:
         source: Path,
         destination: Path,
         digest: str,
+        fallback_digest: str,
         entry_id: str,
     ) -> None:
-        source_root, _key = self._source_root(entry_id, source)
+        source_root, key = self._source_root(entry_id, source)
         self._validate_directory_ancestry(source_root, source.parent, allow_missing=False)
         self._validate_directory_ancestry(
             self.resolver.canonical_root,
@@ -689,6 +690,10 @@ class AgentSnapshotMigrator:
         )
         with _bound_agent_source(source, digest) as approved_identity:
             self.failure_injector("before_retire", entry_id)
+            if self._fallback_digest(key) != fallback_digest:
+                raise StaleMigrationDecision(
+                    f"Agent fallback changed before retirement: {entry_id}"
+                )
             self._validate_directory_ancestry(source_root, source.parent, allow_missing=False)
             self._validate_directory_ancestry(
                 self.resolver.canonical_root,
@@ -762,6 +767,7 @@ class AgentSnapshotMigrator:
             entry_id = str(record["entry_id"])
             source = Path(str(record["path"]))
             digest = str(record["digest"])
+            fallback_digest = str(record["fallback_digest"])
             action = str(record["action"])
             if action == "preserve":
                 if not self._record_path_exists(source) or content_digest(source) != digest:
@@ -771,7 +777,13 @@ class AgentSnapshotMigrator:
             else:
                 destination = Path(str(record["retired_path"]))
                 if source.exists() or source.is_symlink():
-                    self._retire_identity_bound(source, destination, digest, entry_id)
+                    self._retire_identity_bound(
+                        source,
+                        destination,
+                        digest,
+                        fallback_digest,
+                        entry_id,
+                    )
                 elif (
                     not self._record_path_exists(destination)
                     or _retired_content_digest(destination, source) != digest

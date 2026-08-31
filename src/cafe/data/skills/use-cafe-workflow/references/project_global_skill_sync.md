@@ -21,6 +21,10 @@ digests without copying fallback entries into the project.
   installed version.
 - An empty catalog difference list means identical content or no project
   entries are eligible. Stay silent and do not ask a catalog question.
+- A catalog status of `over_budget` is an explicit incomplete preflight, not a
+  no-difference result. Record and report the declared entry limit, do not ask
+  for publication approval, and narrow the catalog check with `--kind` or
+  `--entry` before kickoff continues.
 - When catalog differences exist, show one bounded report covering all three
   catalog kinds and ask one combined catalog decision for the exact selected
   entry IDs.

@@ -569,6 +569,52 @@ def test_catalog_check_defaults_to_all_three_kinds_with_complete_json(
     assert set(payload["effective_digests"]) == {"playbook", "phase", "agent"}
 
 
+def test_catalog_check_json_reports_a_bounded_over_budget_state(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from cafe.catalogs.resolver import MAX_CATALOG_OPERATION_ENTRIES
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
+    )
+    for index in range(MAX_CATALOG_OPERATION_ENTRIES + 1):
+        skill = tmp_path / ".cafe" / "skills" / f"phase-{index:03d}" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text(
+            f"---\nname: phase-{index:03d}\ndescription: project\n---\n",
+            encoding="utf-8",
+        )
+
+    result = runner.invoke(app, ["catalog", "check", "--kind", "phase", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "entry_limit": MAX_CATALOG_OPERATION_ENTRIES,
+        "schema_version": 1,
+        "status": "over_budget",
+    }
+    assert len(result.stdout) < 256
+
+    narrowed = runner.invoke(
+        app,
+        [
+            "catalog",
+            "check",
+            "--kind",
+            "phase",
+            "--entry",
+            "phase:phase-000",
+            "--json",
+        ],
+    )
+    assert narrowed.exit_code == 0, narrowed.stdout
+    assert [item["entry_id"] for item in json.loads(narrowed.stdout)["entries"]] == [
+        "phase:phase-000"
+    ]
+
+
 def test_catalog_check_json_reports_fallback_only_effective_digests(
     tmp_path: Path, monkeypatch
 ) -> None:

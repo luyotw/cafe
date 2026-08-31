@@ -20,8 +20,10 @@ from cafe.catalogs.resolver import (
     MAX_CATALOG_BYTES,
     MAX_CATALOG_DEPTH,
     MAX_CATALOG_NODES,
+    MAX_CATALOG_OPERATION_ENTRIES,
     CatalogEntry,
     CatalogKind,
+    CatalogOperationLimitError,
     CatalogResolver,
     CatalogValidationError,
     bounded_directory_names,
@@ -463,25 +465,47 @@ class CatalogSyncService:
         entry_ids: Optional[Sequence[str]] = None,
     ) -> ComparisonReport:
         selected_kinds = self._normalize_kinds(kinds)
+        if entry_ids is not None and len(entry_ids) > MAX_CATALOG_OPERATION_ENTRIES:
+            raise CatalogOperationLimitError(MAX_CATALOG_OPERATION_ENTRIES)
         requested = None if entry_ids is None else set(entry_ids)
+        requested_identities: dict[str, tuple[CatalogKind, str]] = {}
         if requested is not None:
             if len(requested) != len(entry_ids):
                 raise CatalogSyncError("Duplicate catalog entry filters are not allowed")
             for entry_id in requested:
-                kind, _key = self._parse_entry_id(entry_id)
+                kind, key = self._parse_entry_id(entry_id)
                 if kind not in selected_kinds:
                     raise CatalogSyncError(f"Entry filter is outside selected kinds: {entry_id}")
+                requested_identities[entry_id] = (kind, key)
 
-        effective_digests = self._effective_digests(
-            self.resolver.entries(selected_kinds), selected_kinds
+        if requested is None:
+            effective_entries = self.resolver.entries(
+                selected_kinds,
+                max_entries=MAX_CATALOG_OPERATION_ENTRIES,
+            )
+            project_entries = self.resolver.project_entries(
+                selected_kinds,
+                max_entries=MAX_CATALOG_OPERATION_ENTRIES,
+            )
+        else:
+            effective_entries = []
+            for entry_id in sorted(requested):
+                kind, key = requested_identities[entry_id]
+                try:
+                    effective_entries.append(self.resolver.resolve(kind, key))
+                except FileNotFoundError as exc:
+                    raise CatalogSyncError(f"No project catalog entry for: {entry_id}") from exc
+            project_entries = [
+                entry for entry in effective_entries if entry.source == "project"
+            ]
+        effective_digests = self._effective_digests(effective_entries, selected_kinds)
+        blocked_agents = (
+            AgentSnapshotMigrator(self.resolver).publication_blocked_entry_ids()
+            if CatalogKind.AGENT in selected_kinds
+            else set()
         )
-        blocked_agents = AgentSnapshotMigrator(
-            self.resolver
-        ).publication_blocked_entry_ids()
         project_entries = [
-            entry
-            for entry in self.resolver.project_entries(selected_kinds)
-            if entry.entry_id not in blocked_agents
+            entry for entry in project_entries if entry.entry_id not in blocked_agents
         ]
         available = {entry.entry_id for entry in project_entries}
         if requested is not None:
@@ -580,6 +604,8 @@ class CatalogSyncService:
             character not in "0123456789abcdef" for character in comparison_token
         ):
             raise CatalogSyncError("A valid comparison token is required")
+        if len(selected) > MAX_CATALOG_OPERATION_ENTRIES:
+            raise CatalogOperationLimitError(MAX_CATALOG_OPERATION_ENTRIES)
         if not selected or len(set(selected)) != len(selected):
             raise CatalogSyncError("Approved entries must be non-empty and unique")
         for entry_id in selected:
