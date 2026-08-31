@@ -9,10 +9,10 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
-from cafe.agents.executor import AgentExecutor
+from cafe.agents.executor import AgentExecutionError, AgentExecutor
 from cafe.core.blackboard import BlackboardStore
 from cafe.core.driver_policy import DriverPolicyContract
-from cafe.core.driver_runtime import DriverCoordinator, DriverPacket
+from cafe.core.driver_runtime import DriverCoordinator, DriverPacket, DriverUnavailableError
 from cafe.core.driver_transport import (
     DRIVER_AGENT_NAME,
     BlackboardDriverSessionStore,
@@ -179,3 +179,17 @@ def test_only_exact_saved_cli_pair_can_resume(tmp_path: Path) -> None:
 
     assert sessions.continuation(AgentCLI.CODEX).session_id == "codex-session"
     assert sessions.continuation(AgentCLI.GEMINI).session_id is None
+
+
+def test_transport_normalizes_cli_unavailability(tmp_path: Path) -> None:
+    _, _, packet, _, transport = _runtime(tmp_path)
+
+    with (
+        patch.object(
+            AgentExecutor,
+            "execute",
+            side_effect=AgentExecutionError("missing", error_type="cli_not_found"),
+        ),
+        pytest.raises(DriverUnavailableError),
+    ):
+        transport.request_decision(packet)

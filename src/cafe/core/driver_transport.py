@@ -6,10 +6,11 @@ import json
 from datetime import datetime, timezone
 from typing import Optional
 
+from cafe.agents.executor import AgentExecutionError
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardState, BlackboardStore
 from cafe.core.driver_policy import DriverPolicyContract
-from cafe.core.driver_runtime import DriverDecision, DriverPacket
+from cafe.core.driver_runtime import DriverDecision, DriverPacket, DriverUnavailableError
 from cafe.core.session import SessionStore
 from cafe.core.session_continuation import SessionContinuation
 from cafe.core.types import AgentCLI, AgentConfig, SessionData
@@ -155,11 +156,18 @@ class DelegatedDriverTransport:
             ensure_ascii=False,
             sort_keys=True,
         )
-        response, *_ = agent_manager.execute(
-            DRIVER_AGENT_NAME,
-            prompt,
-            continuation=self.session_store.continuation(self.cli),
-        )
+        try:
+            response, *_ = agent_manager.execute(
+                DRIVER_AGENT_NAME,
+                prompt,
+                continuation=self.session_store.continuation(self.cli),
+            )
+        except AgentExecutionError as exc:
+            if exc.error_type in {"cli_not_found", "cli_unavailable"}:
+                raise DriverUnavailableError(str(exc)) from exc
+            raise
+        except (FileNotFoundError, OSError) as exc:
+            raise DriverUnavailableError(str(exc)) from exc
         try:
             raw = json.loads(response)
         except json.JSONDecodeError as exc:
@@ -172,4 +180,3 @@ class DelegatedDriverTransport:
         ):
             raise ValueError("delegated driver decision does not correlate to its packet")
         return decision
-

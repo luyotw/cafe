@@ -11,6 +11,10 @@ from cafe.core.blackboard import BlackboardState, BlackboardStore
 from cafe.core.driver_policy import DriverPolicyContract
 
 
+class DriverUnavailableError(RuntimeError):
+    """The configured dedicated driver transport is not currently available."""
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -198,6 +202,39 @@ class DriverCoordinator:
             data["consumed_sequences"].append(sequence)
             data["lifecycle"] = "advancing"
             return decision
+
+    def consume_next_authorization(self) -> DriverDecision | None:
+        """Consume the oldest pending advance decision, if one exists."""
+        with self.store.driver_transaction(self.state) as state:
+            data = _state_data(state)
+            consumed = {int(value) for value in data["consumed_sequences"]}
+            for raw_sequence in sorted(data["decisions"], key=int):
+                sequence = int(raw_sequence)
+                if sequence in consumed:
+                    continue
+                decision = DriverDecision.model_validate(data["decisions"][raw_sequence])
+                if decision.action != "advance":
+                    return None
+                data["consumed_sequences"].append(sequence)
+                data["lifecycle"] = "advancing"
+                return decision
+            return None
+
+    def decision_for(self, sequence: int) -> DriverDecision | None:
+        with self.store.driver_transaction(self.state) as state:
+            data = _state_data(state)
+            raw = data["decisions"].get(str(sequence))
+            return DriverDecision.model_validate(raw) if raw is not None else None
+
+    def record_lifecycle(self, lifecycle: str, *, reason: str = "") -> None:
+        if not lifecycle.strip():
+            raise ValueError("driver lifecycle must not be empty")
+        with self.store.driver_transaction(self.state) as state:
+            data = _state_data(state)
+            data["lifecycle"] = lifecycle
+            if reason:
+                reason_key = "pause_reason" if lifecycle == "paused" else f"{lifecycle}_reason"
+                data[reason_key] = reason
 
     def claim_advancement_lease(self, holder: str, *, ttl_seconds: int) -> bool:
         if not holder.strip() or ttl_seconds <= 0:
