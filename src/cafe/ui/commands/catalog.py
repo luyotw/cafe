@@ -10,7 +10,6 @@ import typer
 import yaml
 from rich.console import Console
 
-from cafe.catalogs.migration import AgentSnapshotMigrator
 from cafe.catalogs.resolver import (
     MAX_CATALOG_DISCOVERY_ENTRIES,
     MAX_CATALOG_OPERATION_ENTRIES,
@@ -292,81 +291,6 @@ def catalog_sync_global(
             inspection_hint="--json",
         )
 
-
-@catalog_app.command(name="migrate-agents")
-def catalog_migrate_agents(
-    token: Optional[str] = typer.Option(
-        None, "--token", help="Exact token returned by migration preview"
-    ),
-    decisions: list[str] = typer.Option(
-        [],
-        "--decision",
-        help="Digest-bound ENTRY_ID=preserve|retire decision; repeat for every entry",
-    ),
-    json_output: bool = typer.Option(False, "--json", help="Emit complete machine JSON"),
-) -> None:
-    """Preview or apply conservative legacy project-agent migration decisions."""
-    try:
-        resolver = CatalogResolver(project_root=Path.cwd())
-        migrator = AgentSnapshotMigrator(resolver)
-        if token is None and not decisions:
-            preview = migrator.preview()
-            payload = {
-                "schema_version": 1,
-                "status": "preview",
-                "token": preview.token,
-                "items": [
-                    {
-                        "entry_id": item.entry_id,
-                        "path": str(item.path),
-                        "digest": item.digest,
-                        "fallback_digest": item.fallback_digest,
-                        "classification": item.status,
-                        "effect": item.effect,
-                    }
-                    for item in preview.items
-                ],
-            }
-            if json_output:
-                typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-            else:
-                console.print(
-                    f"[yellow]{len(preview.items)} legacy project agent(s)[/yellow] "
-                    f"token={preview.token}"
-                )
-                _print_bounded_details(
-                    preview.items,
-                    lambda item: f"{item.entry_id}\t{item.status}\t{item.effect}",
-                    inspection_hint="--json",
-                )
-            return
-        if token is None or not decisions:
-            raise CatalogSyncError(
-                "Migration apply requires --token and one --decision for every preview item"
-            )
-        parsed: dict[str, str] = {}
-        for decision in decisions:
-            if "=" not in decision:
-                raise CatalogSyncError(f"Invalid migration decision: {decision!r}")
-            entry_id, action = decision.rsplit("=", 1)
-            if entry_id in parsed:
-                raise CatalogSyncError(f"Duplicate migration decision: {entry_id}")
-            parsed[entry_id] = action
-        result = migrator.apply(token, parsed)
-        payload = {
-            "schema_version": 1,
-            "status": "completed",
-            "retired": [str(path) for path in result.retired],
-            "preserved": [str(path) for path in result.preserved],
-            "manifest": str(result.manifest),
-        }
-    except (CatalogSyncError, OSError, ValueError, RuntimeError) as exc:
-        console.print(f"[red]Error: {exc}[/red]")
-        raise typer.Exit(1)
-    if json_output:
-        typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-    else:
-        console.print(f"[green]Migration completed[/green] manifest={result.manifest}")
 
 
 # ---------------------------------------------------------------------------

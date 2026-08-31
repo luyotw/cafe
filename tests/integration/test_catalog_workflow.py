@@ -32,29 +32,6 @@ def _write_project_catalog(project: Path) -> None:
     )
 
 
-def _preserve_catalog_agents() -> None:
-    preview_result = runner.invoke(app, ["catalog", "migrate-agents", "--json"])
-    assert preview_result.exit_code == 0, preview_result.stdout
-    preview = json.loads(preview_result.stdout)
-    decisions = [
-        value
-        for item in preview["items"]
-        for value in ("--decision", f"{item['entry_id']}=preserve")
-    ]
-    result = runner.invoke(
-        app,
-        [
-            "catalog",
-            "migrate-agents",
-            "--token",
-            preview["token"],
-            *decisions,
-            "--json",
-        ],
-    )
-    assert result.exit_code == 0, result.stdout
-
-
 def test_manual_subset_approval_publishes_only_previewed_project_content(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -64,7 +41,6 @@ def test_manual_subset_approval_publishes_only_previewed_project_content(
     monkeypatch.chdir(project)
     monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
     _write_project_catalog(project)
-    _preserve_catalog_agents()
     preview = runner.invoke(app, ["catalog", "check", "--json"])
     payload = json.loads(preview.stdout)
 
@@ -260,7 +236,7 @@ def test_mixed_catalog_cli_failure_rolls_back_the_complete_selection(
     assert json.loads(receipts[0].read_text(encoding="utf-8"))["status"] == "rolled_back"
 
 
-def test_legacy_agent_cli_retires_proven_snapshot_and_preserves_ambiguity(
+def test_existing_project_agents_resolve_compare_and_publish_without_prerequisite(
     tmp_path: Path, monkeypatch
 ) -> None:
     project = tmp_path / "project"
@@ -272,48 +248,54 @@ def test_legacy_agent_cli_retires_proven_snapshot_and_preserves_ambiguity(
         global_root=global_root,
     )
     builtin = resolver.resolve(CatalogKind.AGENT, "developer/David")
-    snapshot = project / ".cafe" / "agents" / "developer" / "David.md"
-    snapshot.parent.mkdir(parents=True)
-    shutil.copy2(builtin.path, snapshot)
-    ambiguous = project / ".cafe" / "agents" / "pm" / "Roger.md"
-    ambiguous.parent.mkdir(parents=True)
-    ambiguous.write_text(
+    matching = project / ".cafe" / "agents" / "developer" / "David.md"
+    matching.parent.mkdir(parents=True)
+    shutil.copy2(builtin.path, matching)
+    customized = project / ".cafe" / "agents" / "pm" / "Roger.md"
+    customized.parent.mkdir(parents=True)
+    customized.write_text(
         "---\nname: Roger\ndescription: custom\n---\n\nCustom\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(project)
     monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
 
-    preview = runner.invoke(app, ["catalog", "migrate-agents", "--json"])
+    assert resolver.resolve(CatalogKind.AGENT, "developer/David").path == matching
+    assert resolver.resolve(CatalogKind.AGENT, "pm/Roger").path == customized
+
+    preview = runner.invoke(app, ["catalog", "check", "--kind", "agent", "--json"])
     payload = json.loads(preview.stdout)
-    classifications = {
-        item["entry_id"]: item["classification"] for item in payload["items"]
+    entries = {
+        item["entry_id"]: item["project_path"] for item in payload["entries"]
     }
-    assert classifications == {
-        "agent:developer/David": "generated",
-        "agent:pm/Roger": "ambiguous",
+    assert entries == {
+        "agent:developer/David": str(matching),
+        "agent:pm/Roger": str(customized),
     }
 
-    applied = runner.invoke(
+    synced = runner.invoke(
         app,
         [
             "catalog",
-            "migrate-agents",
+            "sync-global",
+            "--kind",
+            "agent",
             "--token",
-            payload["token"],
-            "--decision",
-            "agent:developer/David=retire",
-            "--decision",
-            "agent:pm/Roger=preserve",
+            payload["comparison_token"],
+            "--approve",
+            "agent:developer/David",
+            "--approve",
+            "agent:pm/Roger",
             "--json",
         ],
     )
 
-    assert applied.exit_code == 0, applied.stdout
-    assert not snapshot.exists()
-    assert ambiguous.is_file()
-    assert Path(json.loads(applied.stdout)["manifest"]).is_file()
-    assert resolver.resolve(CatalogKind.AGENT, "developer/David").source == "builtin"
-    recheck = runner.invoke(app, ["catalog", "migrate-agents", "--json"])
-    remaining = {item["entry_id"] for item in json.loads(recheck.stdout)["items"]}
-    assert "agent:developer/David" not in remaining
+    assert synced.exit_code == 0, synced.stdout
+    assert (global_root / "agents" / "developer" / "David.md").read_bytes() == (
+        matching.read_bytes()
+    )
+    assert (global_root / "agents" / "pm" / "Roger.md").read_bytes() == (
+        customized.read_bytes()
+    )
+    assert matching.is_file()
+    assert customized.is_file()

@@ -524,29 +524,6 @@ def _write_catalog_entries(project: Path) -> None:
     )
 
 
-def _preserve_catalog_agents() -> None:
-    preview_result = runner.invoke(app, ["catalog", "migrate-agents", "--json"])
-    assert preview_result.exit_code == 0, preview_result.stdout
-    preview = json.loads(preview_result.stdout)
-    decisions = [
-        value
-        for item in preview["items"]
-        for value in ("--decision", f"{item['entry_id']}=preserve")
-    ]
-    result = runner.invoke(
-        app,
-        [
-            "catalog",
-            "migrate-agents",
-            "--token",
-            preview["token"],
-            *decisions,
-            "--json",
-        ],
-    )
-    assert result.exit_code == 0, result.stdout
-
-
 def test_catalog_check_defaults_to_all_three_kinds_with_complete_json(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -554,7 +531,6 @@ def test_catalog_check_defaults_to_all_three_kinds_with_complete_json(
     global_root = tmp_path / "global"
     monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
     _write_catalog_entries(tmp_path)
-    _preserve_catalog_agents()
 
     result = runner.invoke(app, ["catalog", "check", "--json"])
 
@@ -853,62 +829,12 @@ def test_catalog_sync_global_bounds_human_summary_and_keeps_json_complete(
     assert set(json.loads(json_result.stdout)["updated"]) == set(json_entry_ids)
 
 
-def test_catalog_legacy_migration_requires_digest_bound_decisions(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    global_root = tmp_path / "global"
-    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
-    _write_catalog_entries(tmp_path)
+def test_catalog_exposes_comparison_and_sync_without_migration_command() -> None:
+    result = runner.invoke(app, ["catalog", "--help"])
+    removed_command = "-".join(("migrate", "agents"))
+    removed = runner.invoke(app, ["catalog", removed_command])
 
-    preview = runner.invoke(app, ["catalog", "migrate-agents", "--json"])
-    assert preview.exit_code == 0, preview.stdout
-    token = json.loads(preview.stdout)["token"]
-    result = runner.invoke(
-        app,
-        [
-            "catalog",
-            "migrate-agents",
-            "--token",
-            token,
-            "--decision",
-            "agent:developer/David=preserve",
-            "--json",
-        ],
-    )
-
-    assert result.exit_code == 0, result.stdout
-    assert json.loads(result.stdout)["status"] == "completed"
-    assert (tmp_path / ".cafe" / "agents" / "developer" / "David.md").is_file()
-
-
-def test_catalog_migration_bounds_human_preview_and_keeps_json_complete(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global")
-    entry_ids = []
-    for index in range(52):
-        name = f"Agent{index}"
-        entry_ids.append(f"agent:developer/{name}")
-        path = tmp_path / ".cafe" / "agents" / "developer" / f"{name}.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            f"---\nname: {name}\ndescription: project\n---\n\nDevelop\n",
-            encoding="utf-8",
-        )
-
-    human_result = runner.invoke(app, ["catalog", "migrate-agents"])
-    json_result = runner.invoke(app, ["catalog", "migrate-agents", "--json"])
-
-    assert human_result.exit_code == 0, human_result.stdout
-    human_entry_ids = {
-        line.strip().split()[0]
-        for line in human_result.stdout.splitlines()
-        if line.strip().startswith("agent:developer/Agent")
-    }
-    assert len(human_entry_ids) == 50
-    assert len(set(entry_ids) - human_entry_ids) == 2
-    assert "--json" in human_result.stdout
-    assert json_result.exit_code == 0, json_result.stdout
-    assert {item["entry_id"] for item in json.loads(json_result.stdout)["items"]} == set(entry_ids)
+    assert result.exit_code == 0
+    assert "check" in result.stdout
+    assert "sync-global" in result.stdout
+    assert removed.exit_code != 0

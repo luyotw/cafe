@@ -15,7 +15,6 @@ from typing import Callable, Iterable, Iterator, Optional, Sequence
 
 import yaml
 
-from cafe.catalogs.migration import AgentSnapshotMigrator
 from cafe.catalogs.resolver import (
     MAX_CATALOG_BYTES,
     MAX_CATALOG_DEPTH,
@@ -544,14 +543,6 @@ class CatalogSyncService:
             max_entries=operation_limit,
         )
         effective_digests = self._effective_digests(effective_entries, selected_kinds)
-        blocked_agents = (
-            AgentSnapshotMigrator(self.resolver).publication_blocked_entry_ids()
-            if CatalogKind.AGENT in selected_kinds
-            else set()
-        )
-        project_entries = [
-            entry for entry in project_entries if entry.entry_id not in blocked_agents
-        ]
         available = {entry.entry_id for entry in project_entries}
         if requested is not None:
             unknown = sorted(requested - available)
@@ -662,13 +653,6 @@ class CatalogSyncService:
 
         selected_kinds = self._normalize_kinds(kinds)
         with _global_lock(self.resolver.global_root):
-            blocked = AgentSnapshotMigrator(self.resolver).publication_blocked_entry_ids()
-            blocked_selection = sorted(set(selected) & blocked)
-            if blocked_selection:
-                raise CatalogSyncError(
-                    "Agent migration decision required before publication: "
-                    + ", ".join(blocked_selection)
-                )
             current = self.compare(kinds=selected_kinds, entry_ids=entry_ids)
             if current.token != comparison_token:
                 raise StaleComparisonError(

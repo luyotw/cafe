@@ -64,6 +64,36 @@ def test_project_global_builtin_precedence_never_materializes_fallback(
     assert not project_path.exists()
 
 
+def test_existing_agent_matching_fallback_bytes_remains_project_authority(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    builtin = tmp_path / "builtin"
+    builtin_path = _write_entry(
+        builtin, CatalogKind.AGENT, "developer/David", "shared"
+    )
+    global_path = _write_entry(
+        global_root, CatalogKind.AGENT, "developer/David", "shared"
+    )
+    project_path = _write_entry(
+        project / ".cafe", CatalogKind.AGENT, "developer/David", "shared"
+    )
+    resolver = CatalogResolver(
+        project_root=project,
+        canonical_root=project,
+        global_root=global_root,
+        builtin_root=builtin,
+    )
+
+    assert resolver.resolve(CatalogKind.AGENT, "developer/David").path == project_path
+    project_path.unlink()
+    assert resolver.resolve(CatalogKind.AGENT, "developer/David").path == global_path
+    global_path.unlink()
+    assert resolver.resolve(CatalogKind.AGENT, "developer/David").path == builtin_path
+    assert not project_path.exists()
+
+
 def test_invalid_project_entry_fails_instead_of_falling_through(tmp_path: Path) -> None:
     project = tmp_path / "project"
     builtin = tmp_path / "builtin"

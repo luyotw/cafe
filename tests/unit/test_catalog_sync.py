@@ -14,7 +14,6 @@ import cafe.catalogs.resolver as resolver_module
 import cafe.catalogs.sync as sync_module
 import cafe.catalogs.transactions as transactions_module
 from cafe.agents.manager import AgentManager
-from cafe.catalogs.migration import AgentSnapshotMigrator
 from cafe.catalogs.resolver import (
     MAX_CATALOG_DISCOVERY_ENTRIES,
     MAX_CATALOG_OPERATION_ENTRIES,
@@ -58,15 +57,6 @@ def _service(tmp_path: Path, **kwargs) -> tuple[CatalogSyncService, Path, Path]:
     return CatalogSyncService(resolver, **kwargs), project, global_root
 
 
-def _preserve_legacy_agents(service: CatalogSyncService) -> None:
-    migrator = AgentSnapshotMigrator(service.resolver, is_tracked=lambda _path: False)
-    preview = migrator.preview()
-    migrator.apply(
-        preview.token,
-        {item.entry_id: "preserve" for item in preview.items},
-    )
-
-
 def test_combined_comparison_is_content_bound_and_silent_without_project_entries(
     tmp_path: Path,
 ) -> None:
@@ -77,8 +67,6 @@ def test_combined_comparison_is_content_bound_and_silent_without_project_entries
     _entry(project / ".cafe", CatalogKind.PHASE, "develop", "project")
     _entry(project / ".cafe", CatalogKind.AGENT, "developer/David", "project")
     _entry(global_root, CatalogKind.PLAYBOOK, "standard", "global")
-    _preserve_legacy_agents(service)
-
     report = service.compare()
     assert report.status == "differences"
     assert {item.entry_id for item in report.differences} == {
@@ -146,7 +134,9 @@ def test_effective_digests_cover_global_and_builtin_only_entries(tmp_path: Path)
     assert after.token != before.token
 
 
-def test_generated_agent_snapshot_is_not_a_publication_candidate(tmp_path: Path) -> None:
+def test_existing_agent_matching_builtin_is_an_immediate_publication_candidate(
+    tmp_path: Path,
+) -> None:
     service, project, _global_root = _service(tmp_path)
     builtin = _entry(
         service.resolver.builtin_root,
@@ -164,17 +154,12 @@ def test_generated_agent_snapshot_is_not_a_publication_candidate(tmp_path: Path)
 
     report = service.compare()
 
-    assert report.status == "no_project_entries"
-    assert report.entries == ()
-
-    migrator = AgentSnapshotMigrator(service.resolver, is_tracked=lambda _path: False)
-    preview = migrator.preview()
-    migrator.apply(preview.token, {"agent:developer/David": "preserve"})
-
-    assert [item.entry_id for item in service.compare().entries] == ["agent:developer/David"]
+    assert report.status == "differences"
+    assert [item.entry_id for item in report.entries] == ["agent:developer/David"]
+    assert report.entries[0].effective_source == "project"
 
 
-def test_ambiguous_agent_requires_migration_decision_before_publication(
+def test_existing_custom_agent_publishes_without_prerequisite_state(
     tmp_path: Path,
 ) -> None:
     service, project, global_root = _service(tmp_path)
@@ -190,28 +175,13 @@ def test_ambiguous_agent_requires_migration_decision_before_publication(
         "developer/David",
         "ambiguous project",
     )
-    migrator = AgentSnapshotMigrator(service.resolver, is_tracked=lambda _path: False)
-
-    preview = migrator.preview()
-    assert [(item.entry_id, item.status) for item in preview.items] == [
-        ("agent:developer/David", "ambiguous")
-    ]
-    assert migrator.publication_blocked_entry_ids() == {"agent:developer/David"}
-
-    blocked_report = service.compare()
-    with pytest.raises(CatalogSyncError):
-        service.sync(blocked_report.token, ["agent:developer/David"])
-    assert not (global_root / "agents" / "developer" / "David.md").exists()
-
-    migrator.apply(preview.token, {"agent:developer/David": "preserve"})
-    approved_report = service.compare()
-    result = service.sync(approved_report.token, ["agent:developer/David"])
+    report = service.compare()
+    result = service.sync(report.token, ["agent:developer/David"])
 
     assert result.updated == ("agent:developer/David",)
     assert content_digest(global_root / "agents" / "developer" / "David.md") == content_digest(
         project_agent
     )
-    assert migrator.preview().items == ()
 
 
 def test_digest_covers_file_mode_and_symlink_target(tmp_path: Path) -> None:
@@ -1239,7 +1209,6 @@ def test_production_loaders_hold_the_catalog_lock_through_content_reads(
     write_playbook(global_root, "reviewer")
     _entry(global_root, CatalogKind.PHASE, "develop", "old-phase")
     _entry(global_root, CatalogKind.AGENT, "developer/David", "old-agent")
-    _preserve_legacy_agents(service)
     report = service.compare()
     selected = [
         "playbook:standard",
