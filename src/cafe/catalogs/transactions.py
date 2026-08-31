@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import json
 import os
 import shutil
 import stat
 import tempfile
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 
 from cafe.catalogs.resolver import MAX_CATALOG_OPERATION_ENTRIES
 
@@ -40,25 +44,174 @@ def path_exists(path: Path) -> bool:
     return path.exists() or path.is_symlink()
 
 
+def _filesystem_identity(metadata: os.stat_result) -> tuple[int, int, int]:
+    return (metadata.st_dev, metadata.st_ino, stat.S_IFMT(metadata.st_mode))
+
+
+@dataclass(frozen=True)
+class BoundDirectory:
+    """A no-follow directory chain held open across a namespace mutation."""
+
+    path: Path
+    descriptor: int
+    identities: tuple[tuple[Path, tuple[int, int, int]], ...]
+
+    def verify(self) -> None:
+        for path, expected in self.identities:
+            try:
+                current = path.lstat()
+            except OSError as exc:
+                raise CatalogRecoveryError(
+                    f"Catalog directory identity changed before mutation: {path}"
+                ) from exc
+            if _filesystem_identity(current) != expected:
+                raise CatalogRecoveryError(
+                    f"Catalog directory identity changed before mutation: {path}"
+                )
+
+
+@contextmanager
+def bound_directory(
+    root: Path,
+    relative: Path,
+    *,
+    create: bool = False,
+) -> Iterator[BoundDirectory]:
+    """Open a descendant directory without following a replaceable ancestor."""
+    root = Path(root)
+    relative = Path(relative)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise CatalogRecoveryError("Catalog directory path escapes its root")
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        root_before = root.lstat()
+        if not stat.S_ISDIR(root_before.st_mode):
+            raise CatalogRecoveryError(f"Catalog directory is unsafe: {root}")
+        root_descriptor = os.open(root, flags)
+    except OSError as exc:
+        raise CatalogRecoveryError(f"Catalog directory is unsafe: {root}") from exc
+    descriptors = [root_descriptor]
+    identities: list[tuple[Path, tuple[int, int, int]]] = []
+    try:
+        root_identity = _filesystem_identity(root_before)
+        if _filesystem_identity(os.fstat(root_descriptor)) != root_identity:
+            raise CatalogRecoveryError(f"Catalog directory identity changed: {root}")
+        identities.append((root, root_identity))
+        current_descriptor = root_descriptor
+        current_path = root
+        for part in relative.parts:
+            if part in {"", "."}:
+                continue
+            if create:
+                try:
+                    os.mkdir(part, dir_fd=current_descriptor)
+                    os.fsync(current_descriptor)
+                except FileExistsError:
+                    pass
+                except OSError as exc:
+                    raise CatalogRecoveryError(
+                        f"Catalog directory cannot be created safely: {current_path / part}"
+                    ) from exc
+            try:
+                before = os.stat(part, dir_fd=current_descriptor, follow_symlinks=False)
+                if not stat.S_ISDIR(before.st_mode):
+                    raise CatalogRecoveryError(
+                        f"Catalog directory is unsafe: {current_path / part}"
+                    )
+                descriptor = os.open(part, flags, dir_fd=current_descriptor)
+            except OSError as exc:
+                raise CatalogRecoveryError(
+                    f"Catalog directory is unsafe: {current_path / part}"
+                ) from exc
+            descriptors.append(descriptor)
+            identity = _filesystem_identity(before)
+            if _filesystem_identity(os.fstat(descriptor)) != identity:
+                raise CatalogRecoveryError(
+                    f"Catalog directory identity changed: {current_path / part}"
+                )
+            current_descriptor = descriptor
+            current_path /= part
+            identities.append((current_path, identity))
+        bound = BoundDirectory(current_path, current_descriptor, tuple(identities))
+        bound.verify()
+        yield bound
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def entry_exists(directory: BoundDirectory, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=directory.descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise CatalogRecoveryError(
+            f"Catalog entry is unavailable: {directory.path / name}"
+        ) from exc
+    return True
+
+
+def move_without_replacement(
+    source_name: str,
+    destination_name: str,
+    *,
+    source_directory: BoundDirectory,
+    destination_directory: BoundDirectory,
+) -> None:
+    """Atomically move one entry between bound parents without overwriting."""
+    source_directory.verify()
+    destination_directory.verify()
+    library = ctypes.CDLL(None, use_errno=True)
+    rename = getattr(library, "renameat2", None)
+    flags = 1  # Linux RENAME_NOREPLACE
+    if rename is None:
+        rename = getattr(library, "renameatx_np", None)
+        flags = 4  # macOS RENAME_EXCL
+    if rename is None:
+        raise NotImplementedError("Atomic no-replacement rename is unavailable")
+    rename.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    rename.restype = ctypes.c_int
+    result = rename(
+        source_directory.descriptor,
+        os.fsencode(source_name),
+        destination_directory.descriptor,
+        os.fsencode(destination_name),
+        flags,
+    )
+    if result != 0:
+        error = ctypes.get_errno()
+        if error in {errno.EEXIST, errno.ENOTEMPTY}:
+            raise FileExistsError(error, os.strerror(error), destination_name)
+        if error == errno.ENOENT:
+            raise FileNotFoundError(error, os.strerror(error), source_name)
+        if error in {errno.EINVAL, errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP}:
+            raise NotImplementedError("Filesystem lacks atomic no-replacement rename")
+        raise OSError(error, os.strerror(error))
+    os.fsync(destination_directory.descriptor)
+    if source_directory.descriptor != destination_directory.descriptor:
+        os.fsync(source_directory.descriptor)
+    source_directory.verify()
+    destination_directory.verify()
+
+
 def fsync_directory(path: Path) -> None:
     descriptor = os.open(path, os.O_RDONLY)
     try:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-
-
-def fsync_directory_chain(path: Path, stop: Path) -> None:
-    """Persist directory entries from a leaf through an inclusive stable root."""
-    current = path
-    stop = stop.resolve()
-    while True:
-        fsync_directory(current)
-        if current.resolve() == stop:
-            return
-        if current == current.parent or not current.resolve().is_relative_to(stop):
-            raise CatalogRecoveryError("Catalog durability path escapes its root")
-        current = current.parent
 
 
 def fsync_tree(path: Path) -> None:
@@ -105,13 +258,6 @@ def write_json_durable(path: Path, payload: dict[str, object]) -> None:
     finally:
         if temporary.exists():
             temporary.unlink()
-
-
-def _remove_path(path: Path) -> None:
-    if path.is_symlink() or path.is_file():
-        path.unlink()
-    elif path.is_dir():
-        shutil.rmtree(path)
 
 
 def _bounded_text(value: BaseException | str) -> str:
@@ -358,6 +504,48 @@ def _validate_recovery_content(
             raise CatalogRecoveryError("Catalog recovery pre-update content is unavailable")
 
 
+def _retain_published_for_recovery(
+    target: Path,
+    removed: Path,
+    *,
+    expected_digest: str,
+    entry_id: str,
+    target_directory: BoundDirectory,
+    removed_directory: BoundDirectory,
+    failure_injector: RecoveryInjector,
+) -> None:
+    """Move published bytes to transaction evidence without consuming a replacement."""
+    from cafe.catalogs.resolver import content_digest
+
+    if content_digest(target) != expected_digest:
+        raise OSError("published content does not match transaction intent")
+    if entry_exists(removed_directory, removed.name):
+        raise OSError("published removal evidence already exists")
+    failure_injector("rollback_remove", entry_id)
+    try:
+        move_without_replacement(
+            target.name,
+            removed.name,
+            source_directory=target_directory,
+            destination_directory=removed_directory,
+        )
+    except (FileExistsError, FileNotFoundError) as exc:
+        raise OSError("published content changed before rollback removal") from exc
+    removed_directory.verify()
+    if content_digest(removed) == expected_digest:
+        return
+    try:
+        move_without_replacement(
+            removed.name,
+            target.name,
+            source_directory=removed_directory,
+            destination_directory=target_directory,
+        )
+    except Exception as exc:
+        raise OSError("intervening target was retained as recovery evidence") from exc
+    raise OSError("published content changed before rollback removal")
+
+
 def recover_catalog_transaction(
     transaction: Path,
     global_root: Path,
@@ -371,49 +559,140 @@ def recover_catalog_transaction(
 
     journal = transaction / "transaction.json"
     payload = _payload or _read_transaction_journal(transaction, global_root)
-    records = _validated_transaction_payload(payload, transaction, global_root)
-    _validate_recovery_content(records, transaction, global_root)
+    _validate_transaction_location(transaction, global_root)
+    try:
+        records = _validated_transaction_payload(payload, transaction, global_root)
+    except CatalogRecoveryError as exc:
+        try:
+            evidence_records = _validated_records(payload)
+        except CatalogRecoveryError:
+            evidence_records = []
+        evidence = {
+            "schema_version": 1,
+            "status": "incomplete",
+            "selected": [record["entry_id"] for record in evidence_records],
+            "published": [
+                record["entry_id"] for record in evidence_records if record["state"] == "published"
+            ],
+            "restored": [],
+            "error": _bounded_text(cause),
+            "rollback_errors": [_bounded_text(exc)],
+            "backup_root": str(transaction / "backups"),
+        }
+        write_json_durable(transaction / "recovery.json", evidence)
+        return evidence
     backup_root = transaction / "backups"
+    try:
+        _validate_recovery_content(records, transaction, global_root)
+    except CatalogRecoveryError as exc:
+        evidence = {
+            "schema_version": 1,
+            "status": "incomplete",
+            "selected": [record["entry_id"] for record in records],
+            "published": [
+                record["entry_id"] for record in records if record["state"] == "published"
+            ],
+            "restored": [],
+            "error": _bounded_text(cause),
+            "rollback_errors": [_bounded_text(exc)],
+            "backup_root": str(backup_root),
+        }
+        payload["status"] = "rollback_incomplete"
+        write_json_durable(journal, payload)
+        write_json_durable(transaction / "recovery.json", evidence)
+        return evidence
     selected = [record["entry_id"] for record in records]
     published = [record["entry_id"] for record in records if record["state"] == "published"]
     restored: list[str] = []
     rollback_errors: list[str] = []
+    removed_root = transaction / "removed"
 
     for record in reversed(records):
         entry_id = record["entry_id"]
         relative = Path(record["relative_path"])
         target = global_root / relative
         backup = backup_root / relative
+        removed = removed_root / relative
         try:
-            if record["old_digest"] == "missing":
-                if path_exists(backup):
-                    raise OSError("unexpected backup for a previously missing entry")
-                if path_exists(target):
-                    if content_digest(target) != record["new_digest"]:
-                        raise OSError("published content does not match transaction intent")
-                    failure_injector("rollback_remove", entry_id)
-                    _remove_path(target)
-                    fsync_directory_chain(target.parent, global_root)
-                continue
+            with (
+                bound_directory(
+                    global_root,
+                    relative.parent,
+                    create=True,
+                ) as target_directory,
+                bound_directory(
+                    backup_root,
+                    relative.parent,
+                    create=True,
+                ) as backup_directory,
+                bound_directory(
+                    transaction,
+                    Path("removed") / relative.parent,
+                    create=True,
+                ) as removed_directory,
+            ):
+                target_exists = entry_exists(target_directory, target.name)
+                backup_exists = entry_exists(backup_directory, backup.name)
+                removed_exists = entry_exists(removed_directory, removed.name)
 
-            if path_exists(backup):
-                if content_digest(backup) != record["old_digest"]:
+                if backup_exists and content_digest(backup) != record["old_digest"]:
                     raise OSError("backup digest does not match transaction intent")
-                if path_exists(target):
-                    if content_digest(target) != record["new_digest"]:
-                        raise OSError("published content does not match transaction intent")
-                    failure_injector("rollback_remove", entry_id)
-                    _remove_path(target)
-                    fsync_directory_chain(target.parent, global_root)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                failure_injector("rollback_restore", entry_id)
-                os.replace(backup, target)
-                fsync_directory_chain(target.parent, global_root)
-                if backup.parent != target.parent:
-                    fsync_directory(backup.parent)
-            elif not path_exists(target) or content_digest(target) != record["old_digest"]:
-                raise OSError("approved pre-update content is unavailable")
-            restored.append(entry_id)
+                if removed_exists and content_digest(removed) != record["new_digest"]:
+                    raise OSError("removed publication evidence does not match intent")
+
+                if target_exists and backup_exists:
+                    _retain_published_for_recovery(
+                        target,
+                        removed,
+                        expected_digest=record["new_digest"],
+                        entry_id=entry_id,
+                        target_directory=target_directory,
+                        removed_directory=removed_directory,
+                        failure_injector=failure_injector,
+                    )
+                    target_exists = False
+
+                if record["old_digest"] == "missing":
+                    if backup_exists:
+                        raise OSError("unexpected backup for a previously missing entry")
+                    if target_exists:
+                        _retain_published_for_recovery(
+                            target,
+                            removed,
+                            expected_digest=record["new_digest"],
+                            entry_id=entry_id,
+                            target_directory=target_directory,
+                            removed_directory=removed_directory,
+                            failure_injector=failure_injector,
+                        )
+                    target_directory.verify()
+                    if entry_exists(target_directory, target.name):
+                        raise OSError("previously missing target was not removed")
+                    continue
+
+                if backup_exists:
+                    failure_injector("rollback_restore", entry_id)
+                    try:
+                        move_without_replacement(
+                            backup.name,
+                            target.name,
+                            source_directory=backup_directory,
+                            destination_directory=target_directory,
+                        )
+                    except (FileExistsError, FileNotFoundError) as exc:
+                        raise OSError("target changed before rollback restore") from exc
+                    except NotImplementedError as exc:
+                        raise OSError("atomic rollback restore is unavailable") from exc
+                elif not target_exists or content_digest(target) != record["old_digest"]:
+                    raise OSError("approved pre-update content is unavailable")
+
+                target_directory.verify()
+                if (
+                    not entry_exists(target_directory, target.name)
+                    or content_digest(target) != record["old_digest"]
+                ):
+                    raise OSError("pre-update digest verification failed")
+                restored.append(entry_id)
         except Exception as exc:
             rollback_errors.append(f"{entry_id}: {_bounded_text(exc)}")
 

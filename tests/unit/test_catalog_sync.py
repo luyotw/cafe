@@ -1182,6 +1182,155 @@ def test_late_mixed_catalog_failure_restores_every_global_entry(tmp_path: Path) 
     assert '"status": "rolled_back"' in receipts[0].read_text(encoding="utf-8")
 
 
+def test_publication_rejects_target_parent_replaced_after_backup(
+    tmp_path: Path,
+) -> None:
+    service, project, global_root = _service(tmp_path)
+    _entry(project / ".cafe", CatalogKind.PLAYBOOK, "standard", "approved-new")
+    old_target = _entry(
+        global_root,
+        CatalogKind.PLAYBOOK,
+        "standard",
+        "approved-old",
+    )
+    old_digest = content_digest(old_target)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    displaced = global_root / "approved-playbooks"
+
+    def replace_parent(boundary: str, entry_id: str | None) -> None:
+        if boundary == "backed_up" and entry_id == "playbook:standard":
+            (global_root / "playbooks").rename(displaced)
+            (global_root / "playbooks").symlink_to(outside, target_is_directory=True)
+
+    service.failure_injector = replace_parent
+    report = service.compare()
+
+    with pytest.raises(CatalogSyncError):
+        service.sync(report.token, ["playbook:standard"])
+
+    assert not (outside / "standard.yaml").exists()
+    receipt = next((global_root / ".catalog-transactions").glob("*/recovery.json"))
+    evidence = json.loads(receipt.read_text(encoding="utf-8"))
+    assert evidence["status"] == "incomplete"
+    assert content_digest(receipt.parent / "backups" / "playbooks" / "standard.yaml") == old_digest
+
+
+def test_publication_preserves_target_created_after_backup(tmp_path: Path) -> None:
+    service, project, global_root = _service(tmp_path)
+    _entry(project / ".cafe", CatalogKind.PLAYBOOK, "standard", "approved-new")
+    old_target = _entry(
+        global_root,
+        CatalogKind.PLAYBOOK,
+        "standard",
+        "approved-old",
+    )
+    old_digest = content_digest(old_target)
+    intervening = b"playbook: {id: standard}\nsteps: {}\nmarker: intervening\n"
+
+    def create_target(boundary: str, entry_id: str | None) -> None:
+        if boundary == "backed_up" and entry_id == "playbook:standard":
+            (global_root / "playbooks" / "standard.yaml").write_bytes(intervening)
+
+    service.failure_injector = create_target
+    report = service.compare()
+
+    with pytest.raises(CatalogSyncError):
+        service.sync(report.token, ["playbook:standard"])
+
+    target = global_root / "playbooks" / "standard.yaml"
+    assert target.read_bytes() == intervening
+    receipt = next((global_root / ".catalog-transactions").glob("*/recovery.json"))
+    evidence = json.loads(receipt.read_text(encoding="utf-8"))
+    assert evidence["status"] == "incomplete"
+    assert content_digest(receipt.parent / "backups" / "playbooks" / "standard.yaml") == old_digest
+
+
+@pytest.mark.parametrize("ancestor", ["target-remove", "target-restore", "backup-restore"])
+def test_rollback_rejects_ancestor_replacement_without_external_mutation(
+    tmp_path: Path,
+    ancestor: str,
+) -> None:
+    service, project, global_root = _service(tmp_path)
+    _entry(project / ".cafe", CatalogKind.PLAYBOOK, "standard", "approved-new")
+    old_target = _entry(
+        global_root,
+        CatalogKind.PLAYBOOK,
+        "standard",
+        "approved-old",
+    )
+    old_digest = content_digest(old_target)
+    outside = tmp_path / f"outside-{ancestor}"
+    outside.mkdir()
+    outside_target = outside / "standard.yaml"
+    outside_marker = b"playbook: {id: standard}\nsteps: {}\nmarker: unrelated-outside\n"
+    outside_target.write_bytes(outside_marker)
+    changed = False
+
+    def replace_parent(boundary: str, entry_id: str | None) -> None:
+        nonlocal changed
+        if boundary == "published" and entry_id == "playbook:standard":
+            raise OSError("trigger rollback")
+        expected_boundary = "rollback_remove" if ancestor == "target-remove" else "rollback_restore"
+        if changed or boundary != expected_boundary or entry_id != "playbook:standard":
+            return
+        transaction = next((global_root / ".catalog-transactions").iterdir())
+        if ancestor.startswith("target"):
+            parent = global_root / "playbooks"
+            displaced = global_root / f"approved-playbooks-{ancestor}"
+        else:
+            parent = transaction / "backups" / "playbooks"
+            displaced = transaction / "backups" / "approved-playbooks"
+        parent.rename(displaced)
+        parent.symlink_to(outside_target.parent, target_is_directory=True)
+        changed = True
+
+    service.failure_injector = replace_parent
+    report = service.compare()
+
+    with pytest.raises(CatalogSyncError):
+        service.sync(report.token, ["playbook:standard"])
+
+    assert outside_target.read_bytes() == outside_marker
+    receipt = next((global_root / ".catalog-transactions").glob("*/recovery.json"))
+    evidence = json.loads(receipt.read_text(encoding="utf-8"))
+    assert evidence["status"] == "incomplete"
+    backup_candidates = list(receipt.parent.glob("backups/**/standard.yaml"))
+    assert any(content_digest(candidate) == old_digest for candidate in backup_candidates)
+
+
+def test_rollback_restore_preserves_intervening_target(tmp_path: Path) -> None:
+    service, project, global_root = _service(tmp_path)
+    _entry(project / ".cafe", CatalogKind.PLAYBOOK, "standard", "approved-new")
+    old_target = _entry(
+        global_root,
+        CatalogKind.PLAYBOOK,
+        "standard",
+        "approved-old",
+    )
+    old_digest = content_digest(old_target)
+    intervening = b"playbook: {id: standard}\nsteps: {}\nmarker: intervening\n"
+
+    def create_target(boundary: str, entry_id: str | None) -> None:
+        if boundary == "published" and entry_id == "playbook:standard":
+            raise OSError("trigger rollback")
+        if boundary == "rollback_restore" and entry_id == "playbook:standard":
+            (global_root / "playbooks" / "standard.yaml").write_bytes(intervening)
+
+    service.failure_injector = create_target
+    report = service.compare()
+
+    with pytest.raises(CatalogSyncError):
+        service.sync(report.token, ["playbook:standard"])
+
+    target = global_root / "playbooks" / "standard.yaml"
+    assert target.read_bytes() == intervening
+    receipt = next((global_root / ".catalog-transactions").glob("*/recovery.json"))
+    evidence = json.loads(receipt.read_text(encoding="utf-8"))
+    assert evidence["status"] == "incomplete"
+    assert content_digest(receipt.parent / "backups" / "playbooks" / "standard.yaml") == old_digest
+
+
 @pytest.mark.parametrize(
     ("boundary", "failed_entry"),
     [

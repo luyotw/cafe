@@ -33,10 +33,11 @@ from cafe.catalogs.resolver import (
     read_valid_agent_definition,
 )
 from cafe.catalogs.transactions import (
+    bound_directory,
+    entry_exists,
     fsync_directory,
-    fsync_directory_chain,
     fsync_tree,
-    path_exists,
+    move_without_replacement,
     recover_catalog_transaction,
     retire_committed_transaction,
     write_json_durable,
@@ -739,27 +740,67 @@ class CatalogSyncService:
                     relative = target.relative_to(self.resolver.global_root)
                     backup = backup_root / relative
                     staged = staged_root / relative
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    backup.parent.mkdir(parents=True, exist_ok=True)
-                    fsync_directory_chain(target.parent, self.resolver.global_root)
-                    fsync_directory_chain(backup.parent, transaction)
-                    if path_exists(target):
-                        os.replace(target, backup)
-                        fsync_directory_chain(target.parent, self.resolver.global_root)
-                        fsync_directory(backup.parent)
-                        if content_digest(backup) != item.global_digest:
+                    with (
+                        bound_directory(
+                            self.resolver.global_root,
+                            relative.parent,
+                            create=True,
+                        ) as target_directory,
+                        bound_directory(
+                            backup_root,
+                            relative.parent,
+                            create=True,
+                        ) as backup_directory,
+                        bound_directory(staged_root, relative.parent) as staged_directory,
+                    ):
+                        target_exists = entry_exists(target_directory, target.name)
+                        if target_exists and item.global_digest == "missing":
                             raise StaleComparisonError(
                                 f"Global content changed during publication: {entry_id}"
                             )
-                        record["state"] = "backed_up"
-                        write_json_durable(journal, journal_payload)
-                    elif item.global_digest != "missing":
-                        raise StaleComparisonError(
-                            f"Global content changed during publication: {entry_id}"
-                        )
-                    os.replace(staged, target)
-                    fsync_directory(target.parent)
-                    fsync_directory(staged.parent)
+                        if target_exists:
+                            try:
+                                move_without_replacement(
+                                    target.name,
+                                    backup.name,
+                                    source_directory=target_directory,
+                                    destination_directory=backup_directory,
+                                )
+                            except (FileExistsError, FileNotFoundError) as exc:
+                                raise StaleComparisonError(
+                                    f"Global content changed during publication: {entry_id}"
+                                ) from exc
+                            except NotImplementedError as exc:
+                                raise CatalogSyncError(
+                                    "Atomic no-replacement publication is unavailable"
+                                ) from exc
+                            backup_directory.verify()
+                            if content_digest(backup) != item.global_digest:
+                                raise StaleComparisonError(
+                                    f"Global content changed during publication: {entry_id}"
+                                )
+                            record["state"] = "backed_up"
+                            write_json_durable(journal, journal_payload)
+                            self.failure_injector("backed_up", entry_id)
+                        elif item.global_digest != "missing":
+                            raise StaleComparisonError(
+                                f"Global content changed during publication: {entry_id}"
+                            )
+                        try:
+                            move_without_replacement(
+                                staged.name,
+                                target.name,
+                                source_directory=staged_directory,
+                                destination_directory=target_directory,
+                            )
+                        except (FileExistsError, FileNotFoundError) as exc:
+                            raise StaleComparisonError(
+                                f"Global content changed during publication: {entry_id}"
+                            ) from exc
+                        except NotImplementedError as exc:
+                            raise CatalogSyncError(
+                                "Atomic no-replacement publication is unavailable"
+                            ) from exc
                     record["state"] = "published"
                     write_json_durable(journal, journal_payload)
                     self.failure_injector("published", entry_id)
