@@ -34,6 +34,7 @@ from cafe.catalogs.resolver import (
 )
 from cafe.catalogs.transactions import (
     bound_directory,
+    content_digest_at_parent,
     entry_exists,
     entry_identity,
     fsync_directory,
@@ -776,6 +777,7 @@ class CatalogSyncService:
                                     destination_directory=backup_directory,
                                     expected_source_identity=target_identity,
                                     expected_source_digest=item.global_digest,
+                                    expected_source_digest_parent=target_directory.path,
                                 )
                             except (FileExistsError, FileNotFoundError) as exc:
                                 raise StaleComparisonError(
@@ -786,7 +788,10 @@ class CatalogSyncService:
                                     "Atomic no-replacement publication is unavailable"
                                 ) from exc
                             backup_directory.verify()
-                            if content_digest(backup) != item.global_digest:
+                            if (
+                                content_digest_at_parent(backup, target_directory.path)
+                                != item.global_digest
+                            ):
                                 raise StaleComparisonError(
                                     f"Global content changed during publication: {entry_id}"
                                 )
@@ -809,6 +814,7 @@ class CatalogSyncService:
                                 destination_directory=target_directory,
                                 expected_source_identity=staged_identity,
                                 expected_source_digest=item.project_digest,
+                                expected_source_digest_parent=staged_directory.path,
                             )
                         except (FileExistsError, FileNotFoundError) as exc:
                             raise StaleComparisonError(

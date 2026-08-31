@@ -285,6 +285,90 @@ def test_approved_root_symlink_publishes_self_contained_global_content(
     assert global_entry.digest == approved.differences[0].project_digest
 
 
+def test_publication_replaces_supported_global_root_symlink(
+    tmp_path: Path,
+) -> None:
+    service, project, global_root = _service(tmp_path)
+    project_entry = _entry(
+        project / ".cafe",
+        CatalogKind.PLAYBOOK,
+        "standard",
+        "approved-new",
+    )
+    global_playbooks = global_root / "playbooks"
+    global_target = global_playbooks / "standard.data"
+    global_target.parent.mkdir(parents=True)
+    global_target.write_text(
+        "playbook: {id: standard}\nsteps: {}\nmarker: approved-old\n",
+        encoding="utf-8",
+    )
+    global_entry = global_playbooks / "standard.yaml"
+    global_entry.symlink_to(global_target.name)
+    approved = service.compare()
+    approved_new_digest = content_digest(project_entry)
+
+    result = service.sync(approved.token, ["playbook:standard"])
+    resolved = CatalogResolver(
+        project_root=tmp_path / "other-project",
+        canonical_root=tmp_path / "other-project",
+        global_root=global_root,
+        builtin_root=tmp_path / "other-builtin",
+    ).resolve(CatalogKind.PLAYBOOK, "standard")
+
+    assert result.updated == ("playbook:standard",)
+    assert result.comparison.status == "identical"
+    assert not global_entry.is_symlink()
+    assert content_digest(global_entry) == approved_new_digest
+    assert resolved is not None
+    assert resolved.source == "global"
+    assert resolved.digest == approved_new_digest
+
+
+def test_publication_restores_supported_global_root_symlink_after_failure(
+    tmp_path: Path,
+) -> None:
+    def fail_after_backup(boundary: str, entry_id: str | None) -> None:
+        if boundary == "backed_up" and entry_id == "playbook:standard":
+            raise RuntimeError("injected failure after backup")
+
+    service, project, global_root = _service(
+        tmp_path,
+        failure_injector=fail_after_backup,
+    )
+    _entry(project / ".cafe", CatalogKind.PLAYBOOK, "standard", "approved-new")
+    global_playbooks = global_root / "playbooks"
+    global_target = global_playbooks / "standard.data"
+    global_target.parent.mkdir(parents=True)
+    global_target.write_text(
+        "playbook: {id: standard}\nsteps: {}\nmarker: approved-old\n",
+        encoding="utf-8",
+    )
+    global_entry = global_playbooks / "standard.yaml"
+    global_entry.symlink_to(global_target.name)
+    approved_old_digest = content_digest(global_entry)
+    approved = service.compare()
+
+    with pytest.raises(CatalogSyncError):
+        service.sync(approved.token, ["playbook:standard"])
+
+    resolved = CatalogResolver(
+        project_root=tmp_path / "other-project",
+        canonical_root=tmp_path / "other-project",
+        global_root=global_root,
+        builtin_root=tmp_path / "other-builtin",
+    ).resolve(CatalogKind.PLAYBOOK, "standard")
+    receipt = next((global_root / ".catalog-transactions").glob("*/recovery.json"))
+    evidence = json.loads(receipt.read_text(encoding="utf-8"))
+
+    assert global_entry.is_symlink()
+    assert content_digest(global_entry) == approved_old_digest
+    assert resolved is not None
+    assert resolved.source == "global"
+    assert resolved.digest == approved_old_digest
+    assert evidence["status"] == "rolled_back"
+    assert evidence["restored"] == ["playbook:standard"]
+
+
 def test_approved_directory_root_symlink_publishes_self_contained_global_content(
     tmp_path: Path,
 ) -> None:

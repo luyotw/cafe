@@ -171,6 +171,15 @@ def entry_identity(directory: BoundDirectory, name: str) -> EntryIdentity:
     return _filesystem_identity(metadata)
 
 
+def content_digest_at_parent(path: Path, original_parent: Path) -> str:
+    """Digest a relocated root symlink from its authoritative parent."""
+    from cafe.catalogs.resolver import content_digest
+
+    if path.is_symlink():
+        return content_digest(path, root_symlink_base=original_parent)
+    return content_digest(path)
+
+
 def _native_move_without_replacement(
     source_name: str,
     destination_name: str,
@@ -224,9 +233,10 @@ def move_without_replacement(
     destination_directory: BoundDirectory,
     expected_source_identity: Optional[EntryIdentity] = None,
     expected_source_digest: Optional[str] = None,
+    expected_source_digest_parent: Optional[Path] = None,
 ) -> None:
     """Move one content-bound entry between bound parents without overwriting."""
-    from cafe.catalogs.resolver import content_digest
+    from cafe.catalogs.resolver import CatalogValidationError
 
     source_directory.verify()
     destination_directory.verify()
@@ -235,12 +245,25 @@ def move_without_replacement(
         and entry_identity(source_directory, source_name) != expected_source_identity
     ):
         raise FileNotFoundError(errno.ENOENT, "Catalog source identity changed", source_name)
-    if (
-        expected_source_digest is not None
-        and content_digest(source_directory.path / source_name)
-        != expected_source_digest
-    ):
-        raise FileNotFoundError(errno.ENOENT, "Catalog source content changed", source_name)
+    digest_parent = expected_source_digest_parent or source_directory.path
+    if expected_source_digest is not None:
+        try:
+            source_digest = content_digest_at_parent(
+                source_directory.path / source_name,
+                digest_parent,
+            )
+        except (CatalogValidationError, OSError) as exc:
+            raise FileNotFoundError(
+                errno.ENOENT,
+                "Catalog source content changed",
+                source_name,
+            ) from exc
+        if source_digest != expected_source_digest:
+            raise FileNotFoundError(
+                errno.ENOENT,
+                "Catalog source content changed",
+                source_name,
+            )
     _native_move_without_replacement(
         source_name,
         destination_name,
@@ -254,11 +277,18 @@ def move_without_replacement(
         and entry_identity(destination_directory, destination_name)
         != expected_source_identity
     )
-    content_changed = (
-        expected_source_digest is not None
-        and content_digest(destination_directory.path / destination_name)
-        != expected_source_digest
-    )
+    content_changed = False
+    if expected_source_digest is not None:
+        try:
+            content_changed = (
+                content_digest_at_parent(
+                    destination_directory.path / destination_name,
+                    digest_parent,
+                )
+                != expected_source_digest
+            )
+        except (CatalogValidationError, OSError):
+            content_changed = True
     if identity_changed or content_changed:
         try:
             _native_move_without_replacement(
@@ -553,7 +583,11 @@ def _validate_recovery_content(
         target = global_root / relative
         backup = backup_root / relative
         target_digest = content_digest(target) if path_exists(target) else None
-        backup_digest = content_digest(backup) if path_exists(backup) else None
+        backup_digest = (
+            content_digest_at_parent(backup, target.parent)
+            if path_exists(backup)
+            else None
+        )
         if record["old_digest"] == "missing":
             if backup_digest is not None:
                 raise CatalogRecoveryError(
@@ -612,6 +646,7 @@ def _retain_published_for_recovery(
             destination_directory=removed_directory,
             expected_source_identity=target_identity,
             expected_source_digest=expected_digest,
+            expected_source_digest_parent=target_directory.path,
         )
     except FileExistsError as exc:
         raise OSError("published content changed before rollback removal") from exc
@@ -621,10 +656,10 @@ def _retain_published_for_recovery(
                 return True
         raise OSError("published content changed before rollback removal") from exc
     removed_directory.verify()
-    if content_digest(removed) == expected_digest:
+    if content_digest_at_parent(removed, target_directory.path) == expected_digest:
         return False
     removed_identity = entry_identity(removed_directory, removed.name)
-    removed_digest = content_digest(removed)
+    removed_digest = content_digest_at_parent(removed, target_directory.path)
     try:
         move_without_replacement(
             removed.name,
@@ -633,6 +668,7 @@ def _retain_published_for_recovery(
             destination_directory=target_directory,
             expected_source_identity=removed_identity,
             expected_source_digest=removed_digest,
+            expected_source_digest_parent=target_directory.path,
         )
     except (FileExistsError, FileNotFoundError) as exc:
         if entry_exists(target_directory, target.name):
@@ -731,7 +767,11 @@ def recover_catalog_transaction(
                 backup_exists = entry_exists(backup_directory, backup.name)
                 removed_exists = entry_exists(removed_directory, removed.name)
                 target_digest = content_digest(target) if target_exists else None
-                backup_digest = content_digest(backup) if backup_exists else None
+                backup_digest = (
+                    content_digest_at_parent(backup, target_directory.path)
+                    if backup_exists
+                    else None
+                )
 
                 expected_target_digests = {record["new_digest"]}
                 if record["old_digest"] != "missing":
@@ -742,7 +782,11 @@ def recover_catalog_transaction(
 
                 if backup_exists and backup_digest != record["old_digest"]:
                     raise OSError("backup digest does not match transaction intent")
-                if removed_exists and content_digest(removed) != record["new_digest"]:
+                if (
+                    removed_exists
+                    and content_digest_at_parent(removed, target_directory.path)
+                    != record["new_digest"]
+                ):
                     raise OSError("removed publication evidence does not match intent")
 
                 if target_exists and backup_exists:
@@ -792,6 +836,7 @@ def recover_catalog_transaction(
                             destination_directory=target_directory,
                             expected_source_identity=backup_identity,
                             expected_source_digest=record["old_digest"],
+                            expected_source_digest_parent=target_directory.path,
                         )
                     except (FileExistsError, FileNotFoundError) as exc:
                         raise OSError("target changed before rollback restore") from exc
