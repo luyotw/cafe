@@ -1,7 +1,7 @@
 ---
 name: cafe-review
 description: "審查程式碼品質與風險"
-version: 1.11.0
+version: 1.12.0
 workflow:
   execution_profile:
     workload: review
@@ -105,7 +105,7 @@ Read your agent file: {agent_file}
 - Repo 搜尋與輸出上限：請依 shared skill「cafe-workflow-common」的 **Bounded repository inspection**；本 skill 不重複敘述。
 - 測試證據、repository hooks 與 CI 的分工：請依 shared skill「cafe-workflow-common」的 **Repository-owned quality gates**；本 skill 不重複敘述。
 - 審查變更相關的 targeted test 選擇與品質；不得因缺少 CAFE verification receipt 打回 develop，也不在 review 重跑 repository-wide 驗證。
-- 首輪建立完整 issue acceptance closure 與 triggered risk coverage 基線；correction 輪只重開上輪 blocker、本輪修正影響的 row 與新 finding，完整邊界經證明未變的 row 以 `closed_reused` 引用既有證據，不重跑 probe 或重寫內容。
+- 首輪建立完整 issue acceptance closure 與 triggered risk coverage 基線；correction 輪只重開上輪 blocker、本輪修正影響的 row 與新 finding，完整邊界經證明未變的 row 以 `closed_reused` 引用既有證據，不重跑 probe 或重寫內容；但 `closed_reused` 只省略重複證據，不得省略 provisional pass 前建立或核對完整累積變更的 cross-component seam coverage，已完整記錄且未受影響的 seam 可沿用。
 - 若需修改，把 next-step baton 寫成 `develop`
 - 通過時，把 next-step baton 寫成下一個 workflow step（預設 playbook 為 `pr`）
 - 與 developer 往返、仲裁、以及 blackboard/baton 更新：請依 shared skill「cafe-workflow-common」的 **Develop and review disagreement protocol** 與 **Shared Rules**；本 skill 不重複敘述。
