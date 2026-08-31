@@ -4,6 +4,7 @@ import hashlib
 import json
 from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -25,6 +26,10 @@ PUBLISH_STEP = {
     "capability_requests": ["cafe.pr.publish"],
     "behavior": {"publish_confirmation": True},
 }
+
+
+def _browser_phase(*, open_pr: bool) -> SimpleNamespace:
+    return SimpleNamespace(open_pr=open_pr)
 
 
 def _enable_remote_pr(issue_dir: Path) -> None:
@@ -916,7 +921,10 @@ def test_pr_link_opener_opens_current_pr_url_when_confirmed() -> None:
         )
 
         result = hook.run(
-            stage="publish_output", status_code=PhaseStatusCode.CONFIRMED, step_def=PUBLISH_STEP
+            stage="publish_output",
+            phase=_browser_phase(open_pr=True),
+            status_code=PhaseStatusCode.CONFIRMED,
+            step_def=PUBLISH_STEP,
         )
 
     mock_open.assert_called_once_with("https://github.com/test/repo/pull/123")
@@ -925,13 +933,13 @@ def test_pr_link_opener_opens_current_pr_url_when_confirmed() -> None:
     ]
 
 
-def test_pr_link_opener_skips_browser_in_non_interactive() -> None:
+def test_pr_link_opener_requires_explicit_opt_in_even_with_a_tty() -> None:
     hook = PRLinkOpener()
 
     with (
         patch("cafe.core.capabilities.GitHubOps") as mock_github_ops,
         patch("cafe.core.capabilities.webbrowser.open") as mock_open,
-        patch("cafe.core.capabilities.sys.stdin.isatty", return_value=False),
+        patch("cafe.core.capabilities.sys.stdin.isatty", return_value=True),
         patch("cafe.core.capabilities._current_repo_slug", return_value="test/repo"),
     ):
         mock_github_ops.return_value.get_current_pr_url.return_value = (
@@ -939,7 +947,10 @@ def test_pr_link_opener_skips_browser_in_non_interactive() -> None:
         )
 
         result = hook.run(
-            stage="publish_output", status_code=PhaseStatusCode.CONFIRMED, step_def=PUBLISH_STEP
+            stage="publish_output",
+            phase=_browser_phase(open_pr=False),
+            status_code=PhaseStatusCode.CONFIRMED,
+            step_def=PUBLISH_STEP,
         )
 
     mock_open.assert_not_called()
@@ -957,7 +968,10 @@ def test_pr_link_opener_noops_when_pr_url_unavailable() -> None:
         mock_github_ops.return_value.get_current_pr_url.side_effect = Exception("no pr")
 
         result = hook.run(
-            stage="publish_output", status_code=PhaseStatusCode.CONFIRMED, step_def=PUBLISH_STEP
+            stage="publish_output",
+            phase=_browser_phase(open_pr=True),
+            status_code=PhaseStatusCode.CONFIRMED,
+            step_def=PUBLISH_STEP,
         )
 
     mock_open.assert_not_called()
@@ -980,7 +994,10 @@ def test_pr_link_opener_noops_when_browser_open_fails() -> None:
         )
 
         result = hook.run(
-            stage="publish_output", status_code=PhaseStatusCode.CONFIRMED, step_def=PUBLISH_STEP
+            stage="publish_output",
+            phase=_browser_phase(open_pr=True),
+            status_code=PhaseStatusCode.CONFIRMED,
+            step_def=PUBLISH_STEP,
         )
 
     mock_open.assert_called_once_with("https://github.com/test/repo/pull/123")
@@ -1494,7 +1511,7 @@ def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_with
     assert result.events[1]["type"] == "capability_receipt"
 
 
-def test_github_pr_creator_publish_output_runs_from_pr_done_await_agent_baton(
+def test_github_pr_creator_publish_output_rejects_pr_done_await_agent_baton(
     tmp_path: Path,
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
@@ -1557,12 +1574,76 @@ def test_github_pr_creator_publish_output_runs_from_pr_done_await_agent_baton(
             status_code=None,
         )
 
-    assert mock_run.call_count == 2
-    assert mock_run.call_args_list[0].args[0][0] == "git"
-    assert mock_run.call_args_list[1].args[0][0] == "/bin/bash"
-    assert result.events[0]["type"] == "pr_synced"
-    assert result.events[1]["type"] == "capability_receipt"
-    assert result.context_updates["pr_sync_action"] == "updated"
+    mock_run.assert_not_called()
+    assert result.events == []
+    assert result.context_updates == {}
+
+
+def test_github_pr_creator_rejects_invalid_baton_with_inherited_baton_completion(
+    tmp_path: Path,
+) -> None:
+    """A playbook-level baton contract must gate confirmed PR publication too."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    _enable_remote_pr(issue_dir)
+    phase_dir = issue_dir / "pr"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    publish_request_file = phase_dir / "iteration_001" / "publish_request.json"
+    next_step_file = issue_dir / "next_step.txt"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Test PR\n\nBody\n", encoding="utf-8")
+    publish_request_file.write_text(
+        json.dumps(
+            {
+                "capability": "cafe.pr.publish",
+                "args": {"output": ".cafe/issues/demo/pr/iteration_001/output.md"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    next_step_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": "pr",
+                "to_owner": "done",
+                "to_step": "done",
+                "intent": "await_agent",
+            }
+        ),
+        encoding="utf-8",
+    )
+    step_def = {
+        "capability_requests": ["cafe.pr.publish"],
+        "on": {"workflow_complete": "_done"},
+    }
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+    phase.playbook = {
+        "behavior": {"completion": "baton", "publish_confirmation": True},
+        "steps": {"pr": step_def},
+    }
+
+    hook = GitHubPRCreator()
+    with patch("cafe.core.capabilities.subprocess.run") as mock_run:
+        result = hook.run(
+            stage="publish_output",
+            phase=phase,
+            step_name="pr",
+            step_def=step_def,
+            output_file=output_file,
+            publish_request_file=publish_request_file,
+            context={
+                "next_step_path": str(next_step_file),
+                "publish_confirmation": True,
+                "behavior_completion": "baton",
+            },
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+
+    mock_run.assert_not_called()
+    assert result.events == []
+    assert result.context_updates == {}
 
 
 def test_github_pr_creator_publish_output_runs_from_legacy_done_baton(

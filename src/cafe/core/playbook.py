@@ -786,6 +786,18 @@ class PlaybookDefinition(BaseModel):
                     f"steps.{step_name}.behavior.publish_confirmation requires "
                     "the cafe.pr.publish capability request"
                 )
+            if behavior.completion == "baton":
+                invalid_terminal_intents = sorted(
+                    intent
+                    for intent, target in step.on.items()
+                    if target in {DONE_TARGET, "done"} and intent != "workflow_complete"
+                )
+                if invalid_terminal_intents:
+                    raise ValueError(
+                        f"steps.{step_name}.behavior.completion='baton' requires terminal "
+                        "transitions to use workflow_complete; invalid intents: "
+                        f"{invalid_terminal_intents}"
+                    )
             _validate_ownership_contract(step_name, step, self.steps)
         return self
 

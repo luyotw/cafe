@@ -584,6 +584,11 @@ def workflow(
         "--mute-agent-output",
         help="Suppress agent response streaming while preserving workflow events and artifacts",
     ),
+    open_pr: bool = typer.Option(
+        False,
+        "--open-pr",
+        help="Open the published pull request in a browser (explicit opt-in)",
+    ),
     dry_run: bool = typer.Option(
         True, "--dry-run/--execute", help="Preview the read-only workflow simulation"
     ),
@@ -699,6 +704,7 @@ def workflow(
                 phase_name=phase_name,
                 step_user_inputs=initial_step_user_inputs,
                 interactive=_interactive_mode(),
+                open_pr=open_pr,
                 extra_allowed_directories=add_dir_values,
                 stream_agent_output=not mute_agent_output,
             )

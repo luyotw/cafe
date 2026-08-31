@@ -260,7 +260,7 @@ steps:
     hooks:
       prepare_input: [UserInputCollector]
       publish_output: [GitHubPRCreator]
-    on: {await_agent: _done}
+    on: {workflow_complete: _done}
 """.strip(),
         encoding="utf-8",
     )
