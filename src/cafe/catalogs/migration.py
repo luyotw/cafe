@@ -129,6 +129,32 @@ def _retired_content_digest(path: Path, source: Path) -> str:
     return content_digest(path)
 
 
+def _move_without_replacement(
+    source_name: str,
+    destination_name: str,
+    *,
+    source_directory: int,
+    destination_directory: int,
+    conflict_message: str,
+) -> None:
+    """Move one filesystem object without overwriting a concurrent destination."""
+    try:
+        os.link(
+            source_name,
+            destination_name,
+            src_dir_fd=source_directory,
+            dst_dir_fd=destination_directory,
+            follow_symlinks=False,
+        )
+    except FileExistsError as exc:
+        raise StaleMigrationDecision(conflict_message) from exc
+    except FileNotFoundError as exc:
+        raise StaleMigrationDecision("Migration source changed before move") from exc
+    os.fsync(destination_directory)
+    os.unlink(source_name, dir_fd=source_directory)
+    os.fsync(source_directory)
+
+
 @contextmanager
 def _bound_agent_source(path: Path, expected_digest: str) -> Iterator[tuple[int, int, int]]:
     """Hold and validate the approved filesystem object through retirement."""
@@ -756,14 +782,15 @@ class AgentSnapshotMigrator:
                     source_directory = os.open(source.parent, directory_flags)
                     destination_directory = os.open(destination.parent, directory_flags)
                     try:
-                        os.replace(
+                        _move_without_replacement(
                             source.name,
                             destination.name,
-                            src_dir_fd=source_directory,
-                            dst_dir_fd=destination_directory,
+                            source_directory=source_directory,
+                            destination_directory=destination_directory,
+                            conflict_message=(
+                                f"Retirement destination changed before move: {entry_id}"
+                            ),
                         )
-                        os.fsync(source_directory)
-                        os.fsync(destination_directory)
                         destination_matches = (
                             self._record_path_exists(destination)
                             and _filesystem_identity(destination.lstat()) == approved_identity
@@ -784,14 +811,16 @@ class AgentSnapshotMigrator:
                                 self._record_path_exists(destination)
                                 and not self._record_path_exists(source)
                             ):
-                                os.replace(
+                                _move_without_replacement(
                                     destination.name,
                                     source.name,
-                                    src_dir_fd=destination_directory,
-                                    dst_dir_fd=source_directory,
+                                    source_directory=destination_directory,
+                                    destination_directory=source_directory,
+                                    conflict_message=(
+                                        "Project agent changed before retirement rollback: "
+                                        f"{entry_id}"
+                                    ),
                                 )
-                                os.fsync(source_directory)
-                                os.fsync(destination_directory)
                             raise StaleMigrationDecision(
                                 "Retirement identities changed before the decision "
                                 f"was consumed: {entry_id}"
@@ -849,14 +878,15 @@ class AgentSnapshotMigrator:
                     raise StaleMigrationDecision(
                         f"Retired agent recovery identity changed: {entry_id}"
                     )
-                os.replace(
+                _move_without_replacement(
                     destination.name,
                     source.name,
-                    src_dir_fd=destination_directory,
-                    dst_dir_fd=source_directory,
+                    source_directory=destination_directory,
+                    destination_directory=source_directory,
+                    conflict_message=(
+                        f"Project agent changed before retirement recovery: {entry_id}"
+                    ),
                 )
-                os.fsync(source_directory)
-                os.fsync(destination_directory)
             finally:
                 os.close(source_directory)
                 os.close(destination_directory)

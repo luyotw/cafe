@@ -400,6 +400,75 @@ def test_interrupted_fallback_validation_restores_project_authority_on_resume(
     assert resolver.resolve(CatalogKind.AGENT, "developer/David").source == "project"
 
 
+def test_interrupted_retirement_preserves_source_created_during_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    interrupted = False
+
+    def interrupt_after_move(boundary: str, _entry_id: str | None) -> None:
+        nonlocal interrupted
+        if boundary == "after_retire" and not interrupted:
+            interrupted = True
+            raise OSError("injected interruption after move")
+
+    project = tmp_path / "project"
+    builtin = tmp_path / "builtin"
+    source = _agent(
+        project / ".cafe" / "agents" / "developer" / "David.md",
+        "David",
+        "approved",
+    )
+    _agent(builtin / "agents" / "developer" / "David.md", "David", "approved")
+    resolver = CatalogResolver(
+        project_root=project,
+        canonical_root=project,
+        global_root=tmp_path / "global",
+        builtin_root=builtin,
+    )
+    migrator = AgentSnapshotMigrator(
+        resolver,
+        is_tracked=lambda _path: False,
+        failure_injector=interrupt_after_move,
+    )
+    preview = migrator.preview()
+    decisions = {"agent:developer/David": "retire"}
+
+    with pytest.raises(OSError, match="injected interruption"):
+        migrator.apply(preview.token, decisions)
+
+    manifest = (
+        project / ".cafe" / "migrations" / "agent-snapshots" / preview.token[:16] / "manifest.json"
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    retired = Path(payload["items"][0]["retired_path"])
+    original_stat = os.stat
+    inserted = False
+
+    def insert_source_after_absence_check(path, *args, **kwargs):
+        nonlocal inserted
+        result = original_stat(path, *args, **kwargs)
+        if (
+            not inserted
+            and path == retired.name
+            and kwargs.get("dir_fd") is not None
+            and kwargs.get("follow_symlinks") is False
+        ):
+            inserted = True
+            _agent(source, "David", "intervening")
+        return result
+
+    monkeypatch.setattr(os, "stat", insert_source_after_absence_check)
+
+    with pytest.raises(StaleMigrationDecision):
+        migrator.apply(preview.token, decisions)
+
+    assert inserted
+    assert "intervening" in source.read_text(encoding="utf-8")
+    assert retired.is_file()
+    assert resolver.resolve(CatalogKind.AGENT, "developer/David").source == "project"
+
+
 def test_preserve_decision_is_shared_by_canonical_and_linked_project_views(
     tmp_path: Path,
 ) -> None:
