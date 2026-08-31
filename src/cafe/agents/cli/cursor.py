@@ -137,15 +137,22 @@ class CursorCLI(AbstractCLI):
         return ["--output-format", "stream-json"]
 
     def extract_session_id(self, output_lines: List[str]) -> Optional[str]:
-        """Extract session ID from output.
-
-        Cursor automatically manages session, no need to extract from output.
+        """Extract the acquired Cursor session ID from stream-json output.
 
         Args:
             output_lines: List of lines from CLI output
 
         Returns:
-            None (Cursor automatically manages session)
+            Session ID from the initialization event, when present.
         """
-        # Cursor automatically manages session, no need to extract from output
+        for line in output_lines:
+            try:
+                payload = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            session_id = payload.get("session_id")
+            if isinstance(session_id, str) and session_id.strip():
+                return session_id
         return None

@@ -12,7 +12,7 @@ from cafe.agents.diagnostics import (
     sanitize_error_excerpt,
 )
 from cafe.agents.executor import AgentExecutor, AgentExecutionError
-from cafe.core.session import SessionManager
+from cafe.core.session import SessionManager, SessionStore
 from cafe.core.session_continuation import (
     SessionContinuation,
     SessionContinuationPolicy,
@@ -37,7 +37,7 @@ class AgentManager:
 
     def __init__(
         self,
-        session_manager: Optional[SessionManager] = None,
+        session_manager: Optional[SessionStore] = None,
         issue_name: Optional[str] = None,
         stream_agent_output: bool = True,
     ) -> None:

@@ -3,9 +3,30 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Protocol
 
 from cafe.core.types import AgentCLI, AgentConfig, SessionData
+
+
+class SessionStore(Protocol):
+    """Persistence boundary required by ``AgentManager``."""
+
+    def load_session(
+        self,
+        agent_name: str,
+        cli: AgentCLI,
+        issue_name: Optional[str] = None,
+        phase_name: Optional[str] = None,
+    ) -> Optional[SessionData]: ...
+
+    def save_session(
+        self,
+        agent_name: str,
+        cli: AgentCLI,
+        session_id: str,
+        issue_name: Optional[str] = None,
+        phase_name: Optional[str] = None,
+    ) -> None: ...
 
 
 class SessionManager:
