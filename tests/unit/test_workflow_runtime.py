@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.human_tasks import HumanTaskBinding, HumanTaskDecision, HumanTaskPolicy
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -197,7 +197,7 @@ def test_runtime_blocks_pr_done_without_publish_receipt(tmp_path: Path) -> None:
                 "role": "developer",
                 "behavior": {"completion": "baton", "publish_confirmation": True},
                 "capability_requests": ["cafe.pr.publish"],
-                "on": {"await_agent": "_done"},
+                "on": {"confirm_output": "pr", "workflow_complete": "_done"},
             },
         },
     }
@@ -1842,6 +1842,56 @@ def test_runtime_revision_materializes_a_fresh_plan_confirmation_task(tmp_path: 
     assert pending[0].id != previous.id
     assert pending[0].iteration == 5
     assert pending[0].trigger == "confirm_output"
+
+
+def test_runtime_enforces_confirmation_gate_over_agent_baton(tmp_path: Path) -> None:
+    """A confirmation-gated phase cannot advance itself with an agent baton."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "enforced-plan-confirmation"
+    issue_dir.mkdir(parents=True)
+    playbook = PlaybookLoader().load("standard-qa")
+
+    def executor(step_name: str, step_def: dict, blackboard: object) -> StepExecutionResult:
+        assert step_name == "plan"
+        BlackboardStore(issue_dir).update_handoff_contract(
+            blackboard,
+            from_step="plan",
+            to_owner=HandoffOwner.AGENT,
+            to_step="develop",
+            intent=HandoffIntent.AWAIT_AGENT,
+            source="test.plan_agent_bypass",
+        )
+        return StepExecutionResult(response="plan complete", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="plan")
+
+    current = BlackboardStore(issue_dir).load_or_create("plan")
+    pending = [
+        task
+        for task in HumanTaskRecordStore(issue_dir).tasks()
+        if task.status is HumanTaskStatus.PENDING
+    ]
+    enforced = [event for event in current.events if event.event_type == "confirmation_gate_enforced"]
+
+    assert result.completed is False
+    assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
+    assert current.current_step == "user"
+    assert current.handoff_contract is not None
+    assert current.handoff_contract.to_owner is HandoffOwner.USER
+    assert current.handoff_contract.to_step == "user"
+    assert current.handoff_contract.intent is HandoffIntent.CONFIRM_OUTPUT
+    assert len(pending) == 1
+    assert pending[0].step == "plan"
+    assert pending[0].trigger == "confirm_output"
+    assert enforced[-1].data == {
+        "step": "plan",
+        "original_owner": "agent",
+        "original_step": "develop",
+        "original_intent": "await_agent",
+    }
 
 
 def test_runtime_status_code_missing_no_handoff_contract(tmp_path: Path) -> None:

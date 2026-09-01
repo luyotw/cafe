@@ -750,6 +750,37 @@ class BlackboardWorkflowRuntime:
         if contract.source == "unknown":
             contract.source = "baton"
         self.blackboard_store.write_handoff_contract(self.blackboard, contract)
+        if (
+            step_on_declares(self.steps.get(current_step, {}), "confirm_output")
+            and not resolve_step_behavior(self.playbook, current_step).publish_confirmation
+            and contract.to_owner is not HandoffOwner.USER
+            and not (
+                contract.to_owner is HandoffOwner.AGENT
+                and contract.to_step == current_step
+            )
+        ):
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "confirmation_gate_enforced",
+                {
+                    "step": current_step,
+                    "original_owner": contract.to_owner.value,
+                    "original_step": contract.to_step,
+                    "original_intent": contract.intent.value,
+                },
+            )
+            self.blackboard_store.update_handoff_contract(
+                self.blackboard,
+                from_step=current_step,
+                to_owner=HandoffOwner.USER,
+                to_step="user",
+                intent=HandoffIntent.CONFIRM_OUTPUT,
+                source="workflow.confirmation_gate",
+            )
+            contract = self.blackboard_store.load_handoff_contract(
+                self.blackboard,
+                allowed_steps=list(self.steps.keys()),
+            )
         return contract
 
     def _step_requires_publish_receipt(self, current_step: str) -> bool:
