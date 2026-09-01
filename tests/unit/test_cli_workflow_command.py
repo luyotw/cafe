@@ -25,7 +25,6 @@ from cafe.ui.cli_shared import (
     _resolve_issue_playbook_name,
     apply_alignment_decision_from_payload,
 )
-from cafe.ui.commands.workflow import _reset_baton_for_explicit_start_step
 from cafe.ui.human_tasks import resolve_step_human_task
 from cafe.utils.config import ConfigManager
 
@@ -2046,35 +2045,62 @@ def test_workflow_command_start_step_rebuilds_stale_text_baton(tmp_path: Path, m
     assert blackboard.handoff_contract.from_step == "spec"
 
 
-def test_explicit_start_step_supersedes_stale_handoff_summary(tmp_path: Path) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue-stale-summary"
+def test_explicit_start_step_preserves_user_handoff_for_runtime_supersession(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The runtime must see the original task before it replaces the baton."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-stale-task"
     store = BlackboardStore(issue_dir)
     blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
-    store.set_handoff_summary(blackboard, "Alignment checkpoint required before spec")
     store.update_handoff_contract(
         blackboard,
-        from_step="spec",
+        from_step="develop",
         to_owner=HandoffOwner.USER,
         to_step="user",
-        intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
+        intent=HandoffIntent.NEED_CLARIFICATION,
         source="test",
     )
+    observed: dict[str, object] = {}
 
-    _reset_baton_for_explicit_start_step(
-        issue_dir=issue_dir,
-        blackboard=blackboard,
-        active_step="spec",
-    )
+    class CapturingRuntime:
+        def __init__(self, *, issue_dir: Path, **_kwargs: object) -> None:
+            self.issue_dir = issue_dir
 
-    reloaded = store.load_or_create("spec", playbook_id="standard")
-    assert reloaded.current_step == "spec"
-    assert reloaded.handoff_contract is not None
-    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
-    assert reloaded.handoff_contract.to_step == "spec"
-    assert reloaded.handoff_summary == (
-        "Explicit workflow start requested for spec; the prior handoff is superseded."
-    )
+        def run(self, *, start_step: str | None = None, single_step: bool = False):
+            state = BlackboardStore(self.issue_dir).load_or_create("spec", playbook_id="standard")
+            observed.update(
+                {
+                    "current_step": state.current_step,
+                    "handoff": state.handoff_contract,
+                    "start_step": start_step,
+                    "single_step": single_step,
+                }
+            )
+            return PlaybookRunResult(
+                final_step="spec", final_status_code="await_agent", completed=True
+            )
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.BlackboardWorkflowRuntime", CapturingRuntime),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-stale-task"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--start-step", "spec"],
+        )
+
+    assert result.exit_code == 0
+    assert observed["current_step"] == "user"
+    handoff = observed["handoff"]
+    assert handoff is not None
+    assert handoff.from_step == "develop"
+    assert handoff.to_owner is HandoffOwner.USER
+    assert observed["start_step"] == "spec"
 
 
 def test_workflow_command_prints_guidance_for_invalid_runtime_baton(

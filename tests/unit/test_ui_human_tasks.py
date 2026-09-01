@@ -400,6 +400,68 @@ def test_command_completion_binds_the_current_durable_task_before_routing(tmp_pa
     assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
 
 
+def test_stale_durable_task_cannot_be_completed_by_the_task_command_path(tmp_path: Path) -> None:
+    """A task command cannot route an obsolete handoff back into its old step."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "stale-task-command"
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("spec", playbook_id="standard")
+    store.set_current_step(blackboard, "user")
+    old_contract = store.update_handoff_contract(
+        blackboard,
+        from_step="develop",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.NEED_CLARIFICATION,
+        source="test",
+    )
+    records = HumanTaskRecordStore(issue_dir)
+    stale = records.materialize(
+        workflow_id=blackboard.workflow_id,
+        step="develop",
+        iteration=1,
+        trigger="need_clarification",
+        policy_id="develop-feedback",
+        prompt="Clarify develop",
+        expected_result={"input_schema": "feedback"},
+        continuations={"submit": "develop"},
+        assignee_type="user",
+        handoff_key=":".join(
+            (
+                "user-handoff",
+                blackboard.workflow_id,
+                old_contract.from_step,
+                old_contract.intent.value,
+                old_contract.created_at,
+            )
+        ),
+    )
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.NEED_CLARIFICATION,
+        source="test",
+    )
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data={"steps": {"develop": {"skill": "cafe-develop"}}},
+        blackboard=blackboard,
+        from_step="develop",
+        trigger="need_clarification",
+        raw_payload={
+            "task": "develop-feedback",
+            "feedback": "Resume develop",
+            "human_task_id": stale.id,
+        },
+        source="command",
+    )
+
+    assert result.rejection is not None
+    assert HumanTaskRecordStore(issue_dir).get_task(stale.id).status is HumanTaskStatus.PENDING
+
+
 def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path: Path) -> None:
     """Feedback metadata persists work without creating a parallel input file."""
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger

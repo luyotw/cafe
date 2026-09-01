@@ -14,6 +14,7 @@ from rich.table import Table
 
 from cafe.core.blackboard import BlackboardStore
 from cafe.core.capability_approvals import CapabilityApprovalError
+from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.human_tasks import HumanTaskPolicy
 from cafe.core.task_inbox import TaskInboxError, TaskInboxService
 from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
@@ -23,6 +24,7 @@ from cafe.ui.human_tasks import (
     apply_capability_cancellation,
     apply_human_task_payload,
     collect_human_task_payload,
+    durable_task_matches_current_handoff,
 )
 
 task_app = typer.Typer(help="List, inspect, and complete durable repository tasks")
@@ -381,37 +383,53 @@ def complete_task(
 
 @task_app.command("cancel")
 def cancel_task(
-    task_id: str = typer.Argument(..., help="Stable capability task identifier"),
-    reason: str = typer.Option(..., "--reason", help="Why the capability request was cancelled"),
+    task_id: str = typer.Argument(..., help="Stable task identifier"),
+    reason: str = typer.Option(..., "--reason", help="Why the task was cancelled"),
     json_output: bool = typer.Option(False, "--json", help="Emit one JSON result object"),
 ) -> None:
-    """Cancel one pending capability approval and resume its owning workflow."""
+    """Cancel one capability approval or an exact stale ordinary task."""
     service = TaskInboxService(Path(".cafe"))
     try:
         preflight = service.preflight_completion(task_id)
-        if preflight.task.capability_approval is None:
-            raise TaskInboxError(
-                "invalid_task_type",
-                "Only capability approval tasks can be cancelled through this command.",
-                recovery="Complete the ordinary task with its declared response contract.",
-                task_id=task_id,
-                issue=preflight.issue,
-                workflow_id=preflight.workflow_id,
-            )
         blackboard = BlackboardStore(preflight.issue_dir).load_or_create(
             preflight.task.step, playbook_id=preflight.playbook_id
         )
-        applied = apply_capability_cancellation(
-            issue_dir=preflight.issue_dir,
-            blackboard=blackboard,
-            task=preflight.task,
-            reason=reason,
-        )
-        if json_output:
-            with redirect_stdout(StringIO()):
+        applied: Any = None
+        if preflight.task.capability_approval is not None:
+            applied = apply_capability_cancellation(
+                issue_dir=preflight.issue_dir,
+                blackboard=blackboard,
+                task=preflight.task,
+                reason=reason,
+            )
+            if json_output:
+                with redirect_stdout(StringIO()):
+                    _resume_issue_workflow(preflight.issue, preflight.playbook_id)
+            else:
                 _resume_issue_workflow(preflight.issue, preflight.playbook_id)
         else:
-            _resume_issue_workflow(preflight.issue, preflight.playbook_id)
+            if durable_task_matches_current_handoff(preflight.task, blackboard):
+                raise TaskInboxError(
+                    "active_task",
+                    "The current ordinary task must be completed with its declared response.",
+                    recovery=(
+                        "Complete the current task, or use an explicit workflow start "
+                        "to replace it."
+                    ),
+                    task_id=task_id,
+                    issue=preflight.issue,
+                    workflow_id=preflight.workflow_id,
+                )
+            HumanTaskRecordStore(preflight.issue_dir).cancel(
+                workflow_id=preflight.workflow_id,
+                task_id=task_id,
+                reason=reason,
+            )
+            BlackboardStore(preflight.issue_dir).record_event(
+                blackboard,
+                "stale_human_task_cancelled",
+                {"task_id": task_id, "reason": reason},
+            )
         detail = service.inspect(task_id)
     except TaskInboxError as exc:
         _fail("cancel", exc, json_output)
@@ -420,8 +438,8 @@ def cancel_task(
             "cancel",
             TaskInboxError(
                 "workflow_unavailable",
-                f"The capability task could not be cancelled and resumed: {exc}",
-                recovery="Inspect the exact task state and retry cancellation if it is pending.",
+                f"The task could not be cancelled safely: {exc}",
+                recovery="Inspect the exact task state and retry if it is still pending.",
                 task_id=task_id,
             ),
             json_output,
@@ -436,13 +454,19 @@ def cancel_task(
                         "issue": preflight.issue,
                         "id": preflight.workflow_id,
                         "playbook": preflight.playbook_id,
-                        "continuation": applied.target,
+                        "continuation": applied.target if applied is not None else None,
                     },
                 },
             )
         )
         return
-    console.print(
-        f"[yellow]Cancelled[/yellow] capability task {task_id}; resumed issue "
-        f"{preflight.issue} at {applied.target}."
-    )
+    if applied is not None:
+        console.print(
+            f"[yellow]Cancelled[/yellow] capability task {task_id}; resumed issue "
+            f"{preflight.issue} at {applied.target}."
+        )
+    else:
+        console.print(
+            f"[yellow]Cancelled[/yellow] stale task {task_id}; "
+            f"issue {preflight.issue} remains at {blackboard.current_step}."
+        )

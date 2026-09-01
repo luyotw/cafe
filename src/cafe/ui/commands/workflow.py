@@ -517,32 +517,6 @@ def _print_baton_contract_recovery_guidance(
     )
 
 
-def _reset_baton_for_explicit_start_step(
-    *,
-    issue_dir: Path,
-    blackboard: object,
-    active_step: str,
-) -> None:
-    """Make an explicit --start-step runnable even when the persisted baton is stale."""
-    store = BlackboardStore(issue_dir)
-    store.set_current_step(blackboard, active_step)
-    store.set_handoff_summary(
-        blackboard,
-        (
-            f"Explicit workflow start requested for {active_step}; "
-            "the prior handoff is superseded."
-        ),
-    )
-    store.update_handoff_contract(
-        blackboard,
-        from_step=active_step,
-        to_owner=HandoffOwner.AGENT,
-        to_step=active_step,
-        intent=HandoffIntent.AWAIT_AGENT,
-        source="workflow.start_step",
-    )
-
-
 def _print_workflow_event_display(event: Any) -> None:
     """Render generic user-facing event display without coupling to event type."""
     if not isinstance(event, dict):
@@ -787,12 +761,8 @@ def workflow(
 
             active_step = pending_start_step or blackboard.current_step
             if has_explicit_start_step:
-                if active_step not in {"user", "done"}:
-                    _reset_baton_for_explicit_start_step(
-                        issue_dir=issue_dir,
-                        blackboard=blackboard,
-                        active_step=active_step,
-                    )
+                # The runtime owns explicit-start baton replacement so it can
+                # retain and supersede the exact pending user task atomically.
                 explicit_start_step_pending = False
             if active_step in {"user", "done"}:
                 handoff_contract = getattr(blackboard, "handoff_contract", None)
