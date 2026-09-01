@@ -2,6 +2,14 @@ playbook:
   id: hotfix
   name: "Hotfix Workflow"
   conversation_locale: en-US
+  applicability:
+    summary: "Urgent, tightly bounded production correction with independent code review."
+    use_when:
+      - "A confirmed production defect needs a minimal, time-sensitive correction."
+      - "The rollback and regression boundaries are already understood."
+    avoid_when:
+      - "The request includes unconfirmed product scope or architectural change."
+      - "Acceptance requires broader independent QA or exploratory validation."
 
 behavior:
   completion: status_code

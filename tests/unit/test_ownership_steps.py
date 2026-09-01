@@ -157,6 +157,11 @@ def test_ownership_schema_normalizes_legacy_and_requires_complete_explicit_shape
 def test_strict_validation_accepts_declared_non_agent_owners(tmp_path: Path) -> None:
     """UT-001–UT-004: strict loading no longer treats supported owners as reserved."""
     data = _mixed_owner_model().model_dump(mode="json", exclude_none=True, exclude_unset=True)
+    data["playbook"]["applicability"] = {
+        "summary": "A test workflow with declared non-agent owners.",
+        "use_when": ["The workflow requires declared ownership."],
+        "avoid_when": ["The workflow requires agent-only ownership."],
+    }
     data["roles"] = {"operator": {}}
     data["skills"] = {"workflow": {"shared": []}, "chat": {"shared": []}}
     model = PlaybookDefinition.model_validate(data)

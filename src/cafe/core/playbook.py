@@ -9,7 +9,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional, Union
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from cafe.core.human_tasks import HumanTaskBinding
 from cafe.core.initial_input import (
@@ -35,6 +42,10 @@ RUNTIME_TOOL_GRANTS = frozenset({"web_research", "git_inspection"})
 RigorLevel = Literal["low", "medium", "high"]
 InputMethodDefault = Literal["manual", "github"]
 CONVERSATION_LOCALE_PATTERN = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
+APPLICABILITY_SUMMARY_MAX_LENGTH = 160
+APPLICABILITY_CONDITION_MAX_LENGTH = 200
+APPLICABILITY_CONDITION_MIN_COUNT = 1
+APPLICABILITY_CONDITION_MAX_COUNT = 6
 
 
 def _non_empty(value: str, *, field_name: str) -> str:
@@ -42,6 +53,84 @@ def _non_empty(value: str, *, field_name: str) -> str:
     if not token:
         raise ValueError(f"{field_name} must not be empty")
     return token
+
+
+def _normalize_applicability_text(value: str) -> str:
+    return " ".join(value.split())
+
+
+class PlaybookApplicability(BaseModel):
+    """Bounded, machine-readable workflow selection intent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str
+    use_when: List[str]
+    avoid_when: List[str]
+
+    @field_validator("summary")
+    @classmethod
+    def _validate_summary(cls, value: str) -> str:
+        normalized = _normalize_applicability_text(value)
+        if not normalized:
+            raise ValueError("playbook.applicability.summary must not be empty")
+        if len(normalized) > APPLICABILITY_SUMMARY_MAX_LENGTH:
+            raise ValueError(
+                "playbook.applicability.summary must be at most "
+                f"{APPLICABILITY_SUMMARY_MAX_LENGTH} characters"
+            )
+        return normalized
+
+    @field_validator("use_when", "avoid_when")
+    @classmethod
+    def _validate_conditions(cls, value: List[str], info) -> List[str]:
+        field_name = info.field_name
+        if not (
+            APPLICABILITY_CONDITION_MIN_COUNT
+            <= len(value)
+            <= APPLICABILITY_CONDITION_MAX_COUNT
+        ):
+            raise ValueError(
+                f"playbook.applicability.{field_name} must contain "
+                f"{APPLICABILITY_CONDITION_MIN_COUNT}–"
+                f"{APPLICABILITY_CONDITION_MAX_COUNT} conditions"
+            )
+
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for condition in value:
+            token = _normalize_applicability_text(condition)
+            if not token:
+                raise ValueError(
+                    f"playbook.applicability.{field_name} conditions must not be empty"
+                )
+            if len(token) > APPLICABILITY_CONDITION_MAX_LENGTH:
+                raise ValueError(
+                    f"playbook.applicability.{field_name} conditions must be at most "
+                    f"{APPLICABILITY_CONDITION_MAX_LENGTH} characters"
+                )
+            comparison_key = token.casefold()
+            if comparison_key in seen:
+                raise ValueError(
+                    f"playbook.applicability.{field_name} must not contain duplicate "
+                    "conditions after whitespace and case normalization"
+                )
+            seen.add(comparison_key)
+            normalized.append(token)
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_consistency(self) -> "PlaybookApplicability":
+        positive = {condition.casefold() for condition in self.use_when}
+        contradictions = [
+            condition for condition in self.avoid_when if condition.casefold() in positive
+        ]
+        if contradictions:
+            raise ValueError(
+                "playbook.applicability.avoid_when must not contradict use_when after "
+                "whitespace and case normalization"
+            )
+        return self
 
 
 class PlaybookMeta(BaseModel):
@@ -52,6 +141,7 @@ class PlaybookMeta(BaseModel):
     id: str
     name: Optional[str] = None
     conversation_locale: str = "auto"
+    applicability: Optional[PlaybookApplicability] = None
 
     @field_validator("conversation_locale")
     @classmethod
@@ -952,6 +1042,11 @@ class LoadedPlaybook:
     source: str
     warnings: List[str]
 
+    @property
+    def automatic_selection_eligible(self) -> bool:
+        """Whether selection has explicit evidence instead of inferred metadata."""
+        return self.model.playbook.applicability is not None
+
     def as_dict(self) -> Dict:
         return PlaybookData(
             self.model.model_dump(exclude_none=True),
@@ -1011,7 +1106,31 @@ def load_playbook_file(
     if data is None:
         raise ValueError(f"Playbook is empty: {path}")
     data = normalize_playbook_yaml(data)
-    model = PlaybookDefinition.model_validate(data)
+    try:
+        model = PlaybookDefinition.model_validate(data)
+    except ValidationError as exc:
+        applicability_errors = [
+            error
+            for error in exc.errors()
+            if tuple(error.get("loc", ()))[:2] == ("playbook", "applicability")
+        ]
+        if not applicability_errors:
+            raise
+        raw_playbook = data.get("playbook") if isinstance(data, dict) else None
+        playbook_id = (
+            raw_playbook.get("id", path.stem)
+            if isinstance(raw_playbook, dict)
+            else path.stem
+        )
+        details = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+            for error in exc.errors()
+        )
+        raise ValueError(
+            f"Playbook '{playbook_id}' has invalid playbook.applicability: {details}. "
+            "Repair summary, use_when, and avoid_when, then run "
+            f"cafe playbook validate {playbook_id} --strict"
+        ) from exc
     warnings = validate_playbook(
         model,
         skill_loader=skill_loader,
@@ -1033,6 +1152,14 @@ def validate_playbook(
     """Apply semantic validation and return non-fatal warnings."""
     warnings: List[str] = []
     steps = model.steps
+
+    if model.playbook.applicability is None:
+        warnings.append(
+            f"Playbook '{model.playbook.id}' is missing playbook.applicability; add "
+            "summary, use_when, and avoid_when, then run "
+            f"cafe playbook validate {model.playbook.id} --strict. The playbook remains "
+            "available for explicit selection but is ineligible for automatic recommendation."
+        )
 
     entry = model.entry_point
     if entry is not None and entry not in steps:

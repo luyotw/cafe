@@ -16,6 +16,7 @@ from cafe.core.human_tasks import HumanTaskBinding, HumanTaskDecision, HumanTask
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.ui.human_tasks import resolve_step_human_task
 
 
 def _notify_human_task_in_process(
@@ -1777,6 +1778,70 @@ def test_runtime_prefers_step_baton_over_invalid_status_text(tmp_path: Path) -> 
     assert invalid_events == []
     transitions = [e for e in blackboard.events if e.event_type == "transition"]
     assert transitions[0].data["source"] == "baton"
+
+
+def test_runtime_revision_materializes_a_fresh_plan_confirmation_task(tmp_path: Path) -> None:
+    """A revised plan must not reuse an earlier completed output-review task."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "revised-plan-confirmation"
+    issue_dir.mkdir(parents=True)
+    playbook = PlaybookLoader().load("standard-qa")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("plan", playbook_id="standard-qa")
+    records = HumanTaskRecordStore(issue_dir)
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook,
+        step_name="plan",
+        trigger="confirm_output",
+        iteration=4,
+    )
+    previous = records.materialize(
+        workflow_id=state.workflow_id,
+        step="plan",
+        iteration=4,
+        trigger="confirm_output",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+    )
+    records.complete(
+        workflow_id=state.workflow_id,
+        task_id=previous.id,
+        payload={"task": policy.id, "decision": "revise", "feedback": "Narrow the plan."},
+        source="test",
+    )
+    (issue_dir / "plan" / "iteration_005").mkdir(parents=True)
+
+    def executor(step_name: str, step_def: dict, blackboard: object) -> StepExecutionResult:
+        BlackboardStore(issue_dir).update_handoff_contract(
+            blackboard,
+            from_step="plan",
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.CONFIRM_OUTPUT,
+            source="test.revised_plan",
+        )
+        return StepExecutionResult(response="confirmed plan revision", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="plan")
+
+    current = BlackboardStore(issue_dir).load_or_create("plan")
+    tasks = records.tasks()
+    pending = [task for task in tasks if task.status.value == "pending"]
+
+    assert result.completed is False
+    assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
+    assert current.current_step == "user"
+    assert records.get_task(previous.id).status.value == "completed"
+    assert len(pending) == 1
+    assert pending[0].id != previous.id
+    assert pending[0].iteration == 5
+    assert pending[0].trigger == "confirm_output"
 
 
 def test_runtime_status_code_missing_no_handoff_contract(tmp_path: Path) -> None:

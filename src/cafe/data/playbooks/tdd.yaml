@@ -2,6 +2,14 @@ playbook:
   id: tdd
   name: "Test-Driven Development Workflow"
   conversation_locale: en-US
+  applicability:
+    summary: "Test-driven software delivery with planned scope and independent code review."
+    use_when:
+      - "Repository policy or confirmed risk requires tests to drive implementation."
+      - "Independent code review covers the confirmed acceptance boundary."
+    avoid_when:
+      - "The work does not require a test-first development method."
+      - "Independent black-box acceptance requires a separate QA owner."
 
 behavior:
   completion: status_code

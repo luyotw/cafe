@@ -102,6 +102,24 @@ def test_build_prompt_lists_only_effective_baton_intents(tmp_path: Path) -> None
     assert "alignment_checkpoint" not in prompt
 
 
+def test_build_prompt_distinguishes_confirmation_baton_from_continuation(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+
+    prompt = phase.build_prompt(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        context={
+            "valid_baton_intents": "confirm_output, await_agent",
+            "valid_to_steps": "plan, develop, user",
+            "step_transitions": "confirm_output→plan, await_agent→develop",
+        },
+    )
+
+    assert "confirm_output→plan" in prompt
+    assert "to_owner='user', to_step='user', intent='confirm_output'" in prompt
+    assert "continuation after the human task is completed, not the baton target" in prompt
+
+
 def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     prompt = phase.build_prompt(

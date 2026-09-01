@@ -759,7 +759,7 @@ def test_workflow_command_rejects_unknown_durable_task_without_generic_fallback(
     assert not (issue_dir / "review" / "iteration_001" / "user_input.md").exists()
 
 
-def test_workflow_command_requires_interrupt_task_before_retrying_agent_once(
+def test_workflow_command_pauses_agent_retry_after_durable_task_completion(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -803,41 +803,25 @@ def test_workflow_command_requires_interrupt_task_before_retrying_agent_once(
                 ),
             ],
         )
-        records = HumanTaskRecordStore(issue_dir)
-        interrupted_task = next(
-            record
-            for record in records.tasks()
-            if record.status is HumanTaskStatus.PENDING
-        )
         retry = runner.invoke(
             app,
-            [
-                "workflow",
-                "--playbook",
-                "standard",
-                "--execute",
-                "--single-step",
-                "--user-input",
-                json.dumps(
-                    {
-                        "task": interrupted_task.policy_id,
-                        "decision": "retry",
-                        "human_task_id": interrupted_task.id,
-                    }
-                ),
-            ],
+            ["workflow", "--playbook", "standard", "--execute", "--single-step"],
         )
 
     records = HumanTaskRecordStore(issue_dir)
     assert first.exit_code == 0
     assert "Workflow interrupted" in first.stdout
     assert retry.exit_code == 0, (retry.stdout, retry.exception)
-    assert executor.calls == 2
+    assert "Workflow is waiting for user input" in retry.stdout
+    assert executor.calls == 1
     assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
     assert records.get_wait_state(task.id).released_at is not None
-    assert records.get_task(interrupted_task.id).status is HumanTaskStatus.COMPLETED
-    assert records.get_wait_state(interrupted_task.id).released_at is not None
-    assert len(records.results()) == 2
+    assert len(records.results()) == 1
+    retry_task = next(
+        item for item in records.tasks() if item.trigger == "agent_execution_interrupted"
+    )
+    assert retry_task.status is HumanTaskStatus.PENDING
+    assert records.get_wait_state(retry_task.id).released_at is None
 
 
 def test_user_phase_alignment_checkpoint_approve_resumes_step(tmp_path: Path) -> None:

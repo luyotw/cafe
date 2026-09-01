@@ -142,10 +142,11 @@ def compose_declared_checklist(
     feedback: bool = False,
     template_mode: str = "auto",
     template_file: Optional[str] = None,
+    preserve_completed_items: bool = False,
 ) -> bool:
     """Compose a skill-declared checklist without phase-name behavior branches."""
     if contract.checklist is None:
-        checklist_file_path.write_text("", encoding="utf-8")
+        generate_checklist_file(checklist_file_path, "")
         return False
 
     variant = select_checklist_variant(
@@ -216,7 +217,11 @@ def compose_declared_checklist(
         raise ValueError(
             f"Unresolved checklist placeholders for {skill_name}: {', '.join(unresolved)}"
         )
-    generate_checklist_file(checklist_file_path, content)
+    generate_checklist_file(
+        checklist_file_path,
+        content,
+        preserve_completed_items=preserve_completed_items,
+    )
     return True
 
 
@@ -227,6 +232,7 @@ def generate_custom_skill_checklist(
     checklist_file_path: Path,
     correction_mode: bool = False,
     placeholders: Optional[dict] = None,
+    preserve_completed_items: bool = False,
 ) -> bool:
     """Compose a checklist for a custom (non-builtin) phase skill from its references.
 
@@ -252,7 +258,11 @@ def generate_custom_skill_checklist(
         resolved.update({key: value for key, value in placeholders.items() if value})
 
     checklist_content = resolve_checklist_placeholders(checklist_content, resolved)
-    generate_checklist_file(checklist_file_path, checklist_content)
+    generate_checklist_file(
+        checklist_file_path,
+        checklist_content,
+        preserve_completed_items=preserve_completed_items,
+    )
     return True
 
 

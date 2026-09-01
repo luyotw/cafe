@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from cafe.core.human_tasks import HumanTaskCompletion
 from cafe.core.playbook import PlaybookDefinition, StepConfig, resolve_playbook_skills
@@ -33,9 +34,30 @@ def _write_skill(root: Path, name: str) -> None:
     )
 
 
-def _write_playbook(root: Path, name: str, content: str) -> None:
+def _write_playbook(
+    root: Path,
+    name: str,
+    content: str,
+    *,
+    with_applicability: bool = True,
+) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    (root / f"{name}.yaml").write_text(content, encoding="utf-8")
+    data = yaml.safe_load(content)
+    if with_applicability and isinstance(data, dict):
+        playbook = data.get("playbook")
+        if isinstance(playbook, dict):
+            playbook.setdefault(
+                "applicability",
+                {
+                    "summary": "A test workflow for focused contract coverage.",
+                    "use_when": ["The test requires this workflow."],
+                    "avoid_when": ["The test requires a different workflow."],
+                },
+            )
+    (root / f"{name}.yaml").write_text(
+        yaml.safe_dump(data, sort_keys=False),
+        encoding="utf-8",
+    )
 
 
 def test_issue_can_override_only_one_step_attempt_limit(tmp_path: Path) -> None:
@@ -2094,3 +2116,171 @@ def test_builtin_user_handoffs_resolve_nonempty_declared_policies() -> None:
 
                 assert policy.prompt
                 assert binding.task_id == policy.id
+
+
+def _applicability_definition(applicability: object) -> dict:
+    return {
+        "playbook": {"id": "applicable", "applicability": applicability},
+        "roles": {"operator": {}},
+        "steps": {
+            "run": {
+                "skill": "cafe-develop",
+                "role": "operator",
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+
+
+def _custom_applicability_yaml(applicability: object | None) -> str:
+    playbook: dict[str, object] = {"id": "custom"}
+    if applicability is not None:
+        playbook["applicability"] = applicability
+    return yaml.safe_dump(
+        {
+            "playbook": playbook,
+            "skills": {
+                "workflow": {"shared": []},
+                "chat": {"shared": []},
+            },
+            "roles": {"operator": {}},
+            "commands": {"prepare": {"prompt_for_spec_plan_config": False}},
+            "steps": {
+                "run": {
+                    "skill": "cafe-develop",
+                    "role": "operator",
+                    "on": {"await_agent": "_done"},
+                }
+            },
+        },
+        sort_keys=False,
+    )
+
+
+def test_applicability_normalizes_boundaries_and_round_trips(tmp_path: Path) -> None:
+    """U1 — normalized bounded applicability remains machine-readable."""
+    applicability = {
+        "summary": f"  {'s' * 160}  ",
+        "use_when": [f"  {'u' * 200}  ", "needs   review"],
+        "avoid_when": [f"  {'a' * 200}  "],
+    }
+    model = PlaybookDefinition.model_validate(_applicability_definition(applicability))
+
+    assert model.playbook.applicability.summary == "s" * 160
+    assert model.playbook.applicability.use_when == ["u" * 200, "needs review"]
+    assert model.playbook.applicability.avoid_when == ["a" * 200]
+
+    project_root = tmp_path / "project"
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "custom",
+        _custom_applicability_yaml(applicability),
+        with_applicability=False,
+    )
+    loaded = PlaybookLoader(project_root=project_root).load_model("custom")
+
+    assert loaded.as_dict()["playbook"]["applicability"] == {
+        "summary": "s" * 160,
+        "use_when": ["u" * 200, "needs review"],
+        "avoid_when": ["a" * 200],
+    }
+    assert loaded.automatic_selection_eligible is True
+
+
+@pytest.mark.parametrize(
+    ("applicability", "field"),
+    [
+        ({"use_when": ["yes"], "avoid_when": ["no"]}, "summary"),
+        ({"summary": "ok", "use_when": ["yes"]}, "avoid_when"),
+        (
+            {"summary": ["not a string"], "use_when": ["yes"], "avoid_when": ["no"]},
+            "summary",
+        ),
+        ({"summary": "ok", "use_when": "yes", "avoid_when": ["no"]}, "use_when"),
+        ({"summary": "ok", "use_when": [], "avoid_when": ["no"]}, "use_when"),
+        ({"summary": "ok", "use_when": ["yes"], "avoid_when": ["   "]}, "avoid_when"),
+        ({"summary": "   ", "use_when": ["yes"], "avoid_when": ["no"]}, "summary"),
+        ({"summary": "s" * 161, "use_when": ["yes"], "avoid_when": ["no"]}, "summary"),
+        ({"summary": "ok", "use_when": ["u" * 201], "avoid_when": ["no"]}, "use_when"),
+        (
+            {
+                "summary": "ok",
+                "use_when": [f"condition {index}" for index in range(7)],
+                "avoid_when": ["no"],
+            },
+            "use_when",
+        ),
+        (
+            {"summary": "ok", "use_when": ["Same", " same  "], "avoid_when": ["no"]},
+            "use_when",
+        ),
+        (
+            {"summary": "ok", "use_when": ["Needs QA"], "avoid_when": [" needs  qa "]},
+            "avoid_when",
+        ),
+    ],
+)
+def test_invalid_applicability_reports_identity_field_and_repair(
+    tmp_path: Path,
+    applicability: object,
+    field: str,
+) -> None:
+    """U2/U3 — malformed or contradictory metadata gives actionable diagnostics."""
+    project_root = tmp_path / "project"
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "custom",
+        _custom_applicability_yaml(applicability),
+        with_applicability=False,
+    )
+
+    with pytest.raises(ValueError) as raised:
+        PlaybookLoader(project_root=project_root).load_model("custom")
+
+    message = str(raised.value)
+    assert "custom" in message
+    assert "playbook.applicability" in message
+    assert field in message
+    assert "cafe playbook validate custom --strict" in message
+
+
+def test_legacy_applicability_migration_preserves_graph_and_restores_eligibility(
+    tmp_path: Path,
+) -> None:
+    """U4/I1 — compatibility inspection never fabricates selection metadata."""
+    project_root = tmp_path / "project"
+    playbook_root = project_root / ".cafe" / "playbooks"
+    _write_playbook(
+        playbook_root,
+        "custom",
+        _custom_applicability_yaml(None),
+        with_applicability=False,
+    )
+    loader = PlaybookLoader(project_root=project_root)
+
+    legacy = loader.load_model("custom")
+    legacy_graph = legacy.model.steps["run"].model_dump()
+
+    assert legacy.model.playbook.applicability is None
+    assert legacy.automatic_selection_eligible is False
+    assert any("playbook.applicability" in warning for warning in legacy.warnings)
+    assert any("cafe playbook validate custom --strict" in warning for warning in legacy.warnings)
+    with pytest.raises(ValueError, match="playbook.applicability"):
+        loader.load_model("custom", strict=True)
+
+    _write_playbook(
+        playbook_root,
+        "custom",
+        _custom_applicability_yaml(
+            {
+                "summary": "Use this workflow for a focused custom operation.",
+                "use_when": ["The custom operation is explicitly selected."],
+                "avoid_when": ["A different responsibility is required."],
+            }
+        ),
+        with_applicability=False,
+    )
+    migrated = loader.load_model("custom", strict=True)
+
+    assert migrated.automatic_selection_eligible is True
+    assert migrated.model.steps["run"].model_dump() == legacy_graph

@@ -572,7 +572,7 @@ domain procedure。確認的是一份完整、具體的 selection matrix；不�
 
 ### 17.1 先定義 progress owner 與生命週期
 
-Runtime `checklist.md` 是 **單一 phase iteration 的 procedure completion gate**。它回答「這輪是否遵守完 phase 程序」，不適合作為 N 個 targets 各做到哪裡的 resume ledger，也不能假設在同一 iteration 重入時會因 phase source 更新而自動重建。
+Runtime `checklist.md` 是 **單一 phase iteration 的 procedure completion gate**。它回答「這輪是否遵守完 phase 程序」，不適合作為 N 個 targets 各做到哪裡的 resume ledger。每次 phase preparation 都會從 current resolved skill 刷新它：只有完整內容完全相同的 completed item 才保留完成狀態；新增或變更的 gate 一律重新開啟。
 
 先讀 phase 的 output template、downstream consumers、finalizer 與 publish hooks，再依需要恢復的範圍選擇持久位置：
 
@@ -649,10 +649,10 @@ Phase contract 負責讓 retry 安全、單調前進，不負責 provider retry 
 4. 沒有明確 receipt 的 consumer review、human confirmation、remote push/import/publish 一律維持 `pending`。
 5. migration 後只處理 pending stages，不因 runtime checklist 仍未勾選就重掃已回填完成的 rows。
 
-CAFE 會保留既有 iteration 的 `checklist.md`；`references/execution_steps_*` 的新增項目通常只會出現在新產生的 checklist。因此：
+CAFE 在 phase preparation 時會以 current resolved skill 刷新既有 iteration 的 `checklist.md`，並只保留完整內容完全相同的 completed item；`references/execution_steps_*` 的新增或變更項目會以未完成 gate 出現。因此：
 
-- 會保護當前 in-flight iteration 的 critical resume algorithm 必須放在 `SKILL.md` always-on instructions；可以同步更新 checklist reference，供新 iterations 強制檢查，但不能只改 reference。
-- 不得直接編輯既有 `.cafe/issues/.../checklist.md` 來偽造 contract rollout。若非得讓新 checklist gate 套用，應由 user 授權建立新 iteration/reset，或把需求分類為 runtime migration/core enhancement；先評估 artifact 損失。
+- 會保護當前 in-flight iteration 的 critical resume algorithm 必須放在 `SKILL.md` always-on instructions；可以同步更新 checklist reference，讓下一次 phase preparation 套用新或變更的 gate，但 checklist 不取代 always-on algorithm。
+- 不得直接編輯既有 `.cafe/issues/.../checklist.md` 或 CLI-native installed copy 來偽造 contract rollout；由 runtime 從 resolved source 產生它。若 current runtime 沒有上述 refresh semantics，才把需求分類為 runtime migration/core enhancement；先評估 artifact 損失。
 
 ### 17.6 Source、activation 與驗證
 
@@ -663,5 +663,5 @@ Repair 仍只改 writable source of truth（project `.cafe/skills/<name>/` 或 a
 1. `cafe skill validate --strict`，以及受影響 playbook 的 `cafe playbook validate <id> --strict`。
 2. `cafe skill list`/`show` 確認 resolved source 是剛修改的 project/builtin skill，沒有被另一 catalog shadow。
 3. 對既有 iteration，讓一次 execution attempt 至少走到 phase preparation；runtime 會重新安裝 resolved skill，即使 provider 隨後 rate-limit。之後在 worktree-local CLI-native path（例如 `.claude/skills/<name>/SKILL.md`）read-only 搜尋新版 unique marker，確認 active prompt skill 已更新。不得在該 install 上修檔。
-4. 說明舊 runtime checklist 是否仍是上一版；若是，確認 critical behavior 已在 active `SKILL.md`，且沒有錯誤宣稱 checklist gate 已 rollout。
+4. 確認 runtime 從 active resolved source 刷新 checklist：完全相同的 completed item 保留完成，而新增或變更的 gate 為未完成；同時確認 critical behavior 仍在 active `SKILL.md`，且沒有直接修改 generated checklist 或 installed copy。
 5. 用至少四個 scenario audit 驗收：大量 targets 中斷後只重做一個 bounded unit；legacy partial files 能 evidence-only migration；exact/public output 不會被 ledger 汙染；單一快速 phase 不會被迫承擔不必要 ledger。

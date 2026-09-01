@@ -306,7 +306,7 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "cafe playbook list" in selection
     assert "cafe playbook show <id>" in selection
     assert "repository instructions require an independent QA" in selection
-    assert "closest plausible alternative" in selection
+    assert "closest rejected candidates" in selection
     assert "do not infer behavior from a playbook name" in " ".join(selection.split())
     assert "every phase, role, skill, scheduled gate" in normalized
     assert "one primary and zero or more explicitly confirmed fallbacks" in normalized
@@ -346,6 +346,31 @@ def test_use_cafe_workflow_keeps_playbook_selection_issue_owned() -> None:
     assert "`.cafe/config.yaml` has no playbook key" in normalized_kickoff
     assert kickoff.count("--playbook <playbook-id>") == 3
     assert "Verify that `cafe prepare` persisted the active `playbook_id`" in normalized_kickoff
+
+
+def test_driver_selection_is_evidence_based_across_every_effective_candidate() -> None:
+    """U9 — recommendation uses confirmed scope, graph sufficiency, and applicability."""
+    skill = _read_skill_resource("SKILL.md")
+    selection = _read_skill_resource("references/playbook_selection.md")
+    normalized_skill = " ".join(skill.split())
+    normalized = " ".join(selection.split())
+
+    assert "direct playbook choice" in normalized
+    assert "durable" in normalized
+    assert "every valid effective playbook" in normalized
+    assert "project, Global, and builtin" in normalized
+    assert "resolved graph" in normalized
+    assert "before comparing applicability" in normalized
+    assert "missing applicability" in normalized
+    assert "ineligible for automatic recommendation" in normalized
+    assert "cafe playbook validate <id> --strict" in normalized
+    assert "names and catalog sources are not ranking signals" in normalized
+    assert "smallest sufficient graph" in normalized
+    assert "closest rejected candidates" in normalized
+    assert "speculative future work" in normalized
+    assert "ask the user for an explicit decision" in normalized
+    assert "every effective candidate" in normalized_skill
+    assert "applicability" in normalized_skill
 
 
 def test_kickoff_contract_formatter_lists_all_phases_and_confirmation_owners(

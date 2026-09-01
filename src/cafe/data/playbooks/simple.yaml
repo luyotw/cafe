@@ -2,6 +2,14 @@ playbook:
   id: simple
   name: "Simple Workflow"
   conversation_locale: en-US
+  applicability:
+    summary: "Requirement-led delivery for bounded work that needs independent acceptance testing."
+    use_when:
+      - "The outcome needs requirement clarification and independent acceptance evidence."
+      - "The solution is straightforward enough to proceed without a separate implementation plan."
+    avoid_when:
+      - "The change needs independent code review as a required responsibility."
+      - "Architecture or sequencing requires a dedicated planning phase."
 
 behavior:
   completion: status_code

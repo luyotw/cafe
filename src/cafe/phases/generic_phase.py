@@ -210,6 +210,15 @@ class GenericPhase:
             runtime_context.append(
                 f"- this step's defined transitions (intent→to_step): {context['step_transitions']}"
             )
+        if "confirm_output" in {
+            intent.strip() for intent in baton_intents.split(",") if intent.strip()
+        }:
+            runtime_context.append(
+                "- when requesting user output confirmation, handoff must be "
+                "to_owner='user', to_step='user', intent='confirm_output'; "
+                "the confirm_output transition names the continuation after the "
+                "human task is completed, not the baton target"
+            )
         runtime_context.append(
             "- when asking user questions, handoff must be to_owner='user', to_step='user', intent='need_clarification'"
         )
