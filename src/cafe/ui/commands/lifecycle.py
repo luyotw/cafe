@@ -13,6 +13,7 @@ import yaml
 
 from cafe.core.active_issue import clear_marker_if_matches, write_marker
 from cafe.core.issue_policy_store import (
+    GuardedPolicyActivation,
     IssuePolicyStore,
     PrepareWouldClobberError,
     write_issue_inventory,
@@ -58,7 +59,7 @@ def update_driver_policy(
         config_path = Path(".cafe") / "issues" / issue_name / "issue.yaml"
         if not config_path.exists():
             raise ValueError(f"issue configuration does not exist: {config_path}")
-        IssuePolicyStore(config_path).replace(policy)
+        GuardedPolicyActivation(config_path).apply(policy)
     except (ValueError, OSError) as exc:
         console.print(f"[red]Error: Driver policy was not updated: {exc}[/red]")
         raise typer.Exit(1)
