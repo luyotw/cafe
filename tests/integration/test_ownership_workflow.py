@@ -392,6 +392,67 @@ def test_owner_replacement_supersedes_only_the_prior_handoff(
     ]
 
 
+def test_explicit_start_cancels_predecessor_when_replacement_completes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A direct-to-done override must not leave its exact predecessor actionable."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "completed-override"
+    binding = HumanTaskBinding(trigger="initial", task_id="approval", outcomes={"accept": "done"})
+    monkeypatch.setattr(
+        runtime_mod,
+        "resolve_step_human_task",
+        lambda **_kwargs: (_approval_policy(), binding),
+    )
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **_kwargs: SimpleNamespace(
+            receipt={"capability": "cafe.slack.human_task", "success": True}
+        ),
+    )
+    playbook = {
+        "playbook": {"id": "completed-override"},
+        "steps": {
+            "approval": {
+                "skill": "phase",
+                "role": "operator",
+                "assignee_type": "human",
+                "human_tasks": [binding.model_dump()],
+                "on": {},
+            },
+            "replacement": {
+                "skill": "phase",
+                "role": "operator",
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    paused = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args, **_kwargs: pytest.fail("human boundary ran an agent"),
+    ).run(start_step="approval")
+    records = HumanTaskRecordStore(issue_dir)
+    predecessor = records.tasks()[0]
+    completed = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args, **_kwargs: ("confirmed", {}),
+    ).run(start_step="replacement")
+
+    updated = HumanTaskRecordStore(issue_dir)
+    assert paused.completed is False
+    assert completed.completed is True
+    assert updated.get_task(predecessor.id).status is HumanTaskStatus.CANCELLED
+    assert updated.get_wait_state(predecessor.id).released_at is not None
+
+
 def test_ownership_cli_dry_run_is_a_side_effect_free_simulation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -353,3 +353,56 @@ def test_capability_task_cancel_command_persists_terminal_receipt(
     assert resumed["outcome"] == "cancelled"
     assert resumed["executed"] is False
     assert resumed["correlation_id"] == service.inspect(task.id)["correlation_id"]
+
+
+def test_stale_ordinary_task_can_be_cancelled_without_resuming_the_workflow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Recovery names one obsolete task and cannot disturb the active baton."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task = _pending_issue(tmp_path / ".cafe", "stale-ordinary-cancel")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec", playbook_id="standard")
+    store.update_handoff_contract(
+        state,
+        from_step="review",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.NEED_CLARIFICATION,
+        source="test",
+    )
+    resumed: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "cafe.ui.commands.tasks._resume_issue_workflow",
+        lambda issue, playbook: resumed.append((issue, playbook)),
+    )
+
+    result = runner.invoke(
+        app,
+        ["task", "cancel", task.id, "--reason", "superseded by a confirmed restart", "--json"],
+    )
+
+    payload = json.loads(result.stdout)
+    assert result.exit_code == 0
+    assert payload["data"]["workflow"]["continuation"] is None
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.CANCELLED
+    assert BlackboardStore(issue_dir).load_or_create("spec").current_step == "user"
+    assert resumed == []
+
+
+def test_current_ordinary_task_cannot_be_cancelled_as_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The recovery path is fail-closed for the active ordinary task."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task = _pending_issue(tmp_path / ".cafe", "active-ordinary-cancel")
+
+    result = runner.invoke(
+        app,
+        ["task", "cancel", task.id, "--reason", "incorrectly trying to dismiss it", "--json"],
+    )
+
+    payload = json.loads(result.stdout)
+    assert result.exit_code == 1
+    assert payload["error"]["code"] == "active_task"
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.PENDING

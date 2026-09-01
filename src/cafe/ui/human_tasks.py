@@ -275,6 +275,27 @@ def apply_human_task_payload(
     """Validate and apply one response while retaining a pause on rejection."""
     record_store = HumanTaskRecordStore(issue_dir)
     with record_store.transaction():
+        submitted_id = _submitted_human_task_id(raw_payload)
+        if submitted_id is not None:
+            try:
+                submitted_task = record_store.get_task(submitted_id)
+            except HumanTaskCorrelationError:
+                submitted_task = None
+            if (
+                submitted_task is not None
+                and submitted_task.workflow_id == getattr(blackboard, "workflow_id", None)
+                and submitted_task.status is HumanTaskStatus.PENDING
+                and getattr(
+                    getattr(blackboard, "handoff_contract", None), "has_meaningful_source", False
+                )
+                and not durable_task_matches_current_handoff(submitted_task, blackboard)
+            ):
+                return _durable_task_routing_rejection(
+                    issue_dir=issue_dir,
+                    blackboard=blackboard,
+                    task_id=submitted_id,
+                    message="This durable human task no longer belongs to the current handoff.",
+                )
         return _apply_human_task_payload(
             issue_dir=issue_dir,
             playbook_data=playbook_data,
@@ -338,7 +359,7 @@ def apply_durable_human_task_payload_if_present(
                     task_id=submitted_id,
                     message="This durable human task belongs to a different workflow.",
                 )
-            if not _durable_task_matches_current_handoff(task, blackboard):
+            if not durable_task_matches_current_handoff(task, blackboard):
                 return _durable_task_routing_rejection(
                     issue_dir=issue_dir,
                     blackboard=blackboard,
@@ -383,7 +404,7 @@ def apply_durable_human_task_payload_if_present(
         )
 
 
-def _durable_task_matches_current_handoff(task: HumanTask, blackboard: Any) -> bool:
+def durable_task_matches_current_handoff(task: HumanTask, blackboard: Any) -> bool:
     contract = getattr(blackboard, "handoff_contract", None)
     if (
         getattr(blackboard, "current_step", None) != "user"

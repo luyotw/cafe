@@ -1789,11 +1789,12 @@ class BlackboardWorkflowRuntime:
                 status_code=status_code,
                 source=contract_source,
             )
-        self._materialize_user_handoff_task(
+        materialized_task = self._materialize_user_handoff_task(
             current_step=current_step,
             replaced_handoff=replaced_handoff,
         )
-        self._replaced_user_handoff = None
+        if materialized_task:
+            self._replaced_user_handoff = None
         if record_event:
             self.blackboard_store.record_event(
                 self.blackboard,
@@ -1817,14 +1818,14 @@ class BlackboardWorkflowRuntime:
         *,
         current_step: str,
         replaced_handoff: HandoffContract | None = None,
-    ) -> None:
+    ) -> bool:
         """Create or recover a declared task before exposing the user pause."""
         step_def = self.steps.get(current_step)
         if not isinstance(step_def, dict):
-            return
+            return False
         raw_bindings = step_def.get("human_tasks")
         if not isinstance(raw_bindings, (list, tuple)):
-            return
+            return False
         contract = self.blackboard.handoff_contract
         if (
             contract is None
@@ -1832,7 +1833,7 @@ class BlackboardWorkflowRuntime:
             or contract.to_step != "user"
             or contract.from_step != current_step
         ):
-            return
+            return False
         trigger = contract.intent.value
         iteration = self._human_task_iteration(current_step)
         records = HumanTaskRecordStore(self.issue_dir)
@@ -1857,7 +1858,7 @@ class BlackboardWorkflowRuntime:
                 "human_task_configuration_error",
                 {"step": current_step, "trigger": trigger, "reason": str(exc)},
             )
-            return
+            return False
 
         if replaced_handoff is None:
             existing_task = next(
@@ -1904,6 +1905,7 @@ class BlackboardWorkflowRuntime:
                 "human_task_materialized",
                 {"step": current_step, "trigger": trigger, "task_id": task.id},
             )
+        return True
 
     def _human_task_iteration(self, current_step: str) -> int:
         iteration_dir = self._latest_iteration_dir(current_step)
@@ -1942,16 +1944,22 @@ class BlackboardWorkflowRuntime:
             and task.iteration < iteration
         ]
         if replaced_handoff is not None:
-            replaced_handoff_key = self._human_task_handoff_key(replaced_handoff)
-            legacy_predecessor_id = self._legacy_handoff_predecessor_id(records, replaced_handoff)
-            superseded_task_ids.extend(
-                task.id
-                for task in records.tasks()
-                if task.workflow_id == self.blackboard.workflow_id
-                and task.status is HumanTaskStatus.PENDING
-                and (task.handoff_key == replaced_handoff_key or task.id == legacy_predecessor_id)
-            )
+            superseded_task_ids.extend(self._replaced_human_task_ids(records, replaced_handoff))
         return tuple(dict.fromkeys(superseded_task_ids))
+
+    def _replaced_human_task_ids(
+        self, records: HumanTaskRecordStore, handoff: HandoffContract
+    ) -> tuple[str, ...]:
+        """Return only the pending task exactly correlated to one replaced baton."""
+        replaced_handoff_key = self._human_task_handoff_key(handoff)
+        legacy_predecessor_id = self._legacy_handoff_predecessor_id(records, handoff)
+        return tuple(
+            task.id
+            for task in records.tasks()
+            if task.workflow_id == self.blackboard.workflow_id
+            and task.status is HumanTaskStatus.PENDING
+            and (task.handoff_key == replaced_handoff_key or task.id == legacy_predecessor_id)
+        )
 
     def _legacy_handoff_predecessor_id(
         self, records: HumanTaskRecordStore, handoff: HandoffContract
@@ -2012,6 +2020,27 @@ class BlackboardWorkflowRuntime:
             and contract.to_step == "user"
         ):
             self._replaced_user_handoff = contract
+
+    def _cancel_unresolved_replaced_user_handoff(self) -> None:
+        """Release only the predecessor named by an explicit start-step override."""
+        handoff = self._replaced_user_handoff
+        if handoff is None:
+            return
+        records = HumanTaskRecordStore(self.issue_dir)
+        task_ids = self._replaced_human_task_ids(records, handoff)
+        for task_id in task_ids:
+            records.cancel(
+                workflow_id=self.blackboard.workflow_id,
+                task_id=task_id,
+                reason="superseded by explicit workflow start without a replacement task",
+            )
+        if task_ids:
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "human_task_superseded",
+                {"task_ids": list(task_ids), "source": "workflow.start_step_override"},
+            )
+        self._replaced_user_handoff = None
 
     def _emit_complete(
         self,
@@ -3290,6 +3319,10 @@ class BlackboardWorkflowRuntime:
                     intent=HandoffIntent.AWAIT_AGENT,
                     source="workflow.start_step_override",
                 )
+                try:
+                    return self._run_single_step(current_step=current_step)
+                finally:
+                    self._cancel_unresolved_replaced_user_handoff()
             return self._run_single_step(current_step=current_step)
 
         if self._should_attempt_resume_reconciliation(start_step=start_step):
@@ -3338,7 +3371,20 @@ class BlackboardWorkflowRuntime:
                 intent=HandoffIntent.AWAIT_AGENT,
                 source="workflow.start_step_override",
             )
+            try:
+                return self._run_from_current_step(
+                    current_step=current_step, max_transitions=max_transitions
+                )
+            finally:
+                self._cancel_unresolved_replaced_user_handoff()
 
+        return self._run_from_current_step(
+            current_step=current_step, max_transitions=max_transitions
+        )
+
+    def _run_from_current_step(
+        self, *, current_step: str, max_transitions: int
+    ) -> PlaybookRunResult:
         owned_result = self._run_non_agent_owner(
             current_step=current_step,
             step_def=self.steps[current_step],
