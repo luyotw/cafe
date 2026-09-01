@@ -9,8 +9,13 @@ from typing import Optional
 from cafe.agents.executor import AgentExecutionError
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardState, BlackboardStore
-from cafe.core.driver_policy import DriverPolicyContract
-from cafe.core.driver_runtime import DriverDecision, DriverPacket, DriverUnavailableError
+from cafe.core.driver_policy import DelegatedDriverPolicy, DriverPolicyContract
+from cafe.core.driver_runtime import (
+    DriverDecision,
+    DriverModelMismatchError,
+    DriverPacket,
+    DriverUnavailableError,
+)
 from cafe.core.session import SessionStore
 from cafe.core.session_continuation import SessionContinuation
 from cafe.core.types import AgentCLI, AgentConfig, SessionData
@@ -28,10 +33,12 @@ class BlackboardDriverSessionStore(SessionStore):
         state: BlackboardState,
         *,
         acquisition_sequence: int,
+        requested_model: str,
     ) -> None:
         self.store = store
         self.state = state
         self.acquisition_sequence = acquisition_sequence
+        self.requested_model = requested_model
 
     def load_session(
         self,
@@ -50,6 +57,7 @@ class BlackboardDriverSessionStore(SessionStore):
                 raw.get("namespace") != DRIVER_NAMESPACE
                 or raw.get("workflow_id") != state.workflow_id
                 or raw.get("cli") != cli.value
+                or raw.get("requested_model") != self.requested_model
             ):
                 return None
             created_at = datetime.fromisoformat(str(raw["created_at"]))
@@ -86,6 +94,7 @@ class BlackboardDriverSessionStore(SessionStore):
                     existing.get("namespace") != DRIVER_NAMESPACE
                     or existing.get("workflow_id") != state.workflow_id
                     or existing.get("cli") != cli.value
+                    or existing.get("requested_model") != self.requested_model
                     or existing.get("session_id") != session_id
                 ):
                     raise ValueError("delegated driver session identity cannot be replaced")
@@ -95,6 +104,7 @@ class BlackboardDriverSessionStore(SessionStore):
                 "namespace": DRIVER_NAMESPACE,
                 "workflow_id": state.workflow_id,
                 "cli": cli.value,
+                "requested_model": self.requested_model,
                 "session_id": session_id,
                 "acquisition_sequence": self.acquisition_sequence,
                 "created_at": now,
@@ -116,11 +126,13 @@ class DelegatedDriverTransport:
         policy: DriverPolicyContract,
         session_store: BlackboardDriverSessionStore,
     ) -> None:
-        if policy.driver.mode != "delegated" or policy.driver.delegated is None:
+        if not isinstance(policy.driver, DelegatedDriverPolicy):
             raise ValueError("delegated transport requires delegated driver policy")
         self.policy = policy
         self.session_store = session_store
-        self.cli = AgentCLI(policy.driver.delegated.cli)
+        self.cli = AgentCLI(policy.driver.cli)
+        if session_store.requested_model != policy.driver.model:
+            raise ValueError("delegated session model must match the policy's exact model")
 
     def request_decision(
         self,
@@ -136,7 +148,13 @@ class DelegatedDriverTransport:
             stream_agent_output=False,
         )
         agent_manager.register_agent(
-            AgentConfig(name=DRIVER_AGENT_NAME, cli=self.cli, clis=[], backup_clis=[])
+            AgentConfig(
+                name=DRIVER_AGENT_NAME,
+                cli=self.cli,
+                model=self.policy.driver.model,
+                clis=[],
+                backup_clis=[],
+            )
         )
         prompt = json.dumps(
             {
@@ -157,17 +175,33 @@ class DelegatedDriverTransport:
             sort_keys=True,
         )
         try:
-            response, *_ = agent_manager.execute(
+            execution = agent_manager.execute(
                 DRIVER_AGENT_NAME,
                 prompt,
                 continuation=self.session_store.continuation(self.cli),
             )
         except AgentExecutionError as exc:
-            if exc.error_type in {"cli_not_found", "cli_unavailable"}:
-                raise DriverUnavailableError(str(exc)) from exc
-            raise
+            raise DriverUnavailableError(str(exc)) from exc
         except (FileNotFoundError, OSError) as exc:
             raise DriverUnavailableError(str(exc)) from exc
+        response = execution[0]
+        reported_model = execution[5]
+        if reported_model is not None and reported_model != self.policy.driver.model:
+            with self.session_store.store.driver_transaction(
+                self.session_store.state
+            ) as state:
+                state.driver_state["model_mismatch"] = {
+                    "cli": self.cli.value,
+                    "requested_model": self.policy.driver.model,
+                    "reported_model": reported_model,
+                    "sequence": packet.sequence,
+                    "detected_at": datetime.now(timezone.utc).isoformat(),
+                }
+            raise DriverModelMismatchError(
+                "delegated driver reported a model different from the requested model"
+            )
+        if self.session_store.load_session(DRIVER_AGENT_NAME, self.cli) is None:
+            raise DriverUnavailableError("delegated driver session acquisition was not durable")
         try:
             raw = json.loads(response)
         except json.JSONDecodeError as exc:

@@ -1,11 +1,11 @@
 """測試 CopilotCLI 實作."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 from cafe.agents.cli.copilot import CopilotCLI
-from cafe.core.types import AgentConfig, AgentCLI, TokenUsage
+from cafe.core.types import AgentCLI, AgentConfig, TokenUsage
 
 
 @pytest.fixture
@@ -314,6 +314,30 @@ class TestCopilotCLIExtractSessionId:
         session_id = cli.extract_session_id(output_lines)
 
         assert session_id is None
+
+    @patch("cafe.agents.cli.copilot.Path")
+    @patch("cafe.agents.cli.copilot.time.sleep")
+    def test_extract_session_id_rejects_ambiguous_new_sessions(
+        self, mock_sleep, mock_path_class, copilot_config
+    ):
+        cli = CopilotCLI(copilot_config)
+        mock_home = MagicMock()
+        mock_path_class.home.return_value = mock_home
+        mock_session_dir = MagicMock()
+        mock_session_dir.exists.return_value = True
+        mock_home.__truediv__.return_value.__truediv__.return_value = mock_session_dir
+        mock_session_dir.iterdir.return_value = []
+        cli.record_existing_sessions()
+
+        entries = []
+        for name in ("session-a.jsonl", "session-b.jsonl"):
+            entry = MagicMock()
+            entry.name = name
+            entry.is_file.return_value = True
+            entries.append(entry)
+        mock_session_dir.iterdir.return_value = entries
+
+        assert cli.extract_session_id([]) is None
 
     @patch("cafe.agents.cli.copilot.Path")
     @patch("cafe.agents.cli.copilot.time.sleep")

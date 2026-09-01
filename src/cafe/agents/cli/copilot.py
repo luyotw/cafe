@@ -257,11 +257,10 @@ class CopilotCLI(AbstractCLI):
         # Find newly created sessions
         new_sessions = current_sessions - self._existing_sessions
 
-        if new_sessions:
-            # Get newest session (sorted by name)
-            newest_session = sorted(new_sessions)[-1]
+        if len(new_sessions) == 1:
+            session_name = next(iter(new_sessions))
             # Remove .jsonl extension if present (for file-based sessions)
-            session_id = newest_session.replace(".jsonl", "")
+            session_id = session_name.replace(".jsonl", "")
             return session_id
 
         return None

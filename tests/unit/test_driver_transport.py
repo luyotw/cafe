@@ -9,27 +9,37 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
+from cafe.agents.cli.claude import ClaudeCLI
+from cafe.agents.cli.codex import CodexCLI
+from cafe.agents.cli.copilot import CopilotCLI
+from cafe.agents.cli.cursor import CursorCLI
+from cafe.agents.cli.gemini import GeminiCLI
 from cafe.agents.executor import AgentExecutionError, AgentExecutor
 from cafe.core.blackboard import BlackboardStore
 from cafe.core.driver_policy import DriverPolicyContract
-from cafe.core.driver_runtime import DriverCoordinator, DriverPacket, DriverUnavailableError
+from cafe.core.driver_runtime import (
+    DriverCoordinator,
+    DriverModelMismatchError,
+    DriverPacket,
+    DriverUnavailableError,
+)
 from cafe.core.driver_transport import (
     DRIVER_AGENT_NAME,
     BlackboardDriverSessionStore,
     DelegatedDriverTransport,
 )
-from cafe.core.types import AgentCLI, AgentResponse, TokenUsage
+from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, TokenUsage
 
 
-def _policy(cli: str = "codex") -> DriverPolicyContract:
+def _policy(cli: str = "codex", model: str = "exact-driver-model") -> DriverPolicyContract:
     return DriverPolicyContract.model_validate(
         {
             "contract_version": 2,
             "driver": {
                 "mode": "delegated",
-                "delegated": {"cli": cli, "availability": "required"},
+                "cli": cli,
+                "model": model,
             },
-            "execution": {"advancement": "continuous", "hosting": "foreground"},
         }
     )
 
@@ -39,8 +49,14 @@ def _runtime(issue_dir: Path, cli: str = "codex"):
     state = store.load_or_create("spec")
     coordinator = DriverCoordinator(store, state)
     packet = coordinator.open_boundary(completed_phase="spec", requested_action="plan")
-    sessions = BlackboardDriverSessionStore(store, state, acquisition_sequence=packet.sequence)
-    transport = DelegatedDriverTransport(_policy(cli), sessions)
+    policy = _policy(cli)
+    sessions = BlackboardDriverSessionStore(
+        store,
+        state,
+        acquisition_sequence=packet.sequence,
+        requested_model=policy.driver.model,
+    )
+    transport = DelegatedDriverTransport(policy, sessions)
     return store, state, packet, sessions, transport
 
 
@@ -50,10 +66,12 @@ def test_each_cli_starts_sessionless_then_resumes_only_blackboard_pair(
 ) -> None:
     _, _, packet, sessions, transport = _runtime(tmp_path / cli, cli)
     attempted_sessions: list[str | None] = []
+    attempted_models: list[str | None] = []
     cli_enum = AgentCLI(cli)
 
     def execute(executor, *_args, **_kwargs):
         attempted_sessions.append(executor.config.session_id)
+        attempted_models.append(executor.config.model)
         return AgentResponse(
             response=json.dumps(
                 {
@@ -73,14 +91,49 @@ def test_each_cli_starts_sessionless_then_resumes_only_blackboard_pair(
 
     assert decision.action == "advance"
     assert attempted_sessions == [None]
+    assert attempted_models == ["exact-driver-model"]
     saved = sessions.load_session(DRIVER_AGENT_NAME, cli_enum)
     assert saved is not None
     assert saved.session_id == f"driver-{cli}-session"
+    provenance = sessions.state.driver_state["session"]
+    assert provenance["requested_model"] == "exact-driver-model"
+    assert provenance["acquisition_sequence"] == packet.sequence
+    assert provenance["namespace"] == "cafe.workflow.driver.v2"
 
     with patch.object(AgentExecutor, "execute", execute):
         transport.request_decision(packet)
 
     assert attempted_sessions[-1] == f"driver-{cli}-session"
+    assert attempted_models[-1] == "exact-driver-model"
+
+
+@pytest.mark.parametrize(
+    ("cli", "strategy"),
+    [
+        (AgentCLI.CLAUDE, ClaudeCLI),
+        (AgentCLI.CODEX, CodexCLI),
+        (AgentCLI.GEMINI, GeminiCLI),
+        (AgentCLI.COPILOT, CopilotCLI),
+        (AgentCLI.CURSOR, CursorCLI),
+    ],
+)
+@pytest.mark.parametrize("session_id", [None, "blackboard-session"])
+def test_each_adapter_receives_exact_model_on_acquisition_and_resume(
+    cli: AgentCLI, strategy, session_id: str | None
+) -> None:
+    command = strategy(
+        AgentConfig(
+            name=DRIVER_AGENT_NAME,
+            cli=cli,
+            model="user-selected-exact-model",
+            session_id=session_id,
+        )
+    ).build_command("driver packet")
+
+    model_index = command.index("--model")
+    assert command[model_index + 1] == "user-selected-exact-model"
+    if session_id is not None:
+        assert session_id in command
 
 
 def test_normal_sessions_sticky_cli_and_cross_workflow_identity_are_ignored(
@@ -131,12 +184,13 @@ def test_normal_sessions_sticky_cli_and_cross_workflow_identity_are_ignored(
 def test_delegated_transport_rejects_non_delegated_policy(tmp_path: Path) -> None:
     store = BlackboardStore(tmp_path)
     state = store.load_or_create("spec")
-    sessions = BlackboardDriverSessionStore(store, state, acquisition_sequence=1)
+    sessions = BlackboardDriverSessionStore(
+        store, state, acquisition_sequence=1, requested_model="unused"
+    )
     unattended = DriverPolicyContract.model_validate(
         {
             "contract_version": 2,
             "driver": {"mode": "unattended"},
-            "execution": {"advancement": "continuous", "hosting": "foreground"},
         }
     )
 
@@ -151,13 +205,10 @@ def test_policy_and_packet_cannot_inject_driver_session_identity() -> None:
                 "contract_version": 2,
                 "driver": {
                     "mode": "delegated",
-                    "delegated": {
-                        "cli": "codex",
-                        "availability": "required",
-                        "session_id": "injected",
-                    },
+                    "cli": "codex",
+                    "model": "gpt-5.6-codex",
+                    "session_id": "injected",
                 },
-                "execution": {"advancement": "continuous", "hosting": "foreground"},
             }
         )
     with pytest.raises(ValidationError):
@@ -193,3 +244,34 @@ def test_transport_normalizes_cli_unavailability(tmp_path: Path) -> None:
         pytest.raises(DriverUnavailableError),
     ):
         transport.request_decision(packet)
+
+
+def test_reported_model_mismatch_is_persisted_and_pauses_safely(tmp_path: Path) -> None:
+    _, state, packet, _, transport = _runtime(tmp_path)
+
+    def execute(_executor, *_args, **_kwargs):
+        return AgentResponse(
+            response=json.dumps(
+                {
+                    "workflow_id": packet.workflow_id,
+                    "sequence": packet.sequence,
+                    "requested_action": packet.requested_action,
+                    "action": "advance",
+                }
+            ),
+            token_usage=TokenUsage(),
+            cli=AgentCLI.CODEX,
+            session_id="driver-session",
+            model="different-reported-model",
+        )
+
+    with (
+        patch.object(AgentExecutor, "execute", execute),
+        pytest.raises(DriverModelMismatchError),
+    ):
+        transport.request_decision(packet)
+
+    mismatch = state.driver_state["model_mismatch"]
+    assert mismatch["requested_model"] == "exact-driver-model"
+    assert mismatch["reported_model"] == "different-reported-model"
+    assert mismatch["sequence"] == packet.sequence
