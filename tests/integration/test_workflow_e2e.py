@@ -39,6 +39,8 @@ from cafe.ui.cli import _consume_pending_chat_handoff, app
 from cafe.ui.cli_shared import _load_issue_step_names
 from cafe.utils.phase_config import PhaseStepModelResolution
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 
 @pytest.fixture(autouse=True)
 def _configured_test_phase_chain(monkeypatch):

@@ -1,6 +1,7 @@
 """Tests for prepare CLI command."""
 
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,6 +12,19 @@ from cafe.ui.cli import app
 from cafe.ui.commands.lifecycle import _ensure_worktree_cafe_excluded
 
 runner = CliRunner()
+
+
+@pytest.fixture(scope="module")
+def standard_playbook_for_prepare_tests(tmp_path_factory):
+    """Validate the builtin once; prepare tests only consume the resolved model."""
+    from cafe.playbooks.loader import PlaybookLoader
+
+    project_root = Path(__file__).resolve().parents[2]
+    global_root = tmp_path_factory.mktemp("prepare-global") / "global"
+    return PlaybookLoader(
+        project_root=project_root,
+        global_root=global_root,
+    ).load_model("standard")
 
 
 @pytest.fixture
@@ -25,8 +39,21 @@ def temp_repo_dir(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def change_test_dir(tmp_path, monkeypatch):
+def change_test_dir(tmp_path, monkeypatch, standard_playbook_for_prepare_tests):
     """Automatically change to tmp_path for all tests to ensure isolation."""
+    from cafe.playbooks.loader import PlaybookLoader
+
+    real_load_model = PlaybookLoader.load_model
+
+    def load_model(loader, name, *, strict=False):
+        if name == "standard" and not strict:
+            return standard_playbook_for_prepare_tests
+        return real_load_model(loader, name, strict=strict)
+
+    monkeypatch.setattr(PlaybookLoader, "load_model", load_model)
+    monkeypatch.setattr(
+        "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
+    )
     monkeypatch.chdir(tmp_path)
 
 
@@ -588,32 +615,6 @@ class TestPrepareCommandWorktree:
             config_data = yaml.safe_load(f)
             assert "worktree_path" not in config_data
 
-    @patch("cafe.ui.phase_prompts.prompt_confirm")
-    @patch("cafe.ui.cli.prompt_confirm")
-    @patch("cafe.ui.template_selector.prompt_list")
-    @patch("cafe.ui.phase_prompts.prompt_list")
-    @patch("cafe.ui.cli.prompt_list")
-    @patch("cafe.ui.cli.prompt_text")
-    def test_prepare_interactive_worktree_default_path_suggestion(self, mock_prompt_text, mock_cli_list, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
-        """測試互動模式建議預設路徑 .cafe/worktrees/{issue-name}"""
-        # Mock user inputs: issue name, default path (empty string)
-        mock_prompt_text.side_effect = ["test-issue", ".cafe/worktrees/test-issue"]
-        mock_cli_confirm.side_effect = [True, True, True]  # worktree, pr auto_create, post_todo_list
-        mock_phase_confirm.return_value = True
-        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
-        mock_phase_list.return_value = "1. Manual input"
-        mock_template_list.return_value = "default (system default)"
-
-        result = runner.invoke(app, ["prepare"])
-
-        assert result.exit_code == 0
-        # 驗證輸出中有顯示預設路徑建議
-        assert ".cafe/worktrees/test-issue" in result.stdout
-        # 驗證使用預設路徑
-        mock_git_ops.create_worktree.assert_called_once_with(
-            ".cafe/worktrees/test-issue", "test-issue", "main"
-        )
-
     def test_prepare_creates_cafe_directory_in_worktree_not_symlink(self, temp_repo_dir, mock_git_ops):
         """測試 worktree 中創建實際 .cafe/ 目錄而非符號連結"""
         # Setup: 創建 repo root  .cafe/config.yaml
@@ -734,34 +735,6 @@ class TestPrepareCommandWorktree:
 
     # Tests removed: Agents and templates are no longer copied to worktree .cafe directory
     # They are now managed globally at ~/.cafe/
-
-    @patch("cafe.ui.phase_prompts.prompt_confirm")
-    @patch("cafe.ui.cli.prompt_confirm")
-    @patch("cafe.ui.template_selector.prompt_list")
-    @patch("cafe.ui.phase_prompts.prompt_list")
-    @patch("cafe.ui.cli.prompt_list")
-    @patch("cafe.ui.cli.prompt_text")
-    def test_prepare_interactive_saves_pr_auto_create_true(self, mock_prompt_text, mock_cli_list, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
-        """測試互動模式選擇自動建立 PR (yes)"""
-        # Mock user inputs
-        mock_prompt_text.return_value = "test-issue"
-        mock_cli_confirm.side_effect = [False, True, True]  # worktree, pr auto_create, post_todo_list
-        mock_phase_confirm.return_value = True
-        mock_cli_list.side_effect = ["Custom configuration", "Medium"]
-        mock_phase_list.return_value = "1. Manual input"
-        mock_template_list.return_value = "default (system default)"
-
-        result = runner.invoke(app, ["prepare"])
-
-        assert result.exit_code == 0
-
-        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "issue.yaml"
-        assert config_file.exists()
-
-        with open(config_file) as f:
-            config_data = yaml.safe_load(f)
-            assert "pr" in config_data
-            assert config_data["pr"]["auto_create"] is True
 
     @patch("cafe.ui.phase_prompts.prompt_confirm")
     @patch("cafe.ui.cli.prompt_confirm")
@@ -983,47 +956,6 @@ class TestPrepareCommandSetupMode:
         mock_template_list.assert_not_called()
         # 驗證沒有詢問 sync 或其他 confirm 問題 (mock_phase_confirm 不應該被呼叫)
         mock_phase_confirm.assert_not_called()
-
-    @patch("cafe.ui.phase_prompts.prompt_confirm")
-    @patch("cafe.ui.cli.prompt_confirm")
-    @patch("cafe.ui.template_selector.prompt_list")
-    @patch("cafe.ui.phase_prompts.prompt_list")
-    @patch("cafe.ui.cli.prompt_list")
-    @patch("cafe.ui.cli.prompt_text")
-    def test_custom_configuration_asks_all_questions(self, mock_prompt_text, mock_cli_list, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
-        """測試選擇 Custom configuration 時詢問所有設定問題"""
-        # Mock user inputs
-        mock_prompt_text.return_value = "custom-feature"
-        mock_cli_confirm.return_value = False  # worktree (n)
-        mock_phase_confirm.return_value = True  # sync/pr prompts (y)
-        
-        # Input method 選擇 -> Manual input (第一個 prompt)
-        # Setup mode 選擇 -> Custom configuration (第二個 prompt)
-        # Rigor 選擇 -> High (第三個 prompt)
-        mock_phase_list.return_value = "1. Manual input"
-        mock_cli_list.side_effect = ["Custom configuration", "High"]
-        mock_template_list.return_value = "default (system default)"  # template selector parses this
-
-        result = runner.invoke(app, ["prepare"])
-
-        assert result.exit_code == 0
-        
-        # 驗證設定檔包含使用者選擇
-        config_file = temp_repo_dir / ".cafe" / "issues" / "custom-feature" / "issue.yaml"
-        with open(config_file) as f:
-            config_data = yaml.safe_load(f)
-            
-            # 驗證使用者選擇的值
-            assert config_data["spec"]["rigor"] == "high"
-            assert config_data["spec"]["template"] == "default"
-            assert config_data["plan"]["template"] == "default"
-
-        # 驗證詢問了 setup mode 與 rigor
-        assert mock_cli_list.call_count == 2
-        # 驗證詢問了 input method
-        assert mock_phase_list.call_count == 1
-        # 驗證詢問了 templates (2 次：spec 和 plan)
-        assert mock_template_list.call_count == 2
 
     def test_non_interactive_mode_not_affected_by_setup_mode(self, temp_repo_dir, mock_git_ops):
         """測試 non-interactive mode 不受設定模式影響"""

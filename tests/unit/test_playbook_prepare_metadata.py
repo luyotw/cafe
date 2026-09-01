@@ -15,6 +15,8 @@ from cafe.core.playbook import (
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 
 STANDARD_PREPARE_YAML = """
 commands:

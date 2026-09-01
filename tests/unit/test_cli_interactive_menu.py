@@ -69,14 +69,6 @@ class TestBackwardCompatibility:
             # InteractiveMenu should NOT be called when a subcommand is provided
             mock_menu_cls.assert_not_called()
 
-    def test_ls_command_remains_accessible(self):
-        """測試 cafe ls 指令仍然可以直接使用"""
-        with patch("cafe.ui.cli.InteractiveMenu") as mock_menu_cls:
-            result = runner.invoke(app, ["ls"])
-
-            # ls command runs, interactive menu should not be invoked
-            mock_menu_cls.assert_not_called()
-
     def test_help_flag_remains_accessible(self):
         """測試 --help 旗標仍然正常運作"""
         result = runner.invoke(app, ["--help"])

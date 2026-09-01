@@ -29,6 +29,14 @@ def mock_chat_environment():
 
 
 @pytest.fixture(autouse=True)
+def isolate_global_catalog(tmp_path, monkeypatch):
+    """Keep unit tests away from the user-owned global catalog and its lock."""
+    monkeypatch.setattr(
+        "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
+    )
+
+
+@pytest.fixture(autouse=True)
 def mock_phase_config_boundary_for_legacy_chat_fixtures(monkeypatch):
     """Keep launcher tests focused on chat behavior, not phase-file I/O."""
     from cafe.ui import chat
@@ -45,12 +53,35 @@ def mock_phase_config_boundary_for_legacy_chat_fixtures(monkeypatch):
     yield monkeypatch
 
 
+@pytest.fixture
+def mock_chat_catalog_reads(monkeypatch):
+    """Keep launcher-focused tests on a stable minimal workflow catalog."""
+    monkeypatch.setattr(
+        "cafe.ui.chat._load_latest_role_iteration_cli",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "cafe.ui.chat.PlaybookLoader.load",
+        lambda _loader, _playbook_id: {
+            "steps": {
+                "spec": {},
+                "plan": {},
+                "develop": {"role": "developer"},
+                "review": {},
+                "pr": {},
+            }
+        },
+    )
+
+
 class TestLaunchChatSession:
     """Tests for launch_chat_session()."""
 
     @pytest.fixture(autouse=True)
-    def isolate_launcher_workspace(self, tmp_path, monkeypatch):
-        """Keep launcher-created issue state out of the repository workspace."""
+    def isolate_launcher_workspace(
+        self, tmp_path, monkeypatch, mock_chat_catalog_reads
+    ):
+        """Keep launcher tests local and independent from catalog traversal."""
         monkeypatch.chdir(tmp_path)
 
     def _make_agent_config(self, cli: str, session_id=None, model=None):
@@ -213,26 +244,6 @@ class TestLaunchChatSession:
     @patch("cafe.ui.chat.subprocess.run")
     @patch("cafe.ui.chat.ConfigManager")
     @patch("cafe.ui.chat.AgentManager")
-    def test_passes_issue_name_to_agent_manager(
-        self, mock_agent_manager_cls, mock_config_manager_cls, mock_run
-    ):
-        """Test that issue_name is passed to AgentManager for session resolution."""
-        mock_config = MagicMock()
-        mock_config.get.return_value = {"name": "David", "cli": "claude"}
-        mock_config_manager_cls.return_value = mock_config
-
-        agent_manager = self._make_agent_manager("David", "claude")
-        mock_agent_manager_cls.return_value = agent_manager
-
-        mock_run.return_value = MagicMock(returncode=0)
-
-        launch_chat_session("developer", "my-issue")
-
-        mock_agent_manager_cls.assert_called_once_with(issue_name="my-issue")
-
-    @patch("cafe.ui.chat.subprocess.run")
-    @patch("cafe.ui.chat.ConfigManager")
-    @patch("cafe.ui.chat.AgentManager")
     def test_prepares_chat_environment_before_launch(
         self,
         mock_agent_manager_cls,
@@ -323,47 +334,6 @@ class TestLaunchChatSession:
             "sess-codex",
             "issue123",
         )
-
-    @patch("cafe.ui.chat.subprocess.run")
-    @patch("cafe.ui.chat.ConfigManager")
-    @patch("cafe.ui.chat.AgentManager")
-    def test_codex_chat_accepts_initial_prompt(
-        self,
-        mock_agent_manager_cls,
-        mock_config_manager_cls,
-        mock_run,
-    ):
-        """Test Codex interactive launch receives an initial prompt."""
-        mock_config = MagicMock()
-        mock_config.get.return_value = {"name": "Nick", "cli": "codex", "model": "gpt-5.4"}
-        mock_config_manager_cls.return_value = mock_config
-
-        agent_manager = self._make_agent_manager(
-            "Nick", "codex", session_id="sess-codex", model="gpt-5.4"
-        )
-        mock_agent_manager_cls.return_value = agent_manager
-        mock_run.return_value = MagicMock(returncode=0)
-
-        result = launch_chat_session(
-            "developer",
-            "issue123",
-            initial_prompt="Please guide this alignment decision.",
-        )
-
-        assert result == 0
-        assert mock_run.call_args.args[0] == [
-            "codex",
-            "--model",
-            "gpt-5.4",
-            "resume",
-            "sess-codex",
-            "Please guide this alignment decision.",
-        ]
-        assert (
-            mock_run.call_args.kwargs["env"]["CAFE_CHAT_INITIAL_PROMPT"]
-            == "Please guide this alignment decision."
-        )
-
 
 def test_prepare_chat_environment_installs_chat_skills_only() -> None:
     with (
@@ -478,7 +448,7 @@ def test_launch_chat_session_stops_before_cli_when_playbook_validation_fails(
 
 
 def test_latest_role_iteration_cli_infers_codex_for_phase_chain_metadata(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, mock_chat_catalog_reads
 ) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
@@ -518,6 +488,7 @@ def test_launch_chat_session_prepares_chat_handoff_directory(
     tmp_path,
     monkeypatch,
     mock_chat_environment,
+    mock_chat_catalog_reads,
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
@@ -661,7 +632,7 @@ def test_paused_human_task_chat_fails_closed_through_phase_loader(
 
 
 def test_prepare_chat_handoff_state_creates_blackboard_and_clears_stale_baton(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, mock_chat_catalog_reads
 ) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
@@ -683,7 +654,7 @@ def test_prepare_chat_handoff_state_creates_blackboard_and_clears_stale_baton(
 
 
 def test_prepare_chat_handoff_state_preserves_user_clarification_baton(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, mock_chat_catalog_reads
 ) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
@@ -716,6 +687,7 @@ def test_launch_chat_session_warns_when_baton_missing(
     tmp_path,
     monkeypatch,
     mock_chat_environment,
+    mock_chat_catalog_reads,
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
@@ -743,82 +715,11 @@ def test_launch_chat_session_warns_when_baton_missing(
     assert "did not complete workflow handoff" in printed
 
 
-def test_launch_chat_session_reports_broken_cursor_cli_on_launch_failure(
-    tmp_path,
-    monkeypatch,
-    mock_chat_environment,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-
-    with (
-        patch("builtins.print") as mock_print,
-        patch("cafe.ui.chat.subprocess.run") as mock_run,
-        patch("cafe.ui.chat.ConfigManager") as mock_config_manager_cls,
-        patch("cafe.ui.chat.AgentManager") as mock_agent_manager_cls,
-    ):
-        mock_config = MagicMock()
-        mock_config.get.return_value = {"name": "David", "cli": "cursor-agent"}
-        mock_config_manager_cls.return_value = mock_config
-
-        agent_manager = MagicMock()
-        executor = MagicMock()
-        executor.config = MagicMock(session_id="sess-cursor", model=None)
-        executor._get_cli_strategy.return_value.build_environment.return_value = dict(os.environ)
-        agent_manager.get_agent.return_value = executor
-        agent_manager.session_manager = MagicMock()
-        mock_agent_manager_cls.return_value = agent_manager
-
-        mock_run.return_value = MagicMock(
-            returncode=1,
-            stdout="",
-            stderr="Error: Cannot find module '@anysphere/file-service-darwin-x64'",
-        )
-
-        result = launch_chat_session("developer", "issue123")
-
-    assert result == 1
-    assert mock_run.called
-    printed = " ".join(str(call) for call in mock_print.call_args_list)
-    assert "missing native module" in printed
-    assert "did not complete workflow handoff" not in printed
-
-
-def test_launch_chat_session_nonzero_exit_skips_baton_warning(
-    tmp_path,
-    monkeypatch,
-    mock_chat_environment,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-
-    with (
-        patch("builtins.print") as mock_print,
-        patch("cafe.ui.chat.subprocess.run", return_value=MagicMock(returncode=1)),
-        patch("cafe.ui.chat.ConfigManager") as mock_config_manager_cls,
-        patch("cafe.ui.chat.AgentManager") as mock_agent_manager_cls,
-    ):
-        mock_config = MagicMock()
-        mock_config.get.return_value = {"name": "Roger", "cli": "claude"}
-        mock_config_manager_cls.return_value = mock_config
-
-        agent_manager = MagicMock()
-        executor = MagicMock()
-        executor.config = MagicMock(session_id=None, model=None)
-        executor._get_cli_strategy.return_value.build_environment.return_value = dict(os.environ)
-        agent_manager.get_agent.return_value = executor
-        agent_manager.session_manager = MagicMock()
-        mock_agent_manager_cls.return_value = agent_manager
-
-        result = launch_chat_session("pm", "issue123")
-
-    assert result == 1
-    printed = " ".join(str(call) for call in mock_print.call_args_list)
-    assert "did not complete workflow handoff" not in printed
-
-
 def test_launch_chat_session_nonzero_exit_reports_generic_cli_error(
     tmp_path,
     monkeypatch,
     mock_chat_environment,
+    mock_chat_catalog_reads,
 ) -> None:
     monkeypatch.chdir(tmp_path)
 

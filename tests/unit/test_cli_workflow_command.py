@@ -28,6 +28,8 @@ from cafe.ui.cli_shared import (
 from cafe.ui.human_tasks import resolve_step_human_task
 from cafe.utils.config import ConfigManager
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 runner = CliRunner()
 
 

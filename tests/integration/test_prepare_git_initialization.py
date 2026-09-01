@@ -2,11 +2,14 @@
 
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from cafe.core.git import GitError, GitOperations
 from cafe.ui.cli import app
 from tests.conftest import create_minimal_config
+
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 
 def test_prepare_initializes_git_only_with_explicit_non_interactive_flag(

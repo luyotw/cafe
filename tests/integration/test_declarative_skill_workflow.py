@@ -18,6 +18,8 @@ from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.phase_config import PhaseStepModelResolution
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 
 @pytest.fixture(autouse=True)
 def _configured_test_phase_chain(monkeypatch):

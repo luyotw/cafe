@@ -42,6 +42,8 @@ from cafe.ui.prepare_field_renderer import (
 from cafe.templates.manager import TemplateManager
 from cafe.core.prepare_profile import PrepareIssueConfig
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 
 def _profile(*, is_github_repo: bool = True) -> PrepareProfile:
     loader = PlaybookLoader()

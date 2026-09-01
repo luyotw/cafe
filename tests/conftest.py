@@ -10,6 +10,10 @@ import pytest
 from cafe.core.git import BranchHealth
 
 
+_BUILTIN_SKILL_FRONTMATTER_CACHE: dict[Path, dict[str, object]] = {}
+_BUILTIN_PLAYBOOK_CACHE: dict[str, object] = {}
+
+
 def _ensure_src_on_path() -> None:
     """Add this repo's src directory to sys.path for local imports."""
     repo_root = Path(__file__).resolve().parents[1]
@@ -22,6 +26,78 @@ def _ensure_src_on_path() -> None:
 
 
 _ensure_src_on_path()
+
+
+@pytest.fixture
+def cached_builtin_skill_frontmatter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cache immutable packaged skill metadata without masking override files."""
+    from cafe.skills.loader import SkillLoader
+
+    builtin_root = (
+        Path(__file__).resolve().parents[1] / "src" / "cafe" / "data" / "skills"
+    ).resolve()
+    real_read = SkillLoader._read_skill_frontmatter
+    real_discover = SkillLoader._discover_unlocked
+
+    def read(skill_file: Path) -> dict[str, object]:
+        resolved = Path(skill_file).resolve()
+        if not resolved.is_relative_to(builtin_root):
+            return real_read(skill_file)
+        if resolved not in _BUILTIN_SKILL_FRONTMATTER_CACHE:
+            _BUILTIN_SKILL_FRONTMATTER_CACHE[resolved] = real_read(skill_file)
+        return _BUILTIN_SKILL_FRONTMATTER_CACHE[resolved]
+
+    def discover(loader: SkillLoader, *, strict: bool = False):
+        if loader._catalog and all(
+            entry.source == "builtin" for entry in loader._catalog.values()
+        ):
+            return sorted(loader._catalog.values(), key=lambda entry: entry.name)
+        return real_discover(loader, strict=strict)
+
+    monkeypatch.setattr(
+        SkillLoader,
+        "_read_skill_frontmatter",
+        staticmethod(read),
+    )
+    monkeypatch.setattr(SkillLoader, "_discover_unlocked", discover)
+
+
+@pytest.fixture
+def cached_builtin_playbook_models(
+    cached_builtin_skill_frontmatter,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Reuse strict-validated packaged playbooks without masking overrides."""
+    from cafe.catalogs.resolver import CatalogKind
+    from cafe.playbooks.loader import PlaybookLoader
+
+    package_data_root = (
+        Path(__file__).resolve().parents[1] / "src" / "cafe" / "data"
+    ).resolve()
+    if not _BUILTIN_PLAYBOOK_CACHE:
+        playbook_root = package_data_root / "playbooks"
+        loader = PlaybookLoader(
+            project_root=tmp_path / "cache-project",
+            global_root=tmp_path / "cache-global",
+            builtin_root=package_data_root,
+        )
+        for playbook_file in sorted(playbook_root.glob("*.yaml")):
+            _BUILTIN_PLAYBOOK_CACHE[playbook_file.stem] = loader.load_model(
+                playbook_file.stem,
+                strict=True,
+            )
+
+    real_load_model = PlaybookLoader.load_model
+
+    def load_model(loader: PlaybookLoader, name: str, *, strict: bool = False):
+        if loader.builtin_root == package_data_root and name in _BUILTIN_PLAYBOOK_CACHE:
+            resolved = loader.resolver.resolve(CatalogKind.PLAYBOOK, name)
+            if resolved.source == "builtin":
+                return _BUILTIN_PLAYBOOK_CACHE[name]
+        return real_load_model(loader, name, strict=strict)
+
+    monkeypatch.setattr(PlaybookLoader, "load_model", load_model)
 
 
 def create_minimal_config(base_dir: Path) -> None:
