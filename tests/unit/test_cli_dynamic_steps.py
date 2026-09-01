@@ -19,6 +19,12 @@ def test_custom_step_command_routes_to_workflow_runtime(tmp_path: Path, monkeypa
         "qa:\n  name: Richard\n  clis:\n    - cli: codex\n      model: test-model\n",
         encoding="utf-8",
     )
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-205"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "playbook: custom\ncontract_version: 2\ndriver:\n  mode: unattended\n",
+        encoding="utf-8",
+    )
 
     playbook_dir = tmp_path / ".cafe" / "playbooks"
     playbook_dir.mkdir(parents=True, exist_ok=True)
@@ -51,6 +57,6 @@ steps:
 
         result = runner.invoke(app, ["qa"])
 
-        assert result.exit_code == 0
+        assert result.exit_code == 0, (result.stdout, result.exception)
         executor.execute_step.assert_called_once()
         assert executor.execute_step.call_args[0][0] == "qa"

@@ -176,6 +176,10 @@ response. A terminal `_done` baton has no future chain to adjust.
   simpler invocation are useful. Use
   `cafe workflow --execute --mute-agent-output` when direct controls are needed,
   and use `--single-step` only as an explicit manual or diagnostic control.
+- `cafe workflow --execute --mute-agent-output --background` resumes the durable
+  workflow through the fixed worker and returns its PID. It cannot carry
+  `--single-step`, `--start-step`, `--user-input`, or `--add-dir`; apply those
+  controls in a foreground invocation before starting background continuation.
 - A bounded diagnostic reproduction may temporarily add `--single-step` while
   continuous execution itself is under investigation. Record it as a diagnostic
   override; it does not mutate the confirmed execution contract.

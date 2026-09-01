@@ -57,6 +57,10 @@ invocation controls. They are not policy fields and do not change who owns a
 boundary. Existing worker leases prevent concurrent local advancement; this is
 not a supervisor or stale-run repair service.
 
+`cafe workflow --execute --background` resumes an already prepared workflow
+through the fixed background worker. Foreground execution and that worker both
+hold and renew the same durable advancement lease while the runtime is active.
+
 ## Durable state and inspection
 
 The blackboard records lifecycle state, correlated packets and decisions,

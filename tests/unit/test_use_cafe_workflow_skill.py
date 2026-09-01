@@ -1396,10 +1396,12 @@ def test_use_cafe_workflow_requires_v2_driver_policy_and_model_authority() -> No
     assert "explicit exact model" in skill
     assert "Never persist or infer execution" in skill
     assert "cafe workflow --execute --mute-agent-output" in skill
+    assert "cafe workflow --execute --mute-agent-output --background" in running
     assert "manual diagnostic `--single-step`" in normalized_skill
     assert "provider narration is parsed and persisted" in normalized_running
     assert "does not suppress workflow lifecycle events" in normalized_running
     assert "`cafe make` does not expose that flag and remains a valid launcher" in normalized_running
+    assert "--background` resumes the durable workflow through the fixed worker" in normalized_running
     assert "cafe update-driver-policy" in normalized_running
     assert "--delegated-model <exact-model>" in normalized_running
     assert "--advancement" not in normalized_running

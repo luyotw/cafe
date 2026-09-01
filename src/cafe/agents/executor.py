@@ -127,7 +127,7 @@ class AgentExecutor:
         Returns:
             List of tool names translated for current CLI, or None if no tools
         """
-        if not tools:
+        if tools is None:
             return None
 
         tool_map = self.TOOL_NAME_MAP.get(self.config.cli, {})
@@ -186,7 +186,9 @@ class AgentExecutor:
 
             # Translate allowed tools using CLI-specific logic
             cli_translated_tools = (
-                cli_strategy.translate_allowed_tools(translated_tools) if translated_tools else None
+                cli_strategy.translate_allowed_tools(translated_tools)
+                if translated_tools is not None
+                else None
             )
 
             # Build command using strategy
@@ -341,7 +343,9 @@ class AgentExecutor:
         cli_strategy = self._get_cli_strategy()
         translated_tools = self._translate_tool_names(allowed_tools)
         cli_translated_tools = (
-            cli_strategy.translate_allowed_tools(translated_tools) if translated_tools else None
+            cli_strategy.translate_allowed_tools(translated_tools)
+            if translated_tools is not None
+            else None
         )
         cmd = cli_strategy.build_command(prompt, cli_translated_tools, allowed_directories)
         return cmd[1:]

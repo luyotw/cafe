@@ -92,6 +92,17 @@ def test_update_requires_complete_explicit_policy_before_mutation(tmp_path: Path
     assert active_config.read_text(encoding="utf-8") == original
 
 
+def test_update_rejects_unreadable_yaml_authority_without_mutation(tmp_path: Path) -> None:
+    _, active_config, _ = _issue_layout(tmp_path)
+    original = b"base_branch: develop\nreview: [unterminated\n"
+    active_config.write_bytes(original)
+
+    with pytest.raises(ValueError):
+        IssuePolicyStore(active_config).replace(_v2_policy())
+
+    assert active_config.read_bytes() == original
+
+
 def test_prepare_guard_rejects_existing_runtime_before_mutation(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue432"
     issue_dir.mkdir(parents=True)

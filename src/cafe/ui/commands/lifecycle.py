@@ -49,7 +49,18 @@ def update_driver_policy(
     }
     try:
         policy = DriverPolicyContract.model_validate(proposed)
-        config_path = Path(".cafe") / "issues" / issue_name / "issue.yaml"
+        issues_root = (Path(".cafe") / "issues").resolve()
+        issue_path = Path(issue_name)
+        if (
+            issue_path.is_absolute()
+            or len(issue_path.parts) != 1
+            or issue_name in {"", ".", ".."}
+        ):
+            raise ValueError("issue name must identify one directory inside .cafe/issues")
+        issue_dir = (issues_root / issue_name).resolve()
+        if not issue_dir.is_relative_to(issues_root):
+            raise ValueError("issue configuration must remain inside .cafe/issues")
+        config_path = issue_dir / "issue.yaml"
         if not config_path.exists():
             raise ValueError(f"issue configuration does not exist: {config_path}")
         IssuePolicyStore(config_path).replace(policy)

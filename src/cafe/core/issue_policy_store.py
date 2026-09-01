@@ -15,7 +15,7 @@ from cafe.core.driver_policy import (
     policy_dict,
 )
 from cafe.core.packet_io import atomic_write_bytes
-from cafe.utils.issue_config import read_issue_config, resolve_issue_config_path
+from cafe.utils.issue_config import resolve_issue_config_path
 
 try:
     import fcntl
@@ -30,6 +30,21 @@ except ImportError:  # pragma: no cover - available only on Windows.
 
 class PrepareWouldClobberError(RuntimeError):
     """Preparing an issue would overwrite durable workflow state."""
+
+
+def _read_existing_config_strict(path: Path) -> dict[str, Any]:
+    """Read policy authority without collapsing corruption into an empty mapping."""
+    if not path.exists():
+        return {}
+    try:
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise ValueError(f"cannot read existing issue configuration: {path}") from exc
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"cannot read existing issue configuration: {path}")
+    return loaded
 
 
 @contextmanager
@@ -77,7 +92,7 @@ class IssuePolicyStore:
         with self._thread_lock(path):
             with lock_path.open("a+", encoding="utf-8") as handle:
                 with _exclusive_lock(handle):
-                    current = read_issue_config(path) or {}
+                    current = _read_existing_config_strict(path)
                     updated = {
                         key: value
                         for key, value in current.items()

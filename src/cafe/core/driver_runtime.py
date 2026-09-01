@@ -8,7 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from cafe.core.blackboard import BlackboardState, BlackboardStore
-from cafe.core.driver_policy import DriverPolicyContract
+from cafe.core.driver_policy import DelegatedDriverPolicy, DriverPolicyContract
 
 
 class DriverUnavailableError(RuntimeError):
@@ -33,9 +33,19 @@ class DriverPacket(_StrictDriverModel):
     completed_phase: str
     requested_action: str
     boundary_id: str
+    contract_version: Literal[2]
+    driver_cli: str
+    driver_model: str
     created_at: str = Field(default_factory=_now_iso)
 
-    @field_validator("workflow_id", "completed_phase", "requested_action", "boundary_id")
+    @field_validator(
+        "workflow_id",
+        "completed_phase",
+        "requested_action",
+        "boundary_id",
+        "driver_cli",
+        "driver_model",
+    )
     @classmethod
     def require_non_empty(cls, value: str) -> str:
         if not value.strip():
@@ -47,6 +57,11 @@ class DriverDecision(_StrictDriverModel):
     workflow_id: str
     sequence: int = Field(ge=1)
     requested_action: str
+    completed_phase: str
+    boundary_id: str
+    contract_version: Literal[2]
+    driver_cli: str
+    driver_model: str
     action: Literal["advance", "pause", "stop"]
     rationale: str = ""
     decided_at: str = Field(default_factory=_now_iso)
@@ -106,6 +121,7 @@ def _initial_driver_state() -> dict[str, Any]:
         "packets": {},
         "decisions": {},
         "consumed_sequences": [],
+        "superseded_sequences": [],
         "advancement_lease": None,
         "session": None,
         "worker": None,
@@ -136,14 +152,24 @@ class DriverCoordinator:
         completed_phase: str,
         requested_action: str,
         boundary_id: str | None = None,
+        policy: DriverPolicyContract,
     ) -> DriverPacket:
         identity = boundary_id or f"{completed_phase}:{requested_action}"
+        driver = self._delegated_driver(policy)
         with self.store.driver_transaction(self.state) as state:
             data = _state_data(state)
-            for raw_packet in data["packets"].values():
+            superseded = {int(value) for value in data["superseded_sequences"]}
+            for raw_sequence in sorted(data["packets"], key=int):
+                sequence = int(raw_sequence)
+                if sequence in superseded:
+                    continue
+                raw_packet = data["packets"][raw_sequence]
                 packet = DriverPacket.model_validate(raw_packet)
                 if packet.boundary_id == identity:
-                    return packet
+                    if self._packet_matches_policy(packet, policy):
+                        return packet
+                    data["superseded_sequences"].append(sequence)
+                    superseded.add(sequence)
             sequence = int(data["next_sequence"])
             packet = DriverPacket(
                 workflow_id=state.workflow_id,
@@ -151,6 +177,9 @@ class DriverCoordinator:
                 completed_phase=completed_phase,
                 requested_action=requested_action,
                 boundary_id=identity,
+                contract_version=policy.contract_version,
+                driver_cli=driver.cli,
+                driver_model=driver.model,
             )
             data["packets"][str(sequence)] = packet.model_dump(mode="json")
             data["next_sequence"] = sequence + 1
@@ -171,6 +200,14 @@ class DriverCoordinator:
                 raise ValueError("driver decision workflow does not match packet provenance")
             if decision.requested_action != packet.requested_action:
                 raise ValueError("driver decision requested action does not match packet")
+            if (
+                decision.completed_phase != packet.completed_phase
+                or decision.boundary_id != packet.boundary_id
+                or decision.contract_version != packet.contract_version
+                or decision.driver_cli != packet.driver_cli
+                or decision.driver_model != packet.driver_model
+            ):
+                raise ValueError("driver decision authority does not match packet provenance")
             existing_raw = data["decisions"].get(str(decision.sequence))
             if existing_raw is not None:
                 existing = DriverDecision.model_validate(existing_raw)
@@ -220,19 +257,65 @@ class DriverCoordinator:
             raw = data["decisions"].get(str(sequence))
             return DriverDecision.model_validate(raw) if raw is not None else None
 
-    def pending_boundary(self, requested_action: str) -> DriverPacket | None:
-        """Return the oldest unconsumed boundary for the current durable step."""
+    def pending_boundary(
+        self,
+        requested_action: str,
+        *,
+        policy: DriverPolicyContract,
+    ) -> DriverPacket | None:
+        """Return a pending boundary bound to the current exact delegated policy."""
+        driver = self._delegated_driver(policy)
         with self.store.driver_transaction(self.state) as state:
             data = _state_data(state)
             consumed = {int(value) for value in data["consumed_sequences"]}
+            superseded = {int(value) for value in data["superseded_sequences"]}
             for raw_sequence in sorted(data["packets"], key=int):
                 sequence = int(raw_sequence)
-                if sequence in consumed:
+                if sequence in consumed or sequence in superseded:
                     continue
                 packet = DriverPacket.model_validate(data["packets"][raw_sequence])
-                if packet.requested_action == requested_action:
+                if packet.requested_action != requested_action:
+                    continue
+                if self._packet_matches_policy(packet, policy):
                     return packet
+                data["superseded_sequences"].append(sequence)
+                replacement_sequence = int(data["next_sequence"])
+                replacement = DriverPacket(
+                    workflow_id=state.workflow_id,
+                    sequence=replacement_sequence,
+                    completed_phase=packet.completed_phase,
+                    requested_action=packet.requested_action,
+                    boundary_id=packet.boundary_id,
+                    contract_version=policy.contract_version,
+                    driver_cli=driver.cli,
+                    driver_model=driver.model,
+                )
+                data["packets"][str(replacement_sequence)] = replacement.model_dump(
+                    mode="json"
+                )
+                data["next_sequence"] = replacement_sequence + 1
+                data["lifecycle"] = "awaiting_decision"
+                return replacement
             return None
+
+    @staticmethod
+    def _delegated_driver(policy: DriverPolicyContract) -> DelegatedDriverPolicy:
+        if not isinstance(policy.driver, DelegatedDriverPolicy):
+            raise ValueError("driver boundary packets require delegated policy")
+        return policy.driver
+
+    @classmethod
+    def _packet_matches_policy(
+        cls,
+        packet: DriverPacket,
+        policy: DriverPolicyContract,
+    ) -> bool:
+        driver = cls._delegated_driver(policy)
+        return (
+            packet.contract_version == policy.contract_version
+            and packet.driver_cli == driver.cli
+            and packet.driver_model == driver.model
+        )
 
     def record_lifecycle(self, lifecycle: str, *, reason: str = "") -> None:
         if not lifecycle.strip():
@@ -260,6 +343,20 @@ class DriverCoordinator:
                 "acquired_at": now.isoformat(),
                 "expires_at": (now + timedelta(seconds=ttl_seconds)).isoformat(),
             }
+            return True
+
+    def renew_advancement_lease(self, holder: str, *, ttl_seconds: int) -> bool:
+        """Extend a lease only while the same live worker remains its holder."""
+        if not holder.strip() or ttl_seconds <= 0:
+            raise ValueError("holder and positive ttl_seconds are required")
+        now = datetime.now(timezone.utc)
+        with self.store.driver_transaction(self.state) as state:
+            data = _state_data(state)
+            lease = data.get("advancement_lease")
+            if not isinstance(lease, dict) or lease.get("holder") != holder:
+                return False
+            lease["expires_at"] = (now + timedelta(seconds=ttl_seconds)).isoformat()
+            lease["renewed_at"] = now.isoformat()
             return True
 
     def release_advancement_lease(self, holder: str) -> bool:

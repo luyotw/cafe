@@ -79,14 +79,13 @@ class TestCursorCLIBuildCommand:
 class TestCursorCLITranslateAllowedTools:
     """測試 translate_allowed_tools() 方法."""
 
-    def test_translate_returns_empty_list(self, cursor_config):
-        """測試轉換工具名稱回傳空列表（Cursor 不支援工具限制）."""
+    def test_translate_preserves_scope_marker(self, cursor_config):
+        """測試保留工具範圍，供命令建構區分空權限與一般執行。"""
         cli = CursorCLI(cursor_config)
         tools = ["read", "write", "bash"]
         result = cli.translate_allowed_tools(tools)
 
-        # Cursor 不支援工具限制，應該回傳空列表
-        assert result == []
+        assert result == tools
 
 
 class TestCursorCLIAddDirectories:

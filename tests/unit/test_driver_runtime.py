@@ -20,6 +20,31 @@ def _coordinator(issue_dir: Path) -> DriverCoordinator:
     return DriverCoordinator(store, state)
 
 
+def _policy(model: str = "exact-driver-model") -> DriverPolicyContract:
+    return DriverPolicyContract.model_validate(
+        {
+            "contract_version": 2,
+            "driver": {"mode": "delegated", "cli": "codex", "model": model},
+        }
+    )
+
+
+def _decision(packet, **updates) -> DriverDecision:
+    values = {
+        "workflow_id": packet.workflow_id,
+        "sequence": packet.sequence,
+        "requested_action": packet.requested_action,
+        "completed_phase": packet.completed_phase,
+        "boundary_id": packet.boundary_id,
+        "contract_version": packet.contract_version,
+        "driver_cli": packet.driver_cli,
+        "driver_model": packet.driver_model,
+        "action": "advance",
+    }
+    values.update(updates)
+    return DriverDecision(**values)
+
+
 def _consume_in_process(issue_dir: str, sequence: int, queue) -> None:
     consumed = _coordinator(Path(issue_dir)).consume_authorization(sequence) is not None
     queue.put(consumed)
@@ -28,8 +53,12 @@ def _consume_in_process(issue_dir: str, sequence: int, queue) -> None:
 def test_packets_are_monotonic_structured_and_workflow_correlated(tmp_path: Path) -> None:
     coordinator = _coordinator(tmp_path)
 
-    first = coordinator.open_boundary(completed_phase="spec", requested_action="plan")
-    second = coordinator.open_boundary(completed_phase="plan", requested_action="develop")
+    first = coordinator.open_boundary(
+        completed_phase="spec", requested_action="plan", policy=_policy()
+    )
+    second = coordinator.open_boundary(
+        completed_phase="plan", requested_action="develop", policy=_policy()
+    )
 
     assert first.sequence == 1
     assert second.sequence == 2
@@ -40,38 +69,26 @@ def test_packets_are_monotonic_structured_and_workflow_correlated(tmp_path: Path
 
 def test_decision_must_match_workflow_sequence_and_requested_action(tmp_path: Path) -> None:
     coordinator = _coordinator(tmp_path)
-    packet = coordinator.open_boundary(completed_phase="spec", requested_action="plan")
+    packet = coordinator.open_boundary(
+        completed_phase="spec", requested_action="plan", policy=_policy()
+    )
 
     with pytest.raises(ValueError):
         coordinator.record_decision(
-            DriverDecision(
-                workflow_id="other-workflow",
-                sequence=packet.sequence,
-                requested_action="plan",
-                action="advance",
-            )
+            _decision(packet, workflow_id="other-workflow")
         )
     with pytest.raises(ValueError):
         coordinator.record_decision(
-            DriverDecision(
-                workflow_id=packet.workflow_id,
-                sequence=packet.sequence,
-                requested_action="review",
-                action="advance",
-            )
+            _decision(packet, requested_action="review")
         )
 
 
 def test_one_sequence_retains_one_decision_and_consumes_authorization_once(tmp_path: Path) -> None:
     coordinator = _coordinator(tmp_path)
-    packet = coordinator.open_boundary(completed_phase="spec", requested_action="plan")
-    decision = DriverDecision(
-        workflow_id=packet.workflow_id,
-        sequence=packet.sequence,
-        requested_action=packet.requested_action,
-        action="advance",
-        rationale="continue",
+    packet = coordinator.open_boundary(
+        completed_phase="spec", requested_action="plan", policy=_policy()
     )
+    decision = _decision(packet, rationale="continue")
 
     assert coordinator.record_decision(decision) == decision
     assert coordinator.record_decision(decision) == decision
@@ -86,15 +103,10 @@ def test_one_sequence_retains_one_decision_and_consumes_authorization_once(tmp_p
 
 def test_concurrent_runtimes_cannot_consume_one_authorization_twice(tmp_path: Path) -> None:
     coordinator = _coordinator(tmp_path)
-    packet = coordinator.open_boundary(completed_phase="spec", requested_action="plan")
-    coordinator.record_decision(
-        DriverDecision(
-            workflow_id=packet.workflow_id,
-            sequence=packet.sequence,
-            requested_action=packet.requested_action,
-            action="advance",
-        )
+    packet = coordinator.open_boundary(
+        completed_phase="spec", requested_action="plan", policy=_policy()
     )
+    coordinator.record_decision(_decision(packet))
 
     def consume() -> bool:
         return _coordinator(tmp_path).consume_authorization(packet.sequence) is not None
@@ -107,15 +119,10 @@ def test_concurrent_runtimes_cannot_consume_one_authorization_twice(tmp_path: Pa
 
 def test_concurrent_processes_cannot_consume_one_authorization_twice(tmp_path: Path) -> None:
     coordinator = _coordinator(tmp_path)
-    packet = coordinator.open_boundary(completed_phase="spec", requested_action="plan")
-    coordinator.record_decision(
-        DriverDecision(
-            workflow_id=packet.workflow_id,
-            sequence=packet.sequence,
-            requested_action=packet.requested_action,
-            action="advance",
-        )
+    packet = coordinator.open_boundary(
+        completed_phase="spec", requested_action="plan", policy=_policy()
     )
+    coordinator.record_decision(_decision(packet))
     context = get_context("spawn")
     queue = context.Queue()
     processes = [
@@ -152,6 +159,11 @@ def test_driver_decision_rejects_unknown_actions() -> None:
             workflow_id="workflow",
             sequence=1,
             requested_action="plan",
+            completed_phase="spec",
+            boundary_id="spec:plan",
+            contract_version=2,
+            driver_cli="codex",
+            driver_model="exact-driver-model",
             action="invented",
         )
 

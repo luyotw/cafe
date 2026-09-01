@@ -8,6 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Event, Thread
 from typing import Any, Callable
 
 from cafe.core.blackboard import BlackboardStore
@@ -35,13 +36,21 @@ class WorkflowHost:
         *,
         popen_factory: Callable[..., Any] = subprocess.Popen,
         python_executable: str = sys.executable,
+        lease_ttl_seconds: int = 300,
+        lease_renew_interval_seconds: float = 100.0,
     ) -> None:
+        if lease_ttl_seconds <= 0 or lease_renew_interval_seconds <= 0:
+            raise ValueError("lease TTL and renewal interval must be positive")
+        if lease_renew_interval_seconds >= lease_ttl_seconds:
+            raise ValueError("lease renewal interval must be shorter than the lease TTL")
         self.issue_dir = Path(issue_dir)
         self.store = BlackboardStore(self.issue_dir)
         self.state = self.store.load_or_create("spec")
         self.coordinator = DriverCoordinator(self.store, self.state)
         self.popen_factory = popen_factory
         self.python_executable = python_executable
+        self.lease_ttl_seconds = lease_ttl_seconds
+        self.lease_renew_interval_seconds = lease_renew_interval_seconds
         self._held_worker_id: str | None = None
 
     def run(
@@ -65,7 +74,9 @@ class WorkflowHost:
         hold_lease: bool = False,
     ) -> HostRunResult:
         identity = worker_id or str(uuid.uuid4())
-        if not self.coordinator.claim_advancement_lease(identity, ttl_seconds=300):
+        if not self.coordinator.claim_advancement_lease(
+            identity, ttl_seconds=self.lease_ttl_seconds
+        ):
             raise WorkerAlreadyRunningError("workflow advancement is owned by another worker")
         lease = self.state.driver_state["advancement_lease"]
         self._record_worker(
@@ -74,9 +85,20 @@ class WorkflowHost:
             hosting=hosting,
             lease_expires_at=str(lease["expires_at"]),
         )
+        heartbeat_stop = Event()
+        lease_lost = Event()
+        heartbeat = Thread(
+            target=self._renew_while_running,
+            args=(identity, hosting, heartbeat_stop, lease_lost),
+            name=f"cafe-workflow-lease-{identity}",
+            daemon=True,
+        )
+        heartbeat.start()
         try:
             result = runtime()
         except BaseException as exc:
+            heartbeat_stop.set()
+            heartbeat.join(timeout=min(self.lease_renew_interval_seconds + 1, 5))
             self._record_worker(
                 identity,
                 status="failed",
@@ -85,12 +107,57 @@ class WorkflowHost:
             )
             self.coordinator.release_advancement_lease(identity)
             raise
+        heartbeat_stop.set()
+        heartbeat.join(timeout=min(self.lease_renew_interval_seconds + 1, 5))
+        if heartbeat.is_alive():
+            lease_lost.set()
+        if lease_lost.is_set():
+            self._record_worker(
+                identity,
+                status="failed",
+                hosting=hosting,
+                error_type="AdvancementLeaseLost",
+            )
+            self.coordinator.release_advancement_lease(identity)
+            raise WorkerAlreadyRunningError("workflow advancement lease was lost")
         if hold_lease:
             self._held_worker_id = identity
         else:
             self._record_worker(identity, status="stopped", hosting=hosting)
             self.coordinator.release_advancement_lease(identity)
         return HostRunResult(hosting=hosting, worker_id=identity, result=result)
+
+    def _renew_while_running(
+        self,
+        identity: str,
+        hosting: str,
+        stop: Event,
+        lease_lost: Event,
+    ) -> None:
+        while not stop.wait(self.lease_renew_interval_seconds):
+            try:
+                renewed = self.coordinator.renew_advancement_lease(
+                    identity,
+                    ttl_seconds=self.lease_ttl_seconds,
+                )
+            except (OSError, RuntimeError, ValueError):
+                lease_lost.set()
+                return
+            if not renewed:
+                lease_lost.set()
+                return
+            try:
+                lease = self.state.driver_state.get("advancement_lease")
+                if isinstance(lease, dict):
+                    self._record_worker(
+                        identity,
+                        status="running",
+                        hosting=hosting,
+                        lease_expires_at=str(lease["expires_at"]),
+                    )
+            except (OSError, RuntimeError, ValueError):
+                lease_lost.set()
+                return
 
     def release_held_lease(self) -> bool:
         identity = self._held_worker_id

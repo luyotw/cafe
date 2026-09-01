@@ -49,7 +49,7 @@ class CopilotCLI(AbstractCLI):
             # Use --allow-tool for each tool
             for tool in allowed_tools:
                 cmd.extend(["--allow-tool", tool])
-        else:
+        elif allowed_tools is None:
             # Use --allow-all-tools to automatically approve all tools
             cmd.append("--allow-all-tools")
 

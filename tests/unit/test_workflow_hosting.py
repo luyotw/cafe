@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -89,6 +90,60 @@ def test_only_one_host_worker_advances_and_clean_release_allows_next(tmp_path: P
     assert claimed.count(True) == 1
     host.release_held_lease()
     assert host.run_worker(lambda: "next", worker_id="next").result == "next"
+
+
+def test_live_worker_renews_lease_until_runtime_returns(tmp_path: Path) -> None:
+    runtime_release = Event()
+    lease_renewed = Event()
+    host = WorkflowHost(
+        tmp_path,
+        lease_ttl_seconds=1,
+        lease_renew_interval_seconds=0.01,
+    )
+    original_renew = host.coordinator.renew_advancement_lease
+
+    def renew(holder: str, *, ttl_seconds: int) -> bool:
+        renewed = original_renew(holder, ttl_seconds=ttl_seconds)
+        lease_renewed.set()
+        return renewed
+
+    host.coordinator.renew_advancement_lease = renew
+
+    def run_until_released() -> str:
+        assert runtime_release.wait(timeout=2)
+        return "finished"
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(host.run_worker, run_until_released, worker_id="live")
+        assert lease_renewed.wait(timeout=2)
+        competitor = WorkflowHost(tmp_path)
+        with pytest.raises(WorkerAlreadyRunningError):
+            competitor.run_worker(lambda: "overlap", worker_id="competitor")
+        runtime_release.set()
+        assert future.result(timeout=2).result == "finished"
+
+
+def test_lease_renewal_error_fails_closed_after_runtime_returns(tmp_path: Path) -> None:
+    renewal_attempted = Event()
+    host = WorkflowHost(
+        tmp_path,
+        lease_ttl_seconds=1,
+        lease_renew_interval_seconds=0.01,
+    )
+
+    def fail_renewal(_holder: str, *, ttl_seconds: int) -> bool:
+        assert ttl_seconds == 1
+        renewal_attempted.set()
+        raise OSError("lease store unavailable")
+
+    host.coordinator.renew_advancement_lease = fail_renewal
+
+    def run_until_attempted() -> str:
+        assert renewal_attempted.wait(timeout=2)
+        return "unsafe-success"
+
+    with pytest.raises(WorkerAlreadyRunningError):
+        host.run_worker(run_until_attempted, worker_id="live")
 
 
 def test_stale_reconciliation_changes_only_worker_and_lease_state(tmp_path: Path) -> None:

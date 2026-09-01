@@ -87,6 +87,7 @@ def _resume_issue_workflow(issue: str, playbook: str) -> None:
         issue=issue,
         start_step=None,
         single_step=False,
+        background=False,
         dry_run=False,
         user_input=None,
         add_dir=[],

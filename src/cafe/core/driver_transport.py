@@ -90,16 +90,19 @@ class BlackboardDriverSessionStore(SessionStore):
         with self.store.driver_transaction(self.state) as state:
             existing = state.driver_state.get("session")
             if isinstance(existing, dict):
-                if (
-                    existing.get("namespace") != DRIVER_NAMESPACE
-                    or existing.get("workflow_id") != state.workflow_id
-                    or existing.get("cli") != cli.value
-                    or existing.get("requested_model") != self.requested_model
-                    or existing.get("session_id") != session_id
-                ):
+                if existing.get("namespace") != DRIVER_NAMESPACE or existing.get(
+                    "workflow_id"
+                ) != state.workflow_id:
                     raise ValueError("delegated driver session identity cannot be replaced")
-                existing["last_used_at"] = now
-                return
+                if (
+                    existing.get("cli") == cli.value
+                    and existing.get("requested_model") == self.requested_model
+                ):
+                    if existing.get("session_id") != session_id:
+                        raise ValueError("delegated driver session identity cannot be replaced")
+                    existing["last_used_at"] = now
+                    return
+                state.driver_state.setdefault("session_history", []).append(dict(existing))
             state.driver_state["session"] = {
                 "namespace": DRIVER_NAMESPACE,
                 "workflow_id": state.workflow_id,
@@ -142,6 +145,12 @@ class DelegatedDriverTransport:
     ) -> DriverDecision:
         if packet.workflow_id != self.session_store.state.workflow_id:
             raise ValueError("driver packet belongs to a different workflow")
+        if (
+            packet.contract_version != self.policy.contract_version
+            or packet.driver_cli != self.policy.driver.cli
+            or packet.driver_model != self.policy.driver.model
+        ):
+            raise ValueError("driver packet does not match the current exact policy")
         agent_manager = manager or AgentManager(
             session_manager=self.session_store,
             issue_name=None,
@@ -167,6 +176,11 @@ class DelegatedDriverTransport:
                     "workflow_id": packet.workflow_id,
                     "sequence": packet.sequence,
                     "requested_action": packet.requested_action,
+                    "completed_phase": packet.completed_phase,
+                    "boundary_id": packet.boundary_id,
+                    "contract_version": packet.contract_version,
+                    "driver_cli": packet.driver_cli,
+                    "driver_model": packet.driver_model,
                     "action": ["advance", "pause", "stop"],
                     "rationale": "optional string",
                 },
@@ -178,6 +192,8 @@ class DelegatedDriverTransport:
             execution = agent_manager.execute(
                 DRIVER_AGENT_NAME,
                 prompt,
+                allowed_tools=[],
+                allowed_directories=[],
                 continuation=self.session_store.continuation(self.cli),
             )
         except AgentExecutionError as exc:
@@ -211,6 +227,11 @@ class DelegatedDriverTransport:
             decision.workflow_id != packet.workflow_id
             or decision.sequence != packet.sequence
             or decision.requested_action != packet.requested_action
+            or decision.completed_phase != packet.completed_phase
+            or decision.boundary_id != packet.boundary_id
+            or decision.contract_version != packet.contract_version
+            or decision.driver_cli != packet.driver_cli
+            or decision.driver_model != packet.driver_model
         ):
             raise ValueError("delegated driver decision does not correlate to its packet")
         return decision

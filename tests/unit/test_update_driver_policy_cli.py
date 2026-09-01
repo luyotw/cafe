@@ -115,3 +115,30 @@ def test_update_command_rejects_inapplicable_mode_fields_before_mutation(
 
     assert result.exit_code == 1
     assert active.read_bytes() == original
+
+
+def test_update_command_rejects_issue_name_that_escapes_issue_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    issues_root = tmp_path / ".cafe" / "issues"
+    issues_root.mkdir(parents=True)
+    victim = tmp_path / "victim" / "issue.yaml"
+    victim.parent.mkdir(parents=True)
+    victim.write_text("owner: outside\n", encoding="utf-8")
+    original = victim.read_bytes()
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "update-driver-policy",
+            "../../victim",
+            "--contract-version",
+            "2",
+            "--driver-mode",
+            "unattended",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert victim.read_bytes() == original

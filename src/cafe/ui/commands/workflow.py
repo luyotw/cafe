@@ -21,6 +21,7 @@ from cafe.core.playbook import resolve_step_behavior
 from cafe.core.types import CriticalPhaseError
 from cafe.core.v2_workflow_runtime import Version2WorkflowRuntime
 from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.workflow_hosting import WorkflowHost
 from cafe.core.workflow_notifications import WorkflowNotifier
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.phases.generic_phase import GenericPhase
@@ -572,6 +573,11 @@ def workflow(
         None, "--start-step", help="Start execution from a specific step"
     ),
     single_step: bool = typer.Option(False, "--single-step", help="Run only one playbook step"),
+    background: bool = typer.Option(
+        False,
+        "--background",
+        help="Launch an existing workflow through the fixed background worker",
+    ),
     mute_agent_output: bool = typer.Option(
         False,
         "--mute-agent-output",
@@ -599,6 +605,7 @@ def workflow(
 ) -> None:
     """Run playbook workflow using the new generic runner."""
     user_input = _normalize_cli_user_input(user_input)
+    background = background if isinstance(background, bool) else False
     try:
 
         git = _get_GitOperations()()
@@ -686,6 +693,18 @@ def workflow(
             start_step,
             resume_blackboard.current_step,
         )
+        if background:
+            if single_step or start_step is not None or user_input is not None or add_dir_values:
+                console.print(
+                    "[red]Error: --background resumes the durable workflow and cannot "
+                    "be combined with --single-step, --start-step, --user-input, or --add-dir[/red]"
+                )
+                raise typer.Exit(1)
+            launched = WorkflowHost(issue_dir).run(lambda: None, hosting="background")
+            console.print(
+                f"[green]Workflow background worker started[/green] pid={launched.pid}"
+            )
+            return
 
         def _interactive_mode() -> bool:
             # An explicit payload is authoritative for the current user gate,
@@ -1019,12 +1038,15 @@ def workflow(
                         session_store,
                     ).request_decision(packet)
 
-            result = Version2WorkflowRuntime(
-                runner,
-                driver_policy,
-                delegated_decision_provider=delegated_decision_provider,
-                notifier=WorkflowNotifier(issue_dir),
-            ).run(start_step=pending_start_step, single_step=single_step)
+            result = WorkflowHost(issue_dir).run(
+                lambda: Version2WorkflowRuntime(
+                    runner,
+                    driver_policy,
+                    delegated_decision_provider=delegated_decision_provider,
+                    notifier=WorkflowNotifier(issue_dir),
+                ).run(start_step=pending_start_step, single_step=single_step),
+                hosting="foreground",
+            ).result
             latest_blackboard = BlackboardStore(issue_dir).load_or_create(
                 str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
                 playbook_id=str(playbook_data["playbook"]["id"]),

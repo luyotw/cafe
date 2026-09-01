@@ -18,7 +18,9 @@ class CursorCLI(AbstractCLI):
     ) -> List[str]:
         """Build Cursor CLI command line arguments.
 
-        Note: Cursor doesn't support tool restrictions and directory restrictions, always uses --force to automatically approve all tools.
+        Cursor cannot allow-list individual tools. An explicit empty tool scope
+        therefore omits ``--force`` so non-interactive permission requests fail
+        closed instead of auto-approving tools.
 
         Parameter order: cursor-agent -> -p -> --model -> --resume -> --force -> --output-format
 
@@ -40,8 +42,10 @@ class CursorCLI(AbstractCLI):
         if self.config.session_id:
             cmd.extend(["--resume", self.config.session_id])
 
-        # Cursor doesn't support allowed-tools, use --force to automatically approve all tools
-        cmd.append("--force")
+        # Preserve legacy auto-approval only when callers did not provide a
+        # capability scope. Decision-only callers pass an explicit empty list.
+        if allowed_tools is None or allowed_tools:
+            cmd.append("--force")
 
         # Add output format parameter
         cmd.extend(self.get_output_format())
@@ -102,16 +106,17 @@ class CursorCLI(AbstractCLI):
     def translate_allowed_tools(self, tools: List[str]) -> List[str]:
         """Convert tool names to Cursor format.
 
-        Cursor doesn't support tool restrictions, return empty list.
+        Cursor doesn't support tool restrictions. Preserve the list only so
+        the command builder can distinguish a normal nonempty request from an
+        explicit empty capability scope.
 
         Args:
             tools: List of tool names
 
         Returns:
-            Empty list (Cursor doesn't support tool restrictions)
+            Original list as a capability-scope marker
         """
-        # Cursor doesn't support tool restrictions, return empty list
-        return []
+        return list(tools)
 
     def add_directories(self, cmd: List[str], directories: List[str]) -> List[str]:
         """Add allowed directories to command line arguments.

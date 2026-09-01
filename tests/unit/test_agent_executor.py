@@ -1642,8 +1642,8 @@ class TestToolNameTranslation:
             "run_shell_command(git status)"
         ]
 
-    def test_translate_returns_none_for_empty_tools(self):
-        """測試空工具列表返回 None"""
+    def test_translate_preserves_explicit_empty_tool_scope(self):
+        """測試未指定工具與明確空權限維持不同語意。"""
         config = AgentConfig(
             name="test",
             cli=AgentCLI.CLAUDE,
@@ -1652,7 +1652,7 @@ class TestToolNameTranslation:
         executor = AgentExecutor(config)
 
         assert executor._translate_tool_names(None) is None
-        assert executor._translate_tool_names([]) is None
+        assert executor._translate_tool_names([]) == []
 
 
 class TestGeminiIgnoreSetup:

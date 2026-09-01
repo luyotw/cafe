@@ -247,6 +247,7 @@ def _build_dynamic_step_click_command(step_name: str) -> Optional[click.Command]
             issue=None,
             start_step=step_name,
             single_step=True,
+            background=False,
             dry_run=False,
         )
 

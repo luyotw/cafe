@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -447,10 +448,23 @@ def test_workflow_command_forwards_validated_policy_to_v2_runtime(
         def execute_step(self, step_name, step_def, blackboard_state, **_kwargs):
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
+    class CapturingWorkflowHost:
+        def __init__(self, issue_dir) -> None:
+            captured["host_issue_dir"] = issue_dir
+
+        def run(self, runtime, *, hosting):
+            captured["hosting"] = hosting
+            return SimpleNamespace(result=runtime())
+
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
         patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
         patch("cafe.ui.commands.workflow.Version2WorkflowRuntime", CapturingVersion2Runtime),
+        patch(
+            "cafe.ui.commands.workflow.WorkflowHost",
+            CapturingWorkflowHost,
+            create=True,
+        ),
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-v2-public"
@@ -466,6 +480,42 @@ def test_workflow_command_forwards_validated_policy_to_v2_runtime(
     assert policy.contract_version == 2
     assert policy.driver.mode == "unattended"
     assert captured["provider"] is None
+    assert captured["hosting"] == "foreground"
+
+
+def test_workflow_background_option_uses_fixed_host_launcher(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    captured: dict[str, object] = {}
+
+    class CapturingWorkflowHost:
+        def __init__(self, issue_dir) -> None:
+            captured["issue_dir"] = issue_dir
+
+        def run(self, runtime, *, hosting):
+            captured["hosting"] = hosting
+            return SimpleNamespace(result=None, pid=4321)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch(
+            "cafe.ui.commands.workflow.WorkflowHost",
+            CapturingWorkflowHost,
+            create=True,
+        ),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-v2-background"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--background"],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert captured["hosting"] == "background"
+    assert "4321" in result.stdout
 
 
 def test_workflow_command_passes_initial_user_input_to_spec_step(

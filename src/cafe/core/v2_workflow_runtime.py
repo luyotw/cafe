@@ -55,18 +55,20 @@ class Version2WorkflowRuntime:
         for _ in range(max_transitions):
             if self.policy.driver.mode == "delegated":
                 pending = self.coordinator.pending_boundary(
-                    str(self.phase_runtime.blackboard.current_step)
+                    str(self.phase_runtime.blackboard.current_step),
+                    policy=self.policy,
                 )
                 if pending is not None and not self._authorize_delegated_boundary(pending):
                     return self._boundary_result(pending)
 
+            executed_step = requested_start or str(self.phase_runtime.blackboard.current_step)
             result = self.phase_runtime.run(
                 start_step=requested_start,
                 single_step=True,
             )
             requested_start = None
             last_result = result
-            lifecycle = self._lifecycle_stop(result)
+            lifecycle = self._lifecycle_stop(result, executed_step=executed_step)
             if lifecycle is not None:
                 reason = result.final_status_code
                 self.coordinator.record_lifecycle(lifecycle, reason=reason)
@@ -93,6 +95,7 @@ class Version2WorkflowRuntime:
                 completed_phase=result.final_step,
                 requested_action=requested_action,
                 boundary_id=self._boundary_id(result, requested_action),
+                policy=self.policy,
             )
             self._notify_boundary(packet)
             if not self._authorize_delegated_boundary(packet):
@@ -156,7 +159,12 @@ class Version2WorkflowRuntime:
             return f"{event.timestamp}:{result.final_step}:{requested_action}"
         return f"{result.final_step}:{requested_action}"
 
-    def _lifecycle_stop(self, result: PlaybookRunResult) -> str | None:
+    def _lifecycle_stop(
+        self,
+        result: PlaybookRunResult,
+        *,
+        executed_step: str,
+    ) -> str | None:
         current_step = str(self.phase_runtime.blackboard.current_step)
         status = result.final_status_code.upper()
         if result.completed or current_step == "done":
@@ -169,6 +177,8 @@ class Version2WorkflowRuntime:
         ):
             return "human_task"
         if any(token in status for token in ("ERROR", "FAILED", "INTERRUPTED")):
+            return "error"
+        if current_step == executed_step:
             return "error"
         return None
 
