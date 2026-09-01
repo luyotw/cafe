@@ -73,7 +73,7 @@ def test_write_cafe_phase_requires_interrupt_safe_batch_progress() -> None:
     normalized_skill = " ".join(skill.split())
     normalized_spec = " ".join(spec.split())
 
-    assert "version: 2.9.3" in skill
+    assert "version: 2.9.4" in skill
     assert "## Interruptible and Batch Phases" in skill
     assert "it is not a per-target resume ledger" in normalized_skill
     assert (
@@ -92,7 +92,11 @@ def test_write_cafe_phase_requires_interrupt_safe_batch_progress() -> None:
     assert "Record the algorithm and scope/projection version" in normalized_skill
     assert "post-success runtime/host hook or later retention policy" in normalized_skill
     assert "migrate only deterministic local evidence" in normalized_skill
-    assert "reference-only repairs do not protect that in-flight iteration" in normalized_skill
+    assert (
+        "Phase preparation refreshes an existing iteration's derived `checklist.md`"
+        in normalized_skill
+    )
+    assert "new or changed gates reopen" in normalized_skill
     assert "do not add an internal infinite retry loop" in normalized_skill
 
     assert "## 17. 可中斷與大量工作 phase 的 checkpoint/resume contract" in spec
@@ -113,6 +117,7 @@ def test_write_cafe_phase_requires_interrupt_safe_batch_progress() -> None:
     assert "post-success runtime/host hook 或 retention policy" in normalized_spec
     assert "外層 repair agent 不手改 generated issue artifacts" in normalized_spec
     assert "沒有明確 receipt 的 consumer review" in normalized_spec
-    assert "不能只改 reference" in normalized_spec
+    assert "新增或變更項目會以未完成 gate 出現" in normalized_spec
+    assert "完整內容完全相同的 completed item" in normalized_spec
     assert "runtime 會重新安裝 resolved skill" in normalized_spec
     assert "active `SKILL.md`" in normalized_spec

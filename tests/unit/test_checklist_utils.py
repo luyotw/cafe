@@ -1,10 +1,12 @@
 """Tests for checklist utilities."""
 
+import os
+
 import pytest
-from pathlib import Path
+
 from cafe.utils.checklist_utils import (
+    generate_checklist_file,
     resolve_checklist_placeholders,
-    generate_checklist_file
 )
 
 
@@ -65,6 +67,14 @@ class TestResolveChecklistPlaceholders:
 
         assert result == checklist  # Should remain unchanged
 
+    def test_coerces_non_string_runtime_context_values(self):
+        """Runtime context may include lifecycle flags alongside file paths."""
+        result = resolve_checklist_placeholders(
+            "[ ] Publish completed: {published}", {"published": True}
+        )
+
+        assert result == "[ ] Publish completed: True"
+
     def test_resolves_placeholders_with_special_characters(self):
         """Test resolves placeholders in paths with special characters."""
         checklist = "[ ] Read {file_path}"
@@ -114,6 +124,91 @@ class TestGenerateChecklistFile:
         generate_checklist_file(str(output_path), new_content)
 
         assert output_path.read_text() == new_content
+
+    def test_preserves_completed_items_only_when_their_text_is_unchanged(self, tmp_path):
+        output_path = tmp_path / "checklist.md"
+        output_path.write_text(
+            "[x] Keep this completion\n[x] Replace this requirement\n",
+            encoding="utf-8",
+        )
+
+        generate_checklist_file(
+            output_path,
+            "[ ] Keep this completion\n[ ] New requirement\n",
+            preserve_completed_items=True,
+        )
+
+        assert output_path.read_text(encoding="utf-8") == (
+            "[x] Keep this completion\n[ ] New requirement\n"
+        )
+
+    def test_preserves_each_prior_completion_at_most_once(self, tmp_path):
+        output_path = tmp_path / "checklist.md"
+        output_path.write_text("[x] Verify output\n", encoding="utf-8")
+
+        generate_checklist_file(
+            output_path,
+            "[ ] Verify output\n[ ] Verify output\n",
+            preserve_completed_items=True,
+        )
+
+        assert output_path.read_text(encoding="utf-8") == ("[x] Verify output\n[ ] Verify output\n")
+
+    def test_reopens_completed_item_when_its_nested_rule_changes(self, tmp_path):
+        output_path = tmp_path / "checklist.md"
+        output_path.write_text(
+            "[x] Validate consumer review:\n  - previous receipt rule\n",
+            encoding="utf-8",
+        )
+
+        generate_checklist_file(
+            output_path,
+            "[ ] Validate consumer review:\n  - new checkpoint rule\n",
+            preserve_completed_items=True,
+        )
+
+        assert output_path.read_text(encoding="utf-8") == (
+            "[ ] Validate consumer review:\n  - new checkpoint rule\n"
+        )
+
+    def test_rejects_symlink_without_touching_its_target(self, tmp_path):
+        victim = tmp_path / "victim.md"
+        victim.write_text("do not overwrite\n", encoding="utf-8")
+        output_path = tmp_path / "checklist.md"
+        output_path.symlink_to(victim)
+
+        with pytest.raises(ValueError, match="single-link regular file"):
+            generate_checklist_file(output_path, "[ ] replacement\n")
+
+        assert output_path.is_symlink()
+        assert victim.read_text(encoding="utf-8") == "do not overwrite\n"
+
+    def test_rejects_hardlink_without_touching_its_target(self, tmp_path):
+        victim = tmp_path / "victim.md"
+        victim.write_text("do not overwrite\n", encoding="utf-8")
+        output_path = tmp_path / "checklist.md"
+        os.link(victim, output_path)
+
+        with pytest.raises(ValueError, match="single-link regular file"):
+            generate_checklist_file(output_path, "[ ] replacement\n")
+
+        assert victim.read_text(encoding="utf-8") == "do not overwrite\n"
+
+    def test_failed_atomic_replacement_keeps_existing_checklist_and_cleans_temp(
+        self, tmp_path, monkeypatch
+    ):
+        output_path = tmp_path / "checklist.md"
+        output_path.write_text("[x] existing\n", encoding="utf-8")
+        monkeypatch.setattr(
+            "cafe.utils.checklist_utils.os.replace",
+            lambda *_args: (_ for _ in ()).throw(OSError("replace failed")),
+        )
+
+        with pytest.raises(OSError, match="replace failed"):
+            generate_checklist_file(output_path, "[ ] replacement\n")
+
+        assert output_path.read_text(encoding="utf-8") == "[x] existing\n"
+        assert list(tmp_path.glob(".checklist.md.*.tmp")) == []
 
     def test_handles_empty_content(self, tmp_path):
         """Test handles empty content."""

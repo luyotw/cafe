@@ -1,7 +1,7 @@
 ---
 name: write-cafe-phase
 description: Use this skill when creating, updating, or repairing a CAFE workflow phase or its supporting shared/chat skill under src/cafe/data/skills or .cafe/skills. Covers phase scope, SKILL.md structure, placeholders, plan handoffs, interruption-safe checkpoint/resume behavior, and runtime conventions, including declarative defects identified by use-cafe-workflow. Not for generic skill files, playbook YAML, driver skills, or CAFE core/runtime defects.
-version: 2.9.3
+version: 2.9.4
 ---
 
 # Write CAFE Phase Skill
@@ -86,7 +86,7 @@ version: 2.9.3
 - On retry, trust `done` only when that stage's dependency fingerprint still matches and its evidence exists. Invalidate only rows whose impact can be mapped deterministically; when impact is ambiguous, invalidate every stage that depends on the changed input instead of assuming unrelated completion.
 - Finalize without deleting the only resume ledger. Record `finalized` plus a versioned digest receipt: a separate ledger hashes the complete final-artifact bytes, while an embedded ledger hashes a canonical domain-payload projection that excludes ledger/finalization metadata. Record the algorithm and scope/projection version, verify that exact scope on resume, and retain the owner through durable checklist, baton, handoff, and runtime completion. Cleanup belongs to a post-success runtime/host hook or later retention policy, never to the phase agent before durable completion is observable.
 - When adding resumability to an in-flight legacy iteration, initialize the ledger and migrate only deterministic local evidence. Never infer a subjective review, human approval, or remote mutation as complete without its explicit receipt.
-- Put the critical resume algorithm in `SKILL.md`, even when new checklist gates are also added to `references/execution_steps_*`. CAFE preserves an existing iteration's `checklist.md`, so reference-only repairs do not protect that in-flight iteration.
+- Put the critical resume algorithm in `SKILL.md`, even when new checklist gates are also added to `references/execution_steps_*`. Phase preparation refreshes an existing iteration's derived `checklist.md` from the current resolved skill: only exactly unchanged completed items remain complete, while new or changed gates reopen. References can therefore add current checklist gates, but they never replace the always-on resume algorithm in `SKILL.md`.
 - Never repair an in-flight issue by manually editing generated `output.md`, `checklist.md`, or CLI-native installed copies. The phase agent owns its output; the runtime owns generated state and reinstalls the resolved source skill.
 - After an execution attempt reaches phase preparation, verify the worktree-local CLI-native copy contains a unique marker from the new source. This checks activation without treating the installed copy as source of truth.
 - Provider retry scheduling remains driver/runtime behavior. The phase contract only makes retries safe and progressive; do not add an internal infinite retry loop to mask provider limits.
@@ -142,7 +142,7 @@ version: 2.9.3
 - Every planned output-confirmation route has a matching playbook `on.confirm_output` declaration; reactive user interruptions are not mislabeled as kickoff candidates.
 - Mandatory tools are declared in `workflow.required_tools`; optional diagnostics are not made unconditional, and every binding playbook grants the declared tools.
 - An interruption-prone phase has an output-compatible durable progress owner, stable target identity, per-target/stage dependency fingerprints, bounded checkpoint unit, evidence-backed resume algorithm, final global sweep, non-self-referential versioned finalization digest, and post-success ledger retention/cleanup contract; it does not use runtime checklist state as per-target progress.
-- A repair intended to protect an existing iteration puts the critical rule in `SKILL.md`, explains that its existing `checklist.md` will not regenerate, and defines evidence-only migration for work produced before the ledger existed.
+- A repair intended to protect an existing iteration puts the critical rule in `SKILL.md`, relies on phase preparation to refresh the derived `checklist.md` while retaining only exactly unchanged completion, and defines evidence-only migration for work produced before the ledger existed.
 - Reusable domain procedure follows native → open-source → self-authored evaluation independently per target CLI, and the complete selection matrix has explicit user confirmation before adoption or implementation.
 
 ## When To Add References

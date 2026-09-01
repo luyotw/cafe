@@ -3477,6 +3477,79 @@ workflow:
     assert "pr/iteration_001/output.md" not in checklist
 
 
+def test_workflow_refreshes_declared_checklist_on_interrupted_resume(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A resumed iteration must receive new skill gates without losing stable progress."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-checklist-refresh"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "knowledge": {
+                "skill": "resume-checklist",
+                "role": "developer",
+                "output_artifact": "knowledge",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    skill_dir = tmp_path / ".cafe" / "skills" / "resume-checklist"
+    (skill_dir / "references").mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: resume-checklist
+description: legacy test skill
+---
+""",
+        encoding="utf-8",
+    )
+    (skill_dir / "references" / "execution_steps_normal.md").write_text(
+        "[ ] Keep completed work\n[ ] Read {blackboard_path}\n[ ] New checkpoint barrier\n",
+        encoding="utf-8",
+    )
+    iteration_dir = issue_dir / "knowledge" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "output.md").write_text("partial output\n", encoding="utf-8")
+    (iteration_dir / "iteration.json").write_text('{"iteration": 1}', encoding="utf-8")
+    (iteration_dir / "checklist.md").write_text(
+        "[x] Keep completed work\n[ ] Retired instruction\n",
+        encoding="utf-8",
+    )
+    observed: dict[str, str] = {}
+
+    def assert_refreshed_checklist(*, streaming_output_file: str, **_kwargs) -> None:
+        checklist = Path(streaming_output_file).parent / "checklist.md"
+        observed["content"] = checklist.read_text(encoding="utf-8")
+        checklist.write_text(
+            "[x] Keep completed work\n[x] New checkpoint barrier\n", encoding="utf-8"
+        )
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-checklist-refresh",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed", on_execute=assert_refreshed_checklist),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    state = BlackboardStore(issue_dir).load_or_create("knowledge")
+
+    result = executor.execute_step("knowledge", playbook["steps"]["knowledge"], state)
+
+    assert result.status_code == "confirmed"
+    assert observed["content"].startswith(
+        "[x] Keep completed work\n[ ] Read ./.cafe/issues/issue-checklist-refresh/blackboard.json\n"
+    )
+    assert "{blackboard_path}" not in observed["content"]
+    assert "[ ] New checkpoint barrier" in observed["content"]
+    assert "Retired instruction" not in observed["content"]
+
+
 def _write_skill_with_basic_principles(
     tmp_path: Path,
     *,

@@ -57,7 +57,10 @@ from cafe.core.takeover import build_takeover_snapshot
 from cafe.core.types import AgentCLI
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
 from cafe.phases.generic_phase import GenericPhase
-from cafe.skills.checklist_composer import compose_declared_checklist
+from cafe.skills.checklist_composer import (
+    compose_declared_checklist,
+    generate_custom_skill_checklist,
+)
 from cafe.skills.contracts import (
     DeclaredArtifactError,
     SkillWorkflowContract,
@@ -67,6 +70,7 @@ from cafe.skills.contracts import (
 )
 from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.templates.manager import TemplateManager
+from cafe.utils.checklist_utils import generate_checklist_file
 from cafe.utils.git_utils import get_git_toplevel, get_repo_root, to_cwd_relative_path
 from cafe.utils.phase_config import load_phase_step_model
 
@@ -383,17 +387,23 @@ class GenericWorkflowStepExecutor(Phase):
         skill_invocation = self.generic_phase.skill_bridge.provider_aware_invocation(
             phase_invocations
         )
-        if not checklist_file.exists():
-            self._generate_checklist(
-                step_name=step_name,
-                skill_name=skill_name,
-                agent_name=agent_name,
-                step_def=step_def,
-                blackboard_state=blackboard_state,
-                checklist_file=checklist_file,
-                output_file=output_file,
-                questions_xml_file=questions_xml_file,
-            )
+        # A checklist is a derived phase contract, whether the skill uses the
+        # current declaration or the legacy execution_steps convention.
+        # Refresh it on resume so a phase update cannot leave an interrupted
+        # iteration governed by stale gates.  Unchanged completed items retain
+        # their marks; changed and newly declared items remain open.
+        self._generate_checklist(
+            step_name=step_name,
+            skill_name=skill_name,
+            agent_name=agent_name,
+            step_def=step_def,
+            blackboard_state=blackboard_state,
+            checklist_file=checklist_file,
+            output_file=output_file,
+            questions_xml_file=questions_xml_file,
+            preserve_completed_items=checklist_file.exists(),
+            runtime_context=context,
+        )
 
         last_prompt: List[str] = []
         allowed_tools = self._build_allowed_tools(
@@ -1438,6 +1448,8 @@ class GenericWorkflowStepExecutor(Phase):
         checklist_file: Path,
         output_file: Path,
         questions_xml_file: Path,
+        preserve_completed_items: bool = False,
+        runtime_context: Optional[Mapping[str, str]] = None,
     ) -> None:
         canonical_name = canonical_skill_name(skill_name)
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
@@ -1452,10 +1464,13 @@ class GenericWorkflowStepExecutor(Phase):
             previous_output = self._display_path(
                 self._get_versioned_file_path(step_name, self.iteration - 1, self.phase_dir)
             )
-        context = {
-            placeholder: self._display_path(Path(path))
-            for placeholder, path in declared_inputs.items()
-        }
+        context = dict(runtime_context or {})
+        context.update(
+            {
+                placeholder: self._display_path(Path(path))
+                for placeholder, path in declared_inputs.items()
+            }
+        )
         context.update(
             {
                 "output_file": self._display_path(output_file),
@@ -1469,6 +1484,19 @@ class GenericWorkflowStepExecutor(Phase):
             }
         )
         feedback = bool(input_artifacts.get("review_feedback") or input_artifacts.get("pr_result"))
+        if contract.checklist is None:
+            generated = generate_custom_skill_checklist(
+                skill_name=canonical_name,
+                agent_name=agent_name,
+                role=str(step_def.get("role", "developer")),
+                checklist_file_path=checklist_file,
+                correction_mode=feedback,
+                placeholders=context,
+                preserve_completed_items=preserve_completed_items,
+            )
+            if not generated and not checklist_file.exists():
+                generate_checklist_file(checklist_file, "")
+            return
         compose_declared_checklist(
             skill_name=canonical_name,
             contract=contract,
@@ -1487,6 +1515,7 @@ class GenericWorkflowStepExecutor(Phase):
                 canonical_name,
                 contract,
             ),
+            preserve_completed_items=preserve_completed_items,
         )
 
     def _resolved_template_mode(self, step_name: str, step_def: Dict[str, Any]) -> str:

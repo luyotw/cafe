@@ -759,7 +759,7 @@ def test_workflow_command_rejects_unknown_durable_task_without_generic_fallback(
     assert not (issue_dir / "review" / "iteration_001" / "user_input.md").exists()
 
 
-def test_workflow_command_retries_agent_after_durable_task_completion_once(
+def test_workflow_command_pauses_agent_retry_after_durable_task_completion(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -812,10 +812,16 @@ def test_workflow_command_retries_agent_after_durable_task_completion_once(
     assert first.exit_code == 0
     assert "Workflow interrupted" in first.stdout
     assert retry.exit_code == 0, (retry.stdout, retry.exception)
-    assert executor.calls == 2
+    assert "Workflow is waiting for user input" in retry.stdout
+    assert executor.calls == 1
     assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
     assert records.get_wait_state(task.id).released_at is not None
     assert len(records.results()) == 1
+    retry_task = next(
+        item for item in records.tasks() if item.trigger == "agent_execution_interrupted"
+    )
+    assert retry_task.status is HumanTaskStatus.PENDING
+    assert records.get_wait_state(retry_task.id).released_at is None
 
 
 def test_user_phase_alignment_checkpoint_approve_resumes_step(tmp_path: Path) -> None:
