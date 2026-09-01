@@ -25,7 +25,7 @@ def _event(event_type: str, event_id: str = "event-1") -> WorkflowNotificationEv
 
 
 @pytest.mark.parametrize(
-    "event_type", ["phase_boundary", "human_task", "error", "permission", "completion"]
+    "event_type", ["human_task", "error", "permission", "completion"]
 )
 def test_substantive_events_dispatch_once(tmp_path: Path, event_type: str) -> None:
     requests: list[dict] = []
@@ -45,7 +45,7 @@ def test_substantive_events_dispatch_once(tmp_path: Path, event_type: str) -> No
     assert requests[0]["args"]["event_type"] == event_type
 
 
-@pytest.mark.parametrize("event_type", ["transport_yield", "poll"])
+@pytest.mark.parametrize("event_type", ["phase_boundary", "transport_yield", "poll"])
 def test_transport_activity_never_dispatches_or_creates_receipt(
     tmp_path: Path, event_type: str
 ) -> None:
@@ -69,7 +69,7 @@ def test_missing_transport_records_inspection_guidance_without_delivery(tmp_path
         dispatcher=lambda _request: pytest.fail("notification dispatched"),
     )
 
-    receipt = notifier.notify(_event("phase_boundary"))
+    receipt = notifier.notify(_event("completion"))
 
     assert receipt["status"] == "not_configured"
     state = BlackboardStore(tmp_path).load_or_create("spec")
@@ -135,7 +135,7 @@ def test_trusted_workflow_notification_uses_fixed_slack_adapter(
         configured=True,
         dispatcher=lambda request: requests.append(request) or {"success": True},
     )
-    notifier.notify(_event("phase_boundary"))
+    notifier.notify(_event("completion"))
     monkeypatch.setattr(notification_mod, "load_slack_webhook_url", lambda: "fixed-secret")
     monkeypatch.setattr(
         notification_mod,
@@ -156,4 +156,4 @@ def test_trusted_workflow_notification_uses_fixed_slack_adapter(
 
     assert run.receipt["success"] is True
     assert run.receipt["outputs"]["event_id"] == "event-1"
-    assert delivered == [("fixed-secret", "phase_boundary", 600.0)]
+    assert delivered == [("fixed-secret", "completion", 600.0)]

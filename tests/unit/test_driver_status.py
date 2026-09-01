@@ -33,9 +33,9 @@ def test_status_projects_policy_progress_and_decisions_without_session_identity(
                 "contract_version": 2,
                 "driver": {
                     "mode": "delegated",
-                    "delegated": {"cli": "codex", "availability": "required"},
+                    "cli": "codex",
+                    "model": "gpt-5.6-codex",
                 },
-                "execution": {"advancement": "single_step", "hosting": "background"},
             }
         ),
         encoding="utf-8",
@@ -73,6 +73,14 @@ def test_status_projects_policy_progress_and_decisions_without_session_identity(
         "notification_guidance": {
             "proactive": False,
             "inspection_available": True,
+            "inspection_command": "cafe status",
+        },
+        "model_mismatch": {
+            "cli": "codex",
+            "requested_model": "gpt-5.6-codex",
+            "reported_model": "unexpected-model",
+            "sequence": 1,
+            "detected_at": "2026-01-01T00:00:02+00:00",
         },
     }
     store.save(state)
@@ -88,6 +96,12 @@ def test_status_projects_policy_progress_and_decisions_without_session_identity(
     assert status["progress"]["current_step"] == "develop"
     assert status["progress"]["requested_action"] == "develop"
     assert status["decisions"][0]["action"] == "pause"
+    assert status["model_mismatch"]["reported_model"] == "unexpected-model"
+    assert "execution" not in status["policy"]
+    assert "fallback_reason" not in status
     assert "delegated" in rendered
+    assert "gpt-5.6-codex" in rendered
+    assert "unexpected-model" in rendered
+    assert "Execution:" not in rendered
+    assert "cafe status" in rendered
     assert "secret-driver-session" not in rendered
-

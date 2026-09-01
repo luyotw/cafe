@@ -2,13 +2,18 @@
 
 from typing import Any, List, Mapping, Optional
 
-from cafe.services.timeline_builder import TimelineEntry
-from cafe.services.time_formatter import format_timestamp_local, format_timestamp_utc, format_duration, calculate_elapsed_time
-from cafe.core.types import PhaseStatus
 from cafe.core.context_packet import (
     format_context_packet_diagnostic,
     validate_context_packet_diagnostic,
 )
+from cafe.core.types import PhaseStatus
+from cafe.services.time_formatter import (
+    calculate_elapsed_time,
+    format_duration,
+    format_timestamp_local,
+    format_timestamp_utc,
+)
+from cafe.services.timeline_builder import TimelineEntry
 
 try:
     from rich.console import Console
@@ -84,17 +89,11 @@ class SummaryDisplay:
             return ""
         policy = status.get("policy", {})
         driver = policy.get("driver", {}) if isinstance(policy, Mapping) else {}
-        execution = policy.get("execution", {}) if isinstance(policy, Mapping) else {}
         progress = status.get("progress", {})
         lines = [
             "Workflow Driver",
             f"Authority: {status.get('authority_path', '')}",
             f"Ownership: {driver.get('mode', '') if isinstance(driver, Mapping) else ''}",
-            (
-                "Execution: "
-                f"{execution.get('advancement', '') if isinstance(execution, Mapping) else ''} / "
-                f"{execution.get('hosting', '') if isinstance(execution, Mapping) else ''}"
-            ),
             f"Lifecycle: {status.get('lifecycle', '')}",
             (
                 "Progress: "
@@ -102,6 +101,13 @@ class SummaryDisplay:
                 f"{progress.get('requested_action', '') if isinstance(progress, Mapping) else ''}"
             ),
         ]
+        if isinstance(driver, Mapping) and driver.get("mode") == "delegated":
+            lines.append(
+                f"Delegated driver: {driver.get('cli', '')} / {driver.get('model', '')}"
+            )
+        pause_reason = status.get("pause_reason")
+        if isinstance(pause_reason, str) and pause_reason:
+            lines.append(f"Pause reason: {pause_reason}")
         decisions = status.get("decisions", [])
         if isinstance(decisions, list) and decisions:
             latest = decisions[-1]
@@ -111,7 +117,18 @@ class SummaryDisplay:
                 )
         guidance = status.get("notification_guidance")
         if isinstance(guidance, Mapping) and guidance.get("proactive") is False:
-            lines.append("Notifications: unavailable; durable inspection remains available")
+            command = guidance.get("inspection_command", "cafe status")
+            lines.append(
+                "Notifications: unavailable; this conversation will not be proactively "
+                f"updated. Inspect durable progress with {command}"
+            )
+        mismatch = status.get("model_mismatch")
+        if isinstance(mismatch, Mapping):
+            lines.append(
+                "Model mismatch: requested "
+                f"{mismatch.get('requested_model', '')}; reported "
+                f"{mismatch.get('reported_model', '')}"
+            )
         return "\n".join(lines)
 
     def _format_entry(self, entry: TimelineEntry, prefix: str) -> str:

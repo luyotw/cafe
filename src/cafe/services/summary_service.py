@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from cafe.core.blackboard import BlackboardState, HandoffContract, HandoffOwner
-from cafe.core.git import GitOperations
 from cafe.core.driver_policy import extract_driver_policy, policy_dict
+from cafe.core.git import GitOperations
 from cafe.core.types import PhaseStatus
 from cafe.utils.issue_config import read_authoritative_issue_config, resolve_issue_config_path
 
@@ -235,7 +235,7 @@ class SummaryService:
             },
             "decisions": decisions,
         }
-        for key in ("pause_reason", "fallback_reason", "worker", "notification_guidance"):
+        for key in ("pause_reason", "worker", "notification_guidance", "model_mismatch"):
             if key in driver:
                 status[key] = driver[key]
         return status

@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from cafe.core.blackboard import BlackboardStore
 
 SUBSTANTIVE_WORKFLOW_EVENTS = frozenset(
-    {"phase_boundary", "human_task", "error", "permission", "completion"}
+    {"human_task", "error", "permission", "completion"}
 )
 
 
