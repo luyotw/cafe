@@ -78,6 +78,42 @@ class SummaryDisplay:
             )
         return "\n".join(lines)
 
+    def format_driver_status(self, status: Optional[Mapping[str, Any]]) -> str:
+        """Render the safe workflow-driver read model."""
+        if not status:
+            return ""
+        policy = status.get("policy", {})
+        driver = policy.get("driver", {}) if isinstance(policy, Mapping) else {}
+        execution = policy.get("execution", {}) if isinstance(policy, Mapping) else {}
+        progress = status.get("progress", {})
+        lines = [
+            "Workflow Driver",
+            f"Authority: {status.get('authority_path', '')}",
+            f"Ownership: {driver.get('mode', '') if isinstance(driver, Mapping) else ''}",
+            (
+                "Execution: "
+                f"{execution.get('advancement', '') if isinstance(execution, Mapping) else ''} / "
+                f"{execution.get('hosting', '') if isinstance(execution, Mapping) else ''}"
+            ),
+            f"Lifecycle: {status.get('lifecycle', '')}",
+            (
+                "Progress: "
+                f"{progress.get('current_step', '') if isinstance(progress, Mapping) else ''} -> "
+                f"{progress.get('requested_action', '') if isinstance(progress, Mapping) else ''}"
+            ),
+        ]
+        decisions = status.get("decisions", [])
+        if isinstance(decisions, list) and decisions:
+            latest = decisions[-1]
+            if isinstance(latest, Mapping):
+                lines.append(
+                    f"Latest decision: {latest.get('sequence', '')} {latest.get('action', '')}"
+                )
+        guidance = status.get("notification_guidance")
+        if isinstance(guidance, Mapping) and guidance.get("proactive") is False:
+            lines.append("Notifications: unavailable; durable inspection remains available")
+        return "\n".join(lines)
+
     def _format_entry(self, entry: TimelineEntry, prefix: str) -> str:
         """Format an entry for display with the given prefix.
 

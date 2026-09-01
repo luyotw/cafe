@@ -13,6 +13,7 @@ from cafe.core.driver_runtime import (
     resolve_driver_boundary,
 )
 from cafe.core.workflow_models import PlaybookRunResult
+from cafe.core.workflow_notifications import WorkflowNotificationEvent, WorkflowNotifier
 
 DelegatedDecisionProvider = Callable[[DriverPacket], DriverDecision]
 
@@ -26,10 +27,12 @@ class Version2WorkflowRuntime:
         policy: DriverPolicyContract,
         *,
         delegated_decision_provider: DelegatedDecisionProvider | None = None,
+        notifier: WorkflowNotifier | None = None,
     ) -> None:
         self.phase_runtime = phase_runtime
         self.policy = policy
         self.delegated_decision_provider = delegated_decision_provider
+        self.notifier = notifier
         self.coordinator = DriverCoordinator(
             phase_runtime.blackboard_store,
             phase_runtime.blackboard,
@@ -61,6 +64,8 @@ class Version2WorkflowRuntime:
             if lifecycle is not None:
                 reason = result.final_status_code
                 self.coordinator.record_lifecycle(lifecycle, reason=reason)
+                if lifecycle != "human_task":
+                    self._notify_lifecycle(lifecycle, result)
                 return result
 
             requested_action = str(self.phase_runtime.blackboard.current_step)
@@ -69,6 +74,7 @@ class Version2WorkflowRuntime:
                 requested_action=requested_action,
                 boundary_id=self._boundary_id(result, requested_action),
             )
+            self._notify_boundary(packet)
             decision = self.coordinator.decision_for(packet.sequence)
             resolution = resolve_driver_boundary(
                 self.policy,
@@ -150,3 +156,34 @@ class Version2WorkflowRuntime:
         if any(token in status for token in ("ERROR", "FAILED", "INTERRUPTED")):
             return "error"
         return None
+
+    def _notify_boundary(self, packet: DriverPacket) -> None:
+        if self.notifier is None:
+            return
+        self.notifier.notify(
+            WorkflowNotificationEvent(
+                workflow_id=packet.workflow_id,
+                event_id=f"boundary-{packet.sequence}",
+                event_type="phase_boundary",
+                step=packet.completed_phase,
+            )
+        )
+
+    def _notify_lifecycle(self, lifecycle: str, result: PlaybookRunResult) -> None:
+        if self.notifier is None:
+            return
+        event_type = {
+            "complete": "completion",
+            "permission": "permission",
+            "error": "error",
+        }.get(lifecycle)
+        if event_type is None:
+            return
+        self.notifier.notify(
+            WorkflowNotificationEvent(
+                workflow_id=self.phase_runtime.blackboard.workflow_id,
+                event_id=f"{event_type}-{result.final_step}-{result.final_status_code}",
+                event_type=event_type,
+                step=result.final_step,
+            )
+        )

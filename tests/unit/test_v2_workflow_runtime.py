@@ -10,6 +10,7 @@ from cafe.core.blackboard import BlackboardStore
 from cafe.core.driver_policy import DriverPolicyContract
 from cafe.core.driver_runtime import DriverDecision, DriverUnavailableError
 from cafe.core.v2_workflow_runtime import Version2WorkflowRuntime
+from cafe.core.workflow_notifications import WorkflowNotifier
 from cafe.core.workflow_models import PlaybookRunResult
 
 
@@ -175,3 +176,24 @@ def test_best_effort_transport_failure_records_fallback_and_continues(tmp_path: 
     assert runtime.executed == ["spec", "plan"]
     state = runtime.blackboard_store.load_or_create("spec")
     assert state.driver_state["fallback_reason"] == "delegated_driver_unavailable"
+
+
+def test_runtime_notifies_phase_boundaries_and_completion_only(tmp_path: Path) -> None:
+    runtime = FakePhaseRuntime(tmp_path)
+    requests: list[dict] = []
+    notifier = WorkflowNotifier(
+        tmp_path,
+        configured=True,
+        dispatcher=lambda request: requests.append(request) or {"success": True},
+    )
+
+    Version2WorkflowRuntime(
+        runtime,
+        _policy("unattended", "continuous", "foreground"),
+        notifier=notifier,
+    ).run()
+
+    assert [request["args"]["event_type"] for request in requests] == [
+        "phase_boundary",
+        "completion",
+    ]

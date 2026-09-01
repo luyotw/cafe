@@ -35,6 +35,7 @@ CAPABILITY_PR_PUBLISH_ID = "cafe.pr.publish"
 CAPABILITY_BROWSER_OPEN_ID = "cafe.browser.open"
 CAPABILITY_ISSUE_COMMENT_ID = "cafe.github.issue_comment"
 CAPABILITY_SLACK_HUMAN_TASK_ID = "cafe.slack.human_task"
+CAPABILITY_SLACK_WORKFLOW_EVENT_ID = "cafe.slack.workflow_event"
 
 # Failure categories surfaced on capability receipts (distinct from validation_error).
 SCRIPT_EXIT_ERROR = "script_exit_error"
@@ -111,6 +112,7 @@ class CapabilityManifest(StrictCapabilityModel):
         "open_current_pr",
         "sync_issue_comment",
         "notify_slack_human_task",
+        "notify_slack_workflow_event",
     ]
     arguments: ObjectSchema
     outputs: ObjectSchema
@@ -1145,11 +1147,48 @@ def _notify_slack_human_task_adapter(
     }, None
 
 
+def _notify_slack_workflow_event_adapter(
+    *,
+    repo_root: Path,
+    request: ExecutionRequest,
+    manifest: CapabilityManifest,
+    output_file: Path,
+    timeout_sec: float,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    """Deliver one package-owned substantive workflow event."""
+    from cafe.core.human_task_notifications import (
+        SlackNotificationError,
+        build_workflow_event_message,
+        load_slack_webhook_url,
+        post_slack_notification,
+    )
+
+    del repo_root, manifest, output_file
+    message = build_workflow_event_message(
+        repository=str(request.args["repository"]),
+        workflow_id=str(request.args["workflow_id"]),
+        event_id=str(request.args["event_id"]),
+        event_type=str(request.args["event_type"]),
+        step=str(request.args["step"]),
+    )
+    try:
+        webhook_url = load_slack_webhook_url()
+        post_slack_notification(webhook_url, message, timeout_sec=timeout_sec)
+    except SlackNotificationError as exc:
+        raise CapabilityExecutionError(exc.category, exc.code) from exc
+    return {
+        "delivered": True,
+        "workflow_id": message.workflow_id,
+        "event_id": message.event_id,
+    }, None
+
+
 HOST_CAPABILITY_ADAPTERS: Mapping[str, Any] = {
     "sync_pr": _sync_pr_adapter,
     "open_current_pr": _open_current_pr_adapter,
     "sync_issue_comment": _sync_issue_comment_adapter,
     "notify_slack_human_task": _notify_slack_human_task_adapter,
+    "notify_slack_workflow_event": _notify_slack_workflow_event_adapter,
 }
 
 
@@ -1161,6 +1200,7 @@ def run_capability_request(
     output_file: Path,
     timeout_sec: float = 600.0,
     trusted_human_task_notification: bool = False,
+    trusted_workflow_notification: bool = False,
 ) -> PrPublishRun:
     """Evaluate and dispatch one request through the host-owned adapter allow-list.
 
@@ -1180,6 +1220,17 @@ def run_capability_request(
             capability=cap_id,
             fingerprint=raw_fingerprint,
             code="human_task_notification_not_workflow_owned",
+            decision=PolicyDecision.DENY,
+            outcome="policy_denied",
+            inputs={},
+        )
+
+    if cap_id == CAPABILITY_SLACK_WORKFLOW_EVENT_ID and not trusted_workflow_notification:
+        return _non_dispatch_run(
+            correlation_id=correlation_id,
+            capability=cap_id,
+            fingerprint=raw_fingerprint,
+            code="workflow_notification_not_runtime_owned",
             decision=PolicyDecision.DENY,
             outcome="policy_denied",
             inputs={},

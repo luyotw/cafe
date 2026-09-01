@@ -475,6 +475,13 @@ def status() -> None:
         if context_packets:
             console.print(context_packets)
 
+        load_driver_status = getattr(service, "load_driver_status", None)
+        format_driver_status = getattr(display, "format_driver_status", None)
+        if callable(load_driver_status) and callable(format_driver_status):
+            driver_status = format_driver_status(load_driver_status(issue_name))
+            if driver_status:
+                console.print(driver_status)
+
         # Display aggregated model token usage summary
         display.render_model_summary_table(entries)
 
