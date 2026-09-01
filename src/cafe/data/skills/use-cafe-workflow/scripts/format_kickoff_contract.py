@@ -16,8 +16,8 @@ _MODEL_ADJUSTMENT_AUTHORITIES = {
     "driver_autonomous",
     "user_approval_required",
 }
-_EXECUTION_MODES = {"continuous", "single_step"}
-_DEFAULT_POLL_INTERVAL_SECONDS = 180
+_DRIVER_MODES = {"attached", "unattended", "delegated"}
+_DELEGATED_CLIS = {"claude", "codex", "gemini", "copilot", "cursor-agent"}
 
 
 def _reexec_with_cafe_python() -> None:
@@ -81,6 +81,53 @@ def _positive_seconds(value: str) -> int:
     if seconds <= 0:
         raise argparse.ArgumentTypeError("must be greater than zero")
     return seconds
+
+
+def _driver_policy_rows(args: argparse.Namespace) -> list[list[Any]]:
+    rows: list[list[Any]] = [
+        ["contract_version", 2],
+        ["driver.mode", args.driver_mode],
+    ]
+    if args.driver_mode == "attached":
+        if args.poll_interval_seconds is None:
+            raise ValueError("attached driver requires --poll-interval-seconds")
+        if args.delegated_cli is not None or args.delegated_model is not None:
+            raise ValueError("attached driver rejects delegated fields")
+        rows.extend(
+            [
+                ["driver.poll_interval_seconds", args.poll_interval_seconds],
+                [
+                    "driver.first_poll",
+                    "after the full interval; no startup or transport-level poll",
+                ],
+                [
+                    "driver.poll_timestamp",
+                    "capture and print current system time with every proactive poll",
+                ],
+            ]
+        )
+    elif args.driver_mode == "unattended":
+        if any(
+            value is not None
+            for value in (
+                args.poll_interval_seconds,
+                args.delegated_cli,
+                args.delegated_model,
+            )
+        ):
+            raise ValueError("unattended driver accepts no mode-specific fields")
+    else:
+        if args.poll_interval_seconds is not None:
+            raise ValueError("delegated driver rejects attached polling")
+        if args.delegated_cli is None or not args.delegated_model:
+            raise ValueError("delegated driver requires --delegated-cli and --delegated-model")
+        rows.extend(
+            [
+                ["driver.cli", args.delegated_cli],
+                ["driver.model", args.delegated_model],
+            ]
+        )
+    return rows
 
 
 def _cell(value: Any) -> str:
@@ -297,16 +344,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--update-preflight", type=_json_mapping, required=True)
     parser.add_argument("--catalog-preflight", type=_json_mapping, required=True)
-    parser.add_argument(
-        "--execution-mode",
-        choices=tuple(sorted(_EXECUTION_MODES)),
-        default="continuous",
-    )
+    parser.add_argument("--driver-mode", choices=tuple(sorted(_DRIVER_MODES)), required=True)
     parser.add_argument(
         "--poll-interval-seconds",
         type=_positive_seconds,
-        default=_DEFAULT_POLL_INTERVAL_SECONDS,
     )
+    parser.add_argument("--delegated-cli", choices=tuple(sorted(_DELEGATED_CLIS)))
+    parser.add_argument("--delegated-model")
     parser.add_argument("--risk-factor", action="append", required=True)
     parser.add_argument("--assessment-rationale", required=True)
     parser.add_argument(
@@ -462,16 +506,7 @@ def render(args: argparse.Namespace) -> str:
             ["risk_factors", ", ".join(args.risk_factor)],
             ["assessment_rationale", args.assessment_rationale],
             ["model_adjustment_authority", args.model_adjustment_authority],
-            ["driver_execution.mode", args.execution_mode],
-            ["driver_execution.poll_interval_seconds", args.poll_interval_seconds],
-            [
-                "driver_execution.first_poll",
-                "after the full interval; no startup or transport-level poll",
-            ],
-            [
-                "driver_execution.poll_timestamp",
-                "capture and print current system time with every proactive poll",
-            ],
+            *_driver_policy_rows(args),
             ["user_required", ", ".join(user_required) or "[]"],
             ["driver_confirmable", ", ".join(driver_confirmable) or "[]"],
             ["worktree", worktree],

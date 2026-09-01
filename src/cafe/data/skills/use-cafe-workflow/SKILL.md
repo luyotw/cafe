@@ -8,14 +8,12 @@ metadata: {version: 1.28.0}
 
 ## Purpose
 
-- Drive CAFE through spec, plan, develop, review, and PR without bypassing its
-  artifacts, blackboard state, or baton handoffs.
+- Drive CAFE through spec, plan, develop, review, and PR without bypassing its artifacts, blackboard state, or baton handoffs.
 - Keep driver decisions grounded in the confirmed kickoff contract and
   `.cafe/strategic_context.yaml`.
 - Preflight runtime updates and all three catalogs read-only; apply only exact, separately approved tokens and recheck afterward.
 - Prefer non-interactive commands so work can run unattended and resume cleanly.
-- Diagnose abnormal workflow behavior only far enough to choose the correct,
-  safe repair layer.
+- Diagnose abnormal workflow behavior only far enough to choose the correct, safe repair layer.
 
 ## Progressive disclosure
 
@@ -59,14 +57,15 @@ If more than one situation applies, read every listed reference before acting; d
 - Validate issue-decomposition assessments before confirming spec or plan;
   coordinate any authorized split through existing authority boundaries and
   reconstruct linked-work position from durable records.
-- Resolve and persist a confirmed `driver_execution` contract with `continuous` by default and
-  may be `single_step`; for an authorized v2 cutover use the bounded updater in `running_workflow.md`,
-  require every fresh choice, and never infer legacy values.
+- Resolve and persist exactly one version 2 driver form: attached with positive
+  polling, parameter-free unattended, or delegated with one supported CLI and
+  the user's explicit exact model. Never persist or infer execution,
+  advancement, hosting, availability, aliases, or legacy values.
 - Use `cafe workflow --execute --mute-agent-output` when the invocation needs
-  direct workflow controls such as `--start-step` or `--single-step`; derive
-  `--single-step` only from the confirmed mode. After `cafe prepare`, `cafe make`
-  is also valid for continuous execution, including unattended or background
-  runs.
+  direct workflow controls such as `--start-step` or a manual diagnostic
+  `--single-step`. After `cafe prepare`, `cafe make` is also a valid launcher;
+  launcher choice and background process ownership are invocation mechanics,
+  not driver policy.
 - Configure all phase chains before execution; change them only under `model_selection.md`.
 - Do not manually edit workflow artifacts, blackboard state, or
   `next_step.txt` except when repairing confirmed broken workflow state.
@@ -109,18 +108,19 @@ If more than one situation applies, read every listed reference before acting; d
   capability band, exact primary and any fallbacks, rationale, cached or tested
   primary evidence, configured fallback smoke evidence, and adjustment authority.
 - [ ] Present the deterministic kickoff table and obtain explicit confirmation.
-- [ ] Persist the confirmed execution mode and poll interval; recommend
-  `continuous` and `180` unless the user overrides them.
+- [ ] Persist the confirmed complete v2 driver form; require every applicable
+  field and never recommend a silent policy default.
 - [ ] Check Git state, initialize CAFE if needed, prepare the issue, enter the
   recorded worktree, and persist the issue-owned contract.
 
 ### Run
 
 - [ ] Read the running-workflow reference.
-- [ ] Start or resume with the confirmed execution mode and input, otherwise
+- [ ] Start or resume according to the confirmed driver mode and input; otherwise
   follow the persisted baton without forcing `--start-step`.
-- [ ] From the first wait, honor the full poll cadence; transport-only yields continue the same deferred wait without inspection.
-- [ ] Timestamp every proactive poll and its user update; handle substantive output, completion, errors, and HumanTasks immediately.
+- [ ] In attached mode, honor the full positive poll cadence from the first
+  wait; transport-only yields continue the same deferred wait without inspection.
+- [ ] Timestamp proactive polls and user updates; handle substantive output, completion, errors, and HumanTasks immediately.
 - [ ] At each contract-defined pause or completion, inspect new phase evidence and revise only remaining model chains within confirmed authority.
 - [ ] Inspect progress through `cafe status` and `cafe show`; consult the
   blackboard only when command output is insufficient, and inspect code only

@@ -13,11 +13,15 @@ import typer
 from rich.console import Console
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.driver_policy import DriverPolicyContract, extract_driver_policy
+from cafe.core.driver_transport import BlackboardDriverSessionStore, DelegatedDriverTransport
 from cafe.core.issue_resolution import ActiveIssueResolutionError, resolve_active_issue
 from cafe.core.phase_state_mixin import next_runnable_iteration_number
 from cafe.core.playbook import resolve_step_behavior
 from cafe.core.types import CriticalPhaseError
+from cafe.core.v2_workflow_runtime import Version2WorkflowRuntime
 from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.workflow_notifications import WorkflowNotifier
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.phases.generic_phase import GenericPhase
 from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
@@ -38,6 +42,7 @@ from cafe.ui.human_tasks import (
     apply_human_task_payload,
 )
 from cafe.utils.config import ConfigError, validate_directories_exist
+from cafe.utils.issue_config import read_authoritative_issue_config
 
 
 # Lazy access to GitOperations via cli for backward-compat test patching.
@@ -134,6 +139,13 @@ def _resolve_issue_playbook_name(*a, **kw):
 console = Console()
 
 _USER_INPUT_HELP = "Initial workflow input, or answer to write when resuming from a user handoff"
+
+
+def _load_driver_policy_for_execution(issue_dir: Path) -> DriverPolicyContract:
+    """Validate the issue-owned v2 policy before workflow state can mutate."""
+    return extract_driver_policy(
+        read_authoritative_issue_config(Path(issue_dir) / "issue.yaml") or {}
+    )
 
 
 def _normalize_cli_user_input(user_input: Any) -> Optional[str]:
@@ -649,6 +661,15 @@ def workflow(
             )
             console.print(format_text_report(analyze_playbook(model)))
             return
+        try:
+            driver_policy = _load_driver_policy_for_execution(issue_dir)
+        except ValueError as exc:
+            console.print(f"[red]Error: Workflow driver policy is invalid: {exc}[/red]")
+            console.print(
+                "[yellow]Prepare the issue with one complete explicit v2 driver policy "
+                "or use cafe update-driver-policy before starting or resuming.[/yellow]"
+            )
+            raise typer.Exit(1)
         tty_interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
         generic_phase = GenericPhase(SkillLoader())
 
@@ -982,7 +1003,28 @@ def workflow(
                 playbook=playbook_data,
                 executor=wrapped_executor,
             )
-            result = runner.run(start_step=pending_start_step, single_step=single_step)
+
+            delegated_decision_provider = None
+            if driver_policy.driver.mode == "delegated":
+
+                def delegated_decision_provider(packet):
+                    session_store = BlackboardDriverSessionStore(
+                        runner.blackboard_store,
+                        runner.blackboard,
+                        acquisition_sequence=packet.sequence,
+                        requested_model=driver_policy.driver.model,
+                    )
+                    return DelegatedDriverTransport(
+                        driver_policy,
+                        session_store,
+                    ).request_decision(packet)
+
+            result = Version2WorkflowRuntime(
+                runner,
+                driver_policy,
+                delegated_decision_provider=delegated_decision_provider,
+                notifier=WorkflowNotifier(issue_dir),
+            ).run(start_step=pending_start_step, single_step=single_step)
             latest_blackboard = BlackboardStore(issue_dir).load_or_create(
                 str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
                 playbook_id=str(playbook_data["playbook"]["id"]),

@@ -35,6 +35,31 @@ runner = CliRunner()
 def _configured_cli_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
     """Workflow command tests isolate routing from phase-config preflight."""
     monkeypatch.setattr("cafe.ui.cli._check_agent_clis_available", lambda *args, **kwargs: [])
+    import importlib
+
+    command_module = importlib.import_module("cafe.ui.commands.workflow")
+    read_config = command_module.read_authoritative_issue_config
+
+    def read_with_v2_policy(path):
+        config = dict(read_config(path) or {})
+        config.update(
+            {
+                "contract_version": 2,
+                "driver": {"mode": "unattended"},
+            }
+        )
+        return config
+
+    monkeypatch.setattr(command_module, "read_authoritative_issue_config", read_with_v2_policy)
+
+    class PassthroughVersion2Runtime:
+        def __init__(self, phase_runtime, _policy, **_kwargs):
+            self.phase_runtime = phase_runtime
+
+        def run(self, *, start_step=None, single_step=False, **_kwargs):
+            return self.phase_runtime.run(start_step=start_step, single_step=single_step)
+
+    monkeypatch.setattr(command_module, "Version2WorkflowRuntime", PassthroughVersion2Runtime)
 
 
 def test_issue_step_resolution_uses_issue_yaml_before_blackboard_exists(
@@ -393,6 +418,54 @@ def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None
         assert "Workflow is waiting for user input" in result.stdout
         assert mock_builder.called
         assert executed_steps == ["spec", "plan", "develop", "review", "pr"]
+
+
+def test_workflow_command_forwards_validated_policy_to_v2_runtime(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    captured: dict[str, object] = {}
+
+    class CapturingVersion2Runtime:
+        def __init__(
+            self,
+            phase_runtime,
+            policy,
+            *,
+            delegated_decision_provider=None,
+            notifier=None,
+        ) -> None:
+            captured["policy"] = policy
+            captured["provider"] = delegated_decision_provider
+            captured["notifier"] = notifier
+            self.phase_runtime = phase_runtime
+
+        def run(self, *, start_step=None, single_step=False):
+            return self.phase_runtime.run(start_step=start_step, single_step=single_step)
+
+    class FakeExecutor:
+        def execute_step(self, step_name, step_def, blackboard_state, **_kwargs):
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+        patch("cafe.ui.commands.workflow.Version2WorkflowRuntime", CapturingVersion2Runtime),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-v2-public"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--single-step"],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    policy = captured["policy"]
+    assert policy.contract_version == 2
+    assert policy.driver.mode == "unattended"
+    assert captured["provider"] is None
 
 
 def test_workflow_command_passes_initial_user_input_to_spec_step(

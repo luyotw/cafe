@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -11,9 +10,7 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from cafe.core.issue_policy_store import (
-    GuardedPolicyActivation,
     IssuePolicyStore,
-    PolicyActivationBlockedError,
     PrepareWouldClobberError,
 )
 from cafe.ui.cli import app
@@ -25,9 +22,9 @@ def _v2_policy() -> dict:
         "contract_version": 2,
         "driver": {
             "mode": "delegated",
-            "delegated": {"cli": "cursor-agent", "availability": "best_effort"},
+            "cli": "cursor-agent",
+            "model": "composer-1.5",
         },
-        "execution": {"advancement": "single_step", "hosting": "background"},
     }
 
 
@@ -54,7 +51,7 @@ def test_root_inventory_dereferences_active_worktree_policy(tmp_path: Path) -> N
     assert resolve_issue_config_path(root_config) == active_config.resolve()
     loaded = read_authoritative_issue_config(root_config)
     assert loaded is not None
-    assert loaded["driver"]["delegated"]["cli"] == "cursor-agent"
+    assert loaded["driver"]["cli"] == "cursor-agent"
     assert "driver" not in yaml.safe_load(root_config.read_text(encoding="utf-8"))
 
 
@@ -69,7 +66,7 @@ def test_atomic_update_replaces_only_policy_and_preserves_blackboard_bytes(tmp_p
     }
     active_config.write_text(yaml.safe_dump(original, sort_keys=False), encoding="utf-8")
     blackboard = active_config.parent / "blackboard.json"
-    blackboard_bytes = json.dumps({"current_step": "develop", "events": [1, 2]}).encode()
+    blackboard_bytes = b'{"current_step":"develop","events":[1,2]}'
     blackboard.write_bytes(blackboard_bytes)
 
     updated = IssuePolicyStore(root_config).replace(_v2_policy())
@@ -89,7 +86,7 @@ def test_update_requires_complete_explicit_policy_before_mutation(tmp_path: Path
 
     with pytest.raises(ValidationError):
         IssuePolicyStore(root_config).replace(
-            {"contract_version": 2, "driver": {"mode": "unattended"}}
+            {"contract_version": 2, "driver": {"mode": "delegated", "cli": "codex"}}
         )
 
     assert active_config.read_text(encoding="utf-8") == original
@@ -125,25 +122,3 @@ def test_prepare_cli_stops_before_template_or_git_mutation(tmp_path: Path, monke
     assert "update-driver-policy" in result.stdout
     sync_templates.assert_not_called()
     git_operations.assert_not_called()
-
-
-def test_guarded_activation_rejects_held_advancement_lease_before_mutation(
-    tmp_path: Path,
-) -> None:
-    root_config, active_config, _ = _issue_layout(tmp_path)
-    original = yaml.safe_dump({"base_branch": "main", "driver_execution": "interactive"})
-    active_config.write_text(original, encoding="utf-8")
-    (active_config.parent / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "current_step": "develop",
-                "driver_state": {"advancement_lease": {"holder": "worker"}},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(PolicyActivationBlockedError, match="lease"):
-        GuardedPolicyActivation(root_config).apply(_v2_policy())
-
-    assert active_config.read_text(encoding="utf-8") == original

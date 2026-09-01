@@ -55,20 +55,19 @@ def test_update_command_replaces_only_active_policy_from_complete_explicit_input
             "delegated",
             "--delegated-cli",
             "cursor-agent",
-            "--delegated-availability",
-            "required",
-            "--advancement",
-            "single_step",
-            "--hosting",
-            "background",
+            "--delegated-model",
+            "composer-1.5",
         ],
     )
 
     assert result.exit_code == 0, (result.stdout, result.exception)
     updated = yaml.safe_load(active.read_text(encoding="utf-8"))
     assert updated["review"] == {"custom": True}
-    assert updated["driver"]["delegated"]["cli"] == "cursor-agent"
-    assert updated["execution"] == {"advancement": "single_step", "hosting": "background"}
+    assert updated["driver"] == {
+        "mode": "delegated",
+        "cli": "cursor-agent",
+        "model": "composer-1.5",
+    }
     assert "driver_execution" not in updated
     assert (active.parent / "blackboard.json").read_bytes() == blackboard_bytes
     assert set(yaml.safe_load(root.read_text(encoding="utf-8"))) == {
@@ -111,13 +110,8 @@ def test_update_command_rejects_inapplicable_mode_fields_before_mutation(
             "unattended",
             "--poll-interval-seconds",
             "10",
-            "--advancement",
-            "continuous",
-            "--hosting",
-            "foreground",
         ],
     )
 
     assert result.exit_code == 1
     assert active.read_bytes() == original
-

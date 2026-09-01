@@ -12,13 +12,12 @@ import typer
 import yaml
 
 from cafe.core.active_issue import clear_marker_if_matches, write_marker
+from cafe.core.driver_policy import DriverPolicyContract, policy_dict
 from cafe.core.issue_policy_store import (
-    GuardedPolicyActivation,
     IssuePolicyStore,
     PrepareWouldClobberError,
     write_issue_inventory,
 )
-from cafe.core.driver_policy import DriverPolicyContract
 from cafe.utils.issue_config import resolve_issue_config_path, resolve_issue_id
 
 VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
@@ -30,36 +29,30 @@ def update_driver_policy(
     issue_name: str = typer.Argument(..., help="Issue whose authoritative policy is replaced"),
     contract_version: int = typer.Option(..., "--contract-version"),
     driver_mode: str = typer.Option(..., "--driver-mode"),
-    advancement: str = typer.Option(..., "--advancement"),
-    hosting: str = typer.Option(..., "--hosting"),
     poll_interval_seconds: Optional[int] = typer.Option(
         None, "--poll-interval-seconds"
     ),
     delegated_cli: Optional[str] = typer.Option(None, "--delegated-cli"),
-    delegated_availability: Optional[str] = typer.Option(
-        None, "--delegated-availability"
-    ),
+    delegated_model: Optional[str] = typer.Option(None, "--delegated-model"),
 ) -> None:
     """Atomically replace one issue's policy from complete explicit v2 choices."""
     driver: dict[str, Any] = {"mode": driver_mode}
     if poll_interval_seconds is not None:
-        driver["attached"] = {"poll_interval_seconds": poll_interval_seconds}
-    if delegated_cli is not None or delegated_availability is not None:
-        driver["delegated"] = {
-            "cli": delegated_cli,
-            "availability": delegated_availability,
-        }
+        driver["poll_interval_seconds"] = poll_interval_seconds
+    if delegated_cli is not None:
+        driver["cli"] = delegated_cli
+    if delegated_model is not None:
+        driver["model"] = delegated_model
     proposed = {
         "contract_version": contract_version,
         "driver": driver,
-        "execution": {"advancement": advancement, "hosting": hosting},
     }
     try:
         policy = DriverPolicyContract.model_validate(proposed)
         config_path = Path(".cafe") / "issues" / issue_name / "issue.yaml"
         if not config_path.exists():
             raise ValueError(f"issue configuration does not exist: {config_path}")
-        GuardedPolicyActivation(config_path).apply(policy)
+        IssuePolicyStore(config_path).replace(policy)
     except (ValueError, OSError) as exc:
         console.print(f"[red]Error: Driver policy was not updated: {exc}[/red]")
         raise typer.Exit(1)
@@ -397,6 +390,31 @@ def prepare(
         "--post-pr-todo-list/--no-post-pr-todo-list",
         help="Post organized PR comments as todo list to PR (default: True when auto-create PR is enabled)",
     ),
+    driver_contract_version: Optional[int] = typer.Option(
+        None,
+        "--driver-contract-version",
+        help="Explicit workflow-driver contract version for supported App preparation",
+    ),
+    driver_mode: Optional[str] = typer.Option(
+        None,
+        "--driver-mode",
+        help="Workflow driver owner: attached, unattended, or delegated",
+    ),
+    poll_interval_seconds: Optional[int] = typer.Option(
+        None,
+        "--poll-interval-seconds",
+        help="Positive durable-status polling cadence for attached mode",
+    ),
+    delegated_cli: Optional[str] = typer.Option(
+        None,
+        "--delegated-cli",
+        help="Dedicated CLI for delegated mode",
+    ),
+    delegated_model: Optional[str] = typer.Option(
+        None,
+        "--delegated-model",
+        help="Exact model identifier for delegated mode",
+    ),
 ) -> None:
     """Prepare issue environment (directory, config, git branch) before running spec phase.
 
@@ -463,6 +481,35 @@ def prepare(
                 issue_name = issue_name.strip()
             else:
                 console.print("[red]Error: Issue name is required in non-interactive mode.[/red]")
+                raise typer.Exit(1)
+
+        policy_inputs = (
+            driver_contract_version,
+            driver_mode,
+            poll_interval_seconds,
+            delegated_cli,
+            delegated_model,
+        )
+        prepared_policy: DriverPolicyContract | None = None
+        if any(value is not None for value in policy_inputs):
+            driver: dict[str, Any] = {"mode": driver_mode}
+            if poll_interval_seconds is not None:
+                driver["poll_interval_seconds"] = poll_interval_seconds
+            if delegated_cli is not None:
+                driver["cli"] = delegated_cli
+            if delegated_model is not None:
+                driver["model"] = delegated_model
+            try:
+                prepared_policy = DriverPolicyContract.model_validate(
+                    {
+                        "contract_version": driver_contract_version,
+                        "driver": driver,
+                    }
+                )
+            except ValueError as exc:
+                console.print(
+                    f"[red]Error: Driver policy is incomplete or invalid: {exc}[/red]"
+                )
                 raise typer.Exit(1)
 
         root_issue_dir = Path(".cafe") / "issues" / issue_name
@@ -851,6 +898,8 @@ def prepare(
             "feature_branch": feature_branch,
             "playbook_id": playbook_name,
         }
+        if prepared_policy is not None:
+            config_data.update(policy_dict(prepared_policy))
 
         # Add spec config if present
         if spec_config:

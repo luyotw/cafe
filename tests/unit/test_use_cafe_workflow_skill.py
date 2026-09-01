@@ -114,6 +114,8 @@ def _kickoff_formatter_command(strategic_context: Path, *extra_args: str) -> lis
         "medium",
         "--model-adjustment-authority",
         "driver_autonomous",
+        "--driver-mode",
+        "unattended",
         *extra_args,
         *_preflight_args(),
         "--risk-factor",
@@ -414,8 +416,8 @@ mandate:
     assert "| issue_nature | feature/integration |" in result.stdout
     assert "| issue_scale | medium |" in result.stdout
     assert "| model_adjustment_authority | driver_autonomous |" in result.stdout
-    assert "| driver_execution.mode | continuous |" in result.stdout
-    assert "| driver_execution.poll_interval_seconds | 180 |" in result.stdout
+    assert "| contract_version | 2 |" in result.stdout
+    assert "| driver.mode | unattended |" in result.stdout
     assert "### Preflight evidence" in result.stdout
     assert "| runtime_update.status | current |" in result.stdout
     assert "| runtime_update.versions | 0.3.2 → 0.3.2 |" in result.stdout
@@ -458,7 +460,7 @@ def test_kickoff_contract_documents_persisted_preflight_and_reconfirmation() -> 
     assert "freshly rendered kickoff contract" in normalized
 
 
-def test_kickoff_contract_formatter_accepts_driver_execution_overrides(
+def test_kickoff_contract_formatter_accepts_each_applicable_driver_field(
     tmp_path: Path,
 ) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
@@ -477,10 +479,12 @@ mandate:
     result = subprocess.run(
         _kickoff_formatter_command(
             strategic_context,
-            "--execution-mode",
-            "single_step",
-            "--poll-interval-seconds",
-            "60",
+            "--driver-mode",
+            "delegated",
+            "--delegated-cli",
+            "codex",
+            "--delegated-model",
+            "gpt-5.6-codex",
         ),
         cwd=PROJECT_ROOT,
         text=True,
@@ -489,14 +493,15 @@ mandate:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "| driver_execution.mode | single_step |" in result.stdout
-    assert "| driver_execution.poll_interval_seconds | 60 |" in result.stdout
+    assert "| driver.mode | delegated |" in result.stdout
+    assert "| driver.cli | codex |" in result.stdout
+    assert "| driver.model | gpt-5.6-codex |" in result.stdout
 
 
 @pytest.mark.parametrize(
     ("extra_args", "expected_error"),
     [
-        (("--execution-mode", "invalid"), "invalid choice"),
+        (("--driver-mode", "invalid"), "invalid choice"),
         (("--poll-interval-seconds", "0"), "must be greater than zero"),
         (("--poll-interval-seconds", "-1"), "must be greater than zero"),
         (
@@ -505,7 +510,7 @@ mandate:
         ),
     ],
 )
-def test_kickoff_contract_formatter_rejects_invalid_driver_execution(
+def test_kickoff_contract_formatter_rejects_invalid_driver_policy(
     tmp_path: Path, extra_args: tuple[str, ...], expected_error: str
 ) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
@@ -558,9 +563,11 @@ def test_kickoff_contract_formatter_accepts_primary_only_chains(tmp_path: Path) 
             "localized defect",
             "--issue-scale",
             "small",
-            "--model-adjustment-authority",
-            "user_approval_required",
-            *_preflight_args(),
+                "--model-adjustment-authority",
+                "user_approval_required",
+                "--driver-mode",
+                "unattended",
+                *_preflight_args(),
             "--risk-factor",
             "none",
             "--assessment-rationale",
@@ -927,6 +934,8 @@ def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
             "small",
             "--model-adjustment-authority",
             "user_approval_required",
+            "--driver-mode",
+            "unattended",
             *_preflight_args(),
             "--risk-factor",
             "none",
@@ -986,6 +995,8 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
             "small",
             "--model-adjustment-authority",
             "user_approval_required",
+            "--driver-mode",
+            "unattended",
             *_preflight_args(),
             "--risk-factor",
             "none",
@@ -1087,6 +1098,8 @@ entry_point: audit
             "medium",
             "--model-adjustment-authority",
             "driver_autonomous",
+            "--driver-mode",
+            "unattended",
             *_preflight_args(),
             "--risk-factor",
             "security boundary",
@@ -1142,6 +1155,8 @@ def test_kickoff_formatter_rejects_unresolved_phase_models(tmp_path: Path) -> No
             "small",
             "--model-adjustment-authority",
             "user_approval_required",
+            "--driver-mode",
+            "unattended",
             *_preflight_args(),
             "--risk-factor",
             "none",
@@ -1192,6 +1207,8 @@ def test_kickoff_formatter_rejects_missing_phase_rationale(tmp_path: Path) -> No
             "small",
             "--model-adjustment-authority",
             "user_approval_required",
+            "--driver-mode",
+            "unattended",
             *_preflight_args(),
             "--risk-factor",
             "none",
@@ -1363,7 +1380,7 @@ def test_use_cafe_workflow_requires_confirmed_repository_content_locale() -> Non
     assert "not in issue-owned workflow state" in normalized
 
 
-def test_use_cafe_workflow_requires_driver_execution_contract_and_model_authority() -> None:
+def test_use_cafe_workflow_requires_v2_driver_policy_and_model_authority() -> None:
     skill = _read_skill_resource("SKILL.md")
     kickoff = _read_skill_resource("references/kickoff.md")
     running = _read_skill_resource("references/running_workflow.md")
@@ -1371,95 +1388,35 @@ def test_use_cafe_workflow_requires_driver_execution_contract_and_model_authorit
     normalized_kickoff = " ".join(kickoff.split())
     normalized_running = " ".join(running.split())
     normalized_models = " ".join(models.split())
+    normalized_skill = " ".join(skill.split())
 
     assert "references/model_selection.md" in skill
-    assert "`driver_execution` contract" in skill
-    assert "`continuous` by default" in skill
-    assert "may be `single_step`" in skill
+    assert "exactly one version 2 driver form" in skill
+    assert "parameter-free unattended" in skill
+    assert "explicit exact model" in skill
+    assert "Never persist or infer execution" in skill
     assert "cafe workflow --execute --mute-agent-output" in skill
+    assert "manual diagnostic `--single-step`" in normalized_skill
     assert "provider narration is parsed and persisted" in normalized_running
     assert "does not suppress workflow lifecycle events" in normalized_running
-    assert (
-        "Keep `--mute-agent-output` on direct `cafe workflow` driver executions"
-        in normalized_running
-    )
-    assert "`cafe make` does not expose that flag and remains valid" in normalized_running
+    assert "`cafe make` does not expose that flag and remains a valid launcher" in normalized_running
+    assert "cafe update-driver-policy" in normalized_running
+    assert "--delegated-model <exact-model>" in normalized_running
+    assert "--advancement" not in normalized_running
+    assert "--delegated-availability" not in normalized_running
     assert "cafe show <step> streaming --iteration <n>" in normalized_running
     assert ".cafe/issues/<issue>/<step>/iteration_NNN/streaming.jsonl" in normalized_running
-    assert "reads the entire saved file" in normalized_running
-    assert (
-        "Do not use `cafe show <step> streaming` for driver diagnosis"
-        in normalized_running
-    )
-    assert "rg -n -C <context-lines> '<pattern>' <streaming-file>" in normalized_running
-    assert "tail -n <line-count> <streaming-file>" in normalized_running
-    assert "Remove it only when" not in normalized_running
     assert "persisted baton without forcing `--start-step`" in skill
-    assert "`cafe make` is also a valid start or resume command" in normalized_running
-    assert "Do not use `cafe make` for driver execution" not in normalized_running
-    assert "required cadence" in normalized_running
+    assert "In attached mode" in normalized_running
     assert "Start the timer when the process starts or resumes" in normalized_running
-    assert (
-        "perform one proactive inspection when the interval elapses" in normalized_running
-    )
-    assert "then restart the timer" in normalized_running
-    assert (
-        "if execution remains active after handling the signal, restart the timer"
-        in normalized_running
-    )
     assert "Stop polling when the command exits" in normalized_running
-    assert "must not trigger an extra CAFE status or artifact poll" in normalized_running
-    assert "If the mapping is missing, return to `kickoff.md`" in normalized_running
-    assert (
-        "Start the timer when a workflow process starts or resumes" in normalized_kickoff
-    )
-    assert (
-        "perform one proactive inspection when the interval elapses, then restart the timer"
-        in normalized_kickoff
-    )
-    assert (
-        "if the process remains active afterward, restart the timer"
-        in normalized_kickoff
-    )
-    assert "Stop the timer when the command exits" in normalized_kickoff
-    assert "must not trigger extra workflow polling" in normalized_kickoff
-    assert (
-        "For an older prepared issue without `driver_execution`, propose `continuous` and "
-        "`180` as defaults and confirm them before the next execution"
-        in normalized_kickoff
-    )
-    assert "do not silently infer that the older driver used either mode" in normalized_kickoff
+    assert "exactly one driver form" in normalized_kickoff
+    assert "Do not infer, translate, prefill, or retain values" in normalized_kickoff
     assert "`model_adjustment_authority`" in kickoff
-    assert "`driver_autonomous`" in kickoff
-    assert "`user_approval_required`" in kickoff
     assert "No provider or model is built into this skill" in normalized_models
-    assert "The phase skill owns only its provider-neutral minimum execution profile" in normalized_models
     assert "The driver owns the capability-band classification" in normalized_models
-    assert "`efficiency`" in models
-    assert "`balanced`" in models
-    assert "`frontier`" in models
-    assert "Treat an existing repository chain as a candidate, not as selection evidence" in normalized_models
-    assert "A publication phase may remain `efficiency`" in normalized_models
-    assert "Model release order is not capability-band order" in normalized_models
-    assert "A user may choose a primary-only chain" in normalized_models
-    assert "A primary-only chain skips fallback smoke" in normalized_models
-    assert "a primary failure is a hard stop" in normalized_models
-    assert "Never reject a fallback solely because its version number is lower" in normalized_models
-    assert "never assume two versions are equivalent solely because they share a model family" in normalized_models
-    assert "Reduced uncertainty after spec or plan may move" in normalized_models
-    assert "Resolve the skill bound by the active playbook" in normalized_models
-    assert "actual remaining iteration" in normalized_models
-    assert "making the primary fail with the classified `model_not_found`" in normalized_models
-    assert "Do not create a fake failure inside a live issue" in normalized_models
     assert "scripts/preflight_cache.py" in models
-    assert "last 24 hours" in normalized_models
-    assert "successful result for 30 days" in normalized_models
-    assert "never records a failed" in normalized_models
-    assert "A live workflow failure always overrides cached evidence" in normalized_models
     assert (SKILL_ROOT / "scripts" / "preflight_cache.py").is_file()
-    assert "Reassess at contract-defined boundaries" in normalized_models
-    assert "In `continuous` mode, do not stop execution" in normalized_models
-    assert "In `single_step` mode, reassess after every completed step" in normalized_models
     assert "active worktree's `.cafe/phases.yaml`" in normalized_models
 
 
@@ -1505,7 +1462,7 @@ class TestPollingContract:
             _read_skill_resource("references/running_workflow.md").split()
         )
 
-        assert "From the first wait, honor the full poll cadence" in skill
+        assert "In attached mode, honor the full positive poll cadence" in skill
         assert "there is no shorter startup or warm-up cadence" in kickoff
         assert "The first proactive inspection is due only after that full interval" in running
         assert "Continue a single deferred wait for the remaining interval instead" in running
@@ -1542,7 +1499,13 @@ mandate:
             encoding="utf-8",
         )
         result = subprocess.run(
-            _kickoff_formatter_command(strategic_context),
+            _kickoff_formatter_command(
+                strategic_context,
+                "--driver-mode",
+                "attached",
+                "--poll-interval-seconds",
+                "180",
+            ),
             cwd=PROJECT_ROOT,
             text=True,
             capture_output=True,
@@ -1551,10 +1514,10 @@ mandate:
 
         assert result.returncode == 0, result.stderr
         assert (
-            "| driver_execution.first_poll | after the full interval; "
+            "| driver.first_poll | after the full interval; "
             "no startup or transport-level poll |" in result.stdout
         )
         assert (
-            "| driver_execution.poll_timestamp | capture and print current system time "
+            "| driver.poll_timestamp | capture and print current system time "
             "with every proactive poll |" in result.stdout
         )

@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, Mapping
+from typing import Annotated, Any, Literal, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 DelegatedCLI = Literal["claude", "codex", "gemini", "copilot", "cursor-agent"]
 
@@ -14,51 +13,53 @@ class _StrictPolicyModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
-class AttachedDriverConfig(_StrictPolicyModel):
+class AttachedDriverPolicy(_StrictPolicyModel):
+    mode: Literal["attached"]
     poll_interval_seconds: int = Field(gt=0)
 
 
-class DelegatedDriverConfig(_StrictPolicyModel):
+class UnattendedDriverPolicy(_StrictPolicyModel):
+    mode: Literal["unattended"]
+
+
+class DelegatedDriverPolicy(_StrictPolicyModel):
+    mode: Literal["delegated"]
     cli: DelegatedCLI
-    availability: Literal["best_effort", "required"]
+    model: str
+
+    @field_validator("model")
+    @classmethod
+    def require_exact_model(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("delegated mode requires a non-empty exact model")
+        return value
 
 
-class DriverOwnershipPolicy(_StrictPolicyModel):
-    mode: Literal["attached", "unattended", "delegated"]
-    attached: AttachedDriverConfig | None = None
-    delegated: DelegatedDriverConfig | None = None
-
-    @model_validator(mode="after")
-    def validate_mode_fields(self) -> "DriverOwnershipPolicy":
-        if self.mode == "attached":
-            if self.attached is None or self.delegated is not None:
-                raise ValueError("attached mode requires only driver.attached")
-        elif self.mode == "delegated":
-            if self.delegated is None or self.attached is not None:
-                raise ValueError("delegated mode requires only driver.delegated")
-        elif self.attached is not None or self.delegated is not None:
-            raise ValueError("unattended mode accepts no mode-specific driver fields")
-        return self
-
-
-class ExecutionPolicy(_StrictPolicyModel):
-    advancement: Literal["continuous", "single_step"]
-    hosting: Literal["foreground", "background"]
+DriverPolicy = Annotated[
+    AttachedDriverPolicy | UnattendedDriverPolicy | DelegatedDriverPolicy,
+    Field(discriminator="mode"),
+]
 
 
 class DriverPolicyContract(_StrictPolicyModel):
     contract_version: Literal[2]
-    driver: DriverOwnershipPolicy
-    execution: ExecutionPolicy
+    driver: DriverPolicy
 
 
-POLICY_KEYS = frozenset({"contract_version", "driver", "execution"})
+POLICY_KEYS = frozenset({"contract_version", "driver"})
+REJECTED_POLICY_KEYS = frozenset(
+    {"driver_execution", "execution", "advancement", "hosting", "availability"}
+)
 
 
 def extract_driver_policy(issue_config: Mapping[str, Any]) -> DriverPolicyContract:
     """Validate the complete v2 slice without validating unrelated issue metadata."""
-    if "driver_execution" in issue_config:
-        raise ValueError("legacy driver_execution is not accepted by contract version 2")
+    rejected = REJECTED_POLICY_KEYS.intersection(issue_config)
+    if rejected:
+        raise ValueError(
+            "removed workflow driver fields are not accepted by contract version 2: "
+            + ", ".join(sorted(rejected))
+        )
     policy = {key: issue_config[key] for key in POLICY_KEYS if key in issue_config}
     return DriverPolicyContract.model_validate(policy)
 
@@ -66,4 +67,3 @@ def extract_driver_policy(issue_config: Mapping[str, Any]) -> DriverPolicyContra
 def policy_dict(policy: DriverPolicyContract) -> dict[str, Any]:
     """Return the stable YAML-ready policy shape."""
     return policy.model_dump(mode="json", exclude_none=True)
-

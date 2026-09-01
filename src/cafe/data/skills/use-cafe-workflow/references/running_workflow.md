@@ -12,27 +12,22 @@ unexecuted.
   silent for unchanged or non-actionable catalogs, and stop for a fresh,
   separately scoped approval when a comparison token changed.
 
-- Read the confirmed `driver_execution` mapping from the active issue's
-  `issue.yaml`. When `mode: single_step`, use the direct `cafe workflow`
-  command and append `--single-step`. For the default `mode: continuous`, use
-  either the direct command or `cafe make` after preparation. If the mapping is
-  missing, return to `kickoff.md` and confirm it before execution.
+- Read and validate the complete version 2 driver policy from the active
+  issue's `issue.yaml`. Invalid, absent, legacy, or partial policy stops before
+  workflow mutation and returns to `kickoff.md` for a fresh explicit choice.
 
 ## Bounded version 2 policy replacement
 
-When an in-progress issue is explicitly approved for the version 2 cutover,
-collect a fresh complete choice set instead of reading or translating
-`driver_execution`. Invoke the typed updater with every applicable value in one
-request:
+When an existing issue receives an explicit version 2 policy, collect a fresh
+complete choice set instead of reading or translating legacy state. Invoke the
+typed updater with every applicable value in one request:
 
 ```bash
 cafe update-driver-policy <issue> --contract-version 2 \
   --driver-mode <attached|unattended|delegated> \
-  --advancement <continuous|single_step> \
-  --hosting <foreground|background> \
   [--poll-interval-seconds <seconds>] \
   [--delegated-cli <claude|codex|gemini|copilot|cursor-agent> \
-   --delegated-availability <best_effort|required>]
+   --delegated-model <exact-model>]
 ```
 
 Use the attached option only with `--poll-interval-seconds`, and the delegated
@@ -56,8 +51,8 @@ pointer.
   cafe workflow --execute --mute-agent-output
   ```
 
-  For a prepared issue in `continuous` mode, `cafe make` is also a valid start
-  or resume command when direct workflow controls are not needed:
+  For a prepared issue, `cafe make` is also a valid launcher when direct
+  workflow controls are not needed:
 
   ```bash
   cafe make
@@ -89,6 +84,14 @@ pointer.
 
 ## Progress inspection
 
+For an outliving unattended or delegated run, report notification availability
+before leaving the initiating conversation. If delivery is unavailable, say
+explicitly that the conversation will not be proactively woken or updated and
+direct the user to `cafe status` and `cafe show` for durable progress. If
+delivery is available, promise only substantive lifecycle events such as a
+HumanTask, permission need, error, or completion. Phase boundaries, polling,
+empty yields, and transport activity never notify.
+
 - `cafe status`: phase timeline and current state.
 - `cafe show <step> output`: latest phase result.
 - `cafe show <step> questions`: current clarification request.
@@ -103,9 +106,9 @@ pointer.
 - `.cafe/issues/<issue>/blackboard.json`: use only when command output does not
   explain the handoff.
 
-Treat `driver_execution.poll_interval_seconds` as the required cadence for
-proactive calls to these inspection surfaces while the current process remains
-active. The default is 180 seconds. Start the timer when the process starts or
+In attached mode, treat `driver.poll_interval_seconds` as the required cadence
+for proactive calls to these inspection surfaces while the current process remains
+active. Start the timer when the process starts or
 resumes, before waiting for its first output. The first proactive inspection is
 due only after that full interval; do not use a shorter startup or warm-up
 cadence. If nothing wakes the driver first, perform one proactive inspection
@@ -143,8 +146,8 @@ and do not emit empty-progress chatter merely because the transport yielded.
 
 Keep `--mute-agent-output` on direct `cafe workflow` driver executions so
 provider narration is parsed and persisted without being copied into driver
-context. `cafe make` does not expose that flag and remains valid for continuous
-execution. The mute flag does not suppress workflow lifecycle events, errors,
+context. `cafe make` does not expose that flag and remains a valid launcher.
+The mute flag does not suppress workflow lifecycle events, errors,
 HumanTasks, final artifacts, or `streaming.jsonl`. Direct a user who wants the
 transcript to `cafe show <step> streaming --iteration <n>` or its durable file.
 During bounded diagnosis, resolve the exact durable file and inspect only the
@@ -159,23 +162,20 @@ answering or resuming. Non-interactive resumption is allowed only when the exact
 answer or permission already exists in the current thread, or the confirmed
 contract delegates that specific decision to the driver.
 
-Before execution, resolve and configure every phase chain. In `continuous`
-mode, do not interrupt a healthy run at phase boundaries; inspect every newly
-completed phase when the workflow naturally pauses or completes. In
-`single_step` mode, inspect the completed step's result, actual CLI/model,
-duration, verification, and structured baton before explicitly invoking the
-next step. If a user handoff sits before remaining agent work, reassess those
+Before execution, resolve and configure every phase chain. Do not interrupt a
+healthy unattended or delegated run at phase boundaries. Attached mode returns
+responsibility to the initiator after a boundary; polling remains read-only.
+Manual `--single-step` is a diagnostic invocation control, not persisted
+policy. If a user handoff sits before remaining agent work, reassess those
 future chains under `model_selection.md` before submitting the structured
 response. A terminal `_done` baton has no future chain to adjust.
 
 ## Operating rules
 
-- Use `cafe make` for a prepared continuous workflow when its environment
-  preflight and simpler invocation are useful. Use
+- Use `cafe make` for a prepared workflow when its environment preflight and
+  simpler invocation are useful. Use
   `cafe workflow --execute --mute-agent-output` when direct controls are needed,
-  and derive `--single-step` only from the confirmed execution mode.
-  `continuous` follows persisted state until a user-owned handoff, error, or
-  `done`; `single_step` returns after every step.
+  and use `--single-step` only as an explicit manual or diagnostic control.
 - A bounded diagnostic reproduction may temporarily add `--single-step` while
   continuous execution itself is under investigation. Record it as a diagnostic
   override; it does not mutate the confirmed execution contract.

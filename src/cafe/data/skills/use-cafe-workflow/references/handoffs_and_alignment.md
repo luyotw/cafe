@@ -4,9 +4,9 @@ Read this reference whenever CAFE pauses for a user, the driver considers
 confirming an output, or a proposed delta may affect strategic alignment. Also
 read `strategic_context.md`.
 
-Command examples below show the default `continuous` execution mode. Append
-`--single-step` when and only when the active issue's confirmed
-`driver_execution.mode` is `single_step`.
+Command examples below allow the runtime to follow the persisted baton. Append
+`--single-step` only as an explicit manual or diagnostic invocation control;
+it is not part of the issue's driver policy.
 
 The kickoff contract says who may approve an output or answer a reactive pause.
 The mandate says what the driver may decide. These are independent controls and

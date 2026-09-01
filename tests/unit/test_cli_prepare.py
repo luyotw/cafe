@@ -92,6 +92,72 @@ class TestPrepareCommand:
         marker = (temp_repo_dir / ".cafe" / "active_issue").read_text(encoding="utf-8").strip()
         assert marker == "test-issue"
 
+    @pytest.mark.parametrize(
+        ("mode_args", "expected_driver"),
+        [
+            (
+                ["--driver-mode", "attached", "--poll-interval-seconds", "30"],
+                {"mode": "attached", "poll_interval_seconds": 30},
+            ),
+            (["--driver-mode", "unattended"], {"mode": "unattended"}),
+            (
+                [
+                    "--driver-mode",
+                    "delegated",
+                    "--delegated-cli",
+                    "codex",
+                    "--delegated-model",
+                    "gpt-5.6-codex",
+                ],
+                {"mode": "delegated", "cli": "codex", "model": "gpt-5.6-codex"},
+            ),
+        ],
+    )
+    def test_supported_prepare_persists_only_complete_v2_driver_form(
+        self, temp_repo_dir, mock_git_ops, mode_args, expected_driver
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "prepare",
+                "v2-issue",
+                "--driver-contract-version",
+                "2",
+                *mode_args,
+            ],
+        )
+
+        assert result.exit_code == 0, (result.stdout, result.exception)
+        config = yaml.safe_load(
+            (temp_repo_dir / ".cafe" / "issues" / "v2-issue" / "issue.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert config["contract_version"] == 2
+        assert config["driver"] == expected_driver
+        assert "execution" not in config
+
+    def test_supported_prepare_rejects_partial_policy_before_git_mutation(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "prepare",
+                "invalid-v2",
+                "--driver-contract-version",
+                "2",
+                "--driver-mode",
+                "delegated",
+                "--delegated-cli",
+                "codex",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert not (temp_repo_dir / ".cafe" / "issues" / "invalid-v2").exists()
+        mock_git_ops.create_branch.assert_not_called()
+
     @patch("cafe.ui.phase_prompts.prompt_confirm")
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
