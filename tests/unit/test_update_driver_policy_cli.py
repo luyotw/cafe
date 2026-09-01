@@ -1,0 +1,123 @@
+"""Explicit bounded driver-policy update command tests."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import yaml
+from typer.testing import CliRunner
+
+from cafe.ui.cli import app
+
+
+def _layout(tmp_path: Path) -> tuple[Path, Path, bytes]:
+    root = tmp_path / ".cafe" / "issues" / "issue432" / "issue.yaml"
+    worktree = tmp_path / ".cafe" / "worktrees" / "issue432"
+    active = worktree / ".cafe" / "issues" / "issue432" / "issue.yaml"
+    root.parent.mkdir(parents=True)
+    active.parent.mkdir(parents=True)
+    root.write_text(
+        yaml.safe_dump({"issue_name": "issue432", "worktree_path": str(worktree)}),
+        encoding="utf-8",
+    )
+    active.write_text(
+        yaml.safe_dump(
+            {
+                "base_branch": "develop",
+                "playbook_id": "standard-qa",
+                "review": {"custom": True},
+                "driver_execution": {"mode": "continuous", "poll_interval_seconds": 180},
+            }
+        ),
+        encoding="utf-8",
+    )
+    blackboard = active.parent / "blackboard.json"
+    blackboard_bytes = json.dumps({"current_step": "develop", "events": [1]}).encode()
+    blackboard.write_bytes(blackboard_bytes)
+    return root, active, blackboard_bytes
+
+
+def test_update_command_replaces_only_active_policy_from_complete_explicit_inputs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, active, blackboard_bytes = _layout(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "update-driver-policy",
+            "issue432",
+            "--contract-version",
+            "2",
+            "--driver-mode",
+            "delegated",
+            "--delegated-cli",
+            "cursor-agent",
+            "--delegated-availability",
+            "required",
+            "--advancement",
+            "single_step",
+            "--hosting",
+            "background",
+        ],
+    )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    updated = yaml.safe_load(active.read_text(encoding="utf-8"))
+    assert updated["review"] == {"custom": True}
+    assert updated["driver"]["delegated"]["cli"] == "cursor-agent"
+    assert updated["execution"] == {"advancement": "single_step", "hosting": "background"}
+    assert "driver_execution" not in updated
+    assert (active.parent / "blackboard.json").read_bytes() == blackboard_bytes
+    assert set(yaml.safe_load(root.read_text(encoding="utf-8"))) == {
+        "issue_name",
+        "worktree_path",
+    }
+
+
+def test_update_command_never_infers_missing_values_from_legacy_policy(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _, active, _ = _layout(tmp_path)
+    original = active.read_bytes()
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        ["update-driver-policy", "issue432", "--contract-version", "2"],
+    )
+
+    assert result.exit_code != 0
+    assert active.read_bytes() == original
+
+
+def test_update_command_rejects_inapplicable_mode_fields_before_mutation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _, active, _ = _layout(tmp_path)
+    original = active.read_bytes()
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "update-driver-policy",
+            "issue432",
+            "--contract-version",
+            "2",
+            "--driver-mode",
+            "unattended",
+            "--poll-interval-seconds",
+            "10",
+            "--advancement",
+            "continuous",
+            "--hosting",
+            "foreground",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert active.read_bytes() == original
+

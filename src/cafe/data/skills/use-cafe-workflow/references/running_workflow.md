@@ -18,6 +18,30 @@ unexecuted.
   either the direct command or `cafe make` after preparation. If the mapping is
   missing, return to `kickoff.md` and confirm it before execution.
 
+## Bounded version 2 policy replacement
+
+When an in-progress issue is explicitly approved for the version 2 cutover,
+collect a fresh complete choice set instead of reading or translating
+`driver_execution`. Invoke the typed updater with every applicable value in one
+request:
+
+```bash
+cafe update-driver-policy <issue> --contract-version 2 \
+  --driver-mode <attached|unattended|delegated> \
+  --advancement <continuous|single_step> \
+  --hosting <foreground|background> \
+  [--poll-interval-seconds <seconds>] \
+  [--delegated-cli <claude|codex|gemini|copilot|cursor-agent> \
+   --delegated-availability <best_effort|required>]
+```
+
+Use the attached option only with `--poll-interval-seconds`, and the delegated
+options only with delegated mode. Missing, partial, legacy-derived, or
+mode-inapplicable input must stop before mutation. The updater changes only the
+active-worktree policy slice; it preserves unrelated issue metadata and all
+blackboard state, and never writes policy into the repository-root inventory
+pointer.
+
 - Resolve the current phase from `cafe status` and the structured baton, then
   start it with the user's requirement:
 

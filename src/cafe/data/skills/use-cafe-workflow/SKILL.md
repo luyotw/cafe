@@ -59,9 +59,9 @@ If more than one situation applies, read every listed reference before acting; d
 - Validate issue-decomposition assessments before confirming spec or plan;
   coordinate any authorized split through existing authority boundaries and
   reconstruct linked-work position from durable records.
-- Resolve and persist a confirmed `driver_execution` contract. `mode` is
-  `continuous` by default and may be `single_step`; `poll_interval_seconds`
-  defaults to `180`. Read `running_workflow.md` for their exact semantics.
+- Resolve and persist a confirmed `driver_execution` contract with `continuous` by default and
+  may be `single_step`; for an authorized v2 cutover use the bounded updater in `running_workflow.md`,
+  require every fresh choice, and never infer legacy values.
 - Use `cafe workflow --execute --mute-agent-output` when the invocation needs
   direct workflow controls such as `--start-step` or `--single-step`; derive
   `--single-step` only from the confirmed mode. After `cafe prepare`, `cafe make`

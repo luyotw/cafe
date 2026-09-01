@@ -729,6 +729,7 @@ def _backup_issue_directory(issue_dir: Path, issue_name: str) -> Path:
 
 _sync_lifecycle_runtime()
 app.command()(lifecycle_commands.prepare)
+app.command(name="update-driver-policy")(lifecycle_commands.update_driver_policy)
 app.command()(lifecycle_commands.close)
 app.command()(lifecycle_commands.restore)
 app.command()(lifecycle_commands.reset)

@@ -17,11 +17,54 @@ from cafe.core.issue_policy_store import (
     PrepareWouldClobberError,
     write_issue_inventory,
 )
+from cafe.core.driver_policy import DriverPolicyContract
 from cafe.utils.issue_config import resolve_issue_config_path, resolve_issue_id
 
 VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
 
 console: Any = None
+
+
+def update_driver_policy(
+    issue_name: str = typer.Argument(..., help="Issue whose authoritative policy is replaced"),
+    contract_version: int = typer.Option(..., "--contract-version"),
+    driver_mode: str = typer.Option(..., "--driver-mode"),
+    advancement: str = typer.Option(..., "--advancement"),
+    hosting: str = typer.Option(..., "--hosting"),
+    poll_interval_seconds: Optional[int] = typer.Option(
+        None, "--poll-interval-seconds"
+    ),
+    delegated_cli: Optional[str] = typer.Option(None, "--delegated-cli"),
+    delegated_availability: Optional[str] = typer.Option(
+        None, "--delegated-availability"
+    ),
+) -> None:
+    """Atomically replace one issue's policy from complete explicit v2 choices."""
+    driver: dict[str, Any] = {"mode": driver_mode}
+    if poll_interval_seconds is not None:
+        driver["attached"] = {"poll_interval_seconds": poll_interval_seconds}
+    if delegated_cli is not None or delegated_availability is not None:
+        driver["delegated"] = {
+            "cli": delegated_cli,
+            "availability": delegated_availability,
+        }
+    proposed = {
+        "contract_version": contract_version,
+        "driver": driver,
+        "execution": {"advancement": advancement, "hosting": hosting},
+    }
+    try:
+        policy = DriverPolicyContract.model_validate(proposed)
+        config_path = Path(".cafe") / "issues" / issue_name / "issue.yaml"
+        if not config_path.exists():
+            raise ValueError(f"issue configuration does not exist: {config_path}")
+        IssuePolicyStore(config_path).replace(policy)
+    except (ValueError, OSError) as exc:
+        console.print(f"[red]Error: Driver policy was not updated: {exc}[/red]")
+        raise typer.Exit(1)
+    console.print(
+        f"[green]✓ Updated {issue_name} to explicit workflow driver contract version 2[/green]"
+    )
 prompt_text: Any = None
 prompt_list: Any = None
 prompt_confirm: Any = None
