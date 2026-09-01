@@ -8,6 +8,7 @@ from cafe.core.driver_policy import DriverPolicyContract
 from cafe.core.driver_runtime import (
     DriverCoordinator,
     DriverDecision,
+    DriverModelMismatchError,
     DriverPacket,
     DriverUnavailableError,
     resolve_driver_boundary,
@@ -43,17 +44,22 @@ class Version2WorkflowRuntime:
         *,
         max_transitions: int = 30,
         start_step: str | None = None,
+        single_step: bool = False,
     ) -> PlaybookRunResult:
         if max_transitions <= 0:
             raise ValueError("max_transitions must be positive")
 
-        # A prior single-step run persists authorization before returning. The
-        # next invocation consumes it once before it may run the next phase.
-        self.coordinator.consume_next_authorization()
         requested_start = start_step
         last_result: PlaybookRunResult | None = None
 
         for _ in range(max_transitions):
+            if self.policy.driver.mode == "delegated":
+                pending = self.coordinator.pending_boundary(
+                    str(self.phase_runtime.blackboard.current_step)
+                )
+                if pending is not None and not self._authorize_delegated_boundary(pending):
+                    return self._boundary_result(pending)
+
             result = self.phase_runtime.run(
                 start_step=requested_start,
                 single_step=True,
@@ -69,68 +75,77 @@ class Version2WorkflowRuntime:
                 return result
 
             requested_action = str(self.phase_runtime.blackboard.current_step)
+            resolution = resolve_driver_boundary(
+                self.policy,
+                delegated_available=self.delegated_decision_provider is not None,
+            )
+            if resolution.action_source == "attached":
+                self.coordinator.record_lifecycle(
+                    "awaiting_initiator", reason="attached_boundary"
+                )
+                return result
+            if resolution.action_source == "unattended":
+                if single_step:
+                    return result
+                continue
+
             packet = self.coordinator.open_boundary(
                 completed_phase=result.final_step,
                 requested_action=requested_action,
                 boundary_id=self._boundary_id(result, requested_action),
             )
             self._notify_boundary(packet)
-            decision = self.coordinator.decision_for(packet.sequence)
-            resolution = resolve_driver_boundary(
-                self.policy,
-                delegated_available=self.delegated_decision_provider is not None,
-            )
-            if resolution.pause:
-                self.coordinator.record_lifecycle(
-                    "paused", reason="delegated_driver_unavailable"
-                )
+            if not self._authorize_delegated_boundary(packet):
                 return result
-
-            if decision is None and resolution.requires_decision:
-                assert self.delegated_decision_provider is not None
-                try:
-                    raw_decision = self.delegated_decision_provider(packet)
-                except DriverUnavailableError:
-                    resolution = resolve_driver_boundary(
-                        self.policy,
-                        delegated_available=False,
-                    )
-                    if resolution.pause:
-                        self.coordinator.record_lifecycle(
-                            "paused", reason="delegated_driver_unavailable"
-                        )
-                        return result
-                    raw_decision = None
-                if raw_decision is not None:
-                    decision = DriverDecision.model_validate(raw_decision)
-            if decision is None and resolution.action_source == "unattended_fallback":
-                self.coordinator.record_lifecycle(
-                    "fallback", reason="delegated_driver_unavailable"
-                )
-            if decision is None:
-                decision = DriverDecision(
-                    workflow_id=packet.workflow_id,
-                    sequence=packet.sequence,
-                    requested_action=packet.requested_action,
-                    action="advance",
-                    rationale=resolution.action_source,
-                )
-            decision = self.coordinator.record_decision(decision)
-
-            if decision.action != "advance":
-                self.coordinator.record_lifecycle(
-                    "stopped" if decision.action == "stop" else "paused",
-                    reason=decision.rationale or decision.action,
-                )
-                return result
-            if resolution.return_after_boundary:
-                return result
-            if self.coordinator.consume_authorization(packet.sequence) is None:
+            if single_step:
                 return result
 
         if last_result is None:  # pragma: no cover - guarded by max_transitions.
             raise RuntimeError("version 2 workflow produced no result")
         raise RuntimeError(f"Version 2 workflow reached transition limit ({max_transitions})")
+
+    def _authorize_delegated_boundary(self, packet: DriverPacket) -> bool:
+        decision = self.coordinator.decision_for(packet.sequence)
+        if decision is None:
+            if self.delegated_decision_provider is None:
+                self.coordinator.record_lifecycle(
+                    "paused", reason="delegated_driver_unavailable"
+                )
+                return False
+            try:
+                raw_decision = self.delegated_decision_provider(packet)
+                if raw_decision is None:
+                    self.coordinator.record_lifecycle(
+                        "paused", reason="delegated_driver_returned_no_decision"
+                    )
+                    return False
+                decision = DriverDecision.model_validate(raw_decision)
+                decision = self.coordinator.record_decision(decision)
+            except (DriverUnavailableError, DriverModelMismatchError, ValueError) as exc:
+                if isinstance(exc, DriverModelMismatchError):
+                    reason = "delegated_model_mismatch"
+                elif isinstance(exc, DriverUnavailableError):
+                    reason = "delegated_driver_unavailable"
+                else:
+                    reason = "delegated_invalid_decision"
+                self.coordinator.record_lifecycle("paused", reason=reason)
+                return False
+
+        if decision.action != "advance":
+            self.coordinator.record_lifecycle(
+                "stopped" if decision.action == "stop" else "paused",
+                reason=decision.rationale or decision.action,
+            )
+            return False
+        return self.coordinator.consume_authorization(packet.sequence) is not None
+
+    @staticmethod
+    def _boundary_result(packet: DriverPacket) -> PlaybookRunResult:
+        return PlaybookRunResult(
+            final_step=packet.completed_phase,
+            final_status_code="DELEGATED_DRIVER_PAUSED",
+            completed=False,
+        )
 
     def _boundary_id(self, result: PlaybookRunResult, requested_action: str) -> str:
         for event in reversed(self.phase_runtime.blackboard.events):
@@ -174,6 +189,7 @@ class Version2WorkflowRuntime:
             return
         event_type = {
             "complete": "completion",
+            "human_task": "human_task",
             "permission": "permission",
             "error": "error",
         }.get(lifecycle)

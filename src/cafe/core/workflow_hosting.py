@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 from cafe.core.blackboard import BlackboardStore
-from cafe.core.driver_policy import DriverPolicyContract
 from cafe.core.driver_runtime import DriverCoordinator
 
 
@@ -47,12 +46,15 @@ class WorkflowHost:
 
     def run(
         self,
-        policy: DriverPolicyContract,
         runtime: Callable[[], Any],
+        *,
+        hosting: str,
     ) -> HostRunResult:
-        if policy.execution.hosting == "foreground":
+        if hosting == "foreground":
             return self.run_worker(runtime, hosting="foreground")
-        return self._start_background()
+        if hosting == "background":
+            return self._start_background()
+        raise ValueError("hosting must be an explicit foreground or background invocation")
 
     def run_worker(
         self,
@@ -128,9 +130,6 @@ class WorkflowHost:
             "--execute",
             "--issue",
             self.issue_dir.name,
-            "--internal-v2-worker",
-            "--worker-id",
-            worker_id,
         ]
         self._record_worker(worker_id, status="starting", hosting="background")
         try:

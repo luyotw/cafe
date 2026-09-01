@@ -14,18 +14,7 @@ from cafe.core.blackboard import (
     BlackboardStore,
     EventEntry,
 )
-from cafe.core.driver_policy import DriverPolicyContract
 from cafe.core.workflow_hosting import WorkerAlreadyRunningError, WorkflowHost
-
-
-def _policy(hosting: str) -> DriverPolicyContract:
-    return DriverPolicyContract.model_validate(
-        {
-            "contract_version": 2,
-            "driver": {"mode": "unattended"},
-            "execution": {"advancement": "continuous", "hosting": hosting},
-        }
-    )
 
 
 def test_foreground_and_internal_worker_use_same_runtime_callable(tmp_path: Path) -> None:
@@ -34,7 +23,7 @@ def test_foreground_and_internal_worker_use_same_runtime_callable(tmp_path: Path
     worker = WorkflowHost(tmp_path / "worker")
 
     foreground_result = foreground.run(
-        _policy("foreground"), lambda: calls.append("foreground") or "finished"
+        lambda: calls.append("foreground") or "finished", hosting="foreground"
     )
     worker_result = worker.run_worker(lambda: calls.append("worker") or "finished")
 
@@ -57,11 +46,11 @@ def test_background_launch_is_fixed_typed_worker_command(tmp_path: Path) -> None
         python_executable="/fixed/python",
     )
 
-    result = host.run(_policy("background"), lambda: pytest.fail("ran in parent"))
+    result = host.run(lambda: pytest.fail("ran in parent"), hosting="background")
 
     command, kwargs = launches[0]
     assert command[:4] == ["/fixed/python", "-m", "cafe.ui.cli", "workflow"]
-    assert "--internal-v2-worker" in command
+    assert "--internal-v2-worker" not in command
     assert command[command.index("--issue") + 1] == "issue432"
     assert kwargs["start_new_session"] is True
     assert result.pid == 4321
@@ -76,7 +65,7 @@ def test_background_startup_failure_is_durable_without_claiming_phase_work(tmp_p
     host = WorkflowHost(issue_dir, popen_factory=fail)
 
     with pytest.raises(OSError):
-        host.run(_policy("background"), lambda: None)
+        host.run(lambda: None, hosting="background")
 
     state = BlackboardStore(issue_dir).load_or_create("spec")
     assert state.driver_state["worker"]["status"] == "startup_failed"

@@ -15,6 +15,10 @@ class DriverUnavailableError(RuntimeError):
     """The configured dedicated driver transport is not currently available."""
 
 
+class DriverModelMismatchError(RuntimeError):
+    """The delegated transport reported a model other than the requested model."""
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -53,7 +57,6 @@ class DriverBoundaryResolution(_StrictDriverModel):
         "attached",
         "unattended",
         "delegated",
-        "unattended_fallback",
         "delegated_unavailable",
     ]
     requires_decision: bool
@@ -66,36 +69,27 @@ def resolve_driver_boundary(
     *,
     delegated_available: bool,
 ) -> DriverBoundaryResolution:
-    """Resolve ownership independently from advancement and hosting."""
-    return_after_boundary = policy.execution.advancement == "single_step"
+    """Resolve the owner of one substantive workflow boundary."""
     if policy.driver.mode == "attached":
         return DriverBoundaryResolution(
             action_source="attached",
             requires_decision=False,
             pause=False,
-            return_after_boundary=return_after_boundary,
+            return_after_boundary=True,
         )
     if policy.driver.mode == "unattended":
         return DriverBoundaryResolution(
             action_source="unattended",
             requires_decision=False,
             pause=False,
-            return_after_boundary=return_after_boundary,
+            return_after_boundary=False,
         )
     if delegated_available:
         return DriverBoundaryResolution(
             action_source="delegated",
             requires_decision=True,
             pause=False,
-            return_after_boundary=return_after_boundary,
-        )
-    availability = policy.driver.delegated.availability if policy.driver.delegated else "required"
-    if availability == "best_effort":
-        return DriverBoundaryResolution(
-            action_source="unattended_fallback",
-            requires_decision=False,
-            pause=False,
-            return_after_boundary=return_after_boundary,
+            return_after_boundary=False,
         )
     return DriverBoundaryResolution(
         action_source="delegated_unavailable",
@@ -225,6 +219,20 @@ class DriverCoordinator:
             data = _state_data(state)
             raw = data["decisions"].get(str(sequence))
             return DriverDecision.model_validate(raw) if raw is not None else None
+
+    def pending_boundary(self, requested_action: str) -> DriverPacket | None:
+        """Return the oldest unconsumed boundary for the current durable step."""
+        with self.store.driver_transaction(self.state) as state:
+            data = _state_data(state)
+            consumed = {int(value) for value in data["consumed_sequences"]}
+            for raw_sequence in sorted(data["packets"], key=int):
+                sequence = int(raw_sequence)
+                if sequence in consumed:
+                    continue
+                packet = DriverPacket.model_validate(data["packets"][raw_sequence])
+                if packet.requested_action == requested_action:
+                    return packet
+            return None
 
     def record_lifecycle(self, lifecycle: str, *, reason: str = "") -> None:
         if not lifecycle.strip():

@@ -157,49 +157,42 @@ def test_driver_decision_rejects_unknown_actions() -> None:
 
 
 @pytest.mark.parametrize(
-    ("mode", "delegated_available", "expected_source"),
+    (
+        "mode",
+        "delegated_available",
+        "expected_source",
+        "expected_return",
+        "expected_pause",
+    ),
     [
-        ("attached", False, "attached"),
-        ("unattended", False, "unattended"),
-        ("delegated", True, "delegated"),
-        ("delegated", False, "unattended_fallback"),
+        ("attached", False, "attached", True, False),
+        ("unattended", False, "unattended", False, False),
+        ("delegated", True, "delegated", False, False),
+        ("delegated", False, "delegated_unavailable", True, True),
     ],
 )
-def test_boundary_resolution_keeps_ownership_and_availability_explicit(
-    mode: str, delegated_available: bool, expected_source: str
+def test_boundary_resolution_keeps_only_driver_ownership_explicit(
+    mode: str,
+    delegated_available: bool,
+    expected_source: str,
+    expected_return: bool,
+    expected_pause: bool,
 ) -> None:
     driver: dict = {"mode": mode}
     if mode == "attached":
-        driver["attached"] = {"poll_interval_seconds": 10}
+        driver["poll_interval_seconds"] = 10
     elif mode == "delegated":
-        driver["delegated"] = {"cli": "codex", "availability": "best_effort"}
+        driver.update({"cli": "codex", "model": "gpt-5.6-codex"})
     policy = DriverPolicyContract.model_validate(
         {
             "contract_version": 2,
             "driver": driver,
-            "execution": {"advancement": "continuous", "hosting": "foreground"},
         }
     )
 
     resolution = resolve_driver_boundary(policy, delegated_available=delegated_available)
 
     assert resolution.action_source == expected_source
-    assert resolution.pause is False
-
-
-def test_required_delegated_unavailability_pauses_safely() -> None:
-    policy = DriverPolicyContract.model_validate(
-        {
-            "contract_version": 2,
-            "driver": {
-                "mode": "delegated",
-                "delegated": {"cli": "codex", "availability": "required"},
-            },
-            "execution": {"advancement": "continuous", "hosting": "background"},
-        }
-    )
-
-    resolution = resolve_driver_boundary(policy, delegated_available=False)
-
-    assert resolution.pause is True
-    assert resolution.action_source == "delegated_unavailable"
+    assert resolution.return_after_boundary is expected_return
+    assert resolution.pause is expected_pause
+    assert resolution.requires_decision is (mode == "delegated" and delegated_available)
