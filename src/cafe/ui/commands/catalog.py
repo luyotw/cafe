@@ -318,13 +318,13 @@ def _print_playbook_applicability(
         )
         return
 
-    console.print(f"summary: {applicability.summary}")
+    console.print(f"summary: {applicability.summary}", markup=False)
     console.print("use_when:")
     for condition in applicability.use_when:
-        console.print(f"  - {condition}")
+        console.print(f"  - {condition}", markup=False)
     console.print("avoid_when:")
     for condition in applicability.avoid_when:
-        console.print(f"  - {condition}")
+        console.print(f"  - {condition}", markup=False)
 
 @playbook_app.command(name="list")
 def playbook_list() -> None:

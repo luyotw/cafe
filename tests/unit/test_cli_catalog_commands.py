@@ -26,17 +26,25 @@ def _write_catalog_playbook(
     playbook_id: str,
     *,
     summary: str | None,
+    use_when: tuple[str, ...] = (
+        "The current scope needs focused implementation.",
+        "Independent review is required.",
+    ),
+    avoid_when: tuple[str, ...] = (
+        "The current scope requires a separate planning phase.",
+    ),
 ) -> None:
     applicability = ""
     if summary is not None:
+        use_when_yaml = "\n".join(f'      - "{value}"' for value in use_when)
+        avoid_when_yaml = "\n".join(f'      - "{value}"' for value in avoid_when)
         applicability = f"""
   applicability:
     summary: "{summary}"
     use_when:
-      - "The current scope needs focused implementation."
-      - "Independent review is required."
+{use_when_yaml}
     avoid_when:
-      - "The current scope requires a separate planning phase."
+{avoid_when_yaml}
 """
     root.mkdir(parents=True, exist_ok=True)
     (root / f"{playbook_id}.yaml").write_text(
@@ -133,6 +141,40 @@ def test_playbook_list_and_show_render_complete_bounded_applicability(
         assert "Independent review is required." in result.stdout
         assert "The current scope requires a separate planning phase." in result.stdout
     assert "Applicability" in show_result.stdout
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        ("playbook", "list"),
+        ("playbook", "show", "markup"),
+    ),
+)
+def test_playbook_catalog_renders_markup_like_applicability_as_literal_text(
+    tmp_path: Path,
+    monkeypatch,
+    command: tuple[str, ...],
+) -> None:
+    """U6 — valid contract text is data, never Rich markup."""
+    monkeypatch.chdir(tmp_path)
+    values = (
+        "A [red]literal[/red] summary.",
+        "A [bold]literal[/bold] positive condition.",
+        "[/red]A literal negative condition.",
+    )
+    _write_catalog_playbook(
+        tmp_path / ".cafe" / "playbooks",
+        "markup",
+        summary=values[0],
+        use_when=(values[1],),
+        avoid_when=(values[2],),
+    )
+
+    result = runner.invoke(app, list(command))
+
+    assert result.exit_code == 0
+    for value in values:
+        assert value in result.stdout
 
 
 def test_playbook_catalog_marks_missing_contract_with_migration_action(
