@@ -8,10 +8,15 @@ import pytest
 
 from cafe.core.blackboard import BlackboardStore
 from cafe.core.driver_policy import DriverPolicyContract
-from cafe.core.driver_runtime import DriverDecision, DriverUnavailableError
+from cafe.core.driver_runtime import (
+    DriverCoordinator,
+    DriverDecision,
+    DriverModelMismatchError,
+    DriverUnavailableError,
+)
 from cafe.core.v2_workflow_runtime import Version2WorkflowRuntime
-from cafe.core.workflow_notifications import WorkflowNotifier
 from cafe.core.workflow_models import PlaybookRunResult
+from cafe.core.workflow_notifications import WorkflowNotifier
 
 
 class FakePhaseRuntime:
@@ -47,28 +52,32 @@ class FakeHumanTaskRuntime(FakePhaseRuntime):
         )
 
 
-def _policy(mode: str, advancement: str, hosting: str) -> DriverPolicyContract:
+def _policy(mode: str) -> DriverPolicyContract:
     driver: dict = {"mode": mode}
     if mode == "attached":
-        driver["attached"] = {"poll_interval_seconds": 10}
+        driver["poll_interval_seconds"] = 10
     elif mode == "delegated":
-        driver["delegated"] = {"cli": "codex", "availability": "required"}
+        driver.update({"cli": "codex", "model": "gpt-5.6-codex"})
     return DriverPolicyContract.model_validate(
         {
             "contract_version": 2,
             "driver": driver,
-            "execution": {"advancement": advancement, "hosting": hosting},
         }
     )
 
 
-@pytest.mark.parametrize("mode", ["attached", "unattended", "delegated"])
-@pytest.mark.parametrize("advancement", ["continuous", "single_step"])
-@pytest.mark.parametrize("hosting", ["foreground", "background"])
-def test_ownership_advancement_matrix_is_host_independent(
-    tmp_path: Path, mode: str, advancement: str, hosting: str
+@pytest.mark.parametrize(
+    ("mode", "expected_steps", "expects_decision"),
+    [
+        ("attached", ["spec"], False),
+        ("unattended", ["spec", "plan"], False),
+        ("delegated", ["spec", "plan"], True),
+    ],
+)
+def test_each_driver_mode_follows_its_promised_boundary_behavior(
+    tmp_path: Path, mode: str, expected_steps: list[str], expects_decision: bool
 ) -> None:
-    phase_runtime = FakePhaseRuntime(tmp_path / f"{mode}-{advancement}-{hosting}")
+    phase_runtime = FakePhaseRuntime(tmp_path / mode)
     decisions: list[int] = []
 
     def decide(packet):
@@ -82,29 +91,27 @@ def test_ownership_advancement_matrix_is_host_independent(
 
     result = Version2WorkflowRuntime(
         phase_runtime,
-        _policy(mode, advancement, hosting),
+        _policy(mode),
         delegated_decision_provider=decide if mode == "delegated" else None,
     ).run()
 
-    if advancement == "continuous":
-        assert phase_runtime.executed == ["spec", "plan"]
-        assert result.completed is True
-    else:
-        assert phase_runtime.executed == ["spec"]
-        assert result.completed is False
-    assert bool(decisions) is (mode == "delegated")
+    assert phase_runtime.executed == expected_steps
+    assert result.completed is (mode != "attached")
+    assert bool(decisions) is expects_decision
+    state = phase_runtime.blackboard_store.load_or_create("spec")
+    assert bool(state.driver_state.get("packets")) is expects_decision
 
 
-def test_single_step_authorization_is_consumed_once_after_restart(tmp_path: Path) -> None:
+def test_manual_single_step_is_invocation_only_and_restart_continues(tmp_path: Path) -> None:
     issue_dir = tmp_path / "restart"
     first_runtime = FakePhaseRuntime(issue_dir)
     first = Version2WorkflowRuntime(
-        first_runtime, _policy("unattended", "single_step", "foreground")
-    ).run()
+        first_runtime, _policy("unattended")
+    ).run(single_step=True)
 
     second_runtime = FakePhaseRuntime(issue_dir)
     second = Version2WorkflowRuntime(
-        second_runtime, _policy("unattended", "single_step", "background")
+        second_runtime, _policy("unattended")
     ).run()
 
     assert first.completed is False
@@ -112,7 +119,7 @@ def test_single_step_authorization_is_consumed_once_after_restart(tmp_path: Path
     assert second.completed is True
     assert second_runtime.executed == ["plan"]
     state = second_runtime.blackboard_store.load_or_create("spec")
-    assert state.driver_state["consumed_sequences"] == [1]
+    assert state.driver_state.get("consumed_sequences", []) == []
 
 
 def test_human_task_bypasses_driver_boundary_and_decision(tmp_path: Path) -> None:
@@ -121,7 +128,7 @@ def test_human_task_bypasses_driver_boundary_and_decision(tmp_path: Path) -> Non
 
     result = Version2WorkflowRuntime(
         runtime,
-        _policy("delegated", "continuous", "foreground"),
+        _policy("delegated"),
         delegated_decision_provider=lambda packet: decisions.append(packet),
     ).run()
 
@@ -137,7 +144,7 @@ def test_required_unavailable_delegated_driver_pauses_durably(tmp_path: Path) ->
 
     result = Version2WorkflowRuntime(
         runtime,
-        _policy("delegated", "continuous", "foreground"),
+        _policy("delegated"),
         delegated_decision_provider=None,
     ).run()
 
@@ -148,34 +155,23 @@ def test_required_unavailable_delegated_driver_pauses_durably(tmp_path: Path) ->
     assert state.driver_state["pause_reason"] == "delegated_driver_unavailable"
 
 
-def test_best_effort_transport_failure_records_fallback_and_continues(tmp_path: Path) -> None:
+def test_transport_failure_pauses_without_fallback(tmp_path: Path) -> None:
     runtime = FakePhaseRuntime(tmp_path)
-    policy = _policy("delegated", "continuous", "foreground")
-    policy = policy.model_copy(
-        update={
-            "driver": policy.driver.model_copy(
-                update={
-                    "delegated": policy.driver.delegated.model_copy(
-                        update={"availability": "best_effort"}
-                    )
-                }
-            )
-        }
-    )
 
     def unavailable(_packet):
         raise DriverUnavailableError("codex unavailable")
 
     result = Version2WorkflowRuntime(
         runtime,
-        policy,
+        _policy("delegated"),
         delegated_decision_provider=unavailable,
     ).run()
 
-    assert result.completed is True
-    assert runtime.executed == ["spec", "plan"]
+    assert result.completed is False
+    assert runtime.executed == ["spec"]
     state = runtime.blackboard_store.load_or_create("spec")
-    assert state.driver_state["fallback_reason"] == "delegated_driver_unavailable"
+    assert state.driver_state["pause_reason"] == "delegated_driver_unavailable"
+    assert "fallback_reason" not in state.driver_state
 
 
 def test_runtime_notifies_phase_boundaries_and_completion_only(tmp_path: Path) -> None:
@@ -189,11 +185,86 @@ def test_runtime_notifies_phase_boundaries_and_completion_only(tmp_path: Path) -
 
     Version2WorkflowRuntime(
         runtime,
-        _policy("unattended", "continuous", "foreground"),
+        _policy("unattended"),
         notifier=notifier,
     ).run()
 
-    assert [request["args"]["event_type"] for request in requests] == [
-        "phase_boundary",
-        "completion",
-    ]
+    assert [request["args"]["event_type"] for request in requests] == ["completion"]
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_reason"),
+    [
+        (DriverUnavailableError("acquisition failed"), "delegated_driver_unavailable"),
+        (DriverUnavailableError("resume failed"), "delegated_driver_unavailable"),
+        (DriverModelMismatchError("wrong model"), "delegated_model_mismatch"),
+        (ValueError("invalid response"), "delegated_invalid_decision"),
+    ],
+)
+def test_shared_fake_transport_faults_pause_durably(
+    tmp_path: Path, failure: Exception, expected_reason: str
+) -> None:
+    runtime = FakePhaseRuntime(tmp_path)
+
+    def fail(_packet):
+        raise failure
+
+    result = Version2WorkflowRuntime(
+        runtime,
+        _policy("delegated"),
+        delegated_decision_provider=fail,
+    ).run()
+
+    assert result.completed is False
+    assert runtime.executed == ["spec"]
+    state = runtime.blackboard_store.load_or_create("spec")
+    assert state.driver_state["lifecycle"] == "paused"
+    assert state.driver_state["pause_reason"] == expected_reason
+
+
+@pytest.mark.parametrize(
+    ("restart_stage", "expected_provider_calls"),
+    [("packet", 1), ("decision", 0), ("consumed", 0)],
+)
+def test_shared_fake_transport_restart_reuses_boundary_ledger_once(
+    tmp_path: Path, restart_stage: str, expected_provider_calls: int
+) -> None:
+    issue_dir = tmp_path / restart_stage
+    staged = FakePhaseRuntime(issue_dir)
+    staged.blackboard_store.set_current_step(staged.blackboard, "plan")
+    coordinator = DriverCoordinator(staged.blackboard_store, staged.blackboard)
+    packet = coordinator.open_boundary(
+        completed_phase="spec",
+        requested_action="plan",
+        boundary_id="durable-spec-plan",
+    )
+    decision = DriverDecision(
+        workflow_id=packet.workflow_id,
+        sequence=packet.sequence,
+        requested_action=packet.requested_action,
+        action="advance",
+    )
+    if restart_stage in {"decision", "consumed"}:
+        coordinator.record_decision(decision)
+    if restart_stage == "consumed":
+        assert coordinator.consume_authorization(packet.sequence) == decision
+
+    resumed = FakePhaseRuntime(issue_dir)
+    provider_calls: list[int] = []
+
+    def decide(pending):
+        provider_calls.append(pending.sequence)
+        return decision
+
+    result = Version2WorkflowRuntime(
+        resumed,
+        _policy("delegated"),
+        delegated_decision_provider=decide,
+    ).run()
+
+    assert result.completed is True
+    assert resumed.executed == ["plan"]
+    assert len(provider_calls) == expected_provider_calls
+    state = resumed.blackboard_store.load_or_create("spec")
+    assert state.driver_state["consumed_sequences"] == [packet.sequence]
+    assert len(state.driver_state["decisions"]) == 1
