@@ -18,7 +18,7 @@ from cafe.catalogs.resolver import (
     CatalogResolver,
 )
 from cafe.catalogs.sync import CatalogSyncError, CatalogSyncService, OverBudgetDiscovery
-from cafe.core.playbook import confirmation_gate_steps
+from cafe.core.playbook import LoadedPlaybook, confirmation_gate_steps
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook, format_dot, format_text_report
 from cafe.skills.global_installer import GlobalSkillSyncSummary, sync_global_skills
@@ -297,13 +297,43 @@ def catalog_sync_global(
 # Playbook commands
 # ---------------------------------------------------------------------------
 
+
+def _print_playbook_applicability(
+    loaded: LoadedPlaybook,
+    *,
+    heading: bool = False,
+) -> None:
+    """Render the complete bounded selection contract or its migration state."""
+    if heading:
+        console.print("\nApplicability")
+    applicability = loaded.model.playbook.applicability
+    if applicability is None:
+        playbook_id = loaded.model.playbook.id
+        console.print(
+            "applicability: missing; ineligible for automatic recommendation"
+        )
+        console.print(
+            "migration: add playbook.applicability with summary, use_when, and "
+            f"avoid_when; run cafe playbook validate {playbook_id} --strict"
+        )
+        return
+
+    console.print(f"summary: {applicability.summary}")
+    console.print("use_when:")
+    for condition in applicability.use_when:
+        console.print(f"  - {condition}")
+    console.print("avoid_when:")
+    for condition in applicability.avoid_when:
+        console.print(f"  - {condition}")
+
 @playbook_app.command(name="list")
 def playbook_list() -> None:
     """List resolved playbooks from builtin/global/project catalogs."""
     loader = _build_playbook_loader()
     for name in loader.list_playbooks():
         loaded = loader.load_model(name)
-        console.print(f"{name}\t{loaded.source}\t{loaded.path}")
+        console.print(f"{name}\tsource={loaded.source}\tpath={loaded.path}")
+        _print_playbook_applicability(loaded)
 
 
 @playbook_app.command(name="show")
@@ -317,15 +347,20 @@ def playbook_show(
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
 
+    definition = dict(loaded.as_dict())
+    playbook_metadata = dict(definition["playbook"])
+    playbook_metadata.pop("applicability", None)
+    definition["playbook"] = playbook_metadata
     console.print(
         yaml.dump(
-            loaded.as_dict(),
+            definition,
             allow_unicode=True,
             default_flow_style=False,
             sort_keys=False,
         )
     )
     console.print(f"\n[dim]source={loaded.source} path={loaded.path}[/dim]")
+    _print_playbook_applicability(loaded, heading=True)
     for warning in loaded.warnings:
         console.print(f"[yellow]warning:[/yellow] {warning}")
 

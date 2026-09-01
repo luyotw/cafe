@@ -26,13 +26,27 @@ repository-wide playbook ID must not replace that assessment.
 ## Select when no authoritative choice exists
 
 First assess the issue nature, scale, risk, acceptance surface, and repository
-instructions. Run `cafe playbook list`, then inspect only plausible candidates
-with `cafe playbook show <id>`. Compare the actual step graphs and phase skills;
-do not infer behavior from a playbook name or copy a playbook used by another
-issue.
+instructions from confirmed current scope. Unconfirmed speculative future work must not add
+responsibilities or phases to the current recommendation; handle it through the
+existing clarification or permission boundary only if it becomes current.
 
-Choose the narrowest graph that still assigns every required responsibility to
-an appropriate independent phase. Evaluate:
+Run `cafe playbook list` and enumerate every valid effective playbook across the
+project, Global, and builtin catalogs. Catalog precedence makes a same-id
+project override the one effective candidate; never evaluate its shadowed
+definitions separately. Inspect candidates with `cafe playbook show <id>`.
+A candidate with missing applicability is ineligible for automatic
+recommendation: report the exclusion and tell its author to add the complete
+contract and run `cafe playbook validate <id> --strict`. Do not infer missing
+conditions from the candidate's id, name, source, graph, or phase skills. More
+generally, do not infer behavior from a playbook name or copy a playbook used by
+another issue.
+
+Derive the required responsibilities and boundaries from the confirmed scope.
+Reject candidates whose resolved graph or phase skills are insufficient before
+comparing applicability. Applicability cannot compensate for a missing
+responsibility. For the remaining candidates, compare the graph and declared
+selection intent, then choose the smallest sufficient graph. Candidate names
+and catalog sources are not ranking signals. Evaluate:
 
 - workflow domain and outcome, such as product development, hotfix, incident,
   research, or editorial work;
@@ -46,7 +60,10 @@ an appropriate independent phase. Evaluate:
 Do not select a simpler graph merely because the code change is small when a
 repository rule or acceptance boundary requires an omitted phase. Do not select
 a larger graph merely because it exists; every added phase needs issue or
-repository evidence.
+repository evidence. Report the closest rejected candidates with concrete,
+evidence-linked reasons. If no eligible candidate is sufficient, state the
+uncovered requirements and ask the user for an explicit decision instead of
+choosing a familiar or larger playbook.
 
 ## Independent QA decision
 
@@ -76,7 +93,7 @@ The kickoff contract must include `playbook_selection_rationale` containing:
 
 - the authoritative source or the repository and issue evidence used;
 - the required phase responsibilities, including the QA decision;
-- the closest plausible alternative and why it was rejected.
+- the closest rejected candidates and why each was rejected.
 
 If evidence cannot safely distinguish the candidates and the difference affects
 scope, cost, confirmation stops, external effects, or acceptance confidence, ask

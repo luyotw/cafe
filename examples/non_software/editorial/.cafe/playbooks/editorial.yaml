@@ -1,6 +1,14 @@
 playbook:
   id: editorial
   name: "Editorial Workflow"
+  applicability:
+    summary: "Custom editorial delivery for a confirmed audience and publication outcome."
+    use_when:
+      - "The project must turn an approved brief into publishable written content."
+      - "Editorial review is needed before the content is released."
+    avoid_when:
+      - "The primary outcome is software implementation or incident mitigation."
+      - "The request only needs exploratory research without a publishable manuscript."
 
 skills:
   workflow:

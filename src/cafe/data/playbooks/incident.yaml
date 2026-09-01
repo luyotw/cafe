@@ -2,6 +2,14 @@ playbook:
   id: incident
   name: "Incident Response Workflow（偵測 → 分類 → 緩解 → 事後檢討）"
   conversation_locale: en-US
+  applicability:
+    summary: "Operational incident response for active impact, mitigation, and accountable follow-up."
+    use_when:
+      - "A live or recent operational disruption requires coordinated response."
+      - "Impact containment and recovery evidence are more urgent than product delivery."
+    avoid_when:
+      - "The work is a routine defect without active operational impact."
+      - "The requested outcome is primarily editorial or research material."
 
 behavior:
   completion: status_code

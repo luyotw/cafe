@@ -17,6 +17,29 @@ DEVELOPMENT_PLAYBOOKS = {
     "tdd-qa",
     "hotfix",
 }
+BUNDLED_PLAYBOOKS = DEVELOPMENT_PLAYBOOKS | {"editorial", "incident", "research"}
+
+
+def test_all_bundled_playbooks_have_distinct_bounded_applicability() -> None:
+    """U5/I3 — every packaged candidate is strictly valid and distinguishable."""
+    playbook_root = Path(__file__).parents[2] / "src" / "cafe" / "data" / "playbooks"
+    assert {path.stem for path in playbook_root.glob("*.yaml")} == BUNDLED_PLAYBOOKS
+
+    summaries: set[str] = set()
+    loader = PlaybookLoader()
+    for playbook_id in sorted(BUNDLED_PLAYBOOKS):
+        loaded = loader.load_model(playbook_id, strict=True)
+        applicability = loaded.model.playbook.applicability
+
+        assert applicability is not None
+        assert 1 <= len(applicability.summary) <= 160
+        assert 1 <= len(applicability.use_when) <= 6
+        assert 1 <= len(applicability.avoid_when) <= 6
+        assert all(len(condition) <= 200 for condition in applicability.use_when)
+        assert all(len(condition) <= 200 for condition in applicability.avoid_when)
+        summaries.add(applicability.summary.casefold())
+
+    assert len(summaries) == len(BUNDLED_PLAYBOOKS)
 
 
 def test_development_playbooks_are_discoverable_and_strictly_valid() -> None:
