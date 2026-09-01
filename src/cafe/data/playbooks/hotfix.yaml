@@ -104,7 +104,7 @@ steps:
         task_id: iteration-limit
         outcomes: {resume: review}
     allowed_tools: [Read, Grep, Glob, "Bash(git:*)"]
-    max_iterations: 1
+    max_attempts_per_cycle: 1
     allowed_goto: [develop]
     hooks:
       prepare_input: [UserInputCollector]

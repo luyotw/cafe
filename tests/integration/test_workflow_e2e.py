@@ -870,7 +870,7 @@ class TestSelfLoop:
         assert result.completed is True
 
     def test_review_self_loop_then_confirms(self, tmp_path: Path) -> None:
-        """review need_clarification×2 後 confirmed，在 max_iterations=3 限制內。"""
+        """review need_clarification×2 後 confirmed，在單一 cycle 上限內。"""
         result, calls, subsequent = self._run_single_step_loop(
             tmp_path,
             start_step="review",
@@ -883,8 +883,10 @@ class TestSelfLoop:
         assert subsequent.get("pr", 0) >= 1
         assert result.completed is True
 
-    def test_review_exceeds_max_iterations_materializes_a_human_task(self, tmp_path: Path) -> None:
-        """review 超過 max_iterations=3 時應暫停給可恢復的 HumanTask。"""
+    def test_review_exceeds_cycle_attempt_limit_materializes_a_human_task(
+        self, tmp_path: Path
+    ) -> None:
+        """review 超過單一 cycle 的嘗試上限時應暫停給可恢復的 HumanTask。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-loop-overflow"
         playbook = _load_default_playbook()
         call_counts: dict = {}
@@ -912,7 +914,7 @@ class TestSelfLoop:
         )
         result = runner.run(max_transitions=30)
 
-        # review 應被呼叫恰好 max_iterations（3）次後，在第 4 次前建立任務。
+        # review 應達到單一 cycle 的嘗試上限後，在下一次執行前建立任務。
         assert call_counts.get("review", 0) >= 3
         assert result.completed is False
         assert result.final_status_code == "ITERATION_LIMIT_REACHED"
@@ -924,8 +926,77 @@ class TestSelfLoop:
         assert state.current_step == "user"
         assert state.handoff_contract.intent is HandoffIntent.MANUAL_HANDOFF
 
+    def test_review_limit_restarts_after_review_advances_to_pr(self, tmp_path: Path) -> None:
+        """PR 打回 develop 後，新的 review cycle 應從 attempt 1 開始。"""
+        issue_dir = tmp_path / ".cafe" / "issues" / "issue-review-cycle-reset"
+        playbook = {
+            "playbook": {"id": "review-cycle-reset"},
+            "steps": {
+                "review": {
+                    "skill": "phase",
+                    "role": "reviewer",
+                    "max_attempts_per_cycle": 1,
+                    "on": {"await_agent": "pr", "manual_handoff": "develop"},
+                },
+                "pr": {
+                    "skill": "phase",
+                    "role": "developer",
+                    "on": {"await_agent": "_done", "manual_handoff": "develop"},
+                },
+                "develop": {
+                    "skill": "phase",
+                    "role": "developer",
+                    "on": {"await_agent": "review"},
+                },
+            },
+            "entry_point": "review",
+        }
+        calls: list[str] = []
+        pr_visits = 0
+
+        def executor(step_name: str, step_def: dict, state: BlackboardState) -> StepExecutionResult:
+            nonlocal pr_visits
+            calls.append(step_name)
+            if step_name == "pr":
+                pr_visits += 1
+                if pr_visits == 1:
+                    return StepExecutionResult(
+                        response="needs_changes",
+                        artifacts={},
+                        status_code="needs_changes",
+                        auto_continue=True,
+                    )
+            return StepExecutionResult(
+                response="confirmed",
+                artifacts={},
+                status_code="confirmed",
+            )
+
+        result = BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            executor=executor,
+        ).run(max_transitions=10)
+
+        assert result.completed is True
+        assert calls == ["review", "pr", "develop", "review", "pr"]
+        blackboard = BlackboardStore(issue_dir).load_or_create("review")
+        review_attempts = [
+            event.data["attempt"]
+            for event in blackboard.events
+            if event.event_type == "step_started" and event.data.get("step") == "review"
+        ]
+        assert review_attempts == [1, 1]
+        review_resets = [
+            event
+            for event in blackboard.events
+            if event.event_type == "step_attempt_count_reset"
+            and event.data.get("step") == "review"
+        ]
+        assert [event.data["completed_attempts"] for event in review_resets] == [1, 1]
+
     def test_iteration_counters_recorded_in_blackboard(self, tmp_path: Path) -> None:
-        """self-loop 期間 blackboard events 應包含正確的 visit 計數。"""
+        """self-loop 期間 blackboard events 應包含正確的 attempt 計數。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-loop-events"
         playbook = _load_default_playbook()
         spec_calls = 0
@@ -962,8 +1033,8 @@ class TestSelfLoop:
             for e in blackboard.events
             if e.event_type == "step_started" and e.data.get("step") == "spec"
         ]
-        visits = [e.data.get("visit") for e in spec_started_events]
-        assert visits == [1, 2, 3], f"expected visits [1,2,3], got {visits}"
+        attempts = [e.data.get("attempt") for e in spec_started_events]
+        assert attempts == [1, 2, 3], f"expected attempts [1,2,3], got {attempts}"
 
 
 # ---------------------------------------------------------------------------

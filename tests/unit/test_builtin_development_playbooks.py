@@ -99,7 +99,7 @@ def test_direct_is_the_reviewed_no_spec_no_plan_path() -> None:
     assert playbook.steps["review"].on["await_agent"] == "pr"
     assert playbook.steps["review"].on["manual_handoff"] == "develop"
     assert playbook.steps["pr"].on["manual_handoff"] == "develop"
-    assert playbook.steps["review"].max_iterations == 5
+    assert playbook.steps["review"].max_attempts_per_cycle == 5
 
 
 def test_standard_owns_the_established_full_development_graph() -> None:
@@ -182,13 +182,13 @@ def test_qa_variants_share_one_bounded_acceptance_phase(playbook_id: str) -> Non
         "need_clarification": "qa",
         "need_permission": "qa",
     }
-    assert qa.max_iterations == 5
+    assert qa.max_attempts_per_cycle == 5
     assert qa.allowed_goto == ["develop"]
 
     review = playbook.steps["review"]
     assert review.on["await_agent"] == "qa"
     assert review.on["manual_handoff"] == "develop"
-    assert review.max_iterations == 5
+    assert review.max_attempts_per_cycle == 5
     assert review.allowed_goto == ["develop"]
 
     pr = playbook.steps["pr"]

@@ -26,7 +26,7 @@ from cafe.core.packet_io import atomic_write_bytes
 from cafe.core.workflow_models import BatonRejected
 
 BLACKBOARD_FILENAME = "blackboard.json"
-BLACKBOARD_SCHEMA_VERSION = 3
+BLACKBOARD_SCHEMA_VERSION = 4
 NEXT_STEP_FILENAME = "next_step.txt"
 HANDOFF_CONTRACT_VERSION = 1
 
@@ -143,7 +143,12 @@ class EventEntry:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "EventEntry":
+    def from_dict(
+        cls,
+        data: Dict[str, Any],
+        *,
+        migrate_legacy_attempt_fields: bool = False,
+    ) -> "EventEntry":
         payload = dict(data)
         if "event_type" not in payload and "type" in payload:
             payload["event_type"] = payload.pop("type")
@@ -153,12 +158,46 @@ class EventEntry:
             payload["message"] = str(payload.get("payload", {}))
         if "data" not in payload:
             payload["data"] = payload.pop("payload", {})
+        event_type = str(payload.get("event_type", "event"))
+        event_data = dict(payload.get("data", {}))
+        message = str(payload.get("message", ""))
+        if migrate_legacy_attempt_fields:
+            changed = False
+            if event_type in {
+                "step_started",
+                "step_interrupted",
+                "step_completed",
+                "single_step_completed",
+            } and "visit" in event_data:
+                event_data.setdefault("attempt", event_data["visit"])
+                event_data.pop("visit")
+                changed = True
+            elif event_type == "loop_detected":
+                for legacy_key, current_key in (
+                    ("visits", "attempts"),
+                    ("max_iterations", "max_attempts_per_cycle"),
+                ):
+                    if legacy_key not in event_data:
+                        continue
+                    event_data.setdefault(current_key, event_data[legacy_key])
+                    event_data.pop(legacy_key)
+                    changed = True
+            elif event_type == "step_visit_count_reset":
+                event_type = "step_attempt_count_reset"
+                changed = True
+                if "completed_visits" in event_data:
+                    event_data.setdefault(
+                        "completed_attempts", event_data["completed_visits"]
+                    )
+                    event_data.pop("completed_visits")
+            if changed:
+                message = json.dumps(event_data, ensure_ascii=False)
         return cls(
             timestamp=str(payload.get("timestamp", _now_iso())),
             step=str(payload.get("step", "system")),
-            event_type=str(payload.get("event_type", "event")),
-            message=str(payload.get("message", "")),
-            data=dict(payload.get("data", {})),
+            event_type=event_type,
+            message=message,
+            data=event_data,
         )
 
 
@@ -391,7 +430,7 @@ class BlackboardState:
     handoff_summary: str = ""
     handoff_contract: Optional[HandoffContract] = None
     ownership_cursor: Optional[Dict[str, Any]] = None
-    step_visit_counts: Dict[str, int] = field(default_factory=dict)
+    step_attempt_counts: Dict[str, int] = field(default_factory=dict)
     updated_at: str = field(default_factory=_now_iso)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -409,7 +448,7 @@ class BlackboardState:
                 self.handoff_contract.to_dict() if self.handoff_contract is not None else None
             ),
             "ownership_cursor": dict(self.ownership_cursor) if self.ownership_cursor else None,
-            "step_visit_counts": dict(self.step_visit_counts),
+            "step_attempt_counts": dict(self.step_attempt_counts),
             "updated_at": self.updated_at,
         }
 
@@ -448,16 +487,23 @@ class BlackboardState:
         raw_cursor = data.get("ownership_cursor")
         if raw_cursor is not None and not isinstance(raw_cursor, dict):
             raise ValueError("blackboard ownership_cursor must be an object or null")
-        raw_visits = data.get("step_visit_counts", {})
-        if not isinstance(raw_visits, dict):
-            raise ValueError("blackboard step_visit_counts must be an object")
-        visits: Dict[str, int] = {}
-        for step, count in raw_visits.items():
+        cursor = dict(raw_cursor) if raw_cursor is not None else None
+        if cursor is not None and "attempt_count" not in cursor and "visit_count" in cursor:
+            cursor["attempt_count"] = cursor.pop("visit_count")
+
+        raw_attempts = data.get(
+            "step_attempt_counts",
+            data.get("step_visit_counts", {}),
+        )
+        if not isinstance(raw_attempts, dict):
+            raise ValueError("blackboard step_attempt_counts must be an object")
+        attempts: Dict[str, int] = {}
+        for step, count in raw_attempts.items():
             if not isinstance(count, int) or count < 0:
                 raise ValueError(
-                    "blackboard step_visit_counts values must be non-negative integers"
+                    "blackboard step_attempt_counts values must be non-negative integers"
                 )
-            visits[str(step)] = count
+            attempts[str(step)] = count
 
         return cls(
             current_step=str(data.get("current_step", initial_step)),
@@ -465,7 +511,13 @@ class BlackboardState:
             workflow_id=str(data.get("workflow_id") or _legacy_workflow_id(data, initial_step)),
             schema_version=BLACKBOARD_SCHEMA_VERSION,
             artifacts=artifacts,
-            events=[EventEntry.from_dict(entry) for entry in data.get("events", [])],
+            events=[
+                EventEntry.from_dict(
+                    entry,
+                    migrate_legacy_attempt_fields=raw_version < 4,
+                )
+                for entry in data.get("events", [])
+            ],
             decisions=[DecisionEntry.from_dict(entry) for entry in data.get("decisions", [])],
             capability_receipts=receipts,
             handoff_summary=str(data.get("handoff_summary", "")),
@@ -477,8 +529,8 @@ class BlackboardState:
                 if isinstance(data.get("handoff_contract"), dict)
                 else None
             ),
-            ownership_cursor=dict(raw_cursor) if raw_cursor is not None else None,
-            step_visit_counts=visits,
+            ownership_cursor=cursor,
+            step_attempt_counts=attempts,
             updated_at=str(data.get("updated_at", _now_iso())),
         )
 
@@ -765,6 +817,32 @@ class BlackboardStore:
     def set_current_step(self, state: BlackboardState, step: str) -> None:
         state.current_step = step
         self.save(state)
+
+    def reset_step_attempt_count(
+        self,
+        state: BlackboardState,
+        *,
+        step: str,
+        next_step: str,
+        transition_intent: str,
+        transition_source: str,
+    ) -> Optional[int]:
+        """Clear one completed attempt cycle and retain auditable evidence."""
+        completed_attempts = state.step_attempt_counts.pop(step, None)
+        if completed_attempts is None:
+            return None
+        self.record_event(
+            state,
+            "step_attempt_count_reset",
+            {
+                "step": step,
+                "next_step": next_step,
+                "completed_attempts": completed_attempts,
+                "transition_intent": transition_intent,
+                "transition_source": transition_source,
+            },
+        )
+        return completed_attempts
 
     def set_handoff_summary(self, state: BlackboardState, summary: str) -> None:
         state.handoff_summary = summary

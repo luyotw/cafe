@@ -1379,8 +1379,11 @@ def test_use_cafe_workflow_requires_driver_execution_contract_and_model_authorit
     assert "cafe workflow --execute --mute-agent-output" in skill
     assert "provider narration is parsed and persisted" in normalized_running
     assert "does not suppress workflow lifecycle events" in normalized_running
-    assert "Keep `--mute-agent-output` on every driver execution" in normalized_running
-    assert "Never remove the flag" in normalized_running
+    assert (
+        "Keep `--mute-agent-output` on direct `cafe workflow` driver executions"
+        in normalized_running
+    )
+    assert "`cafe make` does not expose that flag and remains valid" in normalized_running
     assert "cafe show <step> streaming --iteration <n>" in normalized_running
     assert ".cafe/issues/<issue>/<step>/iteration_NNN/streaming.jsonl" in normalized_running
     assert "reads the entire saved file" in normalized_running
@@ -1392,7 +1395,8 @@ def test_use_cafe_workflow_requires_driver_execution_contract_and_model_authorit
     assert "tail -n <line-count> <streaming-file>" in normalized_running
     assert "Remove it only when" not in normalized_running
     assert "persisted baton without forcing `--start-step`" in skill
-    assert "Do not use `cafe make` for driver execution" in normalized_running
+    assert "`cafe make` is also a valid start or resume command" in normalized_running
+    assert "Do not use `cafe make` for driver execution" not in normalized_running
     assert "required cadence" in normalized_running
     assert "Start the timer when the process starts or resumes" in normalized_running
     assert (

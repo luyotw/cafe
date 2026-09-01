@@ -310,7 +310,7 @@ def test_workflow_rejects_invalid_issue_playbook_override_before_execution(
 
     assert result.exit_code == 1
     assert "playbook_overrides.steps.review supports only" in result.stdout
-    assert "max_iterations; unsupported field(s): skill" in result.stdout
+    assert "max_attempts_per_cycle; unsupported field(s): skill" in result.stdout
     assert not (issue_dir / "blackboard.json").exists()
 
 

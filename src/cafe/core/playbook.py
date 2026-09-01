@@ -6,7 +6,7 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Mapping, Optional, Union
 
 import yaml
 from pydantic import (
@@ -515,7 +515,7 @@ class StepConfig(BaseModel):
     capability_requests: List[str] = Field(default_factory=list)
     behavior: StepBehaviorDeclaration = Field(default_factory=StepBehaviorDeclaration)
     valid_intents: List[str] = Field(default_factory=list)
-    max_iterations: Optional[Union[int, str]] = None
+    max_attempts_per_cycle: Optional[int] = None
     correction_session: Literal["fresh", "resume"] = "fresh"
     allowed_goto: List[str] = Field(default_factory=list)
     hooks: StepHooks = Field(default_factory=StepHooks)
@@ -525,6 +525,30 @@ class StepConfig(BaseModel):
     alignment: Optional[StepAlignmentConfig] = None
     human_tasks: tuple[HumanTaskBinding, ...] = ()
     on: Dict[str, str]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_attempt_limit(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or "max_iterations" not in data:
+            return data
+        if "max_attempts_per_cycle" in data:
+            raise ValueError(
+                "step cannot declare both max_attempts_per_cycle and legacy max_iterations"
+            )
+        migrated = dict(data)
+        migrated["max_attempts_per_cycle"] = migrated.pop("max_iterations")
+        return migrated
+
+    @field_validator("max_attempts_per_cycle", mode="before")
+    @classmethod
+    def _validate_attempt_limit(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, str) and value.isdigit():
+            value = int(value)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError("max_attempts_per_cycle must be a positive integer")
+        return value
 
     @model_validator(mode="after")
     def _validate_input_artifact_scope(self) -> "StepConfig":
@@ -626,6 +650,25 @@ class StepConfig(BaseModel):
         if "default" not in normalized and not any(key.isdigit() for key in normalized):
             raise ValueError("skill mapping must include 'default' or numbered iteration keys")
         return normalized
+
+
+def resolve_step_attempt_limit(step_def: Mapping[str, Any]) -> Optional[int]:
+    """Resolve the current or legacy per-cycle attempt limit."""
+    if "max_attempts_per_cycle" in step_def and "max_iterations" in step_def:
+        raise ValueError(
+            "step cannot declare both max_attempts_per_cycle and legacy max_iterations"
+        )
+    raw_limit = step_def.get(
+        "max_attempts_per_cycle",
+        step_def.get("max_iterations"),
+    )
+    if raw_limit is None:
+        return None
+    if isinstance(raw_limit, str) and raw_limit.isdigit():
+        raw_limit = int(raw_limit)
+    if isinstance(raw_limit, bool) or not isinstance(raw_limit, int) or raw_limit < 1:
+        raise ValueError("max_attempts_per_cycle must be a positive integer")
+    return raw_limit
 
 
 class PrepareSetupModeEntry(BaseModel):

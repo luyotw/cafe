@@ -13,10 +13,10 @@ unexecuted.
   separately scoped approval when a comparison token changed.
 
 - Read the confirmed `driver_execution` mapping from the active issue's
-  `issue.yaml`. Append `--single-step` to every command example in this
-  reference only when `mode: single_step`; omit it for the default
-  `mode: continuous`. If the mapping is missing, return to `kickoff.md` and
-  confirm it before execution.
+  `issue.yaml`. When `mode: single_step`, use the direct `cafe workflow`
+  command and append `--single-step`. For the default `mode: continuous`, use
+  either the direct command or `cafe make` after preparation. If the mapping is
+  missing, return to `kickoff.md` and confirm it before execution.
 
 - Resolve the current phase from `cafe status` and the structured baton, then
   start it with the user's requirement:
@@ -30,6 +30,13 @@ unexecuted.
 
   ```bash
   cafe workflow --execute --mute-agent-output
+  ```
+
+  For a prepared issue in `continuous` mode, `cafe make` is also a valid start
+  or resume command when direct workflow controls are not needed:
+
+  ```bash
+  cafe make
   ```
 
 - Answer an authorized user handoff without overriding its structured baton.
@@ -110,16 +117,18 @@ stops on an error. A host may require more frequent user-facing heartbeat
 messages; those messages must not trigger an extra CAFE status or artifact poll,
 and do not emit empty-progress chatter merely because the transport yielded.
 
-Keep `--mute-agent-output` on every driver execution so provider narration is
-parsed and persisted without being copied into driver context. Never remove
-the flag, including for a user-requested live transcript or bounded diagnosis.
-It does not suppress workflow lifecycle events, errors, HumanTasks, final
-artifacts, or `streaming.jsonl`. Direct a user who wants the transcript to
-`cafe show <step> streaming --iteration <n>` or its durable file. During bounded
-diagnosis, resolve the exact durable file and inspect only the minimum relevant
-portion with `rg -n -C <context-lines> '<pattern>' <streaming-file>` or
-`tail -n <line-count> <streaming-file>`. Do not use `cafe show <step> streaming`
-for driver diagnosis, and do not use the raw stream as routine progress context.
+Keep `--mute-agent-output` on direct `cafe workflow` driver executions so
+provider narration is parsed and persisted without being copied into driver
+context. `cafe make` does not expose that flag and remains valid for continuous
+execution. The mute flag does not suppress workflow lifecycle events, errors,
+HumanTasks, final artifacts, or `streaming.jsonl`. Direct a user who wants the
+transcript to `cafe show <step> streaming --iteration <n>` or its durable file.
+During bounded diagnosis, resolve the exact durable file and inspect only the
+minimum relevant portion with
+`rg -n -C <context-lines> '<pattern>' <streaming-file>` or
+`tail -n <line-count> <streaming-file>`. Do not use
+`cafe show <step> streaming` for driver diagnosis, and do not use the raw stream
+as routine progress context.
 
 When CAFE pauses for user input, read `handoffs_and_alignment.md` before
 answering or resuming. Non-interactive resumption is allowed only when the exact
@@ -137,10 +146,12 @@ response. A terminal `_done` baton has no future chain to adjust.
 
 ## Operating rules
 
-- Do not use `cafe make` for driver execution. Use
-  `cafe workflow --execute --mute-agent-output` and derive `--single-step` only
-  from the confirmed execution mode. `continuous` follows persisted state until
-  a user-owned handoff, error, or `done`; `single_step` returns after every step.
+- Use `cafe make` for a prepared continuous workflow when its environment
+  preflight and simpler invocation are useful. Use
+  `cafe workflow --execute --mute-agent-output` when direct controls are needed,
+  and derive `--single-step` only from the confirmed execution mode.
+  `continuous` follows persisted state until a user-owned handoff, error, or
+  `done`; `single_step` returns after every step.
 - A bounded diagnostic reproduction may temporarily add `--single-step` while
   continuous execution itself is under investigation. Record it as a diagnostic
   override; it does not mutate the confirmed execution contract.

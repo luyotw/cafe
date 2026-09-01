@@ -2987,7 +2987,7 @@ def test_runtime_handles_keyboard_interrupt(tmp_path: Path) -> None:
         else interrupted_events[0].message
     )
     assert msg["step"] == "spec"
-    assert bb.step_visit_counts == {}
+    assert bb.step_attempt_counts == {}
 
 
 def test_runtime_handles_agent_execution_error(
@@ -3035,7 +3035,7 @@ def test_runtime_handles_agent_execution_error(
     )
     assert msg["step"] == "spec"
     assert msg["reason"] == "agent_rate_limit"
-    assert bb.step_visit_counts == {}
+    assert bb.step_attempt_counts == {}
     assert bb.current_step == "user"
     assert bb.handoff_contract is not None
     assert bb.handoff_contract.to_owner is HandoffOwner.USER
@@ -3355,8 +3355,8 @@ def _simple_playbook(step_name: str = "spec") -> dict:
 def test_bundled_review_iteration_limits_are_defined_by_playbooks() -> None:
     loader = PlaybookLoader()
 
-    assert loader.load("standard")["steps"]["review"]["max_iterations"] == 5
-    assert loader.load("tdd")["steps"]["review"]["max_iterations"] == 5
+    assert loader.load("standard")["steps"]["review"]["max_attempts_per_cycle"] == 5
+    assert loader.load("tdd")["steps"]["review"]["max_attempts_per_cycle"] == 5
 
 
 def test_pre_execution_failure_does_not_consume_agent_visit(tmp_path: Path) -> None:
@@ -3364,7 +3364,7 @@ def test_pre_execution_failure_does_not_consume_agent_visit(tmp_path: Path) -> N
 
     issue_dir = tmp_path / ".cafe" / "issues" / "pre-execution-failure"
     playbook = _simple_playbook()
-    playbook["steps"]["spec"]["max_iterations"] = 1
+    playbook["steps"]["spec"]["max_attempts_per_cycle"] = 1
     calls = 0
 
     def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
@@ -3383,11 +3383,11 @@ def test_pre_execution_failure_does_not_consume_agent_visit(tmp_path: Path) -> N
 
     interrupted = runtime.run(start_step="spec", max_transitions=5)
     assert interrupted.final_status_code == "INTERRUPTED:agent_contract"
-    assert BlackboardStore(issue_dir).load_or_create("spec").step_visit_counts == {}
+    assert BlackboardStore(issue_dir).load_or_create("spec").step_attempt_counts == {}
 
     completed = runtime.run(start_step="spec", max_transitions=5)
     assert completed.completed is True
-    assert BlackboardStore(issue_dir).load_or_create("spec").step_visit_counts == {"spec": 1}
+    assert BlackboardStore(issue_dir).load_or_create("spec").step_attempt_counts == {"spec": 1}
 
 
 def test_execute_one_iteration_forwards_extra_prompt_to_executor(tmp_path: Path) -> None:
@@ -3576,7 +3576,7 @@ def test_runtime_retries_user_owner_with_step_target_then_succeeds(tmp_path: Pat
     assert len(prompts) == 2
     assert "field 'to_step'" in str(prompts[1])
     blackboard = BlackboardStore(issue_dir).load_or_create("spec")
-    assert blackboard.step_visit_counts == {"spec": 1}
+    assert blackboard.step_attempt_counts == {"spec": 1}
 
 
 def test_runtime_retries_owner_intent_mismatch_then_succeeds(tmp_path: Path) -> None:
@@ -3607,7 +3607,7 @@ def test_runtime_retries_owner_intent_mismatch_then_succeeds(tmp_path: Path) -> 
     assert result.completed is True
     assert "field 'intent'" in str(prompts[1])
     assert "workflow_complete" in str(prompts[1])
-    assert BlackboardStore(issue_dir).load_or_create("spec").step_visit_counts == {"spec": 1}
+    assert BlackboardStore(issue_dir).load_or_create("spec").step_attempt_counts == {"spec": 1}
 
 
 def test_runtime_retries_twice_on_baton_rejected_then_succeeds(tmp_path: Path) -> None:

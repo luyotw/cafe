@@ -62,9 +62,9 @@ If more than one situation applies, read every listed reference before acting; d
 - Resolve and persist a confirmed `driver_execution` contract. `mode` is
   `continuous` by default and may be `single_step`; `poll_interval_seconds`
   defaults to `180`. Read `running_workflow.md` for their exact semantics.
-- Drive every workflow invocation with `cafe workflow --execute --mute-agent-output`;
-  derive `--single-step` only from the confirmed mode. Never remove the mute
-  flag; use the durable record when narration is needed. Do not use `cafe make`.
+- Use `cafe workflow --execute --mute-agent-output` for direct controls such as
+  `--start-step` or `--single-step`, deriving the latter only from the confirmed
+  mode. After `cafe prepare`, `cafe make` also supports continuous outliving runs.
 - Configure all phase chains before execution; change them only under `model_selection.md`.
 - Do not manually edit workflow artifacts, blackboard state, or
   `next_step.txt` except when repairing confirmed broken workflow state.

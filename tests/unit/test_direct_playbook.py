@@ -30,6 +30,6 @@ def test_direct_is_the_reviewed_no_spec_no_plan_path() -> None:
     assert review.on["await_agent"] == "pr"
     assert review.on["manual_handoff"] == "develop"
     assert review.on["need_permission"] == "review"
-    assert review.max_iterations == 5
+    assert review.max_attempts_per_cycle == 5
     assert pr.on["manual_handoff"] == "develop"
     assert pr.allowed_goto == ["develop"]
