@@ -55,8 +55,9 @@ You can contribute to this project in several ways:
     pytest
     ```
     Fast local commits run a bounded contract smoke suite plus tests related to
-    staged files. A complete no-coverage test run executes on `git push` via the
-    `pre-push` hook. Run the coverage gate separately when changing behavior:
+    staged files. The `pre-push` hook re-runs the bounded contract smoke suite;
+    the complete unit/integration and coverage checks run only in the release
+    gate. You may run the coverage gate separately when changing behavior:
     ```bash
     ./scripts/test-coverage.sh
     ```
