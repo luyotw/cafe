@@ -2,6 +2,14 @@ playbook:
   id: direct
   name: "Direct Development"
   conversation_locale: en-US
+  applicability:
+    summary: "Focused implementation with independent code review for already-clear work."
+    use_when:
+      - "The requested behavior and implementation boundary are already confirmed."
+      - "Independent code review is sufficient for the acceptance risk."
+    avoid_when:
+      - "Requirements or solution design still need dedicated specification or planning."
+      - "Acceptance requires an independent QA owner beyond code review."
 
 behavior:
   completion: status_code

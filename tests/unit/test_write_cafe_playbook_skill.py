@@ -74,3 +74,30 @@ def test_write_cafe_playbook_defines_conversation_locale_contract() -> None:
     assert "does not require a separate user confirmation" in normalized_reference
     assert "asking about the language choice is not an override" in normalized_reference
     assert "does not translate commands, paths, playbook or step names" in normalized_reference
+
+
+def test_write_cafe_playbook_requires_bounded_applicability_and_migration() -> None:
+    """U8 — authoring, migration, and final review share one applicability contract."""
+    skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    reference = (SKILL_ROOT / "references" / "playbook-spec.md").read_text(
+        encoding="utf-8"
+    )
+    normalized_skill = " ".join(skill.split())
+    normalized_reference = " ".join(reference.split())
+
+    assert "applicability:" in reference
+    assert "summary:" in reference
+    assert "use_when:" in reference
+    assert "avoid_when:" in reference
+    assert "160" in reference
+    assert "200" in reference
+    assert "1–6" in reference
+    assert "selection intent" in normalized_reference
+    assert "resolved graph remains authoritative" in normalized_reference
+    assert "missing" in normalized_reference
+    assert "ineligible for automatic recommendation" in normalized_reference
+    assert "cafe playbook validate <id> --strict" in reference
+    assert "applicability" in normalized_skill
+    assert "positive and negative conditions" in normalized_skill
+    assert "Final Review" in skill
+    assert "graph facts" in normalized_skill

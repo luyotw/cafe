@@ -2,6 +2,14 @@ playbook:
   id: standard
   name: "Standard Development Workflow"
   conversation_locale: en-US
+  applicability:
+    summary: "Planned software delivery with explicit requirements and independent code review."
+    use_when:
+      - "Requirements and implementation sequencing both need dedicated ownership."
+      - "Independent code review covers the confirmed acceptance boundary."
+    avoid_when:
+      - "Repository policy requires test-driven implementation throughout development."
+      - "Independent black-box acceptance requires a separate QA owner."
 
 behavior:
   completion: status_code

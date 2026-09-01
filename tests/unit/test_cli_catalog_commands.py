@@ -21,6 +21,54 @@ def _isolate_global_catalog(
     )
 
 
+def _write_catalog_playbook(
+    root: Path,
+    playbook_id: str,
+    *,
+    summary: str | None,
+    use_when: tuple[str, ...] = (
+        "The current scope needs focused implementation.",
+        "Independent review is required.",
+    ),
+    avoid_when: tuple[str, ...] = (
+        "The current scope requires a separate planning phase.",
+    ),
+) -> None:
+    applicability = ""
+    if summary is not None:
+        use_when_yaml = "\n".join(f'      - "{value}"' for value in use_when)
+        avoid_when_yaml = "\n".join(f'      - "{value}"' for value in avoid_when)
+        applicability = f"""
+  applicability:
+    summary: "{summary}"
+    use_when:
+{use_when_yaml}
+    avoid_when:
+{avoid_when_yaml}
+"""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / f"{playbook_id}.yaml").write_text(
+        f"""
+playbook:
+  id: {playbook_id}{applicability}
+skills:
+  workflow: {{shared: []}}
+  chat: {{shared: []}}
+roles:
+  developer: {{}}
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+steps:
+  develop:
+    skill: cafe-develop
+    role: developer
+    "on": {{await_agent: _done}}
+""".strip(),
+        encoding="utf-8",
+    )
+
+
 def test_playbook_list_includes_builtin_entries(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
 
@@ -61,6 +109,123 @@ steps:
     assert "id: custom" in result.stdout
     assert "conversation_locale: auto" in result.stdout
     assert "source=project" in result.stdout
+
+
+def test_playbook_list_and_show_render_complete_bounded_applicability(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """U6 — operators can compare complete stable applicability fields."""
+    monkeypatch.chdir(tmp_path)
+    _write_catalog_playbook(
+        tmp_path / ".cafe" / "playbooks",
+        "focused",
+        summary="A focused implementation workflow with independent review.",
+    )
+    _write_catalog_playbook(
+        tmp_path / ".cafe" / "playbooks",
+        "later",
+        summary="A later-sorted comparison workflow.",
+    )
+
+    list_result = runner.invoke(app, ["playbook", "list"])
+    show_result = runner.invoke(app, ["playbook", "show", "focused"])
+
+    assert list_result.exit_code == 0
+    assert show_result.exit_code == 0
+    assert list_result.stdout.index("focused") < list_result.stdout.index("later")
+    for result in (list_result, show_result):
+        assert "focused" in result.stdout
+        assert "source=project" in result.stdout
+        assert "A focused implementation workflow with independent review." in result.stdout
+        assert "The current scope needs focused implementation." in result.stdout
+        assert "Independent review is required." in result.stdout
+        assert "The current scope requires a separate planning phase." in result.stdout
+    assert "Applicability" in show_result.stdout
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        ("playbook", "list"),
+        ("playbook", "show", "markup"),
+    ),
+)
+def test_playbook_catalog_renders_markup_like_applicability_as_literal_text(
+    tmp_path: Path,
+    monkeypatch,
+    command: tuple[str, ...],
+) -> None:
+    """U6 — valid contract text is data, never Rich markup."""
+    monkeypatch.chdir(tmp_path)
+    values = (
+        "A [red]literal[/red] summary.",
+        "A [bold]literal[/bold] positive condition.",
+        "[/red]A literal negative condition.",
+    )
+    _write_catalog_playbook(
+        tmp_path / ".cafe" / "playbooks",
+        "markup",
+        summary=values[0],
+        use_when=(values[1],),
+        avoid_when=(values[2],),
+    )
+
+    result = runner.invoke(app, list(command))
+
+    assert result.exit_code == 0
+    for value in values:
+        assert value in result.stdout
+
+
+def test_playbook_catalog_marks_missing_contract_with_migration_action(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """U4/U6 — legacy inspection is explicit and actionable."""
+    monkeypatch.chdir(tmp_path)
+    _write_catalog_playbook(
+        tmp_path / ".cafe" / "playbooks",
+        "legacy",
+        summary=None,
+    )
+
+    list_result = runner.invoke(app, ["playbook", "list"])
+    show_result = runner.invoke(app, ["playbook", "show", "legacy"])
+
+    assert list_result.exit_code == 0
+    assert show_result.exit_code == 0
+    for result in (list_result, show_result):
+        assert "legacy" in result.stdout
+        assert "ineligible" in result.stdout
+        assert "playbook.applicability" in result.stdout
+        assert "cafe playbook validate legacy --strict" in result.stdout
+
+
+def test_playbook_catalog_uses_only_project_first_effective_definition(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """U7/I2 — shadowed applicability never becomes a second candidate."""
+    monkeypatch.chdir(tmp_path)
+    _write_catalog_playbook(
+        tmp_path / "global" / "playbooks",
+        "override",
+        summary="Shadowed Global applicability.",
+    )
+    _write_catalog_playbook(
+        tmp_path / ".cafe" / "playbooks",
+        "override",
+        summary="Effective project applicability.",
+    )
+
+    list_result = runner.invoke(app, ["playbook", "list"])
+    show_result = runner.invoke(app, ["playbook", "show", "override"])
+
+    assert list_result.exit_code == 0
+    assert show_result.exit_code == 0
+    assert list_result.stdout.count("Effective project applicability.") == 1
+    assert "Shadowed Global applicability." not in list_result.stdout
+    assert "Effective project applicability." in show_result.stdout
+    assert "Shadowed Global applicability." not in show_result.stdout
+    assert "source=project" in show_result.stdout
 
 
 def test_playbook_confirmation_gates_are_derived_from_confirm_output(

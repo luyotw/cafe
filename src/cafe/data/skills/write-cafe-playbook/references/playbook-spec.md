@@ -20,6 +20,12 @@ playbook:
   id: example
   name: "Example Workflow"
   conversation_locale: zh-TW
+  applicability:
+    summary: "Plan and execute a bounded domain change with explicit user review."
+    use_when:
+      - "Requirements need a dedicated planning pass before execution."
+    avoid_when:
+      - "The requested change is already fully specified and needs no plan."
 
 roles:
   developer:
@@ -87,6 +93,32 @@ alignment checkpoints, progress/error reports, and completion messages. It does
 not translate commands, paths, playbook or step names, intents, artifact keys,
 structured payload fields, quoted source text, or the language of workflow
 artifacts.
+
+### Applicability contract
+
+`playbook.applicability` is the machine-readable selection intent for one
+playbook. It must contain all three fields shown above:
+
+- `summary`: one whitespace-normalized, non-empty string of at most 160
+  characters;
+- `use_when`: 1–6 whitespace-normalized, non-empty positive conditions, each at
+  most 200 characters;
+- `avoid_when`: 1–6 whitespace-normalized, non-empty negative conditions, each
+  at most 200 characters.
+
+Conditions are compared after whitespace normalization and case folding.
+Duplicates within either list and a condition present in both lists are invalid.
+Describe workflow suitability, not an alternate copy of steps, confirmation
+gates, QA ownership, or publication behavior. The resolved graph remains
+authoritative for those responsibilities and boundaries.
+
+Existing custom playbooks without applicability remain inspectable and usable
+when already explicitly selected in compatibility mode. They receive a missing
+contract warning and are ineligible for automatic recommendation; no metadata
+is inferred from their id, name, source, graph, or skills. To migrate, add only
+the complete contract, inspect it with `cafe playbook show <id>`, and run
+`cafe playbook validate <id> --strict`. Strict validation fails until the
+contract and every other warning are resolved.
 
 ## 3. Step Fields
 
@@ -449,6 +481,10 @@ assert steps["bridge"]["output_artifact"] == "plan"
 - [ ] Filename stem equals `playbook.id`.
 - [ ] `playbook.conversation_locale` is `auto` or a valid BCP 47 language tag
       and matches the intended driver-to-user conversation language.
+- [ ] `playbook.applicability` has a bounded summary plus 1–6 positive and 1–6
+      negative conditions, with no normalized duplicates or contradictions.
+- [ ] Applicability describes selection intent, agrees with the resolved graph,
+      and does not duplicate graph responsibilities or boundaries.
 - [ ] Every skill resolves and passes strict skill validation.
 - [ ] Every role and `chat_role` is declared.
 - [ ] Every step is reachable from `entry_point`.

@@ -2,6 +2,14 @@ playbook:
   id: research
   name: "Research Workflow（問題 → 搜尋整理 → 綜合 → 報告）"
   conversation_locale: en-US
+  applicability:
+    summary: "Evidence-led investigation for an open question that needs a sourced conclusion."
+    use_when:
+      - "The primary outcome is a defensible answer assembled from evaluated evidence."
+      - "The question and evidence quality need explicit research ownership."
+    avoid_when:
+      - "The confirmed outcome is direct software implementation or incident mitigation."
+      - "The source material is settled and only editorial production remains."
 
 behavior:
   completion: status_code

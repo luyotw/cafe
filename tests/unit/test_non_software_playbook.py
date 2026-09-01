@@ -46,6 +46,8 @@ def test_editorial_example_playbook_loads_and_simulates(monkeypatch) -> None:
     assert analysis.dead_end_steps == ()
     assert analysis.missing_intent_handlers == ()
     assert analysis.entry_point == "brief"
+    assert loaded.model.playbook.applicability is not None
+    assert loaded.automatic_selection_eligible is True
 
 
 def _repo_root() -> Path:

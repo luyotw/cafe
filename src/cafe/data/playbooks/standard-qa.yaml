@@ -2,6 +2,14 @@ playbook:
   id: standard-qa
   name: "Standard Development + QA"
   conversation_locale: en-US
+  applicability:
+    summary: "Planned software delivery with independent code review and acceptance testing."
+    use_when:
+      - "Requirements and implementation sequencing need dedicated ownership."
+      - "Acceptance must be verified independently from implementation and code review."
+    avoid_when:
+      - "Repository policy requires test-driven implementation throughout development."
+      - "Implementation verification and code review fully cover the acceptance boundary."
 
 behavior:
   completion: status_code

@@ -2,6 +2,14 @@ playbook:
   id: tdd-qa
   name: "Test-Driven Development + QA"
   conversation_locale: en-US
+  applicability:
+    summary: "Test-driven software delivery with independent review and acceptance testing."
+    use_when:
+      - "Repository policy or confirmed risk requires tests to drive implementation."
+      - "Acceptance must be verified independently from implementation and code review."
+    avoid_when:
+      - "The work does not require a test-first development method."
+      - "Implementation verification and code review fully cover the acceptance boundary."
 
 behavior: {completion: status_code}
 skills:
