@@ -602,7 +602,31 @@ class BlackboardStore:
                 raise
         return state
 
-    def save(self, state: BlackboardState) -> None:
+    def save(
+        self,
+        state: BlackboardState,
+        *,
+        capability_receipts_authoritative: bool = False,
+    ) -> None:
+        """Persist generic workflow fields without overwriting driver-owned state."""
+        with self._thread_lock_for(self.file_path):
+            self.issue_dir.mkdir(parents=True, exist_ok=True)
+            with self.state_lock_path.open("a+", encoding="utf-8") as lock_file:
+                with _process_file_lock(lock_file):
+                    if self.file_path.exists():
+                        raw = json.loads(self.file_path.read_text(encoding="utf-8"))
+                        persisted = BlackboardState.from_dict(
+                            raw, initial_step=state.current_step
+                        )
+                        state.driver_state = dict(persisted.driver_state)
+                        if not capability_receipts_authoritative:
+                            state.capability_receipts = list(
+                                persisted.capability_receipts
+                            )
+                    self._save_unlocked(state)
+
+    def _save_unlocked(self, state: BlackboardState) -> None:
+        """Persist a state whose caller already owns the state-file lock."""
         self.issue_dir.mkdir(parents=True, exist_ok=True)
         state.updated_at = _now_iso()
         atomic_write_bytes(
@@ -806,7 +830,7 @@ class BlackboardStore:
     def append_capability_receipt(self, state: BlackboardState, receipt: Dict[str, Any]) -> None:
         """Append one structured host capability receipt and persist the blackboard."""
         state.capability_receipts.append(dict(receipt))
-        self.save(state)
+        self.save(state, capability_receipts_authoritative=True)
 
     def upsert_capability_receipt(self, state: BlackboardState, receipt: Dict[str, Any]) -> None:
         """Persist one evolving attempt receipt without duplicating its audit identity."""
@@ -816,10 +840,10 @@ class BlackboardStore:
         for index, existing in enumerate(state.capability_receipts):
             if str(existing.get("notification_attempt_id") or "") == attempt_id:
                 state.capability_receipts[index] = dict(receipt)
-                self.save(state)
+                self.save(state, capability_receipts_authoritative=True)
                 return
         state.capability_receipts.append(dict(receipt))
-        self.save(state)
+        self.save(state, capability_receipts_authoritative=True)
 
     @contextmanager
     def capability_receipt_transaction(
@@ -832,7 +856,9 @@ class BlackboardStore:
                 with _process_file_lock(lock_file):
                     if self.file_path.exists():
                         raw = json.loads(self.file_path.read_text(encoding="utf-8"))
-                        persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
+                        persisted = BlackboardState.from_dict(
+                            raw, initial_step=state.current_step
+                        )
                         state.__dict__.clear()
                         state.__dict__.update(persisted.__dict__)
                     yield state
@@ -852,7 +878,7 @@ class BlackboardStore:
                         state.__dict__.clear()
                         state.__dict__.update(persisted.__dict__)
                     yield state
-                    self.save(state)
+                    self._save_unlocked(state)
 
     @classmethod
     def _thread_lock_for(cls, file_path: Path) -> threading.RLock:

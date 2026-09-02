@@ -125,7 +125,6 @@ def _initial_driver_state() -> dict[str, Any]:
         "advancement_lease": None,
         "session": None,
         "worker": None,
-        "notification_receipts": {},
     }
 
 
@@ -300,6 +299,59 @@ class DriverCoordinator:
                 return replacement
             return None
 
+    def reconcile_missing_boundary(
+        self,
+        requested_action: str,
+        *,
+        policy: DriverPolicyContract,
+    ) -> DriverPacket | None:
+        """Materialize a delegated packet omitted after a durable phase transition."""
+        driver = self._delegated_driver(policy)
+        with self.store.driver_transaction(self.state) as state:
+            data = _state_data(state)
+            transition = next(
+                (
+                    event
+                    for event in reversed(state.events)
+                    if event.event_type == "transition"
+                    and str(event.data.get("to", "")) == requested_action
+                    and str(event.data.get("from", "")).strip()
+                ),
+                None,
+            )
+            if transition is None:
+                return None
+            transition_at = datetime.fromisoformat(transition.timestamp)
+            superseded = {int(value) for value in data["superseded_sequences"]}
+            for raw_sequence, raw_packet in data["packets"].items():
+                if int(raw_sequence) in superseded:
+                    continue
+                packet = DriverPacket.model_validate(raw_packet)
+                if (
+                    packet.requested_action == requested_action
+                    and datetime.fromisoformat(packet.created_at) >= transition_at
+                ):
+                    return None
+            completed_phase = str(transition.data["from"])
+            sequence = int(data["next_sequence"])
+            packet = DriverPacket(
+                workflow_id=state.workflow_id,
+                sequence=sequence,
+                completed_phase=completed_phase,
+                requested_action=requested_action,
+                boundary_id=(
+                    f"transition:{transition.timestamp}:"
+                    f"{completed_phase}:{requested_action}"
+                ),
+                contract_version=policy.contract_version,
+                driver_cli=driver.cli,
+                driver_model=driver.model,
+            )
+            data["packets"][str(sequence)] = packet.model_dump(mode="json")
+            data["next_sequence"] = sequence + 1
+            data["lifecycle"] = "awaiting_decision"
+            return packet
+
     @staticmethod
     def _delegated_driver(policy: DriverPolicyContract) -> DelegatedDriverPolicy:
         if not isinstance(policy.driver, DelegatedDriverPolicy):
@@ -325,6 +377,9 @@ class DriverCoordinator:
         with self.store.driver_transaction(self.state) as state:
             data = _state_data(state)
             data["lifecycle"] = lifecycle
+            for key in list(data):
+                if key == "pause_reason" or key.endswith("_reason"):
+                    data.pop(key, None)
             if reason:
                 reason_key = "pause_reason" if lifecycle == "paused" else f"{lifecycle}_reason"
                 data[reason_key] = reason

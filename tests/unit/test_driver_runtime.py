@@ -153,6 +153,35 @@ def test_only_one_runtime_can_claim_advancement_lease(tmp_path: Path) -> None:
     assert results.count(True) == 1
 
 
+@pytest.mark.parametrize(
+    "lifecycle",
+    ["paused", "error", "permission", "human_task", "stopped", "complete"],
+)
+def test_lifecycle_transition_keeps_only_the_active_reason(tmp_path: Path, lifecycle: str) -> None:
+    coordinator = _coordinator(tmp_path)
+    coordinator.record_lifecycle("paused", reason="stale pause")
+
+    coordinator.record_lifecycle(lifecycle, reason=f"active {lifecycle}")
+
+    reloaded = _coordinator(tmp_path).state.driver_state
+    assert reloaded["lifecycle"] == lifecycle
+    expected_key = "pause_reason" if lifecycle == "paused" else f"{lifecycle}_reason"
+    assert reloaded[expected_key] == f"active {lifecycle}"
+    reason_keys = {key for key in reloaded if key == "pause_reason" or key.endswith("_reason")}
+    assert reason_keys == {expected_key}
+
+
+def test_recovered_lifecycle_clears_stale_reason(tmp_path: Path) -> None:
+    coordinator = _coordinator(tmp_path)
+    coordinator.record_lifecycle("error", reason="old failure")
+
+    coordinator.record_lifecycle("ready")
+
+    reloaded = _coordinator(tmp_path).state.driver_state
+    assert reloaded["lifecycle"] == "ready"
+    assert not any(key == "pause_reason" or key.endswith("_reason") for key in reloaded)
+
+
 def test_driver_decision_rejects_unknown_actions() -> None:
     with pytest.raises(ValidationError):
         DriverDecision(

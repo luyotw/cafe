@@ -85,12 +85,13 @@ pointer.
 ## Progress inspection
 
 For an outliving unattended or delegated run, report notification availability
-before leaving the initiating conversation. If delivery is unavailable, say
-explicitly that the conversation will not be proactively woken or updated and
-direct the user to `cafe status` and `cafe show` for durable progress. If
-delivery is available, promise only substantive lifecycle events such as a
-HumanTask, permission need, error, or completion. Phase boundaries, polling,
-empty yields, and transport activity never notify.
+before leaving the initiating conversation. If HumanTask delivery is
+unavailable, say explicitly that the conversation will not be proactively
+woken or updated and direct the user to `cafe status` and `cafe show` for
+durable progress. If delivery is available, explain that only newly
+materialized HumanTasks may notify. Permission needs, errors, and completion
+remain durable inspection outcomes; phase boundaries, polling, empty yields,
+and transport activity never notify.
 
 - `cafe status`: phase timeline and current state.
 - `cafe show <step> output`: latest phase result.

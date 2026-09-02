@@ -62,30 +62,6 @@ class HumanTaskSlackMessage:
         return {"text": text}
 
 
-@dataclass(frozen=True)
-class WorkflowEventSlackMessage:
-    """Non-secret fields for one substantive workflow lifecycle event."""
-
-    repository: str
-    workflow_id: str
-    event_id: str
-    event_type: str
-    step: str
-
-    def to_slack_payload(self) -> dict[str, str]:
-        text = "\n".join(
-            (
-                "CAFE workflow lifecycle event",
-                f"Repository: {self.repository}",
-                f"Workflow: {self.workflow_id}",
-                f"Step: {self.step}",
-                f"Event: {self.event_type} ({self.event_id})",
-                "Inspect: cafe status",
-            )
-        )
-        return {"text": text}
-
-
 def build_human_task_message(
     *, repository: str, workflow_id: str, task_id: str, step: str, task_type: str
 ) -> HumanTaskSlackMessage:
@@ -103,19 +79,6 @@ def build_human_task_message(
         task_type=task_type,
         inspect_command=f"cafe task inspect {task_id}",
         complete_command=f"cafe task complete {task_id}",
-    )
-
-
-def build_workflow_event_message(
-    *, repository: str, workflow_id: str, event_id: str, event_type: str, step: str
-) -> WorkflowEventSlackMessage:
-    """Build a fixed lifecycle event message with later-inspection guidance."""
-    return WorkflowEventSlackMessage(
-        repository=sanitize_human_task_metadata(repository),
-        workflow_id=sanitize_human_task_metadata(workflow_id),
-        event_id=sanitize_human_task_metadata(event_id),
-        event_type=sanitize_human_task_metadata(event_type),
-        step=sanitize_human_task_metadata(step),
     )
 
 

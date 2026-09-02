@@ -15,7 +15,6 @@ from cafe.core.driver_runtime import (
     resolve_driver_boundary,
 )
 from cafe.core.workflow_models import PlaybookRunResult
-from cafe.core.workflow_notifications import WorkflowNotificationEvent, WorkflowNotifier
 
 DelegatedDecisionProvider = Callable[[DriverPacket], DriverDecision]
 DriverPolicyAuthority = Callable[[], AbstractContextManager[DriverPolicyContract]]
@@ -30,13 +29,11 @@ class Version2WorkflowRuntime:
         policy: DriverPolicyContract,
         *,
         delegated_decision_provider: DelegatedDecisionProvider | None = None,
-        notifier: WorkflowNotifier | None = None,
         policy_authority: DriverPolicyAuthority | None = None,
     ) -> None:
         self.phase_runtime = phase_runtime
         self.policy = policy
         self.delegated_decision_provider = delegated_decision_provider
-        self.notifier = notifier
         self.policy_authority = policy_authority
         self.coordinator = DriverCoordinator(
             phase_runtime.blackboard_store,
@@ -58,24 +55,28 @@ class Version2WorkflowRuntime:
 
         for _ in range(max_transitions):
             with ExitStack() as authority_stack:
+                if self.policy_authority is not None:
+                    try:
+                        current_policy = authority_stack.enter_context(self.policy_authority())
+                    except (OSError, ValueError):
+                        self.coordinator.record_lifecycle(
+                            "paused", reason="driver_policy_invalidated"
+                        )
+                        return self._policy_pause_result()
+                    if current_policy != self.policy:
+                        self.coordinator.record_lifecycle("paused", reason="driver_policy_changed")
+                        return self._policy_pause_result()
+
                 if self.policy.driver.mode == "delegated":
-                    if self.policy_authority is not None:
-                        try:
-                            current_policy = authority_stack.enter_context(self.policy_authority())
-                        except (OSError, ValueError):
-                            self.coordinator.record_lifecycle(
-                                "paused", reason="driver_policy_invalidated"
-                            )
-                            return self._policy_pause_result()
-                        if current_policy != self.policy:
-                            self.coordinator.record_lifecycle(
-                                "paused", reason="driver_policy_changed"
-                            )
-                            return self._policy_pause_result()
                     pending = self.coordinator.pending_boundary(
                         str(self.phase_runtime.blackboard.current_step),
                         policy=self.policy,
                     )
+                    if pending is None:
+                        pending = self.coordinator.reconcile_missing_boundary(
+                            str(self.phase_runtime.blackboard.current_step),
+                            policy=self.policy,
+                        )
                     if pending is not None and not self._authorize_delegated_boundary(pending):
                         return self._boundary_result(pending)
 
@@ -84,43 +85,41 @@ class Version2WorkflowRuntime:
                     start_step=requested_start,
                     single_step=True,
                 )
-            requested_start = None
-            last_result = result
-            lifecycle = self._lifecycle_stop(result, executed_step=executed_step)
-            if lifecycle is not None:
-                reason = result.final_status_code
-                self.coordinator.record_lifecycle(lifecycle, reason=reason)
-                if lifecycle != "human_task":
-                    self._notify_lifecycle(lifecycle, result)
-                return result
+                requested_start = None
+                last_result = result
+                lifecycle = self._lifecycle_stop(result, executed_step=executed_step)
+                if lifecycle is not None:
+                    self.coordinator.record_lifecycle(lifecycle, reason=result.final_status_code)
+                    return result
 
-            requested_action = str(self.phase_runtime.blackboard.current_step)
-            resolution = resolve_driver_boundary(
-                self.policy,
-                delegated_available=self.delegated_decision_provider is not None,
-            )
-            if resolution.action_source == "attached":
-                self.coordinator.record_lifecycle("awaiting_initiator", reason="attached_boundary")
-                return result
-            if resolution.action_source == "unattended":
+                requested_action = str(self.phase_runtime.blackboard.current_step)
+                resolution = resolve_driver_boundary(
+                    self.policy,
+                    delegated_available=self.delegated_decision_provider is not None,
+                )
+                if resolution.action_source == "attached":
+                    self.coordinator.record_lifecycle(
+                        "awaiting_initiator", reason="attached_boundary"
+                    )
+                    return result
+                if resolution.action_source == "unattended":
+                    if single_step:
+                        return result
+                    continue
+
+                packet = self.coordinator.open_boundary(
+                    completed_phase=result.final_step,
+                    requested_action=requested_action,
+                    boundary_id=self._boundary_id(result, requested_action),
+                    policy=self.policy,
+                )
+                if not self._authorize_delegated_boundary(
+                    packet,
+                    consume_authorization=False,
+                ):
+                    return result
                 if single_step:
                     return result
-                continue
-
-            packet = self.coordinator.open_boundary(
-                completed_phase=result.final_step,
-                requested_action=requested_action,
-                boundary_id=self._boundary_id(result, requested_action),
-                policy=self.policy,
-            )
-            self._notify_boundary(packet)
-            if not self._authorize_delegated_boundary(
-                packet,
-                consume_authorization=False,
-            ):
-                return result
-            if single_step:
-                return result
 
         if last_result is None:  # pragma: no cover - guarded by max_transitions.
             raise RuntimeError("version 2 workflow produced no result")
@@ -169,7 +168,7 @@ class Version2WorkflowRuntime:
     def _policy_pause_result(self) -> PlaybookRunResult:
         return PlaybookRunResult(
             final_step=str(self.phase_runtime.blackboard.current_step),
-            final_status_code="DELEGATED_DRIVER_PAUSED",
+            final_status_code="DRIVER_POLICY_PAUSED",
             completed=False,
         )
 
@@ -211,35 +210,3 @@ class Version2WorkflowRuntime:
         if current_step == executed_step:
             return "error"
         return None
-
-    def _notify_boundary(self, packet: DriverPacket) -> None:
-        if self.notifier is None:
-            return
-        self.notifier.notify(
-            WorkflowNotificationEvent(
-                workflow_id=packet.workflow_id,
-                event_id=f"boundary-{packet.sequence}",
-                event_type="phase_boundary",
-                step=packet.completed_phase,
-            )
-        )
-
-    def _notify_lifecycle(self, lifecycle: str, result: PlaybookRunResult) -> None:
-        if self.notifier is None:
-            return
-        event_type = {
-            "complete": "completion",
-            "human_task": "human_task",
-            "permission": "permission",
-            "error": "error",
-        }.get(lifecycle)
-        if event_type is None:
-            return
-        self.notifier.notify(
-            WorkflowNotificationEvent(
-                workflow_id=self.phase_runtime.blackboard.workflow_id,
-                event_id=f"{event_type}-{result.final_step}-{result.final_status_code}",
-                event_type=event_type,
-                step=result.final_step,
-            )
-        )

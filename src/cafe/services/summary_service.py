@@ -235,9 +235,28 @@ class SummaryService:
             },
             "decisions": decisions,
         }
-        for key in ("pause_reason", "worker", "notification_guidance", "model_mismatch"):
+        lifecycle = status["lifecycle"]
+        if lifecycle in {
+            "paused",
+            "error",
+            "permission",
+            "human_task",
+            "stopped",
+            "complete",
+        }:
+            reason_key = "pause_reason" if lifecycle == "paused" else f"{lifecycle}_reason"
+            reason = driver.get(reason_key)
+            if isinstance(reason, str) and reason:
+                status["reason"] = reason
+        for key in ("worker", "notification_guidance"):
             if key in driver:
                 status[key] = driver[key]
+        if (
+            lifecycle == "paused"
+            and status.get("reason") == "delegated_model_mismatch"
+            and "model_mismatch" in driver
+        ):
+            status["model_mismatch"] = driver["model_mismatch"]
         return status
 
     def _load_workflow_state(

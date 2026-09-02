@@ -23,7 +23,7 @@ from cafe.core.types import CriticalPhaseError
 from cafe.core.v2_workflow_runtime import Version2WorkflowRuntime
 from cafe.core.workflow_hosting import WorkflowHost
 from cafe.core.workflow_models import StepExecutionResult
-from cafe.core.workflow_notifications import WorkflowNotifier
+from cafe.core.workflow_notifications import record_notification_guidance
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.phases.generic_phase import GenericPhase
 from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
@@ -688,6 +688,7 @@ def workflow(
             entry_point,
             playbook_id=str(playbook_data["playbook"]["id"]),
         )
+        record_notification_guidance(issue_dir)
         initial_step_user_inputs, user_input = _resolve_initial_step_user_inputs(
             playbook_data,
             user_input,
@@ -1044,7 +1045,6 @@ def workflow(
                     runner,
                     driver_policy,
                     delegated_decision_provider=delegated_decision_provider,
-                    notifier=WorkflowNotifier(issue_dir),
                     policy_authority=IssuePolicyStore(
                         issue_dir / "issue.yaml"
                     ).locked_policy,

@@ -1414,6 +1414,12 @@ def test_use_cafe_workflow_requires_v2_driver_policy_and_model_authority() -> No
     assert "In attached mode" in normalized_running
     assert "Start the timer when the process starts or resumes" in normalized_running
     assert "Stop polling when the command exits" in normalized_running
+    assert "only newly materialized HumanTasks may notify" in normalized_running
+    assert (
+        "Permission needs, errors, and completion remain durable inspection outcomes"
+        in normalized_running
+    )
+    assert "promise only substantive lifecycle events" not in normalized_running
     assert "exactly one driver form" in normalized_kickoff
     assert "Do not infer, translate, prefill, or retain values" in normalized_kickoff
     assert "`model_adjustment_authority`" in kickoff
