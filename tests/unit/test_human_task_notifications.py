@@ -257,6 +257,29 @@ def test_machine_notification_config_rejects_oversized_input(
     assert exc.value.code == "human_task_notification_config_invalid"
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO support")
+def test_machine_notification_config_rejects_fifo_without_blocking(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Plan Unit 10: a special config file cannot block notification callers."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    home = tmp_path / "home"
+    config = home / ".cafe" / "config.yaml"
+    config.parent.mkdir(parents=True)
+    os.mkfifo(config, mode=0o600)
+    _set_home(monkeypatch, home)
+
+    settings = notification_mod.load_human_task_notification_settings()
+
+    assert settings.enabled is False
+    assert settings.outcome == "skipped"
+    assert settings.code == "human_task_notification_config_invalid"
+    with pytest.raises(SlackNotificationError) as exc:
+        load_slack_webhook_url(repository_root=tmp_path)
+    assert exc.value.code == "human_task_notification_config_invalid"
+
+
 def test_machine_notification_config_rejects_too_many_project_routes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

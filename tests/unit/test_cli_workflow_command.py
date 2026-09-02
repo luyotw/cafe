@@ -1,6 +1,7 @@
 """Tests for workflow CLI command."""
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -742,6 +743,51 @@ def test_workflow_command_guidance_uses_fallback_with_malformed_sibling_route(
     assert result.exit_code == 0, (result.stdout, result.exception)
     status = SummaryService(issues_root=issues_root).load_driver_status(issue_name)
     assert status["notification_guidance"]["proactive_events"] == ["human_task"]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO support")
+def test_workflow_command_records_guidance_when_machine_config_is_fifo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plan Integration 6: special config input fails closed before kickoff."""
+    monkeypatch.chdir(tmp_path)
+    issue_name = "issue-guidance"
+    issues_root = tmp_path / ".cafe" / "issues"
+    issue_dir = issues_root / issue_name
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "contract_version: 2\ndriver:\n  mode: unattended\n",
+        encoding="utf-8",
+    )
+
+    home = tmp_path / "home"
+    config = home / ".cafe" / "config.yaml"
+    config.parent.mkdir(parents=True)
+    os.mkfifo(config, mode=0o600)
+    monkeypatch.setattr("cafe.core.human_task_notifications._trusted_user_home", lambda: home)
+
+    class FakeExecutor:
+        def execute_step(self, step_name, step_def, blackboard_state, **_kwargs):
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = issue_name
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--single-step"],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    status = SummaryService(issues_root=issues_root).load_driver_status(issue_name)
+    guidance = status["notification_guidance"]
+    assert guidance["proactive_events"] == []
+    assert guidance["inspection_available"] is True
 
 
 def test_workflow_background_option_uses_fixed_host_launcher(

@@ -46,10 +46,23 @@ def _machine_config_path() -> Path:
 def _load_machine_config() -> tuple[Path, dict[object, object]]:
     """Load the machine-only configuration or raise a stable safe error."""
     config_path = _machine_config_path()
-    if not config_path.exists():
-        return config_path, {}
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
-        with config_path.open("rb") as config_stream:
+        descriptor = os.open(config_path, flags)
+    except FileNotFoundError:
+        return config_path, {}
+    except OSError as exc:
+        raise SlackNotificationError(
+            "validation_error", "human_task_notification_config_invalid"
+        ) from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise SlackNotificationError(
+                "validation_error", "human_task_notification_config_invalid"
+            )
+        with os.fdopen(descriptor, "rb") as config_stream:
+            descriptor = -1
             config_bytes = config_stream.read(MAX_MACHINE_CONFIG_BYTES + 1)
         if len(config_bytes) > MAX_MACHINE_CONFIG_BYTES:
             raise SlackNotificationError(
@@ -62,6 +75,9 @@ def _load_machine_config() -> tuple[Path, dict[object, object]]:
         raise SlackNotificationError(
             "validation_error", "human_task_notification_config_invalid"
         ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     if raw_config is None:
         return config_path, {}
     if not isinstance(raw_config, dict):
