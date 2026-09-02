@@ -271,13 +271,15 @@ class DriverCoordinator:
             superseded = {int(value) for value in data["superseded_sequences"]}
             for raw_sequence in sorted(data["packets"], key=int):
                 sequence = int(raw_sequence)
-                if sequence in consumed or sequence in superseded:
+                if sequence in superseded:
                     continue
                 packet = DriverPacket.model_validate(data["packets"][raw_sequence])
                 if packet.requested_action != requested_action:
                     continue
                 if self._packet_matches_policy(packet, policy):
-                    return packet
+                    if sequence not in consumed:
+                        return packet
+                    continue
                 data["superseded_sequences"].append(sequence)
                 replacement_sequence = int(data["next_sequence"])
                 replacement = DriverPacket(

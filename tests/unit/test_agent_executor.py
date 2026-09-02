@@ -1,10 +1,11 @@
 """Tests for AgentExecutor."""
 
 from pathlib import Path
-import pytest
 from unittest.mock import MagicMock, patch
 
-from cafe.agents.executor import AgentExecutor, AgentExecutionError
+import pytest
+
+from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
 from cafe.core.types import AgentConfig, AgentCLI, AgentResponse, TokenUsage
 
 
@@ -816,6 +817,68 @@ class TestStreamingExecution:
         assert "Line 1" in captured.out
         assert "Line 2" in captured.out
         assert "Line 3" in captured.out
+
+    def test_execution_control_stops_before_unbounded_output_is_retained(self) -> None:
+        executor = AgentExecutor(AgentConfig(name="Driver", cli=AgentCLI.COPILOT))
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = ["12345\n"] * 20_000
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = -15
+
+        with patch("subprocess.Popen", return_value=mock_process), patch(
+            "sys.platform", "win32"
+        ):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor._execute_with_streaming(
+                    cmd=["copilot"],
+                    cli_name="Copilot",
+                    execution_control=AgentExecutionControl(
+                        max_duration_seconds=60,
+                        max_output_bytes=1024,
+                        max_output_lines=2,
+                    ),
+                )
+
+        assert exc_info.value.error_type == "execution_limit"
+        assert mock_process.stdout.readline.call_count == 3
+        mock_process.terminate.assert_called_once()
+
+    def test_execution_control_absolute_deadline_terminates_continuous_process(self) -> None:
+        executor = AgentExecutor(AgentConfig(name="Driver", cli=AgentCLI.COPILOT))
+        mock_process = MagicMock()
+        mock_process.stdout.readline.return_value = "still running\n"
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = -15
+
+        class ImmediateTimer:
+            def __init__(self, _seconds, callback) -> None:
+                self.callback = callback
+                self.daemon = False
+
+            def start(self) -> None:
+                self.callback()
+
+            def cancel(self) -> None:
+                return None
+
+        with (
+            patch("subprocess.Popen", return_value=mock_process),
+            patch("cafe.agents.executor.Timer", ImmediateTimer),
+            patch("sys.platform", "win32"),
+        ):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor._execute_with_streaming(
+                    cmd=["copilot"],
+                    cli_name="Copilot",
+                    execution_control=AgentExecutionControl(
+                        max_duration_seconds=1,
+                        max_output_bytes=1024,
+                        max_output_lines=20,
+                    ),
+                )
+
+        assert exc_info.value.error_type == "execution_limit"
+        mock_process.terminate.assert_called()
 
     def test_execute_with_streaming_can_mute_agent_output_without_losing_data(
         self, tmp_path, capsys

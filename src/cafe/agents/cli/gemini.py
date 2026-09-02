@@ -29,9 +29,6 @@ class GeminiCLI(AbstractCLI):
         Returns:
             Complete command line argument list
         """
-        # Ensure .geminiignore file exists
-        self.ensure_geminiignore()
-
         cmd = ["gemini", "-p", prompt]
 
         # If has session_id, add --resume parameter

@@ -352,3 +352,78 @@ def test_policy_change_reauthorizes_pending_boundary_with_current_exact_model(
     state = resumed.blackboard_store.load_or_create("spec")
     assert old_packet.sequence in state.driver_state["superseded_sequences"]
     assert state.driver_state["consumed_sequences"] != [old_packet.sequence]
+
+
+def test_policy_change_after_decision_pauses_before_consumption_and_phase_use(
+    tmp_path: Path,
+) -> None:
+    old_policy = _policy("delegated")
+    new_policy = DriverPolicyContract.model_validate(
+        {
+            "contract_version": 2,
+            "driver": {"mode": "delegated", "cli": "codex", "model": "new-exact-model"},
+        }
+    )
+    authority = [old_policy]
+    runtime = FakePhaseRuntime(tmp_path)
+
+    def decide(packet):
+        authority[0] = new_policy
+        return _decision(packet)
+
+    result = Version2WorkflowRuntime(
+        runtime,
+        old_policy,
+        delegated_decision_provider=decide,
+        policy_loader=lambda: authority[0],
+    ).run()
+
+    assert result.completed is False
+    assert runtime.executed == ["spec"]
+    state = runtime.blackboard_store.load_or_create("spec")
+    assert state.driver_state["consumed_sequences"] == []
+    assert state.driver_state["lifecycle"] == "paused"
+    assert state.driver_state["pause_reason"] == "driver_policy_changed"
+
+
+def test_policy_change_after_consumption_reauthorizes_before_recovered_phase(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "consumed-policy-change"
+    staged = FakePhaseRuntime(issue_dir)
+    staged.blackboard_store.set_current_step(staged.blackboard, "plan")
+    coordinator = DriverCoordinator(staged.blackboard_store, staged.blackboard)
+    old_policy = _policy("delegated")
+    old_packet = coordinator.open_boundary(
+        completed_phase="spec",
+        requested_action="plan",
+        boundary_id="durable-spec-plan",
+        policy=old_policy,
+    )
+    coordinator.record_decision(_decision(old_packet))
+    assert coordinator.consume_authorization(old_packet.sequence) is not None
+    new_policy = DriverPolicyContract.model_validate(
+        {
+            "contract_version": 2,
+            "driver": {"mode": "delegated", "cli": "codex", "model": "new-exact-model"},
+        }
+    )
+    resumed = FakePhaseRuntime(issue_dir)
+    provider_packets = []
+
+    def decide(packet):
+        provider_packets.append(packet)
+        return _decision(packet)
+
+    result = Version2WorkflowRuntime(
+        resumed,
+        new_policy,
+        delegated_decision_provider=decide,
+    ).run()
+
+    assert result.completed is True
+    assert resumed.executed == ["plan"]
+    assert [packet.driver_model for packet in provider_packets] == ["new-exact-model"]
+    state = resumed.blackboard_store.load_or_create("spec")
+    assert old_packet.sequence in state.driver_state["superseded_sequences"]
+    assert len(state.driver_state["consumed_sequences"]) == 2

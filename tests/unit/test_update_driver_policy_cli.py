@@ -142,3 +142,32 @@ def test_update_command_rejects_issue_name_that_escapes_issue_root(
 
     assert result.exit_code == 1
     assert victim.read_bytes() == original
+
+
+def test_update_command_rejects_traversal_from_inventory_issue_name(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, _, _ = _layout(tmp_path)
+    inventory = yaml.safe_load(root.read_text(encoding="utf-8"))
+    inventory["issue_name"] = "../../victim"
+    root.write_text(yaml.safe_dump(inventory), encoding="utf-8")
+    victim = Path(inventory["worktree_path"]) / "victim" / "issue.yaml"
+    victim.parent.mkdir(parents=True)
+    victim.write_text("owner: outside\n", encoding="utf-8")
+    original = victim.read_bytes()
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "update-driver-policy",
+            "issue432",
+            "--contract-version",
+            "2",
+            "--driver-mode",
+            "unattended",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert victim.read_bytes() == original

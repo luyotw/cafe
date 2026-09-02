@@ -14,7 +14,7 @@ from cafe.agents.cli.codex import CodexCLI
 from cafe.agents.cli.copilot import CopilotCLI
 from cafe.agents.cli.cursor import CursorCLI
 from cafe.agents.cli.gemini import GeminiCLI
-from cafe.agents.executor import AgentExecutionError, AgentExecutor
+from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
 from cafe.core.blackboard import BlackboardStore
 from cafe.core.driver_policy import DriverPolicyContract
 from cafe.core.driver_runtime import (
@@ -84,11 +84,13 @@ def test_each_cli_starts_sessionless_then_resumes_only_blackboard_pair(
     _, _, packet, sessions, transport = _runtime(tmp_path / cli, cli)
     attempted_sessions: list[str | None] = []
     attempted_models: list[str | None] = []
+    attempted_controls: list[AgentExecutionControl] = []
     cli_enum = AgentCLI(cli)
 
-    def execute(executor, *_args, **_kwargs):
+    def execute(executor, *_args, **kwargs):
         attempted_sessions.append(executor.config.session_id)
         attempted_models.append(executor.config.model)
+        attempted_controls.append(kwargs["execution_control"])
         return AgentResponse(
             response=json.dumps(_decision_payload(packet)),
             token_usage=TokenUsage(),
@@ -115,6 +117,9 @@ def test_each_cli_starts_sessionless_then_resumes_only_blackboard_pair(
 
     assert attempted_sessions[-1] == f"driver-{cli}-session"
     assert attempted_models[-1] == "exact-driver-model"
+    assert len(attempted_controls) == 2
+    assert attempted_controls[0] == attempted_controls[1]
+    assert attempted_controls[0].working_directory is not None
 
 
 @pytest.mark.parametrize(
@@ -154,17 +159,70 @@ def test_each_adapter_receives_exact_model_on_acquisition_and_resume(
     ],
 )
 def test_decision_only_command_does_not_auto_approve_tools(
-    cli: AgentCLI, forbidden_flag: str
+    tmp_path: Path, cli: AgentCLI, forbidden_flag: str
 ) -> None:
+    workspace = tmp_path / cli.value
     command = AgentExecutor(
         AgentConfig(name=DRIVER_AGENT_NAME, cli=cli, model="exact-driver-model")
     ).preview_cli_command_args(
         "driver packet",
         allowed_tools=[],
         allowed_directories=[],
+        execution_control=AgentExecutionControl(working_directory=workspace),
     )
 
     assert forbidden_flag not in command
+
+
+@pytest.mark.parametrize("cli", [AgentCLI.CLAUDE, AgentCLI.CODEX, AgentCLI.GEMINI])
+@pytest.mark.parametrize("session_id", [None, "blackboard-session"])
+def test_decision_only_command_enforces_empty_tool_and_workspace_scope(
+    tmp_path: Path, cli: AgentCLI, session_id: str | None
+) -> None:
+    workspace = tmp_path / cli.value
+    workspace.mkdir()
+    control = AgentExecutionControl(
+        working_directory=workspace,
+        max_duration_seconds=120,
+        max_output_bytes=256 * 1024,
+        max_output_lines=2048,
+    )
+
+    command = AgentExecutor(
+        AgentConfig(
+            name=DRIVER_AGENT_NAME,
+            cli=cli,
+            model="exact-driver-model",
+            session_id=session_id,
+        )
+    ).preview_cli_command_args(
+        "driver packet",
+        allowed_tools=[],
+        allowed_directories=[],
+        execution_control=control,
+    )
+
+    if cli == AgentCLI.CLAUDE:
+        assert command[command.index("--tools") + 1] == ""
+        assert "--strict-mcp-config" in command
+    elif cli == AgentCLI.CODEX:
+        assert command[command.index("-C") + 1] == str(workspace.resolve())
+        assert command[command.index("--sandbox") + 1] == "read-only"
+        assert "--ignore-user-config" in command
+        assert "--ignore-rules" in command
+        disabled = [
+            command[index + 1]
+            for index, value in enumerate(command[:-1])
+            if value == "--disable"
+        ]
+        assert "shell_tool" in disabled
+        assert "unified_exec" in disabled
+    else:
+        policy_path = Path(command[command.index("--policy") + 1])
+        assert policy_path.parent == workspace.resolve()
+        policy = policy_path.read_text(encoding="utf-8")
+        assert 'toolName = "*"' in policy
+        assert 'decision = "deny"' in policy
 
 
 def test_transport_forwards_explicit_empty_capability_scope(tmp_path: Path) -> None:
@@ -197,6 +255,13 @@ def test_transport_forwards_explicit_empty_capability_scope(tmp_path: Path) -> N
     assert isinstance(decision, DriverDecision)
     assert captured["allowed_tools"] == []
     assert captured["allowed_directories"] == []
+    control = captured["execution_control"]
+    assert isinstance(control, AgentExecutionControl)
+    assert control.working_directory is not None
+    assert control.working_directory.is_dir()
+    assert control.max_duration_seconds == 120
+    assert control.max_output_bytes == 256 * 1024
+    assert control.max_output_lines == 2048
 
 
 def test_transport_rejects_packet_from_previous_exact_policy_before_execution(

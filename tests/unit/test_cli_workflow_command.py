@@ -435,10 +435,12 @@ def test_workflow_command_forwards_validated_policy_to_v2_runtime(
             *,
             delegated_decision_provider=None,
             notifier=None,
+            policy_loader=None,
         ) -> None:
             captured["policy"] = policy
             captured["provider"] = delegated_decision_provider
             captured["notifier"] = notifier
+            captured["policy_loader"] = policy_loader
             self.phase_runtime = phase_runtime
 
         def run(self, *, start_step=None, single_step=False):
@@ -481,6 +483,7 @@ def test_workflow_command_forwards_validated_policy_to_v2_runtime(
     assert policy.driver.mode == "unattended"
     assert captured["provider"] is None
     assert captured["hosting"] == "foreground"
+    assert callable(captured["policy_loader"])
 
 
 def test_workflow_background_option_uses_fixed_host_launcher(

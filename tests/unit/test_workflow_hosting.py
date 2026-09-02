@@ -146,6 +146,56 @@ def test_lease_renewal_error_fails_closed_after_runtime_returns(tmp_path: Path) 
         host.run_worker(run_until_attempted, worker_id="live")
 
 
+def test_lease_renewal_loss_keeps_runtime_exclusive_until_callable_returns(
+    tmp_path: Path,
+) -> None:
+    renewal_failed = Event()
+    runtime_release = Event()
+    overlap_calls: list[str] = []
+    host = WorkflowHost(
+        tmp_path,
+        lease_ttl_seconds=1,
+        lease_renew_interval_seconds=0.01,
+    )
+
+    def fail_renewal(_holder: str, *, ttl_seconds: int) -> bool:
+        assert ttl_seconds == 1
+        renewal_failed.set()
+        raise OSError("lease store unavailable")
+
+    host.coordinator.renew_advancement_lease = fail_renewal
+
+    def run_until_released() -> str:
+        assert runtime_release.wait(timeout=2)
+        return "unsafe-success"
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(host.run_worker, run_until_released, worker_id="live")
+        assert renewal_failed.wait(timeout=2)
+        store = BlackboardStore(tmp_path)
+        state = store.load_or_create("spec")
+        with store.driver_transaction(state) as persisted:
+            persisted.driver_state["advancement_lease"]["expires_at"] = (
+                "2000-01-01T00:00:00+00:00"
+            )
+
+        competitor = WorkflowHost(tmp_path)
+        blocked = False
+        try:
+            competitor.run_worker(
+                lambda: overlap_calls.append("overlap"), worker_id="competitor"
+            )
+        except WorkerAlreadyRunningError:
+            blocked = True
+        finally:
+            runtime_release.set()
+
+        assert blocked is True
+        assert overlap_calls == []
+        with pytest.raises(WorkerAlreadyRunningError):
+            future.result(timeout=2)
+
+
 def test_stale_reconciliation_changes_only_worker_and_lease_state(tmp_path: Path) -> None:
     issue_dir = tmp_path / "issue"
     store = BlackboardStore(issue_dir)

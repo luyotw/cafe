@@ -1044,6 +1044,7 @@ def workflow(
                     driver_policy,
                     delegated_decision_provider=delegated_decision_provider,
                     notifier=WorkflowNotifier(issue_dir),
+                    policy_loader=lambda: _load_driver_policy_for_execution(issue_dir),
                 ).run(start_step=pending_start_step, single_step=single_step),
                 hosting="foreground",
             ).result

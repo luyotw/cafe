@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
+from hashlib import sha256
+from pathlib import Path
 from typing import Optional
 
-from cafe.agents.executor import AgentExecutionError
+from cafe.agents.executor import AgentExecutionControl, AgentExecutionError
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardState, BlackboardStore
 from cafe.core.driver_policy import DelegatedDriverPolicy, DriverPolicyContract
@@ -22,6 +26,26 @@ from cafe.core.types import AgentCLI, AgentConfig, SessionData
 
 DRIVER_AGENT_NAME = "__cafe_delegated_driver__"
 DRIVER_NAMESPACE = "cafe.workflow.driver.v2"
+DRIVER_MAX_DURATION_SECONDS = 120
+DRIVER_MAX_OUTPUT_BYTES = 256 * 1024
+DRIVER_MAX_OUTPUT_LINES = 2048
+
+
+def _decision_workspace(workflow_id: str) -> Path:
+    """Return one private, repository-free working directory per workflow."""
+    digest = sha256(workflow_id.encode("utf-8")).hexdigest()
+    user_scope = str(os.getuid()) if hasattr(os, "getuid") else "user"
+    root = Path(tempfile.gettempdir()) / f"cafe-driver-v2-{user_scope}"
+    if root.is_symlink():
+        raise OSError("delegated driver workspace root must not be a symlink")
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    root.chmod(0o700)
+    workspace = root / digest
+    if workspace.is_symlink():
+        raise OSError("delegated driver workspace must not be a symlink")
+    workspace.mkdir(mode=0o700, exist_ok=True)
+    workspace.chmod(0o700)
+    return workspace.resolve()
 
 
 class BlackboardDriverSessionStore(SessionStore):
@@ -189,12 +213,19 @@ class DelegatedDriverTransport:
             sort_keys=True,
         )
         try:
+            execution_control = AgentExecutionControl(
+                working_directory=_decision_workspace(packet.workflow_id),
+                max_duration_seconds=DRIVER_MAX_DURATION_SECONDS,
+                max_output_bytes=DRIVER_MAX_OUTPUT_BYTES,
+                max_output_lines=DRIVER_MAX_OUTPUT_LINES,
+            )
             execution = agent_manager.execute(
                 DRIVER_AGENT_NAME,
                 prompt,
                 allowed_tools=[],
                 allowed_directories=[],
                 continuation=self.session_store.continuation(self.cli),
+                execution_control=execution_control,
             )
         except AgentExecutionError as exc:
             raise DriverUnavailableError(str(exc)) from exc

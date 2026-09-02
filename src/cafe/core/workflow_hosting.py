@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import subprocess
 import sys
 import uuid
@@ -9,10 +10,20 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event, Thread
-from typing import Any, Callable
+from typing import IO, Any, Callable
 
 from cafe.core.blackboard import BlackboardStore
 from cafe.core.driver_runtime import DriverCoordinator
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - unavailable on Windows.
+    fcntl = None  # type: ignore[assignment]
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - available only on Windows.
+    msvcrt = None  # type: ignore[assignment]
 
 
 class WorkerAlreadyRunningError(RuntimeError):
@@ -25,6 +36,44 @@ class HostRunResult:
     worker_id: str
     result: Any = None
     pid: int | None = None
+
+
+def _try_advancement_process_lock(path: Path) -> IO[str] | None:
+    """Acquire the callable-duration lock without waiting for another worker."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+", encoding="utf-8")
+    try:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return handle
+        if msvcrt is None:
+            raise RuntimeError("cross-process file locking is unavailable")
+        handle.seek(0, 2)
+        if handle.tell() == 0:
+            handle.write("\0")
+            handle.flush()
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        return handle
+    except OSError as exc:
+        handle.close()
+        if exc.errno in {errno.EACCES, errno.EAGAIN}:
+            return None
+        raise
+    except BaseException:
+        handle.close()
+        raise
+
+
+def _release_advancement_process_lock(handle: IO[str]) -> None:
+    try:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        elif msvcrt is not None:  # pragma: no branch - platform-specific.
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    finally:
+        handle.close()
 
 
 class WorkflowHost:
@@ -51,6 +100,7 @@ class WorkflowHost:
         self.python_executable = python_executable
         self.lease_ttl_seconds = lease_ttl_seconds
         self.lease_renew_interval_seconds = lease_renew_interval_seconds
+        self.advancement_lock_path = self.issue_dir / ".workflow-advancement.lock"
         self._held_worker_id: str | None = None
 
     def run(
@@ -72,6 +122,27 @@ class WorkflowHost:
         worker_id: str | None = None,
         hosting: str = "background",
         hold_lease: bool = False,
+    ) -> HostRunResult:
+        process_lock = _try_advancement_process_lock(self.advancement_lock_path)
+        if process_lock is None:
+            raise WorkerAlreadyRunningError("workflow advancement is owned by another worker")
+        try:
+            return self._run_worker_under_process_lock(
+                runtime,
+                worker_id=worker_id,
+                hosting=hosting,
+                hold_lease=hold_lease,
+            )
+        finally:
+            _release_advancement_process_lock(process_lock)
+
+    def _run_worker_under_process_lock(
+        self,
+        runtime: Callable[[], Any],
+        *,
+        worker_id: str | None,
+        hosting: str,
+        hold_lease: bool,
     ) -> HostRunResult:
         identity = worker_id or str(uuid.uuid4())
         if not self.coordinator.claim_advancement_lease(

@@ -17,6 +17,7 @@ from cafe.core.workflow_models import PlaybookRunResult
 from cafe.core.workflow_notifications import WorkflowNotificationEvent, WorkflowNotifier
 
 DelegatedDecisionProvider = Callable[[DriverPacket], DriverDecision]
+DriverPolicyLoader = Callable[[], DriverPolicyContract]
 
 
 class Version2WorkflowRuntime:
@@ -29,11 +30,13 @@ class Version2WorkflowRuntime:
         *,
         delegated_decision_provider: DelegatedDecisionProvider | None = None,
         notifier: WorkflowNotifier | None = None,
+        policy_loader: DriverPolicyLoader | None = None,
     ) -> None:
         self.phase_runtime = phase_runtime
         self.policy = policy
         self.delegated_decision_provider = delegated_decision_provider
         self.notifier = notifier
+        self.policy_loader = policy_loader
         self.coordinator = DriverCoordinator(
             phase_runtime.blackboard_store,
             phase_runtime.blackboard,
@@ -54,6 +57,12 @@ class Version2WorkflowRuntime:
 
         for _ in range(max_transitions):
             if self.policy.driver.mode == "delegated":
+                if not self._policy_authority_is_current():
+                    return PlaybookRunResult(
+                        final_step=str(self.phase_runtime.blackboard.current_step),
+                        final_status_code="DELEGATED_DRIVER_PAUSED",
+                        completed=False,
+                    )
                 pending = self.coordinator.pending_boundary(
                     str(self.phase_runtime.blackboard.current_step),
                     policy=self.policy,
@@ -98,7 +107,10 @@ class Version2WorkflowRuntime:
                 policy=self.policy,
             )
             self._notify_boundary(packet)
-            if not self._authorize_delegated_boundary(packet):
+            if not self._authorize_delegated_boundary(
+                packet,
+                consume_authorization=False,
+            ):
                 return result
             if single_step:
                 return result
@@ -107,7 +119,12 @@ class Version2WorkflowRuntime:
             raise RuntimeError("version 2 workflow produced no result")
         raise RuntimeError(f"Version 2 workflow reached transition limit ({max_transitions})")
 
-    def _authorize_delegated_boundary(self, packet: DriverPacket) -> bool:
+    def _authorize_delegated_boundary(
+        self,
+        packet: DriverPacket,
+        *,
+        consume_authorization: bool = True,
+    ) -> bool:
         decision = self.coordinator.decision_for(packet.sequence)
         if decision is None:
             if self.delegated_decision_provider is None:
@@ -140,7 +157,28 @@ class Version2WorkflowRuntime:
                 reason=decision.rationale or decision.action,
             )
             return False
+        if not consume_authorization:
+            return True
+        if not self._policy_authority_is_current():
+            return False
         return self.coordinator.consume_authorization(packet.sequence) is not None
+
+    def _policy_authority_is_current(self) -> bool:
+        if self.policy_loader is None:
+            return True
+        try:
+            current_policy = self.policy_loader()
+        except (OSError, ValueError):
+            self.coordinator.record_lifecycle(
+                "paused", reason="driver_policy_invalidated"
+            )
+            return False
+        if current_policy != self.policy:
+            self.coordinator.record_lifecycle(
+                "paused", reason="driver_policy_changed"
+            )
+            return False
+        return True
 
     @staticmethod
     def _boundary_result(packet: DriverPacket) -> PlaybookRunResult:

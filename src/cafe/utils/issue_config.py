@@ -43,7 +43,17 @@ def resolve_issue_config_path(config_path: Path) -> Path:
     issue_name = config.get("issue_name")
     if not isinstance(issue_name, str) or not issue_name.strip():
         issue_name = path.parent.name
-    candidate = worktree / ".cafe" / "issues" / issue_name / "issue.yaml"
+    issue_path = Path(issue_name)
+    if (
+        issue_path.is_absolute()
+        or len(issue_path.parts) != 1
+        or issue_name in {"", ".", ".."}
+    ):
+        raise ValueError("inventory issue name must identify one directory")
+    issues_root = (worktree / ".cafe" / "issues").resolve()
+    candidate = (issues_root / issue_name / "issue.yaml").resolve()
+    if not candidate.is_relative_to(issues_root):
+        raise ValueError("inventory issue configuration escapes its worktree issue root")
     return candidate.resolve() if candidate.exists() else path
 
 

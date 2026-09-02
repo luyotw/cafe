@@ -11,7 +11,7 @@ from cafe.agents.diagnostics import (
     is_transient_same_cli_error,
     sanitize_error_excerpt,
 )
-from cafe.agents.executor import AgentExecutor, AgentExecutionError
+from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
 from cafe.core.session import SessionManager, SessionStore
 from cafe.core.session_continuation import (
     SessionContinuation,
@@ -414,6 +414,7 @@ class AgentManager:
         phase_name: Optional[str] = None,
         continuation: Optional[SessionContinuation] = None,
         backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
+        execution_control: AgentExecutionControl | None = None,
     ) -> Tuple[str, TokenUsage, List, Optional[List[str]], List[str], Optional[str]]:
         """Execute prompt with specified agent.
 
@@ -472,11 +473,17 @@ class AgentManager:
 
         while True:
             try:
+                control_kwargs = (
+                    {"execution_control": execution_control}
+                    if execution_control is not None
+                    else {}
+                )
                 agent_response = executor.execute(
                     attempt_prompt,
                     allowed_tools,
                     allowed_directories,
                     streaming_output_file,
+                    **control_kwargs,
                 )
                 break  # Success, exit loop
             except AgentExecutionError as e:
@@ -516,6 +523,7 @@ class AgentManager:
                         phase_name=phase_name,
                         continuation=continuation,
                         backup_context_callback=backup_context_callback,
+                        execution_control=execution_control,
                     )
                     break  # Backup succeeded, exit loop
                 else:
@@ -582,6 +590,7 @@ class AgentManager:
         allowed_directories: Optional[List[str]] = None,
         phase_name: Optional[str] = None,
         continuation: Optional[SessionContinuation] = None,
+        execution_control: AgentExecutionControl | None = None,
     ) -> Optional[List[str]]:
         """Preview CLI command args before execution starts."""
         executor = AgentExecutor(
@@ -591,7 +600,12 @@ class AgentManager:
                 continuation=continuation,
             )
         )
-        return executor.preview_cli_command_args(prompt, allowed_tools, allowed_directories)
+        return executor.preview_cli_command_args(
+            prompt,
+            allowed_tools,
+            allowed_directories,
+            execution_control=execution_control,
+        )
 
     def preview_cli_environment(
         self,
@@ -620,6 +634,7 @@ class AgentManager:
         phase_name: Optional[str] = None,
         continuation: Optional[SessionContinuation] = None,
         backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
+        execution_control: AgentExecutionControl | None = None,
     ) -> "AgentResponse":
         """Try backup agents in order until one succeeds or all fail.
 
@@ -732,11 +747,17 @@ class AgentManager:
             transient_retry_done = False
             while True:
                 try:
+                    control_kwargs = (
+                        {"execution_control": execution_control}
+                        if execution_control is not None
+                        else {}
+                    )
                     agent_response = backup_executor.execute(
                         backup_prompt,
                         allowed_tools,
                         allowed_directories,
                         streaming_output_file,
+                        **control_kwargs,
                     )
                     if agent_response.cli is None:
                         agent_response.cli = entry.cli
