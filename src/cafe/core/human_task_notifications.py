@@ -36,6 +36,117 @@ class SlackNotificationError(RuntimeError):
         self.code = code
 
 
+def _machine_config_path() -> Path:
+    """Return the only machine-owned notification configuration path."""
+    return _trusted_user_home() / MACHINE_CONFIG_DIRECTORY / MACHINE_CONFIG_FILENAME
+
+
+def _load_machine_config() -> tuple[Path, dict[object, object]]:
+    """Load the machine-only configuration or raise a stable safe error."""
+    config_path = _machine_config_path()
+    if not config_path.exists():
+        return config_path, {}
+    try:
+        raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise SlackNotificationError(
+            "validation_error", "human_task_notification_config_invalid"
+        ) from exc
+    if raw_config is None:
+        return config_path, {}
+    if not isinstance(raw_config, dict):
+        raise SlackNotificationError("validation_error", "human_task_notification_config_invalid")
+    return config_path, raw_config
+
+
+def _human_task_notification_declaration(raw_config: dict[object, object]) -> dict[object, object]:
+    """Extract the human-task declaration without accepting project input."""
+    notifications = raw_config.get("notifications", {})
+    if notifications is None:
+        notifications = {}
+    if not isinstance(notifications, dict):
+        raise SlackNotificationError("validation_error", "human_task_notification_config_invalid")
+    declaration = notifications.get("human_tasks", {})
+    if declaration is None:
+        declaration = {}
+    if not isinstance(declaration, dict):
+        raise SlackNotificationError("validation_error", "human_task_notification_config_invalid")
+    return declaration
+
+
+def _normalise_project_root(repository_root: Path) -> str:
+    """Return a stable absolute route key supplied only to trusted config lookup."""
+    try:
+        root = repository_root.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise SlackNotificationError(
+            "validation_error", "human_task_notification_config_invalid"
+        ) from exc
+    if not root.is_absolute():
+        raise SlackNotificationError("validation_error", "human_task_notification_config_invalid")
+    return str(root)
+
+
+def _is_private_machine_config(config_path: Path) -> bool:
+    """Direct URLs are credentials, so their config must be private and regular."""
+    try:
+        metadata = config_path.lstat()
+    except OSError:
+        return False
+    private_mode = stat.S_IMODE(metadata.st_mode) & 0o077 == 0
+    owned_by_user = not hasattr(os, "getuid") or metadata.st_uid == os.getuid()
+    return (
+        stat.S_ISREG(metadata.st_mode) and private_mode and owned_by_user and metadata.st_nlink == 1
+    )
+
+
+def _project_webhook_routes(
+    *, config_path: Path, declaration: dict[object, object]
+) -> dict[str, str]:
+    """Validate direct Slack URLs stored in private machine project routes."""
+    projects = declaration.get("projects", {})
+    if projects is None:
+        projects = {}
+    if not isinstance(projects, dict):
+        raise SlackNotificationError("validation_error", "human_task_notification_config_invalid")
+    if projects and not _is_private_machine_config(config_path):
+        raise SlackNotificationError("validation_error", "human_task_notification_config_unsafe")
+
+    routes: dict[str, str] = {}
+    for configured_root, configured_route in projects.items():
+        if not isinstance(configured_root, str) or not configured_root:
+            raise SlackNotificationError(
+                "validation_error", "human_task_notification_config_invalid"
+            )
+        configured_path = Path(configured_root)
+        if not configured_path.is_absolute() or not isinstance(configured_route, dict):
+            raise SlackNotificationError(
+                "validation_error", "human_task_notification_config_invalid"
+            )
+        if set(configured_route) != {"webhook_url"}:
+            raise SlackNotificationError(
+                "validation_error", "human_task_notification_config_invalid"
+            )
+        webhook_url = configured_route.get("webhook_url")
+        if not isinstance(webhook_url, str):
+            raise SlackNotificationError(
+                "validation_error", "human_task_notification_config_invalid"
+            )
+        try:
+            normalised_root = _normalise_project_root(configured_path)
+            validated_url = _validate_slack_webhook_url(webhook_url)
+        except SlackNotificationError as exc:
+            raise SlackNotificationError(
+                "validation_error", "human_task_notification_config_invalid"
+            ) from exc
+        if normalised_root in routes and routes[normalised_root] != validated_url:
+            raise SlackNotificationError(
+                "validation_error", "human_task_notification_config_invalid"
+            )
+        routes[normalised_root] = validated_url
+    return routes
+
+
 @dataclass(frozen=True)
 class HumanTaskSlackMessage:
     """Actionable, non-secret fields for one pending HumanTask."""
@@ -119,51 +230,15 @@ def load_human_task_notification_settings() -> HumanTaskNotificationSettings:
     behavior. Operators can explicitly disable delivery in ``~/.cafe/config.yaml``;
     malformed or unsupported declarations are observable skipped outcomes.
     """
-    config_path = _trusted_user_home() / MACHINE_CONFIG_DIRECTORY / MACHINE_CONFIG_FILENAME
-    if not config_path.exists():
-        return HumanTaskNotificationSettings(
-            enabled=True,
-            transport="slack",
-            outcome="enabled",
-            code="human_task_notification_enabled",
-        )
     try:
-        raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, yaml.YAMLError):
+        config_path, raw_config = _load_machine_config()
+        declaration = _human_task_notification_declaration(raw_config)
+    except SlackNotificationError as exc:
         return HumanTaskNotificationSettings(
             enabled=False,
             transport="",
             outcome="skipped",
-            code="human_task_notification_config_invalid",
-        )
-    if raw_config is None:
-        raw_config = {}
-    if not isinstance(raw_config, dict):
-        return HumanTaskNotificationSettings(
-            enabled=False,
-            transport="",
-            outcome="skipped",
-            code="human_task_notification_config_invalid",
-        )
-    notifications = raw_config.get("notifications", {})
-    if notifications is None:
-        notifications = {}
-    if not isinstance(notifications, dict):
-        return HumanTaskNotificationSettings(
-            enabled=False,
-            transport="",
-            outcome="skipped",
-            code="human_task_notification_config_invalid",
-        )
-    declaration = notifications.get("human_tasks", {})
-    if declaration is None:
-        declaration = {}
-    if not isinstance(declaration, dict):
-        return HumanTaskNotificationSettings(
-            enabled=False,
-            transport="",
-            outcome="skipped",
-            code="human_task_notification_config_invalid",
+            code=exc.code,
         )
     enabled = declaration.get("enabled", True)
     transport = declaration.get("transport", "slack")
@@ -187,6 +262,15 @@ def load_human_task_notification_settings() -> HumanTaskNotificationSettings:
             transport=transport,
             outcome="skipped",
             code="human_task_notification_transport_unsupported",
+        )
+    try:
+        _project_webhook_routes(config_path=config_path, declaration=declaration)
+    except SlackNotificationError as exc:
+        return HumanTaskNotificationSettings(
+            enabled=False,
+            transport="",
+            outcome="skipped",
+            code=exc.code,
         )
     return HumanTaskNotificationSettings(
         enabled=True,
@@ -244,22 +328,24 @@ def _login_user_home() -> Path:
 def _slack_credential_file() -> Path:
     """Select one package-defined credential file for the current process."""
     user_home = _trusted_user_home()
-    if (
-        os.environ.get(TEST_RUN_SLACK_ROUTING_ENV) == "1"
-        and user_home == _login_user_home()
-    ):
+    if os.environ.get(TEST_RUN_SLACK_ROUTING_ENV) == "1" and user_home == _login_user_home():
         return user_home / TEST_RUN_SLACK_WEBHOOK_FILENAME
     return user_home / SLACK_WEBHOOK_FILENAME
 
 
-def load_slack_webhook_url() -> str:
-    """Read and validate the package-defined, user-owned Slack credential file."""
+def load_slack_webhook_url(*, repository_root: Path | None = None) -> str:
+    """Read a private machine project route or the package default credential."""
+    if repository_root is not None and os.environ.get(TEST_RUN_SLACK_ROUTING_ENV) != "1":
+        config_path, raw_config = _load_machine_config()
+        declaration = _human_task_notification_declaration(raw_config)
+        project_url = _project_webhook_routes(
+            config_path=config_path,
+            declaration=declaration,
+        ).get(_normalise_project_root(repository_root))
+        if project_url is not None:
+            return project_url
     credential_file = _slack_credential_file()
-    flags = (
-        os.O_RDONLY
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_NONBLOCK", 0)
-    )
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
         descriptor = os.open(credential_file, flags)
     except FileNotFoundError as exc:
@@ -323,9 +409,7 @@ def post_slack_notification(
         method="POST",
     )
     try:
-        with _open_slack_request(
-            request, timeout=timeout_sec
-        ) as response:  # noqa: S310 - URL is fixed/validated.
+        with _open_slack_request(request, timeout=timeout_sec) as response:  # noqa: S310 - URL is fixed/validated.
             status = response.status
             body = response.read(64).decode("utf-8", errors="replace").strip()
     except HTTPError as exc:
