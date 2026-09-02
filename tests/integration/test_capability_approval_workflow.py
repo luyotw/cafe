@@ -84,6 +84,7 @@ def test_approve_restart_and_duplicate_resume_execute_exact_request_once(
     phase._get_issue_config_value = lambda *_args: True
     manifest = _manifest()
     calls: list[str] = []
+    notifications: list[dict[str, object]] = []
     monkeypatch.setattr(
         "cafe.core.capabilities.load_capability_registry",
         lambda _paths: {manifest.id: manifest},
@@ -94,6 +95,20 @@ def test_approve_restart_and_duplicate_resume_execute_exact_request_once(
         return {}, None
 
     monkeypatch.setattr(capability_module, "HOST_CAPABILITY_ADAPTERS", {"open_current_pr": adapter})
+    import cafe.core.workflow_runtime as workflow_runtime_mod
+
+    monkeypatch.setattr(
+        workflow_runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: notifications.append(kwargs["capability_request"])
+        or SimpleNamespace(
+            receipt={
+                "capability": "cafe.slack.human_task",
+                "success": True,
+                "outcome": "success",
+            }
+        ),
+    )
     hook = GitHubPRCreator()
     kwargs = {
         "stage": "publish_output",
@@ -136,6 +151,25 @@ def test_approve_restart_and_duplicate_resume_execute_exact_request_once(
     duplicate = hook.run(**kwargs)
 
     assert completed.exit_code == 0
+    assert notifications == [
+        {
+            "capability": "cafe.slack.human_task",
+            "args": {
+                "repository": tmp_path.name,
+                "workflow_id": task.workflow_id,
+                "task_id": task.id,
+                "step": "develop",
+                "task_type": "capability-approval",
+            },
+            "effects": {
+                "writes": [],
+                "network_destinations": ["hooks.slack.com"],
+                "browser_open": [],
+            },
+            "credentials": ["slack_human_task_webhook"],
+            "permissions": {"network": ["hooks.slack.com"]},
+        }
+    ]
     assert calls == ["mutated"]
     assert resumed.events[-1]["success"] is True
     assert duplicate.events[-1]["success"] is True

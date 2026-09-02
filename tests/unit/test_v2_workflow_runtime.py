@@ -17,7 +17,6 @@ from cafe.core.driver_runtime import (
 )
 from cafe.core.v2_workflow_runtime import Version2WorkflowRuntime
 from cafe.core.workflow_models import PlaybookRunResult
-from cafe.core.workflow_notifications import WorkflowNotifier
 
 
 class FakePhaseRuntime:
@@ -242,22 +241,12 @@ def test_transport_failure_pauses_without_fallback(tmp_path: Path) -> None:
     assert "fallback_reason" not in state.driver_state
 
 
-def test_runtime_notifies_phase_boundaries_and_completion_only(tmp_path: Path) -> None:
+def test_runtime_completion_does_not_create_workflow_notification_receipts(tmp_path: Path) -> None:
     runtime = FakePhaseRuntime(tmp_path)
-    requests: list[dict] = []
-    notifier = WorkflowNotifier(
-        tmp_path,
-        configured=True,
-        dispatcher=lambda request: requests.append(request) or {"success": True},
-    )
+    Version2WorkflowRuntime(runtime, _policy("unattended")).run()
 
-    Version2WorkflowRuntime(
-        runtime,
-        _policy("unattended"),
-        notifier=notifier,
-    ).run()
-
-    assert [request["args"]["event_type"] for request in requests] == ["completion"]
+    state = runtime.blackboard_store.load_or_create("spec")
+    assert state.driver_state["notification_receipts"] == {}
 
 
 @pytest.mark.parametrize(
