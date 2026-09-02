@@ -48,7 +48,11 @@ configuration.
    A project route only affects that exact resolved path; other repositories
    keep using the default credential below. Project files, environment
    variables, symbolic links, and relative paths cannot supply or redirect a
-   route.
+   route. CAFE reads at most 64 KiB of machine configuration and accepts at
+   most 128 project routes. A configuration over either limit is invalid. A
+   malformed route fails closed when it resolves to the active repository,
+   while a malformed sibling route cannot suppress another repository's fixed
+   fallback credential.
 
 3. Create the fixed user-owned credential file and restrict it to your account:
 
