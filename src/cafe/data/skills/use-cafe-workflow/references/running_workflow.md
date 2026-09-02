@@ -179,18 +179,21 @@ response. A terminal `_done` baton has no future chain to adjust.
   and use `--single-step` only as an explicit manual or diagnostic control.
 - `cafe workflow --execute --mute-agent-output --background` resumes the durable
   workflow through the fixed worker and returns its PID. It cannot carry
-  `--single-step`, `--start-step`, `--user-input`, or `--add-dir`; apply those
-  controls in a foreground invocation before starting background continuation.
-- When a HumanTask answer must be persisted before that fixed worker starts,
-  complete it without immediate execution, then launch the worker separately:
+  `--single-step`, `--start-step`, or `--add-dir`.
+- `--background --user-input '<exact payload>'` durably stages initial input,
+  or validates and persists a current HumanTask response, before spawning the
+  fixed worker. An invalid, stale, mismatched, or inapplicable HumanTask
+  response must leave the workflow paused and must not start a worker. Prefer
+  this single command when answering a HumanTask and continuing in the
+  background:
 
   ```bash
-  cafe task complete <task-id> --result '<exact structured JSON>' --no-resume
-  cafe workflow --issue <issue> --execute --mute-agent-output --background
+  cafe workflow --issue <issue> --execute --mute-agent-output --background \
+    --user-input '<exact structured JSON with human_task_id>'
   ```
 
-  `--no-resume` does not bypass response validation or the durable handoff; it
-  only defers execution after the task is successfully completed.
+  The input is durable before process ownership is transferred, so a worker
+  startup failure can be retried without submitting the HumanTask again.
 - A bounded diagnostic reproduction may temporarily add `--single-step` while
   continuous execution itself is under investigation. Record it as a diagnostic
   override; it does not mutate the confirmed execution contract.

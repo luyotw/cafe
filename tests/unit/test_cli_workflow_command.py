@@ -825,6 +825,258 @@ def test_workflow_background_option_uses_fixed_host_launcher(
     assert "4321" in result.stdout
 
 
+def test_workflow_background_persists_initial_user_input_before_launch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    captured: dict[str, object] = {}
+
+    class CapturingWorkflowHost:
+        def __init__(self, issue_dir) -> None:
+            captured["issue_dir"] = issue_dir
+
+        def run(self, runtime, *, hosting):
+            input_file = Path(captured["issue_dir"]) / "spec" / "iteration_001" / "user_input.md"
+            captured["input_at_launch"] = input_file.read_text(encoding="utf-8")
+            captured["hosting"] = hosting
+            return SimpleNamespace(result=None, pid=4322)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.WorkflowHost", CapturingWorkflowHost),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-background-input"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--background",
+                "--user-input",
+                "Build the requested background workflow.",
+            ],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert captured["hosting"] == "background"
+    assert captured["input_at_launch"] == "Build the requested background workflow."
+    assert "4322" in result.stdout
+
+
+def test_workflow_background_completes_durable_task_before_launch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-background-handoff"
+    store, task = _pause_with_iteration_limit_task(issue_dir)
+    captured: dict[str, object] = {}
+
+    class CapturingWorkflowHost:
+        def __init__(self, host_issue_dir) -> None:
+            captured["issue_dir"] = host_issue_dir
+
+        def run(self, runtime, *, hosting):
+            state = store.load_or_create("spec", playbook_id="standard")
+            captured["current_step_at_launch"] = state.current_step
+            captured["hosting"] = hosting
+            return SimpleNamespace(result=None, pid=4323)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.WorkflowHost", CapturingWorkflowHost),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-background-handoff"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--background",
+                "--user-input",
+                json.dumps(
+                    {
+                        "task": "iteration-limit",
+                        "decision": "resume",
+                        "human_task_id": task.id,
+                    }
+                ),
+            ],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert captured["hosting"] == "background"
+    assert captured["current_step_at_launch"] == "review"
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert "4323" in result.stdout
+
+
+def test_workflow_background_rejects_invalid_task_without_launch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-background-invalid-task"
+    _store, task = _pause_with_iteration_limit_task(issue_dir)
+
+    class UnexpectedWorkflowHost:
+        def __init__(self, _issue_dir) -> None:
+            pytest.fail("invalid input must not construct a background host")
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.WorkflowHost", UnexpectedWorkflowHost),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-background-invalid-task"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--background",
+                "--user-input",
+                json.dumps(
+                    {
+                        "task": "iteration-limit",
+                        "decision": "resume",
+                        "human_task_id": "wrong-task-id",
+                    }
+                ),
+            ],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert "Unknown durable human task" in result.stdout
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.PENDING
+
+
+def test_workflow_background_rejects_input_for_started_agent_step(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-background-started"
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("spec", playbook_id="standard")
+    store.set_current_step(blackboard, "develop")
+
+    class UnexpectedWorkflowHost:
+        def __init__(self, _issue_dir) -> None:
+            pytest.fail("inapplicable input must not construct a background host")
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.WorkflowHost", UnexpectedWorkflowHost),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-background-started"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--background",
+                "--user-input",
+                "stale input",
+            ],
+        )
+
+    assert result.exit_code == 1, (result.stdout, result.exception)
+    assert "valid only for a new workflow" in result.stdout
+    assert "background worker was not started" in result.stdout
+    assert store.load_or_create("spec", playbook_id="standard").current_step == "develop"
+    assert not (issue_dir / "spec" / "iteration_001" / "user_input.md").exists()
+
+
+def test_workflow_background_handoff_startup_failure_has_safe_retry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-background-retry"
+    store, task = _pause_with_iteration_limit_task(issue_dir)
+    launches: list[str] = []
+
+    class FailingThenSuccessfulWorkflowHost:
+        def __init__(self, _issue_dir) -> None:
+            pass
+
+        def run(self, runtime, *, hosting):
+            launches.append(hosting)
+            if len(launches) == 1:
+                raise OSError("worker spawn failed")
+            return SimpleNamespace(result=None, pid=4324)
+
+    payload = json.dumps(
+        {
+            "task": "iteration-limit",
+            "decision": "resume",
+            "human_task_id": task.id,
+        }
+    )
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch(
+            "cafe.ui.commands.workflow.WorkflowHost",
+            FailingThenSuccessfulWorkflowHost,
+        ),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-background-retry"
+        mock_git_cls.return_value = git
+
+        failed_launch = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--background",
+                "--user-input",
+                payload,
+            ],
+        )
+        replayed_input = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--background",
+                "--user-input",
+                payload,
+            ],
+        )
+        safe_retry = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--background"],
+        )
+
+    assert failed_launch.exit_code == 1
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert store.load_or_create("spec", playbook_id="standard").current_step == "review"
+    assert replayed_input.exit_code == 1
+    assert "valid only for a new workflow" in replayed_input.stdout
+    assert "background worker was not started" in replayed_input.stdout
+    assert not (issue_dir / "spec" / "iteration_001" / "user_input.md").exists()
+    assert safe_retry.exit_code == 0, (safe_retry.stdout, safe_retry.exception)
+    assert launches == ["background", "background"]
+    assert "4324" in safe_retry.stdout
+
+
 def test_workflow_command_passes_initial_user_input_to_spec_step(
     tmp_path: Path, monkeypatch
 ) -> None:

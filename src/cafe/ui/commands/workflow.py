@@ -192,6 +192,49 @@ def _resolve_initial_step_user_inputs(
     return _build_initial_step_user_inputs(playbook_data, user_input), None
 
 
+def _persist_background_step_user_inputs(
+    issue_dir: Path,
+    step_user_inputs: Optional[Dict[str, str]],
+) -> None:
+    """Persist invocation input before transferring execution to a worker.
+
+    Foreground execution can carry ``step_user_inputs`` in memory until the
+    phase creates its iteration.  A detached worker cannot see that memory, so
+    materialize the same input in the iteration file it already reads on
+    startup.  Persisting before spawn also makes a startup failure retryable
+    without asking the user to submit the input again.
+    """
+    for step_name, value in (step_user_inputs or {}).items():
+        step_dir = issue_dir / step_name
+        iteration = next_runnable_iteration_number(step_dir)
+        iteration_dir = step_dir / f"iteration_{iteration:03d}"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        (iteration_dir / "user_input.md").write_text(value, encoding="utf-8")
+
+
+def _is_genuine_cold_start(blackboard: Any, *, entry_point: str) -> bool:
+    """Return whether invocation input can still be the workflow requirement."""
+    contract = getattr(blackboard, "handoff_contract", None)
+    bootstrap_handoff = contract is None or (
+        contract.from_step == entry_point
+        and contract.to_owner is HandoffOwner.AGENT
+        and contract.to_step == entry_point
+        and contract.intent is HandoffIntent.AWAIT_AGENT
+        and contract.source == "bootstrap"
+    )
+    return (
+        blackboard.current_step == entry_point
+        and not blackboard.events
+        and not blackboard.decisions
+        and not blackboard.artifacts
+        and not blackboard.capability_receipts
+        and not blackboard.step_attempt_counts
+        and blackboard.ownership_cursor is None
+        and not blackboard.handoff_summary
+        and bootstrap_handoff
+    )
+
+
 def _validate_allowed_directories(config_manager: Any, add_dir: List[str]) -> None:
     """Validate config.yaml and CLI-provided allowed directories."""
     configured = config_manager.get_allowed_directories()
@@ -580,7 +623,7 @@ def workflow(
     background: bool = typer.Option(
         False,
         "--background",
-        help="Launch an existing workflow through the fixed background worker",
+        help="Launch a workflow through the fixed background worker",
     ),
     mute_agent_output: bool = typer.Option(
         False,
@@ -695,6 +738,18 @@ def workflow(
             issue_dir,
             repository_root=resolve_human_task_notification_repository_root(issue_dir),
         )
+        if (
+            background
+            and user_input is not None
+            and start_step is None
+            and resume_blackboard.current_step not in {"user", "done"}
+            and not _is_genuine_cold_start(resume_blackboard, entry_point=entry_point)
+        ):
+            console.print(
+                "[red]Error: --user-input is valid only for a new workflow or its "
+                "current user handoff; background worker was not started[/red]"
+            )
+            raise typer.Exit(1)
         initial_step_user_inputs, user_input = _resolve_initial_step_user_inputs(
             playbook_data,
             user_input,
@@ -702,22 +757,25 @@ def workflow(
             resume_blackboard.current_step,
         )
         if background:
-            if single_step or start_step is not None or user_input is not None or add_dir_values:
+            if single_step or start_step is not None or add_dir_values:
                 console.print(
                     "[red]Error: --background resumes the durable workflow and cannot "
-                    "be combined with --single-step, --start-step, --user-input, or --add-dir[/red]"
+                    "be combined with --single-step, --start-step, or --add-dir[/red]"
                 )
                 raise typer.Exit(1)
-            launched = WorkflowHost(issue_dir).run(lambda: None, hosting="background")
-            console.print(
-                f"[green]Workflow background worker started[/green] pid={launched.pid}"
-            )
-            return
+            _persist_background_step_user_inputs(issue_dir, initial_step_user_inputs)
+            initial_step_user_inputs = None
+            if user_input is None:
+                launched = WorkflowHost(issue_dir).run(lambda: None, hosting="background")
+                console.print(
+                    f"[green]Workflow background worker started[/green] pid={launched.pid}"
+                )
+                return
 
         def _interactive_mode() -> bool:
             # An explicit payload is authoritative for the current user gate,
             # then normal TTY interaction resumes after that payload is consumed.
-            return tty_interactive and user_input is None
+            return not background and tty_interactive and user_input is None
 
         initial_phase_name = start_step or resume_blackboard.current_step
         if initial_phase_name not in playbook_data["steps"]:
@@ -1019,6 +1077,19 @@ def workflow(
                     return
                 pending_start_step = user_selected_step
                 continue
+
+            if background:
+                if user_input is not None:
+                    console.print(
+                        "[red]Error: --user-input could not be applied to the current "
+                        "workflow handoff; background worker was not started[/red]"
+                    )
+                    raise typer.Exit(1)
+                launched = WorkflowHost(issue_dir).run(lambda: None, hosting="background")
+                console.print(
+                    f"[green]Workflow background worker started[/green] pid={launched.pid}"
+                )
+                return
 
             effective_start_step = active_step
             console.print(
