@@ -19,6 +19,9 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 WEBHOOK_PATH = Path(".slack-webhook")
 WEBHOOK_HOST = "hooks.slack.com"
 MAX_CREDENTIAL_BYTES = 8192
+MAX_LOG_BYTES = 64 * 1024
+MAX_SUMMARY_CHARS = 1024
+MAX_MESSAGE_CHARS = 4096
 SUMMARY_PATTERN = re.compile(r"^(.+\b(?:passed|failed|error|skipped|xfailed)\b.+)$")
 COVERAGE_PATTERN = re.compile(r"^TOTAL\s+\d+\s+\d+\s+(\d+%)$")
 
@@ -81,15 +84,24 @@ def load_test_webhook_url() -> str:
 def read_test_summary(log_path: Path) -> tuple[str, str | None]:
     """Extract only the compact pytest result and aggregate coverage from the run log."""
     try:
-        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        with log_path.open("rb") as log_file:
+            log_file.seek(0, os.SEEK_END)
+            log_size = log_file.tell()
+            log_file.seek(max(0, log_size - MAX_LOG_BYTES))
+            raw_tail = log_file.read(MAX_LOG_BYTES)
     except OSError:
         return "pytest output unavailable", None
+    lines = raw_tail.decode("utf-8", errors="replace").splitlines()
     summary = "pytest output unavailable"
     coverage = None
     for line in reversed(lines):
         stripped = line.strip(" =")
         if SUMMARY_PATTERN.fullmatch(stripped):
-            summary = stripped
+            summary = (
+                stripped
+                if len(stripped) <= MAX_SUMMARY_CHARS
+                else f"…{stripped[-(MAX_SUMMARY_CHARS - 1):]}"
+            )
             break
     for line in reversed(lines):
         match = COVERAGE_PATTERN.fullmatch(line.strip())
@@ -138,8 +150,11 @@ def main(argv: list[str]) -> int:
     if coverage is not None:
         text.append(f"Coverage: {coverage}")
     text.append(f"Durations: {report_path}")
+    message_text = "\n".join(text)
+    if len(message_text) > MAX_MESSAGE_CHARS:
+        message_text = f"{message_text[: MAX_MESSAGE_CHARS - 1]}…"
     try:
-        post_message(load_test_webhook_url(), {"text": "\n".join(text)})
+        post_message(load_test_webhook_url(), {"text": message_text})
     except RuntimeError:
         return 1
     return 0

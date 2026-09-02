@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 import uuid
+from collections import Counter
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -78,11 +80,19 @@ def _process_file_lock(lock_file: IO[str]) -> Iterator[None]:
 
 @contextmanager
 def _optional_process_file_lock(lock_file: IO[str]) -> Iterator[None]:
-    """Use a process lock when available without making generic persistence depend on it."""
+    """Serialize generic persistence with a portable fallback lock."""
     try:
         release = _acquire_process_file_lock(lock_file)
     except (OSError, RuntimeError):
-        yield
+        fallback_path = Path(f"{lock_file.name}.sqlite3")
+        connection = sqlite3.connect(fallback_path, isolation_level=None, timeout=30.0)
+        try:
+            connection.execute("BEGIN EXCLUSIVE")
+            yield
+        finally:
+            if connection.in_transaction:
+                connection.rollback()
+            connection.close()
         return
     try:
         yield
@@ -91,6 +101,92 @@ def _optional_process_file_lock(lock_file: IO[str]) -> Iterator[None]:
             release()
         except OSError:
             pass
+
+
+def _serialized_identity(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
+def _merge_changed_mapping(
+    latest: Dict[str, Any], baseline: Dict[str, Any], desired: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Apply only this writer's key changes to the latest durable mapping."""
+    merged = dict(latest)
+    for key in baseline.keys() | desired.keys():
+        if baseline.get(key) == desired.get(key) and (key in baseline) == (key in desired):
+            continue
+        if key in desired:
+            merged[key] = desired[key]
+        else:
+            merged.pop(key, None)
+    return merged
+
+
+def _merge_changed_sequence(
+    latest: List[Any], baseline: List[Any], desired: List[Any]
+) -> List[Any]:
+    """Apply this writer's additions/removals without dropping concurrent entries."""
+    baseline_counts = Counter(_serialized_identity(value) for value in baseline)
+    desired_counts = Counter(_serialized_identity(value) for value in desired)
+    removals = baseline_counts - desired_counts
+    additions = desired_counts - baseline_counts
+    merged: List[Any] = []
+    for value in latest:
+        identity = _serialized_identity(value)
+        if removals[identity]:
+            removals[identity] -= 1
+        else:
+            merged.append(value)
+    for value in desired:
+        identity = _serialized_identity(value)
+        if additions[identity]:
+            merged.append(value)
+            additions[identity] -= 1
+    return merged
+
+
+def _merge_generic_state(
+    *,
+    persisted: "BlackboardState",
+    desired: "BlackboardState",
+    baseline: Dict[str, Any],
+    capability_receipts_authoritative: bool,
+) -> "BlackboardState":
+    """Three-way merge one generic writer over the latest serialized state."""
+    latest_raw = persisted.to_dict()
+    desired_raw = desired.to_dict()
+    merged_raw = dict(latest_raw)
+    for field_name in (
+        "schema_version",
+        "current_step",
+        "playbook_id",
+        "workflow_id",
+        "handoff_summary",
+        "handoff_contract",
+        "ownership_cursor",
+    ):
+        if desired_raw[field_name] != baseline.get(field_name):
+            merged_raw[field_name] = desired_raw[field_name]
+    for field_name in ("artifacts", "step_attempt_counts"):
+        merged_raw[field_name] = _merge_changed_mapping(
+            latest_raw[field_name],
+            baseline.get(field_name, {}),
+            desired_raw[field_name],
+        )
+    for field_name in ("events", "decisions"):
+        merged_raw[field_name] = _merge_changed_sequence(
+            latest_raw[field_name],
+            baseline.get(field_name, []),
+            desired_raw[field_name],
+        )
+    if capability_receipts_authoritative:
+        merged_raw["capability_receipts"] = _merge_changed_sequence(
+            latest_raw["capability_receipts"],
+            baseline.get("capability_receipts", []),
+            desired_raw["capability_receipts"],
+        )
+    merged_raw["driver_state"] = latest_raw["driver_state"]
+    return BlackboardState.from_dict(merged_raw, initial_step=desired.current_step)
 
 
 class ArtifactKind(str, Enum):
@@ -190,12 +286,16 @@ class EventEntry:
         message = str(payload.get("message", ""))
         if migrate_legacy_attempt_fields:
             changed = False
-            if event_type in {
-                "step_started",
-                "step_interrupted",
-                "step_completed",
-                "single_step_completed",
-            } and "visit" in event_data:
+            if (
+                event_type
+                in {
+                    "step_started",
+                    "step_interrupted",
+                    "step_completed",
+                    "single_step_completed",
+                }
+                and "visit" in event_data
+            ):
                 event_data.setdefault("attempt", event_data["visit"])
                 event_data.pop("visit")
                 changed = True
@@ -213,9 +313,7 @@ class EventEntry:
                 event_type = "step_attempt_count_reset"
                 changed = True
                 if "completed_visits" in event_data:
-                    event_data.setdefault(
-                        "completed_attempts", event_data["completed_visits"]
-                    )
+                    event_data.setdefault("completed_attempts", event_data["completed_visits"])
                     event_data.pop("completed_visits")
             if changed:
                 message = json.dumps(event_data, ensure_ascii=False)
@@ -460,6 +558,9 @@ class BlackboardState:
     driver_state: Dict[str, Any] = field(default_factory=dict)
     step_attempt_counts: Dict[str, int] = field(default_factory=dict)
     updated_at: str = field(default_factory=_now_iso)
+    _persisted_snapshot: Optional[Dict[str, Any]] = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -538,7 +639,7 @@ class BlackboardState:
         if not isinstance(raw_driver_state, dict):
             raise ValueError("blackboard driver_state must be an object")
 
-        return cls(
+        state = cls(
             current_step=str(data.get("current_step", initial_step)),
             playbook_id=str(data.get("playbook_id", "standard")),
             workflow_id=str(data.get("workflow_id") or _legacy_workflow_id(data, initial_step)),
@@ -567,6 +668,8 @@ class BlackboardState:
             step_attempt_counts=attempts,
             updated_at=str(data.get("updated_at", _now_iso())),
         )
+        state._persisted_snapshot = state.to_dict()
+        return state
 
 
 class BlackboardStore:
@@ -642,24 +745,34 @@ class BlackboardStore:
                 with _optional_process_file_lock(lock_file):
                     if self.file_path.exists():
                         raw = json.loads(self.file_path.read_text(encoding="utf-8"))
-                        persisted = BlackboardState.from_dict(
-                            raw, initial_step=state.current_step
-                        )
-                        state.driver_state = dict(persisted.driver_state)
-                        if not capability_receipts_authoritative:
-                            state.capability_receipts = list(
-                                persisted.capability_receipts
+                        persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
+                        if state._persisted_snapshot is not None:
+                            merged = _merge_generic_state(
+                                persisted=persisted,
+                                desired=state,
+                                baseline=state._persisted_snapshot,
+                                capability_receipts_authoritative=(
+                                    capability_receipts_authoritative
+                                ),
                             )
+                            state.__dict__.clear()
+                            state.__dict__.update(merged.__dict__)
+                        else:
+                            state.driver_state = dict(persisted.driver_state)
+                            if not capability_receipts_authoritative:
+                                state.capability_receipts = list(persisted.capability_receipts)
                     self._save_unlocked(state)
 
     def _save_unlocked(self, state: BlackboardState) -> None:
         """Persist a state whose caller already owns the state-file lock."""
         self.issue_dir.mkdir(parents=True, exist_ok=True)
         state.updated_at = _now_iso()
+        payload = json.dumps(state.to_dict(), ensure_ascii=False, indent=2).encode("utf-8")
         atomic_write_bytes(
             self.file_path,
-            json.dumps(state.to_dict(), ensure_ascii=False, indent=2).encode("utf-8"),
+            payload,
         )
+        state._persisted_snapshot = json.loads(payload)
 
     def ensure_baton(
         self,
@@ -682,8 +795,7 @@ class BlackboardStore:
                 return None
             if (
                 state.handoff_contract is not None
-                and state.handoff_contract.to_next_step_dict()
-                == contract.to_next_step_dict()
+                and state.handoff_contract.to_next_step_dict() == contract.to_next_step_dict()
             ):
                 return state.handoff_contract
             state.handoff_contract = contract
@@ -873,9 +985,7 @@ class BlackboardStore:
         self.save(state, capability_receipts_authoritative=True)
 
     @contextmanager
-    def capability_receipt_transaction(
-        self, state: BlackboardState
-    ) -> Iterator[BlackboardState]:
+    def capability_receipt_transaction(self, state: BlackboardState) -> Iterator[BlackboardState]:
         """Serialize one receipt-backed dispatch across runtimes and processes."""
         with self._thread_lock_for(self.file_path):
             self.issue_dir.mkdir(parents=True, exist_ok=True)
@@ -883,9 +993,7 @@ class BlackboardStore:
                 with _process_file_lock(lock_file):
                     if self.file_path.exists():
                         raw = json.loads(self.file_path.read_text(encoding="utf-8"))
-                        persisted = BlackboardState.from_dict(
-                            raw, initial_step=state.current_step
-                        )
+                        persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
                         state.__dict__.clear()
                         state.__dict__.update(persisted.__dict__)
                     yield state
@@ -899,9 +1007,7 @@ class BlackboardStore:
                 with _process_file_lock(lock_file):
                     if self.file_path.exists():
                         raw = json.loads(self.file_path.read_text(encoding="utf-8"))
-                        persisted = BlackboardState.from_dict(
-                            raw, initial_step=state.current_step
-                        )
+                        persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
                         state.__dict__.clear()
                         state.__dict__.update(persisted.__dict__)
                     yield state
