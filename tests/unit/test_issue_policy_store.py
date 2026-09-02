@@ -77,6 +77,58 @@ def test_root_inventory_dereferences_active_worktree_policy(tmp_path: Path) -> N
     assert "driver" not in yaml.safe_load(root_config.read_text(encoding="utf-8"))
 
 
+def test_root_inventory_public_update_writes_registered_worktree_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root_config, active_config, _ = _issue_layout(tmp_path)
+    active_config.write_text(
+        yaml.safe_dump({"base_branch": "develop", **_v2_policy()}),
+        encoding="utf-8",
+    )
+    root_before = root_config.read_bytes()
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "update-driver-policy",
+            "issue432",
+            "--contract-version",
+            "2",
+            "--driver-mode",
+            "unattended",
+        ],
+    )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert extract_driver_policy(
+        yaml.safe_load(active_config.read_text(encoding="utf-8"))
+    ).driver.mode == "unattended"
+    assert root_config.read_bytes() == root_before
+
+
+def test_registered_worktree_authority_ignores_its_inventory_metadata(
+    tmp_path: Path,
+) -> None:
+    _, active_config, _ = _issue_layout(tmp_path)
+    active_config.write_text(
+        yaml.safe_dump(
+            {
+                "issue_name": "issue432",
+                "worktree_path": ".cafe/worktrees/issue432",
+                **_v2_policy(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = IssuePolicyStore(active_config)
+
+    assert resolve_issue_config_path(active_config) == active_config.resolve()
+    assert store.config_path == active_config.resolve()
+    with store.locked_policy() as policy:
+        assert policy == extract_driver_policy(_v2_policy())
+
+
 def test_atomic_update_replaces_only_policy_and_preserves_blackboard_bytes(tmp_path: Path) -> None:
     root_config, active_config, _ = _issue_layout(tmp_path)
     original = {
