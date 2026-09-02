@@ -18,6 +18,8 @@ from cafe.core.status_codes import (
 from cafe.phases.generic_phase import GenericPhase
 from cafe.playbooks.loader import PlaybookLoader
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SKILL_ROOT = PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "use-cafe-workflow"
 

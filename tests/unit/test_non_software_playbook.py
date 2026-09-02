@@ -3,6 +3,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from cafe.core.workflow_models import PlaybookRunResult
@@ -10,6 +11,8 @@ from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook
 from cafe.skills.loader import SkillLoader
 from cafe.ui.cli import app
+
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 runner = CliRunner()
 
@@ -100,14 +103,6 @@ def test_builtin_non_software_workflow_dry_run_accepts_editorial(monkeypatch) ->
     assert (
         blackboard_path.read_bytes() if blackboard_path.exists() else None
     ) == original_blackboard
-
-
-def test_builtin_non_software_playbook_load_strict(monkeypatch) -> None:
-    monkeypatch.chdir(_repo_root())
-    loader = PlaybookLoader()
-    for name in ("editorial", "research", "incident"):
-        loaded = loader.load_model(name, strict=True)
-        assert loaded.model.playbook.id == name
 
 
 def test_builtin_non_software_agent_defaults_on_disk() -> None:

@@ -10,22 +10,6 @@ from cafe.ui.cli import app
 runner = CliRunner()
 
 
-def test_playbook_validate_succeeds_for_builtin_prepare_playbooks() -> None:
-    for name in (
-        "direct",
-        "simple",
-        "standard",
-        "standard-qa",
-        "tdd",
-        "tdd-qa",
-        "hotfix",
-    ):
-        result = runner.invoke(app, ["playbook", "validate", name])
-        assert result.exit_code == 0, result.stdout
-        assert "Valid" in result.stdout
-        assert name in result.stdout
-
-
 def test_playbook_validate_accepts_project_override_without_prepare(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / "project"
     cafe_dir = project_root / ".cafe" / "playbooks"

@@ -17,6 +17,8 @@ from cafe.audit.tooling_audit import (
 from cafe.core.blackboard import BlackboardState
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_skill_frontmatter")
+
 
 def test_run_builtin_tooling_audit_all_pass() -> None:
     lines = run_builtin_tooling_audit()

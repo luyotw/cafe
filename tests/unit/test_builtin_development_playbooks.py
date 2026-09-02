@@ -8,6 +8,8 @@ from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook
 from cafe.skills.loader import SkillLoader
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 DEVELOPMENT_PLAYBOOKS = {
     "direct",
     "simple",

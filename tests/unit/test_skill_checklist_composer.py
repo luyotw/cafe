@@ -23,6 +23,8 @@ from cafe.skills.checklist_composer import (
 from cafe.skills.contracts import SkillWorkflowContract
 from cafe.skills.loader import SkillLoader
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "checklists"
 DEVELOP_BASIC_PRINCIPLES = load_skill_reference("cafe-develop", "basic_principles.md")

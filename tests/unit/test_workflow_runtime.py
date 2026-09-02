@@ -18,6 +18,8 @@ from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui.human_tasks import resolve_step_human_task
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 
 def _notify_human_task_in_process(
     issue_dir_value: str,

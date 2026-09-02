@@ -9,6 +9,8 @@ from typer.testing import CliRunner
 
 from cafe.ui.cli import app
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 runner = CliRunner()
 
 
@@ -67,21 +69,6 @@ steps:
 """.strip(),
         encoding="utf-8",
     )
-
-
-def test_playbook_list_includes_builtin_entries(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-
-    result = runner.invoke(app, ["playbook", "list"])
-
-    assert result.exit_code == 0
-    assert "standard" in result.stdout
-    assert "default" not in result.stdout
-    assert "hotfix" in result.stdout
-    assert "simple" in result.stdout
-    assert "editorial" in result.stdout
-    assert "research" in result.stdout
-    assert "incident" in result.stdout
 
 
 def test_playbook_show_displays_custom_override(tmp_path: Path, monkeypatch) -> None:

@@ -22,6 +22,8 @@ from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui.cli import app
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 
 VALID_WEBHOOK = "https://hooks.slack.com/services/T00000000/B00000000/integration-secret"
 runner = CliRunner()
