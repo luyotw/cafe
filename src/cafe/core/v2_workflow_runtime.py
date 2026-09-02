@@ -164,18 +164,25 @@ class Version2WorkflowRuntime:
         if lifecycle_event.event_type == "workflow_completed":
             completed_step = str(lifecycle_event.data.get("step", ""))
             target = str(lifecycle_event.data.get("next_step", ""))
-            if completed_step == current_step and target in {"done", "_done"}:
-                self.phase_runtime.blackboard_store.update_handoff_contract(
-                    self.phase_runtime.blackboard,
-                    from_step=completed_step,
-                    to_owner=HandoffOwner.DONE,
-                    to_step="done",
-                    intent=HandoffIntent.WORKFLOW_COMPLETE,
-                    status_code=str(
-                        lifecycle_event.data.get("status_code", "workflow_complete")
-                    ),
-                    source="workflow.lifecycle_recovery",
-                )
+            if current_step in {completed_step, "done"} and target in {"done", "_done"}:
+                contract = self.phase_runtime.blackboard.handoff_contract
+                if (
+                    contract is None
+                    or contract.to_owner is not HandoffOwner.DONE
+                    or contract.to_step != "done"
+                    or contract.intent is not HandoffIntent.WORKFLOW_COMPLETE
+                ):
+                    self.phase_runtime.blackboard_store.update_handoff_contract(
+                        self.phase_runtime.blackboard,
+                        from_step=completed_step,
+                        to_owner=HandoffOwner.DONE,
+                        to_step="done",
+                        intent=HandoffIntent.WORKFLOW_COMPLETE,
+                        status_code=str(
+                            lifecycle_event.data.get("status_code", "workflow_complete")
+                        ),
+                        source="workflow.lifecycle_recovery",
+                    )
                 return "done"
             return None
         if str(lifecycle_event.data.get("from", "")) != current_step:

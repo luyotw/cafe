@@ -2127,7 +2127,6 @@ class BlackboardWorkflowRuntime:
                 "runtime": runtime,
             },
         )
-        self.blackboard_store.set_current_step(self.blackboard, "done")
         if update_contract:
             self.blackboard_store.update_handoff_contract(
                 self.blackboard,
@@ -2138,6 +2137,7 @@ class BlackboardWorkflowRuntime:
                 status_code=status_code,
                 source=contract_source,
             )
+        self.blackboard_store.set_current_step(self.blackboard, "done")
         cafe_dir = self.issue_dir.parent.parent
         clear_marker_if_matches(cafe_dir, self.issue_dir.name)
         return PlaybookRunResult(

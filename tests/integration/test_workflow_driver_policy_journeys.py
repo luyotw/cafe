@@ -450,10 +450,15 @@ def test_delegated_restart_skips_phase_with_durable_transition_before_pointer(
     assert decisions == [1]
 
 
-@pytest.mark.parametrize("interrupt_after_pointer", [False, True])
-def test_delegated_restart_skips_final_phase_around_durable_completion_pointer(
+@pytest.mark.parametrize("mode", ["attached", "unattended", "delegated"])
+@pytest.mark.parametrize(
+    "interrupt_after",
+    ["event", "next_step", "blackboard_contract", "pointer", "legacy_pointer"],
+)
+def test_each_mode_restarts_terminally_across_completion_publication_boundaries(
     tmp_path: Path,
-    interrupt_after_pointer: bool,
+    mode: str,
+    interrupt_after: str,
 ) -> None:
     issue_dir = tmp_path / "completion-pointer-crash"
     playbook = {
@@ -491,38 +496,92 @@ def test_delegated_restart_skips_final_phase_around_durable_completion_pointer(
         playbook=playbook,
         executor=executor,
     )
+    store = interrupted.blackboard_store
+    record_event = store.record_event
+    save = store.save
+    update_handoff = store.update_handoff_contract
     publish_current_step = interrupted.blackboard_store.set_current_step
 
-    def interrupt_before_done(state, step: str) -> None:
-        if step == "done":
-            raise RuntimeError("interrupted before done publication")
-        publish_current_step(state, step)
+    def interrupt_after_event(state, event_type: str, data: dict) -> None:
+        record_event(state, event_type, data)
+        if event_type == "workflow_completed":
+            raise RuntimeError("interrupted after event publication")
 
-    if interrupt_after_pointer:
-        interruption = patch(
-            "cafe.core.workflow_runtime.clear_marker_if_matches",
-            side_effect=RuntimeError("interrupted after done publication"),
+    def interrupt_during_contract_save(
+        state,
+        *,
+        capability_receipts_authoritative: bool = False,
+    ) -> None:
+        contract = state.handoff_contract
+        if contract is not None and contract.to_step == "done":
+            if interrupt_after == "blackboard_contract":
+                save(
+                    state,
+                    capability_receipts_authoritative=capability_receipts_authoritative,
+                )
+            raise RuntimeError(f"interrupted after {interrupt_after} publication")
+        save(
+            state,
+            capability_receipts_authoritative=capability_receipts_authoritative,
+        )
+
+    def interrupt_after_pointer(state, step: str) -> None:
+        publish_current_step(state, step)
+        if step == "done":
+            raise RuntimeError("interrupted after pointer publication")
+
+    def interrupt_with_legacy_pointer(state, **kwargs) -> None:
+        if kwargs.get("to_step") == "done":
+            publish_current_step(state, "done")
+            raise RuntimeError("interrupted after legacy_pointer publication")
+        update_handoff(state, **kwargs)
+
+    if interrupt_after == "event":
+        interruption = patch.object(store, "record_event", side_effect=interrupt_after_event)
+    elif interrupt_after in {"next_step", "blackboard_contract"}:
+        interruption = patch.object(store, "save", side_effect=interrupt_during_contract_save)
+    elif interrupt_after == "pointer":
+        interruption = patch.object(
+            store,
+            "set_current_step",
+            side_effect=interrupt_after_pointer,
         )
     else:
         interruption = patch.object(
-            interrupted.blackboard_store,
-            "set_current_step",
-            side_effect=interrupt_before_done,
+            store,
+            "update_handoff_contract",
+            side_effect=interrupt_with_legacy_pointer,
         )
     with interruption:
-        with pytest.raises(RuntimeError, match="done publication"):
+        if mode == "attached":
+            first = Version2WorkflowRuntime(interrupted, _policy(mode)).run(start_step="spec")
+            assert first.completed is False
+        with pytest.raises(RuntimeError, match=f"after {interrupt_after} publication"):
             Version2WorkflowRuntime(
                 interrupted,
-                _policy("delegated"),
-                delegated_decision_provider=decide,
-            ).run(start_step="spec")
+                _policy(mode),
+                delegated_decision_provider=decide if mode == "delegated" else None,
+            ).run(start_step=None if mode == "attached" else "spec")
 
-    crashed = BlackboardStore(issue_dir).load_or_create("spec")
-    assert crashed.current_step == ("done" if interrupt_after_pointer else "plan")
+    crashed_payload = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
+    crashed_contract = crashed_payload["handoff_contract"]
+    next_step = json.loads((issue_dir / "next_step.txt").read_text(encoding="utf-8"))
+    publication_reached = {
+        "event": ("plan", "plan", "plan"),
+        "next_step": ("plan", "done", "plan"),
+        "blackboard_contract": ("plan", "done", "done"),
+        "pointer": ("done", "done", "done"),
+        "legacy_pointer": ("done", "plan", "plan"),
+    }
+    assert (
+        crashed_payload["current_step"],
+        next_step["to_step"],
+        crashed_contract["to_step"],
+    ) == publication_reached[interrupt_after]
     assert [
-        event.data["step"]
-        for event in crashed.events
-        if event.event_type == "workflow_completed"
+        event["data"]["step"]
+        for event in crashed_payload["events"]
+        if event["event_type"] == "workflow_completed"
     ] == ["plan"]
 
     resumed = BlackboardWorkflowRuntime(
@@ -532,13 +591,13 @@ def test_delegated_restart_skips_final_phase_around_durable_completion_pointer(
     )
     result = Version2WorkflowRuntime(
         resumed,
-        _policy("delegated"),
-        delegated_decision_provider=decide,
+        _policy(mode),
+        delegated_decision_provider=decide if mode == "delegated" else None,
     ).run()
 
     assert result.completed is True
     assert executed == ["spec", "plan"]
-    assert decisions == [1]
+    assert decisions == ([1] if mode == "delegated" else [])
     recovered = BlackboardStore(issue_dir).load_or_create("spec")
     assert recovered.current_step == "done"
     terminal_handoff = BlackboardStore(issue_dir).load_handoff_contract(
@@ -552,20 +611,21 @@ def test_delegated_restart_skips_final_phase_around_durable_completion_pointer(
         [event for event in recovered.events if event.event_type == "workflow_completed"]
     ) == 1
 
-    restarted = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir,
-        playbook=playbook,
-        executor=executor,
-    )
-    restarted_result = Version2WorkflowRuntime(
-        restarted,
-        _policy("delegated"),
-        delegated_decision_provider=decide,
-    ).run()
+    for _ in range(2):
+        restarted = BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            executor=executor,
+        )
+        restarted_result = Version2WorkflowRuntime(
+            restarted,
+            _policy(mode),
+            delegated_decision_provider=decide if mode == "delegated" else None,
+        ).run()
 
-    assert restarted_result.completed is True
-    assert executed == ["spec", "plan"]
-    assert decisions == [1]
+        assert restarted_result.completed is True
+        assert executed == ["spec", "plan"]
+        assert decisions == ([1] if mode == "delegated" else [])
 
 
 @pytest.mark.parametrize("human_task_delivery_available", [False, True])
