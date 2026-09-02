@@ -15,6 +15,8 @@ from cafe.phases import generic_phase, generic_workflow_step
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui import cli_shared
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 
 def test_agent_manager_has_no_fixed_read_only_retry_policy():
     """UT-007: investigation and monitoring have no forced-edit budget."""

@@ -18,6 +18,8 @@ from cafe.core.issue_policy_store import (
 from cafe.ui.cli import app
 from cafe.utils.issue_config import read_authoritative_issue_config, resolve_issue_config_path
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 
 def _v2_policy() -> dict:
     return {

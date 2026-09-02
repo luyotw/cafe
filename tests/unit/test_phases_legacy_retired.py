@@ -10,6 +10,7 @@ from cafe.ui.cli import app
 from tests.conftest import create_minimal_config
 
 runner = CliRunner()
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 
 def test_phases_legacy_module_is_removed() -> None:

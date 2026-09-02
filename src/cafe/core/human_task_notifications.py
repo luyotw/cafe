@@ -17,6 +17,8 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 import yaml
 
 SLACK_WEBHOOK_FILENAME = ".slack-webhook"
+TEST_RUN_SLACK_WEBHOOK_FILENAME = ".cafe/test-slack-webhook"
+TEST_RUN_SLACK_ROUTING_ENV = "CAFE_TEST_RUN_SLACK_NOTIFICATIONS"
 SLACK_WEBHOOK_HOST = "hooks.slack.com"
 MAX_CREDENTIAL_BYTES = 8192
 MACHINE_CONFIG_DIRECTORY = ".cafe"
@@ -230,9 +232,29 @@ def _trusted_user_home() -> Path:
     return Path(pwd.getpwuid(os.getuid()).pw_dir)
 
 
+def _login_user_home() -> Path:
+    """Resolve the real login home without test seams or mutable environment input."""
+    if os.name != "posix":  # pragma: no cover - Windows has no pwd database.
+        return Path.home()
+    import pwd
+
+    return Path(pwd.getpwuid(os.getuid()).pw_dir)
+
+
+def _slack_credential_file() -> Path:
+    """Select one package-defined credential file for the current process."""
+    user_home = _trusted_user_home()
+    if (
+        os.environ.get(TEST_RUN_SLACK_ROUTING_ENV) == "1"
+        and user_home == _login_user_home()
+    ):
+        return user_home / TEST_RUN_SLACK_WEBHOOK_FILENAME
+    return user_home / SLACK_WEBHOOK_FILENAME
+
+
 def load_slack_webhook_url() -> str:
-    """Read and validate only the fixed user-owned Slack credential file."""
-    credential_file = _trusted_user_home() / SLACK_WEBHOOK_FILENAME
+    """Read and validate the package-defined, user-owned Slack credential file."""
+    credential_file = _slack_credential_file()
     flags = (
         os.O_RDONLY
         | getattr(os, "O_NOFOLLOW", 0)

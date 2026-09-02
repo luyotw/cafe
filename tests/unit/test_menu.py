@@ -10,6 +10,8 @@ import pytest
 
 from cafe.ui.menu import MenuState, MenuStateDetector, InteractiveMenu
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 
 # ---------------------------------------------------------------------------
 # MenuStateDetector tests

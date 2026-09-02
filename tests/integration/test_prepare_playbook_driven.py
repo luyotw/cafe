@@ -9,6 +9,8 @@ from typer.testing import CliRunner
 
 from cafe.ui.cli import app
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 runner = CliRunner()
 
 

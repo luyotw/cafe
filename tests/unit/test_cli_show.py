@@ -10,6 +10,7 @@ from cafe.ui.cli import app, _resolve_iteration_number, _get_show_file_path
 
 
 runner = CliRunner()
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 
 class TestResolveIterationNumber:

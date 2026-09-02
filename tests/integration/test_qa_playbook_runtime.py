@@ -11,6 +11,8 @@ from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 
 def _finish_pr(issue_dir: Path) -> None:
     store = BlackboardStore(issue_dir)
@@ -30,6 +32,7 @@ def _runtime_playbook(name: str) -> dict:
     playbook = PlaybookLoader().load(name, strict=True)
     playbook["steps"]["pr"]["capability_requests"] = []
     playbook["steps"]["pr"]["behavior"] = {"completion": "status_code"}
+    playbook["steps"]["pr"]["on"].pop("confirm_output", None)
     return playbook
 
 

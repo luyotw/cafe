@@ -20,6 +20,8 @@ from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.ui.cli import app
 from cafe.utils.phase_config import PhaseStepModelResolution
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 runner = CliRunner()
 
 

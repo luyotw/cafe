@@ -15,6 +15,8 @@ from cafe.ui.human_tasks import (
     validate_step_human_task_completion,
 )
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_skill_frontmatter")
+
 
 @pytest.fixture(autouse=True)
 def _isolate_global_catalog(
@@ -1968,7 +1970,9 @@ def test_builtin_catalog_includes_hotfix_and_simple() -> None:
     assert "incident" in playbooks
 
 
-def test_builtin_playbooks_declare_en_us_conversation_locale() -> None:
+def test_builtin_playbooks_declare_en_us_conversation_locale(
+    cached_builtin_playbook_models,
+) -> None:
     loader = PlaybookLoader()
 
     for playbook_id in (
@@ -1986,7 +1990,7 @@ def test_builtin_playbooks_declare_en_us_conversation_locale() -> None:
         assert loader.load_model(playbook_id).model.playbook.conversation_locale == "en-US"
 
 
-def test_builtin_hotfix_and_simple_playbooks_load() -> None:
+def test_builtin_hotfix_and_simple_playbooks_load(cached_builtin_playbook_models) -> None:
     loader = PlaybookLoader()
 
     hotfix = loader.load_model("hotfix").model
@@ -2074,7 +2078,9 @@ steps:
         loader.load("invalid-null-scope")
 
 
-def test_builtin_non_software_playbooks_define_non_default_handoff_metadata() -> None:
+def test_builtin_non_software_playbooks_define_non_default_handoff_metadata(
+    cached_builtin_playbook_models,
+) -> None:
     loader = PlaybookLoader()
 
     research = loader.load_model("research").model
@@ -2088,9 +2094,13 @@ def test_builtin_non_software_playbooks_define_non_default_handoff_metadata() ->
     assert "requirements" not in (editorial.steps["draft"].handoff_label or "").lower()
 
 
-def test_builtin_user_handoffs_resolve_nonempty_declared_policies() -> None:
+def test_builtin_user_handoffs_resolve_nonempty_declared_policies(
+    cached_builtin_playbook_models,
+) -> None:
     """Builtin user pauses must not fall back to implicit development behavior."""
     loader = PlaybookLoader()
+    skill_loader = SkillLoader()
+    skill_loader.discover()
     triggers = {"confirm_output", "need_clarification", "no_changes_needed"}
 
     for playbook_id in (
@@ -2112,6 +2122,7 @@ def test_builtin_user_handoffs_resolve_nonempty_declared_policies() -> None:
                     playbook_data=playbook,
                     step_name=step_name,
                     trigger=trigger,
+                    skill_loader=skill_loader,
                 )
 
                 assert policy.prompt

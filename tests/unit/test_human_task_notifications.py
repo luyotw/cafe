@@ -77,6 +77,14 @@ def _write_credential(home: Path, value: str = VALID_WEBHOOK) -> Path:
     return credential
 
 
+def _write_test_run_credential(home: Path, value: str = VALID_WEBHOOK) -> Path:
+    credential = home / ".cafe" / "test-slack-webhook"
+    credential.parent.mkdir(parents=True, exist_ok=True)
+    credential.write_text(value, encoding="utf-8")
+    credential.chmod(0o600)
+    return credential
+
+
 def test_actionable_message_exposes_allowlisted_task_journey_without_prompt_or_credentials() -> None:
     """Test List 2: notification content stays within the safe task allowlist."""
     message = build_human_task_message(
@@ -237,6 +245,43 @@ def test_credential_resolver_reads_only_the_fixed_user_file(
     _set_home(monkeypatch, home)
 
     assert load_slack_webhook_url() == VALID_WEBHOOK
+
+
+def test_credential_resolver_uses_the_test_channel_only_for_the_coverage_runner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The test runner can select only its separately provisioned local credential."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    home = tmp_path / "home"
+    home.mkdir()
+    _write_credential(home, "https://hooks.slack.com/services/T00000000/B00000000/production")
+    test_webhook = "https://hooks.slack.com/services/T00000000/B00000000/test-channel"
+    _write_test_run_credential(home, test_webhook)
+    _set_home(monkeypatch, home)
+    monkeypatch.setattr(notification_mod, "_login_user_home", lambda: home)
+    monkeypatch.setenv("CAFE_TEST_RUN_SLACK_NOTIFICATIONS", "1")
+
+    assert load_slack_webhook_url() == test_webhook
+
+
+def test_credential_resolver_fails_closed_when_the_coverage_runner_has_no_test_channel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A test run must never fall back to the HumanTask channel and cause noise."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    home = tmp_path / "home"
+    home.mkdir()
+    _write_credential(home)
+    _set_home(monkeypatch, home)
+    monkeypatch.setattr(notification_mod, "_login_user_home", lambda: home)
+    monkeypatch.setenv("CAFE_TEST_RUN_SLACK_NOTIFICATIONS", "1")
+
+    with pytest.raises(SlackNotificationError) as exc:
+        load_slack_webhook_url()
+
+    assert exc.value.code == "slack_credentials_missing"
 
 
 def test_credential_resolver_ignores_home_environment(

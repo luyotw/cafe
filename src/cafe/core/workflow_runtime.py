@@ -754,6 +754,10 @@ class BlackboardWorkflowRuntime:
             step_on_declares(self.steps.get(current_step, {}), "confirm_output")
             and not resolve_step_behavior(self.playbook, current_step).publish_confirmation
             and contract.to_owner is not HandoffOwner.USER
+            and not self._is_declared_manual_handoff(
+                current_step=current_step,
+                contract=contract,
+            )
             and not (
                 contract.to_owner is HandoffOwner.AGENT
                 and contract.to_step == current_step
@@ -782,6 +786,34 @@ class BlackboardWorkflowRuntime:
                 allowed_steps=list(self.steps.keys()),
             )
         return contract
+
+    def _is_declared_manual_handoff(
+        self,
+        *,
+        current_step: str,
+        contract: HandoffContract,
+    ) -> bool:
+        """Allow an explicit correction route to bypass an output-confirmation gate.
+
+        A confirmation gate protects the successful output from being advanced
+        without a human decision.  It must not turn a phase's declared
+        correction route into a user pause: a review finding needs to return
+        to its responsible agent step before there is an output to approve.
+        The target must exactly match the playbook's ``manual_handoff`` route,
+        so an arbitrary agent-authored baton cannot use this exception to skip
+        confirmation.
+        """
+        if (
+            contract.to_owner is not HandoffOwner.AGENT
+            or contract.intent is not HandoffIntent.MANUAL_HANDOFF
+        ):
+            return False
+        step_def = self.steps.get(current_step, {})
+        transitions = step_def.get("on") if isinstance(step_def, dict) else None
+        return (
+            isinstance(transitions, dict)
+            and transitions.get("manual_handoff") == contract.to_step
+        )
 
     def _step_requires_publish_receipt(self, current_step: str) -> bool:
         if not resolve_step_behavior(self.playbook, current_step).publish_confirmation:

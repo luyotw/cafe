@@ -1896,6 +1896,79 @@ def test_runtime_enforces_confirmation_gate_over_agent_baton(tmp_path: Path) -> 
     }
 
 
+def test_runtime_preserves_declared_manual_handoff_from_confirmation_gate(
+    tmp_path: Path,
+) -> None:
+    """A blocking review returns to its declared correction step without approval."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "review-correction"
+    issue_dir.mkdir(parents=True)
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "review": {
+                "skill": "review",
+                "role": "reviewer",
+                "on": {
+                    "await_agent": "closeout",
+                    "confirm_output": "review",
+                    "manual_handoff": "knowledge",
+                },
+            },
+            "knowledge": {
+                "skill": "knowledge",
+                "role": "developer",
+                "on": {"await_agent": "_done"},
+            },
+            "closeout": {
+                "skill": "closeout",
+                "role": "developer",
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        store = BlackboardStore(issue_dir)
+        if step_name == "review":
+            store.update_handoff_contract(
+                state,
+                from_step="review",
+                to_owner=HandoffOwner.AGENT,
+                to_step="knowledge",
+                intent=HandoffIntent.MANUAL_HANDOFF,
+                source="test.review_blocking",
+            )
+        else:
+            store.update_handoff_contract(
+                state,
+                from_step="knowledge",
+                to_owner=HandoffOwner.DONE,
+                to_step="done",
+                intent=HandoffIntent.WORKFLOW_COMPLETE,
+                source="test.knowledge_complete",
+            )
+        return StepExecutionResult(response="complete", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="review")
+
+    current = BlackboardStore(issue_dir).load_or_create("review")
+    enforced = [
+        event
+        for event in current.events
+        if event.event_type == "confirmation_gate_enforced"
+    ]
+
+    assert result.completed is True
+    assert calls == ["review", "knowledge"]
+    assert enforced == []
+
+
 def test_runtime_status_code_missing_no_handoff_contract(tmp_path: Path) -> None:
     """When status and handoff are absent, the runtime still pauses."""
     issue_dir = tmp_path / ".cafe" / "issues" / "missing-no-handoff"

@@ -11,6 +11,8 @@ from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 
 def _load_default_playbook() -> dict:
     return PlaybookLoader().load("standard")

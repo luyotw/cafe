@@ -12,6 +12,8 @@ from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui import cli_shared
 from cafe.ui.human_tasks import resolve_step_human_task
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 
 def test_owner_declared_manual_handoff_uses_the_declared_durable_task(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

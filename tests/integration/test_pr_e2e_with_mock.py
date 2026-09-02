@@ -21,6 +21,8 @@ from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.phase_config import PhaseStepModelResolution
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 
 def test_pr_publish_generic_journey_preserves_outputs_and_correlates_receipt(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

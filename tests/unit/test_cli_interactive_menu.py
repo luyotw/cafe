@@ -14,6 +14,7 @@ from cafe.ui.cli import app
 
 
 runner = CliRunner()
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 
 class TestBareCAFELaunchesMenu:

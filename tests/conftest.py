@@ -2,6 +2,7 @@
 
 import sys
 import shutil
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -45,7 +46,7 @@ def cached_builtin_skill_frontmatter(monkeypatch: pytest.MonkeyPatch) -> None:
             return real_read(skill_file)
         if resolved not in _BUILTIN_SKILL_FRONTMATTER_CACHE:
             _BUILTIN_SKILL_FRONTMATTER_CACHE[resolved] = real_read(skill_file)
-        return _BUILTIN_SKILL_FRONTMATTER_CACHE[resolved]
+        return deepcopy(_BUILTIN_SKILL_FRONTMATTER_CACHE[resolved])
 
     def discover(loader: SkillLoader, *, strict: bool = False):
         if loader._catalog and all(
@@ -94,7 +95,7 @@ def cached_builtin_playbook_models(
         if loader.builtin_root == package_data_root and name in _BUILTIN_PLAYBOOK_CACHE:
             resolved = loader.resolver.resolve(CatalogKind.PLAYBOOK, name)
             if resolved.source == "builtin":
-                return _BUILTIN_PLAYBOOK_CACHE[name]
+                return deepcopy(_BUILTIN_PLAYBOOK_CACHE[name])
         return real_load_model(loader, name, strict=strict)
 
     monkeypatch.setattr(PlaybookLoader, "load_model", load_model)
