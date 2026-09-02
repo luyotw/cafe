@@ -450,6 +450,102 @@ def test_delegated_restart_skips_phase_with_durable_transition_before_pointer(
     assert decisions == [1]
 
 
+@pytest.mark.parametrize("interrupt_after_pointer", [False, True])
+def test_delegated_restart_skips_final_phase_around_durable_completion_pointer(
+    tmp_path: Path,
+    interrupt_after_pointer: bool,
+) -> None:
+    issue_dir = tmp_path / "completion-pointer-crash"
+    playbook = {
+        "playbook": {"id": "completion-pointer-crash"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_intents": ["await_agent"],
+                "on": {"await_agent": "plan"},
+            },
+            "plan": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_intents": ["workflow_complete"],
+                "on": {"workflow_complete": "_done"},
+            },
+        },
+    }
+    executed: list[str] = []
+
+    def executor(step_name: str, _step_def: dict, _state: object) -> StepExecutionResult:
+        executed.append(step_name)
+        status_code = "await_agent" if step_name == "spec" else "workflow_complete"
+        return StepExecutionResult(response=status_code, artifacts={}, status_code=status_code)
+
+    decisions: list[int] = []
+
+    def decide(packet):
+        decisions.append(packet.sequence)
+        return _decision(packet)
+
+    interrupted = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    publish_current_step = interrupted.blackboard_store.set_current_step
+
+    def interrupt_before_done(state, step: str) -> None:
+        if step == "done":
+            raise RuntimeError("interrupted before done publication")
+        publish_current_step(state, step)
+
+    if interrupt_after_pointer:
+        interruption = patch(
+            "cafe.core.workflow_runtime.clear_marker_if_matches",
+            side_effect=RuntimeError("interrupted after done publication"),
+        )
+    else:
+        interruption = patch.object(
+            interrupted.blackboard_store,
+            "set_current_step",
+            side_effect=interrupt_before_done,
+        )
+    with interruption:
+        with pytest.raises(RuntimeError, match="done publication"):
+            Version2WorkflowRuntime(
+                interrupted,
+                _policy("delegated"),
+                delegated_decision_provider=decide,
+            ).run(start_step="spec")
+
+    crashed = BlackboardStore(issue_dir).load_or_create("spec")
+    assert crashed.current_step == ("done" if interrupt_after_pointer else "plan")
+    assert [
+        event.data["step"]
+        for event in crashed.events
+        if event.event_type == "workflow_completed"
+    ] == ["plan"]
+
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = Version2WorkflowRuntime(
+        resumed,
+        _policy("delegated"),
+        delegated_decision_provider=decide,
+    ).run()
+
+    assert result.completed is True
+    assert executed == ["spec", "plan"]
+    assert decisions == [1]
+    recovered = BlackboardStore(issue_dir).load_or_create("spec")
+    assert recovered.current_step == "done"
+    assert len(
+        [event for event in recovered.events if event.event_type == "workflow_completed"]
+    ) == 1
+
+
 @pytest.mark.parametrize("human_task_delivery_available", [False, True])
 def test_lifecycle_guidance_and_later_inspection_remain_session_safe(
     tmp_path: Path, human_task_delivery_available: bool

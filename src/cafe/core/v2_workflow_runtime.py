@@ -57,8 +57,22 @@ class Version2WorkflowRuntime:
             with ExitStack() as authority_stack:
                 recovered_start = None
                 if requested_start is None:
-                    recovered_start = self._recovered_start_step_from_transition()
+                    recovered_start = self._recovered_start_step_from_lifecycle()
                     requested_start = recovered_start
+                    if recovered_start == "done":
+                        self.phase_runtime.blackboard_store.set_current_step(
+                            self.phase_runtime.blackboard,
+                            "done",
+                        )
+                        result = self.phase_runtime.run(
+                            start_step="done",
+                            single_step=True,
+                        )
+                        self.coordinator.record_lifecycle(
+                            "complete",
+                            reason=result.final_status_code,
+                        )
+                        return result
 
                 if self.policy_authority is not None:
                     try:
@@ -133,20 +147,28 @@ class Version2WorkflowRuntime:
             raise RuntimeError("version 2 workflow produced no result")
         raise RuntimeError(f"Version 2 workflow reached transition limit ({max_transitions})")
 
-    def _recovered_start_step_from_transition(self) -> str | None:
-        """Resume the target of a durable transition whose pointer was not published."""
+    def _recovered_start_step_from_lifecycle(self) -> str | None:
+        """Resume a durable lifecycle target whose pointer was not published."""
         current_step = str(self.phase_runtime.blackboard.current_step)
-        transition = next(
+        lifecycle_event = next(
             (
                 event
                 for event in reversed(self.phase_runtime.blackboard.events)
-                if event.event_type == "transition"
+                if event.event_type in {"transition", "workflow_completed"}
             ),
             None,
         )
-        if transition is None or str(transition.data.get("from", "")) != current_step:
+        if lifecycle_event is None:
             return None
-        target = str(transition.data.get("to", ""))
+        if lifecycle_event.event_type == "workflow_completed":
+            completed_step = str(lifecycle_event.data.get("step", ""))
+            target = str(lifecycle_event.data.get("next_step", ""))
+            if completed_step == current_step and target in {"done", "_done"}:
+                return "done"
+            return None
+        if str(lifecycle_event.data.get("from", "")) != current_step:
+            return None
+        target = str(lifecycle_event.data.get("to", ""))
         declared_steps = getattr(self.phase_runtime, "steps", {})
         if not target or target == current_step or target not in declared_steps:
             return None
