@@ -4,6 +4,8 @@ import multiprocessing
 import time
 from pathlib import Path
 
+import pytest
+
 from cafe.core.blackboard import BlackboardStore
 from cafe.core.driver_policy import DriverPolicyContract
 from cafe.core.driver_runtime import DriverCoordinator, DriverDecision
@@ -91,6 +93,85 @@ def _write_generic_event_with_mixed_platform_lock(
         blackboard_mod._acquire_process_file_lock = original_acquire
         blackboard_mod.BlackboardStore._save_unlocked = original_save
     results.put(("ok", event_type))
+
+
+def _hold_strict_driver_transaction(
+    issue_dir_value: str,
+    transaction_entered: object,
+    release_transaction: object,
+    results: object,
+) -> None:
+    """Commit strict driver state after a coordinated generic writer attempts a save."""
+    store = BlackboardStore(Path(issue_dir_value))
+    state = store.load_or_create("spec")
+    try:
+        with store.driver_transaction(state) as persisted:
+            persisted.driver_state["mixed_lock_probe"] = {"committed": True}
+            transaction_entered.set()
+            if not release_transaction.wait(timeout=10):
+                raise TimeoutError("strict driver transaction was not released")
+    except BaseException as exc:
+        results.put(("error", repr(exc)))
+        return
+    results.put(("ok", "driver"))
+
+
+def _write_generic_state_beside_strict_transaction(
+    issue_dir_value: str,
+    generic_action: str,
+    state_loaded: object,
+    transaction_entered: object,
+    save_attempted: object,
+    save_entered: object,
+    results: object,
+) -> None:
+    """Exercise a native-failure generic save through event and receipt callers."""
+    import cafe.core.blackboard as blackboard_mod
+
+    store = BlackboardStore(Path(issue_dir_value))
+    state = store.load_or_create("spec")
+    original_acquire = blackboard_mod._acquire_process_file_lock
+    original_save = blackboard_mod.BlackboardStore._save_unlocked
+
+    def _fail_state_file_lock(lock_file: object) -> object:
+        if Path(str(lock_file.name)) == store.state_lock_path:
+            raise OSError("simulated generic state-lock failure")
+        return original_acquire(lock_file)
+
+    def _observed_save(save_store: BlackboardStore, save_state: object) -> None:
+        save_entered.set()
+        original_save(save_store, save_state)
+
+    blackboard_mod._acquire_process_file_lock = _fail_state_file_lock
+    blackboard_mod.BlackboardStore._save_unlocked = _observed_save
+    try:
+        state_loaded.set()
+        if not transaction_entered.wait(timeout=10):
+            raise TimeoutError("strict driver transaction did not enter")
+        save_attempted.set()
+        if generic_action == "event":
+            store.record_event(
+                state,
+                "mixed_lock_event",
+                {"step": "spec", "source": "native_failure"},
+            )
+        else:
+            with store.capability_receipt_transaction(state):
+                store.upsert_capability_receipt(
+                    state,
+                    {
+                        "notification_attempt_id": "mixed-lock-receipt",
+                        "code": "notification_delivered",
+                        "outcome": "success",
+                    },
+                )
+    except BaseException as exc:
+        results.put(("error", repr(exc)))
+        return
+    finally:
+        blackboard_mod._acquire_process_file_lock = original_acquire
+        blackboard_mod.BlackboardStore._save_unlocked = original_save
+    results.put(("ok", generic_action))
 
 
 def test_generic_save_cannot_clobber_driver_owned_state(tmp_path: Path) -> None:
@@ -224,3 +305,62 @@ def test_generic_saves_share_lock_when_one_platform_lock_fails(tmp_path: Path) -
     assert all(process.exitcode == 0 for process in workers)
     assert all(status == "ok" for status, _event_type in outcomes)
     assert {"native_event", "fallback_event"} <= event_types
+
+
+@pytest.mark.parametrize("generic_action", ["event", "receipt"])
+def test_native_failure_generic_save_serializes_with_strict_transaction(
+    tmp_path: Path, generic_action: str
+) -> None:
+    """Unit 7/9/10 + Integration 5/6: every successful writer retains its fact."""
+    issue_dir = tmp_path / generic_action
+    BlackboardStore(issue_dir).load_or_create("spec")
+    context = multiprocessing.get_context("spawn")
+    state_loaded = context.Event()
+    transaction_entered = context.Event()
+    save_attempted = context.Event()
+    save_entered = context.Event()
+    release_transaction = context.Event()
+    results = context.Queue()
+    generic_writer = context.Process(
+        target=_write_generic_state_beside_strict_transaction,
+        args=(
+            str(issue_dir),
+            generic_action,
+            state_loaded,
+            transaction_entered,
+            save_attempted,
+            save_entered,
+            results,
+        ),
+    )
+    strict_writer = context.Process(
+        target=_hold_strict_driver_transaction,
+        args=(str(issue_dir), transaction_entered, release_transaction, results),
+    )
+
+    try:
+        generic_writer.start()
+        assert state_loaded.wait(timeout=10)
+        strict_writer.start()
+        assert transaction_entered.wait(timeout=10)
+        assert save_attempted.wait(timeout=10)
+        persistence_spans_overlapped = save_entered.wait(timeout=0.5)
+    finally:
+        release_transaction.set()
+        generic_writer.join(timeout=15)
+        strict_writer.join(timeout=15)
+
+    outcomes = [results.get(timeout=5) for _ in range(2)]
+    reloaded = BlackboardStore(issue_dir).load_or_create("spec")
+    assert not persistence_spans_overlapped
+    assert generic_writer.exitcode == 0
+    assert strict_writer.exitcode == 0
+    assert all(status == "ok" for status, _action in outcomes)
+    assert reloaded.driver_state["mixed_lock_probe"] == {"committed": True}
+    if generic_action == "event":
+        assert any(event.event_type == "mixed_lock_event" for event in reloaded.events)
+    else:
+        assert any(
+            receipt.get("notification_attempt_id") == "mixed-lock-receipt"
+            for receipt in reloaded.capability_receipts
+        )

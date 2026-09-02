@@ -79,12 +79,23 @@ def _process_file_lock(lock_file: IO[str]) -> Iterator[None]:
 
 
 @contextmanager
-def _optional_process_file_lock(lock_file: IO[str]) -> Iterator[None]:
-    """Serialize generic persistence through one portable lock domain."""
+def _portable_process_file_lock(lock_file: IO[str]) -> Iterator[None]:
+    """Hold the portable outer lock shared by whole-blackboard writers."""
     portable_lock_path = Path(f"{lock_file.name}.sqlite3")
     connection = sqlite3.connect(portable_lock_path, isolation_level=None, timeout=30.0)
     try:
         connection.execute("BEGIN EXCLUSIVE")
+        yield
+    finally:
+        if connection.in_transaction:
+            connection.rollback()
+        connection.close()
+
+
+@contextmanager
+def _optional_process_file_lock(lock_file: IO[str]) -> Iterator[None]:
+    """Serialize generic persistence with optional platform-native locking."""
+    with _portable_process_file_lock(lock_file):
         try:
             release = _acquire_process_file_lock(lock_file)
         except (OSError, RuntimeError):
@@ -97,10 +108,6 @@ def _optional_process_file_lock(lock_file: IO[str]) -> Iterator[None]:
                     release()
                 except OSError:
                     pass
-    finally:
-        if connection.in_transaction:
-            connection.rollback()
-        connection.close()
 
 
 def _serialized_identity(value: Any) -> str:
@@ -1004,14 +1011,17 @@ class BlackboardStore:
         with self._thread_lock_for(self.file_path):
             self.issue_dir.mkdir(parents=True, exist_ok=True)
             with self.driver_lock_path.open("a+", encoding="utf-8") as lock_file:
-                with _process_file_lock(lock_file):
-                    if self.file_path.exists():
-                        raw = json.loads(self.file_path.read_text(encoding="utf-8"))
-                        persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
-                        state.__dict__.clear()
-                        state.__dict__.update(persisted.__dict__)
-                    yield state
-                    self._save_unlocked(state)
+                with _portable_process_file_lock(lock_file):
+                    with _process_file_lock(lock_file):
+                        if self.file_path.exists():
+                            raw = json.loads(self.file_path.read_text(encoding="utf-8"))
+                            persisted = BlackboardState.from_dict(
+                                raw, initial_step=state.current_step
+                            )
+                            state.__dict__.clear()
+                            state.__dict__.update(persisted.__dict__)
+                        yield state
+                        self._save_unlocked(state)
 
     @classmethod
     def _thread_lock_for(cls, file_path: Path) -> threading.RLock:
