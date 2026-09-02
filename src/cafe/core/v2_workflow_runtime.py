@@ -55,6 +55,11 @@ class Version2WorkflowRuntime:
 
         for _ in range(max_transitions):
             with ExitStack() as authority_stack:
+                recovered_start = None
+                if requested_start is None:
+                    recovered_start = self._recovered_start_step_from_transition()
+                    requested_start = recovered_start
+
                 if self.policy_authority is not None:
                     try:
                         current_policy = authority_stack.enter_context(self.policy_authority())
@@ -68,13 +73,16 @@ class Version2WorkflowRuntime:
                         return self._policy_pause_result()
 
                 if self.policy.driver.mode == "delegated":
+                    requested_action = recovered_start or str(
+                        self.phase_runtime.blackboard.current_step
+                    )
                     pending = self.coordinator.pending_boundary(
-                        str(self.phase_runtime.blackboard.current_step),
+                        requested_action,
                         policy=self.policy,
                     )
                     if pending is None:
                         pending = self.coordinator.reconcile_missing_boundary(
-                            str(self.phase_runtime.blackboard.current_step),
+                            requested_action,
                             policy=self.policy,
                         )
                     if pending is not None and not self._authorize_delegated_boundary(pending):
@@ -124,6 +132,25 @@ class Version2WorkflowRuntime:
         if last_result is None:  # pragma: no cover - guarded by max_transitions.
             raise RuntimeError("version 2 workflow produced no result")
         raise RuntimeError(f"Version 2 workflow reached transition limit ({max_transitions})")
+
+    def _recovered_start_step_from_transition(self) -> str | None:
+        """Resume the target of a durable transition whose pointer was not published."""
+        current_step = str(self.phase_runtime.blackboard.current_step)
+        transition = next(
+            (
+                event
+                for event in reversed(self.phase_runtime.blackboard.events)
+                if event.event_type == "transition"
+            ),
+            None,
+        )
+        if transition is None or str(transition.data.get("from", "")) != current_step:
+            return None
+        target = str(transition.data.get("to", ""))
+        declared_steps = getattr(self.phase_runtime, "steps", {})
+        if not target or target == current_step or target not in declared_steps:
+            return None
+        return target
 
     def _authorize_delegated_boundary(
         self,

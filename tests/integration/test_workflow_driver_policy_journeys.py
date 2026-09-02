@@ -368,6 +368,88 @@ def test_delegated_restart_recovers_missing_boundary_and_consumes_once(
     assert len(state.driver_state["decisions"]) == 1
 
 
+def test_delegated_restart_skips_phase_with_durable_transition_before_pointer(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "transition-pointer-crash"
+    playbook = {
+        "playbook": {"id": "transition-pointer-crash"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_intents": ["await_agent"],
+                "on": {"await_agent": "plan"},
+            },
+            "plan": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_intents": ["workflow_complete"],
+                "on": {"workflow_complete": "_done"},
+            },
+        },
+    }
+    executed: list[str] = []
+
+    def executor(step_name: str, _step_def: dict, _state: object) -> StepExecutionResult:
+        executed.append(step_name)
+        status_code = "await_agent" if step_name == "spec" else "workflow_complete"
+        return StepExecutionResult(response=status_code, artifacts={}, status_code=status_code)
+
+    decisions: list[int] = []
+
+    def decide(packet):
+        decisions.append(packet.sequence)
+        return _decision(packet)
+
+    interrupted = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    publish_current_step = interrupted.blackboard_store.set_current_step
+
+    def interrupt_before_plan(state, step: str) -> None:
+        if step == "plan":
+            raise RuntimeError("interrupted before current-step publication")
+        publish_current_step(state, step)
+
+    with patch.object(
+        interrupted.blackboard_store,
+        "set_current_step",
+        side_effect=interrupt_before_plan,
+    ):
+        with pytest.raises(RuntimeError, match="current-step publication"):
+            Version2WorkflowRuntime(
+                interrupted,
+                _policy("delegated"),
+                delegated_decision_provider=decide,
+            ).run(start_step="spec")
+
+    crashed = BlackboardStore(issue_dir).load_or_create("spec")
+    assert crashed.current_step == "spec"
+    assert [
+        (event.data["from"], event.data["to"])
+        for event in crashed.events
+        if event.event_type == "transition"
+    ] == [("spec", "plan")]
+
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = Version2WorkflowRuntime(
+        resumed,
+        _policy("delegated"),
+        delegated_decision_provider=decide,
+    ).run()
+
+    assert result.completed is True
+    assert executed == ["spec", "plan"]
+    assert decisions == [1]
+
+
 @pytest.mark.parametrize("human_task_delivery_available", [False, True])
 def test_lifecycle_guidance_and_later_inspection_remain_session_safe(
     tmp_path: Path, human_task_delivery_available: bool
