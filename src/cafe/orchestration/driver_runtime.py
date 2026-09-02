@@ -252,7 +252,7 @@ class DriverCoordinator:
                 return replacement
             return None
 
-    def read_pending_boundary(self, requested_action: str) -> DriverPacket | None:
+    def read_pending_boundary(self, requested_action: str | None = None) -> DriverPacket | None:
         """Inspect an unresolved boundary without changing its policy or ledger.
 
         Explicit ``--single-step`` uses this to honour an already-open delegated
@@ -280,7 +280,7 @@ class DriverCoordinator:
             if sequence in consumed or sequence in superseded:
                 continue
             packet = DriverPacket.model_validate(packets[raw_sequence])
-            if packet.requested_action == requested_action:
+            if requested_action is None or packet.requested_action == requested_action:
                 return packet
         return None
 

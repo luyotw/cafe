@@ -88,6 +88,8 @@ def _resume_issue_workflow(issue: str, playbook: str) -> None:
         start_step=None,
         single_step=False,
         background=False,
+        internal_worker_id=None,
+        internal_policy_digest=None,
         dry_run=False,
         user_input=None,
         add_dir=[],

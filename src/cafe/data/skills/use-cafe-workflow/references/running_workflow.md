@@ -163,9 +163,11 @@ answering or resuming. Non-interactive resumption is allowed only when the exact
 answer or permission already exists in the current thread, or the confirmed
 contract delegates that specific decision to the driver.
 
-Before execution, resolve and configure every phase chain. Do not interrupt a
-healthy unattended or delegated run at phase boundaries. Attached mode returns
-responsibility to the initiator after a boundary; polling remains read-only.
+Before execution, resolve and configure every phase chain. Attached and
+unattended execution use the continuous core directly; delegated execution
+remains gated by its outer controller, which advances the core one transition
+at a time. Attached selects foreground hosting and its polling remains
+read-only. Do not interrupt a healthy run at phase boundaries.
 Manual `--single-step` is a diagnostic invocation control, not persisted
 policy. If a user handoff sits before remaining agent work, reassess those
 future chains under `model_selection.md` before submitting the structured
@@ -177,9 +179,12 @@ response. A terminal `_done` baton has no future chain to adjust.
   simpler invocation are useful. Use
   `cafe workflow --execute --mute-agent-output` when direct controls are needed,
   and use `--single-step` only as an explicit manual or diagnostic control.
-- `cafe workflow --execute --mute-agent-output --background` resumes the durable
-  workflow through the fixed worker and returns its PID. It cannot carry
-  `--single-step`, `--start-step`, or `--add-dir`.
+- An ordinary unattended `cafe workflow --execute --mute-agent-output` with no
+  input, start-step, add-dir, or single-step control starts the fixed worker
+  automatically and returns its PID. `--background` explicitly selects that
+  worker for unattended or delegated execution; attached mode must remain in
+  the foreground. A background invocation cannot carry `--single-step`,
+  `--start-step`, or `--add-dir`.
 - `--background --user-input '<exact payload>'` durably stages initial input,
   or validates and persists a current HumanTask response, before spawning the
   fixed worker. An invalid, stale, mismatched, or inapplicable HumanTask

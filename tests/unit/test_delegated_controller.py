@@ -52,6 +52,27 @@ class FakeHumanTaskRuntime(FakePhaseRuntime):
         )
 
 
+class FailingPhaseRuntime(FakePhaseRuntime):
+    def run(self, **_kwargs) -> PlaybookRunResult:
+        raise ValueError("core phase failure")
+
+
+class AfterPointerCompletionRuntime(FakePhaseRuntime):
+    """Model core recovery after the completion pointer, before its baton."""
+
+    def __init__(self, issue_dir: Path) -> None:
+        super().__init__(issue_dir)
+        self.blackboard_store.set_current_step(self.blackboard, "done")
+
+    def run(self, **_kwargs) -> PlaybookRunResult:
+        return PlaybookRunResult(
+            final_step="spec",
+            final_status_code="workflow_complete",
+            completed=True,
+            detail="completion-458",
+        )
+
+
 def _policy(model: str = "gpt-5.6-codex") -> DriverPolicyContract:
     return DriverPolicyContract.model_validate(
         {
@@ -255,3 +276,29 @@ def test_changed_policy_pauses_without_phase_execution(tmp_path: Path) -> None:
 
     assert result.final_status_code == "DRIVER_POLICY_PAUSED"
     assert runtime.executed == []
+
+
+def test_core_phase_error_is_not_relabelled_as_policy_invalidation(tmp_path: Path) -> None:
+    runtime = FailingPhaseRuntime(tmp_path)
+
+    with pytest.raises(ValueError, match="core phase failure"):
+        DelegatedWorkflowController(
+            runtime,
+            _policy(),
+            delegated_decision_provider=_decision,
+        ).run()
+
+
+def test_completion_replay_after_pointer_does_not_open_a_delegated_gate(tmp_path: Path) -> None:
+    runtime = AfterPointerCompletionRuntime(tmp_path)
+    decisions: list[object] = []
+
+    result = DelegatedWorkflowController(
+        runtime,
+        _policy(),
+        delegated_decision_provider=lambda packet: decisions.append(packet) or _decision(packet),
+    ).run()
+
+    assert result.completed is True
+    assert decisions == []
+    assert runtime.blackboard.driver_state.get("packets", {}) == {}

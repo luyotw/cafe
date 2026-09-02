@@ -633,6 +633,22 @@ class BlackboardWorkflowRuntime:
                 return str(value) if isinstance(value, str) and value else None
         return None
 
+    @staticmethod
+    def _contract_postdates_event(contract: HandoffContract, event: Any) -> bool:
+        """Whether a baton proves that a lifecycle event has already advanced.
+
+        A transition record is intentionally written before its pointer and
+        baton.  It is recoverable only until a later baton has been published;
+        otherwise replaying an old record could overwrite a user handoff from
+        its target step.
+        """
+        try:
+            return datetime.fromisoformat(contract.created_at) > datetime.fromisoformat(
+                str(event.timestamp)
+            )
+        except (TypeError, ValueError):
+            return False
+
     def _recover_unpublished_lifecycle_position(self) -> Optional[PlaybookRunResult]:
         """Publish one durable transition whose event survived a crash window.
 
@@ -655,10 +671,36 @@ class BlackboardWorkflowRuntime:
         if event.event_type == "transition":
             source = str(event.data.get("from", ""))
             target = str(event.data.get("to", ""))
-            if source != current or target not in self.steps or target == source:
+            if current not in {source, target} or target not in self.steps or target == source:
                 return None
+            try:
+                contract = self.blackboard_store.load_handoff_contract(
+                    self.blackboard,
+                    allowed_steps=list(self.steps.keys()),
+                )
+            except BatonRejected:
+                contract = None
+            if contract is not None:
+                if (
+                    contract.from_step == source
+                    and contract.to_owner == HandoffOwner.AGENT
+                    and contract.to_step == target
+                    and contract.intent == HandoffIntent.AWAIT_AGENT
+                ):
+                    return None
+                if self._contract_postdates_event(contract, event) or (
+                    current == target and contract.from_step == target
+                ):
+                    return None
             status = str(event.data.get("status_code", ""))
             transition_id = event.data.get("transition_id")
+            self._reset_step_attempts_after_successful_advance(
+                current_step=source,
+                next_step=target,
+                status_code=status,
+                transition_intent=event.data.get("transition_intent"),
+                transition_source=str(event.data.get("source", "")),
+            )
             self.blackboard_store.update_handoff_contract(
                 self.blackboard,
                 from_step=source,
@@ -668,7 +710,8 @@ class BlackboardWorkflowRuntime:
                 status_code=status,
                 source="workflow.lifecycle_recovery",
             )
-            self.blackboard_store.set_current_step(self.blackboard, target)
+            if current == source:
+                self.blackboard_store.set_current_step(self.blackboard, target)
             self.blackboard_store.record_event(
                 self.blackboard,
                 "transition_recovered",
@@ -688,8 +731,25 @@ class BlackboardWorkflowRuntime:
 
         source = str(event.data.get("step", ""))
         target = str(event.data.get("next_step", ""))
-        if source != current or target not in {"done", "_done"}:
+        if current not in {source, "done"} or target not in {"done", "_done"}:
             return None
+        try:
+            contract = self.blackboard_store.load_handoff_contract(
+                self.blackboard,
+                allowed_steps=list(self.steps.keys()),
+            )
+        except BatonRejected:
+            contract = None
+        if contract is not None:
+            if (
+                contract.from_step == source
+                and contract.to_owner == HandoffOwner.DONE
+                and contract.to_step == "done"
+                and contract.intent == HandoffIntent.WORKFLOW_COMPLETE
+            ):
+                return None
+            if self._contract_postdates_event(contract, event):
+                return None
         status = str(event.data.get("status_code", ""))
         transition_id = event.data.get("transition_id")
         self.blackboard_store.update_handoff_contract(
@@ -701,7 +761,8 @@ class BlackboardWorkflowRuntime:
             status_code=status,
             source="workflow.lifecycle_recovery",
         )
-        self.blackboard_store.set_current_step(self.blackboard, "done")
+        if current == source:
+            self.blackboard_store.set_current_step(self.blackboard, "done")
         self.blackboard_store.record_event(
             self.blackboard,
             "completion_recovered",
@@ -2359,6 +2420,11 @@ class BlackboardWorkflowRuntime:
             {"from": current_step, "to": next_step, "status_code": status_code},
         )
         transition_id = str(uuid4())
+        raw_transition_intent = (
+            transition_intent.value
+            if isinstance(transition_intent, HandoffIntent)
+            else transition_intent
+        )
         self.blackboard_store.record_event(
             self.blackboard,
             "transition",
@@ -2369,6 +2435,7 @@ class BlackboardWorkflowRuntime:
                 "status_code": status_code,
                 "source": source,
                 "runtime": runtime,
+                "transition_intent": raw_transition_intent,
             },
         )
         self._reset_step_attempts_after_successful_advance(

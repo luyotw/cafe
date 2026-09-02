@@ -1269,7 +1269,7 @@ class TestUserHandoff:
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-cli-resume"
         issue_dir.mkdir(parents=True, exist_ok=True)
         (issue_dir / "issue.yaml").write_text(
-            "playbook: standard\ncontract_version: 2\ndriver:\n  mode: unattended\n",
+            "playbook: standard\ncontract_version: 2\ndriver:\n  mode: attached\n  poll_interval_seconds: 10\n",
             encoding="utf-8",
         )
 
@@ -1348,7 +1348,7 @@ class TestNextStepLifecycle:
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-nextstep-missing"
         issue_dir.mkdir(parents=True, exist_ok=True)
         (issue_dir / "issue.yaml").write_text(
-            "playbook: standard\ncontract_version: 2\ndriver:\n  mode: unattended\n",
+            "playbook: standard\ncontract_version: 2\ndriver:\n  mode: attached\n  poll_interval_seconds: 10\n",
             encoding="utf-8",
         )
         (issue_dir / "blackboard.json").write_text(

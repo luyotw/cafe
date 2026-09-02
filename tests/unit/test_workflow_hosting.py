@@ -69,6 +69,29 @@ def test_fixed_worker_launch_carries_only_validated_internal_context(tmp_path: P
     assert WorkerLaunchStore(issue_dir).get(record["worker_id"])["status"] == "running"
 
 
+def test_parent_pid_update_never_regresses_a_fast_child_status(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue458-race"
+    store = WorkerLaunchStore(issue_dir)
+    record = store.start(mode="unattended", policy=_unattended_policy())
+
+    def popen(_command, **_kwargs):
+        assert store.get(record["worker_id"])["status"] == "started"
+        assert store.validate_child(
+            worker_id=record["worker_id"],
+            mode="unattended",
+            policy=_unattended_policy(),
+            policy_digest=record["policy_digest"],
+        )
+        store.mark(record["worker_id"], "stopped")
+        return type("Process", (), {"pid": 4581})()
+
+    FixedWorkerLauncher(issue_dir, popen_factory=popen).launch(record)
+
+    persisted = store.get(record["worker_id"])
+    assert persisted["status"] == "stopped"
+    assert persisted["pid"] == 4581
+
+
 def test_worker_startup_failure_is_sidecar_only(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue432"
 

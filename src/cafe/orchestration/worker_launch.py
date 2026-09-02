@@ -104,6 +104,16 @@ class WorkerLaunchStore:
                 record.pop("error_code", None)
             return dict(record)
 
+    def set_pid(self, worker_id: str, pid: int) -> dict[str, Any] | None:
+        """Attach the parent-observed PID without changing a child-owned status."""
+        with self._locked_records() as records:
+            record = records.get(worker_id)
+            if not isinstance(record, dict):
+                return None
+            record["pid"] = int(pid)
+            record["updated_at"] = _now()
+            return dict(record)
+
     def validate_child(
         self,
         *,
@@ -124,7 +134,7 @@ class WorkerLaunchStore:
                 record.get("mode") == mode
                 and record.get("policy_digest") == expected_digest
                 and policy_digest == expected_digest
-                and record.get("status") in {"starting", "started"}
+                and record.get("status") == "started"
             )
             if valid:
                 record["status"] = "running"
@@ -230,6 +240,10 @@ class FixedWorkerLauncher:
         if extra_args:
             command.extend(extra_args)
         try:
+            # Publish `started` before Popen can schedule the child.  The child
+            # may immediately advance to `running` or a terminal state, so the
+            # parent must never write `started` after spawning it.
+            self.store.mark(worker_id, "started")
             process = self.popen_factory(
                 command,
                 cwd=str(self._repository_root()),
@@ -242,7 +256,7 @@ class FixedWorkerLauncher:
         except OSError:
             self.store.mark(worker_id, "startup_failed", error_code="spawn_failed")
             raise
-        self.store.mark(worker_id, "started", pid=int(process.pid))
+        self.store.set_pid(worker_id, int(process.pid))
         return int(process.pid)
 
     def _repository_root(self) -> Path:

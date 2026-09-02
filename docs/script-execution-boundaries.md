@@ -28,7 +28,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/core/git.py::run_git` | Internal fixed Git command family |
 | `src/cafe/core/phase_review_mixin.py::_open_file_with_editor` | Explicit interactive editor |
 | `src/cafe/core/sandbox_execution.py::run` | Sandbox script adapter |
-| `src/cafe/core/workflow_hosting.py::_start_background` | Internal fixed CAFE v2 worker bootstrap |
+| `src/cafe/orchestration/worker_launch.py::launch` | Internal fixed CAFE worker bootstrap |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/format_kickoff_contract.py::_reexec_with_cafe_python` | Internal fixed Python re-exec |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::_cli_fingerprint` | Internal version probe |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::candidate_probe` | User-requested model availability probe |

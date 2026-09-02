@@ -218,6 +218,61 @@ def test_transition_replay_rebuilds_the_delegated_gate_from_durable_identity(
     ]
 
 
+def test_transition_replay_repairs_stale_baton_after_pointer_publication(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "transition-baton-crash"
+    executed: list[str] = []
+
+    def executor(step_name: str, _step_def: dict, _state: object) -> StepExecutionResult:
+        executed.append(step_name)
+        status = "await_agent" if step_name == "spec" else "workflow_complete"
+        return StepExecutionResult(response=status, artifacts={}, status_code=status)
+
+    interrupted = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_two_step_playbook(),
+        executor=executor,
+    )
+    publish_handoff = interrupted.blackboard_store.update_handoff_contract
+
+    def crash_after_pointer(state, **kwargs) -> None:
+        if kwargs.get("to_step") == "plan":
+            raise RuntimeError("interrupted after pointer publication")
+        publish_handoff(state, **kwargs)
+
+    with patch.object(
+        interrupted.blackboard_store,
+        "update_handoff_contract",
+        side_effect=crash_after_pointer,
+    ):
+        with pytest.raises(RuntimeError, match="pointer publication"):
+            interrupted.run(start_step="spec")
+
+    crashed = BlackboardStore(issue_dir).load_or_create("spec")
+    transition = next(event for event in crashed.events if event.event_type == "transition")
+    assert crashed.current_step == "plan"
+    assert crashed.handoff_contract.to_step == "spec"
+
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_two_step_playbook(),
+        executor=executor,
+    )
+    packets = []
+    result = DelegatedWorkflowController(
+        resumed,
+        _policy(),
+        delegated_decision_provider=lambda packet: packets.append(packet) or _decision(packet),
+    ).run()
+
+    assert result.completed is True
+    assert executed == ["spec", "plan"]
+    assert [packet.boundary_id for packet in packets] == [
+        f"transition:{transition.data['transition_id']}:plan"
+    ]
+
+
 def test_lifecycle_status_remains_session_safe(tmp_path: Path) -> None:
     issues_root = tmp_path / ".cafe" / "issues"
     issue_dir = issues_root / "lifecycle-inspection"

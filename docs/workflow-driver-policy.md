@@ -73,9 +73,9 @@ runtime is active.
 The blackboard records lifecycle state, correlated packets and decisions,
 one-time decision consumption, and delegated CLI/model/session provenance. A
 small launch-attempt sidecar records only worker identity, policy digest,
-status, PID when available, timestamps, and a bounded startup error. Status and
-show commands expose progress, lifecycle stops, decisions, and the latest worker
-launch state without exposing the delegated session ID.
+status, PID when available, timestamps, and a bounded startup error. Status
+exposes progress, lifecycle stops, decisions, and the latest worker launch state
+without exposing the delegated session ID.
 
 Restart uses the same unconsumed boundary ledger. A crash before decision
 persistence may request that decision again against the same packet; a recorded

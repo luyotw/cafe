@@ -664,7 +664,13 @@ def workflow(
 ) -> None:
     """Run playbook workflow using the new generic runner."""
     user_input = _normalize_cli_user_input(user_input)
+    single_step = single_step if isinstance(single_step, bool) else False
     background = background if isinstance(background, bool) else False
+    mute_agent_output = mute_agent_output if isinstance(mute_agent_output, bool) else False
+    open_pr = open_pr if isinstance(open_pr, bool) else False
+    dry_run = dry_run if isinstance(dry_run, bool) else True
+    internal_worker_id = _normalize_cli_user_input(internal_worker_id)
+    internal_policy_digest = _normalize_cli_user_input(internal_policy_digest)
     validated_worker_id: str | None = None
     worker_exit_status = "stopped"
     worker_exit_error: str | None = None
@@ -773,7 +779,12 @@ def workflow(
                         mode=live_policy.driver.mode,
                         policy=live_policy,
                     )
-                    pid = FixedWorkerLauncher(issue_dir).launch(record)
+                    child_args = ["--playbook", selected_playbook]
+                    if mute_agent_output:
+                        child_args.append("--mute-agent-output")
+                    if open_pr:
+                        child_args.append("--open-pr")
+                    pid = FixedWorkerLauncher(issue_dir).launch(record, extra_args=child_args)
             except (OSError, ValueError) as exc:
                 console.print(f"[red]Error: workflow background worker could not start: {exc}[/red]")
                 raise typer.Exit(1)
@@ -1190,9 +1201,7 @@ def workflow(
                         if driver_policy.driver.mode == "delegated":
                             pending = DriverCoordinator(
                                 runner.blackboard_store, runner.blackboard
-                            ).read_pending_boundary(
-                                pending_start_step or str(runner.blackboard.current_step)
-                            )
+                            ).read_pending_boundary()
                             if pending is not None:
                                 return PlaybookRunResult(
                                     final_step=pending.completed_phase,
@@ -1209,10 +1218,18 @@ def workflow(
                         ).run(start_step=pending_start_step)
                     return runner.run(start_step=pending_start_step, single_step=False)
 
-            result = WorkflowHost(issue_dir).run(
-                run_composed_workflow,
-                hosting="foreground",
-            ).result
+            host = WorkflowHost(issue_dir)
+            if validated_worker_id is not None:
+                result = host.run_worker(
+                    run_composed_workflow,
+                    worker_id=validated_worker_id,
+                    hosting="background",
+                ).result
+            else:
+                result = host.run(
+                    run_composed_workflow,
+                    hosting="foreground",
+                ).result
             latest_blackboard = BlackboardStore(issue_dir).load_or_create(
                 str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
                 playbook_id=str(playbook_data["playbook"]["id"]),

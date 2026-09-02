@@ -8,6 +8,7 @@ with supervised orchestration.
 
 from __future__ import annotations
 
+import sys
 from contextlib import AbstractContextManager, nullcontext
 from typing import Any, Callable
 
@@ -57,55 +58,80 @@ class DelegatedWorkflowController:
         if max_transitions <= 0:
             raise ValueError("max_transitions must be positive")
 
-        requested_start = start_step
-        last_result: PlaybookRunResult | None = None
-        authority = self.policy_authority() if self.policy_authority is not None else nullcontext(self.policy)
         try:
-            with authority as current_policy:
-                if current_policy != self.policy:
-                    self.coordinator.record_lifecycle("paused", reason="driver_policy_changed")
-                    return self._policy_pause_result()
-                for _ in range(max_transitions):
-                    requested_action = requested_start or str(self.phase_runtime.blackboard.current_step)
-                    pending = self.coordinator.pending_boundary(
-                        requested_action,
-                        policy=self.policy,
-                    )
-                    if pending is None:
-                        pending = self.coordinator.reconcile_missing_boundary(
-                            requested_action,
-                            policy=self.policy,
-                        )
-                    if pending is not None and not self._authorize_delegated_boundary(pending):
-                        return self._boundary_result(pending)
-
-                    executed_step = requested_start or str(self.phase_runtime.blackboard.current_step)
-                    result = self.phase_runtime.run(
-                        start_step=requested_start,
-                        single_step=True,
-                    )
-                    requested_start = None
-                    last_result = result
-                    lifecycle = self._lifecycle_stop(result, executed_step=executed_step)
-                    if lifecycle is not None:
-                        self.coordinator.record_lifecycle(lifecycle, reason=result.final_status_code)
-                        return result
-
-                    requested_action = str(self.phase_runtime.blackboard.current_step)
-                    packet = self.coordinator.open_boundary(
-                        completed_phase=result.final_step,
-                        requested_action=requested_action,
-                        boundary_id=self._boundary_id(result, requested_action),
-                        policy=self.policy,
-                    )
-                    if not self._authorize_delegated_boundary(
-                        packet,
-                        consume_authorization=False,
-                    ):
-                        return self._boundary_result(packet)
+            authority = (
+                self.policy_authority()
+                if self.policy_authority is not None
+                else nullcontext(self.policy)
+            )
+            current_policy = authority.__enter__()
         except (OSError, ValueError):
             self.coordinator.record_lifecycle("paused", reason="driver_policy_invalidated")
             return self._policy_pause_result()
+        try:
+            if current_policy != self.policy:
+                self.coordinator.record_lifecycle("paused", reason="driver_policy_changed")
+                return self._policy_pause_result()
+            return self._run_with_stable_policy(max_transitions=max_transitions, start_step=start_step)
+        finally:
+            authority.__exit__(*sys.exc_info())
+
+    def _run_with_stable_policy(
+        self,
+        *,
+        max_transitions: int,
+        start_step: str | None,
+    ) -> PlaybookRunResult:
+        requested_start = start_step
+        last_result: PlaybookRunResult | None = None
+        for _ in range(max_transitions):
+            requested_action = requested_start or str(self.phase_runtime.blackboard.current_step)
+            pending = self.coordinator.pending_boundary(
+                requested_action,
+                policy=self.policy,
+            )
+            if pending is None:
+                pending = self.coordinator.reconcile_missing_boundary(
+                    requested_action,
+                    policy=self.policy,
+                )
+            if pending is not None and not self._authorize_delegated_boundary(pending):
+                return self._boundary_result(pending)
+
+            executed_step = requested_start or str(self.phase_runtime.blackboard.current_step)
+            result = self.phase_runtime.run(
+                start_step=requested_start,
+                single_step=True,
+            )
+            requested_start = None
+            last_result = result
+            recovered_transition = (
+                not result.completed
+                and str(self.phase_runtime.blackboard.current_step) != "done"
+                and result.detail is not None
+                and result.final_step != executed_step
+            )
+            lifecycle = (
+                None
+                if recovered_transition
+                else self._lifecycle_stop(result, executed_step=executed_step)
+            )
+            if lifecycle is not None:
+                self.coordinator.record_lifecycle(lifecycle, reason=result.final_status_code)
+                return result
+
+            requested_action = str(self.phase_runtime.blackboard.current_step)
+            packet = self.coordinator.open_boundary(
+                completed_phase=result.final_step,
+                requested_action=requested_action,
+                boundary_id=self._boundary_id(result, requested_action),
+                policy=self.policy,
+            )
+            if not self._authorize_delegated_boundary(
+                packet,
+                consume_authorization=False,
+            ):
+                return self._boundary_result(packet)
 
         if last_result is None:  # pragma: no cover - guarded by max_transitions.
             raise RuntimeError("version 2 workflow produced no result")
