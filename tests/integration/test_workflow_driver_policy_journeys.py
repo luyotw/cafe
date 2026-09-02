@@ -541,9 +541,31 @@ def test_delegated_restart_skips_final_phase_around_durable_completion_pointer(
     assert decisions == [1]
     recovered = BlackboardStore(issue_dir).load_or_create("spec")
     assert recovered.current_step == "done"
+    terminal_handoff = BlackboardStore(issue_dir).load_handoff_contract(
+        recovered,
+        allowed_steps=list(playbook["steps"]),
+    )
+    assert terminal_handoff.to_owner.value == "done"
+    assert terminal_handoff.to_step == "done"
+    assert terminal_handoff.intent.value == "workflow_complete"
     assert len(
         [event for event in recovered.events if event.event_type == "workflow_completed"]
     ) == 1
+
+    restarted = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    restarted_result = Version2WorkflowRuntime(
+        restarted,
+        _policy("delegated"),
+        delegated_decision_provider=decide,
+    ).run()
+
+    assert restarted_result.completed is True
+    assert executed == ["spec", "plan"]
+    assert decisions == [1]
 
 
 @pytest.mark.parametrize("human_task_delivery_available", [False, True])

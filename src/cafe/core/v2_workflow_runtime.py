@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import AbstractContextManager, ExitStack
 from typing import Any, Callable
 
+from cafe.core.blackboard import HandoffIntent, HandoffOwner
 from cafe.core.driver_policy import DriverPolicyContract
 from cafe.core.driver_runtime import (
     DriverCoordinator,
@@ -164,6 +165,17 @@ class Version2WorkflowRuntime:
             completed_step = str(lifecycle_event.data.get("step", ""))
             target = str(lifecycle_event.data.get("next_step", ""))
             if completed_step == current_step and target in {"done", "_done"}:
+                self.phase_runtime.blackboard_store.update_handoff_contract(
+                    self.phase_runtime.blackboard,
+                    from_step=completed_step,
+                    to_owner=HandoffOwner.DONE,
+                    to_step="done",
+                    intent=HandoffIntent.WORKFLOW_COMPLETE,
+                    status_code=str(
+                        lifecycle_event.data.get("status_code", "workflow_complete")
+                    ),
+                    source="workflow.lifecycle_recovery",
+                )
                 return "done"
             return None
         if str(lifecycle_event.data.get("from", "")) != current_step:
