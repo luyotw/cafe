@@ -27,6 +27,34 @@ PUBLISH_STEP = {
     "behavior": {"publish_confirmation": True},
 }
 
+BATON_REVIEW_PUBLISH_STEP = {
+    "skill": "cafe-pr",
+    "capability_requests": ["cafe.pr.publish"],
+    "behavior": {"completion": "baton", "publish_confirmation": True},
+    "human_tasks": [
+        {
+            "trigger": "confirm_output",
+            "task_id": "local-review",
+            "outcomes": {"approve": "_done", "request_changes": "develop"},
+        }
+    ],
+    "on": {"confirm_output": "pr"},
+}
+
+BATON_TERMINAL_PUBLISH_STEP = {
+    "skill": "cafe-pr",
+    "capability_requests": ["cafe.pr.publish"],
+    "behavior": {"completion": "baton", "publish_confirmation": True},
+    "on": {"workflow_complete": "_done"},
+}
+
+BATON_UNBOUND_REVIEW_PUBLISH_STEP = {
+    "skill": "cafe-pr",
+    "capability_requests": ["cafe.pr.publish"],
+    "behavior": {"completion": "baton", "publish_confirmation": True},
+    "on": {"confirm_output": "pr"},
+}
+
 
 def _browser_phase(*, open_pr: bool) -> SimpleNamespace:
     return SimpleNamespace(open_pr=open_pr)
@@ -1207,13 +1235,26 @@ def test_github_pr_creator_load_failures_persist_correlated_rejection_receipts(
         "cafe.core.capabilities.load_capability_registry",
         side_effect=CapabilityRegistryError("invalid registry"),
     )
+    original_read_text = Path.read_text
+    original_read_bytes = Path.read_bytes
+
+    def read_text(path: Path, *args, **kwargs):
+        if path == capability_request_file:
+            raise PermissionError("request unreadable")
+        return original_read_text(path, *args, **kwargs)
+
+    def read_bytes(path: Path, *args, **kwargs):
+        if path == capability_request_file:
+            raise PermissionError("request unreadable")
+        return original_read_bytes(path, *args, **kwargs)
+
     read_patch = (
-        patch("pathlib.Path.read_text", side_effect=PermissionError("request unreadable"))
+        patch.object(Path, "read_text", new=read_text)
         if failure == "request_read"
         else nullcontext()
     )
     bytes_patch = (
-        patch("pathlib.Path.read_bytes", side_effect=PermissionError("request unreadable"))
+        patch.object(Path, "read_bytes", new=read_bytes)
         if failure == "request_read"
         else nullcontext()
     )
@@ -1321,14 +1362,29 @@ def test_github_pr_creator_unreadable_request_fingerprint_tracks_source_path(
     blackboard_state = store.load_or_create("publish")
     hook = GitHubPRCreator()
     fingerprints: list[str] = []
+    request_files = tuple(
+        output_file.parent / filename for filename in ("first.json", "second.json")
+    )
+    for request_file in request_files:
+        request_file.write_text("same request", encoding="utf-8")
+    original_read_text = Path.read_text
+    original_read_bytes = Path.read_bytes
+
+    def read_text(path: Path, *args, **kwargs):
+        if path in request_files:
+            raise PermissionError("request unreadable")
+        return original_read_text(path, *args, **kwargs)
+
+    def read_bytes(path: Path, *args, **kwargs):
+        if path in request_files:
+            raise PermissionError("request unreadable")
+        return original_read_bytes(path, *args, **kwargs)
 
     with (
-        patch("pathlib.Path.read_text", side_effect=PermissionError("request unreadable")),
-        patch("pathlib.Path.read_bytes", side_effect=PermissionError("request unreadable")),
+        patch.object(Path, "read_text", new=read_text),
+        patch.object(Path, "read_bytes", new=read_bytes),
     ):
-        for filename in ("first.json", "second.json"):
-            request_file = output_file.parent / filename
-            request_file.write_text("same request", encoding="utf-8")
+        for request_file in request_files:
             hook.run(
                 stage="publish_output",
                 phase=phase,
@@ -1440,8 +1496,51 @@ def test_github_pr_creator_publish_output_records_all_multi_capability_receipts(
     ]
 
 
-def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_without_status_code(
+@pytest.mark.parametrize(
+    ("step_def", "to_owner", "to_step", "intent", "baton_status", "should_publish"),
+    [
+        (
+            BATON_TERMINAL_PUBLISH_STEP,
+            "done",
+            "done",
+            "workflow_complete",
+            "BATON_WORKFLOW_COMPLETE",
+            True,
+        ),
+        (
+            BATON_REVIEW_PUBLISH_STEP,
+            "user",
+            "user",
+            "confirm_output",
+            "BATON_CONFIRM_OUTPUT",
+            True,
+        ),
+        (
+            BATON_REVIEW_PUBLISH_STEP,
+            "done",
+            "done",
+            "workflow_complete",
+            "BATON_WORKFLOW_COMPLETE",
+            False,
+        ),
+        (
+            BATON_UNBOUND_REVIEW_PUBLISH_STEP,
+            "user",
+            "user",
+            "confirm_output",
+            "BATON_CONFIRM_OUTPUT",
+            False,
+        ),
+    ],
+)
+def test_github_pr_creator_publish_output_honors_declared_pr_handoff_without_status_code(
     tmp_path: Path,
+    step_def: dict,
+    to_owner: str,
+    to_step: str,
+    intent: str,
+    baton_status: str,
+    should_publish: bool,
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     _enable_remote_pr(issue_dir)
@@ -1468,10 +1567,10 @@ def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_with
             {
                 "version": 1,
                 "from_step": "pr",
-                "to_owner": "done",
-                "to_step": "done",
-                "intent": "workflow_complete",
-                "status_code": "BATON_WORKFLOW_COMPLETE",
+                "to_owner": to_owner,
+                "to_step": to_step,
+                "intent": intent,
+                "status_code": baton_status,
                 "created_at": "2026-04-26T22:49:02.559908+08:00",
                 "source": "agent.test",
             }
@@ -1496,16 +1595,22 @@ def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_with
             stage="publish_output",
             phase=phase,
             step_name="pr",
-            step_def=PUBLISH_STEP,
+            step_def=step_def,
             output_file=output_file,
             publish_request_file=publish_request_file,
             context={"next_step_path": str(next_step_file)},
             status_code=None,
         )
 
-    assert mock_run.call_count == 2
-    assert mock_run.call_args_list[0].args[0][0] == "git"
-    assert mock_run.call_args_list[1].args[0][0] == "/bin/bash"
+    if not should_publish:
+        assert all(call.args[0][0] != "/bin/bash" for call in mock_run.call_args_list)
+        assert result.events == []
+        assert result.context_updates == {}
+        return
+
+    commands = [call.args[0][0] for call in mock_run.call_args_list]
+    assert "git" in commands
+    assert commands.count("/bin/bash") == 1
     assert result.events[0]["type"] == "pr_synced"
     assert result.events[0]["source"] == "capability"
     assert result.events[1]["type"] == "capability_receipt"

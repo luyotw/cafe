@@ -269,10 +269,16 @@ Every declared intent must have a resolvable key. `cafe playbook simulate` repor
 
 ## 5. User Gates And Loops
 
-`on.confirm_output` is the first-class declaration of a planned kickoff
-confirmation gate. The workflow driver derives the user's stop-contract
-candidates from steps that declare this key. Use it only when the user can
-meaningfully approve the completed output before the normal path continues.
+`on.confirm_output` is the first-class declaration of a planned output
+confirmation gate. `cafe playbook confirmation-gates` reports two classes:
+
+- an ordinary confirmation binding is an assignable kickoff stop-contract candidate;
+- a matching `confirm_output` binding with `feedback_delivery` is a mandatory
+  HumanTask gate that always remains user-owned and is not assignable to the driver.
+
+Use this transition only when the user can meaningfully approve the completed
+output before the normal path continues. The workflow driver partitions only
+the assignable class and must still display every mandatory gate.
 Reactive `need_clarification`, `need_permission`, and `alignment_checkpoint`
 pauses are safety interruptions, not scheduled confirmation candidates.
 
@@ -496,6 +502,8 @@ assert steps["bridge"]["output_artifact"] == "plan"
 - [ ] Every declared intent has an `"on"` handler.
 - [ ] Every user-facing pause has a matching `human_tasks` binding and a policy
       in the selected skill.
+- [ ] Every `confirm_output` gate is reported as either assignable or mandatory;
+      mandatory gates cannot be assigned to the driver.
 - [ ] Every normal path reaches `_done` or an intentional user pause.
 - [ ] Plan producers output `plan`; execute consumers input `plan` and read `{plan_file}`.
 - [ ] Serial bridges distinguish incoming `{plan_file}` from next `{output_file}`.

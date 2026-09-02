@@ -23,8 +23,9 @@ the workflow conversation language. Also read `playbook_selection.md`,
 - [ ] Keep the choice issue-owned. Do not write the selected playbook to
   `.cafe/config.yaml` or `.cafe/strategic_context.yaml`; after confirmation it
   belongs only in `.cafe/issues/<issue-name>/issue.yaml`.
-- [ ] Run `cafe playbook confirmation-gates <playbook-id>` and read both the
-  `Conversation locale:` line and confirmation-gate candidates.
+- [ ] Run `cafe playbook confirmation-gates <playbook-id>` and read the
+  `Conversation locale:` line, assignable candidate section, and mandatory
+  HumanTask section.
 - [ ] Treat a configured explicit BCP 47 value as the fallback, not an override
   of a direct or reliably inferred user preference. For `auto`, infer from the
   user's messages using the same rules above.
@@ -85,8 +86,8 @@ obtain explicit user confirmation of:
   closest rejected alternative;
 - `conversation_locale` with source;
 - `repository_content_locale`;
-- every planned confirmation gate, partitioned into `user_required` and
-  `driver_confirmable`;
+- every assignable planned confirmation gate, partitioned into `user_required`
+  and `driver_confirmable`, plus the separate mandatory HumanTask stop list;
 - `reactive_user_handoffs`;
 - mandate preset, axes, levels, and out-of-mandate list;
 - issue nature, scale, and risk factors;
@@ -157,8 +158,9 @@ and obtain confirmation before preparation or workflow execution.
    ```bash
    cafe playbook confirmation-gates <playbook-id>
    ```
-2. Treat exactly the reported steps as candidates. They come from
-   `steps.<step>."on".confirm_output`.
+2. Treat only the reported assignable steps as candidates. Mandatory HumanTask
+   steps remain user-owned and never enter the kickoff partition. Both classes
+   come from `steps.<step>."on".confirm_output`.
 3. Present each candidate by step and purpose. Recommend that all candidates
    stop for the user, then ask the user to assign every candidate to exactly
    one of:
@@ -167,8 +169,9 @@ and obtain confirmation before preparation or workflow execution.
 4. Require the two lists to be disjoint and their union to equal the candidates.
    Reject unknown steps, missing candidates, overlaps, role names, and steps
    that do not declare `on.confirm_output`.
-5. If no candidates exist, explicitly confirm that there are no scheduled
-   confirmation stops.
+5. Present every mandatory HumanTask step as an informational, non-configurable
+   user stop. If no assignable candidates exist, explicitly say so without
+   implying that mandatory stops are absent.
 
 If the playbook, effective conversation locale, repository content locale,
 driver policy, or candidate set changes, reconfirm the contract before the next

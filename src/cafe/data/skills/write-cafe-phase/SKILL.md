@@ -1,7 +1,7 @@
 ---
 name: write-cafe-phase
 description: Use this skill when creating, updating, or repairing a CAFE workflow phase or its supporting shared/chat skill under src/cafe/data/skills or .cafe/skills. Covers phase scope, SKILL.md structure, placeholders, plan handoffs, interruption-safe checkpoint/resume behavior, and runtime conventions, including declarative defects identified by use-cafe-workflow. Not for generic skill files, playbook YAML, driver skills, or CAFE core/runtime defects.
-version: 2.9.4
+version: 2.9.5
 ---
 
 # Write CAFE Phase Skill
@@ -65,7 +65,7 @@ version: 2.9.4
 
 ## Planned User Confirmation Gates
 - When a phase output needs planned user approval, the phase skill must route the output to `user` and the bound playbook step must declare `on.confirm_output`. Neither side alone is a complete contract.
-- Treat the active playbook's `on.confirm_output` declarations as the source of kickoff stop-contract candidates. Do not hardcode `user_required` or `driver_confirmable` policy inside a phase skill.
+- Treat the active playbook's `on.confirm_output` declarations as the source of planned confirmation gates. A matching binding with `feedback_delivery` is a mandatory user-owned HumanTask; all other matches are kickoff stop-contract candidates. Do not hardcode `user_required` or `driver_confirmable` policy inside a phase skill.
 - Keep `need_clarification`, `need_permission`, and `alignment_checkpoint` as reactive safety interruptions; they are not scheduled confirmation candidates.
 - The stop contract is step-level. If one phase contains multiple approval moments that must allow different user/driver ownership, split them into separate playbook steps instead of inventing pseudo-step gate names.
 - After adding or removing a planned gate, run `cafe playbook confirmation-gates <id>`, report the changed candidate set, and require the workflow driver to reconfirm any stale issue contract before the next `cafe make`.
@@ -106,7 +106,7 @@ version: 2.9.4
 - `description` must say when to use the skill, not just what it contains.
 - If the skill is part of workflow execution, assume runtime will provide file paths such as blackboard, artifacts, output file, checklist, and baton path.
 - For a plan → execute pair, wire the playbook artifact contract before using `{plan_file}`; a skill body alone does not make the handoff work.
-- For planned output approval, wire `on.confirm_output` in the playbook before claiming the phase participates in the kickoff stop contract; routing text in the skill alone is insufficient.
+- For planned output approval, wire `on.confirm_output` in the playbook before claiming the phase participates in confirmation handling; routing text in the skill alone is insufficient.
 - Every phase skill declares a provider-neutral `workflow.execution_profile` with workload, reasoning, risk domains, and fallback strength. Never put a CLI provider, model name, pricing tier, or current availability claim in that profile.
 - If one playbook step selects different skills by iteration, describe each skill honestly. The workflow driver resolves the actual iteration skill and conservatively aggregates all variants at kickoff.
 - Declare every mandatory tool dependency once in `workflow.required_tools`; every playbook step that selects the skill must grant it in `allowed_tools`.
@@ -139,7 +139,7 @@ version: 2.9.4
 - The skill does not rely on hidden context that runtime will not provide.
 - A plan → execute pair uses `plan` as the artifact key, the execute skill declares `{plan_file}` in `## Context`, and no sidecar duplicates the plan task list.
 - A bridge phase that consumes one plan and produces the next clearly distinguishes incoming `{plan_file}` from next-plan `{output_file}`, completes the incoming checklist before handoff, and supports a `not_required` next plan.
-- Every planned output-confirmation route has a matching playbook `on.confirm_output` declaration; reactive user interruptions are not mislabeled as kickoff candidates.
+- Every planned output-confirmation route has a matching playbook `on.confirm_output` declaration and is classified as assignable or mandatory; reactive user interruptions are not mislabeled as kickoff candidates.
 - Mandatory tools are declared in `workflow.required_tools`; optional diagnostics are not made unconditional, and every binding playbook grants the declared tools.
 - An interruption-prone phase has an output-compatible durable progress owner, stable target identity, per-target/stage dependency fingerprints, bounded checkpoint unit, evidence-backed resume algorithm, final global sweep, non-self-referential versioned finalization digest, and post-success ledger retention/cleanup contract; it does not use runtime checklist state as per-target progress.
 - A repair intended to protect an existing iteration puts the critical rule in `SKILL.md`, relies on phase preparation to refresh the derived `checklist.md` while retaining only exactly unchanged completion, and defines evidence-only migration for work produced before the ledger existed.
@@ -175,5 +175,5 @@ version: 2.9.4
 - Check that a long batch cannot lose or repeat more than one declared bounded unit after an abrupt provider interruption, and that completed work remains independently auditable.
 - For an in-flight repair, check the resolved source with `cafe skill show`/`list`, then after phase preparation inspect the worktree-local CLI-native copy for the new marker; never edit that copy directly.
 - Check that user review loops stay in the phase responsible for the output; do not add routine backward transitions merely to regenerate a checklist. Reopen upstream only when a previously confirmed source of truth is invalidated.
-- Check that every planned user approval is visible in `cafe playbook confirmation-gates <id>` and that distinct approval ownership choices are represented by distinct playbook steps.
+- Check that every planned user approval is visible in the assignable or mandatory section of `cafe playbook confirmation-gates <id>` and that distinct approval ownership choices are represented by distinct playbook steps.
 - Check that supporting domain guidance was selected at authoring time with user confirmation, remains subordinate to the phase contract, and introduces no runtime network discovery or silent fallback.

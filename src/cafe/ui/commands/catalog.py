@@ -18,7 +18,11 @@ from cafe.catalogs.resolver import (
     CatalogResolver,
 )
 from cafe.catalogs.sync import CatalogSyncError, CatalogSyncService, OverBudgetDiscovery
-from cafe.core.playbook import LoadedPlaybook, confirmation_gate_steps
+from cafe.core.playbook import (
+    LoadedPlaybook,
+    confirmation_gate_steps,
+    mandatory_confirmation_gate_steps,
+)
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook, format_dot, format_text_report
 from cafe.skills.global_installer import GlobalSkillSyncSummary, sync_global_skills
@@ -387,7 +391,7 @@ def playbook_validate(
 def playbook_confirmation_gates(
     name: str = typer.Argument(..., help="Playbook name"),
 ) -> None:
-    """List planned user confirmation candidates declared by a playbook."""
+    """List assignable and mandatory confirmation gates declared by a playbook."""
     try:
         loaded = _build_playbook_loader().load_model(name)
     except Exception as e:
@@ -395,11 +399,18 @@ def playbook_confirmation_gates(
         raise typer.Exit(1)
 
     gates = confirmation_gate_steps(loaded.model)
+    mandatory_gates = mandatory_confirmation_gate_steps(loaded.model)
     console.print(f"Playbook: {loaded.model.playbook.id}")
     console.print(f"Conversation locale: {loaded.model.playbook.conversation_locale}")
-    console.print("Confirmation gates (steps declaring on.confirm_output):")
+    console.print("Assignable confirmation gates (kickoff contract candidates):")
     if gates:
         for step_name in gates:
+            console.print(f"  - {step_name}")
+    else:
+        console.print("  (none)")
+    console.print("Mandatory human-task gates (always user-required):")
+    if mandatory_gates:
+        for step_name in mandatory_gates:
             console.print(f"  - {step_name}")
     else:
         console.print("  (none)")

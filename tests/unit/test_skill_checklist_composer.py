@@ -889,6 +889,8 @@ def test_write_cafe_phase_requires_playbook_declared_confirmation_gates() -> Non
     assert "the bound playbook step must declare `on.confirm_output`" in normalized_skill
     assert "Neither side alone is a complete contract" in normalized_skill
     assert "cafe playbook confirmation-gates <id>" in skill
+    assert "mandatory user-owned HumanTask" in normalized_skill
+    assert "mandatory HumanTask gates" in spec
     assert "The stop contract is step-level" in normalized_skill
     assert "Planned user confirmation gate" in spec
     assert "skill-only pause" in spec

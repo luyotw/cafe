@@ -1,7 +1,7 @@
 ---
 name: cafe-pr
 description: "整理提交內容並產出 pull request 標題與描述"
-version: 1.2.0
+version: 1.3.0
 workflow:
   execution_profile:
     workload: publication
@@ -117,10 +117,10 @@ alongside this skill.
    - Body 維持 `Summary`、`Changes`、`Test Plan` 結構
 3. 不要直接呼叫 GitHub connector、GitHub API、`gh pr create`，也不要自行執行 `scripts/sync_pr.sh`
 4. 不要查詢或等待遠端 branch/PR；遠端 publish 是 agent 回傳後才由 host-side hook 執行
-5. 完成本地 PR artifact 與 checklist 後，依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新
-6. CAFE host-side hook 會執行 `scripts/sync_pr.sh --output {output_file}`，依 `issue.yaml` 的 `base_branch` 自動加上 `--base`
+5. 完成本地 PR artifact 與 checklist 後，依本輪注入的 `{step_transitions}` 選擇 next-step baton：宣告 `confirm_output` 時交給 `user` review；只有宣告 `workflow_complete→done` 時才直接完成；不得選擇未宣告的路由
+6. CAFE host-side hook 會在有效 handoff 進入人工 review 或完成前執行 `scripts/sync_pr.sh --output {output_file}`，依 `issue.yaml` 的 `base_branch` 自動加上 `--base`
 7. Hook 會把 PR URL 作為 `pr_synced` event 回傳，CLI 會印出 PR URL
-8. 完成本地 artifact 後，把 next-step baton 寫成 `done`；不要用 response text status code 代表 workflow completion
+8. 當 `{step_transitions}` 宣告 `confirm_output` 時，只有綁定 HumanTask 的核准結果可以完成 workflow；PR agent 不得改寫成 `done` 或 `workflow_complete`
 
 ### Gotchas
 - Script 的 progress/error 輸出在 stderr，JSON result 在 stdout

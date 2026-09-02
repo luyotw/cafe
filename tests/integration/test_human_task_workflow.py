@@ -10,12 +10,24 @@ import pytest
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+from cafe.core.playbook import PlaybookDefinition, validate_playbook
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.skills.loader import SkillLoader
 from cafe.ui.human_tasks import apply_human_task_payload, resolve_step_human_task
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
+DEVELOPMENT_PLAYBOOKS = (
+    "direct",
+    "hotfix",
+    "simple",
+    "standard",
+    "standard-qa",
+    "tdd",
+    "tdd-qa",
+)
 
 
 def _paused_default_state(issue_dir: Path, *, from_step: str, intent: HandoffIntent):
@@ -56,6 +68,169 @@ def _materialize_default_task(
         continuations=binding.outcomes,
         assignee_type="user",
     )
+
+
+@pytest.mark.parametrize("playbook_id", DEVELOPMENT_PLAYBOOKS)
+def test_builtin_pr_pauses_for_local_review_before_done(tmp_path: Path, playbook_id: str) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / f"{playbook_id}-pr-review"
+    playbook = PlaybookLoader().load(playbook_id, strict=True)
+    attempts = 0
+
+    def executor(
+        step_name: str,
+        step_def: dict,
+        state: object,
+        *,
+        extra_prompt: str | None = None,
+        same_invocation_retry: bool = False,
+    ) -> StepExecutionResult:
+        nonlocal attempts
+        assert step_name == "pr"
+        attempts += 1
+        if attempts == 1:
+            BlackboardStore(issue_dir).update_handoff_contract(
+                state,
+                from_step="pr",
+                to_owner=HandoffOwner.DONE,
+                to_step="done",
+                intent=HandoffIntent.WORKFLOW_COMPLETE,
+                source="test.stale_terminal_baton",
+            )
+            return StepExecutionResult(
+                response="PR artifact ready with a stale terminal baton",
+                artifacts={"pr_result": "pr/iteration_001/output.md"},
+            )
+
+        assert same_invocation_retry is True
+        assert extra_prompt is not None and "[BATON ERROR]" in extra_prompt
+        BlackboardStore(issue_dir).update_handoff_contract(
+            state,
+            from_step="pr",
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.CONFIRM_OUTPUT,
+            source="test.pr_ready_for_local_review",
+        )
+        return StepExecutionResult(
+            response="PR artifact ready",
+            artifacts={"pr_result": "pr/iteration_001/output.md"},
+        )
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="pr")
+
+    state = BlackboardStore(issue_dir).load_or_create("pr")
+    pending = [
+        task
+        for task in HumanTaskRecordStore(issue_dir).tasks()
+        if task.status is HumanTaskStatus.PENDING
+    ]
+
+    assert result.completed is False
+    assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
+    assert state.current_step == "user"
+    assert attempts == 2
+    assert len(pending) == 1
+    assert pending[0].policy_id == "local-review"
+    assert any(
+        event.event_type == "baton_rejected"
+        and event.data.get("invalid_value") == "workflow_complete"
+        for event in state.events
+    )
+
+    approval = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="pr",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "local-review",
+            "decision": "approve",
+            "human_task_id": pending[0].id,
+        },
+        source="integration",
+    )
+
+    assert approval.target == "done"
+    assert BlackboardStore(issue_dir).load_or_create("pr").current_step == "done"
+
+
+def test_custom_pr_keeps_its_declared_terminal_route(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "custom-terminal-pr"
+    playbook = {
+        "playbook": {
+            "id": "custom-terminal",
+            "name": "Custom Terminal PR",
+            "conversation_locale": "en-US",
+            "applicability": {
+                "summary": "Publish a prepared change through a custom terminal PR step.",
+                "use_when": ["A custom workflow owns its terminal PR route."],
+                "avoid_when": ["A mandatory local review is required."],
+            },
+        },
+        "roles": {
+            "developer": {
+                "description": "Developer",
+                "default_agent": "David",
+                "default_cli": "claude",
+            }
+        },
+        "skills": {"workflow": {"shared": []}, "chat": {"shared": []}},
+        "steps": {
+            "pr": {
+                "skill": "cafe-pr",
+                "role": "developer",
+                "assignee_type": "agent",
+                "input_artifacts": [],
+                "output_artifact": "pr_result",
+                "allowed_tools": ["Read", "Edit", "Write", "Grep", "Glob"],
+                "capability_requests": ["cafe.pr.publish"],
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "hooks": {"publish_output": ["GitHubPRCreator"]},
+                "on": {"workflow_complete": "_done"},
+            }
+        },
+        "commands": {"prepare": {"prompt_for_spec_plan_config": False}},
+        "entry_point": "pr",
+    }
+    model = PlaybookDefinition.model_validate(playbook)
+    assert validate_playbook(
+        model,
+        skill_loader=SkillLoader(project_root=tmp_path),
+        source="project",
+        path=tmp_path / "custom-terminal.yaml",
+        strict=True,
+    ) == []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        assert step_name == "pr"
+        BlackboardStore(issue_dir).update_handoff_contract(
+            state,
+            from_step="pr",
+            to_owner=HandoffOwner.DONE,
+            to_step="done",
+            intent=HandoffIntent.WORKFLOW_COMPLETE,
+            source="test.custom_terminal_route",
+        )
+        return StepExecutionResult(
+            response="Custom PR artifact ready",
+            artifacts={"pr_result": "pr/iteration_001/output.md"},
+        )
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="pr")
+
+    assert result.completed is True
+    assert result.final_status_code == "BATON_WORKFLOW_COMPLETE"
+    assert BlackboardStore(issue_dir).load_or_create("pr").current_step == "done"
+    assert HumanTaskRecordStore(issue_dir).tasks() == ()
 
 
 def test_default_human_tasks_validate_and_route_all_user_handoff_patterns(tmp_path: Path) -> None:
@@ -522,7 +697,11 @@ def test_durable_invalid_stale_and_cross_workflow_results_leave_the_pause_intact
         blackboard=state,
         from_step="spec",
         trigger="confirm_output",
-        raw_payload={"task": "output-review", "decision": "confirm", "human_task_id": task.id},
+        raw_payload={
+            "task": "output-review",
+            "decision": "confirm",
+            "human_task_id": task.id,
+        },
         source="interactive",
     )
 
@@ -548,7 +727,11 @@ def test_durable_invalid_stale_and_cross_workflow_results_leave_the_pause_intact
         blackboard=duplicate_state,
         from_step="spec",
         trigger="confirm_output",
-        raw_payload={"task": "output-review", "decision": "confirm", "human_task_id": duplicate_task.id},
+        raw_payload={
+            "task": "output-review",
+            "decision": "confirm",
+            "human_task_id": duplicate_task.id,
+        },
         source="command",
     )
     duplicate = apply_human_task_payload(
@@ -557,7 +740,11 @@ def test_durable_invalid_stale_and_cross_workflow_results_leave_the_pause_intact
         blackboard=duplicate_state,
         from_step="spec",
         trigger="confirm_output",
-        raw_payload={"task": "output-review", "decision": "confirm", "human_task_id": duplicate_task.id},
+        raw_payload={
+            "task": "output-review",
+            "decision": "confirm",
+            "human_task_id": duplicate_task.id,
+        },
         source="command",
     )
 

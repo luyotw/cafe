@@ -284,8 +284,8 @@ placeholder 名稱。不要依賴 artifact 名稱或新增 Python mapping；未�
 
 ### Planned user confirmation gate
 
-- phase output 需要在正常流程中讓 user 審核時，skill 的 routing decision 必須暫停給 `user`，且綁定的 playbook step 必須宣告 `on.confirm_output`。兩者缺一都不完整：skill-only pause 不會成為 kickoff 契約候選；playbook-only gate 則沒有 phase 行為保證會產生該 handoff。
-- `on.confirm_output` 是 planned kickoff confirmation gate 的 playbook source of truth。外層 driver 以 `cafe playbook confirmation-gates <id>` 列出候選；phase skill 不得自行寫 `user_required`、`driver_confirmable` 或 repo-wide 預設。
+- phase output 需要在正常流程中讓 user 審核時，skill 的 routing decision 必須暫停給 `user`，且綁定的 playbook step 必須宣告 `on.confirm_output`。兩者缺一都不完整：skill-only pause 不會進入 confirmation discovery；playbook-only gate 則沒有 phase 行為保證會產生該 handoff。
+- `on.confirm_output` 是 planned confirmation gate 的 playbook source of truth。外層 driver 以 `cafe playbook confirmation-gates <id>` 分別列出可分派的 kickoff candidates，以及 matching binding 含 `feedback_delivery`、不可分派給 driver 的 mandatory HumanTask gates；phase skill 不得自行寫 `user_required`、`driver_confirmable` 或 repo-wide 預設。
 - `need_clarification`、`need_permission`、`alignment_checkpoint` 是條件式安全中斷，不是預定停點；不要為了讓它們出現在 kickoff 契約而改寫成 `confirm_output`。
 - stop contract 以 playbook step name 為單位。如果同一 phase 有兩個需要不同 user/driver ownership 的確認時點，應拆成兩個 playbook steps；不要發明 `phase.preview`、`phase.plan` 等 pseudo-step gate 名稱。
 - 新增、移除或拆分 planned gate 後，執行 `cafe playbook confirmation-gates <id>`，並回報既有 issue 的 confirmation contract 已可能 stale，必須在下一次 `cafe make` 前重新確認。
@@ -366,7 +366,7 @@ skill 文件內不要假設只有某一條 playbook 會用它。
 
 若 phase 有 planned user approval，`on` transitions 必須包含
 `confirm_output: <current-step>`；完成綁定後用
-`cafe playbook confirmation-gates <id>` 驗證該 step 出現在候選清單。
+`cafe playbook confirmation-gates <id>` 驗證該 step 出現在 assignable 或 mandatory 清單。
 
 ## 13. 驗收 checklist
 
@@ -381,7 +381,7 @@ skill 文件內不要假設只有某一條 playbook 會用它。
 - [ ] plan → execute pair 使用 `output_artifact: plan` → `input_artifacts: [plan]`，execute 的 `## Context` 包含 `{plan_file}`
 - [ ] 若 phase 同時 execute 舊 plan 並產生下一份 plan，已依 §15 區分 `{plan_file}` 與 `{output_file}`、先完成舊 checklist、處理 `not_required` 分支
 - [ ] implementation tasks 位於 plan artifact 並使用 `- [ ]`／`- [x]`；沒有另建重複的 plan-derived checklist
-- [ ] planned user approval 同時有 phase routing decision 與 playbook `on.confirm_output`；reactive interruption 未混入 kickoff 候選
+- [ ] planned user approval 同時有 phase routing decision 與 playbook `on.confirm_output`，並正確分類為 assignable 或 mandatory；reactive interruption 未混入 kickoff 候選
 - [ ] 必要工具已集中宣告在 `workflow.required_tools`，所有綁定 step 的 `allowed_tools` 均滿足宣告，選用診斷工具沒有誤列為必要工具
 - [ ] 若 planned gate set 有變更，已執行 `cafe playbook confirmation-gates <id>` 並回報 issue contract 需要重新確認
 - [ ] 多 target、長時間、live API、subagent 或反覆 review phase 已依 §17 定義與 output/downstream/publish contract 相容的 durable progress owner、per-target/stage dependency fingerprints、bounded unit、evidence-backed resume 與 final sweep；沒有把 runtime checklist 當 per-target ledger

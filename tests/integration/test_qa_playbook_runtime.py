@@ -33,6 +33,7 @@ def _runtime_playbook(name: str) -> dict:
     playbook["steps"]["pr"]["capability_requests"] = []
     playbook["steps"]["pr"]["behavior"] = {"completion": "status_code"}
     playbook["steps"]["pr"]["on"].pop("confirm_output", None)
+    playbook["steps"]["pr"]["on"]["workflow_complete"] = "_done"
     return playbook
 
 

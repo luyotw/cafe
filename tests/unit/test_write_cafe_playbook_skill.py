@@ -34,8 +34,10 @@ def test_write_cafe_playbook_skill_preserves_core_contracts() -> None:
     assert "Serial Plan Bridge" in reference
     assert "not_required" in reference
     assert "UserInputCollector" in reference
-    assert "planned kickoff confirmation gate" in normalized_reference
+    assert "planned output confirmation gate" in normalized_reference
     assert "confirmation-gates" in skill
+    assert "mandatory HumanTask gates" in skill
+    assert "not assignable to the driver" in reference
     assert "no unreachable steps" in reference
     assert "write-cafe-phase" in skill
     assert "skills.workflow" in reference

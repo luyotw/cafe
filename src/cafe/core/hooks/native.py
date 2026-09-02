@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from cafe.core.blackboard import BlackboardState, HandoffContract, HandoffIntent, HandoffOwner
 from cafe.core.hooks import HookResult, NoOpHook
+from cafe.core.human_tasks import resolve_step_human_task
 from cafe.core.initial_input import (
     GITHUB_ISSUE_PROVIDER,
     MANUAL_TEXT_PROVIDER,
@@ -157,12 +158,41 @@ def _publish_requested(
     except Exception:
         return False
 
-    return (
+    terminal_publish = (
         contract.from_step == step_name
         and contract.to_owner == HandoffOwner.DONE
         and contract.to_step == "done"
         and contract.intent == HandoffIntent.WORKFLOW_COMPLETE
     )
+    review_publish = (
+        contract.from_step == step_name
+        and contract.to_owner == HandoffOwner.USER
+        and contract.to_step == "user"
+        and contract.intent == HandoffIntent.CONFIRM_OUTPUT
+    )
+    transitions = step_def.get("on") if isinstance(step_def, dict) else None
+    if not isinstance(transitions, dict):
+        return False
+    if terminal_publish:
+        return transitions.get("workflow_complete") in {"_done", "done"}
+    if not review_publish or "confirm_output" not in transitions:
+        return False
+
+    playbook = getattr(phase, "playbook", None)
+    if not isinstance(playbook, dict):
+        playbook = {"steps": {step_name: step_def}}
+    try:
+        repo_root = phase.git_ops.get_repo_root()
+        skill_loader = SkillLoader(project_root=Path(repo_root).resolve())
+        resolve_step_human_task(
+            playbook_data=playbook,
+            step_name=step_name,
+            trigger="confirm_output",
+            skill_loader=skill_loader,
+        )
+    except Exception:
+        return False
+    return True
 
 
 def _declared_capability_ids(step_def: Any) -> list[str]:

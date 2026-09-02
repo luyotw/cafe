@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from cafe.core.playbook import confirmation_gate_steps
+from cafe.core.playbook import confirmation_gate_steps, mandatory_confirmation_gate_steps
 from cafe.core.status_codes import (
     PhaseStatusCode,
     effective_step_handoff_intents,
@@ -295,6 +295,8 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "Do not reuse another issue's contract" in normalized
     assert "union to equal the candidates" in normalized
     assert "driver_confirmable" in reference
+    assert "Mandatory HumanTask" in reference
+    assert "never enter the kickoff partition" in normalized
     assert "reactive interruptions, not scheduled candidates" in normalized
     assert "Alignment is a proactive driver decision" in normalized
     assert "alignment_policy:" not in reference
@@ -412,7 +414,8 @@ mandate:
     assert "| plan | developer | cafe-plan | 是 | driver（驗證後繼續） | 否 |" in result.stdout
     assert "| develop | developer | cafe-develop | 否 | — | 否 |" in result.stdout
     assert "| review | reviewer | cafe-review | 否 | — | 否 |" in result.stdout
-    assert "| pr | developer | cafe-pr | 否 | — | 否 |" in result.stdout
+    assert "| pr | developer | cafe-pr | 是 | user（mandatory） | 是 |" in result.stdout
+    assert "| mandatory_human_tasks | pr |" in result.stdout
     assert "| effective_locale | zh-TW (user thread override) |" in result.stdout
     assert "| repository_content_locale | zh-TW |" in result.stdout
     assert "| issue_nature | feature/integration |" in result.stdout
@@ -962,6 +965,30 @@ def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
     assert "unassigned gates: plan" in result.stderr
 
 
+def test_kickoff_contract_formatter_rejects_mandatory_gate_assignment(
+    tmp_path: Path,
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+
+    command = _kickoff_formatter_command(strategic_context)
+    driver_index = command.index("--driver-confirmable")
+    command[driver_index + 1 : driver_index + 3] = ["spec", "plan", "pr"]
+    result = subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "unknown gates: pr" in result.stderr
+
+
 def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_missing(
     tmp_path: Path,
 ) -> None:
@@ -1264,6 +1291,25 @@ def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() 
         "tdd-qa": ("spec", "plan"),
         "editorial": ("brief",),
         "hotfix": (),
+        "incident": (),
+        "research": (),
+    }
+
+    mandatory = {
+        playbook_id: mandatory_confirmation_gate_steps(
+            loader.load_model(playbook_id).model
+        )
+        for playbook_id in actual
+    }
+    assert mandatory == {
+        "direct": ("pr",),
+        "simple": ("pr",),
+        "standard": ("pr",),
+        "standard-qa": ("pr",),
+        "tdd": ("pr",),
+        "tdd-qa": ("pr",),
+        "editorial": (),
+        "hotfix": ("pr",),
         "incident": (),
         "research": (),
     }

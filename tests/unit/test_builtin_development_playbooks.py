@@ -57,6 +57,34 @@ def test_development_playbooks_are_discoverable_and_strictly_valid() -> None:
         assert simulation.missing_intent_handlers == ()
 
 
+def test_every_builtin_pr_requires_local_review_before_done() -> None:
+    """A PR artifact cannot complete a built-in development workflow by itself."""
+    loader = PlaybookLoader()
+
+    for playbook_id in DEVELOPMENT_PLAYBOOKS:
+        pr = loader.load_model(playbook_id, strict=True).model.steps["pr"]
+        local_review = next(task for task in pr.human_tasks if task.task_id == "local-review")
+
+        assert pr.on["confirm_output"] == "pr"
+        assert "workflow_complete" not in pr.on
+        assert local_review.trigger == "confirm_output"
+        assert local_review.outcomes == {
+            "approve": "_done",
+            "request_changes": "develop",
+        }
+
+
+def test_cafe_pr_routes_completed_artifacts_to_local_review() -> None:
+    skill = (
+        Path(__file__).parents[2] / "src" / "cafe" / "data" / "skills" / "cafe-pr" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert "依本輪注入的 `{step_transitions}`" in skill
+    assert "宣告 `confirm_output` 時交給 `user` review" in skill
+    assert "只有宣告 `workflow_complete→done` 時才直接完成" in skill
+    assert "不得選擇未宣告的路由" in skill
+
+
 @pytest.mark.parametrize(
     ("playbook_id", "step_name"),
     [
