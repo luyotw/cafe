@@ -143,6 +143,18 @@ def _linked_worktree_canonical_root(active_root: Path) -> Path:
     return common_dir.parent
 
 
+def resolve_human_task_notification_repository_root(issue_dir: Path) -> Path:
+    """Return the canonical repository identity used for HumanTask delivery."""
+    resolved_issue_dir = Path(issue_dir).resolve()
+    if (
+        resolved_issue_dir.parent.name == "issues"
+        and resolved_issue_dir.parent.parent.name == ".cafe"
+    ):
+        active_root = resolved_issue_dir.parent.parent.parent
+        return _linked_worktree_canonical_root(active_root)
+    return resolved_issue_dir.parent
+
+
 @dataclass
 class StepIterationFrame:
     execution_result: Any
@@ -198,11 +210,7 @@ class HumanTaskNotificationDispatcher:
         self.blackboard = blackboard
 
     def _repository_root(self) -> Path:
-        issue_dir = self.issue_dir.resolve()
-        if issue_dir.parent.name == "issues" and issue_dir.parent.parent.name == ".cafe":
-            active_root = issue_dir.parent.parent.parent
-            return _linked_worktree_canonical_root(active_root)
-        return issue_dir.parent
+        return resolve_human_task_notification_repository_root(self.issue_dir)
 
     def notify(self, task: HumanTask) -> None:
         """Record one source-independent, machine-controlled delivery decision."""

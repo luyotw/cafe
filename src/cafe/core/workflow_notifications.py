@@ -8,7 +8,7 @@ from typing import Any
 from cafe.core.blackboard import BlackboardStore
 
 
-def _human_task_delivery_available() -> bool:
+def _human_task_delivery_available(*, repository_root: Path) -> bool:
     from cafe.core.human_task_notifications import (
         SlackNotificationError,
         load_human_task_notification_settings,
@@ -18,7 +18,7 @@ def _human_task_delivery_available() -> bool:
     if not load_human_task_notification_settings().enabled:
         return False
     try:
-        load_slack_webhook_url()
+        load_slack_webhook_url(repository_root=repository_root)
     except SlackNotificationError:
         return False
     return True
@@ -27,11 +27,12 @@ def _human_task_delivery_available() -> bool:
 def record_notification_guidance(
     issue_dir: Path,
     *,
+    repository_root: Path,
     human_task_delivery_available: bool | None = None,
 ) -> dict[str, Any]:
     """Record honest inspection guidance without creating delivery authority."""
     available = (
-        _human_task_delivery_available()
+        _human_task_delivery_available(repository_root=repository_root)
         if human_task_delivery_available is None
         else human_task_delivery_available
     )

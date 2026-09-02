@@ -1,6 +1,7 @@
 """Tests for workflow CLI command."""
 
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -536,7 +537,10 @@ def test_workflow_command_refreshes_notification_guidance_for_later_inspection(
         def execute_step(self, step_name, step_def, blackboard_state, **_kwargs):
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
-    def load_credential() -> str:
+    repository_roots: list[Path | None] = []
+
+    def load_credential(*, repository_root: Path | None = None) -> str:
+        repository_roots.append(repository_root)
         if not credential_available:
             raise SlackNotificationError("validation_error", "slack_credentials_missing")
         return "https://hooks.slack.com/services/T/B/secret"
@@ -563,6 +567,7 @@ def test_workflow_command_refreshes_notification_guidance_for_later_inspection(
         )
 
     assert result.exit_code == 0, (result.stdout, result.exception)
+    assert repository_roots == ([tmp_path.resolve()] if notifications_enabled else [])
     status = SummaryService(issues_root=issues_root).load_driver_status("issue-guidance")
     guidance = status["notification_guidance"]
     expected_events = ["human_task"] if human_task_delivery_available else []
@@ -572,6 +577,110 @@ def test_workflow_command_refreshes_notification_guidance_for_later_inspection(
     rendered = SummaryDisplay().format_driver_status(status)
     assert "Notifications:" in rendered
     assert "cafe status" in rendered
+
+
+@pytest.mark.parametrize("linked_worktree", [False, True], ids=["project", "worktree"])
+def test_workflow_command_guidance_uses_project_only_slack_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    linked_worktree: bool,
+) -> None:
+    """Plan Integration 6: public start uses the HumanTask repository route."""
+    repository = tmp_path / "main-repository"
+    active_root = repository
+    repository.mkdir()
+    if linked_worktree:
+        active_root = tmp_path / "linked-checkout"
+        subprocess.run(
+            ("git", "init"), cwd=repository, check=True, capture_output=True, text=True
+        )
+        subprocess.run(
+            ("git", "config", "user.email", "cafe-test@example.test"),
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ("git", "config", "user.name", "CAFE Test"),
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        (repository / "README.md").write_text("test\n", encoding="utf-8")
+        subprocess.run(
+            ("git", "add", "README.md"),
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ("git", "commit", "-m", "Initial"),
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ("git", "worktree", "add", "--detach", str(active_root)),
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    monkeypatch.chdir(active_root)
+    issue_name = "issue-guidance"
+    issues_root = active_root / ".cafe" / "issues"
+    issue_dir = issues_root / issue_name
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "contract_version: 2\ndriver:\n  mode: unattended\n",
+        encoding="utf-8",
+    )
+
+    home = tmp_path / "home"
+    config = home / ".cafe" / "config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        "\n".join(
+            (
+                "notifications:",
+                "  human_tasks:",
+                "    projects:",
+                f"      {repository.resolve()}:",
+                "        webhook_url: https://hooks.slack.com/services/T/B/project-route",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    config.chmod(0o600)
+    monkeypatch.setattr(
+        "cafe.core.human_task_notifications._trusted_user_home", lambda: home
+    )
+
+    class FakeExecutor:
+        def execute_step(self, step_name, step_def, blackboard_state, **_kwargs):
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = issue_name
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--single-step"],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    status = SummaryService(issues_root=issues_root).load_driver_status(issue_name)
+    assert status["notification_guidance"]["proactive_events"] == ["human_task"]
 
 
 def test_workflow_background_option_uses_fixed_host_launcher(
