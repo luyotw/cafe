@@ -425,6 +425,12 @@ def test_workflow_command_forwards_validated_policy_to_v2_runtime(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-v2-public"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "contract_version: 2\ndriver:\n  mode: unattended\n",
+        encoding="utf-8",
+    )
     captured: dict[str, object] = {}
 
     class CapturingVersion2Runtime:
@@ -435,12 +441,12 @@ def test_workflow_command_forwards_validated_policy_to_v2_runtime(
             *,
             delegated_decision_provider=None,
             notifier=None,
-            policy_loader=None,
+            policy_authority=None,
         ) -> None:
             captured["policy"] = policy
             captured["provider"] = delegated_decision_provider
             captured["notifier"] = notifier
-            captured["policy_loader"] = policy_loader
+            captured["policy_authority"] = policy_authority
             self.phase_runtime = phase_runtime
 
         def run(self, *, start_step=None, single_step=False):
@@ -483,7 +489,10 @@ def test_workflow_command_forwards_validated_policy_to_v2_runtime(
     assert policy.driver.mode == "unattended"
     assert captured["provider"] is None
     assert captured["hosting"] == "foreground"
-    assert callable(captured["policy_loader"])
+    policy_authority = captured["policy_authority"]
+    assert callable(policy_authority)
+    with policy_authority() as current_policy:
+        assert current_policy == policy
 
 
 def test_workflow_background_option_uses_fixed_host_launcher(

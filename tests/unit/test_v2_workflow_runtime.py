@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -127,14 +128,10 @@ def test_each_driver_mode_follows_its_promised_boundary_behavior(
 def test_manual_single_step_is_invocation_only_and_restart_continues(tmp_path: Path) -> None:
     issue_dir = tmp_path / "restart"
     first_runtime = FakePhaseRuntime(issue_dir)
-    first = Version2WorkflowRuntime(
-        first_runtime, _policy("unattended")
-    ).run(single_step=True)
+    first = Version2WorkflowRuntime(first_runtime, _policy("unattended")).run(single_step=True)
 
     second_runtime = FakePhaseRuntime(issue_dir)
-    second = Version2WorkflowRuntime(
-        second_runtime, _policy("unattended")
-    ).run()
+    second = Version2WorkflowRuntime(second_runtime, _policy("unattended")).run()
 
     assert first.completed is False
     assert first_runtime.executed == ["spec"]
@@ -371,11 +368,15 @@ def test_policy_change_after_decision_pauses_before_consumption_and_phase_use(
         authority[0] = new_policy
         return _decision(packet)
 
+    @contextmanager
+    def current_authority():
+        yield authority[0]
+
     result = Version2WorkflowRuntime(
         runtime,
         old_policy,
         delegated_decision_provider=decide,
-        policy_loader=lambda: authority[0],
+        policy_authority=current_authority,
     ).run()
 
     assert result.completed is False
@@ -384,6 +385,60 @@ def test_policy_change_after_decision_pauses_before_consumption_and_phase_use(
     assert state.driver_state["consumed_sequences"] == []
     assert state.driver_state["lifecycle"] == "paused"
     assert state.driver_state["pause_reason"] == "driver_policy_changed"
+
+
+def test_policy_authority_guard_spans_consumption_and_phase_use(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "guarded-policy-use"
+    staged = FakePhaseRuntime(issue_dir)
+    staged.blackboard_store.set_current_step(staged.blackboard, "plan")
+    coordinator = DriverCoordinator(staged.blackboard_store, staged.blackboard)
+    old_policy = _policy("delegated")
+    old_packet = coordinator.open_boundary(
+        completed_phase="spec",
+        requested_action="plan",
+        boundary_id="durable-spec-plan",
+        policy=old_policy,
+    )
+    coordinator.record_decision(_decision(old_packet))
+    new_policy = DriverPolicyContract.model_validate(
+        {
+            "contract_version": 2,
+            "driver": {"mode": "delegated", "cli": "codex", "model": "new-exact-model"},
+        }
+    )
+    authority = [old_policy]
+    events: list[str] = []
+
+    @contextmanager
+    def guarded_authority():
+        events.append("authority_entered")
+        try:
+            yield authority[0]
+        finally:
+            authority[0] = new_policy
+            events.append("authority_released")
+
+    class AuthorityObservingRuntime(FakePhaseRuntime):
+        def run(self, **kwargs) -> PlaybookRunResult:
+            events.append(f"phase_used:{authority[0].driver.model}")
+            return super().run(**kwargs)
+
+    resumed = AuthorityObservingRuntime(issue_dir)
+    result = Version2WorkflowRuntime(
+        resumed,
+        old_policy,
+        policy_authority=guarded_authority,
+    ).run()
+
+    assert result.completed is True
+    assert resumed.executed == ["plan"]
+    assert events == [
+        "authority_entered",
+        "phase_used:gpt-5.6-codex",
+        "authority_released",
+    ]
+    state = resumed.blackboard_store.load_or_create("spec")
+    assert state.driver_state["consumed_sequences"] == [old_packet.sequence]
 
 
 def test_policy_change_after_consumption_reauthorizes_before_recovered_phase(

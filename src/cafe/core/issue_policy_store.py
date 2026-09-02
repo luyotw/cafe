@@ -12,6 +12,7 @@ import yaml
 from cafe.core.driver_policy import (
     POLICY_KEYS,
     DriverPolicyContract,
+    extract_driver_policy,
     policy_dict,
 )
 from cafe.core.packet_io import atomic_write_bytes
@@ -86,24 +87,34 @@ class IssuePolicyStore:
             if isinstance(proposed, DriverPolicyContract)
             else DriverPolicyContract.model_validate(dict(proposed))
         )
+        with self._locked_authority() as (path, current):
+            updated = {
+                key: value
+                for key, value in current.items()
+                if key not in POLICY_KEYS and key != "driver_execution"
+            }
+            updated.update(policy_dict(policy))
+            content = yaml.safe_dump(
+                updated, allow_unicode=True, default_flow_style=False, sort_keys=False
+            ).encode("utf-8")
+            atomic_write_bytes(path, content)
+        return updated
+
+    @contextmanager
+    def locked_policy(self) -> Iterator[DriverPolicyContract]:
+        """Hold policy authority stable while a validated policy is in use."""
+        with self._locked_authority() as (_, current):
+            yield extract_driver_policy(current)
+
+    @contextmanager
+    def _locked_authority(self) -> Iterator[tuple[Path, dict[str, Any]]]:
         path = self.config_path
         path.parent.mkdir(parents=True, exist_ok=True)
         lock_path = path.parent / ".issue.yaml.policy.lock"
         with self._thread_lock(path):
             with lock_path.open("a+", encoding="utf-8") as handle:
                 with _exclusive_lock(handle):
-                    current = _read_existing_config_strict(path)
-                    updated = {
-                        key: value
-                        for key, value in current.items()
-                        if key not in POLICY_KEYS and key != "driver_execution"
-                    }
-                    updated.update(policy_dict(policy))
-                    content = yaml.safe_dump(
-                        updated, allow_unicode=True, default_flow_style=False, sort_keys=False
-                    ).encode("utf-8")
-                    atomic_write_bytes(path, content)
-        return updated
+                    yield path, _read_existing_config_strict(path)
 
     @staticmethod
     def ensure_prepare_target_available(issue_dir: Path) -> None:

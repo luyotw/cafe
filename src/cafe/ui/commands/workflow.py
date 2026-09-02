@@ -15,13 +15,14 @@ from rich.console import Console
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.driver_policy import DriverPolicyContract, extract_driver_policy
 from cafe.core.driver_transport import BlackboardDriverSessionStore, DelegatedDriverTransport
+from cafe.core.issue_policy_store import IssuePolicyStore
 from cafe.core.issue_resolution import ActiveIssueResolutionError, resolve_active_issue
 from cafe.core.phase_state_mixin import next_runnable_iteration_number
 from cafe.core.playbook import resolve_step_behavior
 from cafe.core.types import CriticalPhaseError
 from cafe.core.v2_workflow_runtime import Version2WorkflowRuntime
-from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_hosting import WorkflowHost
+from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_notifications import WorkflowNotifier
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.phases.generic_phase import GenericPhase
@@ -1044,7 +1045,9 @@ def workflow(
                     driver_policy,
                     delegated_decision_provider=delegated_decision_provider,
                     notifier=WorkflowNotifier(issue_dir),
-                    policy_loader=lambda: _load_driver_policy_for_execution(issue_dir),
+                    policy_authority=IssuePolicyStore(
+                        issue_dir / "issue.yaml"
+                    ).locked_policy,
                 ).run(start_step=pending_start_step, single_step=single_step),
                 hosting="foreground",
             ).result

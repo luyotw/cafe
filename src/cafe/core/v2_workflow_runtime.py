@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager, ExitStack
 from typing import Any, Callable
 
 from cafe.core.driver_policy import DriverPolicyContract
@@ -17,7 +18,7 @@ from cafe.core.workflow_models import PlaybookRunResult
 from cafe.core.workflow_notifications import WorkflowNotificationEvent, WorkflowNotifier
 
 DelegatedDecisionProvider = Callable[[DriverPacket], DriverDecision]
-DriverPolicyLoader = Callable[[], DriverPolicyContract]
+DriverPolicyAuthority = Callable[[], AbstractContextManager[DriverPolicyContract]]
 
 
 class Version2WorkflowRuntime:
@@ -30,13 +31,13 @@ class Version2WorkflowRuntime:
         *,
         delegated_decision_provider: DelegatedDecisionProvider | None = None,
         notifier: WorkflowNotifier | None = None,
-        policy_loader: DriverPolicyLoader | None = None,
+        policy_authority: DriverPolicyAuthority | None = None,
     ) -> None:
         self.phase_runtime = phase_runtime
         self.policy = policy
         self.delegated_decision_provider = delegated_decision_provider
         self.notifier = notifier
-        self.policy_loader = policy_loader
+        self.policy_authority = policy_authority
         self.coordinator = DriverCoordinator(
             phase_runtime.blackboard_store,
             phase_runtime.blackboard,
@@ -56,25 +57,33 @@ class Version2WorkflowRuntime:
         last_result: PlaybookRunResult | None = None
 
         for _ in range(max_transitions):
-            if self.policy.driver.mode == "delegated":
-                if not self._policy_authority_is_current():
-                    return PlaybookRunResult(
-                        final_step=str(self.phase_runtime.blackboard.current_step),
-                        final_status_code="DELEGATED_DRIVER_PAUSED",
-                        completed=False,
+            with ExitStack() as authority_stack:
+                if self.policy.driver.mode == "delegated":
+                    if self.policy_authority is not None:
+                        try:
+                            current_policy = authority_stack.enter_context(self.policy_authority())
+                        except (OSError, ValueError):
+                            self.coordinator.record_lifecycle(
+                                "paused", reason="driver_policy_invalidated"
+                            )
+                            return self._policy_pause_result()
+                        if current_policy != self.policy:
+                            self.coordinator.record_lifecycle(
+                                "paused", reason="driver_policy_changed"
+                            )
+                            return self._policy_pause_result()
+                    pending = self.coordinator.pending_boundary(
+                        str(self.phase_runtime.blackboard.current_step),
+                        policy=self.policy,
                     )
-                pending = self.coordinator.pending_boundary(
-                    str(self.phase_runtime.blackboard.current_step),
-                    policy=self.policy,
-                )
-                if pending is not None and not self._authorize_delegated_boundary(pending):
-                    return self._boundary_result(pending)
+                    if pending is not None and not self._authorize_delegated_boundary(pending):
+                        return self._boundary_result(pending)
 
-            executed_step = requested_start or str(self.phase_runtime.blackboard.current_step)
-            result = self.phase_runtime.run(
-                start_step=requested_start,
-                single_step=True,
-            )
+                executed_step = requested_start or str(self.phase_runtime.blackboard.current_step)
+                result = self.phase_runtime.run(
+                    start_step=requested_start,
+                    single_step=True,
+                )
             requested_start = None
             last_result = result
             lifecycle = self._lifecycle_stop(result, executed_step=executed_step)
@@ -91,9 +100,7 @@ class Version2WorkflowRuntime:
                 delegated_available=self.delegated_decision_provider is not None,
             )
             if resolution.action_source == "attached":
-                self.coordinator.record_lifecycle(
-                    "awaiting_initiator", reason="attached_boundary"
-                )
+                self.coordinator.record_lifecycle("awaiting_initiator", reason="attached_boundary")
                 return result
             if resolution.action_source == "unattended":
                 if single_step:
@@ -128,9 +135,7 @@ class Version2WorkflowRuntime:
         decision = self.coordinator.decision_for(packet.sequence)
         if decision is None:
             if self.delegated_decision_provider is None:
-                self.coordinator.record_lifecycle(
-                    "paused", reason="delegated_driver_unavailable"
-                )
+                self.coordinator.record_lifecycle("paused", reason="delegated_driver_unavailable")
                 return False
             try:
                 raw_decision = self.delegated_decision_provider(packet)
@@ -159,26 +164,14 @@ class Version2WorkflowRuntime:
             return False
         if not consume_authorization:
             return True
-        if not self._policy_authority_is_current():
-            return False
         return self.coordinator.consume_authorization(packet.sequence) is not None
 
-    def _policy_authority_is_current(self) -> bool:
-        if self.policy_loader is None:
-            return True
-        try:
-            current_policy = self.policy_loader()
-        except (OSError, ValueError):
-            self.coordinator.record_lifecycle(
-                "paused", reason="driver_policy_invalidated"
-            )
-            return False
-        if current_policy != self.policy:
-            self.coordinator.record_lifecycle(
-                "paused", reason="driver_policy_changed"
-            )
-            return False
-        return True
+    def _policy_pause_result(self) -> PlaybookRunResult:
+        return PlaybookRunResult(
+            final_step=str(self.phase_runtime.blackboard.current_step),
+            final_status_code="DELEGATED_DRIVER_PAUSED",
+            completed=False,
+        )
 
     @staticmethod
     def _boundary_result(packet: DriverPacket) -> PlaybookRunResult:
@@ -210,8 +203,7 @@ class Version2WorkflowRuntime:
         if "PERMISSION" in status:
             return "permission"
         if current_step == "user" or any(
-            token in status
-            for token in ("HUMAN_TASK", "CONFIRM", "CLARIFICATION", "NO_CHANGES")
+            token in status for token in ("HUMAN_TASK", "CONFIRM", "CLARIFICATION", "NO_CHANGES")
         ):
             return "human_task"
         if any(token in status for token in ("ERROR", "FAILED", "INTERRUPTED")):
