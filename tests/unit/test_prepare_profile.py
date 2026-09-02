@@ -10,6 +10,8 @@ from cafe.core.prepare_profile import PrepareProfile, PrepareRigorError
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 
 def _write_skill(root: Path, name: str) -> None:
     skill_dir = root / name

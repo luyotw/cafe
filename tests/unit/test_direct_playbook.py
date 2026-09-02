@@ -1,6 +1,10 @@
 """Contracts for the reviewed direct-development playbook."""
 
+import pytest
+
 from cafe.playbooks.loader import PlaybookLoader
+
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 
 def test_direct_is_discoverable_and_strictly_valid() -> None:

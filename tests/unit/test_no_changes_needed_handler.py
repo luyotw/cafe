@@ -3,6 +3,8 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from cafe.core.hooks.native import (
     InitialInputProviderResolver,
     NoChangesNeededHandler,
@@ -10,6 +12,8 @@ from cafe.core.hooks.native import (
 )
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.playbooks.loader import PlaybookLoader
+
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 
 def _no_change_step_def() -> dict:
