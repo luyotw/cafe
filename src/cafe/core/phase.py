@@ -1103,7 +1103,13 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
                 isinstance(e, AgentExecutionError)
                 and hasattr(e, "error_type")
                 and e.error_type
-                in ("rate_limit", "cli_not_found", "cli_unavailable", "model_not_found")
+                in (
+                    "rate_limit",
+                    "provider_overloaded",
+                    "cli_not_found",
+                    "cli_unavailable",
+                    "model_not_found",
+                )
             )
 
             if is_critical_error:

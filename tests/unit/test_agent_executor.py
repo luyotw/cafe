@@ -281,6 +281,69 @@ class TestAgentExecutorErrorHandling:
 
         assert exc_info.value.error_type == "rate_limit"
 
+    def test_codex_server_overloaded_is_not_a_rate_limit(self) -> None:
+        """Codex capacity errors must not be presented as account quota exhaustion."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+        event = {
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "error": {
+                    "message": "Selected model is at capacity. Please try a different model.",
+                    "codex_error_info": "server_overloaded",
+                },
+            },
+        }
+
+        error_text = executor._extract_stream_json_error_text(event)
+        error_type, display_message = executor._classify_execution_error("Codex", error_text)
+
+        assert error_type == "provider_overloaded"
+        assert display_message == "Codex provider is temporarily at capacity."
+
+    def test_codex_server_overloaded_stream_event_is_classified_before_exit(self) -> None:
+        """Nested Codex terminal errors should retain their provider capacity code."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"thread.started","thread_id":"abc"}\n',
+            (
+                '{"type":"event_msg","payload":{"type":"task_complete",'
+                '"error":{"message":"Selected model is at capacity. Please try a '
+                'different model.","codex_error_info":"server_overloaded"}}}\n'
+            ),
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 1
+        mock_process.terminate.return_value = None
+
+        with patch("subprocess.Popen", return_value=mock_process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor.execute("Test prompt")
+
+        assert exc_info.value.error_type == "provider_overloaded"
+        assert exc_info.value.display_message == "Codex provider is temporarily at capacity."
+
+    def test_codex_normal_nested_message_is_not_an_error(self) -> None:
+        """A normal agent message must not be inferred as a terminal error."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+
+        error_text = executor._extract_stream_json_error_text(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "agent_message",
+                    "message": "The selected model is at capacity for this example.",
+                },
+            }
+        )
+
+        assert error_text == ""
+
     def test_unrelated_codex_failure_is_not_rate_limit(self) -> None:
         """Unrelated Codex failures should retain normal non-fallback behavior."""
         config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
