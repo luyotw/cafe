@@ -10,9 +10,12 @@ from typer.testing import CliRunner
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.git import BranchHealth
+from cafe.core.human_task_notifications import SlackNotificationError
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.services.summary_display import SummaryDisplay
+from cafe.services.summary_service import SummaryService
 from cafe.ui.cli import (
     _execute_single_step_alias,
     _find_external_resume_step,
@@ -493,6 +496,82 @@ def test_workflow_command_forwards_validated_policy_to_v2_runtime(
     assert callable(policy_authority)
     with policy_authority() as current_policy:
         assert current_policy == policy
+
+
+@pytest.mark.parametrize(
+    ("notifications_enabled", "credential_available", "human_task_delivery_available"),
+    [
+        (False, True, False),
+        (True, False, False),
+        (True, True, True),
+    ],
+)
+def test_workflow_command_refreshes_notification_guidance_for_later_inspection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    notifications_enabled: bool,
+    credential_available: bool,
+    human_task_delivery_available: bool,
+) -> None:
+    """Plan Integration 6: every start/resume publishes current delivery guidance."""
+    monkeypatch.chdir(tmp_path)
+    issues_root = tmp_path / ".cafe" / "issues"
+    issue_dir = issues_root / "issue-guidance"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "contract_version: 2\ndriver:\n  mode: unattended\n",
+        encoding="utf-8",
+    )
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+    stale_events = [] if human_task_delivery_available else ["human_task"]
+    with store.driver_transaction(state) as persisted:
+        persisted.driver_state["notification_guidance"] = {
+            "proactive_events": stale_events,
+            "inspection_available": True,
+            "inspection_command": "stale command",
+        }
+
+    class FakeExecutor:
+        def execute_step(self, step_name, step_def, blackboard_state, **_kwargs):
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    def load_credential() -> str:
+        if not credential_available:
+            raise SlackNotificationError("validation_error", "slack_credentials_missing")
+        return "https://hooks.slack.com/services/T/B/secret"
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+        patch(
+            "cafe.core.human_task_notifications.load_human_task_notification_settings",
+            return_value=SimpleNamespace(enabled=notifications_enabled),
+        ),
+        patch(
+            "cafe.core.human_task_notifications.load_slack_webhook_url",
+            side_effect=load_credential,
+        ),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-guidance"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--single-step"],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    status = SummaryService(issues_root=issues_root).load_driver_status("issue-guidance")
+    guidance = status["notification_guidance"]
+    expected_events = ["human_task"] if human_task_delivery_available else []
+    assert guidance["proactive_events"] == expected_events
+    assert guidance["inspection_available"] is True
+    assert guidance["inspection_command"] == "cafe status"
+    rendered = SummaryDisplay().format_driver_status(status)
+    assert "Notifications:" in rendered
+    assert "cafe status" in rendered
 
 
 def test_workflow_background_option_uses_fixed_host_launcher(
