@@ -400,6 +400,110 @@ def test_command_completion_binds_the_current_durable_task_before_routing(tmp_pa
     assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
 
 
+def test_durable_task_accepts_a_declared_revision_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A correction target remains valid beside a fixed approval outcome."""
+    builtin_root = tmp_path / "builtin"
+    skill_dir = builtin_root / "skills" / "review-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: review-skill
+description: test review skill
+workflow:
+  human_tasks:
+    - id: output-review
+      pattern: confirm_output
+      prompt: Review output
+      input_schema: decision
+      decisions:
+        - id: confirm
+          label: Confirm
+        - id: revise
+          label: Revise
+          requires_feedback: true
+          requires_target: true
+          correction: true
+      allowed_targets: [knowledge]
+---
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+    monkeypatch.setattr("cafe.ui.human_tasks.SkillLoader", lambda: loader)
+    issue_dir = tmp_path / ".cafe" / "issues" / "durable-revision"
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("review", playbook_id="standard")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="review",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.CONFIRM_OUTPUT,
+        source="test",
+    )
+    playbook = {
+        "steps": {
+            "review": {
+                "skill": "review-skill",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "output-review",
+                        "outcomes": {"confirm": "closeout"},
+                        "allowed_targets": ["knowledge"],
+                    }
+                ],
+            },
+            "knowledge": {"skill": "review-skill"},
+            "closeout": {"skill": "review-skill"},
+        }
+    }
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook,
+        step_name="review",
+        trigger="confirm_output",
+        skill_loader=loader,
+    )
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=blackboard.workflow_id,
+        step="review",
+        iteration=1,
+        trigger="confirm_output",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+    )
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=blackboard,
+        from_step="review",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "output-review",
+            "decision": "revise",
+            "target": "knowledge",
+            "feedback": "Repair the schema fields.",
+            "human_task_id": task.id,
+        },
+        source="command",
+    )
+
+    assert result.rejection is None
+    assert result.target == "knowledge"
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
+
+
 def test_stale_durable_task_cannot_be_completed_by_the_task_command_path(tmp_path: Path) -> None:
     """A task command cannot route an obsolete handoff back into its old step."""
     issue_dir = tmp_path / ".cafe" / "issues" / "stale-task-command"
