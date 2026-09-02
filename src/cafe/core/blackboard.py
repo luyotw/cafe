@@ -80,27 +80,27 @@ def _process_file_lock(lock_file: IO[str]) -> Iterator[None]:
 
 @contextmanager
 def _optional_process_file_lock(lock_file: IO[str]) -> Iterator[None]:
-    """Serialize generic persistence with a portable fallback lock."""
+    """Serialize generic persistence through one portable lock domain."""
+    portable_lock_path = Path(f"{lock_file.name}.sqlite3")
+    connection = sqlite3.connect(portable_lock_path, isolation_level=None, timeout=30.0)
     try:
-        release = _acquire_process_file_lock(lock_file)
-    except (OSError, RuntimeError):
-        fallback_path = Path(f"{lock_file.name}.sqlite3")
-        connection = sqlite3.connect(fallback_path, isolation_level=None, timeout=30.0)
+        connection.execute("BEGIN EXCLUSIVE")
         try:
-            connection.execute("BEGIN EXCLUSIVE")
+            release = _acquire_process_file_lock(lock_file)
+        except (OSError, RuntimeError):
+            release = None
+        try:
             yield
         finally:
-            if connection.in_transaction:
-                connection.rollback()
-            connection.close()
-        return
-    try:
-        yield
+            if release is not None:
+                try:
+                    release()
+                except OSError:
+                    pass
     finally:
-        try:
-            release()
-        except OSError:
-            pass
+        if connection.in_transaction:
+            connection.rollback()
+        connection.close()
 
 
 def _serialized_identity(value: Any) -> str:
