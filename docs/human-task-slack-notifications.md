@@ -48,6 +48,16 @@ project hook, task, agent response, or environment variable.
 No project-specific playbook, skill, credential, or script is required in a
 clean repository.
 
+### Keep coverage-test notifications separate
+
+`scripts/test-coverage.sh` marks only its own process as a coverage test run.
+HumanTasks materialized by test fixtures then use the separate fixed credential
+`~/.cafe/test-slack-webhook`; it must also be a private regular file owned by
+the login user. If that credential is missing or invalid, test-run HumanTask
+delivery fails closed and never falls back to the normal HumanTask channel.
+The marker chooses only between these two package-defined paths: it cannot
+supply a URL, channel, or credential path from a project or environment value.
+
 ## What the notification contains
 
 The notification identifies the repository, workflow ID, step, HumanTask ID,
@@ -70,13 +80,14 @@ credential is `slack_human_task_webhook`. Prompts, raw agent output, task
 feedback, project-defined fields, and credential values are never passed to the
 capability, notification, or receipt.
 
-The trusted package adapter reads `~/.slack-webhook` only after the capability
-request passes validation and policy. It accepts HTTPS Slack Incoming Webhook
-URLs only, rejects redirects, and bounds the connection attempt to five
-seconds. The URL is used as the outbound request destination but is not put in
-the message, repository, HumanTask record, project-hook input, log, or receipt.
-Project-authored hooks remain sandboxed and never inherit this capability or
-credential.
+The trusted package adapter reads the fixed `~/.slack-webhook` credential only
+after the capability request passes validation and policy; the coverage test
+runner is the sole exception and uses the separately provisioned fixed test
+credential above. It accepts HTTPS Slack Incoming Webhook URLs only, rejects
+redirects, and bounds the connection attempt to five seconds. The URL is used
+as the outbound request destination but is not put in the message, repository,
+HumanTask record, project-hook input, log, or receipt. Project-authored hooks
+remain sandboxed and never inherit this capability or credential.
 
 ## Inspect delivery receipts
 
