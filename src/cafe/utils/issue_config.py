@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -28,7 +29,40 @@ def _repository_root_for_config(config_path: Path) -> Path:
     return Path.cwd().resolve()
 
 
-def resolve_issue_config_path(config_path: Path) -> Path:
+def _registered_worktree_paths(repository_root: Path) -> tuple[Path, ...]:
+    """Return the selected repository's registered worktree roots, main first."""
+    result = subprocess.run(
+        ["git", "worktree", "list", "--porcelain", "-z"],
+        cwd=repository_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise ValueError("cannot verify inventory worktree against the selected repository")
+    registered: list[Path] = []
+    for field in result.stdout.split("\0"):
+        if field.startswith("worktree "):
+            registered.append(Path(field.removeprefix("worktree ")).resolve())
+    return tuple(registered)
+
+
+def _issue_authority_worktree(config_path: Path) -> Optional[Path]:
+    """Return the worktree for an exact .cafe issue authority path."""
+    if (
+        config_path.name == "issue.yaml"
+        and config_path.parent.parent.name == "issues"
+        and config_path.parent.parent.parent.name == ".cafe"
+    ):
+        return config_path.parents[3]
+    return None
+
+
+def resolve_issue_config_path(
+    config_path: Path,
+    *,
+    require_registered_worktree: bool = False,
+) -> Path:
     """Resolve a repo inventory pointer to the active-worktree authority."""
     path = Path(config_path).resolve()
     config = read_issue_config(path)
@@ -37,9 +71,28 @@ def resolve_issue_config_path(config_path: Path) -> Path:
     raw_worktree = config.get("worktree_path")
     if not isinstance(raw_worktree, str) or not raw_worktree.strip():
         return path
+    registered_worktrees: tuple[Path, ...] = ()
+    repository_root = _repository_root_for_config(path)
+    authority_worktree = _issue_authority_worktree(path)
+    if require_registered_worktree or authority_worktree is not None:
+        try:
+            registered_worktrees = _registered_worktree_paths(repository_root)
+        except ValueError:
+            if require_registered_worktree:
+                raise
+        main_worktree = registered_worktrees[0] if registered_worktrees else None
+        if (
+            authority_worktree in registered_worktrees
+            and authority_worktree != main_worktree
+        ):
+            return path
     worktree = Path(raw_worktree)
     if not worktree.is_absolute():
-        worktree = _repository_root_for_config(path) / worktree
+        worktree = repository_root / worktree
+    worktree = worktree.resolve()
+    if require_registered_worktree:
+        if worktree not in registered_worktrees:
+            raise ValueError("inventory worktree is not registered to the selected repository")
     issue_name = config.get("issue_name")
     if not isinstance(issue_name, str) or not issue_name.strip():
         issue_name = path.parent.name
@@ -54,7 +107,11 @@ def resolve_issue_config_path(config_path: Path) -> Path:
     candidate = (issues_root / issue_name / "issue.yaml").resolve()
     if not candidate.is_relative_to(issues_root):
         raise ValueError("inventory issue configuration escapes its worktree issue root")
-    return candidate.resolve() if candidate.exists() else path
+    if candidate.exists():
+        return candidate.resolve()
+    if require_registered_worktree:
+        raise ValueError("registered inventory worktree has no issue policy authority")
+    return path
 
 
 def read_authoritative_issue_config(config_path: Path) -> Optional[Dict[str, Any]]:

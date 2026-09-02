@@ -9,12 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cafe.core.blackboard import (
-    ArtifactEntry,
-    ArtifactKind,
-    BlackboardStore,
-    EventEntry,
-)
+from cafe.core.blackboard import BlackboardStore
 from cafe.core.workflow_hosting import WorkerAlreadyRunningError, WorkflowHost
 
 
@@ -194,42 +189,3 @@ def test_lease_renewal_loss_keeps_runtime_exclusive_until_callable_returns(
         assert overlap_calls == []
         with pytest.raises(WorkerAlreadyRunningError):
             future.result(timeout=2)
-
-
-def test_stale_reconciliation_changes_only_worker_and_lease_state(tmp_path: Path) -> None:
-    issue_dir = tmp_path / "issue"
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop")
-    state.artifacts["plan"] = ArtifactEntry(
-        name="plan",
-        kind=ArtifactKind.DOCUMENT,
-        version=1,
-        updated_by="plan",
-        path="plan/output.md",
-    )
-    state.events.append(
-        EventEntry(
-            timestamp="2026-01-01T00:00:00+00:00",
-            step="develop",
-            event_type="step_interrupted",
-            message="executor disappeared",
-        )
-    )
-    state.step_attempt_counts = {"develop": 2}
-    store.save(state)
-    host = WorkflowHost(issue_dir)
-    host.run_worker(lambda: None, worker_id="stale", hold_lease=True)
-    with store.driver_transaction(host.state) as persisted:
-        persisted.driver_state["advancement_lease"]["expires_at"] = "2000-01-01T00:00:00+00:00"
-        persisted.driver_state["worker"]["lease_expires_at"] = "2000-01-01T00:00:00+00:00"
-    before = store.load_or_create("develop").to_dict()
-
-    assert host.reconcile_stale_ownership() is True
-
-    after = store.load_or_create("develop").to_dict()
-    for key in ("current_step", "artifacts", "events", "handoff_contract", "step_attempt_counts"):
-        assert after[key] == before[key]
-    assert after["driver_state"]["advancement_lease"] is None
-    assert after["driver_state"]["worker"]["status"] == "stale"
-    assert "terminal_result" not in after["driver_state"]
-    assert host.run_worker(lambda: "resumed", worker_id="replacement").result == "resumed"

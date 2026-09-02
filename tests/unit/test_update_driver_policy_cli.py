@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -15,6 +16,26 @@ def _layout(tmp_path: Path) -> tuple[Path, Path, bytes]:
     root = tmp_path / ".cafe" / "issues" / "issue432" / "issue.yaml"
     worktree = tmp_path / ".cafe" / "worktrees" / "issue432"
     active = worktree / ".cafe" / "issues" / "issue432" / "issue.yaml"
+    subprocess.run(["git", "init", "-b", "develop"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "cafe-test@local.invalid"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(["git", "config", "user.name", "CAFE Test"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-m", "Initial"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    worktree.parent.mkdir(parents=True)
+    subprocess.run(
+        ["git", "worktree", "add", "-b", "issue432", str(worktree)],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
     root.parent.mkdir(parents=True)
     active.parent.mkdir(parents=True)
     root.write_text(
@@ -171,3 +192,34 @@ def test_update_command_rejects_traversal_from_inventory_issue_name(
 
     assert result.exit_code == 1
     assert victim.read_bytes() == original
+
+
+def test_update_command_rejects_unregistered_inventory_worktree(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, _, _ = _layout(tmp_path)
+    attacker = tmp_path / "unregistered"
+    attacker_config = attacker / ".cafe" / "issues" / "issue432" / "issue.yaml"
+    attacker_config.parent.mkdir(parents=True)
+    original = b"owner: outside\n"
+    attacker_config.write_bytes(original)
+    root.write_text(
+        yaml.safe_dump({"issue_name": "issue432", "worktree_path": str(attacker)}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "update-driver-policy",
+            "issue432",
+            "--contract-version",
+            "2",
+            "--driver-mode",
+            "unattended",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert attacker_config.read_bytes() == original

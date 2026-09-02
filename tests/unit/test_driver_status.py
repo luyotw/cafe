@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from cafe.core.blackboard import BlackboardStore
@@ -42,48 +43,48 @@ def test_status_projects_policy_progress_and_decisions_without_session_identity(
     )
     store = BlackboardStore(active_dir)
     state = store.load_or_create("develop")
-    state.driver_state = {
-        "lifecycle": "paused",
-        "pause_reason": "awaiting authorization",
-        "packets": {
-            "1": {
+    with store.driver_transaction(state) as persisted:
+        persisted.driver_state = {
+            "lifecycle": "paused",
+            "pause_reason": "delegated_model_mismatch",
+            "packets": {
+                "1": {
+                    "workflow_id": state.workflow_id,
+                    "sequence": 1,
+                    "completed_phase": "plan",
+                    "requested_action": "develop",
+                    "boundary_id": "plan:develop",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                }
+            },
+            "decisions": {
+                "1": {
+                    "workflow_id": state.workflow_id,
+                    "sequence": 1,
+                    "requested_action": "develop",
+                    "action": "pause",
+                    "rationale": "review required",
+                    "decided_at": "2026-01-01T00:00:01+00:00",
+                }
+            },
+            "session": {
+                "session_id": "secret-driver-session",
+                "cli": "codex",
                 "workflow_id": state.workflow_id,
+            },
+            "notification_guidance": {
+                "proactive_events": [],
+                "inspection_available": True,
+                "inspection_command": "cafe status",
+            },
+            "model_mismatch": {
+                "cli": "codex",
+                "requested_model": "gpt-5.6-codex",
+                "reported_model": "unexpected-model",
                 "sequence": 1,
-                "completed_phase": "plan",
-                "requested_action": "develop",
-                "boundary_id": "plan:develop",
-                "created_at": "2026-01-01T00:00:00+00:00",
-            }
-        },
-        "decisions": {
-            "1": {
-                "workflow_id": state.workflow_id,
-                "sequence": 1,
-                "requested_action": "develop",
-                "action": "pause",
-                "rationale": "review required",
-                "decided_at": "2026-01-01T00:00:01+00:00",
-            }
-        },
-        "session": {
-            "session_id": "secret-driver-session",
-            "cli": "codex",
-            "workflow_id": state.workflow_id,
-        },
-        "notification_guidance": {
-            "proactive": False,
-            "inspection_available": True,
-            "inspection_command": "cafe status",
-        },
-        "model_mismatch": {
-            "cli": "codex",
-            "requested_model": "gpt-5.6-codex",
-            "reported_model": "unexpected-model",
-            "sequence": 1,
-            "detected_at": "2026-01-01T00:00:02+00:00",
-        },
-    }
-    store.save(state)
+                "detected_at": "2026-01-01T00:00:02+00:00",
+            },
+        }
 
     status = SummaryService(issues_root=issues_root).load_driver_status("issue432")
     rendered = SummaryDisplay().format_driver_status(status)
@@ -105,3 +106,40 @@ def test_status_projects_policy_progress_and_decisions_without_session_identity(
     assert "Execution:" not in rendered
     assert "cafe status" in rendered
     assert "secret-driver-session" not in rendered
+
+
+@pytest.mark.parametrize(
+    "lifecycle",
+    ["paused", "error", "permission", "human_task", "stopped", "complete"],
+)
+def test_status_projects_only_the_active_lifecycle_reason(tmp_path: Path, lifecycle: str) -> None:
+    issues_root = tmp_path / ".cafe" / "issues"
+    issue_dir = issues_root / "issue432"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "contract_version": 2,
+                "driver": {"mode": "unattended"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    reason_key = "pause_reason" if lifecycle == "paused" else f"{lifecycle}_reason"
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    with store.driver_transaction(state) as persisted:
+        persisted.driver_state = {
+            "lifecycle": lifecycle,
+            reason_key: f"active {lifecycle}",
+            ("error_reason" if lifecycle == "paused" else "pause_reason"): "stale",
+            "session": {"session_id": "hidden-session"},
+        }
+
+    status = SummaryService(issues_root=issues_root).load_driver_status("issue432")
+    rendered = SummaryDisplay().format_driver_status(status)
+
+    assert status["reason"] == f"active {lifecycle}"
+    assert "stale" not in json.dumps(status)
+    assert "hidden-session" not in json.dumps(status)
+    assert f"active {lifecycle}" in rendered

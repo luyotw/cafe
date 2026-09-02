@@ -237,6 +237,77 @@ def test_machine_notification_settings_skip_invalid_or_unsupported_transport(
     assert settings.code == expected_code
 
 
+def test_machine_notification_config_rejects_oversized_input(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Plan Unit 10: machine configuration has a fixed parsing budget."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    home = tmp_path / "home"
+    _write_machine_config(home, " " * (notification_mod.MAX_MACHINE_CONFIG_BYTES + 1))
+    _set_home(monkeypatch, home)
+
+    settings = notification_mod.load_human_task_notification_settings()
+
+    assert settings.enabled is False
+    assert settings.outcome == "skipped"
+    assert settings.code == "human_task_notification_config_invalid"
+    with pytest.raises(SlackNotificationError) as exc:
+        load_slack_webhook_url(repository_root=tmp_path)
+    assert exc.value.code == "human_task_notification_config_invalid"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO support")
+def test_machine_notification_config_rejects_fifo_without_blocking(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Plan Unit 10: a special config file cannot block notification callers."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    home = tmp_path / "home"
+    config = home / ".cafe" / "config.yaml"
+    config.parent.mkdir(parents=True)
+    os.mkfifo(config, mode=0o600)
+    _set_home(monkeypatch, home)
+
+    settings = notification_mod.load_human_task_notification_settings()
+
+    assert settings.enabled is False
+    assert settings.outcome == "skipped"
+    assert settings.code == "human_task_notification_config_invalid"
+    with pytest.raises(SlackNotificationError) as exc:
+        load_slack_webhook_url(repository_root=tmp_path)
+    assert exc.value.code == "human_task_notification_config_invalid"
+
+
+def test_machine_notification_config_rejects_too_many_project_routes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Plan Unit 10: project-route traversal has a fixed cardinality budget."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    home = tmp_path / "home"
+    routes = [
+        f"      {tmp_path / f'project-{index}'}:\n"
+        f"        webhook_url: https://hooks.slack.com/services/T/B/route-{index}"
+        for index in range(notification_mod.MAX_PROJECT_ROUTES + 1)
+    ]
+    _write_machine_config(
+        home,
+        "notifications:\n  human_tasks:\n    projects:\n" + "\n".join(routes) + "\n",
+    )
+    _set_home(monkeypatch, home)
+
+    settings = notification_mod.load_human_task_notification_settings()
+
+    assert settings.enabled is False
+    assert settings.outcome == "skipped"
+    assert settings.code == "human_task_notification_config_invalid"
+    with pytest.raises(SlackNotificationError) as exc:
+        load_slack_webhook_url(repository_root=tmp_path)
+    assert exc.value.code == "human_task_notification_config_invalid"
+
+
 def test_credential_resolver_reads_only_the_fixed_user_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -285,6 +356,36 @@ def test_credential_resolver_uses_private_machine_project_route(
 
     assert load_slack_webhook_url(repository_root=project) == project_webhook
     assert load_slack_webhook_url(repository_root=other_project) == VALID_WEBHOOK
+
+
+def test_credential_resolver_rejects_malformed_selected_project_route(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The selected repository fails closed instead of using its fallback."""
+    home = tmp_path / "home"
+    project = tmp_path / "open-forest-scripts"
+    home.mkdir()
+    project.mkdir()
+    _write_credential(home)
+    _write_machine_config(
+        home,
+        "\n".join(
+            (
+                "notifications:",
+                "  human_tasks:",
+                "    projects:",
+                f"      {project}:",
+                "        webhook_url: not-a-slack-webhook",
+                "",
+            )
+        ),
+    )
+    _set_home(monkeypatch, home)
+
+    with pytest.raises(SlackNotificationError) as exc:
+        load_slack_webhook_url(repository_root=project)
+
+    assert exc.value.code == "human_task_notification_config_invalid"
 
 
 def test_project_route_requires_private_machine_config(

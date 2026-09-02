@@ -1,6 +1,8 @@
 """Tests for workflow CLI command."""
 
 import json
+import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -10,9 +12,12 @@ from typer.testing import CliRunner
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.git import BranchHealth
+from cafe.core.human_task_notifications import SlackNotificationError
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.services.summary_display import SummaryDisplay
+from cafe.services.summary_service import SummaryService
 from cafe.ui.cli import (
     _execute_single_step_alias,
     _find_external_resume_step,
@@ -442,12 +447,10 @@ def test_workflow_command_forwards_validated_policy_to_v2_runtime(
             policy,
             *,
             delegated_decision_provider=None,
-            notifier=None,
             policy_authority=None,
         ) -> None:
             captured["policy"] = policy
             captured["provider"] = delegated_decision_provider
-            captured["notifier"] = notifier
             captured["policy_authority"] = policy_authority
             self.phase_runtime = phase_runtime
 
@@ -495,6 +498,296 @@ def test_workflow_command_forwards_validated_policy_to_v2_runtime(
     assert callable(policy_authority)
     with policy_authority() as current_policy:
         assert current_policy == policy
+
+
+@pytest.mark.parametrize(
+    ("notifications_enabled", "credential_available", "human_task_delivery_available"),
+    [
+        (False, True, False),
+        (True, False, False),
+        (True, True, True),
+    ],
+)
+def test_workflow_command_refreshes_notification_guidance_for_later_inspection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    notifications_enabled: bool,
+    credential_available: bool,
+    human_task_delivery_available: bool,
+) -> None:
+    """Plan Integration 6: every start/resume publishes current delivery guidance."""
+    monkeypatch.chdir(tmp_path)
+    issues_root = tmp_path / ".cafe" / "issues"
+    issue_dir = issues_root / "issue-guidance"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "contract_version: 2\ndriver:\n  mode: unattended\n",
+        encoding="utf-8",
+    )
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+    stale_events = [] if human_task_delivery_available else ["human_task"]
+    with store.driver_transaction(state) as persisted:
+        persisted.driver_state["notification_guidance"] = {
+            "proactive_events": stale_events,
+            "inspection_available": True,
+            "inspection_command": "stale command",
+        }
+
+    class FakeExecutor:
+        def execute_step(self, step_name, step_def, blackboard_state, **_kwargs):
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    repository_roots: list[Path | None] = []
+
+    def load_credential(*, repository_root: Path | None = None) -> str:
+        repository_roots.append(repository_root)
+        if not credential_available:
+            raise SlackNotificationError("validation_error", "slack_credentials_missing")
+        return "https://hooks.slack.com/services/T/B/secret"
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+        patch(
+            "cafe.core.human_task_notifications.load_human_task_notification_settings",
+            return_value=SimpleNamespace(enabled=notifications_enabled),
+        ),
+        patch(
+            "cafe.core.human_task_notifications.load_slack_webhook_url",
+            side_effect=load_credential,
+        ),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-guidance"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--single-step"],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert repository_roots == ([tmp_path.resolve()] if notifications_enabled else [])
+    status = SummaryService(issues_root=issues_root).load_driver_status("issue-guidance")
+    guidance = status["notification_guidance"]
+    expected_events = ["human_task"] if human_task_delivery_available else []
+    assert guidance["proactive_events"] == expected_events
+    assert guidance["inspection_available"] is True
+    assert guidance["inspection_command"] == "cafe status"
+    rendered = SummaryDisplay().format_driver_status(status)
+    assert "Notifications:" in rendered
+    assert "cafe status" in rendered
+
+
+@pytest.mark.parametrize("linked_worktree", [False, True], ids=["project", "worktree"])
+def test_workflow_command_guidance_uses_project_only_slack_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    linked_worktree: bool,
+) -> None:
+    """Plan Integration 6: public start uses the HumanTask repository route."""
+    repository = tmp_path / "main-repository"
+    active_root = repository
+    repository.mkdir()
+    if linked_worktree:
+        active_root = tmp_path / "linked-checkout"
+        subprocess.run(
+            ("git", "init"), cwd=repository, check=True, capture_output=True, text=True
+        )
+        subprocess.run(
+            ("git", "config", "user.email", "cafe-test@example.test"),
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ("git", "config", "user.name", "CAFE Test"),
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        (repository / "README.md").write_text("test\n", encoding="utf-8")
+        subprocess.run(
+            ("git", "add", "README.md"),
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ("git", "commit", "-m", "Initial"),
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ("git", "worktree", "add", "--detach", str(active_root)),
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    monkeypatch.chdir(active_root)
+    issue_name = "issue-guidance"
+    issues_root = active_root / ".cafe" / "issues"
+    issue_dir = issues_root / issue_name
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "contract_version: 2\ndriver:\n  mode: unattended\n",
+        encoding="utf-8",
+    )
+
+    home = tmp_path / "home"
+    config = home / ".cafe" / "config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        "\n".join(
+            (
+                "notifications:",
+                "  human_tasks:",
+                "    projects:",
+                f"      {repository.resolve()}:",
+                "        webhook_url: https://hooks.slack.com/services/T/B/project-route",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    config.chmod(0o600)
+    monkeypatch.setattr(
+        "cafe.core.human_task_notifications._trusted_user_home", lambda: home
+    )
+
+    class FakeExecutor:
+        def execute_step(self, step_name, step_def, blackboard_state, **_kwargs):
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = issue_name
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--single-step"],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    status = SummaryService(issues_root=issues_root).load_driver_status(issue_name)
+    assert status["notification_guidance"]["proactive_events"] == ["human_task"]
+
+
+def test_workflow_command_guidance_uses_fallback_with_malformed_sibling_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plan Integration 6: an unrelated route cannot suppress this repository."""
+    monkeypatch.chdir(tmp_path)
+    issue_name = "issue-guidance"
+    issues_root = tmp_path / ".cafe" / "issues"
+    issue_dir = issues_root / issue_name
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "contract_version: 2\ndriver:\n  mode: unattended\n",
+        encoding="utf-8",
+    )
+
+    home = tmp_path / "home"
+    config = home / ".cafe" / "config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        "\n".join(
+            (
+                "notifications:",
+                "  human_tasks:",
+                "    projects:",
+                f"      {tmp_path / 'unrelated-repository'}:",
+                "        webhook_url: not-a-slack-webhook",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    config.chmod(0o600)
+    fallback = home / ".slack-webhook"
+    fallback.write_text(
+        "https://hooks.slack.com/services/T/B/fallback-route",
+        encoding="utf-8",
+    )
+    fallback.chmod(0o600)
+    monkeypatch.setattr("cafe.core.human_task_notifications._trusted_user_home", lambda: home)
+
+    class FakeExecutor:
+        def execute_step(self, step_name, step_def, blackboard_state, **_kwargs):
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = issue_name
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--single-step"],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    status = SummaryService(issues_root=issues_root).load_driver_status(issue_name)
+    assert status["notification_guidance"]["proactive_events"] == ["human_task"]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO support")
+def test_workflow_command_records_guidance_when_machine_config_is_fifo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plan Integration 6: special config input fails closed before kickoff."""
+    monkeypatch.chdir(tmp_path)
+    issue_name = "issue-guidance"
+    issues_root = tmp_path / ".cafe" / "issues"
+    issue_dir = issues_root / issue_name
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "contract_version: 2\ndriver:\n  mode: unattended\n",
+        encoding="utf-8",
+    )
+
+    home = tmp_path / "home"
+    config = home / ".cafe" / "config.yaml"
+    config.parent.mkdir(parents=True)
+    os.mkfifo(config, mode=0o600)
+    monkeypatch.setattr("cafe.core.human_task_notifications._trusted_user_home", lambda: home)
+
+    class FakeExecutor:
+        def execute_step(self, step_name, step_def, blackboard_state, **_kwargs):
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = issue_name
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--single-step"],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    status = SummaryService(issues_root=issues_root).load_driver_status(issue_name)
+    guidance = status["notification_guidance"]
+    assert guidance["proactive_events"] == []
+    assert guidance["inspection_available"] is True
 
 
 def test_workflow_background_option_uses_fixed_host_launcher(
@@ -872,8 +1165,7 @@ def test_workflow_command_rejects_unknown_durable_task_without_generic_fallback(
             app,
             [
                 "workflow",
-                "--playbook",
-                "standard",
+                "--playbook", "standard",
                 "--execute",
                 "--single-step",
                 "--user-input",
@@ -926,8 +1218,7 @@ def test_workflow_command_pauses_agent_retry_after_durable_task_completion(
             app,
             [
                 "workflow",
-                "--playbook",
-                "standard",
+                "--playbook", "standard",
                 "--execute",
                 "--single-step",
                 "--user-input",
@@ -1716,7 +2007,8 @@ def test_workflow_command_does_not_treat_generic_user_input_as_alignment_approva
             app,
             [
                 "workflow",
-                "--playbook", "standard",
+                "--playbook",
+                "standard",
                 "--execute",
                 "--user-input",
                 "looks good",
@@ -1767,7 +2059,8 @@ def test_workflow_command_resume_confirm_output_keeps_await_agent_intent(
             app,
             [
                 "workflow",
-                "--playbook", "standard",
+                "--playbook",
+                "standard",
                 "--execute",
                 "--user-input",
                 '{"task":"output-review","decision":"confirm"}',
@@ -3548,11 +3841,7 @@ def test_find_external_resume_step_returns_none_for_consumed_ledger_feedback(
         "steps": {
             "pr": {
                 "hooks": {
-                    "prepare_input": [
-                        "GitHubPRCreator",
-                        "GitHubPRFeedbackSource",
-                        "UserInputCollector",
-                    ],
+                    "prepare_input": ["GitHubPRCreator", "GitHubPRFeedbackSource", "UserInputCollector"],
                 },
             },
         },
@@ -3622,7 +3911,11 @@ def test_find_external_resume_step_returns_pr_for_new_unresolved_github_feedback
         "steps": {
             "pr": {
                 "hooks": {
-                    "prepare_input": ["GitHubPRCreator", "GitHubPRFeedbackSource", "UserInputCollector"],
+                    "prepare_input": [
+                        "GitHubPRCreator",
+                        "GitHubPRFeedbackSource",
+                        "UserInputCollector",
+                    ],
                 },
             },
         },

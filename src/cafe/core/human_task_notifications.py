@@ -21,6 +21,8 @@ TEST_RUN_SLACK_WEBHOOK_FILENAME = ".cafe/test-slack-webhook"
 TEST_RUN_SLACK_ROUTING_ENV = "CAFE_TEST_RUN_SLACK_NOTIFICATIONS"
 SLACK_WEBHOOK_HOST = "hooks.slack.com"
 MAX_CREDENTIAL_BYTES = 8192
+MAX_MACHINE_CONFIG_BYTES = 65536
+MAX_PROJECT_ROUTES = 128
 MACHINE_CONFIG_DIRECTORY = ".cafe"
 MACHINE_CONFIG_FILENAME = "config.yaml"
 MAX_NOTIFICATION_METADATA_LENGTH = 128
@@ -44,14 +46,38 @@ def _machine_config_path() -> Path:
 def _load_machine_config() -> tuple[Path, dict[object, object]]:
     """Load the machine-only configuration or raise a stable safe error."""
     config_path = _machine_config_path()
-    if not config_path.exists():
-        return config_path, {}
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
-        raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        descriptor = os.open(config_path, flags)
+    except FileNotFoundError:
+        return config_path, {}
+    except OSError as exc:
+        raise SlackNotificationError(
+            "validation_error", "human_task_notification_config_invalid"
+        ) from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise SlackNotificationError(
+                "validation_error", "human_task_notification_config_invalid"
+            )
+        with os.fdopen(descriptor, "rb") as config_stream:
+            descriptor = -1
+            config_bytes = config_stream.read(MAX_MACHINE_CONFIG_BYTES + 1)
+        if len(config_bytes) > MAX_MACHINE_CONFIG_BYTES:
+            raise SlackNotificationError(
+                "validation_error", "human_task_notification_config_invalid"
+            )
+        raw_config = yaml.safe_load(config_bytes.decode("utf-8"))
+    except SlackNotificationError:
+        raise
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise SlackNotificationError(
             "validation_error", "human_task_notification_config_invalid"
         ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     if raw_config is None:
         return config_path, {}
     if not isinstance(raw_config, dict):
@@ -100,26 +126,43 @@ def _is_private_machine_config(config_path: Path) -> bool:
     )
 
 
-def _project_webhook_routes(
+def _bounded_project_webhook_declarations(
     *, config_path: Path, declaration: dict[object, object]
-) -> dict[str, str]:
-    """Validate direct Slack URLs stored in private machine project routes."""
+) -> dict[object, object]:
+    """Return the bounded private map without inspecting unrelated routes."""
     projects = declaration.get("projects", {})
     if projects is None:
         projects = {}
-    if not isinstance(projects, dict):
+    if not isinstance(projects, dict) or len(projects) > MAX_PROJECT_ROUTES:
         raise SlackNotificationError("validation_error", "human_task_notification_config_invalid")
     if projects and not _is_private_machine_config(config_path):
         raise SlackNotificationError("validation_error", "human_task_notification_config_unsafe")
+    return projects
 
-    routes: dict[str, str] = {}
+
+def _project_webhook_route(
+    *, config_path: Path, declaration: dict[object, object], repository_root: Path
+) -> str | None:
+    """Validate only routes that resolve to the selected repository."""
+    projects = _bounded_project_webhook_declarations(
+        config_path=config_path,
+        declaration=declaration,
+    )
+    selected_root = _normalise_project_root(repository_root)
+    selected_urls: set[str] = set()
     for configured_root, configured_route in projects.items():
         if not isinstance(configured_root, str) or not configured_root:
-            raise SlackNotificationError(
-                "validation_error", "human_task_notification_config_invalid"
-            )
+            continue
         configured_path = Path(configured_root)
-        if not configured_path.is_absolute() or not isinstance(configured_route, dict):
+        if not configured_path.is_absolute():
+            continue
+        try:
+            normalised_root = _normalise_project_root(configured_path)
+        except SlackNotificationError:
+            continue
+        if normalised_root != selected_root:
+            continue
+        if not isinstance(configured_route, dict):
             raise SlackNotificationError(
                 "validation_error", "human_task_notification_config_invalid"
             )
@@ -133,18 +176,15 @@ def _project_webhook_routes(
                 "validation_error", "human_task_notification_config_invalid"
             )
         try:
-            normalised_root = _normalise_project_root(configured_path)
             validated_url = _validate_slack_webhook_url(webhook_url)
         except SlackNotificationError as exc:
             raise SlackNotificationError(
                 "validation_error", "human_task_notification_config_invalid"
             ) from exc
-        if normalised_root in routes and routes[normalised_root] != validated_url:
-            raise SlackNotificationError(
-                "validation_error", "human_task_notification_config_invalid"
-            )
-        routes[normalised_root] = validated_url
-    return routes
+        selected_urls.add(validated_url)
+    if len(selected_urls) > 1:
+        raise SlackNotificationError("validation_error", "human_task_notification_config_invalid")
+    return next(iter(selected_urls), None)
 
 
 @dataclass(frozen=True)
@@ -264,7 +304,10 @@ def load_human_task_notification_settings() -> HumanTaskNotificationSettings:
             code="human_task_notification_transport_unsupported",
         )
     try:
-        _project_webhook_routes(config_path=config_path, declaration=declaration)
+        _bounded_project_webhook_declarations(
+            config_path=config_path,
+            declaration=declaration,
+        )
     except SlackNotificationError as exc:
         return HumanTaskNotificationSettings(
             enabled=False,
@@ -338,10 +381,11 @@ def load_slack_webhook_url(*, repository_root: Path | None = None) -> str:
     if repository_root is not None and os.environ.get(TEST_RUN_SLACK_ROUTING_ENV) != "1":
         config_path, raw_config = _load_machine_config()
         declaration = _human_task_notification_declaration(raw_config)
-        project_url = _project_webhook_routes(
+        project_url = _project_webhook_route(
             config_path=config_path,
             declaration=declaration,
-        ).get(_normalise_project_root(repository_root))
+            repository_root=repository_root,
+        )
         if project_url is not None:
             return project_url
     credential_file = _slack_credential_file()

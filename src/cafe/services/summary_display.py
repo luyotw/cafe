@@ -105,9 +105,9 @@ class SummaryDisplay:
             lines.append(
                 f"Delegated driver: {driver.get('cli', '')} / {driver.get('model', '')}"
             )
-        pause_reason = status.get("pause_reason")
-        if isinstance(pause_reason, str) and pause_reason:
-            lines.append(f"Pause reason: {pause_reason}")
+        reason = status.get("reason")
+        if isinstance(reason, str) and reason:
+            lines.append(f"Reason: {reason}")
         decisions = status.get("decisions", [])
         if isinstance(decisions, list) and decisions:
             latest = decisions[-1]
@@ -116,12 +116,19 @@ class SummaryDisplay:
                     f"Latest decision: {latest.get('sequence', '')} {latest.get('action', '')}"
                 )
         guidance = status.get("notification_guidance")
-        if isinstance(guidance, Mapping) and guidance.get("proactive") is False:
+        if isinstance(guidance, Mapping):
             command = guidance.get("inspection_command", "cafe status")
-            lines.append(
-                "Notifications: unavailable; this conversation will not be proactively "
-                f"updated. Inspect durable progress with {command}"
-            )
+            proactive_events = guidance.get("proactive_events", [])
+            if proactive_events == ["human_task"]:
+                lines.append(
+                    "Notifications: HumanTasks may notify; other lifecycle progress "
+                    f"remains inspectable with {command}"
+                )
+            else:
+                lines.append(
+                    "Notifications: unavailable; this conversation will not be proactively "
+                    f"updated. Inspect durable progress with {command}"
+                )
         mismatch = status.get("model_mismatch")
         if isinstance(mismatch, Mapping):
             lines.append(

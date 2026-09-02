@@ -74,10 +74,10 @@ decision is never duplicated, and an advance decision is consumed at most once.
 
 ## Notifications
 
-HumanTasks, permissions, errors, and completion are substantive lifecycle
-events and may use the existing typed workflow-notification capability once per
-event. Phase boundaries, polling, empty yields, and transport activity do not
-notify.
+Only newly materialized HumanTasks may use the existing typed HumanTask
+notification boundary. Permissions, errors, completion, phase boundaries,
+polling, empty yields, and transport activity do not gain notification
+authority; they remain durable inspection outcomes.
 
 When delivery is unavailable, CAFE does not promise to wake or update the
 initiating conversation. Durable workflow truth remains available through

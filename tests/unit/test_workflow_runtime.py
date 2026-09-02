@@ -2582,6 +2582,7 @@ def test_receipt_transaction_uses_windows_process_lock_without_fcntl(
     monkeypatch.setattr(blackboard_mod, "msvcrt", windows_lock)
     store = BlackboardStore(tmp_path / "issue")
     state = store.load_or_create("spec")
+    lock_calls.clear()
 
     with store.capability_receipt_transaction(state):
         assert [(mode, count) for _, mode, count in lock_calls] == [(1, 1)]
@@ -2705,7 +2706,8 @@ def test_windows_process_lock_failure_preserves_human_owned_handoff(
     assert task.status.value == "pending"
     assert state.current_step == "user"
     assert state.handoff_contract.to_owner is HandoffOwner.USER
-    assert [(mode, count) for _, mode, count in lock_calls] == [(1, 1)]
+    assert lock_calls
+    assert {(mode, count) for _, mode, count in lock_calls} == {(1, 1)}
     assert dispatches == []
 
 

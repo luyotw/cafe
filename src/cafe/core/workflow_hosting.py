@@ -239,25 +239,6 @@ class WorkflowHost:
         self._held_worker_id = None
         return released
 
-    def reconcile_stale_ownership(self, *, now: datetime | None = None) -> bool:
-        current = now or datetime.now(timezone.utc)
-        changed = False
-        with self.store.driver_transaction(self.state) as state:
-            lease = state.driver_state.get("advancement_lease")
-            if isinstance(lease, dict):
-                expires_at = datetime.fromisoformat(str(lease["expires_at"]))
-                if expires_at <= current:
-                    state.driver_state["advancement_lease"] = None
-                    changed = True
-            worker = state.driver_state.get("worker")
-            if isinstance(worker, dict) and worker.get("status") in {"starting", "running"}:
-                raw_expiry = worker.get("lease_expires_at")
-                if isinstance(raw_expiry, str) and datetime.fromisoformat(raw_expiry) <= current:
-                    worker["status"] = "stale"
-                    worker["reconciled_at"] = current.isoformat()
-                    changed = True
-        return changed
-
     def _start_background(self) -> HostRunResult:
         worker_id = str(uuid.uuid4())
         command = [

@@ -140,6 +140,65 @@ def test_each_driver_mode_follows_its_promised_boundary_behavior(
     assert bool(state.driver_state.get("packets")) is expects_decision
 
 
+@pytest.mark.parametrize("mode", ["attached", "unattended", "delegated"])
+def test_each_mode_revalidates_live_policy_before_phase_use(tmp_path: Path, mode: str) -> None:
+    configured = _policy(mode)
+    replacement = _policy("unattended" if mode != "unattended" else "attached")
+    runtime = FakePhaseRuntime(tmp_path / mode)
+
+    @contextmanager
+    def changed_authority():
+        yield replacement
+
+    result = Version2WorkflowRuntime(
+        runtime,
+        configured,
+        delegated_decision_provider=(
+            (lambda packet: _decision(packet)) if mode == "delegated" else None
+        ),
+        policy_authority=changed_authority,
+    ).run()
+
+    assert result.final_status_code == "DRIVER_POLICY_PAUSED"
+    assert runtime.executed == []
+    state = runtime.blackboard_store.load_or_create("spec")
+    assert state.driver_state["lifecycle"] == "paused"
+    assert state.driver_state["pause_reason"] == "driver_policy_changed"
+
+
+@pytest.mark.parametrize("mode", ["attached", "unattended", "delegated"])
+def test_each_mode_holds_live_policy_authority_through_phase_use(tmp_path: Path, mode: str) -> None:
+    configured = _policy(mode)
+    authority_held = False
+    observations: list[bool] = []
+
+    @contextmanager
+    def live_authority():
+        nonlocal authority_held
+        authority_held = True
+        try:
+            yield configured
+        finally:
+            authority_held = False
+
+    class AuthorityObservingRuntime(FakePhaseRuntime):
+        def run(self, **kwargs) -> PlaybookRunResult:
+            observations.append(authority_held)
+            return super().run(**kwargs)
+
+    runtime = AuthorityObservingRuntime(tmp_path / mode)
+    Version2WorkflowRuntime(
+        runtime,
+        configured,
+        delegated_decision_provider=(
+            (lambda packet: _decision(packet)) if mode == "delegated" else None
+        ),
+        policy_authority=live_authority,
+    ).run(single_step=True)
+
+    assert observations == [True]
+
+
 def test_manual_single_step_is_invocation_only_and_restart_continues(tmp_path: Path) -> None:
     issue_dir = tmp_path / "restart"
     first_runtime = FakePhaseRuntime(issue_dir)
@@ -246,7 +305,7 @@ def test_runtime_completion_does_not_create_workflow_notification_receipts(tmp_p
     Version2WorkflowRuntime(runtime, _policy("unattended")).run()
 
     state = runtime.blackboard_store.load_or_create("spec")
-    assert state.driver_state["notification_receipts"] == {}
+    assert "notification_receipts" not in state.driver_state
 
 
 @pytest.mark.parametrize(
@@ -321,6 +380,88 @@ def test_shared_fake_transport_restart_reuses_boundary_ledger_once(
     state = resumed.blackboard_store.load_or_create("spec")
     assert state.driver_state["consumed_sequences"] == [packet.sequence]
     assert len(state.driver_state["decisions"]) == 1
+
+
+def test_restart_reconciles_durable_transition_missing_its_boundary_packet(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "missing-boundary"
+    staged = FakePhaseRuntime(issue_dir)
+    staged.blackboard_store.record_event(
+        staged.blackboard,
+        "transition",
+        {
+            "from": "spec",
+            "to": "plan",
+            "status_code": "ready_for_plan",
+            "source": "test.crash_window",
+            "runtime": "single_step",
+        },
+    )
+    staged.blackboard_store.set_current_step(staged.blackboard, "plan")
+
+    resumed = FakePhaseRuntime(issue_dir)
+    decisions: list[int] = []
+
+    def decide(packet):
+        decisions.append(packet.sequence)
+        return _decision(packet)
+
+    result = Version2WorkflowRuntime(
+        resumed,
+        _policy("delegated"),
+        delegated_decision_provider=decide,
+    ).run()
+
+    assert result.completed is True
+    assert resumed.executed == ["plan"]
+    assert decisions == [1]
+    state = resumed.blackboard_store.load_or_create("spec")
+    assert state.driver_state["consumed_sequences"] == [1]
+    assert state.driver_state["packets"]["1"]["completed_phase"] == "spec"
+
+
+def test_missing_boundary_reconciliation_distinguishes_repeated_requested_action(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "repeated-action"
+    staged = FakePhaseRuntime(issue_dir)
+    coordinator = DriverCoordinator(staged.blackboard_store, staged.blackboard)
+    first = coordinator.open_boundary(
+        completed_phase="spec",
+        requested_action="plan",
+        boundary_id="first-plan",
+        policy=_policy("delegated"),
+    )
+    coordinator.record_decision(_decision(first))
+    assert coordinator.consume_authorization(first.sequence) is not None
+    staged.blackboard_store.record_event(
+        staged.blackboard,
+        "transition",
+        {
+            "from": "review",
+            "to": "plan",
+            "status_code": "retry_plan",
+            "source": "test.repeated_action",
+            "runtime": "single_step",
+        },
+    )
+    staged.blackboard_store.set_current_step(staged.blackboard, "plan")
+    resumed = FakePhaseRuntime(issue_dir)
+    packets = []
+
+    def decide(packet):
+        packets.append(packet)
+        return _decision(packet)
+
+    Version2WorkflowRuntime(
+        resumed,
+        _policy("delegated"),
+        delegated_decision_provider=decide,
+    ).run()
+
+    assert [packet.sequence for packet in packets] == [2]
+    assert packets[0].completed_phase == "review"
 
 
 def test_policy_change_reauthorizes_pending_boundary_with_current_exact_model(

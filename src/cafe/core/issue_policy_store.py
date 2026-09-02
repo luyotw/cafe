@@ -11,6 +11,7 @@ import yaml
 
 from cafe.core.driver_policy import (
     POLICY_KEYS,
+    REJECTED_POLICY_KEYS,
     DriverPolicyContract,
     extract_driver_policy,
     policy_dict,
@@ -79,7 +80,10 @@ class IssuePolicyStore:
 
     @property
     def config_path(self) -> Path:
-        return resolve_issue_config_path(self.requested_path)
+        return resolve_issue_config_path(
+            self.requested_path,
+            require_registered_worktree=True,
+        )
 
     def replace(self, proposed: Mapping[str, Any] | DriverPolicyContract) -> dict[str, Any]:
         policy = (
@@ -88,17 +92,42 @@ class IssuePolicyStore:
             else DriverPolicyContract.model_validate(dict(proposed))
         )
         with self._locked_authority() as (path, current):
+            original = path.read_bytes() if path.exists() else None
             updated = {
                 key: value
                 for key, value in current.items()
-                if key not in POLICY_KEYS and key != "driver_execution"
+                if key not in POLICY_KEYS and key not in REJECTED_POLICY_KEYS
             }
             updated.update(policy_dict(policy))
+            if extract_driver_policy(updated) != policy:
+                raise ValueError("replacement did not produce the requested v2 policy")
             content = yaml.safe_dump(
                 updated, allow_unicode=True, default_flow_style=False, sort_keys=False
             ).encode("utf-8")
-            atomic_write_bytes(path, content)
-        return updated
+            try:
+                serialized = yaml.safe_load(content.decode("utf-8"))
+                if not isinstance(serialized, dict):
+                    raise ValueError("replacement did not serialize as issue configuration")
+                if extract_driver_policy(serialized) != policy:
+                    raise ValueError("serialized replacement is not the requested v2 policy")
+                atomic_write_bytes(path, content)
+                published = _read_existing_config_strict(path)
+                if extract_driver_policy(published) != policy:
+                    raise ValueError("published replacement is not the requested v2 policy")
+            except Exception as exc:
+                try:
+                    if original is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        atomic_write_bytes(path, original)
+                except Exception as rollback_exc:
+                    raise ValueError(
+                        "policy replacement failed and the prior authority could not be restored"
+                    ) from rollback_exc
+                raise ValueError(
+                    "policy replacement was not durably readable and was rolled back"
+                ) from exc
+        return published
 
     @contextmanager
     def locked_policy(self) -> Iterator[DriverPolicyContract]:
