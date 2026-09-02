@@ -744,6 +744,21 @@ def _apply_human_task_payload(
     else:
         assert validated_completion is not None
         agent_input = validated_completion.agent_input()
+    if (
+        not agent_input
+        and durable_task is not None
+        and trigger == HandoffIntent.CONFIRM_OUTPUT.value
+        and continuation == from_step
+        and continuation != "_done"
+        and isinstance(decision, str)
+        and decision
+    ):
+        agent_input = _durable_decision_continuation_input(
+            task=durable_task,
+            policy=policy,
+            decision=decision,
+            continuation=continuation,
+        )
     if agent_input:
         if durable_result is not None:
             has_feedback = isinstance(durable_result.payload.get("feedback"), str)
@@ -982,6 +997,28 @@ def _validated_completion_payload(
     if completion.target is not None:
         payload["target"] = completion.target
     return payload
+
+
+def _durable_decision_continuation_input(
+    *,
+    task: HumanTask,
+    policy: HumanTaskPolicy,
+    decision: str,
+    continuation: str,
+) -> str:
+    """Project one validated self-loop confirmation into its continuation iteration."""
+    receipt = {
+        "schema_version": 1,
+        "type": "human_task_completion",
+        "human_task_id": task.id,
+        "task": policy.id,
+        "decision": decision,
+        "continuation": continuation,
+    }
+    return (
+        "CAFE validated this HumanTask response for the continuation phase:\n"
+        f"{json.dumps(receipt, ensure_ascii=False, sort_keys=True)}"
+    )
 
 
 def _write_next_iteration_user_input(*, issue_dir: Path, step_name: str, text: str) -> None:
