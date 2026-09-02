@@ -253,6 +253,7 @@ def test_default_human_tasks_validate_and_route_all_user_handoff_patterns(tmp_pa
 
     assert confirmed.target == "plan"
     assert confirm_store.load_or_create("spec").current_step == "plan"
+    assert not (confirm_dir / "plan" / "iteration_001" / "user_input.md").exists()
 
     clarification_dir = tmp_path / ".cafe" / "issues" / "clarification"
     clarification_store, clarification_state = _paused_default_state(
@@ -620,6 +621,75 @@ def test_completed_durable_result_recovers_the_declared_continuation_after_a_res
 
     assert recovered.target == "plan"
     assert store.load_or_create("spec").handoff_contract.to_step == "plan"
+    assert len(HumanTaskRecordStore(issue_dir).results()) == 1
+
+
+def test_durable_self_loop_decision_projection_recovers_after_an_interruption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A persisted result can recreate its continuation receipt without completing twice."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "self-loop-recovery"
+    playbook = PlaybookLoader().load("standard")
+    playbook["steps"]["spec"]["human_tasks"][0]["outcomes"] = {"confirm": "spec"}
+    store, state = _paused_default_state(
+        issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
+    )
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook,
+        step_name="spec",
+        trigger="confirm_output",
+    )
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=state.workflow_id,
+        step="spec",
+        iteration=1,
+        trigger="confirm_output",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+    )
+    payload = {
+        "task": "output-review",
+        "decision": "confirm",
+        "human_task_id": task.id,
+    }
+
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(
+            "cafe.ui.human_tasks._write_next_iteration_user_input",
+            lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("interrupted")),
+        )
+        with pytest.raises(RuntimeError, match="interrupted"):
+            apply_human_task_payload(
+                issue_dir=issue_dir,
+                playbook_data=playbook,
+                blackboard=state,
+                from_step="spec",
+                trigger="confirm_output",
+                raw_payload=payload,
+                source="command",
+            )
+
+    assert store.load_or_create("spec").current_step == "user"
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
+
+    recovered = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=store.load_or_create("spec"),
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload=payload,
+        source="command",
+    )
+
+    continuation_input = (issue_dir / "spec" / "iteration_001" / "user_input.md").read_text(
+        encoding="utf-8"
+    )
+    assert recovered.target == "spec"
+    assert '"decision": "confirm"' in continuation_input
     assert len(HumanTaskRecordStore(issue_dir).results()) == 1
 
 

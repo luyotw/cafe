@@ -120,6 +120,77 @@ def test_noninteractive_completion_can_defer_workflow_resume(
     assert "--issue deferred --execute --background" in result.stdout
 
 
+def test_deferred_self_loop_completion_persists_the_decision_for_the_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--no-resume leaves a pure decision where the detached worker will read it."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "deferred-self-loop"
+    iteration_dir = issue_dir / "spec" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook: standard\n", encoding="utf-8")
+    playbook = PlaybookLoader().load("standard")
+    playbook["steps"]["spec"]["human_tasks"][0]["outcomes"] = {"confirm": "spec"}
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec", playbook_id="standard")
+    store.set_current_step(state, "user")
+    store.update_handoff_contract(
+        state,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.CONFIRM_OUTPUT,
+        source="test",
+    )
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook,
+        step_name="spec",
+        trigger="confirm_output",
+    )
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=state.workflow_id,
+        step="spec",
+        iteration=1,
+        trigger="confirm_output",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+    )
+    monkeypatch.setattr(
+        "cafe.ui.commands.tasks.PlaybookLoader.load",
+        lambda _self, _playbook_id: playbook,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "task",
+            "complete",
+            task.id,
+            "--result",
+            '{"decision":"confirm"}',
+            "--no-resume",
+        ],
+    )
+
+    continuation_input = (iteration_dir / "user_input.md").read_text(encoding="utf-8")
+    receipt = json.loads(continuation_input.splitlines()[1])
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert receipt == {
+        "schema_version": 1,
+        "type": "human_task_completion",
+        "human_task_id": task.id,
+        "task": "output-review",
+        "decision": "confirm",
+        "continuation": "spec",
+    }
+    assert "workflow execute" not in continuation_input
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert store.load_or_create("spec").current_step == "spec"
+
+
 def test_interactive_completion_uses_same_durable_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
