@@ -227,9 +227,14 @@ def complete_task(
     result_file: Optional[Path] = typer.Option(
         None, "--result-file", help="Read a non-interactive JSON response from a file"
     ),
+    no_resume: bool = typer.Option(
+        False,
+        "--no-resume",
+        help="Persist the response without resuming the owning workflow",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit one JSON result object"),
 ) -> None:
-    """Complete one pending task and resume its owning workflow."""
+    """Complete one pending task and normally resume its owning workflow."""
     service = TaskInboxService(Path(".cafe"))
     try:
         preflight = service.preflight_completion(task_id)
@@ -324,28 +329,32 @@ def complete_task(
                     issue=preflight.issue,
                     workflow_id=preflight.workflow_id,
                 )
-        try:
-            if json_output:
-                # The workflow runner is historically stdout-oriented. Capture its
-                # presentation output so the task command retains a one-document
-                # stdout contract; durable workflow files remain the progress log.
-                with redirect_stdout(StringIO()):
+        if not no_resume:
+            try:
+                if json_output:
+                    # The workflow runner is historically stdout-oriented. Capture its
+                    # presentation output so the task command retains a one-document
+                    # stdout contract; durable workflow files remain the progress log.
+                    with redirect_stdout(StringIO()):
+                        _resume_issue_workflow(preflight.issue, preflight.playbook_id)
+                else:
                     _resume_issue_workflow(preflight.issue, preflight.playbook_id)
-            else:
-                _resume_issue_workflow(preflight.issue, preflight.playbook_id)
-        except (OSError, ValueError, RuntimeError, typer.Exit) as exc:
-            raise TaskInboxError(
-                "workflow_resume_failed",
-                f"Task {task_id} was completed, but its owning workflow could not resume: {exc}",
-                recovery=(
-                    f"Run `cafe workflow --issue {preflight.issue} --playbook "
-                    f"{preflight.playbook_id} --execute` to continue the owning workflow; "
-                    "do not complete the task again."
-                ),
-                task_id=task_id,
-                issue=preflight.issue,
-                workflow_id=preflight.workflow_id,
-            ) from exc
+            except (OSError, ValueError, RuntimeError, typer.Exit) as exc:
+                raise TaskInboxError(
+                    "workflow_resume_failed",
+                    (
+                        f"Task {task_id} was completed, but its owning workflow could not "
+                        f"resume: {exc}"
+                    ),
+                    recovery=(
+                        f"Run `cafe workflow --issue {preflight.issue} --playbook "
+                        f"{preflight.playbook_id} --execute` to continue the owning workflow; "
+                        "do not complete the task again."
+                    ),
+                    task_id=task_id,
+                    issue=preflight.issue,
+                    workflow_id=preflight.workflow_id,
+                ) from exc
         detail = service.inspect(task_id)
     except TaskInboxError as exc:
         _fail("complete", exc, json_output)
@@ -374,6 +383,13 @@ def complete_task(
                     },
                 },
             )
+        )
+        return
+    if no_resume:
+        console.print(
+            f"[green]Completed[/green] task {task_id}; issue {preflight.issue} is ready "
+            f"at {applied.target}. Run `cafe workflow --issue {preflight.issue} "
+            "--execute --background` to resume it."
         )
         return
     console.print(

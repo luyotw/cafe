@@ -87,6 +87,39 @@ def test_noninteractive_completion_resumes_only_bound_workflow(
     assert HumanTaskRecordStore(other_dir).get_task(other.id).status is HumanTaskStatus.PENDING
 
 
+def test_noninteractive_completion_can_defer_workflow_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A durable completion can be handed to the fixed background worker separately."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task = _pending_issue(tmp_path / ".cafe", "deferred")
+    _other_dir, _other_task = _pending_issue(tmp_path / ".cafe", "active")
+    (tmp_path / ".cafe" / "active_issue").write_text("active\n", encoding="utf-8")
+    resumed: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "cafe.ui.commands.tasks._resume_issue_workflow",
+        lambda issue, playbook: resumed.append((issue, playbook)),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "task",
+            "complete",
+            task.id,
+            "--result",
+            '{"decision":"confirm"}',
+            "--no-resume",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert BlackboardStore(issue_dir).load_or_create("spec").current_step == "plan"
+    assert resumed == []
+    assert "--issue deferred --execute --background" in result.stdout
+
+
 def test_interactive_completion_uses_same_durable_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
