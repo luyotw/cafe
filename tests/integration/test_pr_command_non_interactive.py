@@ -19,6 +19,7 @@ from cafe.utils.pr import parse_pr_body, parse_pr_title
 
 SCRIPT_PATH = Path("src/cafe/data/skills/cafe-pr/scripts/sync_pr.sh")
 runner = CliRunner()
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -104,6 +105,11 @@ def test_cafe_workflow_pr_non_interactive_routes_through_runtime(tmp_path: Path,
     create_minimal_config(tmp_path)
     issue_name = "test-issue"
     issue_dir = tmp_path / ".cafe" / "issues" / issue_name
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "playbook: standard\ncontract_version: 2\ndriver:\n  mode: unattended\n",
+        encoding="utf-8",
+    )
     spec_dir = issue_dir / "spec" / "iteration_001"
     plan_dir = issue_dir / "plan" / "iteration_001"
     spec_dir.mkdir(parents=True)

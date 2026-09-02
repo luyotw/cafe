@@ -9,10 +9,14 @@ import pytest
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.git import GitOperations
+from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.ui.human_tasks import apply_human_task_payload
 from tests.conftest import create_minimal_config
+
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 
 def _init_repo_with_cafe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> GitOperations:
@@ -154,14 +158,31 @@ def test_worktree_workflow_spec_pause_resume_reaches_plan(
     pause_events = [e for e in blackboard.events if e.event_type == "workflow_paused"]
     assert pause_events
 
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    confirmed = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=blackboard,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload={
+            "human_task_id": task.id,
+            "task": "output-review",
+            "decision": "confirm",
+        },
+        source="integration",
+    )
+
     with pytest.raises(RuntimeError, match="max transition limit"):
         BlackboardWorkflowRuntime(
             issue_dir=issue_dir,
             playbook=playbook,
             executor=executor,
-        ).run(start_step="spec", max_transitions=2)
+        ).run(max_transitions=2)
 
-    assert spec_calls == 2
+    assert confirmed.target == "plan"
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert spec_calls == 1
     blackboard = BlackboardStore(issue_dir).load_or_create("spec")
     plan_started = [
         e

@@ -233,7 +233,11 @@ def test_custom_publish_feedback_and_lifecycle_contracts(tmp_path: Path, monkeyp
     issue_dir = tmp_path / ".cafe" / "issues" / "release-journey"
     issue_dir.mkdir(parents=True)
     (issue_dir / "issue.yaml").write_text(
-        "playbook: release-flow\npr:\n  auto_create: true\n", encoding="utf-8"
+        "playbook: release-flow\n"
+        "pr:\n  auto_create: true\n"
+        "contract_version: 2\n"
+        "driver:\n  mode: unattended\n",
+        encoding="utf-8",
     )
     playbook_dir = tmp_path / ".cafe" / "playbooks"
     playbook_dir.mkdir(parents=True)
@@ -1264,6 +1268,10 @@ class TestUserHandoff:
 
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-cli-resume"
         issue_dir.mkdir(parents=True, exist_ok=True)
+        (issue_dir / "issue.yaml").write_text(
+            "playbook: standard\ncontract_version: 2\ndriver:\n  mode: unattended\n",
+            encoding="utf-8",
+        )
 
         call_log: List[str] = []
         spec_calls = 0
@@ -1339,6 +1347,10 @@ class TestNextStepLifecycle:
 
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-nextstep-missing"
         issue_dir.mkdir(parents=True, exist_ok=True)
+        (issue_dir / "issue.yaml").write_text(
+            "playbook: standard\ncontract_version: 2\ndriver:\n  mode: unattended\n",
+            encoding="utf-8",
+        )
         (issue_dir / "blackboard.json").write_text(
             json.dumps(
                 {

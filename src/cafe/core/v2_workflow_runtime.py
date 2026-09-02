@@ -203,7 +203,8 @@ class Version2WorkflowRuntime:
         if "PERMISSION" in status:
             return "permission"
         if current_step == "user" or any(
-            token in status for token in ("HUMAN_TASK", "CONFIRM", "CLARIFICATION", "NO_CHANGES")
+            token in status
+            for token in ("HUMAN_TASK", "CONFIRM_OUTPUT", "CLARIFICATION", "NO_CHANGES")
         ):
             return "human_task"
         if any(token in status for token in ("ERROR", "FAILED", "INTERRUPTED")):

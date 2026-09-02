@@ -66,6 +66,22 @@ class FakeOperationalStopRuntime(FakePhaseRuntime):
         )
 
 
+class FakeConfirmedPhaseRuntime(FakePhaseRuntime):
+    def run(self, *, start_step=None, single_step=False, **_kwargs) -> PlaybookRunResult:
+        assert single_step is True
+        step = start_step or self.blackboard.current_step
+        self.executed.append(step)
+        if step == "spec":
+            self.blackboard_store.set_current_step(self.blackboard, "plan")
+            return PlaybookRunResult(
+                final_step="spec", final_status_code="confirmed", completed=False
+            )
+        self.blackboard_store.set_current_step(self.blackboard, "done")
+        return PlaybookRunResult(
+            final_step="plan", final_status_code="workflow_complete", completed=True
+        )
+
+
 def _policy(mode: str) -> DriverPolicyContract:
     driver: dict = {"mode": mode}
     if mode == "attached":
@@ -139,6 +155,15 @@ def test_manual_single_step_is_invocation_only_and_restart_continues(tmp_path: P
     assert second_runtime.executed == ["plan"]
     state = second_runtime.blackboard_store.load_or_create("spec")
     assert state.driver_state.get("consumed_sequences", []) == []
+
+
+def test_unattended_advances_after_confirmed_status(tmp_path: Path) -> None:
+    runtime = FakeConfirmedPhaseRuntime(tmp_path)
+
+    result = Version2WorkflowRuntime(runtime, _policy("unattended")).run()
+
+    assert result.completed is True
+    assert runtime.executed == ["spec", "plan"]
 
 
 def test_human_task_bypasses_driver_boundary_and_decision(tmp_path: Path) -> None:
