@@ -1338,7 +1338,7 @@ def test_runtime_resumes_from_blackboard_current_step(tmp_path: Path) -> None:
     assert executed_steps == ["plan"]
 
 
-def test_runtime_pauses_after_realigning_stale_current_step_from_handoff_contract(
+def test_continuous_runtime_executes_after_realigning_stale_current_step(
     tmp_path: Path,
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-stale-current-step"
@@ -1371,9 +1371,9 @@ def test_runtime_pauses_after_realigning_stale_current_step_from_handoff_contrac
     _write_baton(
         issue_dir,
         from_step="spec",
-        to_owner="agent",
+        to_owner=HandoffOwner.AGENT,
         to_step="plan",
-        intent="await_agent",
+        intent=HandoffIntent.AWAIT_AGENT,
         status_code="confirmed",
     )
     executed_steps: list[str] = []
@@ -1390,12 +1390,11 @@ def test_runtime_pauses_after_realigning_stale_current_step_from_handoff_contrac
 
     result = runtime.run(max_transitions=5)
 
-    assert result.completed is False
-    assert result.final_step == "spec"
-    assert result.final_status_code == "BATON_POSITION_REALIGNED"
-    assert executed_steps == []
+    assert result.completed is True
+    assert result.final_step == "plan"
+    assert executed_steps == ["plan"]
     blackboard = BlackboardStore(issue_dir).load_or_create("spec")
-    assert blackboard.current_step == "plan"
+    assert blackboard.current_step == "done"
     realigned_events = [
         event for event in blackboard.events if event.event_type == "runtime_position_realigned"
     ]
@@ -1412,6 +1411,42 @@ def test_runtime_pauses_after_realigning_stale_current_step_from_handoff_contrac
     assert resumed.completed is True
     assert resumed.final_step == "plan"
     assert executed_steps == ["plan"]
+
+
+def test_single_step_reports_a_stale_handoff_realign_without_executing_it(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "single-step-realign"
+    playbook = {
+        "playbook": {"id": "single-step-realign"},
+        "steps": {
+            "spec": {"skill": "spec_first", "role": "pm", "on": {"await_agent": "plan"}},
+            "plan": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+    store.update_handoff_contract(
+        state,
+        from_step="spec",
+        to_owner=HandoffOwner.AGENT,
+        to_step="plan",
+        intent=HandoffIntent.AWAIT_AGENT,
+        status_code="confirmed",
+        source="test",
+    )
+    executed: list[str] = []
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda step, *_args: executed.append(step)
+        or StepExecutionResult(response="confirmed", artifacts={}, status_code="confirmed"),
+    )
+
+    result = runtime.run(single_step=True)
+
+    assert result.completed is False
+    assert result.final_step == "spec"
+    assert result.final_status_code == "confirmed"
+    assert executed == []
 
 
 def test_runtime_resumes_to_user_wait_from_handoff_contract(tmp_path: Path) -> None:

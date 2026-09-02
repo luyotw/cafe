@@ -1,10 +1,8 @@
-"""Fixed local foreground/background hosting for the version 2 workflow runtime."""
+"""Local process ownership around an outer workflow controller."""
 
 from __future__ import annotations
 
 import errno
-import subprocess
-import sys
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,7 +11,7 @@ from threading import Event, Thread
 from typing import IO, Any, Callable
 
 from cafe.core.blackboard import BlackboardStore
-from cafe.core.driver_runtime import DriverCoordinator
+from cafe.orchestration.driver_runtime import DriverCoordinator
 
 try:
     import fcntl
@@ -83,8 +81,6 @@ class WorkflowHost:
         self,
         issue_dir: Path,
         *,
-        popen_factory: Callable[..., Any] = subprocess.Popen,
-        python_executable: str = sys.executable,
         lease_ttl_seconds: int = 300,
         lease_renew_interval_seconds: float = 100.0,
     ) -> None:
@@ -96,8 +92,6 @@ class WorkflowHost:
         self.store = BlackboardStore(self.issue_dir)
         self.state = self.store.load_or_create("spec")
         self.coordinator = DriverCoordinator(self.store, self.state)
-        self.popen_factory = popen_factory
-        self.python_executable = python_executable
         self.lease_ttl_seconds = lease_ttl_seconds
         self.lease_renew_interval_seconds = lease_renew_interval_seconds
         self.advancement_lock_path = self.issue_dir / ".workflow-advancement.lock"
@@ -111,9 +105,7 @@ class WorkflowHost:
     ) -> HostRunResult:
         if hosting == "foreground":
             return self.run_worker(runtime, hosting="foreground")
-        if hosting == "background":
-            return self._start_background()
-        raise ValueError("hosting must be an explicit foreground or background invocation")
+        raise ValueError("hosting must be 'foreground'")
 
     def run_worker(
         self,
@@ -239,48 +231,6 @@ class WorkflowHost:
         self._held_worker_id = None
         return released
 
-    def _start_background(self) -> HostRunResult:
-        worker_id = str(uuid.uuid4())
-        command = [
-            self.python_executable,
-            "-m",
-            "cafe.ui.cli",
-            "workflow",
-            "--execute",
-            "--issue",
-            self.issue_dir.name,
-        ]
-        self._record_worker(worker_id, status="starting", hosting="background")
-        try:
-            process = self.popen_factory(
-                command,
-                cwd=str(self._repository_root()),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-                close_fds=True,
-            )
-        except OSError as exc:
-            self._record_worker(
-                worker_id,
-                status="startup_failed",
-                hosting="background",
-                error_type=type(exc).__name__,
-            )
-            raise
-        self._record_worker(
-            worker_id,
-            status="started",
-            hosting="background",
-            pid=int(process.pid),
-        )
-        return HostRunResult(
-            hosting="background",
-            worker_id=worker_id,
-            pid=int(process.pid),
-        )
-
     def _record_worker(self, worker_id: str, *, status: str, hosting: str, **extra: Any) -> None:
         with self.store.driver_transaction(self.state) as state:
             state.driver_state.setdefault("advancement_lease", None)
@@ -298,10 +248,3 @@ class WorkflowHost:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
                 **extra,
             }
-
-    def _repository_root(self) -> Path:
-        resolved = self.issue_dir.resolve()
-        for parent in resolved.parents:
-            if parent.name == ".cafe":
-                return parent.parent
-        return Path.cwd().resolve()

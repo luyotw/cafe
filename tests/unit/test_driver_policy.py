@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from cafe.core.driver_policy import DriverPolicyContract, extract_driver_policy
+from cafe.orchestration.driver_policy import DriverPolicyContract, extract_driver_policy
 from cafe.ui.commands.workflow import _load_driver_policy_for_execution
 
 

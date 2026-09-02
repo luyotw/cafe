@@ -13,16 +13,18 @@ import typer
 from rich.console import Console
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.core.driver_policy import DriverPolicyContract, extract_driver_policy
-from cafe.core.driver_transport import BlackboardDriverSessionStore, DelegatedDriverTransport
-from cafe.core.issue_policy_store import IssuePolicyStore
+from cafe.orchestration.driver_policy import DriverPolicyContract, extract_driver_policy
+from cafe.orchestration.delegated_controller import DelegatedWorkflowController
+from cafe.orchestration.driver_runtime import DriverCoordinator
+from cafe.orchestration.driver_transport import BlackboardDriverSessionStore, DelegatedDriverTransport
+from cafe.orchestration.issue_policy_store import IssuePolicyStore
+from cafe.orchestration.worker_launch import FixedWorkerLauncher, WorkerLaunchStore
 from cafe.core.issue_resolution import ActiveIssueResolutionError, resolve_active_issue
 from cafe.core.phase_state_mixin import next_runnable_iteration_number
 from cafe.core.playbook import resolve_step_behavior
 from cafe.core.types import CriticalPhaseError
-from cafe.core.v2_workflow_runtime import Version2WorkflowRuntime
-from cafe.core.workflow_hosting import WorkflowHost
-from cafe.core.workflow_models import StepExecutionResult
+from cafe.orchestration.workflow_hosting import WorkflowHost
+from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult
 from cafe.core.workflow_notifications import record_notification_guidance
 from cafe.core.workflow_runtime import (
     BlackboardWorkflowRuntime,
@@ -625,6 +627,16 @@ def workflow(
         "--background",
         help="Launch a workflow through the fixed background worker",
     ),
+    internal_worker_id: Optional[str] = typer.Option(
+        None,
+        "--internal-worker-id",
+        hidden=True,
+    ),
+    internal_policy_digest: Optional[str] = typer.Option(
+        None,
+        "--internal-policy-digest",
+        hidden=True,
+    ),
     mute_agent_output: bool = typer.Option(
         False,
         "--mute-agent-output",
@@ -653,6 +665,10 @@ def workflow(
     """Run playbook workflow using the new generic runner."""
     user_input = _normalize_cli_user_input(user_input)
     background = background if isinstance(background, bool) else False
+    validated_worker_id: str | None = None
+    worker_exit_status = "stopped"
+    worker_exit_error: str | None = None
+    launch_store: WorkerLaunchStore | None = None
     try:
 
         git = _get_GitOperations()()
@@ -724,6 +740,60 @@ def workflow(
                 "or use cafe update-driver-policy before starting or resuming.[/yellow]"
             )
             raise typer.Exit(1)
+        launch_store = WorkerLaunchStore(issue_dir)
+        has_internal_worker_context = bool(internal_worker_id or internal_policy_digest)
+        if has_internal_worker_context:
+            try:
+                with IssuePolicyStore(issue_dir / "issue.yaml").locked_policy() as live_policy:
+                    valid_worker = launch_store.validate_child(
+                        worker_id=internal_worker_id,
+                        mode=live_policy.driver.mode,
+                        policy=live_policy,
+                        policy_digest=internal_policy_digest,
+                    )
+                    if valid_worker:
+                        driver_policy = live_policy
+            except (OSError, ValueError):
+                valid_worker = False
+            if not valid_worker:
+                console.print("[red]Error: background worker context is invalid or stale[/red]")
+                raise typer.Exit(1)
+            validated_worker_id = internal_worker_id
+            # A validated child is always the foreground execution half of the
+            # fixed worker handoff and must never launch another child.
+            background = False
+
+        def launch_background_worker() -> None:
+            """Atomically hand one validated policy snapshot to the fixed child."""
+            try:
+                with IssuePolicyStore(issue_dir / "issue.yaml").locked_policy() as live_policy:
+                    if live_policy != driver_policy:
+                        raise ValueError("workflow driver policy changed before launch")
+                    record = launch_store.start(
+                        mode=live_policy.driver.mode,
+                        policy=live_policy,
+                    )
+                    pid = FixedWorkerLauncher(issue_dir).launch(record)
+            except (OSError, ValueError) as exc:
+                console.print(f"[red]Error: workflow background worker could not start: {exc}[/red]")
+                raise typer.Exit(1)
+            console.print(f"[green]Workflow background worker started[/green] pid={pid}")
+
+        explicit_foreground_control = bool(
+            single_step or start_step is not None or user_input is not None or add_dir_values
+        )
+        automatic_unattended = (
+            not has_internal_worker_context
+            and not background
+            and driver_policy.driver.mode == "unattended"
+            and not explicit_foreground_control
+        )
+        if background and driver_policy.driver.mode == "attached":
+            console.print("[red]Error: attached mode must run in the foreground[/red]")
+            raise typer.Exit(1)
+        if automatic_unattended:
+            launch_background_worker()
+            return
         tty_interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
         generic_phase = GenericPhase(SkillLoader())
 
@@ -766,10 +836,7 @@ def workflow(
             _persist_background_step_user_inputs(issue_dir, initial_step_user_inputs)
             initial_step_user_inputs = None
             if user_input is None:
-                launched = WorkflowHost(issue_dir).run(lambda: None, hosting="background")
-                console.print(
-                    f"[green]Workflow background worker started[/green] pid={launched.pid}"
-                )
+                launch_background_worker()
                 return
 
         def _interactive_mode() -> bool:
@@ -1085,10 +1152,7 @@ def workflow(
                         "workflow handoff; background worker was not started[/red]"
                     )
                     raise typer.Exit(1)
-                launched = WorkflowHost(issue_dir).run(lambda: None, hosting="background")
-                console.print(
-                    f"[green]Workflow background worker started[/green] pid={launched.pid}"
-                )
+                launch_background_worker()
                 return
 
             effective_start_step = active_step
@@ -1117,15 +1181,36 @@ def workflow(
                         session_store,
                     ).request_decision(packet)
 
+            def run_composed_workflow():
+                """Keep policy ownership outside the mode-neutral core."""
+                with IssuePolicyStore(issue_dir / "issue.yaml").locked_policy() as live_policy:
+                    if live_policy != driver_policy:
+                        raise ValueError("workflow driver policy changed before execution")
+                    if single_step:
+                        if driver_policy.driver.mode == "delegated":
+                            pending = DriverCoordinator(
+                                runner.blackboard_store, runner.blackboard
+                            ).read_pending_boundary(
+                                pending_start_step or str(runner.blackboard.current_step)
+                            )
+                            if pending is not None:
+                                return PlaybookRunResult(
+                                    final_step=pending.completed_phase,
+                                    final_status_code="DELEGATED_DRIVER_PAUSED",
+                                    completed=False,
+                                    detail=str(pending.sequence),
+                                )
+                        return runner.run(start_step=pending_start_step, single_step=True)
+                    if driver_policy.driver.mode == "delegated":
+                        return DelegatedWorkflowController(
+                            runner,
+                            driver_policy,
+                            delegated_decision_provider=delegated_decision_provider,
+                        ).run(start_step=pending_start_step)
+                    return runner.run(start_step=pending_start_step, single_step=False)
+
             result = WorkflowHost(issue_dir).run(
-                lambda: Version2WorkflowRuntime(
-                    runner,
-                    driver_policy,
-                    delegated_decision_provider=delegated_decision_provider,
-                    policy_authority=IssuePolicyStore(
-                        issue_dir / "issue.yaml"
-                    ).locked_policy,
-                ).run(start_step=pending_start_step, single_step=single_step),
+                run_composed_workflow,
                 hosting="foreground",
             ).result
             latest_blackboard = BlackboardStore(issue_dir).load_or_create(
@@ -1211,8 +1296,12 @@ def workflow(
                         continue
             return
     except CriticalPhaseError as e:
+        worker_exit_status = "failed"
+        worker_exit_error = type(e).__name__
         _handle_phase_exception(e, "workflow")
     except Exception as e:
+        worker_exit_status = "failed"
+        worker_exit_error = type(e).__name__
         if _is_baton_contract_error(e):
             _print_baton_contract_recovery_guidance(
                 issue_dir=locals().get("issue_dir"),
@@ -1220,3 +1309,10 @@ def workflow(
             )
         console.print(f"[red]Error: workflow run failed: {e}[/red]")
         raise typer.Exit(1)
+    finally:
+        if validated_worker_id and launch_store is not None:
+            launch_store.mark(
+                validated_worker_id,
+                worker_exit_status,
+                error_code=worker_exit_error,
+            )

@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from cafe.core.blackboard import BlackboardStore
-from cafe.core.driver_policy import DriverPolicyContract
-from cafe.core.driver_runtime import DriverCoordinator, DriverDecision
+from cafe.orchestration.driver_policy import DriverPolicyContract
+from cafe.orchestration.driver_runtime import DriverCoordinator, DriverDecision
 
 
 def _write_generic_state_without_platform_lock(

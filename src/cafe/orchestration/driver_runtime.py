@@ -8,7 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from cafe.core.blackboard import BlackboardState, BlackboardStore
-from cafe.core.driver_policy import DelegatedDriverPolicy, DriverPolicyContract
+from cafe.orchestration.driver_policy import DelegatedDriverPolicy, DriverPolicyContract
 
 
 class DriverUnavailableError(RuntimeError):
@@ -65,53 +65,6 @@ class DriverDecision(_StrictDriverModel):
     action: Literal["advance", "pause", "stop"]
     rationale: str = ""
     decided_at: str = Field(default_factory=_now_iso)
-
-
-class DriverBoundaryResolution(_StrictDriverModel):
-    action_source: Literal[
-        "attached",
-        "unattended",
-        "delegated",
-        "delegated_unavailable",
-    ]
-    requires_decision: bool
-    pause: bool
-    return_after_boundary: bool
-
-
-def resolve_driver_boundary(
-    policy: DriverPolicyContract,
-    *,
-    delegated_available: bool,
-) -> DriverBoundaryResolution:
-    """Resolve the owner of one substantive workflow boundary."""
-    if policy.driver.mode == "attached":
-        return DriverBoundaryResolution(
-            action_source="attached",
-            requires_decision=False,
-            pause=False,
-            return_after_boundary=True,
-        )
-    if policy.driver.mode == "unattended":
-        return DriverBoundaryResolution(
-            action_source="unattended",
-            requires_decision=False,
-            pause=False,
-            return_after_boundary=False,
-        )
-    if delegated_available:
-        return DriverBoundaryResolution(
-            action_source="delegated",
-            requires_decision=True,
-            pause=False,
-            return_after_boundary=False,
-        )
-    return DriverBoundaryResolution(
-        action_source="delegated_unavailable",
-        requires_decision=False,
-        pause=True,
-        return_after_boundary=True,
-    )
 
 
 def _initial_driver_state() -> dict[str, Any]:
@@ -299,6 +252,38 @@ class DriverCoordinator:
                 return replacement
             return None
 
+    def read_pending_boundary(self, requested_action: str) -> DriverPacket | None:
+        """Inspect an unresolved boundary without changing its policy or ledger.
+
+        Explicit ``--single-step`` uses this to honour an already-open delegated
+        gate while remaining a read/report/block invocation.  Reauthorization
+        and missing-packet recovery belong to the normal delegated controller.
+        """
+        data = self.state.driver_state
+        if not isinstance(data, dict):
+            return None
+        consumed = {
+            int(value)
+            for value in data.get("consumed_sequences", [])
+            if isinstance(value, int) or (isinstance(value, str) and value.isdigit())
+        }
+        superseded = {
+            int(value)
+            for value in data.get("superseded_sequences", [])
+            if isinstance(value, int) or (isinstance(value, str) and value.isdigit())
+        }
+        packets = data.get("packets", {})
+        if not isinstance(packets, dict):
+            return None
+        for raw_sequence in sorted(packets, key=int):
+            sequence = int(raw_sequence)
+            if sequence in consumed or sequence in superseded:
+                continue
+            packet = DriverPacket.model_validate(packets[raw_sequence])
+            if packet.requested_action == requested_action:
+                return packet
+        return None
+
     def reconcile_missing_boundary(
         self,
         requested_action: str,
@@ -333,16 +318,19 @@ class DriverCoordinator:
                 ):
                     return None
             completed_phase = str(transition.data["from"])
+            transition_id = transition.data.get("transition_id")
+            identity = (
+                str(transition_id)
+                if isinstance(transition_id, str) and transition_id.strip()
+                else transition.timestamp
+            )
             sequence = int(data["next_sequence"])
             packet = DriverPacket(
                 workflow_id=state.workflow_id,
                 sequence=sequence,
                 completed_phase=completed_phase,
                 requested_action=requested_action,
-                boundary_id=(
-                    f"transition:{transition.timestamp}:"
-                    f"{completed_phase}:{requested_action}"
-                ),
+                boundary_id=f"transition:{identity}:{requested_action}",
                 contract_version=policy.contract_version,
                 driver_cli=driver.cli,
                 driver_model=driver.model,

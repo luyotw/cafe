@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -15,6 +16,7 @@ from cafe.core.git import BranchHealth
 from cafe.core.human_task_notifications import SlackNotificationError
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult
+from cafe.orchestration.driver_policy import DriverPolicyContract
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.services.summary_display import SummaryDisplay
 from cafe.services.summary_service import SummaryService
@@ -39,36 +41,37 @@ pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 runner = CliRunner()
 
 
+def _configure_test_driver_policy(monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    """Give routing tests an outer policy without writing an issue inventory."""
+    import importlib
+
+    command_module = importlib.import_module("cafe.ui.commands.workflow")
+    driver: dict[str, object] = {"mode": mode}
+    if mode == "attached":
+        driver["poll_interval_seconds"] = 10
+    policy = DriverPolicyContract.model_validate(
+        {"contract_version": 2, "driver": driver}
+    )
+    monkeypatch.setattr(
+        command_module, "_load_driver_policy_for_execution", lambda _issue_dir: policy
+    )
+
+    class TestIssuePolicyStore:
+        def __init__(self, _path) -> None:
+            pass
+
+        @contextmanager
+        def locked_policy(self):
+            yield policy
+
+    monkeypatch.setattr(command_module, "IssuePolicyStore", TestIssuePolicyStore)
+
+
 @pytest.fixture(autouse=True)
 def _configured_cli_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
     """Workflow command tests isolate routing from phase-config preflight."""
     monkeypatch.setattr("cafe.ui.cli._check_agent_clis_available", lambda *args, **kwargs: [])
-    import importlib
-
-    command_module = importlib.import_module("cafe.ui.commands.workflow")
-    read_config = command_module.read_authoritative_issue_config
-
-    def read_with_v2_policy(path):
-        config = dict(read_config(path) or {})
-        config.update(
-            {
-                "contract_version": 2,
-                "driver": {"mode": "unattended"},
-            }
-        )
-        return config
-
-    monkeypatch.setattr(command_module, "read_authoritative_issue_config", read_with_v2_policy)
-
-    class PassthroughVersion2Runtime:
-        def __init__(self, phase_runtime, _policy, **_kwargs):
-            self.phase_runtime = phase_runtime
-
-        def run(self, *, start_step=None, single_step=False, **_kwargs):
-            return self.phase_runtime.run(start_step=start_step, single_step=single_step)
-
-    monkeypatch.setattr(command_module, "Version2WorkflowRuntime", PassthroughVersion2Runtime)
-
+    _configure_test_driver_policy(monkeypatch, "attached")
 
 def test_issue_step_resolution_uses_issue_yaml_before_blackboard_exists(
     tmp_path: Path, monkeypatch
@@ -428,7 +431,7 @@ def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None
         assert executed_steps == ["spec", "plan", "develop", "review", "pr"]
 
 
-def test_workflow_command_forwards_validated_policy_to_v2_runtime(
+def test_single_step_uses_the_mode_neutral_core_in_the_foreground(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -439,23 +442,6 @@ def test_workflow_command_forwards_validated_policy_to_v2_runtime(
         encoding="utf-8",
     )
     captured: dict[str, object] = {}
-
-    class CapturingVersion2Runtime:
-        def __init__(
-            self,
-            phase_runtime,
-            policy,
-            *,
-            delegated_decision_provider=None,
-            policy_authority=None,
-        ) -> None:
-            captured["policy"] = policy
-            captured["provider"] = delegated_decision_provider
-            captured["policy_authority"] = policy_authority
-            self.phase_runtime = phase_runtime
-
-        def run(self, *, start_step=None, single_step=False):
-            return self.phase_runtime.run(start_step=start_step, single_step=single_step)
 
     class FakeExecutor:
         def execute_step(self, step_name, step_def, blackboard_state, **_kwargs):
@@ -472,7 +458,6 @@ def test_workflow_command_forwards_validated_policy_to_v2_runtime(
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
         patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
-        patch("cafe.ui.commands.workflow.Version2WorkflowRuntime", CapturingVersion2Runtime),
         patch(
             "cafe.ui.commands.workflow.WorkflowHost",
             CapturingWorkflowHost,
@@ -489,15 +474,7 @@ def test_workflow_command_forwards_validated_policy_to_v2_runtime(
         )
 
     assert result.exit_code == 0, (result.stdout, result.exception)
-    policy = captured["policy"]
-    assert policy.contract_version == 2
-    assert policy.driver.mode == "unattended"
-    assert captured["provider"] is None
     assert captured["hosting"] == "foreground"
-    policy_authority = captured["policy_authority"]
-    assert callable(policy_authority)
-    with policy_authority() as current_policy:
-        assert current_policy == policy
 
 
 @pytest.mark.parametrize(
@@ -790,25 +767,26 @@ def test_workflow_command_records_guidance_when_machine_config_is_fifo(
     assert guidance["inspection_available"] is True
 
 
-def test_workflow_background_option_uses_fixed_host_launcher(
+def test_workflow_background_option_uses_fixed_worker_launcher(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    _configure_test_driver_policy(monkeypatch, "unattended")
     captured: dict[str, object] = {}
 
-    class CapturingWorkflowHost:
+    class CapturingWorkerLauncher:
         def __init__(self, issue_dir) -> None:
             captured["issue_dir"] = issue_dir
 
-        def run(self, runtime, *, hosting):
-            captured["hosting"] = hosting
-            return SimpleNamespace(result=None, pid=4321)
+        def launch(self, record):
+            captured["record"] = record
+            return 4321
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
         patch(
-            "cafe.ui.commands.workflow.WorkflowHost",
-            CapturingWorkflowHost,
+            "cafe.ui.commands.workflow.FixedWorkerLauncher",
+            CapturingWorkerLauncher,
             create=True,
         ),
     ):
@@ -821,29 +799,82 @@ def test_workflow_background_option_uses_fixed_host_launcher(
         )
 
     assert result.exit_code == 0, (result.stdout, result.exception)
-    assert captured["hosting"] == "background"
+    assert captured["record"]["mode"] == "unattended"
     assert "4321" in result.stdout
+
+
+def test_unattended_without_explicit_controls_automatically_starts_the_worker(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _configure_test_driver_policy(monkeypatch, "unattended")
+    launches: list[dict] = []
+
+    class CapturingWorkerLauncher:
+        def __init__(self, _issue_dir) -> None:
+            pass
+
+        def launch(self, record):
+            launches.append(record)
+            return 4580
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", CapturingWorkerLauncher),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue458-auto"
+        mock_git_cls.return_value = git
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert [record["mode"] for record in launches] == ["unattended"]
+    assert "4580" in result.stdout
+
+
+def test_attached_rejects_explicit_background_before_a_worker_is_created(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    class UnexpectedWorkerLauncher:
+        def __init__(self, _issue_dir) -> None:
+            pytest.fail("attached mode must reject before constructing a worker")
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", UnexpectedWorkerLauncher),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue458-attached"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app, ["workflow", "--playbook", "standard", "--execute", "--background"]
+        )
+
+    assert result.exit_code == 1
+    assert "attached mode must run in the foreground" in result.stdout
 
 
 def test_workflow_background_persists_initial_user_input_before_launch(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    _configure_test_driver_policy(monkeypatch, "unattended")
     captured: dict[str, object] = {}
 
-    class CapturingWorkflowHost:
+    class CapturingWorkerLauncher:
         def __init__(self, issue_dir) -> None:
             captured["issue_dir"] = issue_dir
 
-        def run(self, runtime, *, hosting):
+        def launch(self, _record):
             input_file = Path(captured["issue_dir"]) / "spec" / "iteration_001" / "user_input.md"
             captured["input_at_launch"] = input_file.read_text(encoding="utf-8")
-            captured["hosting"] = hosting
-            return SimpleNamespace(result=None, pid=4322)
+            return 4322
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.commands.workflow.WorkflowHost", CapturingWorkflowHost),
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", CapturingWorkerLauncher),
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-background-input"
@@ -862,7 +893,6 @@ def test_workflow_background_persists_initial_user_input_before_launch(
         )
 
     assert result.exit_code == 0, (result.stdout, result.exception)
-    assert captured["hosting"] == "background"
     assert captured["input_at_launch"] == "Build the requested background workflow."
     assert "4322" in result.stdout
 
@@ -871,23 +901,23 @@ def test_workflow_background_completes_durable_task_before_launch(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    _configure_test_driver_policy(monkeypatch, "unattended")
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-background-handoff"
     store, task = _pause_with_iteration_limit_task(issue_dir)
     captured: dict[str, object] = {}
 
-    class CapturingWorkflowHost:
+    class CapturingWorkerLauncher:
         def __init__(self, host_issue_dir) -> None:
             captured["issue_dir"] = host_issue_dir
 
-        def run(self, runtime, *, hosting):
+        def launch(self, _record):
             state = store.load_or_create("spec", playbook_id="standard")
             captured["current_step_at_launch"] = state.current_step
-            captured["hosting"] = hosting
-            return SimpleNamespace(result=None, pid=4323)
+            return 4323
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.commands.workflow.WorkflowHost", CapturingWorkflowHost),
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", CapturingWorkerLauncher),
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-background-handoff"
@@ -912,7 +942,6 @@ def test_workflow_background_completes_durable_task_before_launch(
         )
 
     assert result.exit_code == 0, (result.stdout, result.exception)
-    assert captured["hosting"] == "background"
     assert captured["current_step_at_launch"] == "review"
     assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
     assert "4323" in result.stdout
@@ -922,16 +951,17 @@ def test_workflow_background_rejects_invalid_task_without_launch(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    _configure_test_driver_policy(monkeypatch, "unattended")
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-background-invalid-task"
     _store, task = _pause_with_iteration_limit_task(issue_dir)
 
-    class UnexpectedWorkflowHost:
+    class UnexpectedWorkerLauncher:
         def __init__(self, _issue_dir) -> None:
-            pytest.fail("invalid input must not construct a background host")
+            pytest.fail("invalid input must not construct a background worker")
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.commands.workflow.WorkflowHost", UnexpectedWorkflowHost),
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", UnexpectedWorkerLauncher),
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-background-invalid-task"
@@ -964,18 +994,19 @@ def test_workflow_background_rejects_input_for_started_agent_step(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    _configure_test_driver_policy(monkeypatch, "unattended")
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-background-started"
     store = BlackboardStore(issue_dir)
     blackboard = store.load_or_create("spec", playbook_id="standard")
     store.set_current_step(blackboard, "develop")
 
-    class UnexpectedWorkflowHost:
+    class UnexpectedWorkerLauncher:
         def __init__(self, _issue_dir) -> None:
-            pytest.fail("inapplicable input must not construct a background host")
+            pytest.fail("inapplicable input must not construct a background worker")
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.commands.workflow.WorkflowHost", UnexpectedWorkflowHost),
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", UnexpectedWorkerLauncher),
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-background-started"
@@ -1004,19 +1035,20 @@ def test_workflow_background_handoff_startup_failure_has_safe_retry(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    _configure_test_driver_policy(monkeypatch, "unattended")
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-background-retry"
     store, task = _pause_with_iteration_limit_task(issue_dir)
     launches: list[str] = []
 
-    class FailingThenSuccessfulWorkflowHost:
+    class FailingThenSuccessfulWorkerLauncher:
         def __init__(self, _issue_dir) -> None:
             pass
 
-        def run(self, runtime, *, hosting):
-            launches.append(hosting)
+        def launch(self, _record):
+            launches.append("worker")
             if len(launches) == 1:
                 raise OSError("worker spawn failed")
-            return SimpleNamespace(result=None, pid=4324)
+            return 4324
 
     payload = json.dumps(
         {
@@ -1028,8 +1060,8 @@ def test_workflow_background_handoff_startup_failure_has_safe_retry(
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
         patch(
-            "cafe.ui.commands.workflow.WorkflowHost",
-            FailingThenSuccessfulWorkflowHost,
+                "cafe.ui.commands.workflow.FixedWorkerLauncher",
+                FailingThenSuccessfulWorkerLauncher,
         ),
     ):
         git = MagicMock()
@@ -1073,7 +1105,7 @@ def test_workflow_background_handoff_startup_failure_has_safe_retry(
     assert "background worker was not started" in replayed_input.stdout
     assert not (issue_dir / "spec" / "iteration_001" / "user_input.md").exists()
     assert safe_retry.exit_code == 0, (safe_retry.stdout, safe_retry.exception)
-    assert launches == ["background", "background"]
+    assert launches == ["worker", "worker"]
     assert "4324" in safe_retry.stdout
 
 

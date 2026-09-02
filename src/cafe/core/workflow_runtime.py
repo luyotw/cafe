@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
+from uuid import uuid4
 
 from cafe.core.active_issue import clear_marker_if_matches
 from cafe.core.automatic_steps import (
@@ -604,15 +605,119 @@ class BlackboardWorkflowRuntime:
             )
             self.blackboard_store.set_current_step(self.blackboard, resolved)
             if contract.to_owner == HandoffOwner.AGENT:
+                transition_id = self._latest_transition_id(
+                    from_step=contract.from_step,
+                    to_step=resolved,
+                )
                 return RuntimePositionResolution(
                     current_step=resolved,
                     realignment_result=PlaybookRunResult(
-                        final_step=previous,
-                        final_status_code="BATON_POSITION_REALIGNED",
+                        final_step=contract.from_step or previous,
+                        final_status_code=contract.status_code or "BATON_POSITION_REALIGNED",
                         completed=False,
+                        detail=transition_id,
                     ),
                 )
         return RuntimePositionResolution(current_step=resolved)
+
+    def _latest_transition_id(self, *, from_step: str, to_step: str) -> Optional[str]:
+        """Return the durable identity of a transition being replayed."""
+        for event in reversed(self.blackboard.events):
+            if event.event_type != "transition":
+                continue
+            if (
+                str(event.data.get("from", "")) == from_step
+                and str(event.data.get("to", "")) == to_step
+            ):
+                value = event.data.get("transition_id")
+                return str(value) if isinstance(value, str) and value else None
+        return None
+
+    def _recover_unpublished_lifecycle_position(self) -> Optional[PlaybookRunResult]:
+        """Publish one durable transition whose event survived a crash window.
+
+        Transition events are written before the current-step pointer and baton.
+        If the process disappears in that interval, replay must publish that
+        already completed transition rather than execute its phase again.
+        """
+        current = str(self.blackboard.current_step)
+        event = next(
+            (
+                candidate
+                for candidate in reversed(self.blackboard.events)
+                if candidate.event_type in {"transition", "workflow_completed"}
+            ),
+            None,
+        )
+        if event is None:
+            return None
+
+        if event.event_type == "transition":
+            source = str(event.data.get("from", ""))
+            target = str(event.data.get("to", ""))
+            if source != current or target not in self.steps or target == source:
+                return None
+            status = str(event.data.get("status_code", ""))
+            transition_id = event.data.get("transition_id")
+            self.blackboard_store.update_handoff_contract(
+                self.blackboard,
+                from_step=source,
+                to_owner=HandoffOwner.AGENT,
+                to_step=target,
+                intent=HandoffIntent.AWAIT_AGENT,
+                status_code=status,
+                source="workflow.lifecycle_recovery",
+            )
+            self.blackboard_store.set_current_step(self.blackboard, target)
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "transition_recovered",
+                {
+                    "transition_id": transition_id,
+                    "from": source,
+                    "to": target,
+                    "status_code": status,
+                },
+            )
+            return PlaybookRunResult(
+                final_step=source,
+                final_status_code=status or "TRANSITION_RECOVERED",
+                completed=False,
+                detail=str(transition_id) if isinstance(transition_id, str) else None,
+            )
+
+        source = str(event.data.get("step", ""))
+        target = str(event.data.get("next_step", ""))
+        if source != current or target not in {"done", "_done"}:
+            return None
+        status = str(event.data.get("status_code", ""))
+        transition_id = event.data.get("transition_id")
+        self.blackboard_store.update_handoff_contract(
+            self.blackboard,
+            from_step=source,
+            to_owner=HandoffOwner.DONE,
+            to_step="done",
+            intent=HandoffIntent.WORKFLOW_COMPLETE,
+            status_code=status,
+            source="workflow.lifecycle_recovery",
+        )
+        self.blackboard_store.set_current_step(self.blackboard, "done")
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "completion_recovered",
+            {
+                "transition_id": transition_id,
+                "from": source,
+                "to": "done",
+                "status_code": status,
+            },
+        )
+        return PlaybookRunResult(
+            final_step=source,
+            final_status_code=status or "WORKFLOW_COMPLETE",
+            completed=True,
+            detail=str(transition_id) if isinstance(transition_id, str) else None,
+        )
 
     def _result_from_terminal_position(self, current_step: str) -> Optional[PlaybookRunResult]:
         if current_step not in {"user", "done"}:
@@ -2210,6 +2315,7 @@ class BlackboardWorkflowRuntime:
             self.blackboard,
             "workflow_completed",
             {
+                "transition_id": str(uuid4()),
                 "step": current_step,
                 "status_code": status_code,
                 "next_step": next_step,
@@ -2252,10 +2358,12 @@ class BlackboardWorkflowRuntime:
             self.blackboard,
             {"from": current_step, "to": next_step, "status_code": status_code},
         )
+        transition_id = str(uuid4())
         self.blackboard_store.record_event(
             self.blackboard,
             "transition",
             {
+                "transition_id": transition_id,
                 "from": current_step,
                 "to": next_step,
                 "status_code": status_code,
@@ -3453,6 +3561,11 @@ class BlackboardWorkflowRuntime:
         start_step: Optional[str] = None,
         single_step: bool = False,
     ) -> PlaybookRunResult:
+        recovered_transition = (
+            self._recover_unpublished_lifecycle_position() if start_step is None else None
+        )
+        if recovered_transition is not None and single_step:
+            return recovered_transition
         if single_step:
             resolution = (
                 RuntimePositionResolution(current_step=start_step)
@@ -3509,7 +3622,7 @@ class BlackboardWorkflowRuntime:
             if start_step is not None
             else self._resolve_runtime_position_from_handoff()
         )
-        if resolution.realignment_result is not None:
+        if resolution.realignment_result is not None and single_step:
             return resolution.realignment_result
         current_step = resolution.current_step
         terminal_result = self._result_from_terminal_position(current_step)

@@ -10,8 +10,8 @@ import pytest
 from pydantic import ValidationError
 
 from cafe.core.blackboard import BlackboardStore
-from cafe.core.driver_policy import DriverPolicyContract
-from cafe.core.driver_runtime import DriverCoordinator, DriverDecision, resolve_driver_boundary
+from cafe.orchestration.driver_policy import DriverPolicyContract
+from cafe.orchestration.driver_runtime import DriverCoordinator, DriverDecision
 
 
 def _coordinator(issue_dir: Path) -> DriverCoordinator:
@@ -197,43 +197,15 @@ def test_driver_decision_rejects_unknown_actions() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    (
-        "mode",
-        "delegated_available",
-        "expected_source",
-        "expected_return",
-        "expected_pause",
-    ),
-    [
-        ("attached", False, "attached", True, False),
-        ("unattended", False, "unattended", False, False),
-        ("delegated", True, "delegated", False, False),
-        ("delegated", False, "delegated_unavailable", True, True),
-    ],
-)
-def test_boundary_resolution_keeps_only_driver_ownership_explicit(
-    mode: str,
-    delegated_available: bool,
-    expected_source: str,
-    expected_return: bool,
-    expected_pause: bool,
-) -> None:
-    driver: dict = {"mode": mode}
-    if mode == "attached":
-        driver["poll_interval_seconds"] = 10
-    elif mode == "delegated":
-        driver.update({"cli": "codex", "model": "gpt-5.6-codex"})
-    policy = DriverPolicyContract.model_validate(
-        {
-            "contract_version": 2,
-            "driver": driver,
-        }
+def test_read_pending_boundary_does_not_consume_or_reauthorize_it(tmp_path: Path) -> None:
+    coordinator = _coordinator(tmp_path)
+    packet = coordinator.open_boundary(
+        completed_phase="spec", requested_action="plan", policy=_policy()
     )
+    before = BlackboardStore(tmp_path).load_or_create("spec").to_dict()
 
-    resolution = resolve_driver_boundary(policy, delegated_available=delegated_available)
+    observed = _coordinator(tmp_path).read_pending_boundary("plan")
 
-    assert resolution.action_source == expected_source
-    assert resolution.return_after_boundary is expected_return
-    assert resolution.pause is expected_pause
-    assert resolution.requires_decision is (mode == "delegated" and delegated_available)
+    after = BlackboardStore(tmp_path).load_or_create("spec").to_dict()
+    assert observed == packet
+    assert before == after

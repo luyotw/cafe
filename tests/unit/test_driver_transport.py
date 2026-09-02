@@ -16,15 +16,15 @@ from cafe.agents.cli.cursor import CursorCLI
 from cafe.agents.cli.gemini import GeminiCLI
 from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
 from cafe.core.blackboard import BlackboardStore
-from cafe.core.driver_policy import DriverPolicyContract
-from cafe.core.driver_runtime import (
+from cafe.orchestration.driver_policy import DriverPolicyContract
+from cafe.orchestration.driver_runtime import (
     DriverCoordinator,
     DriverDecision,
     DriverModelMismatchError,
     DriverPacket,
     DriverUnavailableError,
 )
-from cafe.core.driver_transport import (
+from cafe.orchestration.driver_transport import (
     DRIVER_AGENT_NAME,
     BlackboardDriverSessionStore,
     DelegatedDriverTransport,

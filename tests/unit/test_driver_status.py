@@ -143,3 +143,46 @@ def test_status_projects_only_the_active_lifecycle_reason(tmp_path: Path, lifecy
     assert "stale" not in json.dumps(status)
     assert "hidden-session" not in json.dumps(status)
     assert f"active {lifecycle}" in rendered
+
+
+def test_status_projects_latest_worker_launch_before_blackboard_exists(tmp_path: Path) -> None:
+    issues_root = tmp_path / ".cafe" / "issues"
+    issue_dir = issues_root / "issue458"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        yaml.safe_dump({"contract_version": 2, "driver": {"mode": "unattended"}}),
+        encoding="utf-8",
+    )
+    (issue_dir / ".workflow-worker-launches.json").write_text(
+        json.dumps(
+            {
+                "attempts": {
+                    "worker-458": {
+                        "worker_id": "worker-458",
+                        "mode": "unattended",
+                        "policy_digest": "not-exposed",
+                        "status": "startup_failed",
+                        "error_code": "worker_context_mismatch",
+                        "created_at": "2026-01-01T00:00:00+00:00",
+                        "updated_at": "2026-01-01T00:00:01+00:00",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = SummaryService(issues_root=issues_root).load_driver_status("issue458")
+
+    assert status["lifecycle"] == "not_started"
+    assert status["worker"] == {
+        "worker_id": "worker-458",
+        "mode": "unattended",
+        "status": "startup_failed",
+        "error_code": "worker_context_mismatch",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-01T00:00:01+00:00",
+    }
+    assert "Worker: startup_failed reason=worker_context_mismatch" in SummaryDisplay().format_driver_status(
+        status
+    )
