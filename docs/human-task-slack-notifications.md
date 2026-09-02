@@ -7,7 +7,9 @@ deduplicated, denied, or fails.
 
 The webhook selects one channel when it is created in Slack. CAFE does not
 accept a channel, destination, webhook URL, or credential path from a playbook,
-project hook, task, agent response, or environment variable.
+project hook, task, agent response, or environment variable. Operators may
+instead set an exact repository path and webhook in their private machine
+configuration.
 
 ## Set up the supported path
 
@@ -27,6 +29,27 @@ project hook, task, agent response, or environment variable.
        transport: slack
    ```
 
+   To route one repository to its own channel, put its absolute checkout path
+   and Incoming Webhook URL in this same file. Because the URL is a credential,
+   the file must be private (`chmod 600 ~/.cafe/config.yaml`) and must not be
+   committed. CAFE resolves worktrees back to their parent repository, so the
+   main checkout path covers its `.cafe/worktrees/*` workflows as well:
+
+   ```yaml
+   notifications:
+     human_tasks:
+       enabled: true
+       transport: slack
+       projects:
+         /home/you/work/open-forest-scripts:
+           webhook_url: https://hooks.slack.com/services/...
+   ```
+
+   A project route only affects that exact resolved path; other repositories
+   keep using the default credential below. Project files, environment
+   variables, symbolic links, and relative paths cannot supply or redirect a
+   route.
+
 3. Create the fixed user-owned credential file and restrict it to your account:
 
    ```bash
@@ -37,10 +60,11 @@ project hook, task, agent response, or environment variable.
 
 4. Put only the channel-bound Incoming Webhook URL in that file, on one line.
    The supported form is `https://hooks.slack.com/services/...`. Never commit
-   this file or copy its value into `.cafe/config.yaml`, a playbook, a task, or
-   a script. CAFE resolves the login account's home directory independently of
-   `HOME` and rejects credential files that are symlinks, non-regular files,
-   owned by another user, hard-linked, or accessible by group/other users.
+   this file or copy its value into a project `.cafe` directory, a playbook, a
+   task, or a script. It remains the fallback for repositories without a route.
+   CAFE resolves the login account's home directory independently of `HOME`
+   and rejects credential files that are symlinks, non-regular files, owned by
+   another user, hard-linked, or accessible by group/other users.
 5. Run any supported workflow normally. Do not invoke a notification script or
    synthetic hook. When CAFE durably creates a real pending HumanTask, such as
    an output-review or permission task, it makes one immediate attempt.
@@ -80,14 +104,15 @@ credential is `slack_human_task_webhook`. Prompts, raw agent output, task
 feedback, project-defined fields, and credential values are never passed to the
 capability, notification, or receipt.
 
-The trusted package adapter reads the fixed `~/.slack-webhook` credential only
-after the capability request passes validation and policy; the coverage test
-runner is the sole exception and uses the separately provisioned fixed test
-credential above. It accepts HTTPS Slack Incoming Webhook URLs only, rejects
-redirects, and bounds the connection attempt to five seconds. The URL is used
-as the outbound request destination but is not put in the message, repository,
-HumanTask record, project-hook input, log, or receipt. Project-authored hooks
-remain sandboxed and never inherit this capability or credential.
+The trusted package adapter first checks for an exact path route in the private
+machine config and otherwise reads the fallback `~/.slack-webhook` credential;
+the coverage test runner is the sole exception and uses the separately
+provisioned fixed test credential above. It accepts HTTPS Slack Incoming
+Webhook URLs only, rejects redirects, and bounds the connection attempt to five
+seconds. The URL is used as the outbound request destination but is not put in
+the message, repository, HumanTask record, project-hook input, log, or receipt.
+Project-authored hooks remain sandboxed and never inherit this capability or
+credential.
 
 ## Inspect delivery receipts
 
@@ -114,7 +139,7 @@ Interpret the stable fields as follows:
 | Skipped | code `human_task_notification_config_invalid`, `human_task_notification_transport_unsupported`, or `human_task_notification_not_actionable` | The machine configuration is unusable, the provider is unsupported, or the task is no longer actionable; no post occurs. |
 | Deduplicated | code `human_task_notification_deduplicated`, `outcome: deduplicated` | CAFE already recorded a delivery decision for this task, so it does not post again. |
 | Denied | `success: false`, decision outcome `deny` | The exact request failed registered argument, effect, credential, permission, or package policy checks; the adapter did not run. |
-| Missing or unreadable credential | code `slack_credentials_missing`, `slack_credentials_empty`, `slack_credentials_unreadable`, or `slack_credentials_unsafe` | Repair the fixed user credential file, ownership, and permissions. |
+| Missing or unreadable credential | code `slack_credentials_missing`, `slack_credentials_empty`, `slack_credentials_unreadable`, or `slack_credentials_unsafe` | Repair the fallback user credential file, ownership, and permissions. |
 | Invalid credential | code `slack_credentials_invalid` | Replace the file contents with a valid channel-bound Slack HTTPS Incoming Webhook URL. |
 | Slack/transport failure | code `slack_http_error`, `slack_response_not_ok`, `slack_timeout`, or `slack_transport_error` | Slack rejected the post or could not be reached. |
 | Interrupted | code `slack_notification_interrupted` | CAFE durably began an attempt but stopped before its final outcome could be recorded; it does not resend because Slack may already have accepted the post. |
@@ -146,6 +171,6 @@ the accurate record of that attempt.
 
 This feature does not provide bidirectional Slack interaction, task completion
 from Slack, callbacks, a daemon, scheduling, reminders, due dates, an SLA,
-automatic retries, multiple or dynamic destinations, or a generic provider
-interface. The former `notify-slack.sh` phase scripts are retired; project
-scripts remain untrusted and cannot become a notification authority path.
+automatic retries, dynamic destinations, or a generic provider interface. The
+former `notify-slack.sh` phase scripts are retired; project scripts remain
+untrusted and cannot become a notification authority path.

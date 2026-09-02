@@ -1125,7 +1125,7 @@ def _notify_slack_human_task_adapter(
         post_slack_notification,
     )
 
-    del repo_root, manifest, output_file
+    del manifest, output_file
     message = build_human_task_message(
         repository=str(request.args["repository"]),
         workflow_id=str(request.args["workflow_id"]),
@@ -1134,7 +1134,7 @@ def _notify_slack_human_task_adapter(
         task_type=str(request.args["task_type"]),
     )
     try:
-        webhook_url = load_slack_webhook_url()
+        webhook_url = load_slack_webhook_url(repository_root=repo_root)
         post_slack_notification(webhook_url, message, timeout_sec=timeout_sec)
     except SlackNotificationError as exc:
         raise CapabilityExecutionError(exc.category, exc.code) from exc

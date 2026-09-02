@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -32,7 +33,14 @@ class AgentManager:
     # Agent directory constants
     CAFE_DIR = ".cafe"
     AGENTS_DIR = "agents"
-    FALLBACKABLE_ERROR_TYPES = ("rate_limit", "cli_not_found", "cli_unavailable", "model_not_found")
+    FALLBACKABLE_ERROR_TYPES = (
+        "rate_limit",
+        "provider_overloaded",
+        "cli_not_found",
+        "cli_unavailable",
+        "model_not_found",
+    )
+    PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS = (60, 120, 300)
     SUPPORTS_COLD_TAKEOVER = True
 
     def __init__(
@@ -468,6 +476,7 @@ class AgentManager:
         # Track if we've already retried for session conflict
         retried = False
         transient_retry_done = False
+        provider_overload_retries = 0
         primary_attempt = 1
         attempt_prompt = prompt
 
@@ -511,6 +520,22 @@ class AgentManager:
                         f"⚠️  {executor.config.cli.value} connection closed unexpectedly, "
                         "retrying once..."
                     )
+                elif (
+                    getattr(e, "error_type", None) == "provider_overloaded"
+                    and provider_overload_retries
+                    < len(self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS)
+                ):
+                    delay = self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS[
+                        provider_overload_retries
+                    ]
+                    provider_overload_retries += 1
+                    primary_attempt += 1
+                    print(
+                        f"⚠️  {executor.config.cli.value} provider is temporarily at capacity; "
+                        f"retrying in {delay}s ({provider_overload_retries}/"
+                        f"{len(self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS)})..."
+                    )
+                    time.sleep(delay)
                 elif hasattr(e, "error_type") and e.error_type in self.FALLBACKABLE_ERROR_TYPES:
                     # Try backup agents
                     agent_response = self._try_backup_agents(
@@ -745,6 +770,7 @@ class AgentManager:
 
             backup_attempt = 1
             transient_retry_done = False
+            provider_overload_retries = 0
             while True:
                 try:
                     control_kwargs = (
@@ -780,6 +806,23 @@ class AgentManager:
                         print(
                             f"⚠️  {entry.cli.value} connection closed unexpectedly, retrying once..."
                         )
+                        continue
+                    if (
+                        getattr(backup_error, "error_type", None) == "provider_overloaded"
+                        and provider_overload_retries
+                        < len(self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS)
+                    ):
+                        delay = self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS[
+                            provider_overload_retries
+                        ]
+                        provider_overload_retries += 1
+                        backup_attempt += 1
+                        print(
+                            f"⚠️  {entry.cli.value} provider is temporarily at capacity; "
+                            f"retrying in {delay}s ({provider_overload_retries}/"
+                            f"{len(self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS)})..."
+                        )
+                        time.sleep(delay)
                         continue
                     if (
                         hasattr(backup_error, "error_type")
@@ -835,6 +878,8 @@ class AgentManager:
         error_type = getattr(error, "error_type", None)
         if error_type == "rate_limit":
             return "rate limit"
+        if error_type == "provider_overloaded":
+            return "provider temporarily overloaded"
         if error_type == "cli_not_found":
             return "CLI not found"
         if error_type == "cli_unavailable":

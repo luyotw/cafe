@@ -73,6 +73,74 @@ PAUSE_STATUS_CODES = {
     PhaseStatusCode.NEED_PERMISSION.value,
 }
 SLACK_HUMAN_TASK_TIMEOUT_SEC = 5.0
+MAX_GIT_METADATA_BYTES = 8192
+
+
+def _read_git_metadata(path: Path) -> str | None:
+    """Read a bounded ordinary Git metadata file without executing Git."""
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        contents = path.read_bytes()
+    except OSError:
+        return None
+    if len(contents) > MAX_GIT_METADATA_BYTES:
+        return None
+    try:
+        return contents.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _resolve_git_metadata_path(value: str, *, relative_to: Path) -> Path | None:
+    """Resolve one bounded Git metadata path without accepting extra content."""
+    if not value or "\x00" in value or "\n" in value or "\r" in value:
+        return None
+    try:
+        candidate = Path(value)
+        if not candidate.is_absolute():
+            candidate = relative_to / candidate
+        return candidate.resolve(strict=False)
+    except (OSError, RuntimeError):
+        return None
+
+
+def _linked_worktree_canonical_root(active_root: Path) -> Path:
+    """Return a linked worktree's primary checkout after cross-checking metadata."""
+    git_file = active_root / ".git"
+    git_file_contents = _read_git_metadata(git_file)
+    if git_file_contents is None:
+        return active_root
+    git_file_lines = git_file_contents.splitlines()
+    if len(git_file_lines) != 1 or not git_file_lines[0].startswith("gitdir: "):
+        return active_root
+    git_dir = _resolve_git_metadata_path(
+        git_file_lines[0].removeprefix("gitdir: "), relative_to=active_root
+    )
+    if git_dir is None or not git_dir.is_dir():
+        return active_root
+    common_dir_contents = _read_git_metadata(git_dir / "commondir")
+    worktree_gitfile_contents = _read_git_metadata(git_dir / "gitdir")
+    if common_dir_contents is None or worktree_gitfile_contents is None:
+        return active_root
+    common_dir_lines = common_dir_contents.splitlines()
+    worktree_gitfile_lines = worktree_gitfile_contents.splitlines()
+    if len(common_dir_lines) != 1 or len(worktree_gitfile_lines) != 1:
+        return active_root
+    common_dir = _resolve_git_metadata_path(common_dir_lines[0], relative_to=git_dir)
+    recorded_gitfile = _resolve_git_metadata_path(
+        worktree_gitfile_lines[0], relative_to=git_dir
+    )
+    if (
+        common_dir is None
+        or recorded_gitfile is None
+        or common_dir.name != ".git"
+        or git_dir.parent.name != "worktrees"
+        or git_dir.parent.parent != common_dir
+        or recorded_gitfile != git_file.resolve(strict=False)
+    ):
+        return active_root
+    return common_dir.parent
 
 
 @dataclass
@@ -130,9 +198,11 @@ class HumanTaskNotificationDispatcher:
         self.blackboard = blackboard
 
     def _repository_root(self) -> Path:
-        if self.issue_dir.parent.name == "issues" and self.issue_dir.parent.parent.name == ".cafe":
-            return self.issue_dir.parent.parent.parent
-        return self.issue_dir.parent
+        issue_dir = self.issue_dir.resolve()
+        if issue_dir.parent.name == "issues" and issue_dir.parent.parent.name == ".cafe":
+            active_root = issue_dir.parent.parent.parent
+            return _linked_worktree_canonical_root(active_root)
+        return issue_dir.parent
 
     def notify(self, task: HumanTask) -> None:
         """Record one source-independent, machine-controlled delivery decision."""
@@ -754,8 +824,7 @@ class BlackboardWorkflowRuntime:
             # if its durable record is temporarily unreadable.
             pass
         return any(
-            event.event_type == "agent_execution_task_materialized"
-            and event.step == current_step
+            event.event_type == "agent_execution_task_materialized" and event.step == current_step
             for event in self.blackboard.events
         )
 
@@ -781,10 +850,7 @@ class BlackboardWorkflowRuntime:
                 current_step=current_step,
                 contract=contract,
             )
-            and not (
-                contract.to_owner is HandoffOwner.AGENT
-                and contract.to_step == current_step
-            )
+            and not (contract.to_owner is HandoffOwner.AGENT and contract.to_step == current_step)
         ):
             self.blackboard_store.record_event(
                 self.blackboard,
@@ -834,8 +900,7 @@ class BlackboardWorkflowRuntime:
         step_def = self.steps.get(current_step, {})
         transitions = step_def.get("on") if isinstance(step_def, dict) else None
         return (
-            isinstance(transitions, dict)
-            and transitions.get("manual_handoff") == contract.to_step
+            isinstance(transitions, dict) and transitions.get("manual_handoff") == contract.to_step
         )
 
     def _step_requires_publish_receipt(self, current_step: str) -> bool:
@@ -982,10 +1047,7 @@ class BlackboardWorkflowRuntime:
         attempts = self.blackboard.step_attempt_counts
         attempt_count = attempts.get(current_step, 0) + 1
         max_attempts_per_cycle = resolve_step_attempt_limit(step_def)
-        if (
-            max_attempts_per_cycle is not None
-            and attempt_count > max_attempts_per_cycle
-        ):
+        if max_attempts_per_cycle is not None and attempt_count > max_attempts_per_cycle:
             self.blackboard_store.record_event(
                 self.blackboard,
                 "loop_detected",
@@ -997,8 +1059,7 @@ class BlackboardWorkflowRuntime:
                 },
             )
             message = (
-                f"Step '{current_step}' exceeded "
-                f"max_attempts_per_cycle={max_attempts_per_cycle}"
+                f"Step '{current_step}' exceeded max_attempts_per_cycle={max_attempts_per_cycle}"
             )
             if self._declares_iteration_limit_task(step_def):
                 result = self._emit_pause(
@@ -1026,9 +1087,7 @@ class BlackboardWorkflowRuntime:
             for binding in raw_bindings
         )
 
-    def _record_step_attempt(
-        self, *, current_step: str, step_def: Dict, runtime: str
-    ) -> int:
+    def _record_step_attempt(self, *, current_step: str, step_def: Dict, runtime: str) -> int:
         """Persist the cycle attempt before any owner-specific side effect."""
         attempt_count = self._ensure_step_attempt_within_limit(
             current_step=current_step,

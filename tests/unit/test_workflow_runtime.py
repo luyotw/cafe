@@ -2,6 +2,7 @@
 
 import json
 import multiprocessing
+import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -35,9 +36,7 @@ def _notify_human_task_in_process(
         nonlocal dispatched
         dispatched = True
         time.sleep(0.25)
-        return SimpleNamespace(
-            receipt={"capability": "cafe.slack.human_task", "success": True}
-        )
+        return SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True})
 
     try:
         issue_dir = Path(issue_dir_value)
@@ -1876,7 +1875,9 @@ def test_runtime_enforces_confirmation_gate_over_agent_baton(tmp_path: Path) -> 
         for task in HumanTaskRecordStore(issue_dir).tasks()
         if task.status is HumanTaskStatus.PENDING
     ]
-    enforced = [event for event in current.events if event.event_type == "confirmation_gate_enforced"]
+    enforced = [
+        event for event in current.events if event.event_type == "confirmation_gate_enforced"
+    ]
 
     assert result.completed is False
     assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
@@ -1959,9 +1960,7 @@ def test_runtime_preserves_declared_manual_handoff_from_confirmation_gate(
 
     current = BlackboardStore(issue_dir).load_or_create("review")
     enforced = [
-        event
-        for event in current.events
-        if event.event_type == "confirmation_gate_enforced"
+        event for event in current.events if event.event_type == "confirmation_gate_enforced"
     ]
 
     assert result.completed is True
@@ -2098,6 +2097,123 @@ def test_runtime_materializes_one_declared_task_and_recovers_it_after_restart(
     assert request["args"]["task_id"] == task.id
     assert request["args"]["workflow_id"] == task.workflow_id
     assert request["args"]["repository"] == tmp_path.name
+
+
+def test_human_task_notification_routes_custom_git_worktrees_to_the_parent_repository(
+    tmp_path: Path,
+) -> None:
+    """A route for the primary checkout covers a linked custom worktree."""
+    from cafe.core.workflow_runtime import HumanTaskNotificationDispatcher
+
+    repository = tmp_path / "main-repository"
+    worktree = tmp_path / "custom-checkout"
+    repository.mkdir()
+    subprocess.run(("git", "init"), cwd=repository, check=True, capture_output=True, text=True)
+    subprocess.run(
+        ("git", "config", "user.email", "cafe-test@example.test"),
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ("git", "config", "user.name", "CAFE Test"),
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (repository / "README.md").write_text("test\n", encoding="utf-8")
+    subprocess.run(
+        ("git", "add", "README.md"),
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ("git", "commit", "-m", "Initial"),
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ("git", "worktree", "add", "--detach", str(worktree)),
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    issue_dir = worktree / ".cafe" / "issues" / "issue-38"
+    issue_dir.mkdir(parents=True)
+    dispatcher = HumanTaskNotificationDispatcher(
+        issue_dir=issue_dir,
+        blackboard_store=SimpleNamespace(),
+        blackboard=SimpleNamespace(),
+    )
+
+    assert dispatcher._repository_root() == repository.resolve()
+
+
+def test_human_task_notification_ignores_git_environment_route_injection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Git environment variables cannot replace the linked-worktree route key."""
+    from cafe.core.workflow_runtime import HumanTaskNotificationDispatcher
+
+    repository = tmp_path / "main-repository"
+    other_repository = tmp_path / "other-repository"
+    worktree = tmp_path / "custom-checkout"
+    for root in (repository, other_repository):
+        root.mkdir()
+        subprocess.run(("git", "init"), cwd=root, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ("git", "config", "user.email", "cafe-test@example.test"),
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ("git", "config", "user.name", "CAFE Test"),
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        (root / "README.md").write_text("test\n", encoding="utf-8")
+        subprocess.run(
+            ("git", "add", "README.md"),
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ("git", "commit", "-m", "Initial"),
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    subprocess.run(
+        ("git", "worktree", "add", "--detach", str(worktree)),
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    issue_dir = worktree / ".cafe" / "issues" / "issue-38"
+    issue_dir.mkdir(parents=True)
+    monkeypatch.setenv("GIT_DIR", str(other_repository / ".git"))
+    dispatcher = HumanTaskNotificationDispatcher(
+        issue_dir=issue_dir,
+        blackboard_store=SimpleNamespace(),
+        blackboard=SimpleNamespace(),
+    )
+
+    assert dispatcher._repository_root() == repository.resolve()
 
 
 def test_runtime_notifies_human_owned_creation_for_builtin_and_project_playbooks(
@@ -2255,8 +2371,10 @@ def test_runtime_recovers_notification_when_task_commit_precedes_attempt(
     monkeypatch.setattr(
         runtime_mod,
         "run_capability_request",
-        lambda **kwargs: calls.append(kwargs)
-        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+        lambda **kwargs: (
+            calls.append(kwargs)
+            or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True})
+        ),
     )
 
     BlackboardWorkflowRuntime(
@@ -2307,8 +2425,10 @@ def test_runtime_audits_interrupted_attempt_without_duplicate_dispatch(
     monkeypatch.setattr(
         runtime_mod,
         "run_capability_request",
-        lambda **kwargs: dispatches.append(kwargs)
-        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+        lambda **kwargs: (
+            dispatches.append(kwargs)
+            or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True})
+        ),
     )
     BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
@@ -2338,8 +2458,10 @@ def test_concurrent_stale_runtimes_claim_one_notification_attempt(
     monkeypatch.setattr(
         runtime_mod,
         "run_capability_request",
-        lambda **kwargs: dispatches.append(kwargs)
-        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+        lambda **kwargs: (
+            dispatches.append(kwargs)
+            or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True})
+        ),
     )
 
     runtimes = [
@@ -2454,9 +2576,7 @@ def test_receipt_transaction_uses_windows_process_lock_without_fcntl(
     windows_lock = SimpleNamespace(
         LK_LOCK=1,
         LK_UNLCK=2,
-        locking=lambda descriptor, mode, count: lock_calls.append(
-            (descriptor, mode, count)
-        ),
+        locking=lambda descriptor, mode, count: lock_calls.append((descriptor, mode, count)),
     )
     monkeypatch.setattr(blackboard_mod, "fcntl", None)
     monkeypatch.setattr(blackboard_mod, "msvcrt", windows_lock)
@@ -2491,8 +2611,10 @@ def test_unavailable_process_lock_preserves_user_handoff(
     monkeypatch.setattr(
         runtime_mod,
         "run_capability_request",
-        lambda **kwargs: dispatches.append(kwargs)
-        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+        lambda **kwargs: (
+            dispatches.append(kwargs)
+            or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True})
+        ),
     )
     issue_dir = tmp_path / ".cafe" / "issues" / "lock-unavailable-user-handoff"
 
@@ -2539,8 +2661,10 @@ def test_windows_process_lock_failure_preserves_human_owned_handoff(
     monkeypatch.setattr(
         runtime_mod,
         "run_capability_request",
-        lambda **kwargs: dispatches.append(kwargs)
-        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+        lambda **kwargs: (
+            dispatches.append(kwargs)
+            or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True})
+        ),
     )
     policy = HumanTaskPolicy(
         id="approval",

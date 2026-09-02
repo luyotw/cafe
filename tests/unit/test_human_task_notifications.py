@@ -23,7 +23,6 @@ from cafe.core.human_task_notifications import (
     post_slack_notification,
 )
 
-
 VALID_WEBHOOK = "https://hooks.slack.com/services/T00000000/B00000000/secret-value"
 
 
@@ -85,7 +84,17 @@ def _write_test_run_credential(home: Path, value: str = VALID_WEBHOOK) -> Path:
     return credential
 
 
-def test_actionable_message_exposes_allowlisted_task_journey_without_prompt_or_credentials() -> None:
+def _write_machine_config(home: Path, contents: str) -> Path:
+    config = home / ".cafe" / "config.yaml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(contents, encoding="utf-8")
+    config.chmod(0o600)
+    return config
+
+
+def test_actionable_message_exposes_allowlisted_task_journey_without_prompt_or_credentials() -> (
+    None
+):
     """Test List 2: notification content stays within the safe task allowlist."""
     message = build_human_task_message(
         repository="openfunltd/cafe",
@@ -247,6 +256,74 @@ def test_credential_resolver_reads_only_the_fixed_user_file(
     assert load_slack_webhook_url() == VALID_WEBHOOK
 
 
+def test_credential_resolver_uses_private_machine_project_route(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A machine-owned absolute project route overrides only that repository."""
+    home = tmp_path / "home"
+    project = tmp_path / "open-forest-scripts"
+    other_project = tmp_path / "other-project"
+    home.mkdir()
+    project.mkdir()
+    other_project.mkdir()
+    _write_credential(home)
+    project_webhook = "https://hooks.slack.com/services/T00000000/B00000000/project-route"
+    _write_machine_config(
+        home,
+        "\n".join(
+            (
+                "notifications:",
+                "  human_tasks:",
+                "    projects:",
+                f"      {project}:",
+                f"        webhook_url: {project_webhook}",
+                "",
+            )
+        ),
+    )
+    _set_home(monkeypatch, home)
+
+    assert load_slack_webhook_url(repository_root=project) == project_webhook
+    assert load_slack_webhook_url(repository_root=other_project) == VALID_WEBHOOK
+
+
+def test_project_route_requires_private_machine_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A direct webhook in a world-readable config fails closed before dispatch."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    home = tmp_path / "home"
+    project = tmp_path / "open-forest-scripts"
+    home.mkdir()
+    project.mkdir()
+    config = home / ".cafe" / "config.yaml"
+    config.parent.mkdir()
+    config.write_text(
+        "\n".join(
+            (
+                "notifications:",
+                "  human_tasks:",
+                "    projects:",
+                f"      {project}:",
+                "        webhook_url: https://hooks.slack.com/services/T00000000/B00000000/project-route",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    config.chmod(0o644)
+    _set_home(monkeypatch, home)
+
+    settings = notification_mod.load_human_task_notification_settings()
+    assert settings.enabled is False
+    assert settings.code == "human_task_notification_config_unsafe"
+
+    with pytest.raises(SlackNotificationError) as exc:
+        load_slack_webhook_url(repository_root=project)
+    assert exc.value.code == "human_task_notification_config_unsafe"
+
+
 def test_credential_resolver_uses_the_test_channel_only_for_the_coverage_runner(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -263,6 +340,40 @@ def test_credential_resolver_uses_the_test_channel_only_for_the_coverage_runner(
     monkeypatch.setenv("CAFE_TEST_RUN_SLACK_NOTIFICATIONS", "1")
 
     assert load_slack_webhook_url() == test_webhook
+
+
+def test_coverage_runner_does_not_use_a_project_route(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Coverage notifications stay on their isolated credential even with routes."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    home = tmp_path / "home"
+    project = tmp_path / "open-forest-scripts"
+    home.mkdir()
+    project.mkdir()
+    _write_test_run_credential(home, "https://hooks.slack.com/services/T00000000/B00000000/test")
+    _write_machine_config(
+        home,
+        "\n".join(
+            (
+                "notifications:",
+                "  human_tasks:",
+                "    projects:",
+                f"      {project}:",
+                "        webhook_url: https://hooks.slack.com/services/T00000000/B00000000/project-route",
+                "",
+            )
+        ),
+    )
+    _set_home(monkeypatch, home)
+    monkeypatch.setattr(notification_mod, "_login_user_home", lambda: home)
+    monkeypatch.setenv("CAFE_TEST_RUN_SLACK_NOTIFICATIONS", "1")
+
+    assert (
+        load_slack_webhook_url(repository_root=project)
+        == "https://hooks.slack.com/services/T00000000/B00000000/test"
+    )
 
 
 def test_credential_resolver_fails_closed_when_the_coverage_runner_has_no_test_channel(
@@ -518,6 +629,53 @@ def test_capability_receipts_classify_failures_without_secret_material(
     assert run.receipt["code"] == expected_code
     assert run.receipt["outcome"] == "execution_failure"
     assert "secret-value" not in json.dumps(run.receipt)
+
+
+def test_capability_uses_machine_project_route_without_exposing_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The trusted adapter resolves a route from its real repository root."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    home = tmp_path / "home"
+    project = tmp_path / "open-forest-scripts"
+    home.mkdir()
+    project.mkdir()
+    project_webhook = "https://hooks.slack.com/services/T00000000/B00000000/project-route"
+    _write_machine_config(
+        home,
+        "\n".join(
+            (
+                "notifications:",
+                "  human_tasks:",
+                "    projects:",
+                f"      {project}:",
+                f"        webhook_url: {project_webhook}",
+                "",
+            )
+        ),
+    )
+    _set_home(monkeypatch, home)
+    requests = []
+    monkeypatch.setattr(
+        notification_mod,
+        "_open_slack_request",
+        lambda request, *, timeout: requests.append((request, timeout)) or _SlackResponse(),
+    )
+    registry = load_capability_registry(default_capability_definition_dirs(tmp_path))
+
+    run = run_capability_request(
+        repo_root=project,
+        registry=registry,
+        capability_request=_slack_request(),
+        output_file=tmp_path / "output.md",
+        timeout_sec=4.0,
+        trusted_human_task_notification=True,
+    )
+
+    assert run.receipt["success"] is True
+    assert requests[0][0].full_url == project_webhook
+    assert project_webhook not in json.dumps(run.receipt)
 
 
 def test_capability_receipt_records_success_and_policy_denial(

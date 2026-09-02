@@ -168,6 +168,38 @@ class TestAgentExecution:
             assert streaming_log == []
             assert token_usage.output_tokens == 50
 
+    def test_execute_retries_provider_overload_after_a_bounded_delay(self) -> None:
+        """Temporary provider capacity retries the same CLI before any fallback."""
+        from cafe.core.types import AgentResponse, TokenUsage
+
+        manager = AgentManager()
+        manager.register_agent(AgentConfig(name="Nick", cli=AgentCLI.CODEX))
+        overloaded = AgentExecutionError(
+            "Selected model is at capacity.",
+            error_type="provider_overloaded",
+            display_message="Codex provider is temporarily at capacity.",
+        )
+        success = AgentResponse(response="completed", token_usage=TokenUsage())
+
+        with (
+            patch.object(AgentExecutor, "execute", side_effect=[overloaded, success]) as execute,
+            patch("cafe.agents.manager.time.sleep") as sleep,
+        ):
+            result = manager.execute("Nick", "Test prompt")
+
+        assert result[0] == "completed"
+        assert execute.call_count == 2
+        sleep.assert_called_once_with(60)
+        assert manager.get_failed_attempts() == [
+            {
+                "cli": "codex",
+                "chain_role": "primary",
+                "attempt": 1,
+                "error_type": "provider_overloaded",
+                "error_excerpt": "Codex provider is temporarily at capacity.",
+            }
+        ]
+
     def test_execute_current_agent(self) -> None:
         """Test executing the current agent."""
         manager = AgentManager()

@@ -648,6 +648,14 @@ class AgentExecutor:
         ],
     }
 
+    PROVIDER_OVERLOADED_PATTERNS = {
+        "codex": [
+            "server_overloaded",
+            "selected model is at capacity",
+            "model is at capacity",
+        ],
+    }
+
     CLI_UNAVAILABLE_PATTERNS = {
         "claude": [
             "disabled claude subscription access",
@@ -706,6 +714,10 @@ class AgentExecutor:
         self, cli_name: str, error_text: str
     ) -> tuple[Optional[str], Optional[str]]:
         """Classify CLI execution errors into workflow-level retry categories."""
+        if self._is_provider_overloaded_error(error_text):
+            return "provider_overloaded", self._format_provider_overloaded_display_message(
+                cli_name
+            )
         if self._is_rate_limit_error(error_text):
             return "rate_limit", self._format_rate_limit_display_message(cli_name, error_text)
         if self._is_cli_unavailable_error(error_text):
@@ -717,6 +729,17 @@ class AgentExecutor:
                 cli_name, error_text
             )
         return None, None
+
+    def _is_provider_overloaded_error(self, error_text: str) -> bool:
+        """Check whether the selected provider is temporarily at capacity."""
+        error_lower = error_text.lower()
+        cli_patterns = self.PROVIDER_OVERLOADED_PATTERNS.get(self.config.cli.value, [])
+        return any(pattern in error_lower for pattern in cli_patterns)
+
+    @staticmethod
+    def _format_provider_overloaded_display_message(cli_name: str) -> str:
+        """Return an accurate durable summary for temporary provider capacity."""
+        return f"{cli_name} provider is temporarily at capacity."
 
     def _is_model_not_found_error(self, error_text: str) -> bool:
         """Check if error message indicates the configured model is invalid or unavailable."""
@@ -755,14 +778,23 @@ class AgentExecutor:
         """Extract known error text from a stream-json event."""
         parts: List[str] = []
 
-        error = data.get("error")
-        if isinstance(error, str):
-            parts.append(error)
-        elif isinstance(error, dict):
-            for key in ("message", "type", "code"):
-                value = error.get(key)
-                if isinstance(value, str):
-                    parts.append(value)
+        def append_error(error: object) -> None:
+            if isinstance(error, str):
+                parts.append(error)
+            elif isinstance(error, dict):
+                for key in ("message", "type", "code", "codex_error_info"):
+                    value = error.get(key)
+                    if isinstance(value, str):
+                        parts.append(value)
+
+        append_error(data.get("error"))
+
+        # Codex's event stream wraps terminal errors in the event payload.
+        # Inspect that authoritative nested value before a non-zero process
+        # exit reduces it to an ambiguous generic failure.
+        payload = data.get("payload")
+        if isinstance(payload, dict):
+            append_error(payload.get("error"))
 
         message = data.get("message")
         if isinstance(message, str):
