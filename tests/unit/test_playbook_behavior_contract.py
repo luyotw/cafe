@@ -258,6 +258,7 @@ def test_custom_named_publish_hook_accepts_declared_terminal_baton(tmp_path):
             "publish_confirmation": True,
             "next_step_path": str(baton_file),
         },
+        step_def={"on": {"workflow_complete": "_done"}},
     )
 
 

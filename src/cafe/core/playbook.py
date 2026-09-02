@@ -817,20 +817,35 @@ def resolve_prepare_config(model: PlaybookDefinition) -> PrepareConfig:
 
 
 def confirmation_gate_steps(model: PlaybookDefinition) -> tuple[str, ...]:
-    """Return ordered steps that declare a planned user confirmation gate.
+    """Return ordered confirmation gates assignable in the kickoff contract.
 
     ``on.confirm_output`` is the playbook-level declaration that a completed
-    step may hand its output to the user for approval. A binding that declares
-    feedback delivery is a runtime local-review loop, not a kickoff scheduling
-    choice. Other user-owned intents such as clarification, permission, and
-    alignment checkpoints are reactive safety interruptions rather than
-    kickoff confirmation choices.
+    step may hand its output to the user for approval. A matching binding that
+    declares feedback delivery is a mandatory human task, not an assignable
+    kickoff choice. Other user-owned intents such as clarification, permission,
+    and alignment checkpoints are reactive safety interruptions.
     """
     return tuple(
         step_name
         for step_name, step in model.steps.items()
         if "confirm_output" in step.on
-        and not any(binding.feedback_delivery is not None for binding in step.human_tasks)
+        and not _has_mandatory_confirmation_gate(step)
+    )
+
+
+def mandatory_confirmation_gate_steps(model: PlaybookDefinition) -> tuple[str, ...]:
+    """Return ordered confirmation gates that always require a HumanTask."""
+    return tuple(
+        step_name
+        for step_name, step in model.steps.items()
+        if "confirm_output" in step.on and _has_mandatory_confirmation_gate(step)
+    )
+
+
+def _has_mandatory_confirmation_gate(step: StepConfig) -> bool:
+    return any(
+        binding.trigger == "confirm_output" and binding.feedback_delivery is not None
+        for binding in step.human_tasks
     )
 
 

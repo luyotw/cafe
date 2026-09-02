@@ -141,7 +141,6 @@ steps:
         feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
     "on":
       confirm_output: pr
-      workflow_complete: _done
       need_permission: pr
       manual_handoff: develop
 

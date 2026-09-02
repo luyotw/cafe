@@ -29,11 +29,13 @@ input`:
   `reactive_user_handoffs` from the active `issue.yaml`.
 - [ ] Verify the exact confirmation-gate partition with
   `cafe playbook confirmation-gates <playbook-id>`.
-- [ ] If the contract or locale is missing, stale, invalid, or omits the pause
-  policy, stop for the user and repair the contract before continuing.
+- [ ] If the contract or locale is missing, stale, invalid, or omits an
+  assignable pause policy, stop for the user and repair the contract before
+  continuing. Mandatory HumanTask gates are not members of that partition.
 
 Then route by intent:
 
+- `confirm_output` from a mandatory HumanTask step: always stop for the real user.
 - `confirm_output` from a `user_required` step: stop for user approval or
   correction.
 - `confirm_output` from a `driver_confirmable` step: verify the output and

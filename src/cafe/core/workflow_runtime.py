@@ -2769,7 +2769,18 @@ class BlackboardWorkflowRuntime:
                     )
                 self._store_artifacts(frame.artifacts)
                 try:
-                    contract = self._load_agent_written_handoff_contract(current_step=current_step)
+                    if self._is_baton_driven_step(current_step):
+                        contract = self._load_step_handoff_contract(current_step=current_step)
+                        if contract is None:
+                            raise BatonRejected(
+                                field="from_step",
+                                invalid_value="",
+                                valid_values=[current_step],
+                            )
+                    else:
+                        contract = self._load_agent_written_handoff_contract(
+                            current_step=current_step
+                        )
                     if contract.to_owner == HandoffOwner.AGENT and contract.to_step == current_step:
                         explicit_status_code = getattr(frame.execution_result, "status_code", None)
                         if not explicit_status_code:

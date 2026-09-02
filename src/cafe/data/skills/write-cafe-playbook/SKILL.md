@@ -1,7 +1,7 @@
 ---
 name: write-cafe-playbook
 description: Use this skill when creating, restructuring, reviewing, or repairing a CAFE playbook YAML under src/cafe/data/playbooks or .cafe/playbooks. Covers applicability, conversation locale, step graphs, roles, artifacts, plan/checklist handoffs, forward plan chains, user review loops, conditional skips, hooks, tools, and strict validation. Use it whenever a user asks to write or update a CAFE playbook, or use-cafe-workflow identifies a playbook declarative defect.
-version: 1.4.0
+version: 1.4.1
 ---
 
 # Write CAFE Playbook
@@ -84,8 +84,8 @@ version: 1.4.0
 5. Write the YAML using the template and field rules in `references/playbook-spec.md`.
 6. Run `cafe skill validate --strict` so the referenced skills and placeholders are valid.
 7. Run `cafe playbook validate <id> --strict`, inspect `cafe playbook show <id>`,
-   and run `cafe playbook confirmation-gates <id>` to verify the planned user
-   confirmation candidates.
+   and run `cafe playbook confirmation-gates <id>` to verify both assignable
+   confirmation candidates and mandatory HumanTask gates.
 8. Run `cafe playbook simulate <id> --dot`; fix unreachable steps, missing intent handlers, dead ends, and unintended directed cycles.
 9. Add a focused schema or artifact assertion when using serial `plan` bridges or nontrivial skip branches.
 
@@ -103,6 +103,7 @@ version: 1.4.0
   conditions; normalized conditions are unique, non-contradictory, and
   consistent with the graph without copying graph facts.
 - Every declared `valid_intents` outcome has a matching transition key.
+- Every mandatory HumanTask gate is excluded from kickoff assignment and remains user-owned.
 - User review loops stay in the current phase; normal workflow progress remains forward-only.
 - Every implementation plan has exactly one producer and an execute consumer reading `plan`.
 - Optional phases have an explicit skip and do not leave unchecked tasks in a `not_required` plan.

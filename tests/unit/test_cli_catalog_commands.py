@@ -225,12 +225,14 @@ def test_playbook_confirmation_gates_are_derived_from_confirm_output(
 
     assert default_result.exit_code == 0
     assert "Conversation locale: en-US" in default_result.stdout
-    assert "steps declaring on.confirm_output" in default_result.stdout
+    assert "Assignable confirmation gates" in default_result.stdout
     assert "  - spec" in default_result.stdout
     assert "  - plan" in default_result.stdout
     assert "  - develop" not in default_result.stdout
+    assert "Mandatory human-task gates" in default_result.stdout
+    assert "  - pr" in default_result.stdout
     assert research_result.exit_code == 0
-    assert "(none)" in research_result.stdout
+    assert research_result.stdout.count("(none)") == 2
     assert "Reactive clarification, permission, and alignment pauses" in research_result.stdout
 
 

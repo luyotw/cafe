@@ -45,7 +45,10 @@ def _reexec_with_cafe_python() -> None:
 try:
     import yaml  # type: ignore[import-untyped]
 
-    from cafe.core.playbook import confirmation_gate_steps
+    from cafe.core.playbook import (
+        confirmation_gate_steps,
+        mandatory_confirmation_gate_steps,
+    )
     from cafe.core.types import AgentCLI
     from cafe.playbooks.loader import PlaybookLoader
     from cafe.skills.execution_profile import resolve_execution_profile
@@ -400,6 +403,7 @@ def render(args: argparse.Namespace) -> str:
     model = loaded.model
     skill_loader = SkillLoader(project_root=project_root)
     candidates = confirmation_gate_steps(model)
+    mandatory_human_tasks = mandatory_confirmation_gate_steps(model)
     user_required, driver_confirmable = _resolve_partition(
         candidates=candidates,
         user_values=args.user_required,
@@ -472,6 +476,7 @@ def render(args: argparse.Namespace) -> str:
         ]
         yes, no = "是", "否"
         no_gate, user_owner = "—", "user"
+        mandatory_user_owner = "user（mandatory）"
         driver_owner = "driver（驗證後繼續）"
         reactive_title = "### Reactive user handoffs"
         reactive_headers = ["Intent", "Policy", "是否為排程 gate"]
@@ -488,6 +493,7 @@ def render(args: argparse.Namespace) -> str:
         ]
         yes, no = "yes", "no"
         no_gate, user_owner = "—", "user"
+        mandatory_user_owner = "user (mandatory)"
         driver_owner = "driver (verify, then continue)"
         reactive_title = "### Reactive user handoffs"
         reactive_headers = ["Intent", "Policy", "Scheduled gate"]
@@ -509,6 +515,10 @@ def render(args: argparse.Namespace) -> str:
             *_driver_policy_rows(args),
             ["user_required", ", ".join(user_required) or "[]"],
             ["driver_confirmable", ", ".join(driver_confirmable) or "[]"],
+            [
+                "mandatory_human_tasks",
+                ", ".join(mandatory_human_tasks) or "[]",
+            ],
             ["worktree", worktree],
             ["mandate_source", mandate_source],
         ],
@@ -554,7 +564,9 @@ def render(args: argparse.Namespace) -> str:
     model_rows: list[list[Any]] = []
     profile_rows: list[list[Any]] = []
     for step_name, step in model.steps.items():
-        if step_name in user_required:
+        if step_name in mandatory_human_tasks:
+            gate, owner, stop = yes, mandatory_user_owner, yes
+        elif step_name in user_required:
             gate, owner, stop = yes, user_owner, yes
         elif step_name in driver_confirmable:
             gate, owner, stop = yes, driver_owner, no
