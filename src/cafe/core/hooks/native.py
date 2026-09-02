@@ -1205,6 +1205,7 @@ class GitHubPRCreator(NoOpHook):
             validation_rejection_receipt,
         )
         from cafe.core.capability_approvals import CapabilityApprovalService
+        from cafe.core.workflow_runtime import HumanTaskNotificationDispatcher
 
         phase = kwargs.get("phase")
         step_name = str(kwargs.get("step_name") or "")
@@ -1359,6 +1360,11 @@ class GitHubPRCreator(NoOpHook):
                 )
                 approval = service.inspect(task.id)
                 if approval["state"] == "pending":
+                    HumanTaskNotificationDispatcher(
+                        issue_dir=issue_dir,
+                        blackboard_store=BlackboardStore(issue_dir),
+                        blackboard=blackboard_state,
+                    ).notify(task)
                     events.append(
                         {
                             "type": "capability_approval_pending",

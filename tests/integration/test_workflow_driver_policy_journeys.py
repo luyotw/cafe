@@ -28,7 +28,6 @@ from cafe.core.types import AgentCLI, AgentResponse, TokenUsage
 from cafe.core.v2_workflow_runtime import Version2WorkflowRuntime
 from cafe.core.workflow_hosting import WorkflowHost
 from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult
-from cafe.core.workflow_notifications import record_notification_guidance
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.services.summary_display import SummaryDisplay
@@ -628,12 +627,9 @@ def test_each_mode_restarts_terminally_across_completion_publication_boundaries(
         assert decisions == ([1] if mode == "delegated" else [])
 
 
-@pytest.mark.parametrize("human_task_delivery_available", [False, True])
-def test_lifecycle_guidance_and_later_inspection_remain_session_safe(
-    tmp_path: Path, human_task_delivery_available: bool
-) -> None:
+def test_lifecycle_and_later_inspection_remain_session_safe(tmp_path: Path) -> None:
     issues_root = tmp_path / ".cafe" / "issues"
-    issue_dir = issues_root / ("configured" if human_task_delivery_available else "plain")
+    issue_dir = issues_root / "lifecycle-inspection"
     issue_dir.mkdir(parents=True)
     (issue_dir / "issue.yaml").write_text(
         yaml.safe_dump(_policy("delegated").model_dump(mode="json")),
@@ -646,16 +642,11 @@ def test_lifecycle_guidance_and_later_inspection_remain_session_safe(
     DriverCoordinator(store, state).record_lifecycle(
         "permission", reason="operator approval required"
     )
-    guidance = record_notification_guidance(
-        issue_dir,
-        human_task_delivery_available=human_task_delivery_available,
-    )
 
     status = SummaryService(issues_root=issues_root).load_driver_status(issue_dir.name)
     rendered = SummaryDisplay().format_driver_status(status)
 
     assert status["reason"] == "operator approval required"
-    assert status["notification_guidance"] == guidance
     assert "secret-session" not in json.dumps(status)
-    assert "cafe status" in rendered
+    assert "Reason: operator approval required" in rendered
     assert "notification_receipts" not in store.load_or_create("review").driver_state

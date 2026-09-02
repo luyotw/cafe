@@ -686,10 +686,16 @@ def _apply_human_task_payload(
 
     if durable_task is not None:
         permitted_continuations = set(durable_task.continuations.values())
-        if not permitted_continuations:
-            raw_allowed = durable_task.expected_result.get("allowed_targets", [])
-            if isinstance(raw_allowed, list):
-                permitted_continuations = {item for item in raw_allowed if isinstance(item, str)}
+        raw_allowed = durable_task.expected_result.get("allowed_targets", [])
+        if isinstance(raw_allowed, list):
+            # A decision such as ``revise`` can route to a target selected from
+            # the task's declared correction targets.  Those targets are
+            # deliberately separate from the fixed decision outcomes (for
+            # example, ``confirm -> closeout``), so both sources must be
+            # accepted by the durable-task correlation fence.
+            permitted_continuations.update(
+                item for item in raw_allowed if isinstance(item, str)
+            )
         if continuation not in permitted_continuations:
             rejection = HumanTaskRejection(
                 message="This response does not select the pending task's declared continuation.",

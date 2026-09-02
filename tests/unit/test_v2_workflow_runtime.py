@@ -300,6 +300,14 @@ def test_transport_failure_pauses_without_fallback(tmp_path: Path) -> None:
     assert "fallback_reason" not in state.driver_state
 
 
+def test_runtime_completion_does_not_create_workflow_notification_receipts(tmp_path: Path) -> None:
+    runtime = FakePhaseRuntime(tmp_path)
+    Version2WorkflowRuntime(runtime, _policy("unattended")).run()
+
+    state = runtime.blackboard_store.load_or_create("spec")
+    assert "notification_receipts" not in state.driver_state
+
+
 @pytest.mark.parametrize(
     ("failure", "expected_reason"),
     [

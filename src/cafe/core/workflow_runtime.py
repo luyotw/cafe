@@ -20,6 +20,7 @@ from cafe.core.automatic_steps import (
     default_automatic_executor_registry,
 )
 from cafe.core.blackboard import (
+    BlackboardState,
     BlackboardStore,
     HandoffContract,
     HandoffIntent,
@@ -114,63 +115,26 @@ class IterationLimitReachedError(RuntimeError):
         self.result = result
 
 
-class BlackboardWorkflowRuntime:
-    """Workflow runtime that prefers blackboard/baton-driven transitions."""
+class HumanTaskNotificationDispatcher:
+    """Dispatch the one supported trusted notification for a pending HumanTask."""
 
     def __init__(
         self,
         *,
         issue_dir: Path,
-        playbook: Dict,
-        executor: Any,
-        automatic_registry: Optional[AutomaticExecutorRegistry] = None,
+        blackboard_store: BlackboardStore,
+        blackboard: BlackboardState,
     ) -> None:
         self.issue_dir = issue_dir
-        self.playbook = playbook
-        self.executor = executor
-        self.automatic_registry = automatic_registry or default_automatic_executor_registry()
-
-        playbook_meta = playbook["playbook"]
-        self.playbook_id = str(playbook_meta["id"])
-        self.playbook_source = str(getattr(playbook, "source", "unknown"))
-        self.steps: Dict = playbook["steps"]
-        self.start_step = str(playbook.get("entry_point") or next(iter(self.steps.keys())))
-        self._validate_automatic_executor_declarations()
-
-        self.blackboard_store = BlackboardStore(issue_dir)
-        self.blackboard = self.blackboard_store.load_or_create(
-            self.start_step,
-            playbook_id=self.playbook_id,
-            tolerate_invalid_baton=True,
-        )
-        self._replaced_user_handoff: HandoffContract | None = None
-
-    def _validate_automatic_executor_declarations(self) -> None:
-        """Reject unavailable automatic authority before recording a workflow visit."""
-        for step_name, step_def in self.steps.items():
-            if not isinstance(step_def, dict) or self._owner_for_step(step_def) != "auto":
-                continue
-            declaration = step_def.get("automatic")
-            executor_id = declaration.get("executor") if isinstance(declaration, dict) else None
-            inputs = declaration.get("inputs") if isinstance(declaration, dict) else None
-            if not isinstance(executor_id, str) or not self.automatic_registry.is_registered(
-                executor_id
-            ):
-                raise ValueError(
-                    f"Step '{step_name}' automatic executor {executor_id!r} is not registered"
-                )
-            if not isinstance(inputs, dict):
-                raise ValueError(
-                    f"Step '{step_name}' has an invalid automatic executor declaration"
-                )
-            self.automatic_registry.validate_inputs(executor_id, inputs)
+        self.blackboard_store = blackboard_store
+        self.blackboard = blackboard
 
     def _repository_root(self) -> Path:
         if self.issue_dir.parent.name == "issues" and self.issue_dir.parent.parent.name == ".cafe":
             return self.issue_dir.parent.parent.parent
         return self.issue_dir.parent
 
-    def _notify_new_human_task(self, task: HumanTask) -> None:
+    def notify(self, task: HumanTask) -> None:
         """Record one source-independent, machine-controlled delivery decision."""
         attempt_id = f"slack-human-task:{task.id}"
         try:
@@ -187,7 +151,7 @@ class BlackboardWorkflowRuntime:
                         outcome="skipped",
                     )
                     return
-                self._dispatch_human_task_notification(task, attempt_id=attempt_id)
+                self._dispatch(task, attempt_id=attempt_id)
         except Exception:
             # Lock and persistence failures must not make Slack authoritative over human work.
             return
@@ -229,7 +193,7 @@ class BlackboardWorkflowRuntime:
             },
         )
 
-    def _dispatch_human_task_notification(self, task: HumanTask, *, attempt_id: str) -> None:
+    def _dispatch(self, task: HumanTask, *, attempt_id: str) -> None:
         existing_receipt = next(
             (
                 receipt
@@ -329,6 +293,65 @@ class BlackboardWorkflowRuntime:
             }
         )
         self.blackboard_store.upsert_capability_receipt(self.blackboard, receipt)
+
+
+class BlackboardWorkflowRuntime:
+    """Workflow runtime that prefers blackboard/baton-driven transitions."""
+
+    def __init__(
+        self,
+        *,
+        issue_dir: Path,
+        playbook: Dict,
+        executor: Any,
+        automatic_registry: Optional[AutomaticExecutorRegistry] = None,
+    ) -> None:
+        self.issue_dir = issue_dir
+        self.playbook = playbook
+        self.executor = executor
+        self.automatic_registry = automatic_registry or default_automatic_executor_registry()
+
+        playbook_meta = playbook["playbook"]
+        self.playbook_id = str(playbook_meta["id"])
+        self.playbook_source = str(getattr(playbook, "source", "unknown"))
+        self.steps: Dict = playbook["steps"]
+        self.start_step = str(playbook.get("entry_point") or next(iter(self.steps.keys())))
+        self._validate_automatic_executor_declarations()
+
+        self.blackboard_store = BlackboardStore(issue_dir)
+        self.blackboard = self.blackboard_store.load_or_create(
+            self.start_step,
+            playbook_id=self.playbook_id,
+            tolerate_invalid_baton=True,
+        )
+        self._replaced_user_handoff: HandoffContract | None = None
+
+    def _validate_automatic_executor_declarations(self) -> None:
+        """Reject unavailable automatic authority before recording a workflow visit."""
+        for step_name, step_def in self.steps.items():
+            if not isinstance(step_def, dict) or self._owner_for_step(step_def) != "auto":
+                continue
+            declaration = step_def.get("automatic")
+            executor_id = declaration.get("executor") if isinstance(declaration, dict) else None
+            inputs = declaration.get("inputs") if isinstance(declaration, dict) else None
+            if not isinstance(executor_id, str) or not self.automatic_registry.is_registered(
+                executor_id
+            ):
+                raise ValueError(
+                    f"Step '{step_name}' automatic executor {executor_id!r} is not registered"
+                )
+            if not isinstance(inputs, dict):
+                raise ValueError(
+                    f"Step '{step_name}' has an invalid automatic executor declaration"
+                )
+            self.automatic_registry.validate_inputs(executor_id, inputs)
+
+    def _notify_new_human_task(self, task: HumanTask) -> None:
+        HumanTaskNotificationDispatcher(
+            issue_dir=self.issue_dir,
+            blackboard_store=self.blackboard_store,
+            blackboard=self.blackboard,
+        ).notify(task)
 
     @staticmethod
     def _extract_goto_target(response: str) -> Optional[str]:

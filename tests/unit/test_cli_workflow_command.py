@@ -469,10 +469,6 @@ def test_workflow_command_forwards_validated_policy_to_v2_runtime(
         patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
         patch("cafe.ui.commands.workflow.Version2WorkflowRuntime", CapturingVersion2Runtime),
         patch(
-            "cafe.ui.commands.workflow.record_notification_guidance",
-            side_effect=lambda path: captured.setdefault("guidance_issue_dir", path),
-        ),
-        patch(
             "cafe.ui.commands.workflow.WorkflowHost",
             CapturingWorkflowHost,
             create=True,
@@ -493,7 +489,6 @@ def test_workflow_command_forwards_validated_policy_to_v2_runtime(
     assert policy.driver.mode == "unattended"
     assert captured["provider"] is None
     assert captured["hosting"] == "foreground"
-    assert Path(captured["guidance_issue_dir"]).resolve() == issue_dir
     policy_authority = captured["policy_authority"]
     assert callable(policy_authority)
     with policy_authority() as current_policy:
@@ -517,10 +512,6 @@ def test_workflow_background_option_uses_fixed_host_launcher(
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
         patch(
-            "cafe.ui.commands.workflow.record_notification_guidance",
-            side_effect=lambda path: captured.setdefault("guidance_issue_dir", path),
-        ),
-        patch(
             "cafe.ui.commands.workflow.WorkflowHost",
             CapturingWorkflowHost,
             create=True,
@@ -536,7 +527,6 @@ def test_workflow_background_option_uses_fixed_host_launcher(
 
     assert result.exit_code == 0, (result.stdout, result.exception)
     assert captured["hosting"] == "background"
-    assert Path(captured["guidance_issue_dir"]).name == "issue-v2-background"
     assert "4321" in result.stdout
 
 
