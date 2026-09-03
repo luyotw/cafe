@@ -616,6 +616,7 @@ def generate_pr_checklist(
         "pr_file": pr_file,
         "output_file": pr_file,
         "previous_output_file": prev_pr_file or "",
+        "review_feedback_instruction": "",
     }
 
     if iteration > 1:

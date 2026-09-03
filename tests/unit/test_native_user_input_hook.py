@@ -35,7 +35,11 @@ BATON_REVIEW_PUBLISH_STEP = {
         {
             "trigger": "confirm_output",
             "task_id": "local-review",
-            "outcomes": {"approve": "_done", "request_changes": "develop"},
+            "outcomes": {
+                "fix_now": "develop",
+                "create_follow_up": "_done",
+                "continue_without_issue": "_done",
+            },
         }
     ],
     "on": {"confirm_output": "pr"},

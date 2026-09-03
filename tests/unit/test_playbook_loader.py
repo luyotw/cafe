@@ -421,7 +421,9 @@ steps:
     human_tasks:
       - trigger: confirm_output
         task_id: local-review
-        outcomes: {approve: _done, request_changes: repair}
+        outcomes:
+          {fix_now: repair, create_follow_up: _done,
+           continue_without_issue: _done}
         feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
     on: {confirm_output: fixed-review, await_agent: _done}
   target-review:
@@ -500,7 +502,7 @@ workflow:
         trigger="confirm_output",
         raw_payload={
             "task": "local-review",
-            "decision": "request_changes",
+            "decision": "fix_now",
             "feedback": "Repair the implementation.",
         },
         skill_loader=skill_loader,

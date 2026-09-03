@@ -149,7 +149,7 @@ def test_builtin_pr_pauses_for_local_review_before_done(tmp_path: Path, playbook
         trigger="confirm_output",
         raw_payload={
             "task": "local-review",
-            "decision": "approve",
+            "decision": "continue_without_issue",
             "human_task_id": pending[0].id,
         },
         source="integration",
@@ -501,7 +501,7 @@ def test_matching_durable_completion_records_one_result_and_declared_continuatio
         assert store.load_or_create("spec").handoff_contract.to_step == "plan"
 
 
-def test_default_local_review_approval_does_not_create_durable_feedback(tmp_path: Path) -> None:
+def test_default_local_review_continue_does_not_create_durable_feedback(tmp_path: Path) -> None:
     """IT-002: default local approval completes without a correction work item."""
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
@@ -519,7 +519,7 @@ def test_default_local_review_approval_does_not_create_durable_feedback(tmp_path
         trigger="confirm_output",
         raw_payload={
             "task": "local-review",
-            "decision": "approve",
+            "decision": "continue_without_issue",
             "feedback": "Optional acknowledgement.",
         },
         source="integration",
@@ -529,6 +529,47 @@ def test_default_local_review_approval_does_not_create_durable_feedback(tmp_path
     assert WorkflowFeedbackLedger(issue_dir).pending() == []
     assert "workflow_feedback" not in state.artifacts
     assert store.load_or_create("pr").current_step == "done"
+
+
+@pytest.mark.parametrize("decision", ["create_follow_up", "continue_without_issue"])
+def test_local_review_follow_up_dispositions_are_durable_terminal_decisions(
+    tmp_path: Path, decision: str
+) -> None:
+    """Follow-up choices are recorded without creating correction feedback."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / ".cafe" / "issues" / f"local-review-{decision}"
+    playbook = PlaybookLoader().load("standard")
+    store, state = _paused_default_state(
+        issue_dir, from_step="pr", intent=HandoffIntent.CONFIRM_OUTPUT
+    )
+    task = _materialize_default_task(
+        issue_dir, state, from_step="pr", trigger="confirm_output"
+    )
+    payload = {
+        "task": "local-review",
+        "decision": decision,
+        "human_task_id": task.id,
+    }
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="pr",
+        trigger="confirm_output",
+        raw_payload=payload,
+        source="command",
+    )
+
+    records = HumanTaskRecordStore(issue_dir)
+    durable_result = records.get_result(task.id)
+    assert result.target == "done"
+    assert durable_result is not None
+    assert durable_result.payload["decision"] == decision
+    assert durable_result.payload.get("feedback") is None
+    assert WorkflowFeedbackLedger(issue_dir).pending() == []
+    assert "workflow_feedback" not in state.artifacts
 
 
 def test_durable_local_review_delivers_feedback_and_completes_one_task(tmp_path: Path) -> None:
@@ -552,7 +593,7 @@ def test_durable_local_review_delivers_feedback_and_completes_one_task(tmp_path:
         trigger="confirm_output",
         raw_payload={
             "task": "local-review",
-            "decision": "request_changes",
+            "decision": "fix_now",
             "feedback": "Preserve both durable contracts.",
             "human_task_id": task.id,
         },

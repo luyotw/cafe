@@ -62,6 +62,7 @@ REQUIRED_SKILL_REFERENCES = {
         "execution_acceptance_closure.md",
         "execution_first_pass.md",
         "execution_correction.md",
+        "execution_convergence.md",
         "execution_exit_audit.md",
         "execution_finalize.md",
         "feedback_instruction.md",
@@ -77,6 +78,7 @@ REQUIRED_SKILL_REFERENCES = {
         "plan_read_instruction.md",
         "pr_spec_context.md",
         "pr_plan_context.md",
+        "review_feedback_instruction.md",
     ],
 }
 
@@ -488,7 +490,7 @@ def test_review_correction_runtime_composes_planless_closure_contract(
     )
 
     checklist = output_path.read_text(encoding="utf-8")
-    correction_heading = "## Correction Review"
+    correction_heading = "## Discovery Correction Review"
     risk_heading = "## Triggered Risk Assessment"
     matrix_heading = "## Acceptance Closure"
     exit_heading = "## Exit Audit"
@@ -582,7 +584,8 @@ def test_review_composed_checklists_stay_within_budget_and_keep_role_guidance(
     }
     cases = (
         ("first-planned", 1, planned_context, False),
-        ("correction-planned", 2, planned_context, True),
+        ("discovery-correction-planned", 3, planned_context, True),
+        ("convergence-correction-planned", 4, planned_context, True),
         (
             "correction-planless",
             2,
@@ -623,12 +626,21 @@ def test_review_composed_checklists_stay_within_budget_and_keep_role_guidance(
         assert "need_permission" not in checklist
         if iteration == 1:
             assert "## First-Pass Behavior Review" in checklist
-            assert "## Correction Review" not in checklist
-        else:
-            assert "## Correction Review" in checklist
+            assert "## Discovery Correction Review" not in checklist
+            assert "## Convergence Review" not in checklist
+        elif iteration <= 3:
+            assert "## Discovery Correction Review" in checklist
+            assert "## Convergence Review" not in checklist
             assert "## First-Pass Behavior Review" not in checklist
             assert "Correction Impact Set" in checklist
             assert "do not rerun probes for rows validly carried as `closed_reused`" in checklist
+        else:
+            assert "## Convergence Review" in checklist
+            assert "## Discovery Correction Review" not in checklist
+            assert "## First-Pass Behavior Review" not in checklist
+            assert "newly evidenced `Impact: Critical`" in checklist
+            assert "Convert every other newly discovered Important or Minor" in checklist
+        assert "## Follow-up Proposals" in checklist
 
     legacy_path = tmp_path / "legacy-pr-todo.md"
     generate_review_checklist(
@@ -666,6 +678,17 @@ def test_review_composed_checklists_stay_within_budget_and_keep_role_guidance(
                 "plan": "plan.md",
                 "code": "code.md",
                 "review_feedback": "review.md",
+            },
+        ),
+        (
+            "standard-qa",
+            "pr",
+            {
+                "spec": "spec.md",
+                "plan": "plan.md",
+                "code": "code.md",
+                "review_feedback": "review.md",
+                "qa_feedback": "qa.md",
             },
         ),
     ],
@@ -719,6 +742,9 @@ def test_short_builtin_playbook_checklists_compose_with_declared_artifact_scope(
         assert "Read the requirements specification" not in content
     if "plan" not in scope:
         assert "Read the implementation plan" not in content
+    if "review_feedback" in available_artifacts:
+        assert "Read the latest review feedback at review.md" in content
+        assert "use its `## Follow-up Proposals` section as the only proposal source" in content
 
 
 @pytest.mark.parametrize(

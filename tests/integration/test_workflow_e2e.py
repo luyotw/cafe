@@ -457,7 +457,7 @@ def test_default_requested_changes_follow_declared_loop_without_publish_authorit
         trigger="confirm_output",
         raw_payload={
             "task": "local-review",
-            "decision": "request_changes",
+            "decision": "fix_now",
             "feedback": "Exercise the declared correction route.",
         },
         source="integration",

@@ -579,15 +579,21 @@ def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path
             "pr": {
                 "skill": "cafe-pr",
                 "max_attempts_per_cycle": 5,
-                "human_tasks": [{
-                    "trigger": "confirm_output",
-                    "task_id": "local-review",
-                    "outcomes": {"approve": "_done", "request_changes": "develop"},
-                    "feedback_delivery": {
-                        "artifact": "workflow_feedback",
-                        "source_kind": "local_review",
-                    },
-                }],
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "local-review",
+                        "outcomes": {
+                            "fix_now": "develop",
+                            "create_follow_up": "_done",
+                            "continue_without_issue": "_done",
+                        },
+                        "feedback_delivery": {
+                            "artifact": "workflow_feedback",
+                            "source_kind": "local_review",
+                        },
+                    }
+                ],
             },
             "develop": {"skill": "cafe-develop"},
         }
@@ -602,7 +608,7 @@ def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path
         trigger="confirm_output",
         raw_payload={
             "task": "local-review",
-            "decision": "request_changes",
+            "decision": "fix_now",
             "feedback": "Cover the empty input boundary.",
         },
         source="command",
@@ -617,8 +623,10 @@ def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path
     assert not (issue_dir / "develop" / "iteration_001" / "user_input.md").exists()
 
 
-def test_feedback_delivery_approval_does_not_record_optional_feedback(tmp_path: Path) -> None:
-    """Approval notes do not become actionable correction feedback."""
+def test_feedback_delivery_terminal_disposition_does_not_record_feedback(
+    tmp_path: Path,
+) -> None:
+    """Terminal disposition notes do not become actionable correction feedback."""
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / ".cafe" / "issues" / "local-review-approval"
@@ -629,15 +637,21 @@ def test_feedback_delivery_approval_does_not_record_optional_feedback(tmp_path: 
         "steps": {
             "pr": {
                 "skill": "cafe-pr",
-                "human_tasks": [{
-                    "trigger": "confirm_output",
-                    "task_id": "local-review",
-                    "outcomes": {"approve": "_done", "request_changes": "develop"},
-                    "feedback_delivery": {
-                        "artifact": "workflow_feedback",
-                        "source_kind": "local_review",
-                    },
-                }],
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "local-review",
+                        "outcomes": {
+                            "fix_now": "develop",
+                            "create_follow_up": "_done",
+                            "continue_without_issue": "_done",
+                        },
+                        "feedback_delivery": {
+                            "artifact": "workflow_feedback",
+                            "source_kind": "local_review",
+                        },
+                    }
+                ],
             },
             "develop": {"skill": "cafe-develop"},
         }
@@ -651,7 +665,7 @@ def test_feedback_delivery_approval_does_not_record_optional_feedback(tmp_path: 
         trigger="confirm_output",
         raw_payload={
             "task": "local-review",
-            "decision": "approve",
+            "decision": "continue_without_issue",
             "feedback": "Approved with a non-actionable note.",
         },
         source="command",

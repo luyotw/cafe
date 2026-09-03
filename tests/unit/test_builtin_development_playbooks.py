@@ -6,6 +6,7 @@ import pytest
 
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook
+from cafe.skills.contracts import resolve_prompt_inputs
 from cafe.skills.loader import SkillLoader
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
@@ -69,8 +70,9 @@ def test_every_builtin_pr_requires_local_review_before_done() -> None:
         assert "workflow_complete" not in pr.on
         assert local_review.trigger == "confirm_output"
         assert local_review.outcomes == {
-            "approve": "_done",
-            "request_changes": "develop",
+            "fix_now": "develop",
+            "create_follow_up": "_done",
+            "continue_without_issue": "_done",
         }
 
 
@@ -83,6 +85,57 @@ def test_cafe_pr_routes_completed_artifacts_to_local_review() -> None:
     assert "宣告 `confirm_output` 時交給 `user` review" in skill
     assert "只有宣告 `workflow_complete→done` 時才直接完成" in skill
     assert "不得選擇未宣告的路由" in skill
+    assert "Follow-up Proposals" in skill
+    assert "不會自動建立 GitHub issue" in skill
+    assert "decision applies to every open FUP" in skill
+    assert "不支援逐項混合處置" in skill
+
+    policy = next(
+        task
+        for task in SkillLoader().get_workflow_contract("cafe-pr").human_tasks
+        if task.id == "local-review"
+    )
+    decisions = {decision.id: decision for decision in policy.decisions}
+    assert set(decisions) == {"fix_now", "create_follow_up", "continue_without_issue"}
+    assert decisions["fix_now"].requires_feedback is True
+    assert decisions["create_follow_up"].requires_feedback is False
+    assert decisions["continue_without_issue"].requires_feedback is False
+
+
+def test_cafe_review_convergence_contract_preserves_critical_blockers() -> None:
+    """Late non-critical discovery converges without weakening Critical review."""
+    root = Path(__file__).parents[2] / "src" / "cafe" / "data" / "skills" / "cafe-review"
+    skill = (root / "SKILL.md").read_text(encoding="utf-8")
+    convergence = (root / "references" / "execution_convergence.md").read_text(encoding="utf-8")
+    finalize = (root / "references" / "execution_finalize.md").read_text(encoding="utf-8")
+    risk = (root / "references" / "execution_risk_assessment.md").read_text(
+        encoding="utf-8"
+    )
+    acceptance = (root / "references" / "execution_acceptance_closure.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "第 1–3 輪是 discovery mode" in skill
+    assert "第 4 輪起是 convergence mode" in skill
+    assert "confidence bucket" in skill
+    assert "`Impact: Critical`" in skill
+    assert "不得重開 correction loop" in skill
+    assert "unresolved existing blocker lineage" in convergence
+    assert "regression causally introduced by the current correction" in convergence
+    assert "newly evidenced `Impact: Critical`" in convergence
+    assert "Convert every other newly discovered Important or Minor" in convergence
+    assert "`BLK-NNN`" in finalize
+    assert "`FUP-NNN`" in finalize
+    assert "draft issue title and body" in finalize
+    assert "## Finding Registry" in finalize
+    assert "every historical and current BLK/FUP lineage" in finalize
+    assert "mark it `promoted` with a linked existing-or-new `BLK-NNN`" in convergence
+    assert "late non-Critical observation cannot become blocking" in convergence
+    assert "pre-existing late non-Critical observation" in risk
+    assert "non-blocking status `follow_up`" in risk
+    assert "every allowed blocking row is `closed_fresh`" in acceptance
+    assert "every non-blocking late gap is `follow_up`" in acceptance
+    assert "correction-impacted entries classified `follow_up`" in finalize
 
 
 @pytest.mark.parametrize(
@@ -249,3 +302,11 @@ def test_qa_feedback_is_exposed_by_every_correction_and_publication_skill() -> N
     }
     assert required == {"spec", "code"}
     assert optional == {"plan", "review_feedback"}
+
+    pr_contract = loader.get_workflow_contract("cafe-pr")
+    resolved = resolve_prompt_inputs(
+        pr_contract,
+        {"qa_feedback": "qa.md", "review_feedback": "review.md"},
+    )
+    assert resolved["feedback_file"] == "qa.md"
+    assert resolved["review_feedback_file"] == "review.md"
