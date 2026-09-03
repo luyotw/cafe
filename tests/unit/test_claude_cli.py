@@ -334,6 +334,24 @@ class TestClaudeCLIParseResponse:
         # 應該忽略非 JSON 行
         assert response == "Valid JSON"
 
+    def test_parse_response_ignores_permission_denial_message_string(self, claude_config):
+        """權限拒絕事件的字串 message 不可被當成 message.content 解析."""
+        cli = ClaudeCLI(claude_config)
+        output_lines = [
+            json.dumps(
+                {
+                    "type": "system",
+                    "subtype": "permission_denied",
+                    "message": "Approval required for content.xml",
+                }
+            ),
+            json.dumps({"message": {"content": [{"type": "text", "text": "Valid JSON"}]}}),
+        ]
+
+        response, _, _ = cli.parse_response(output_lines)
+
+        assert response == "Valid JSON"
+
 
 class TestClaudeCLIExtractSessionId:
     """測試 extract_session_id() 方法."""

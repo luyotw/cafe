@@ -81,10 +81,15 @@ class ClaudeCLI(AbstractCLI):
         for line in output_lines:
             try:
                 data = json.loads(line.strip())
+                if not isinstance(data, dict):
+                    continue
 
                 # Extract content (new format: message.content[] or old format: content)
-                if "message" in data and "content" in data["message"]:
-                    for content_block in data["message"]["content"]:
+                message = data.get("message")
+                if isinstance(message, dict) and isinstance(message.get("content"), list):
+                    for content_block in message["content"]:
+                        if not isinstance(content_block, dict):
+                            continue
                         if content_block.get("type") == "text":
                             response_text = content_block.get("text", "")
                 elif "content" in data:
@@ -238,7 +243,7 @@ class ClaudeCLI(AbstractCLI):
         for line in output_lines:
             try:
                 data = json.loads(line.strip())
-                if "session_id" in data:
+                if isinstance(data, dict) and "session_id" in data:
                     return data["session_id"]
             except json.JSONDecodeError:
                 continue

@@ -1060,6 +1060,32 @@ class TestStreamingExecution:
         assert "Hello" in captured.out
         assert "world" in captured.out
 
+    def test_execute_with_streaming_ignores_permission_denial_message_string(self) -> None:
+        """Claude 權限拒絕的字串 message 不可中斷 stream-json 執行."""
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"system","subtype":"permission_denied","message":"Approval required for content.xml"}\n',
+            '{"type":"assistant","message":{"content":[{"type":"text","text":"Review complete"}]}}\n',
+            '{"type":"result"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.run", return_value=MagicMock(stdout="", returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_with_streaming(
+                cmd=["claude", "--print", "test"],
+                cli_name="Claude",
+                parse_stream_json=True,
+            )
+
+        assert agent_response.response == "Review complete"
+        assert agent_response.streaming_log == ["Review complete"]
+
     def test_execute_with_streaming_handles_error(self) -> None:
         """測試 streaming 執行失敗時拋出錯誤"""
         config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)

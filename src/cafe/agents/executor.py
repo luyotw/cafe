@@ -1237,8 +1237,11 @@ class AgentExecutor:
                             if "error" in data and data.get("error") == "invalid_request":
                                 # Extract error message from response text
                                 error_text = response_text or ""
-                                if "message" in data and "content" in data["message"]:
-                                    for content_block in data["message"]["content"]:
+                                message = data.get("message")
+                                if isinstance(message, dict) and isinstance(message.get("content"), list):
+                                    for content_block in message["content"]:
+                                        if not isinstance(content_block, dict):
+                                            continue
                                         if content_block.get("type") == "text":
                                             error_text = content_block.get("text", "")
 
@@ -1323,8 +1326,11 @@ class AgentExecutor:
                             else:
                                 # Default Claude format extractor
                                 # Extract content from message.content[] (new Claude format)
-                                if "message" in data and "content" in data["message"]:
-                                    for content_block in data["message"]["content"]:
+                                message = data.get("message")
+                                if isinstance(message, dict) and isinstance(message.get("content"), list):
+                                    for content_block in message["content"]:
+                                        if not isinstance(content_block, dict):
+                                            continue
                                         if content_block.get("type") == "text":
                                             text = content_block.get("text", "")
                                             if self.stream_output:
