@@ -42,21 +42,45 @@ identity. It is an ordinary driver and uses only existing kickoff authority:
 confirmation contract, mandatory HumanTask stops, reactive user handoffs,
 mandate, and model-adjustment authority.
 
-The callback receives only an asynchronous durable-boundary notice. It must
+The callback receives only an asynchronous durable-event notice. It must
 re-check `cafe status`/`cafe show`; a notice can be stale. It may diagnose and
-perform actions already authorized by the kickoff, but it cannot answer a
-mandatory HumanTask or grant permissions/capabilities. It does not own the
-background worker or gain a safe stop channel. An existing reliable,
-authorized control may be used only after verification; this feature creates
-no PID registry, cancellation API, recovery protocol, or stop guarantee.
+perform actions already authorized by the kickoff. It cannot wait for, collect,
+infer, or choose an answer for a mandatory, `user_required`, clarification,
+permission, or capability task, nor grant permissions or capabilities. It may
+complete a declared `driver_confirmable` task only after verifying the current
+confirmation contract and evidence. It does not own the background worker or
+gain a safe stop channel. An existing reliable, authorized control may be used
+only after verification; this feature creates no PID registry, cancellation API,
+recovery protocol, or stop guarantee.
 
-When completing or cancelling a HumanTask or capability task for either
-background mode, do not use the task command's automatic resume. Use
-`cafe task complete ... --no-resume` or `cafe task cancel ... --no-resume`,
-then restart the continuous worker. Unattended uses `--background`; event-driven
-uses the same `--background --on-workflow-event
-builtin:use-cafe-workflow:workflow_event_callback` command. Attached may use
-the task command's automatic foreground resume.
+## Completing a HumanTask
+
+The callback is not an interaction channel. A mandatory, `user_required`,
+clarification, permission, or capability task requires a **user-facing driver
+turn** to receive the user's explicit answer. A `driver_confirmable` task may
+instead be completed by any driver, including an event-driven callback, after
+it verifies the confirmed contract and evidence. Both cases use the same durable
+task flow:
+
+1. Inspect the exact pending task with `cafe task inspect <task-id>` and read
+   its declared input schema. Never reuse a stale task ID.
+2. For user-owned tasks, serialize only the user's supplied answer into that
+   schema. The driver may add the task ID required by the schema, but must not
+   infer a decision, approval, permission, or missing answer. For a
+   `driver_confirmable` task, use only its declared response after the required
+   contract and evidence verification.
+3. Run `cafe task complete <task-id> --result '<json>' --no-resume --json`.
+   Treat an uncertain command result as unconfirmed: inspect durable task and
+   handoff state before retrying. If the task is already complete, do not submit
+   another answer.
+4. After durable completion, continue with the confirmed mode: attached starts
+   the foreground continuous workflow; unattended starts the ordinary background
+   worker; event-driven starts the background worker with its trusted callback.
+
+`--no-resume` is an internal driver control that separates durable task
+completion from mode-specific continuation. Direct `cafe task complete` users
+retain its normal automatic foreground-resume behavior and need not perform
+this two-step flow.
 
 ## Commands and handoffs
 
@@ -69,8 +93,9 @@ the task command's automatic foreground resume.
 - A background invocation cannot carry `--single-step`, `--start-step`, or
   `--add-dir`. It may stage an exact `--user-input` before spawning the worker.
 - For a HumanTask, read `handoffs_and_alignment.md`, resolve the active
-  HumanTask and its input schema, submit its current `human_task_id`
-  payload, and never turn an unknown or stale task into phase input.
+  HumanTask and its input schema, including current `human_task_id`, then follow
+  **Completing a HumanTask** above. Never turn an unknown or stale task into
+  phase input.
   Plain text is valid only for a task that explicitly declares the `feedback`
   schema.
 

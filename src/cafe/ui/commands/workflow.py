@@ -13,17 +13,17 @@ import typer
 from rich.console import Console
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.orchestration.worker_launch import FixedWorkerLauncher, WorkerLaunchStore
-from cafe.orchestration.workflow_observer import (
-    WorkflowObserverBinding,
-    dispatch_workflow_observer,
-    resolve_builtin_observer,
+from cafe.workflow_execution.worker_launch import FixedWorkerLauncher, WorkerLaunchStore
+from cafe.workflow_execution.event_callback import (
+    ResolvedWorkflowEventCallback,
+    dispatch_workflow_event_callback,
+    resolve_builtin_workflow_event_callback,
 )
 from cafe.core.issue_resolution import ActiveIssueResolutionError, resolve_active_issue
 from cafe.core.phase_state_mixin import next_runnable_iteration_number
 from cafe.core.playbook import resolve_step_behavior
 from cafe.core.types import CriticalPhaseError
-from cafe.orchestration.workflow_hosting import WorkflowHost
+from cafe.workflow_execution.workflow_hosting import WorkflowHost
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.phases.generic_phase import GenericPhase
@@ -621,7 +621,7 @@ def workflow(
     on_workflow_event: Optional[str] = typer.Option(
         None,
         "--on-workflow-event",
-        help="Trusted builtin callback to invoke after durable workflow boundaries",
+        help="Trusted builtin asynchronous callback after durable workflow events",
     ),
     mute_agent_output: bool = typer.Option(
         False,
@@ -741,27 +741,27 @@ def workflow(
             # fixed worker handoff and must never launch another child.
             background = False
 
-        observer_binding: WorkflowObserverBinding | None = None
+        callback_binding: ResolvedWorkflowEventCallback | None = None
         if on_workflow_event is not None:
             try:
-                observer_binding = resolve_builtin_observer(
+                callback_binding = resolve_builtin_workflow_event_callback(
                     on_workflow_event,
                     project_root=Path.cwd(),
                 )
             except ValueError as exc:
-                console.print(f"[red]Error: workflow observer is invalid: {exc}[/red]")
+                console.print(f"[red]Error: workflow event callback is invalid: {exc}[/red]")
                 raise typer.Exit(1)
             if not background and not has_internal_worker_context:
                 console.print("[red]Error: --on-workflow-event requires --background[/red]")
                 raise typer.Exit(1)
 
         def launch_background_worker() -> None:
-            """Launch one generic worker with an optional trusted observer ID."""
+            """Launch one generic worker with an optional trusted event callback ID."""
             try:
                 record = launch_store.start()
                 child_args = ["--playbook", selected_playbook]
-                if observer_binding is not None:
-                    child_args.extend(["--on-workflow-event", observer_binding.observer_id])
+                if callback_binding is not None:
+                    child_args.extend(["--on-workflow-event", callback_binding.callback_id])
                 if mute_agent_output:
                     child_args.append("--mute-agent-output")
                 if open_pr:
@@ -1140,15 +1140,15 @@ def workflow(
                 issue_dir=issue_dir,
                 playbook=playbook_data,
                 executor=wrapped_executor,
-                workflow_event_observer=(
+                workflow_event_callback=(
                     (
-                        lambda event: dispatch_workflow_observer(
-                            observer_binding,
+                        lambda event: dispatch_workflow_event_callback(
+                            callback_binding,
                             event,
                             cwd=Path.cwd(),
                         )
                     )
-                    if observer_binding is not None
+                    if callback_binding is not None
                     else None
                 ),
             )
@@ -1253,12 +1253,12 @@ def workflow(
     except CriticalPhaseError as e:
         worker_exit_status = "failed"
         worker_exit_error = type(e).__name__
-        _dispatch_interruption_observer(locals().get("runner"), e)
+        _dispatch_interruption_callback(locals().get("runner"), e)
         _handle_phase_exception(e, "workflow")
     except Exception as e:
         worker_exit_status = "failed"
         worker_exit_error = type(e).__name__
-        _dispatch_interruption_observer(locals().get("runner"), e)
+        _dispatch_interruption_callback(locals().get("runner"), e)
         if _is_baton_contract_error(e):
             _print_baton_contract_recovery_guidance(
                 issue_dir=locals().get("issue_dir"),
@@ -1275,7 +1275,7 @@ def workflow(
             )
 
 
-def _dispatch_interruption_observer(runtime: Any, error: Exception) -> None:
+def _dispatch_interruption_callback(runtime: Any, error: Exception) -> None:
     """Publish a durable interruption only when a configured runtime exists."""
     if not isinstance(runtime, BlackboardWorkflowRuntime):
         return

@@ -37,7 +37,7 @@ pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 runner = CliRunner()
 
 
-def test_background_forwards_trusted_observer_to_the_fixed_worker(
+def test_background_forwards_trusted_event_callback_to_the_fixed_worker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -533,7 +533,7 @@ def test_single_step_uses_the_mode_neutral_core_in_the_foreground(
     assert captured["hosting"] == "foreground"
 
 
-@pytest.mark.skip(reason="replaced by event-driven observer coverage")
+@pytest.mark.skip(reason="replaced by event-driven callback coverage")
 def test_delegated_single_step_never_bypasses_an_existing_gate_with_start_step(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -606,7 +606,7 @@ def test_delegated_single_step_never_bypasses_an_existing_gate_with_start_step(
         (True, True, True),
     ],
 )
-@pytest.mark.skip(reason="replaced by event-driven observer coverage")
+@pytest.mark.skip(reason="replaced by event-driven callback coverage")
 def test_workflow_command_refreshes_notification_guidance_for_later_inspection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -680,7 +680,7 @@ def test_workflow_command_refreshes_notification_guidance_for_later_inspection(
 
 
 @pytest.mark.parametrize("linked_worktree", [False, True], ids=["project", "worktree"])
-@pytest.mark.skip(reason="replaced by event-driven observer coverage")
+@pytest.mark.skip(reason="replaced by event-driven callback coverage")
 def test_workflow_command_guidance_uses_project_only_slack_route(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -780,7 +780,7 @@ def test_workflow_command_guidance_uses_project_only_slack_route(
     assert status["notification_guidance"]["proactive_events"] == ["human_task"]
 
 
-@pytest.mark.skip(reason="replaced by event-driven observer coverage")
+@pytest.mark.skip(reason="replaced by event-driven callback coverage")
 def test_workflow_command_guidance_uses_fallback_with_malformed_sibling_route(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -843,7 +843,7 @@ def test_workflow_command_guidance_uses_fallback_with_malformed_sibling_route(
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO support")
-@pytest.mark.skip(reason="replaced by event-driven observer coverage")
+@pytest.mark.skip(reason="replaced by event-driven callback coverage")
 def test_workflow_command_records_guidance_when_machine_config_is_fifo(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -8,8 +8,8 @@ from threading import Event
 
 import pytest
 
-from cafe.orchestration.worker_launch import FixedWorkerLauncher, WorkerLaunchStore
-from cafe.orchestration.workflow_hosting import WorkerAlreadyRunningError, WorkflowHost
+from cafe.workflow_execution.worker_launch import FixedWorkerLauncher, WorkerLaunchStore
+from cafe.workflow_execution.workflow_hosting import WorkerAlreadyRunningError, WorkflowHost
 
 
 def test_foreground_and_background_use_the_same_runtime_callable(tmp_path: Path) -> None:

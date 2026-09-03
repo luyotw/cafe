@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-metadata: {version: 1.29.0}
+metadata: {version: 1.30.0}
 ---
 
 # Use CAFE Workflow
@@ -118,8 +118,10 @@ If more than one situation applies, read every listed reference before acting; d
 - [ ] In attached mode, honor the full positive poll cadence from the first
   wait; transport-only yields continue the same deferred wait without inspection.
 - [ ] In event-driven mode, start the same continuous background worker as
-  unattended with the trusted callback. A callback is best-effort observation:
+  unattended with the trusted callback. A callback is an asynchronous,
+  best-effort notification:
   it never gates the next phase and must not use `--single-step`.
+- [ ] In a user-facing driver turn, relay only an explicit mandatory/user-required HumanTask answer with `cafe task complete --no-resume --json`, verify it durably, then resume using the confirmed mode; a confirmed `driver_confirmable` gate may be verified and completed by a driver, but detached callbacks cannot collect or infer user answers.
 - [ ] Timestamp proactive polls and user updates; handle substantive output, completion, errors, and HumanTasks immediately.
 - [ ] At each contract-defined pause or completion, inspect new phase evidence and revise only remaining model chains within confirmed authority.
 - [ ] When CAFE pauses, classify the handoff before supplying any input.

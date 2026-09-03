@@ -251,7 +251,8 @@ def _callback_prompt(event: dict[str, Any], *, repository_root: Path) -> str:
             "This is an asynchronous wake notification, not a workflow advancement gate.",
             "Read the builtin use-cafe-workflow skill and follow its current confirmed contract.",
             "First inspect current durable state with cafe status/show before acting; the event may be stale.",
-            "Do not answer mandatory HumanTasks or grant permissions/capabilities. Do not wait for this callback.",
+            "Do not answer mandatory, user-required, clarification, permission, or capability tasks; only a user-facing driver turn may relay an explicit answer.",
+            "You may complete a declared driver_confirmable task only after verifying its confirmed contract and evidence. Do not grant permissions/capabilities or wait for this callback.",
             "Do not assume you own a running background process. Only use an already reliable, authorized control path.",
             f"Repository: {repository_root}",
             f"Wake notice: {notice}",
@@ -263,9 +264,9 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
     issue_name = event.get("issue")
     workflow_id = event.get("workflow_id")
     if not isinstance(issue_name, str) or not issue_name or Path(issue_name).name != issue_name:
-        raise ValueError("workflow observer event has an invalid issue")
+        raise ValueError("workflow event callback has an invalid issue")
     if not isinstance(workflow_id, str) or not workflow_id:
-        raise ValueError("workflow observer event has an invalid workflow ID")
+        raise ValueError("workflow event callback has an invalid workflow ID")
     issue_dir = repository_root / ".cafe" / "issues" / issue_name
     driver_dir = _driver_dir(issue_dir)
     with _session_lock(driver_dir):
@@ -276,7 +277,7 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
 
         blackboard = BlackboardStore(issue_dir).load_or_create("spec")
         if blackboard.workflow_id != workflow_id:
-            raise ValueError("workflow observer event is stale")
+            raise ValueError("workflow event callback is stale")
         cli = AgentCLI(config["cli"])
         store = EventDriverSessionStore(
             driver_dir,
@@ -334,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--workflow-event is required")
     raw_event = json.loads(args.workflow_event)
     if not isinstance(raw_event, dict):
-        raise ValueError("workflow observer event must be an object")
+        raise ValueError("workflow event callback must be an object")
     run_callback(raw_event, repository_root=Path.cwd().resolve())
     return 0
 

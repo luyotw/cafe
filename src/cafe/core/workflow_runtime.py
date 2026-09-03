@@ -387,7 +387,7 @@ class BlackboardWorkflowRuntime:
         playbook: Dict,
         executor: Any,
         automatic_registry: Optional[AutomaticExecutorRegistry] = None,
-        workflow_event_observer: Callable[[Mapping[str, Any]], None] | None = None,
+        workflow_event_callback: Callable[[Mapping[str, Any]], None] | None = None,
     ) -> None:
         self.issue_dir = issue_dir
         self.playbook = playbook
@@ -408,7 +408,7 @@ class BlackboardWorkflowRuntime:
             tolerate_invalid_baton=True,
         )
         self._replaced_user_handoff: HandoffContract | None = None
-        self._workflow_event_observer = workflow_event_observer
+        self._workflow_event_callback = workflow_event_callback
         self._pending_phase_terminal: Dict[str, Any] | None = None
         self._observed_result_keys: set[tuple[str, str]] = set()
 
@@ -2177,26 +2177,34 @@ class BlackboardWorkflowRuntime:
         self._pending_phase_terminal = payload
 
     def _dispatch_workflow_event(self, event_type: str, payload: Mapping[str, Any]) -> None:
-        """Call the optional observer after its corresponding state is durable."""
+        """Dispatch a bounded callback envelope after its state is durable.
+
+        This runs after the individual blackboard mutation has committed.  The
+        callback is a one-way execution boundary: it receives no workflow
+        control result and must re-read durable state before taking any action.
+        """
         step = payload.get("step")
         status_code = payload.get("status_code")
         if isinstance(step, str) and isinstance(status_code, str):
             self._observed_result_keys.add((step, status_code))
-        if self._workflow_event_observer is None:
+        if self._workflow_event_callback is None:
             return
-        event = {
+        event: Dict[str, Any] = {
             "workflow_id": self.blackboard.workflow_id,
             "issue": self.issue_dir.name,
             "event_type": event_type,
-            **dict(payload),
         }
+        for field in ("step", "status_code", "runtime", "attempt", "hop", "reason", "task_id"):
+            value = payload.get(field)
+            if isinstance(value, (str, int)):
+                event[field] = value
         try:
-            self._workflow_event_observer(event)
+            self._workflow_event_callback(event)
         except Exception as exc:
             try:
                 self.blackboard_store.record_event(
                     self.blackboard,
-                    "workflow_observer_dispatch_failed",
+                    "workflow_event_callback_dispatch_failed",
                     {"event_type": event_type, "error": type(exc).__name__},
                 )
             except Exception:
@@ -2220,7 +2228,18 @@ class BlackboardWorkflowRuntime:
 
     def _finalize_observed_result(self, result: PlaybookRunResult) -> PlaybookRunResult:
         """Flush a durable phase boundary on every public runtime return path."""
-        self._flush_phase_terminal()
+        pending = self._pending_phase_terminal
+        if (
+            pending is not None
+            and pending.get("step") == result.final_step
+            and pending.get("status_code") != result.final_status_code
+        ):
+            self._flush_phase_terminal(
+                event_type="workflow_completed" if result.completed else "workflow_interruption",
+                extra={"status_code": result.final_status_code},
+            )
+        else:
+            self._flush_phase_terminal()
         result_key = (result.final_step, result.final_status_code)
         if result_key not in self._observed_result_keys:
             self._dispatch_workflow_event(
@@ -2282,12 +2301,12 @@ class BlackboardWorkflowRuntime:
         if materialized_task_id:
             flushed = self._flush_phase_terminal(
                 event_type="human_task",
-                extra={"task_id": materialized_task_id},
+                extra={"task_id": materialized_task_id, "status_code": status_code},
             )
         else:
             flushed = self._flush_phase_terminal(
                 event_type="workflow_interruption",
-                extra={"reason": reason},
+                extra={"reason": reason, "status_code": status_code},
             )
         if not flushed:
             self._dispatch_workflow_event(
@@ -3238,7 +3257,10 @@ class BlackboardWorkflowRuntime:
                         self.blackboard_store.set_current_step(self.blackboard, "user")
                         self._flush_phase_terminal(
                             event_type="human_task",
-                            extra={"task_id": pending_approval["task_id"]},
+                            extra={
+                                "task_id": pending_approval["task_id"],
+                                "status_code": "CAPABILITY_APPROVAL_PENDING",
+                            },
                         )
                         return PlaybookRunResult(
                             final_step=current_step,

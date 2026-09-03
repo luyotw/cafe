@@ -51,18 +51,20 @@ Then route by intent:
 - any other user-owned pause: stop. Unknown handoffs are not driver-confirmable.
 
 Driver-confirmable means the driver verifies and resumes; it does not let a
-phase agent approve itself. Resume the structured user handoff without forcing
-a start step. If the declared outcome continues to an agent phase, first
-reassess and configure that phase's model chain, because this invocation may
-execute the continuation. Then submit the response, for example:
+phase agent approve itself. If the declared outcome continues to an agent
+phase, first reassess and configure that phase's model chain, because the
+driver will execute the continuation. Then submit the exact HumanTask response,
+for example:
 
 ```bash
-cafe workflow --execute --mute-agent-output \
-  --user-input '{"task":"output-review","decision":"confirm","human_task_id":"<active-human-task-id>"}'
+cafe task complete <active-human-task-id> \
+  --result '{"task":"output-review","decision":"confirm","human_task_id":"<active-human-task-id>"}' \
+  --no-resume --json
 ```
 
-Use the active task's declared decision ID. For a bounded revision, include its
-required `feedback` instead of sending plain text. Stop for the user when
+Use the active task's declared decision ID. Verify the durable result, then
+continue using the confirmed mode from `running_workflow.md`. For a bounded
+revision, include its required `feedback` instead of sending plain text. Stop for the user when
 approval would change requirements beyond authority, public positioning,
 business/legal/pricing decisions, production access, destructive operations,
 or an ambiguous strategic tradeoff.
@@ -128,21 +130,22 @@ Keep adjacent concerns separate:
 ### Asking and resuming
 
 Ask one focused question naming the governing axis, proposal delta, recommended
-option, and tradeoff. Pass the answer using the confirmed execution mode so the
-accepted artifact records it. Continuous mode proceeds to the next real pause;
-single-step mode returns control after the next step:
+option, and tradeoff. When the user answers, submit the result to the exact
+pending HumanTask, verify it, then continue using the confirmed execution mode:
 
 ```bash
-cafe workflow --execute --mute-agent-output \
-  --user-input '{"task":"clarification-answers","answers":{"<question-id>":"<answer>"},"human_task_id":"<active-human-task-id>"}'
+cafe task complete <active-human-task-id> \
+  --result '{"task":"clarification-answers","answers":{"<question-id>":"<answer>"},"human_task_id":"<active-human-task-id>"}' \
+  --no-resume --json
 ```
 
 Use every current question ID required by the active task. If its declared
 input schema is `feedback` rather than `answers`, use:
 
 ```bash
-cafe workflow --execute --mute-agent-output \
-  --user-input '{"task":"clarification-feedback","feedback":"<answer>","human_task_id":"<active-human-task-id>"}'
+cafe task complete <active-human-task-id> \
+  --result '{"task":"clarification-feedback","feedback":"<answer>","human_task_id":"<active-human-task-id>"}' \
+  --no-resume --json
 ```
 
 Never convert an `answers`, `decision`, or `target` task into a plain-text

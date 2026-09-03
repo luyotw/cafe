@@ -10,7 +10,7 @@
 - 三種mode都不因本issue改用`--single-step`；`event-driven`不等待driver，callback/driver失敗也不阻擋workflow。
 - callback只補上即時資訊，不會讓driver自動own background process。使用者授權、目標識別與技術控制管道是三件不同的事；只有現有環境已提供可靠且獲授權的控制方式時，driver才可用它停止process。
 - 本issue不新增或保證background stop能力。沒有可靠既有控制方式時，event-driven driver只能即時inspect/diagnose，並等待worker自然停止後再執行需要idle state的處理。
-- Driver Mode、per-issue driver config/session與prompt只存在於`src/cafe/data/skills/use-cafe-workflow/**`；CAFE core只認識mode-neutral background hosting、async observer與session continuation。
+- Driver Mode、per-issue driver config/session與prompt只存在於`src/cafe/data/skills/use-cafe-workflow/**`；CAFE core只認識mode-neutral background hosting、asynchronous workflow event callback與session continuation。
 
 ## TODO 1：更新skill-owned mode contract
 
@@ -33,13 +33,13 @@
 ## TODO 2：讓既有background hosting保持mode-neutral
 
 - [ ] 將現有unattended所需的background launch、ownership lock、launch validation與worker status從`DriverPolicy`、`DriverCoordinator`及`BlackboardState.driver_state`解耦；沿用`.workflow-advancement.lock`與generic `WorkerLaunchStore`，不另建hosting subsystem。
-- [ ] generic background invocation增加optional opaque builtin observer ID；event-driven重用同一條background路徑，attached/unattended不傳observer。
-- [ ] observer ID只以既有builtin catalog/package resolver驗證origin與script containment；拒絕project/global override、path、argv、shell fragment與environment override。
+- [ ] generic background invocation增加optional opaque builtin event callback ID；event-driven重用同一條background路徑，attached/unattended不傳callback。
+- [ ] callback ID只以既有builtin catalog/package resolver驗證origin與script containment；拒絕project/global override、path、argv、shell fragment與environment override。
 - [ ] 不新增hook snapshot、digest、binding lifecycle state、safe-stop API、PID registry、cooperative cancellation或worker lifecycle framework；也不把任何既有外部/manual process control誤寫成event-driven保證。
 
-## TODO 3：加入最小的mode-neutral async observer
+## TODO 3：加入最小的mode-neutral asynchronous workflow event callback
 
-- [ ] 在既有phase terminal success/failure、HumanTask或permission materialization、workflow interruption與workflow completion完成durable commit後，best-effort啟動builtin observer callback。
+- [ ] 在既有phase terminal success/failure、HumanTask或permission materialization、workflow interruption與workflow completion完成durable commit後，best-effort啟動builtin event callback。
 - [ ] 同一個durable boundary只dispatch一次；phase terminal若同時materialize HumanTask/permission，放進同一份wake payload，不再額外喚醒一次。這是單次dispatch，不建立dedupe state。
 - [ ] payload只包含必要identity與wake reason：workflow/issue、event kind、step、attempt/iteration、terminal status，以及存在時的task/permission ID；不夾帶blackboard、artifacts、phase config或專用summary。
 - [ ] callback以detached subprocess、`start_new_session=True`、`close_fds=True`執行，不繼承workflow ownership lock，不wait、不retry、不queue、不replay；workflow立刻繼續。
@@ -58,9 +58,9 @@
 
 ## TODO 5：切換routing並移除skill外Driver Mode依賴
 
-- [ ] `attached`維持foreground continuous +既有poll cadence，不註冊observer。
-- [ ] `unattended`維持background continuous，不註冊observer。
-- [ ] `event-driven`維持background continuous，只多傳builtin observer ID；不使用`--single-step`。
+- [ ] `attached`維持foreground continuous +既有poll cadence，不註冊callback。
+- [ ] `unattended`維持background continuous，不註冊callback。
+- [ ] `event-driven`維持background continuous，只多傳builtin callback ID；不使用`--single-step`。
 - [ ] 不為workflow start/resume另送callback；kickoff/initiating driver已在場，event-driven driver只由之後真正的phase terminal或重要事件喚醒。
 - [ ] HumanTask/permission沿用現有skill對話與既有completion/resume流程，不在使用者完成task後再額外送一個自我callback。
 - [ ] additive replacement測試通過後原子切換routing，再刪除舊delegated policy/controller/runtime/transport、prepare/update-driver-policy flags、driver state/status/show/notification projection與相關imports/tests。
@@ -69,10 +69,10 @@
 
 ## TODO 6：最小驗收
 
-- [ ] mode routing：attached與unattended行為不變；event-driven是background continuous且只多observer，不使用single-step。
+- [ ] mode routing：attached與unattended行為不變；event-driven是background continuous且只多callback，不使用single-step。
 - [ ] durable boundary先commit再喚醒；slow、失敗或重疊callback不阻塞workflow，同一issue callback由`session.lock`序列化。
 - [ ] 同一phase terminal + task/permission只喚醒一次，且不需要cursor、dedupe或replay state。
-- [ ] builtin observer ID驗證拒絕override、path/argv/shell/env注入。
+- [ ] builtin callback ID驗證拒絕override、path/argv/shell/env注入。
 - [ ] exact session第一次acquire後只resume；conflict/mismatch不得silent replacement或fallback。只做共用regression，不新增五CLI完整矩陣。
 - [ ] callback喚醒的driver走既有status/show/diagnosis與authority規則；驗證「callback不提供process ownership」，沒有可靠既有控制方式時只診斷，worker停止且ownership釋放後才可retry/resume/修改phase config。
 - [ ] 若測試環境已有可靠、獲授權的process control，驗證driver只能在重讀current target後沿用它；這不新增stop API或worker-control測試矩陣。

@@ -1463,6 +1463,24 @@ def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> No
     assert "active worktree's `.cafe/phases.yaml`" in normalized_models
 
 
+def test_use_cafe_workflow_keeps_human_task_completion_in_the_interactive_driver() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+    normalized_running = " ".join(running.split())
+
+    assert "user-facing driver turn" in skill
+    assert "cafe task complete <task-id> --result '<json>' --no-resume --json" in running
+    assert (
+        "Direct `cafe task complete` users retain its normal automatic foreground-resume"
+        in normalized_running
+    )
+    assert "cannot wait for, collect, infer, or choose an answer for a mandatory" in normalized_running
+    assert "may instead be completed by any driver" in normalized_running
+    assert "cafe task complete <active-human-task-id>" in handoffs
+    assert '--user-input \'{"task":"output-review"' not in handoffs
+
+
 def test_use_cafe_workflow_never_shows_unmuted_driver_execution() -> None:
     offenders = []
     paths = [SKILL_ROOT / "SKILL.md", *sorted((SKILL_ROOT / "references").glob("*.md"))]
