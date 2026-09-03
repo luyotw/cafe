@@ -14,12 +14,10 @@ import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from hashlib import sha256
 from pathlib import Path
 from typing import Any, Iterator
 
 from cafe.core.packet_io import atomic_write_bytes
-from cafe.orchestration.driver_policy import DriverPolicyContract
 
 try:
     import fcntl
@@ -37,17 +35,6 @@ _thread_locks: dict[Path, threading.RLock] = {}
 _thread_locks_guard = threading.Lock()
 
 
-def canonical_policy_digest(policy: DriverPolicyContract) -> str:
-    """Return a digest of exactly the validated driver-policy contract."""
-    encoded = json.dumps(
-        policy.model_dump(mode="json"),
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return sha256(encoded).hexdigest()
-
-
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -60,13 +47,13 @@ class WorkerLaunchStore:
         self.path = self.issue_dir / LAUNCH_RECORD_FILENAME
         self.lock_path = self.issue_dir / f"{LAUNCH_RECORD_FILENAME}.lock"
 
-    def start(self, *, mode: str, policy: DriverPolicyContract) -> dict[str, Any]:
+    def start(self) -> dict[str, Any]:
+        """Reserve one child handoff without reading workflow policy."""
         worker_id = str(uuid.uuid4())
         now = _now()
         record = {
             "worker_id": worker_id,
-            "mode": mode,
-            "policy_digest": canonical_policy_digest(policy),
+            "worker_token": uuid.uuid4().hex,
             "status": "starting",
             "created_at": now,
             "updated_at": now,
@@ -118,24 +105,16 @@ class WorkerLaunchStore:
         self,
         *,
         worker_id: str | None,
-        mode: str,
-        policy: DriverPolicyContract,
-        policy_digest: str | None,
+        worker_token: str | None,
     ) -> bool:
         """Validate a child against a parent-created record without core I/O."""
-        if not worker_id or not policy_digest:
+        if not worker_id or not worker_token:
             return False
-        expected_digest = canonical_policy_digest(policy)
         with self._locked_records() as records:
             record = records.get(worker_id)
             if not isinstance(record, dict):
                 return False
-            valid = (
-                record.get("mode") == mode
-                and record.get("policy_digest") == expected_digest
-                and policy_digest == expected_digest
-                and record.get("status") == "started"
-            )
+            valid = record.get("worker_token") == worker_token and record.get("status") == "started"
             if valid:
                 record["status"] = "running"
                 record["updated_at"] = _now()
@@ -223,7 +202,7 @@ class FixedWorkerLauncher:
 
     def launch(self, record: dict[str, Any], *, extra_args: list[str] | None = None) -> int:
         worker_id = str(record["worker_id"])
-        digest = str(record["policy_digest"])
+        worker_token = str(record["worker_token"])
         command = [
             self.python_executable,
             "-m",
@@ -234,8 +213,8 @@ class FixedWorkerLauncher:
             self.issue_dir.name,
             "--internal-worker-id",
             worker_id,
-            "--internal-policy-digest",
-            digest,
+            "--internal-worker-token",
+            worker_token,
         ]
         if extra_args:
             command.extend(extra_args)

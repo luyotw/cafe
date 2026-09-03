@@ -12,12 +12,6 @@ import typer
 import yaml
 
 from cafe.core.active_issue import clear_marker_if_matches, write_marker
-from cafe.orchestration.driver_policy import DriverPolicyContract, policy_dict
-from cafe.orchestration.issue_policy_store import (
-    IssuePolicyStore,
-    PrepareWouldClobberError,
-    write_issue_inventory,
-)
 from cafe.utils.issue_config import resolve_issue_config_path, resolve_issue_id
 
 VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
@@ -25,51 +19,6 @@ VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
 console: Any = None
 
 
-def update_driver_policy(
-    issue_name: str = typer.Argument(..., help="Issue whose authoritative policy is replaced"),
-    contract_version: int = typer.Option(..., "--contract-version"),
-    driver_mode: str = typer.Option(..., "--driver-mode"),
-    poll_interval_seconds: Optional[int] = typer.Option(
-        None, "--poll-interval-seconds"
-    ),
-    delegated_cli: Optional[str] = typer.Option(None, "--delegated-cli"),
-    delegated_model: Optional[str] = typer.Option(None, "--delegated-model"),
-) -> None:
-    """Atomically replace one issue's policy from complete explicit v2 choices."""
-    driver: dict[str, Any] = {"mode": driver_mode}
-    if poll_interval_seconds is not None:
-        driver["poll_interval_seconds"] = poll_interval_seconds
-    if delegated_cli is not None:
-        driver["cli"] = delegated_cli
-    if delegated_model is not None:
-        driver["model"] = delegated_model
-    proposed = {
-        "contract_version": contract_version,
-        "driver": driver,
-    }
-    try:
-        policy = DriverPolicyContract.model_validate(proposed)
-        issues_root = (Path(".cafe") / "issues").resolve()
-        issue_path = Path(issue_name)
-        if (
-            issue_path.is_absolute()
-            or len(issue_path.parts) != 1
-            or issue_name in {"", ".", ".."}
-        ):
-            raise ValueError("issue name must identify one directory inside .cafe/issues")
-        issue_dir = (issues_root / issue_name).resolve()
-        if not issue_dir.is_relative_to(issues_root):
-            raise ValueError("issue configuration must remain inside .cafe/issues")
-        config_path = issue_dir / "issue.yaml"
-        if not config_path.exists():
-            raise ValueError(f"issue configuration does not exist: {config_path}")
-        IssuePolicyStore(config_path).replace(policy)
-    except (ValueError, OSError) as exc:
-        console.print(f"[red]Error: Driver policy was not updated: {exc}[/red]")
-        raise typer.Exit(1)
-    console.print(
-        f"[green]✓ Updated {issue_name} to explicit workflow driver contract version 2[/green]"
-    )
 prompt_text: Any = None
 prompt_list: Any = None
 prompt_confirm: Any = None
@@ -401,31 +350,6 @@ def prepare(
         "--post-pr-todo-list/--no-post-pr-todo-list",
         help="Post organized PR comments as todo list to PR (default: True when auto-create PR is enabled)",
     ),
-    driver_contract_version: Optional[int] = typer.Option(
-        None,
-        "--driver-contract-version",
-        help="Explicit workflow-driver contract version for supported App preparation",
-    ),
-    driver_mode: Optional[str] = typer.Option(
-        None,
-        "--driver-mode",
-        help="Workflow driver owner: attached, unattended, or delegated",
-    ),
-    poll_interval_seconds: Optional[int] = typer.Option(
-        None,
-        "--poll-interval-seconds",
-        help="Positive durable-status polling cadence for attached mode",
-    ),
-    delegated_cli: Optional[str] = typer.Option(
-        None,
-        "--delegated-cli",
-        help="Dedicated CLI for delegated mode",
-    ),
-    delegated_model: Optional[str] = typer.Option(
-        None,
-        "--delegated-model",
-        help="Exact model identifier for delegated mode",
-    ),
 ) -> None:
     """Prepare issue environment (directory, config, git branch) before running spec phase.
 
@@ -494,35 +418,6 @@ def prepare(
                 console.print("[red]Error: Issue name is required in non-interactive mode.[/red]")
                 raise typer.Exit(1)
 
-        policy_inputs = (
-            driver_contract_version,
-            driver_mode,
-            poll_interval_seconds,
-            delegated_cli,
-            delegated_model,
-        )
-        prepared_policy: DriverPolicyContract | None = None
-        if any(value is not None for value in policy_inputs):
-            driver: dict[str, Any] = {"mode": driver_mode}
-            if poll_interval_seconds is not None:
-                driver["poll_interval_seconds"] = poll_interval_seconds
-            if delegated_cli is not None:
-                driver["cli"] = delegated_cli
-            if delegated_model is not None:
-                driver["model"] = delegated_model
-            try:
-                prepared_policy = DriverPolicyContract.model_validate(
-                    {
-                        "contract_version": driver_contract_version,
-                        "driver": driver,
-                    }
-                )
-            except ValueError as exc:
-                console.print(
-                    f"[red]Error: Driver policy is incomplete or invalid: {exc}[/red]"
-                )
-                raise typer.Exit(1)
-
         root_issue_dir = Path(".cafe") / "issues" / issue_name
         existing_config = root_issue_dir / "issue.yaml"
         existing_issue_dir = (
@@ -530,16 +425,19 @@ def prepare(
             if existing_config.exists()
             else root_issue_dir
         )
-        try:
-            IssuePolicyStore.ensure_prepare_target_available(existing_issue_dir)
-            if worktree and worktree.strip():
-                explicit_worktree_issue_dir = (
-                    Path(worktree.strip()) / ".cafe" / "issues" / issue_name
+        for candidate in (
+            existing_issue_dir,
+            (
+                (Path(worktree.strip()) / ".cafe" / "issues" / issue_name)
+                if worktree and worktree.strip()
+                else None
+            ),
+        ):
+            if candidate is not None and (candidate / "blackboard.json").exists():
+                console.print(
+                    "[red]Error: active workflow state exists; prepare would overwrite it[/red]"
                 )
-                IssuePolicyStore.ensure_prepare_target_available(explicit_worktree_issue_dir)
-        except PrepareWouldClobberError as exc:
-            console.print(f"[red]Error: {exc}[/red]")
-            raise typer.Exit(1)
+                raise typer.Exit(1)
 
         # Templates remain materialized, but no preparation mutation occurs
         # until an active workflow has been ruled out.
@@ -552,9 +450,7 @@ def prepare(
                 f"  [green]✓[/green] Updated .cafe directory with {template_success} template(s)"
             )
         if template_failed > 0:
-            console.print(
-                f"  [yellow]⚠[/yellow] Warning: Failed to copy {template_failed} file(s)"
-            )
+            console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {template_failed} file(s)")
 
         # 4. Initialize Git operations
         initialized_git_now = False
@@ -562,9 +458,7 @@ def prepare(
             repository_exists = GitOperations.is_repository()
             git_ops = GitOperations()
             bootstrap_needs_baseline = repository_exists and not git_ops.has_commits()
-            resume_approved_bootstrap = (
-                bootstrap_needs_baseline and git_ops.is_bootstrap_pending()
-            )
+            resume_approved_bootstrap = bootstrap_needs_baseline and git_ops.is_bootstrap_pending()
 
             if not repository_exists or bootstrap_needs_baseline:
                 should_initialize = init_git or resume_approved_bootstrap
@@ -605,9 +499,7 @@ def prepare(
                     git_ops = GitOperations.initialize_repository(initial_branch="main")
                 else:
                     if not git_ops.is_bootstrap_pending():
-                        git_ops.run_git(
-                            "config", "--local", "cafe.bootstrap-pending", "true"
-                        )
+                        git_ops.run_git("config", "--local", "cafe.bootstrap-pending", "true")
                     git_ops.complete_repository_initialization()
                 initialized_git_now = True
                 initialized_branch = git_ops.get_current_branch()
@@ -909,9 +801,6 @@ def prepare(
             "feature_branch": feature_branch,
             "playbook_id": playbook_name,
         }
-        if prepared_policy is not None:
-            config_data.update(policy_dict(prepared_policy))
-
         # Add spec config if present
         if spec_config:
             config_data["spec"] = spec_config
@@ -945,9 +834,7 @@ def prepare(
                     base_branch,
                 )
             except Exception as exc:
-                console.print(
-                    f"[red]Error: Cannot safely prepare an automatic PR: {exc}[/red]"
-                )
+                console.print(f"[red]Error: Cannot safely prepare an automatic PR: {exc}[/red]")
                 console.print(
                     "[yellow]Update the local base branch explicitly, then run "
                     "cafe prepare again.[/yellow]"
@@ -1041,15 +928,15 @@ def prepare(
         with open(issue_config_file, "w", encoding="utf-8") as f:
             yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)
 
-        # For worktree mode, keep only a policy-free inventory pointer in the root checkout.
+        # For worktree mode, keep only a repository inventory pointer in the root checkout.
         if use_worktree:
             repo_root_issue_dir = Path(f".cafe/issues/{issue_name}")
             repo_root_issue_dir.mkdir(parents=True, exist_ok=True)
             repo_root_config_file = repo_root_issue_dir / "issue.yaml"
-            write_issue_inventory(
-                repo_root_config_file,
-                issue_name=issue_name,
-                worktree_path=Path(str(worktree_path)),
+            inventory = {"issue_name": issue_name, "worktree_path": str(worktree_path)}
+            repo_root_config_file.write_text(
+                yaml.safe_dump(inventory, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
             )
 
         console.print()
@@ -2067,9 +1954,11 @@ def reset(
                     "status_code": target_status_code,
                     "timestamp": target_timestamp or datetime.now().astimezone().isoformat(),
                     "iteration": target_iteration,
-                    "message": f"Phase completed with {target_status_code}"
-                    if target_status_code
-                    else "Phase reset to this iteration",
+                    "message": (
+                        f"Phase completed with {target_status_code}"
+                        if target_status_code
+                        else "Phase reset to this iteration"
+                    ),
                     "end_time": target_end_time
                     or target_timestamp
                     or datetime.now().astimezone().isoformat(),

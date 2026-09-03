@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from cafe.core.blackboard import BlackboardState, HandoffContract, HandoffOwner
-from cafe.orchestration.driver_policy import extract_driver_policy, policy_dict
 from cafe.core.git import GitOperations
 from cafe.core.types import PhaseStatus
 from cafe.utils.issue_config import read_authoritative_issue_config, resolve_issue_config_path
@@ -171,126 +170,6 @@ class SummaryService:
                         }
                     )
         return packets
-
-    def load_driver_status(self, issue_name: str) -> Optional[Dict[str, Any]]:
-        """Project durable policy/runtime state without delegated session identity."""
-        inventory_path = self.issues_root / issue_name / "issue.yaml"
-        authority_path = resolve_issue_config_path(inventory_path)
-        config = read_authoritative_issue_config(inventory_path)
-        if config is None:
-            return None
-        try:
-            policy = extract_driver_policy(config)
-        except (ValueError, TypeError):
-            return None
-        worker = self._latest_worker_launch(authority_path.parent)
-        blackboard_path = authority_path.parent / "blackboard.json"
-        if not blackboard_path.exists():
-            status = {
-                "authority_path": str(authority_path),
-                "policy": policy_dict(policy),
-                "lifecycle": "not_started",
-                "progress": {"current_step": None, "requested_action": None},
-                "decisions": [],
-            }
-            if worker is not None:
-                status["worker"] = worker
-            return status
-        try:
-            raw = json.loads(blackboard_path.read_text(encoding="utf-8"))
-            state = BlackboardState.from_dict(raw, initial_step="spec")
-        except Exception:
-            return None
-        driver = state.driver_state
-        packets = driver.get("packets", {})
-        latest_packet = None
-        if isinstance(packets, dict) and packets:
-            latest_packet = packets[max(packets, key=lambda value: int(value))]
-        decisions = []
-        raw_decisions = driver.get("decisions", {})
-        if isinstance(raw_decisions, dict):
-            for raw_sequence in sorted(raw_decisions, key=lambda value: int(value)):
-                decision = raw_decisions[raw_sequence]
-                if not isinstance(decision, dict):
-                    continue
-                decisions.append(
-                    {
-                        key: decision.get(key)
-                        for key in (
-                            "sequence",
-                            "requested_action",
-                            "action",
-                            "rationale",
-                            "decided_at",
-                        )
-                    }
-                )
-        status: Dict[str, Any] = {
-            "authority_path": str(authority_path),
-            "policy": policy_dict(policy),
-            "lifecycle": str(driver.get("lifecycle", "idle")),
-            "progress": {
-                "current_step": state.current_step,
-                "requested_action": (
-                    latest_packet.get("requested_action")
-                    if isinstance(latest_packet, dict)
-                    else None
-                ),
-            },
-            "decisions": decisions,
-        }
-        lifecycle = status["lifecycle"]
-        if lifecycle in {
-            "paused",
-            "error",
-            "permission",
-            "human_task",
-            "stopped",
-            "complete",
-        }:
-            reason_key = "pause_reason" if lifecycle == "paused" else f"{lifecycle}_reason"
-            reason = driver.get(reason_key)
-            if isinstance(reason, str) and reason:
-                status["reason"] = reason
-        for key in ("worker", "notification_guidance"):
-            if key in driver:
-                status[key] = driver[key]
-        if (
-            lifecycle == "paused"
-            and status.get("reason") == "delegated_model_mismatch"
-            and "model_mismatch" in driver
-        ):
-            status["model_mismatch"] = driver["model_mismatch"]
-        if worker is not None:
-            status["worker"] = worker
-        return status
-
-    @staticmethod
-    def _latest_worker_launch(issue_dir: Path) -> Optional[Dict[str, Any]]:
-        """Read the newest launch attempt without turning it into a liveness API."""
-        path = issue_dir / ".workflow-worker-launches.json"
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            return None
-        attempts = payload.get("attempts") if isinstance(payload, dict) else None
-        records = [record for record in (attempts or {}).values() if isinstance(record, dict)]
-        if not records:
-            return None
-        latest = max(records, key=lambda record: str(record.get("updated_at", "")))
-        return {
-            key: latest[key]
-            for key in (
-                "worker_id",
-                "mode",
-                "status",
-                "pid",
-                "error_code",
-                "created_at",
-                "updated_at",
-            )
-            if key in latest
-        }
 
     def _load_workflow_state(
         self, issue_name: str

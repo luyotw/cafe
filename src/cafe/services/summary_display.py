@@ -83,69 +83,6 @@ class SummaryDisplay:
             )
         return "\n".join(lines)
 
-    def format_driver_status(self, status: Optional[Mapping[str, Any]]) -> str:
-        """Render the safe workflow-driver read model."""
-        if not status:
-            return ""
-        policy = status.get("policy", {})
-        driver = policy.get("driver", {}) if isinstance(policy, Mapping) else {}
-        progress = status.get("progress", {})
-        lines = [
-            "Workflow Driver",
-            f"Authority: {status.get('authority_path', '')}",
-            f"Ownership: {driver.get('mode', '') if isinstance(driver, Mapping) else ''}",
-            f"Lifecycle: {status.get('lifecycle', '')}",
-            (
-                "Progress: "
-                f"{progress.get('current_step', '') if isinstance(progress, Mapping) else ''} -> "
-                f"{progress.get('requested_action', '') if isinstance(progress, Mapping) else ''}"
-            ),
-        ]
-        if isinstance(driver, Mapping) and driver.get("mode") == "delegated":
-            lines.append(
-                f"Delegated driver: {driver.get('cli', '')} / {driver.get('model', '')}"
-            )
-        reason = status.get("reason")
-        if isinstance(reason, str) and reason:
-            lines.append(f"Reason: {reason}")
-        worker = status.get("worker")
-        if isinstance(worker, Mapping):
-            worker_line = f"Worker: {worker.get('status', '')}"
-            if worker.get("pid") is not None:
-                worker_line += f" pid={worker['pid']}"
-            if isinstance(worker.get("error_code"), str) and worker["error_code"]:
-                worker_line += f" reason={worker['error_code']}"
-            lines.append(worker_line)
-        decisions = status.get("decisions", [])
-        if isinstance(decisions, list) and decisions:
-            latest = decisions[-1]
-            if isinstance(latest, Mapping):
-                lines.append(
-                    f"Latest decision: {latest.get('sequence', '')} {latest.get('action', '')}"
-                )
-        guidance = status.get("notification_guidance")
-        if isinstance(guidance, Mapping):
-            command = guidance.get("inspection_command", "cafe status")
-            proactive_events = guidance.get("proactive_events", [])
-            if proactive_events == ["human_task"]:
-                lines.append(
-                    "Notifications: HumanTasks may notify; other lifecycle progress "
-                    f"remains inspectable with {command}"
-                )
-            else:
-                lines.append(
-                    "Notifications: unavailable; this conversation will not be proactively "
-                    f"updated. Inspect durable progress with {command}"
-                )
-        mismatch = status.get("model_mismatch")
-        if isinstance(mismatch, Mapping):
-            lines.append(
-                "Model mismatch: requested "
-                f"{mismatch.get('requested_model', '')}; reported "
-                f"{mismatch.get('reported_model', '')}"
-            )
-        return "\n".join(lines)
-
     def _format_entry(self, entry: TimelineEntry, prefix: str) -> str:
         """Format an entry for display with the given prefix.
 

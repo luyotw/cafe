@@ -16,8 +16,8 @@ _MODEL_ADJUSTMENT_AUTHORITIES = {
     "driver_autonomous",
     "user_approval_required",
 }
-_DRIVER_MODES = {"attached", "unattended", "delegated"}
-_DELEGATED_CLIS = {"claude", "codex", "gemini", "copilot", "cursor-agent"}
+_DRIVER_MODES = {"attached", "unattended", "event-driven"}
+_EVENT_DRIVEN_CLIS = {"claude", "codex", "gemini", "copilot", "cursor-agent"}
 
 
 def _reexec_with_cafe_python() -> None:
@@ -94,8 +94,8 @@ def _driver_policy_rows(args: argparse.Namespace) -> list[list[Any]]:
     if args.driver_mode == "attached":
         if args.poll_interval_seconds is None:
             raise ValueError("attached driver requires --poll-interval-seconds")
-        if args.delegated_cli is not None or args.delegated_model is not None:
-            raise ValueError("attached driver rejects delegated fields")
+        if args.event_driver_cli is not None or args.event_driver_model is not None:
+            raise ValueError("attached driver rejects event-driven fields")
         rows.extend(
             [
                 ["driver.poll_interval_seconds", args.poll_interval_seconds],
@@ -114,20 +114,22 @@ def _driver_policy_rows(args: argparse.Namespace) -> list[list[Any]]:
             value is not None
             for value in (
                 args.poll_interval_seconds,
-                args.delegated_cli,
-                args.delegated_model,
+                args.event_driver_cli,
+                args.event_driver_model,
             )
         ):
             raise ValueError("unattended driver accepts no mode-specific fields")
     else:
         if args.poll_interval_seconds is not None:
-            raise ValueError("delegated driver rejects attached polling")
-        if args.delegated_cli is None or not args.delegated_model:
-            raise ValueError("delegated driver requires --delegated-cli and --delegated-model")
+            raise ValueError("event-driven driver rejects attached polling")
+        if args.event_driver_cli is None or not args.event_driver_model:
+            raise ValueError(
+                "event-driven driver requires --event-driver-cli and --event-driver-model"
+            )
         rows.extend(
             [
-                ["driver.cli", args.delegated_cli],
-                ["driver.model", args.delegated_model],
+                ["driver.cli", args.event_driver_cli],
+                ["driver.model", args.event_driver_model],
             ]
         )
     return rows
@@ -166,9 +168,7 @@ def _json_mapping(value: str) -> dict[str, Any]:
     return parsed
 
 
-def _validate_preflight(
-    value: dict[str, Any], *, label: str, required: set[str]
-) -> dict[str, Any]:
+def _validate_preflight(value: dict[str, Any], *, label: str, required: set[str]) -> dict[str, Any]:
     missing = sorted(required - set(value))
     if missing:
         raise ValueError(f"{label} preflight is missing: {', '.join(missing)}")
@@ -352,8 +352,8 @@ def _parser() -> argparse.ArgumentParser:
         "--poll-interval-seconds",
         type=_positive_seconds,
     )
-    parser.add_argument("--delegated-cli", choices=tuple(sorted(_DELEGATED_CLIS)))
-    parser.add_argument("--delegated-model")
+    parser.add_argument("--event-driver-cli", choices=tuple(sorted(_EVENT_DRIVEN_CLIS)))
+    parser.add_argument("--event-driver-model")
     parser.add_argument("--risk-factor", action="append", required=True)
     parser.add_argument("--assessment-rationale", required=True)
     parser.add_argument(
@@ -549,8 +549,7 @@ def render(args: argparse.Namespace) -> str:
             [
                 "catalog.effective_digests",
                 ", ".join(
-                    f"{kind}={effective_digests[kind]}"
-                    for kind in ("playbook", "phase", "agent")
+                    f"{kind}={effective_digests[kind]}" for kind in ("playbook", "phase", "agent")
                 ),
             ],
             [
@@ -605,9 +604,7 @@ def render(args: argparse.Namespace) -> str:
         model_rows.append([step_name, primary, fallbacks, chain_source, rationale])
 
     unused_rationales = set(phase_rationales) - {
-        name
-        for name, step in model.steps.items()
-        if step.assignee_type in {"agent", "hybrid"}
+        name for name, step in model.steps.items() if step.assignee_type in {"agent", "hybrid"}
     }
     if unused_rationales:
         raise ValueError(

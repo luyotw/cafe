@@ -89,7 +89,8 @@ def _resume_issue_workflow(issue: str, playbook: str) -> None:
         single_step=False,
         background=False,
         internal_worker_id=None,
-        internal_policy_digest=None,
+        internal_worker_token=None,
+        on_workflow_event=None,
         dry_run=False,
         user_input=None,
         add_dir=[],
@@ -313,9 +314,9 @@ def complete_task(
                 from_step=preflight.task.step,
                 trigger=preflight.task.trigger,
                 raw_payload=raw_payload,
-                source="command"
-                if result is not None or result_file is not None
-                else "interactive",
+                source=(
+                    "command" if result is not None or result_file is not None else "interactive"
+                ),
             )
             if applied.rejection is not None or applied.target is None:
                 message = (
@@ -404,6 +405,11 @@ def complete_task(
 def cancel_task(
     task_id: str = typer.Argument(..., help="Stable task identifier"),
     reason: str = typer.Option(..., "--reason", help="Why the task was cancelled"),
+    no_resume: bool = typer.Option(
+        False,
+        "--no-resume",
+        help="Persist the cancellation without resuming the owning workflow",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit one JSON result object"),
 ) -> None:
     """Cancel one capability approval or an exact stale ordinary task."""
@@ -421,11 +427,12 @@ def cancel_task(
                 task=preflight.task,
                 reason=reason,
             )
-            if json_output:
-                with redirect_stdout(StringIO()):
+            if not no_resume:
+                if json_output:
+                    with redirect_stdout(StringIO()):
+                        _resume_issue_workflow(preflight.issue, preflight.playbook_id)
+                else:
                     _resume_issue_workflow(preflight.issue, preflight.playbook_id)
-            else:
-                _resume_issue_workflow(preflight.issue, preflight.playbook_id)
         else:
             if durable_task_matches_current_handoff(preflight.task, blackboard):
                 raise TaskInboxError(
@@ -480,6 +487,12 @@ def cancel_task(
         )
         return
     if applied is not None:
+        if no_resume:
+            console.print(
+                f"[yellow]Cancelled[/yellow] capability task {task_id}; issue "
+                f"{preflight.issue} is ready at {applied.target}."
+            )
+            return
         console.print(
             f"[yellow]Cancelled[/yellow] capability task {task_id}; resumed issue "
             f"{preflight.issue} at {applied.target}."

@@ -249,7 +249,8 @@ def _build_dynamic_step_click_command(step_name: str) -> Optional[click.Command]
             single_step=True,
             background=False,
             internal_worker_id=None,
-            internal_policy_digest=None,
+            internal_worker_token=None,
+            on_workflow_event=None,
             dry_run=False,
         )
 
@@ -732,7 +733,6 @@ def _backup_issue_directory(issue_dir: Path, issue_name: str) -> Path:
 
 _sync_lifecycle_runtime()
 app.command()(lifecycle_commands.prepare)
-app.command(name="update-driver-policy")(lifecycle_commands.update_driver_policy)
 app.command()(lifecycle_commands.close)
 app.command()(lifecycle_commands.restore)
 app.command()(lifecycle_commands.reset)
