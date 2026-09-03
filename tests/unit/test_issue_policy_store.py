@@ -10,8 +10,8 @@ import yaml
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
-from cafe.core.driver_policy import REJECTED_POLICY_KEYS, extract_driver_policy
-from cafe.core.issue_policy_store import (
+from cafe.orchestration.driver_policy import REJECTED_POLICY_KEYS, extract_driver_policy
+from cafe.orchestration.issue_policy_store import (
     IssuePolicyStore,
     PrepareWouldClobberError,
 )
@@ -183,7 +183,7 @@ def test_atomic_update_removes_every_removed_policy_key(tmp_path: Path) -> None:
 def test_replace_rolls_back_when_published_policy_cannot_be_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import cafe.core.issue_policy_store as store_module
+    import cafe.orchestration.issue_policy_store as store_module
     from cafe.core.packet_io import atomic_write_bytes as real_atomic_write_bytes
 
     root_config, active_config, _ = _issue_layout(tmp_path)

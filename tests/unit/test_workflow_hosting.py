@@ -1,16 +1,16 @@
-"""Foreground/background hosting parity and bounded ownership tests."""
+"""Foreground host ownership and bounded lease tests."""
 
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
-from types import SimpleNamespace
-
 import pytest
 
 from cafe.core.blackboard import BlackboardStore
-from cafe.core.workflow_hosting import WorkerAlreadyRunningError, WorkflowHost
+from cafe.orchestration.driver_policy import DriverPolicyContract
+from cafe.orchestration.worker_launch import FixedWorkerLauncher, WorkerLaunchStore
+from cafe.orchestration.workflow_hosting import WorkerAlreadyRunningError, WorkflowHost
 
 
 def test_foreground_and_internal_worker_use_same_runtime_callable(tmp_path: Path) -> None:
@@ -29,44 +29,105 @@ def test_foreground_and_internal_worker_use_same_runtime_callable(tmp_path: Path
     assert worker_result.hosting == "background"
 
 
-def test_background_launch_is_fixed_typed_worker_command(tmp_path: Path) -> None:
+def _unattended_policy() -> DriverPolicyContract:
+    return DriverPolicyContract.model_validate(
+        {"contract_version": 2, "driver": {"mode": "unattended"}}
+    )
+
+
+def test_fixed_worker_launch_carries_only_validated_internal_context(tmp_path: Path) -> None:
     launches: list[tuple[list[str], dict]] = []
 
     def popen(command, **kwargs):
         launches.append((command, kwargs))
-        return SimpleNamespace(pid=4321)
+        return type("Process", (), {"pid": 4321})()
 
-    host = WorkflowHost(
-        tmp_path / ".cafe" / "issues" / "issue432",
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue432"
+    record = WorkerLaunchStore(issue_dir).start(mode="unattended", policy=_unattended_policy())
+    launcher = FixedWorkerLauncher(
+        issue_dir,
         popen_factory=popen,
         python_executable="/fixed/python",
     )
 
-    result = host.run(lambda: pytest.fail("ran in parent"), hosting="background")
+    pid = launcher.launch(record)
 
     command, kwargs = launches[0]
     assert command[:4] == ["/fixed/python", "-m", "cafe.ui.cli", "workflow"]
-    assert "--internal-v2-worker" not in command
     assert command[command.index("--issue") + 1] == "issue432"
+    assert command[command.index("--internal-worker-id") + 1] == record["worker_id"]
+    assert command[command.index("--internal-policy-digest") + 1] == record["policy_digest"]
+    assert "--background" not in command
     assert kwargs["start_new_session"] is True
-    assert result.pid == 4321
+    assert pid == 4321
+    assert WorkerLaunchStore(issue_dir).validate_child(
+        worker_id=record["worker_id"],
+        mode="unattended",
+        policy=_unattended_policy(),
+        policy_digest=record["policy_digest"],
+    )
+    assert WorkerLaunchStore(issue_dir).get(record["worker_id"])["status"] == "running"
 
 
-def test_background_startup_failure_is_durable_without_claiming_phase_work(tmp_path: Path) -> None:
+def test_parent_pid_update_never_regresses_a_fast_child_status(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue458-race"
+    store = WorkerLaunchStore(issue_dir)
+    record = store.start(mode="unattended", policy=_unattended_policy())
+
+    def popen(_command, **_kwargs):
+        assert store.get(record["worker_id"])["status"] == "started"
+        assert store.validate_child(
+            worker_id=record["worker_id"],
+            mode="unattended",
+            policy=_unattended_policy(),
+            policy_digest=record["policy_digest"],
+        )
+        store.mark(record["worker_id"], "stopped")
+        return type("Process", (), {"pid": 4581})()
+
+    FixedWorkerLauncher(issue_dir, popen_factory=popen).launch(record)
+
+    persisted = store.get(record["worker_id"])
+    assert persisted["status"] == "stopped"
+    assert persisted["pid"] == 4581
+
+
+def test_worker_startup_failure_is_sidecar_only(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue432"
 
     def fail(*_args, **_kwargs):
         raise OSError("cannot start")
 
-    host = WorkflowHost(issue_dir, popen_factory=fail)
+    record = WorkerLaunchStore(issue_dir).start(mode="unattended", policy=_unattended_policy())
+    launcher = FixedWorkerLauncher(issue_dir, popen_factory=fail)
 
     with pytest.raises(OSError):
-        host.run(lambda: None, hosting="background")
+        launcher.launch(record)
 
-    state = BlackboardStore(issue_dir).load_or_create("spec")
-    assert state.driver_state["worker"]["status"] == "startup_failed"
-    assert state.driver_state["advancement_lease"] is None
-    assert state.current_step == "spec"
+    assert WorkerLaunchStore(issue_dir).get(record["worker_id"])["status"] == "startup_failed"
+    assert not (issue_dir / "blackboard.json").exists()
+
+
+def test_invalid_worker_handshake_fails_closed_and_records_startup_failure(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue458"
+    store = WorkerLaunchStore(issue_dir)
+    record = store.start(mode="unattended", policy=_unattended_policy())
+
+    assert not store.validate_child(
+        worker_id=record["worker_id"],
+        mode="unattended",
+        policy=_unattended_policy(),
+        policy_digest="replaced-policy-digest",
+    )
+    persisted = store.get(record["worker_id"])
+    assert persisted["status"] == "startup_failed"
+    assert persisted["error_code"] == "worker_context_mismatch"
+    assert not (issue_dir / "blackboard.json").exists()
+
+
+def test_host_rejects_a_background_spawn_request(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="foreground"):
+        WorkflowHost(tmp_path).run(lambda: None, hosting="background")
 
 
 def test_only_one_host_worker_advances_and_clean_release_allows_next(tmp_path: Path) -> None:

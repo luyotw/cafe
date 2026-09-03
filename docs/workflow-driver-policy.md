@@ -42,9 +42,9 @@ explicit `cafe update-driver-policy` request.
 
 ## Runtime behavior
 
-- Attached executes one eligible phase and returns responsibility to the
-  initiator. Its positive polling cadence reads durable state only; polling
-  cannot execute work, create a delegated boundary, or consume authorization.
+- Attached runs the core in the foreground. Its positive polling cadence reads
+  durable state only; polling cannot execute work, create a delegated boundary,
+  or consume authorization.
 - Unattended continues eligible phases until a HumanTask, confirmation,
   permission need, error, explicit stop, or completion.
 - Delegated alone creates driver packets and decisions. The selected CLI always
@@ -57,16 +57,25 @@ invocation controls. They are not policy fields and do not change who owns a
 boundary. Existing worker leases prevent concurrent local advancement; this is
 not a supervisor or stale-run repair service.
 
-`cafe workflow --execute --background` resumes an already prepared workflow
-through the fixed background worker. Foreground execution and that worker both
-hold and renew the same durable advancement lease while the runtime is active.
+`cafe workflow --execute --background` launches a fixed background worker for
+an eligible prepared workflow. Attached mode rejects that flag. An ordinary
+unattended `cafe workflow --execute` with no input, start-step, add-dir, or
+single-step control launches the same worker automatically; explicit controls
+remain foreground. The worker receives a parent-created launch ID and digest of
+the canonical policy. Before it constructs workflow state, it verifies that
+record while the authoritative policy is locked. A mismatch is recorded as
+`startup_failed` and exits without spawning another worker. Foreground execution
+and the worker both hold and renew the same durable advancement lease while the
+runtime is active.
 
 ## Durable state and inspection
 
 The blackboard records lifecycle state, correlated packets and decisions,
-one-time decision consumption, and delegated CLI/model/session provenance.
-Status and show commands expose progress, lifecycle stops, decisions, and a
-reported model mismatch without exposing the delegated session ID.
+one-time decision consumption, and delegated CLI/model/session provenance. A
+small launch-attempt sidecar records only worker identity, policy digest,
+status, PID when available, timestamps, and a bounded startup error. Status
+exposes progress, lifecycle stops, decisions, and the latest worker launch state
+without exposing the delegated session ID.
 
 Restart uses the same unconsumed boundary ledger. A crash before decision
 persistence may request that decision again against the same packet; a recorded

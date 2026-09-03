@@ -9,7 +9,7 @@ from typing import Any, Iterator, Mapping, TextIO
 
 import yaml
 
-from cafe.core.driver_policy import (
+from cafe.orchestration.driver_policy import (
     POLICY_KEYS,
     REJECTED_POLICY_KEYS,
     DriverPolicyContract,

@@ -12,8 +12,8 @@ import typer
 import yaml
 
 from cafe.core.active_issue import clear_marker_if_matches, write_marker
-from cafe.core.driver_policy import DriverPolicyContract, policy_dict
-from cafe.core.issue_policy_store import (
+from cafe.orchestration.driver_policy import DriverPolicyContract, policy_dict
+from cafe.orchestration.issue_policy_store import (
     IssuePolicyStore,
     PrepareWouldClobberError,
     write_issue_inventory,

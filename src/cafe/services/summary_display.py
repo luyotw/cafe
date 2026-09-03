@@ -108,6 +108,14 @@ class SummaryDisplay:
         reason = status.get("reason")
         if isinstance(reason, str) and reason:
             lines.append(f"Reason: {reason}")
+        worker = status.get("worker")
+        if isinstance(worker, Mapping):
+            worker_line = f"Worker: {worker.get('status', '')}"
+            if worker.get("pid") is not None:
+                worker_line += f" pid={worker['pid']}"
+            if isinstance(worker.get("error_code"), str) and worker["error_code"]:
+                worker_line += f" reason={worker['error_code']}"
+            lines.append(worker_line)
         decisions = status.get("decisions", [])
         if isinstance(decisions, list) and decisions:
             latest = decisions[-1]
